@@ -81,11 +81,12 @@ def register_chart_intents(
                 chart_data = canonicalize_chart_data(result, normalized_chart_type)
                 chart_error = ""
             except ChartDataError as exc:
-                # R6.2 contract: ChartDataAgent's own validate_chart_data
-                # pipeline (repair round trip, then heuristic fallback)
-                # already tries hard to guarantee canonical output before
-                # ever returning successfully - this is the rare defensive
-                # case where it still somehow didn't. Never a silent no-op:
+                # R6.2 contract, ADR-013 stage 13.3: _call_chart_agent's own
+                # respond_json call (one repair round trip against the real
+                # JSON Schema, then StructuredOutputError) already tries
+                # hard to guarantee schema-conforming output before ever
+                # returning successfully - this is the rare defensive case
+                # where it still somehow didn't. Never a silent no-op:
                 # still create a real chart node with a minimal placeholder
                 # shape and chart_error set, same "degrade gracefully, never
                 # drop the request" contract as the agent's own internal
@@ -95,9 +96,9 @@ def register_chart_intents(
             # ADR-010 stage 10.1: agent provenance - this node is produced by
             # a model generation, not a direct user action (stage 10.5's
             # "undo this build" is what will consume that distinction).
-            # add_chart_node also mints chart asset bytes into image_assets;
-            # record_command captures those alongside the node, so undoing a
-            # generated chart does not strand its PNG.
+            # ADR-013 stage 13.4 retired add_chart_node's own PNG render (see
+            # ChartState's own docstring) - there is no longer an asset for
+            # record_command to snapshot alongside the node.
             node, _command = document.record_command(
                 "generateChart", "agent",
                 lambda: document.add_chart_node(

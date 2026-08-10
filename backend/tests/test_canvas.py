@@ -700,9 +700,10 @@ def test_non_image_node_deletion_does_not_touch_image_assets():
 
 
 def test_deleting_one_node_of_every_kind_does_not_raise():
-    """ADR-002 stage 2.5 regression net: remove_nodes() has generic,
-    kind-agnostic cross-kind scans (the image_asset_id/chart_asset_id
-    eviction above being the first two) that used to rely on every
+    """ADR-002 stage 2.5 regression net: remove_nodes() has a generic,
+    kind-agnostic cross-kind scan (the image_asset_id eviction above -
+    chart nodes carried a second such scan, chart_asset_id, until ADR-013
+    stage 13.4 retired their backend-rendered PNG) that used to rely on every
     SceneNode carrying every kind's fields with a safe default. As fields
     migrate onto per-kind node.state objects one kind at a time, a scan
     that isn't updated in lockstep raises AttributeError the moment ANY
@@ -6688,7 +6689,7 @@ def test_set_and_clear_model_override_ws_intents_mutate_and_publish():
 _CHART_DATA = {"type": "bar", "title": "Widgets Sold", "labels": ["Q1", "Q2"], "values": [10.0, 20.0]}
 
 
-def test_add_chart_node_creates_a_real_rendered_chart_connected_to_its_parent():
+def test_add_chart_node_creates_a_chart_connected_to_its_parent():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
 
@@ -6698,15 +6699,24 @@ def test_add_chart_node_creates_a_real_rendered_chart_connected_to_its_parent():
     assert chart.state.chart_type == "bar"
     assert chart.state.chart_data == _CHART_DATA
     assert chart.state.chart_source_node_id == parent.id
-    assert chart.state.chart_asset_version == 1
     assert chart.state.chart_width == 680.0 and chart.state.chart_height == 500.0
     assert chart.state.chart_aspect_locked is True
     assert any(e.source == parent.id and e.target == chart.id for e in doc.edges.values())
-    asset = doc.get_image_asset(chart.state.chart_asset_id)
-    assert asset is not None
-    png_bytes, mime_type = asset
-    assert mime_type == "image/png"
-    assert png_bytes.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_add_chart_node_does_not_render_or_touch_image_assets():
+    # ADR-013 stage 13.4: the backend-rendered display PNG went dead once
+    # stage 13.2 shipped the client-side interactive renderer - nothing
+    # fetches it, so add_chart_node no longer produces one (closing one of
+    # the event-loop-blocking offenders backend/tests/perf/
+    # test_loop_watchdog.py used to pin outright, rather than just moving
+    # it off-thread).
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+
+    doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
+
+    assert doc.image_assets == {}
 
 
 def test_add_chart_node_title_defaults_to_chart_when_data_has_none():
@@ -6755,19 +6765,15 @@ def test_resize_chart_preserves_aspect_ratio_when_locked():
     assert chart.state.chart_width / chart.state.chart_height == pytest.approx(2.0, rel=1e-6)
 
 
-def test_resize_chart_rerenders_and_bumps_asset_version_overwriting_same_id():
+def test_resize_chart_does_not_render_or_touch_image_assets():
+    # ADR-013 stage 13.4: see add_chart_node's own equivalent test above.
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
-    original_asset_id = chart.state.chart_asset_id
-    original_bytes, _ = doc.get_image_asset(original_asset_id)
 
     doc.resize_chart(chart.id, 900.0, 900.0)
 
-    assert chart.state.chart_asset_id == original_asset_id, "same id, overwritten in place"
-    assert chart.state.chart_asset_version == 2
-    new_bytes, _ = doc.get_image_asset(original_asset_id)
-    assert new_bytes != original_bytes
+    assert doc.image_assets == {}
 
 
 def test_resize_chart_rejects_a_non_chart_node():
@@ -6799,18 +6805,6 @@ def test_toggle_chart_aspect_lock_rejects_a_non_chart_node():
         doc.toggle_chart_aspect_lock(plain.id)
 
 
-def test_removing_a_chart_node_cleans_up_its_asset_from_image_assets():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA))
-    asset_id = chart.state.chart_asset_id
-    assert doc.get_image_asset(asset_id) is not None
-
-    doc.remove_nodes([chart.id])
-
-    assert doc.get_image_asset(asset_id) is None
-
-
 def test_scene_payload_exposes_all_chart_fields():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -6822,8 +6816,6 @@ def test_scene_payload_exposes_all_chart_fields():
     assert row["chartType"] == "bar"
     assert row["chartData"] == _CHART_DATA
     assert row["chartError"] == "degraded"
-    assert row["chartAssetId"] == chart.state.chart_asset_id
-    assert row["chartAssetVersion"] == 1
     assert row["chartWidth"] == 680.0
     assert row["chartHeight"] == 500.0
     assert row["chartAspectLocked"] is True

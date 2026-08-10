@@ -119,7 +119,7 @@ function chatRow(id: string, x: number, y: number, title = id): SceneNodeRow {
         color: null, headerColor: null, isSystemPrompt: false, isSummaryNote: false,
         isBranchComparison: false, itemIds: [], isLocked: true, groupWidth: null,
         groupHeight: null, chartType: "", chartData: {}, chartError: "",
-        chartAssetId: "", chartAssetVersion: 0, chartWidth: 680.0, chartHeight: 500.0,
+        chartWidth: 680.0, chartHeight: 500.0,
         chartAspectLocked: true, chartSourceNodeId: "", htmlSplitterState: null,
         chatScrollValue: 0.0,
         toolCalls: [],

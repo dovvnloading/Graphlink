@@ -1,9 +1,8 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   ChartNodeView,
-  chartAssetUrl,
   chartExportUrl,
   chartNodePropsAreEqual,
   makeDebouncedChartResize,
@@ -25,8 +24,6 @@ function renderChartNode(overrides: Partial<ChartFlowNode["data"]> = {}, id = "n
       chartType: "bar",
       chartData: { type: "bar", title: "Quarterly Revenue" },
       chartError: "",
-      chartAssetId: "asset-chart-1",
-      chartAssetVersion: 1,
       chartWidth: 680,
       chartHeight: 500,
       chartAspectLocked: true,
@@ -46,11 +43,13 @@ function renderChartNode(overrides: Partial<ChartFlowNode["data"]> = {}, id = "n
 }
 
 describe("ChartNodeView", () => {
-  it("renders the img with the correct cache-busting src (asset endpoint + ?v=chartAssetVersion)", () => {
-    const { container } = renderChartNode({ chartAssetId: "asset-chart-1", chartAssetVersion: 3 });
-    const img = container.querySelector("img");
-    expect(img).not.toBeNull();
-    expect(img).toHaveAttribute("src", "/api/assets/asset-chart-1?v=3");
+  it("renders the interactive chart canvas (lazy-loaded) instead of a static image", async () => {
+    const { container } = renderChartNode({
+      chartType: "bar",
+      chartData: { type: "bar", title: "Quarterly Revenue", labels: ["Q1", "Q2"], values: [10, 20] },
+    });
+    await waitFor(() => expect(container.querySelector(".chart-canvas-wrapper")).not.toBeNull());
+    expect(container.querySelector("img")).toBeNull();
   });
 
   it("renders the title from chartData.title and the type badge from chartType", () => {
@@ -69,23 +68,12 @@ describe("ChartNodeView", () => {
     expect(screen.queryByLabelText("Chart generation warning")).toBeNull();
   });
 
-  it("shows an inline warning badge carrying chartError as its title, WITHOUT hiding the chart image", () => {
+  it("shows an inline warning badge carrying chartError as its title, WITHOUT hiding the chart canvas", async () => {
     const { container } = renderChartNode({ chartError: "used a placeholder - generation failed" });
     const badge = screen.getByLabelText("Chart generation warning");
     expect(badge).toHaveAttribute("title", "used a placeholder - generation failed");
-    // The chart image still renders - a chart_error never blocks the card.
-    expect(container.querySelector("img")).not.toBeNull();
-  });
-
-  it("onError shows the 'Chart unavailable' placeholder and hides the broken img", () => {
-    const { container } = renderChartNode();
-    const img = container.querySelector("img");
-    expect(img).not.toBeNull();
-
-    fireEvent.error(img!);
-
-    expect(screen.getByText("Chart unavailable")).toBeInTheDocument();
-    expect(container.querySelector("img")).toBeNull();
+    // The chart canvas still renders - a chart_error never blocks the card.
+    await waitFor(() => expect(container.querySelector(".chart-canvas-wrapper")).not.toBeNull());
   });
 
   it("the aspect-lock toggle button reads 'Unlock Aspect' when locked and calls onToggleAspectLock", async () => {
@@ -103,21 +91,24 @@ describe("ChartNodeView", () => {
     expect(button).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("the Export link points at the dedicated export endpoint for this node's id", () => {
+  it("the Export PNG/SVG links point at the dedicated export endpoint for this node's id", () => {
     renderChartNode({}, "chart-42");
-    const link = screen.getByRole("link", { name: "Export" });
-    expect(link).toHaveAttribute("href", "/api/assets/chart/chart-42/export?session=default");
-    expect(link).toHaveAttribute("target", "_blank");
+    const pngLink = screen.getByRole("link", { name: "Export PNG" });
+    expect(pngLink).toHaveAttribute("href", "/api/assets/chart/chart-42/export?session=default&fmt=png");
+    expect(pngLink).toHaveAttribute("target", "_blank");
+    const svgLink = screen.getByRole("link", { name: "Export SVG" });
+    expect(svgLink).toHaveAttribute("href", "/api/assets/chart/chart-42/export?session=default&fmt=svg");
+    expect(svgLink).toHaveAttribute("target", "_blank");
   });
 });
 
-describe("chartAssetUrl / chartExportUrl", () => {
-  it("chartAssetUrl builds /api/assets/{id}?v={version}", () => {
-    expect(chartAssetUrl("abc", 7)).toBe("/api/assets/abc?v=7");
+describe("chartExportUrl", () => {
+  it("defaults to fmt=png", () => {
+    expect(chartExportUrl("node-1")).toBe("/api/assets/chart/node-1/export?session=default&fmt=png");
   });
 
-  it("chartExportUrl builds /api/assets/chart/{nodeId}/export?session=default", () => {
-    expect(chartExportUrl("node-1")).toBe("/api/assets/chart/node-1/export?session=default");
+  it("builds an fmt=svg url when asked", () => {
+    expect(chartExportUrl("node-1", "svg")).toBe("/api/assets/chart/node-1/export?session=default&fmt=svg");
   });
 });
 
@@ -175,8 +166,6 @@ describe("ChartNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
         chartType: "bar",
         chartData: { type: "bar", title: "Quarterly Revenue" },
         chartError: "",
-        chartAssetId: "asset-chart-1",
-        chartAssetVersion: 1,
         chartWidth: 680,
         chartHeight: 500,
         chartAspectLocked: true,
@@ -194,16 +183,18 @@ describe("ChartNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
     expect(chartNodePropsAreEqual(p, { ...p })).toBe(true);
   });
 
-  it("treats a fresh-but-value-identical chartData object (same title) as equal", () => {
-    const a = props({ chartData: { type: "bar", title: "Quarterly Revenue", values: [1, 2, 3] } });
-    const b = {
-      ...a,
-      data: { ...a.data, chartData: { type: "line" as const, title: "Quarterly Revenue", values: [9, 9] } },
-    };
-    // Different object, even different unread sub-fields (type/values) - only
-    // `.title` is ever read by this component, and it matches.
-    expect(a.data.chartData).not.toBe(b.data.chartData);
+  it("treats an unchanged chartData reference as equal even when other unread fields differ", () => {
+    const a = props({ chartWidth: 680, chartData: { type: "bar", title: "Quarterly Revenue", values: [1, 2, 3] } });
+    const b = { ...a, data: { ...a.data, chartWidth: 999 } };
+    expect(a.data.chartData).toBe(b.data.chartData);
     expect(chartNodePropsAreEqual(a, b)).toBe(true);
+  });
+
+  it("returns false when chartData is a fresh object reference, even with byte-identical content - the renderer reads the whole shape now, so only a real upstream rebuild (see SceneCanvas.tsx's toFlowNodes cache) should mint a new reference", () => {
+    const a = props({ chartData: { type: "bar", title: "Quarterly Revenue", values: [1, 2, 3] } });
+    const b = { ...a, data: { ...a.data, chartData: { type: "bar" as const, title: "Quarterly Revenue", values: [1, 2, 3] } } };
+    expect(a.data.chartData).not.toBe(b.data.chartData);
+    expect(chartNodePropsAreEqual(a, b)).toBe(false);
   });
 
   it("is unaffected by ChartNodeData fields this component never reads (chartWidth, chartHeight, chartSourceNodeId) or unread NodeProps fields (dragging, zIndex)", () => {
@@ -232,20 +223,12 @@ describe("ChartNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
   it.each([
     ["chartType", { chartType: "line" }],
     ["chartError", { chartError: "boom" }],
-    ["chartAssetId", { chartAssetId: "asset-2" }],
-    ["chartAssetVersion", { chartAssetVersion: 2 }],
     ["chartAspectLocked", { chartAspectLocked: false }],
     ["onToggleAspectLock", { onToggleAspectLock: vi.fn() }],
     ["onResize", { onResize: vi.fn() }],
   ] as const)("returns false when data.%s changes and nothing else does", (_name, override) => {
     const a = props();
     const b = { ...a, data: { ...a.data, ...override } };
-    expect(chartNodePropsAreEqual(a, b)).toBe(false);
-  });
-
-  it("returns false when chartData.title differs, even with everything else on chartData identical", () => {
-    const a = props({ chartData: { type: "bar", title: "A" } });
-    const b = { ...a, data: { ...a.data, chartData: { type: "bar" as const, title: "B" } } };
     expect(chartNodePropsAreEqual(a, b)).toBe(false);
   });
 

@@ -110,12 +110,6 @@
           "chartAspectLocked": {
             "type": "boolean"
           },
-          "chartAssetId": {
-            "type": "string"
-          },
-          "chartAssetVersion": {
-            "type": "integer"
-          },
           "chartData": {
             "additionalProperties": false,
             "properties": {
@@ -169,6 +163,9 @@
                   "type": "number"
                 },
                 "type": "array"
+              },
+              "version": {
+                "type": "integer"
               },
               "xAxis": {
                 "type": "string"
@@ -755,8 +752,6 @@
           "chartType",
           "chartData",
           "chartError",
-          "chartAssetId",
-          "chartAssetVersion",
           "chartWidth",
           "chartHeight",
           "chartAspectLocked",

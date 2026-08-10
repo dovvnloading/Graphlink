@@ -113,9 +113,18 @@ def test_native_kwargs_llama_cpp_shape(monkeypatch):
     }
 
 
-def test_native_kwargs_anthropic_is_none_the_fallback_signal(monkeypatch):
+def test_native_kwargs_anthropic_shape(monkeypatch):
+    # ADR-013 stage 13.3: Anthropic's native path is tool-forcing - one
+    # single-purpose tool named after schema_name, whose input_schema is the
+    # caller's schema verbatim, with tool_choice forcing exactly that tool.
+    from backend.providers.base import ToolSpec
+
     state = _snapshot(monkeypatch, USE_API_MODE=True, API_PROVIDER_TYPE=config.API_PROVIDER_ANTHROPIC)
-    assert so._native_kwargs_for_active_provider(state, SCHEMA, "response") is None
+    result = so._native_kwargs_for_active_provider(state, SCHEMA, "response")
+    assert result["tool_choice"] == "response"
+    assert result["tools"] == (
+        ToolSpec(name="response", description=result["tools"][0].description, input_schema=SCHEMA),
+    )
 
 
 # -- full dispatch: the golden, all-5-providers exit criterion ------------
@@ -212,24 +221,34 @@ def test_respond_json_passes_native_kwargs_through_to_the_providers_complete_cal
     }
 
 
-def test_respond_json_embeds_the_schema_as_a_system_message_for_the_anthropic_fallback(monkeypatch):
+def test_respond_json_forces_a_tool_call_for_anthropics_native_path(monkeypatch):
+    # ADR-013 stage 13.3: Anthropic now has a native path (tool-forcing),
+    # not the schema-guided-system-message fallback - no system message is
+    # prepended, and the forced tool/tool_choice reach the provider's own
+    # request.tools/tool_choice fields.
     _activate_mode(monkeypatch, "anthropic")
     from backend.providers import anthropic_provider as ap
 
     seen_messages = []
+    seen_tools = []
+    seen_tool_choice = []
 
     class Fake(ap.AnthropicProvider):
         def complete(self, request, cancel):
             seen_messages.append(request.messages)
+            seen_tools.append(request.tools)
+            seen_tool_choice.append(request.tool_choice)
             return '{"answer": "42"}'
 
     monkeypatch.setattr(ap, "AnthropicProvider", Fake)
-    so.respond_json(config.TASK_CHAT, [{"role": "user", "content": "hi"}], SCHEMA, schema_name="my_schema")
+    result = so.respond_json(config.TASK_CHAT, [{"role": "user", "content": "hi"}], SCHEMA, schema_name="my_schema")
 
-    first_call_messages = seen_messages[0]
-    assert first_call_messages[0]["role"] == "system"
-    assert "my_schema" in first_call_messages[0]["content"]
-    assert first_call_messages[1] == {"role": "user", "content": "hi"}
+    assert result == {"answer": "42"}
+    assert seen_messages[0] == [{"role": "user", "content": "hi"}]
+    assert seen_tool_choice[0] == "my_schema"
+    assert len(seen_tools[0]) == 1
+    assert seen_tools[0][0].name == "my_schema"
+    assert seen_tools[0][0].input_schema == SCHEMA
 
 
 # -- validate-and-repair tail -----------------------------------------------

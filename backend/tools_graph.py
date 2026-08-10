@@ -475,7 +475,7 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
                 return await _run_chat(document, dispatcher, node_id, run_id, cancel_event, ctx)
             if action == "research":
                 return await _run_research(document, node, node_id, claim, cancel_event)
-            return await _run_chart(document, node, node_id, run_id, call, _agents)
+            return await _run_chart(document, node, node_id, run_id, call, _agents, cancel_event)
         finally:
             if node.pending_request_id == claim:
                 node.pending_request_id = None
@@ -627,7 +627,7 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
             "sources": [s.final_url for s in result.sources][:8],
         }))
 
-    async def _run_chart(document, node, node_id, run_id, call, _agents):
+    async def _run_chart(document, node, node_id, run_id, call, _agents, cancel_event):
         from graphlink_chart_data import ChartDataError, SUPPORTED_CHART_TYPES, canonicalize_chart_data
 
         chart_type = str(call.arguments.get("chart_type") or "bar")
@@ -639,8 +639,15 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         source_text = node.content or ""
         if not source_text.strip():
             return _error(f"Node {node_id!r} has no content to chart.")
+        # ADR-013 stage 13.3: cancel_event (ctx.cancel.event, same primitive
+        # every other run_node branch above already threads through) reaches
+        # _call_chart_agent's own respond_json call now - a real
+        # api_provider.RequestCancelledError on Stop, propagating straight
+        # out of asyncio.to_thread and into ToolRegistry.invoke's own
+        # special-casing for that exact type (see _run_web_research's own
+        # comment above for why that type specifically matters).
         parsed = await asyncio.wait_for(
-            asyncio.to_thread(_agents._call_chart_agent, source_text, chart_type),
+            asyncio.to_thread(_agents._call_chart_agent, source_text, chart_type, cancel_event),
             timeout=_agents_const("WATCHDOG_TIMEOUT_SECONDS"),
         )
         if isinstance(parsed, dict) and parsed.get("error"):

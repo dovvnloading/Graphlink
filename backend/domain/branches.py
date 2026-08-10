@@ -403,7 +403,7 @@ class BranchOps:
             # node.kind == "chat" check, since this method's own docstring
             # promises to stop quietly on a stray non-chat node/edge shape,
             # never raise. Same duck-typed posture as remove_nodes's own
-            # image_asset_id/chart_asset_id reads (backend/domain/graph.py).
+            # image_asset_id read (backend/domain/graph.py).
             history.append({
                 "role": "user" if getattr(node.state, "is_user", False) else "assistant",
                 "content": getattr(node.state, "content_parts", None) or node.content,

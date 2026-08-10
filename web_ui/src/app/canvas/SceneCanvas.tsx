@@ -1640,8 +1640,6 @@ export function toFlowNodes(
           chartType: n.chartType,
           chartData: n.chartData,
           chartError: n.chartError,
-          chartAssetId: n.chartAssetId,
-          chartAssetVersion: n.chartAssetVersion,
           chartWidth: n.chartWidth,
           chartHeight: n.chartHeight,
           chartAspectLocked: n.chartAspectLocked,

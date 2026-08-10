@@ -6398,18 +6398,86 @@ mark.document-view-search-match-current {
   min-height: 0;
 }
 
-/* max-width/max-height + object-fit: contain - same "never blow out the
-   card, only ever scale down" contract as .image-node-img. */
-.chart-node-img {
-  display: block;
-  width: 100%;
-  max-width: 100%;
-  height: auto;
-  max-height: 100%;
-  object-fit: contain;
-  border-radius: 6px;
+/* ADR-013 stage 13.2: the interactive renderer's own wrapper - position:
+   relative anchors the zoom-reset button and hover tooltip (both absolutely
+   positioned children), flex:1/min-height:0 fills the remaining card body
+   exactly like .chart-node-img used to. */
+.chart-canvas-wrapper {
+  position: relative;
+  display: flex;
   flex: 1;
   min-height: 0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.chart-canvas-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+.chart-zoom-reset {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 3px 8px;
+  color: var(--gl-surface-text-muted);
+  background-color: var(--gl-surface-inset-deep);
+  border: 1px solid var(--gl-surface-border-strong);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.chart-zoom-reset:hover {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 10;
+  pointer-events: none;
+  min-width: 90px;
+  padding: 6px 9px;
+  border: 1px solid;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  box-shadow: var(--gl-shadow-2);
+}
+
+.chart-tooltip-title {
+  font-weight: 600;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.chart-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.chart-canvas-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  padding: 16px;
+  color: var(--gl-surface-text-muted);
+  font-size: 11px;
+  text-align: center;
+  border: 1px dashed var(--gl-surface-border);
+  border-radius: 8px;
 }
 
 .chart-node-placeholder {

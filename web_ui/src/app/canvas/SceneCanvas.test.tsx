@@ -124,8 +124,6 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     chartType: "",
     chartData: {},
     chartError: "",
-    chartAssetId: "",
-    chartAssetVersion: 0,
     chartWidth: 680.0,
     chartHeight: 500.0,
     chartAspectLocked: true,
@@ -1618,10 +1616,12 @@ describe("toFlowNodes (R6.1 frame/container nodes)", () => {
 });
 
 // R6.2: Chart node. ADR-003 stage 3.3 (C9) put chartType/chartData/
-// chartError/chartAssetId/chartAssetVersion/chartWidth/chartHeight/
-// chartAspectLocked/chartSourceNodeId directly on the generated
-// SceneNodeRow type - this helper only exists now for its convenient
-// chart-kind defaults, not to work around missing fields.
+// chartError/chartWidth/chartHeight/chartAspectLocked/chartSourceNodeId
+// directly on the generated SceneNodeRow type (chartAssetId/
+// chartAssetVersion rode alongside them until ADR-013 stage 13.4 retired
+// the backend-rendered display PNG they addressed) - this helper only
+// exists now for its convenient chart-kind defaults, not to work around
+// missing fields.
 function chartNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
   return {
     ...baseNode(),
@@ -1629,8 +1629,6 @@ function chartNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     chartType: "bar",
     chartData: { type: "bar", title: "Revenue" },
     chartError: "",
-    chartAssetId: "asset-chart-1",
-    chartAssetVersion: 1,
     chartWidth: 680,
     chartHeight: 500,
     chartAspectLocked: true,
@@ -1640,7 +1638,7 @@ function chartNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
 }
 
 describe("toFlowNodes (R6.2 chart node)", () => {
-  it("maps all 9 chart wire fields onto the flow node's data, and chartWidth/chartHeight ALSO onto the flow node object itself (NodeResizer controlled-mode)", () => {
+  it("maps all 7 chart wire fields onto the flow node's data, and chartWidth/chartHeight ALSO onto the flow node object itself (NodeResizer controlled-mode)", () => {
     const scene = baseScene({
       nodes: [
         chartNode({
@@ -1650,8 +1648,6 @@ describe("toFlowNodes (R6.2 chart node)", () => {
           chartType: "sankey",
           chartData: { type: "sankey", title: "Flow" },
           chartError: "used a placeholder chart",
-          chartAssetId: "asset-9",
-          chartAssetVersion: 4,
           chartWidth: 900,
           chartHeight: 640,
           chartAspectLocked: false,
@@ -1673,8 +1669,6 @@ describe("toFlowNodes (R6.2 chart node)", () => {
       chartType: "sankey",
       chartData: { type: "sankey", title: "Flow" },
       chartError: "used a placeholder chart",
-      chartAssetId: "asset-9",
-      chartAssetVersion: 4,
       chartWidth: 900,
       chartHeight: 640,
       chartAspectLocked: false,

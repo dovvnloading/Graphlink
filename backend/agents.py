@@ -72,7 +72,7 @@ from urllib.parse import quote
 import api_provider
 import graphlink_task_config as config
 from graphlink_artifact_agent import ArtifactAgent
-from graphlink_chart_agent import ChartDataAgent
+from graphlink_chart_data import CHART_JSON_SCHEMAS, chart_generation_messages
 from graphlink_chat_agent import ChatAgent
 from graphlink_note_agent import BranchComparisonAgent, BranchSynthesisAgent, ExplainerAgent, KeyTakeawayAgent
 from graphlink_settings_store import SettingsManager  # type hint only
@@ -112,6 +112,7 @@ from graphlink_prompts import BASE_SYSTEM_PROMPT
 
 from backend.events import SessionBus  # type hint only
 from backend.run_lifecycle import RunRegistry, run_single_shot
+from backend.structured_output import StructuredOutputError, respond_json
 
 logger = logging.getLogger(__name__)
 
@@ -3111,36 +3112,38 @@ class AgentDispatcher:
         marker, so two overlapping generateChart calls (e.g. from two tabs
         open on the same session) cannot race each other.
 
-        No cancel_event: ChartDataAgent has no cancellation checkpoint of
-        its own, and its own legacy caller (ChartWorkerThread) has no
-        stop() method either - same honestly-documented limitation as every
-        other dispatch surface.
+        ADR-013 stage 13.3: `_call_chart_agent` now receives run_single_shot's
+        own cancel_event and forwards it to respond_json as a real
+        cancellation_event - a genuine interruption (api_provider.
+        RequestCancelledError), not the "no cancellation checkpoint of its
+        own" gap this docstring used to document for ChartDataAgent
+        (retired this same stage). run_single_shot's own exception handling
+        already treats a caught exception while cancel_event.is_set() as a
+        silent cancel rather than a failure, so a cancelled generation
+        neither calls on_failure nor shows a notification.
 
         Two distinct failure shapes, both routed through on_failure plus a
         notification, NEITHER of which creates a node (node creation only
         ever happens in on_success):
           1. `_call_chart_agent` returns a dict carrying a top-level "error"
-             key - ChartDataAgent.get_response's own fully-degraded case
-             (even its heuristic_chart_data fallback found nothing usable).
-             Mirrors ChartWorkerThread.run()'s identical `if 'error' in
-             parsed: raise ValueError(...)` check at the one legacy call
-             site.
+             key - respond_json's StructuredOutputError case (the model
+             could not produce schema-conforming JSON even after its own
+             one repair attempt).
           2. A timeout or any other exception raised getting there.
         A dict with NO "error" key is still not guaranteed to be canonical -
         on_success (backend/canvas.py's own closure) is responsible for its
         own defensive canonicalize_chart_data/ChartDataError handling before
         calling document.add_chart_node, exactly as this feature's own
         contract requires; this method's job ends at handing back whatever
-        ChartDataAgent produced.
+        _call_chart_agent produced.
 
         Reuses WATCHDOG_TIMEOUT_SECONDS (420s), not a new constant:
-        ChartDataAgent.get_response makes at most TWO sequential blocking
-        api_provider.chat() calls (the initial extraction call, plus one
-        repair_chart_data round trip on a non-canonical first attempt) -
-        double Artifact's own single-call shape, but nowhere near Web
-        Research's ~10-call chain that justified ITS own 900s bump, and 420s
-        already carries ample headroom for two calls at any realistic
-        per-call latency.
+        respond_json makes at most TWO sequential blocking api_provider.
+        chat() calls (the initial extraction call, plus one repair round
+        trip on a non-canonical first attempt) - double Artifact's own
+        single-call shape, but nowhere near Web Research's ~10-call chain
+        that justified ITS own 900s bump, and 420s already carries ample
+        headroom for two calls at any realistic per-call latency.
 
         ADR-002 stage 2.3: the guard/timeout/exception/notify skeleton
         below now lives once, shared with start_note_generation, in
@@ -3157,7 +3160,7 @@ class AgentDispatcher:
             notifications_state=notifications_state,
             node_id=node_id,
             timeout=WATCHDOG_TIMEOUT_SECONDS,
-            call=lambda: _call_chart_agent(source_text, chart_type),
+            call=lambda cancel_event: _call_chart_agent(source_text, chart_type, cancel_event),
             validate=lambda result: (
                 str(result["error"]) if isinstance(result, dict) and "error" in result else None
             ),
@@ -3215,7 +3218,7 @@ class AgentDispatcher:
             notifications_state=notifications_state,
             node_id=node_id,
             timeout=WATCHDOG_TIMEOUT_SECONDS,
-            call=lambda: _call_note_agent(note_kind, source_text),
+            call=lambda _cancel_event: _call_note_agent(note_kind, source_text),
             validate=lambda text: (
                 # An agent that returns nothing usable must not silently
                 # create an empty note - that reads as a broken feature.
@@ -3268,7 +3271,7 @@ class AgentDispatcher:
             notifications_state=notifications_state,
             node_id=None,
             timeout=WATCHDOG_TIMEOUT_SECONDS,
-            call=lambda: _call_branch_comparison_agent(source_text),
+            call=lambda _cancel_event: _call_branch_comparison_agent(source_text),
             validate=lambda text: (
                 "Branch comparison returned an empty response. Please try again."
                 if not str(text or "").strip() else None
@@ -3316,7 +3319,7 @@ class AgentDispatcher:
             notifications_state=notifications_state,
             node_id=None,
             timeout=WATCHDOG_TIMEOUT_SECONDS,
-            call=lambda: _call_branch_synthesis_agent(source_text, instructions),
+            call=lambda _cancel_event: _call_branch_synthesis_agent(source_text, instructions),
             validate=lambda text: (
                 "Branch synthesis returned an empty response. Please try again."
                 if not str(text or "").strip() else None
@@ -3539,19 +3542,56 @@ def _call_artifact_agent(current_artifact, history):
     return ArtifactAgent().get_response(current_artifact, history)
 
 
-def _call_chart_agent(source_text: str, chart_type: str) -> dict:
+def _call_chart_agent(source_text: str, chart_type: str, cancel_event: threading.Event | None = None) -> dict:
     """Runs inside asyncio.to_thread - the blocking driver for
     start_chart_generation above, mirroring _call_artifact_agent's own
-    shape. ChartDataAgent.get_response returns a JSON STRING (its own
-    unchanged public contract, preserved byte-for-byte by the R6.2
-    extraction into graphlink_chart_agent.py - see that module's own
-    docstring), so this parses it back into a dict the same way
-    ChartWorkerThread.run() already does at the one legacy call site
-    (`parsed = json.loads(data)`) before start_chart_generation inspects it
-    for a top-level "error" key."""
-    agent = ChartDataAgent()
-    raw = agent.get_response(source_text, chart_type)
-    return json.loads(raw)
+    shape. ADR-013 stage 13.3: retired graphlink_chart_agent.py's whole
+    ChartDataAgent pipeline (five hand-maintained per-type prompts, a
+    bespoke clean_response/repair_chart_data pair, a manual per-provider
+    JSON-mode if/elif, and a heuristic-regex fallback of last resort) in
+    favor of ONE respond_json call against a real JSON Schema - the module
+    ChartDataAgent existed specifically to replace (see structured_output.py's
+    own docstring). graphlink_chart_data.CHART_JSON_SCHEMAS/
+    chart_generation_messages are shared with backend/evals/runner.py's own
+    chart eval fixture, so the eval drives the identical shape this
+    actually ships.
+
+    `cancel_event`, when set, is respond_json's own cancellation_event -
+    forwarded all the way to api_provider.chat(), a REAL interruption
+    (api_provider.RequestCancelledError, checked before the request is sent
+    and between any transport retries) rather than the pre-13.3 gap this
+    surface's own start_chart_generation docstring used to document ("no
+    cancellation checkpoint of its own"). A cancellation raises straight
+    through - run_single_shot's own exception handling already treats a
+    caught exception while cancel_event.is_set() as a silent cancel, not a
+    failure, so this function does not catch it itself.
+
+    Returns a dict either way: the canonical shape on success, or
+    {"error": <message>} on respond_json's own StructuredOutputError (the
+    model could not produce schema-conforming JSON even after one repair
+    attempt) - the exact contract start_chart_generation/_run_chart already
+    expect (top-level "error" key => surfaced as a failure, never reaches
+    on_success/add_chart_node)."""
+    try:
+        schema = CHART_JSON_SCHEMAS[chart_type]
+    except KeyError:
+        # Defensive only - both real callers (intents_chart.py's
+        # generate_chart, tools_graph.py's _run_chart) already validate
+        # chart_type against SUPPORTED_CHART_TYPES before ever reaching
+        # here; this guards against a raw KeyError if a future caller
+        # regresses that, matching the retired ChartDataAgent's own
+        # equivalent internal guard.
+        return {"error": f"Unsupported chart type: {chart_type!r}"}
+    try:
+        return respond_json(
+            config.TASK_CHART,
+            chart_generation_messages(source_text, chart_type),
+            schema,
+            schema_name=f"{chart_type}_chart",
+            cancellation_event=cancel_event,
+        )
+    except StructuredOutputError as exc:
+        return {"error": str(exc)}
 
 
 # -- R5.3: Gitlink - blocking helpers, each runs inside asyncio.to_thread ----

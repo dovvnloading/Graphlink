@@ -448,7 +448,7 @@ async def run_single_shot(
     notifications_state,
     node_id: str | None,
     timeout: float,
-    call: Callable[[], Any],
+    call: Callable[[threading.Event], Any],
     validate: Callable[[Any], str | None],
     on_success,
     on_failure,
@@ -464,7 +464,18 @@ async def run_single_shot(
     the generation, return immediately) - see the inline comment at the
     claim below for why the old directly-awaited shape had to go.
 
-    `call`: zero-arg callable, run inside asyncio.to_thread. `validate`:
+    `call`: callable run inside asyncio.to_thread, receiving THIS run's own
+    cancel_event (below) as its one argument - ADR-013 stage 13.3: previously
+    a zero-arg callable, the cancel_event was created here but never reached
+    `call` itself, so a cancelled run's blocking work (an in-flight
+    api_provider.chat()) always ran to completion regardless; only the
+    result was discarded (see the cancel_event comment just below). A
+    surface that wants a REAL interruption threads it through to something
+    that checks it (respond_json's own cancellation_event kwarg, ultimately
+    api_provider.RequestCancelledError) - chart's own `_call_chart_agent` is
+    the first to do so; note/branch-comparison/branch-synthesis accept and
+    ignore it today (no change in their own behavior), a call signature
+    change rather than a behavior one for those three. `validate`:
     inspects a SUCCESSFUL `call` result and returns a human-readable
     failure message when it is well-formed but not usable (e.g. chart's
     top-level "error" key, note's empty-string check) - this is a
@@ -514,7 +525,7 @@ async def run_single_shot(
 
     async def _task() -> None:
         try:
-            result = await asyncio.wait_for(asyncio.to_thread(call), timeout=timeout)
+            result = await asyncio.wait_for(asyncio.to_thread(call, cancel_event), timeout=timeout)
             if cancel_event.is_set():
                 return
             message = validate(result)

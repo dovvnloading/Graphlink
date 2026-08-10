@@ -98,19 +98,16 @@ def _resolve_context_summary() -> str:
     return CONTEXT_SUMMARY_SYSTEM_PROMPT
 
 
-def _resolve_chart_output_hard_rules() -> str:
-    from graphlink_chart_agent import ChartDataAgent
-    return ChartDataAgent.CHART_OUTPUT_HARD_RULES
-
-
-def _resolve_chart_schema_templates() -> str:
-    # A dict of per-chart-type schema strings; canonicalized as sorted
-    # "name: template" lines so the registry hashes ONE deterministic text.
-    from graphlink_chart_agent import ChartDataAgent
-    return "\n".join(
-        f"{name}: {template}"
-        for name, template in sorted(ChartDataAgent.CHART_SCHEMA_TEMPLATES.items())
-    )
+def _resolve_chart_generation_system() -> str:
+    # ADR-013 stage 13.3: replaces the retired ChartDataAgent's two
+    # registry entries (chart-output-hard-rules/chart-schema-templates -
+    # five hand-maintained per-type prompt strings + a hard-rules block)
+    # with the ONE stable system prompt respond_json-based chart generation
+    # actually sends now; the per-type schema itself is real JSON Schema
+    # (graphlink_chart_data.CHART_JSON_SCHEMAS), not prompt text, so it has
+    # no place in a PROMPT registry at all.
+    from graphlink_chart_data import CHART_GENERATION_SYSTEM_PROMPT
+    return CHART_GENERATION_SYSTEM_PROMPT
 
 
 def _resolve_note_key_takeaway() -> str:
@@ -206,8 +203,7 @@ def _resolve_reasoning_hint_high() -> str:
 _PROMPT_RESOLVERS = {
     "chat-system-core": _resolve_chat_system_core,
     "context-summary": _resolve_context_summary,
-    "chart-output-hard-rules": _resolve_chart_output_hard_rules,
-    "chart-schema-templates": _resolve_chart_schema_templates,
+    "chart-generation-system": _resolve_chart_generation_system,
     "note-key-takeaway": _resolve_note_key_takeaway,
     "note-branch-comparison": _resolve_note_branch_comparison,
     "note-branch-synthesis": _resolve_note_branch_synthesis,
@@ -250,8 +246,7 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         # 325f3b5b928865e1e41813c863ac56364660b2877a.
         ("chat-system-core", 2, "5509e4da2049f63c08a2209209b03291c175c321669a20cb91fb08c88d1906e1"),
         ("context-summary", 1, "2dbdc7b34ebcbd909bfe17eef2cc93f3295d63b2f2f12aaea17c00fe3c4e5564"),
-        ("chart-output-hard-rules", 1, "a852599cfd04506adf05d91bcc7fdfabe0e2e90cb45e5c436a4b3b27cf9292a8"),
-        ("chart-schema-templates", 1, "4e3453902371676fbca08e5b9d0d63cfd6b51ee85442542f4b0126b4a0b9663c"),
+        ("chart-generation-system", 1, "3527adee7721dfe61516d658a91627fabc7d4cbdfb817c33dbe9e44f5a56e57c"),
         ("note-key-takeaway", 1, "6c353e7c606ab20f197a5ee4eafb0aac2f86c7c9a491ccddfac63bf2349ec936"),
         ("note-branch-comparison", 1, "0713d59157923e1ea9dd71715a1ffc9e394e6fedec5a42e62cacb143ef06dfc1"),
         ("note-branch-synthesis", 1, "7513752343c8bc7d4aecfaf388d0513114fd18ad425fa86bab237dfcf38fe2ff"),

@@ -86,18 +86,6 @@ def test_pycoder_domain_imports_qt_free():
     _assert_import_is_qt_free("graphlink_plugins.pycoder.domain")
 
 
-def test_chart_agent_imports_qt_free():
-    # R6.2 prerequisite: graphlink_agents_tools.py (home of ChartDataAgent
-    # before this split) has its own unconditional `from PySide6.QtCore
-    # import QThread, Signal` at module level, needed only by its
-    # ChartWorkerThread/ImageGenerationWorkerThread/ModelPullWorkerThread
-    # classes - importing anything from it, including the Qt-free
-    # ChartDataAgent, pulled Qt in regardless. This is the machine-checked
-    # fact that the real chart-generation path backend/ needs (backend/
-    # agents.py's generateChart dispatch) no longer does.
-    _assert_import_is_qt_free("graphlink_chart_agent")
-
-
 def test_note_agent_imports_qt_free():
     # R8a: graphlink_note_agent.py restores KeyTakeawayAgent/ExplainerAgent,
     # which were lost when R7.6b deleted graphlink_app/ (they lived in

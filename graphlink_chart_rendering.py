@@ -660,29 +660,24 @@ def _render_chart_content(figure, chart_type: str, chart_data: dict[str, Any], t
         figure.tight_layout(pad=1.25)
 
 
-def render_chart_png(chart_type: str, chart_data: dict[str, Any], width: float, height: float, dpi_scale: float = 1.0) -> bytes:
-    """Render one chart to PNG bytes. Port of ChartItem.generate_chart +
-    _render_chart_to_image + _figure_to_image, minus the render cache (no
-    long-lived widget here to cache against) and minus the card chrome (see
-    module docstring).
+def _build_chart_figure(chart_type: str, chart_data: dict[str, Any], width: float, height: float, dpi: float):
+    """Shared figure-construction path for both render_chart_png and
+    render_chart_svg below (ADR-013 stage 13.4) - everything through
+    `canvas.draw()` is format-agnostic; only the final `figure.savefig(...)`
+    call differs (raster vs vector). Returns `(figure, theme)` - the theme
+    carries `surface`, the facecolor every caller's own savefig needs.
 
-    `width`/`height` are the desired on-screen box size in CSS px (the
-    node's chart_width/chart_height); `dpi_scale` multiplies the base render
-    density (1.0 for normal display/resize, 3.0 for the export endpoint -
-    mirrors legacy's own EXPORT_SCALE).
-
-    Never raises for a malformed `chart_data` under a KNOWN chart_type -
-    canonicalize_chart_data's ChartDataError (or any other exception a
-    renderer hits) is caught and swapped for a placeholder "Chart rendering
-    issue" image instead, exactly as ChartItem.generate_chart never crashes
-    on bad data. DOES raise ValueError for a `chart_type` outside
-    SUPPORTED_CHART_TYPES - there is no such thing as a placeholder chart
-    TYPE, only placeholder chart DATA."""
+    Raises ValueError for a `chart_type` outside SUPPORTED_CHART_TYPES -
+    there is no such thing as a placeholder chart TYPE, only placeholder
+    chart DATA (a malformed `chart_data` under a KNOWN type never raises;
+    canonicalize_chart_data's ChartDataError, or any other exception a
+    renderer hits, is caught and swapped for a placeholder "Chart rendering
+    issue" image instead, exactly as legacy ChartItem.generate_chart never
+    crashed on bad data)."""
     normalized_type = str(chart_type or "").strip().lower()
     if normalized_type not in SUPPORTED_CHART_TYPES:
         raise ValueError(f"Unsupported chart type: {normalized_type or 'unknown'}")
 
-    dpi = BASE_DPI * max(1.0, float(dpi_scale))
     fig_width_in = max(MIN_FIGURE_WIDTH_PX, float(width)) / CSS_PX_PER_INCH
     fig_height_in = max(MIN_FIGURE_HEIGHT_PX, float(height)) / CSS_PX_PER_INCH
 
@@ -697,6 +692,35 @@ def render_chart_png(chart_type: str, chart_data: dict[str, Any], width: float, 
         _render_error_image(figure, theme, str(exc))
 
     canvas.draw()
+    return figure, theme
+
+
+def render_chart_png(chart_type: str, chart_data: dict[str, Any], width: float, height: float, dpi_scale: float = 1.0) -> bytes:
+    """Render one chart to PNG bytes. Port of ChartItem.generate_chart +
+    _render_chart_to_image + _figure_to_image, minus the render cache (no
+    long-lived widget here to cache against) and minus the card chrome (see
+    module docstring).
+
+    `width`/`height` are the desired on-screen box size in CSS px; `dpi_scale`
+    multiplies the base render density (3.0 for the export endpoint - mirrors
+    legacy's own EXPORT_SCALE; ADR-013 stage 13.4 retired every OTHER caller,
+    see this module's own docstring)."""
+    dpi = BASE_DPI * max(1.0, float(dpi_scale))
+    figure, theme = _build_chart_figure(chart_type, chart_data, width, height, dpi)
     buffer = BytesIO()
     figure.savefig(buffer, format="png", dpi=dpi, facecolor=theme["surface"])
+    return buffer.getvalue()
+
+
+def render_chart_svg(chart_type: str, chart_data: dict[str, Any], width: float, height: float) -> bytes:
+    """Render one chart to SVG bytes (ADR-013 stage 13.4's new export
+    option) - same figure/content pipeline as render_chart_png, but vector
+    output, so there is no dpi_scale parameter: SVG is resolution-
+    independent, unlike a PNG's fixed pixel grid. BASE_DPI still sets the
+    figure's internal layout density (font/line sizing in figure-relative
+    units), matching the PNG export's own proportions rather than picking
+    an unrelated second constant."""
+    figure, theme = _build_chart_figure(chart_type, chart_data, width, height, BASE_DPI)
+    buffer = BytesIO()
+    figure.savefig(buffer, format="svg", facecolor=theme["surface"])
     return buffer.getvalue()

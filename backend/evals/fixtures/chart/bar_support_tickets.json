@@ -7,6 +7,7 @@
   },
   "scripted_response": "{\"type\": \"bar\", \"title\": \"Support Tickets by Category\", \"labels\": [\"Billing Issues\", \"Login Problems\", \"Feature Requests\", \"Bug Reports\"], \"values\": [42, 87, 65, 23], \"xAxis\": \"Category\", \"yAxis\": \"Ticket Count\"}",
   "expected": {
+    "version": 1,
     "type": "bar",
     "title": "Support Tickets by Category",
     "labels": ["Billing Issues", "Login Problems", "Feature Requests", "Bug Reports"],

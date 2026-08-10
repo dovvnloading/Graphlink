@@ -172,8 +172,6 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         chartType: "",
         chartData: {},
         chartError: "",
-        chartAssetId: "",
-        chartAssetVersion: 0,
         chartWidth: 680.0,
         chartHeight: 500.0,
         chartAspectLocked: true,
@@ -266,8 +264,6 @@ describe("SceneStore", () => {
           { source: "B", target: "C", value: 4.5 },
         ],
       },
-      chartAssetId: "asset-chart-1",
-      chartAssetVersion: 1,
     };
 
     listeners.get("scene")!(validScenePayload({ nodes: [chartNode] }));
@@ -296,8 +292,6 @@ describe("SceneStore", () => {
         xAxis: "Quarter",
         yAxis: "Revenue",
       },
-      chartAssetId: "asset-chart-1",
-      chartAssetVersion: 1,
     };
 
     listeners.get("scene")!(validScenePayload({ nodes: [chartNode] }));

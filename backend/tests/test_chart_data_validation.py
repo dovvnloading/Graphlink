@@ -1,23 +1,24 @@
-"""canonicalize_chart_data's own validation rules, and ChartDataAgent.
-validate_chart_data's use of that same contract (Qt-removal plan R7.3).
+"""canonicalize_chart_data's own validation rules (Qt-removal plan R7.3).
 
-R7.3 gap: graphlink_chart_data.py and graphlink_chart_agent.py are both
-confirmed Qt-free survivor modules backend/ imports directly (from
-backend/domain/graph.py and backend/agents.py) - live production logic, not legacy-only code. Before this
-file, their own validation/rejection rules had no backend/tests coverage at
-all: backend/tests/test_canvas.py's chart tests only cover the "unsupported
-chart_type string" rejection path (SceneDocument.add_chart_node's own guard),
-never canonicalize_chart_data's own ChartDataError branch for malformed-but-
-otherwise-valid-type data (non-finite numbers, wrong container types, sankey
-cycles) - the exact defensive `except ChartDataError` guard in canvas.py's
-generateChart wrapper this
-file's absence left completely unexercised. Ported from graphlink_app/tests/
-test_chart_nodes.py's own Qt-free test functions (the file's other tests
-construct a real Qt ChatScene and stay behind).
-"""
+R7.3 gap: graphlink_chart_data.py is a confirmed Qt-free survivor module
+backend/ imports directly (from backend/domain/graph.py) - live production
+logic, not legacy-only code. Before this file, its own validation/rejection
+rules had no backend/tests coverage at all: backend/tests/test_canvas.py's
+chart tests only cover the "unsupported chart_type string" rejection path
+(SceneDocument.add_chart_node's own guard), never canonicalize_chart_data's
+own ChartDataError branch for malformed-but-otherwise-valid-type data
+(non-finite numbers, wrong container types, sankey cycles) - the exact
+defensive `except ChartDataError` guard in canvas.py's generateChart wrapper
+this file's absence left completely unexercised. Ported from graphlink_app/
+tests/test_chart_nodes.py's own Qt-free test functions (the file's other
+tests construct a real Qt ChatScene and stay behind).
 
-from graphlink_chart_agent import ChartDataAgent
-from graphlink_chart_data import ChartDataError, canonicalize_chart_data
+ADR-013 stage 13.3 retired ChartDataAgent (graphlink_chart_agent.py) - this
+file's own tests of its validate_chart_data wrapper went with it; the
+canonicalize_chart_data tests below are unaffected (they exercise the
+canonical validator directly, not through any wrapper)."""
+
+from graphlink_chart_data import CHART_SPEC_VERSION, ChartDataError, canonicalize_chart_data
 
 
 def _bar_data(**overrides):
@@ -72,40 +73,9 @@ def test_canonicalize_chart_data_aggregates_duplicate_sankey_flows_and_rejects_c
         assert "cannot contain cycles" in str(exc)
 
 
-def test_chart_data_agent_validate_chart_data_uses_the_canonical_contract():
-    # ChartDataAgent.validate_chart_data (graphlink_chart_agent.py:541-558) is
-    # a thin wrapper: call canonicalize_chart_data, report (True, None) on
-    # success or (False, message) on ChartDataError. This proves the wrapper
-    # actually delegates rather than reimplementing (and drifting from) its
-    # own copy of the validation rules.
-    agent = ChartDataAgent()
-
-    valid, error = agent.validate_chart_data(_bar_data(values="123"), "bar")
-    assert valid is False
-    assert "both be lists" in error
-
-    valid, error = agent.validate_chart_data(
-        {"type": "sankey", "flows": [{"source": "A", "target": "B", "value": float("nan")}]},
-        "sankey",
-    )
-    assert valid is False
-    assert "finite" in error
-
-    valid, error = agent.validate_chart_data(_bar_data(), "bar")
-    assert valid is True
-    assert error is None
-
-
-def test_chart_data_agent_validate_chart_data_canonicalizes_the_dict_in_place():
-    # validate_chart_data's own contract (graphlink_chart_agent.py:555-556):
-    # on success it clears and repopulates the SAME dict with the canonical
-    # shape, rather than returning a new one - callers rely on the caller's
-    # own `data` reference already being canonical afterward.
-    agent = ChartDataAgent()
-    data = _bar_data(values=["1", "2", "3"])  # strings - canonical form is floats
-
-    valid, error = agent.validate_chart_data(data, "bar")
-
-    assert valid is True
-    assert error is None
-    assert data["values"] == [1.0, 2.0, 3.0]
+def test_canonicalize_chart_data_stamps_the_spec_version():
+    # ADR-013 stage 13.1: every canonical shape carries an explicit,
+    # typed version - a future migration reads this rather than sniffing
+    # field presence to know which shape it's looking at.
+    canonical = canonicalize_chart_data(_bar_data(), "bar")
+    assert canonical["version"] == CHART_SPEC_VERSION == 1

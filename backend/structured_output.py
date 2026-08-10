@@ -2,10 +2,12 @@
 used by every caller that needs a model's answer to conform to a schema
 (charts, plugins, the agentic planner) instead of each one hand-rolling its
 own JSON-mode kwargs and repair chain the way graphlink_chart_agent.py's
-ChartDataAgent currently does (five hardcoded chart schemas, a bespoke
+now-retired ChartDataAgent used to (five hardcoded chart schemas, a bespoke
 clean_response/repair_chart_data pair, and an if/elif on API_PROVIDER_TYPE
 picking response_format/response_mime_type/format by hand - exactly the
 per-caller sprawl this ADR's own "Alternatives considered" rejects).
+ADR-013 stage 13.3 retired that whole pipeline in favor of this module -
+backend/agents.py's _call_chart_agent is now just one respond_json call.
 
 Two paths per provider, chosen from THIS request's own provider snapshot
 (api_provider._snapshot_provider_state()/ProviderRuntime.snapshot() - the
@@ -25,9 +27,14 @@ same one api_provider.chat() itself reads, so this module never re-derives
   constrained server-side, so this path should essentially never need
   repair - but the response is still parsed+validated as a safety net, not
   trusted blindly.
-- **Fallback** (Anthropic - no native JSON-schema mode today): the schema is
-  embedded in an extra system message (schema-guided generation, no
-  server-side enforcement) instead of native kwargs.
+- **Native, tool-forced** (Anthropic - ADR-013 stage 13.3): Anthropic has no
+  native JSON-schema RESPONSE mode, but it does have hard-enforced tool
+  argument schemas - so the native path defines exactly one single-purpose
+  tool (name=`schema_name`, input_schema=`schema`) and forces it via
+  `tool_choice`. AnthropicProvider.complete() reads the forced tool call's
+  arguments back as the result instead of visible text (see that method's
+  own comment) - server-side constrained, same posture as every other
+  native branch, not the schema-guided prompting the fallback below is.
 
 Both paths converge on the SAME validate-and-repair tail: parse, validate
 against `schema` (a hand-rolled Draft-2020-12 SUBSET validator - type/
@@ -60,6 +67,7 @@ import re
 
 import api_provider
 import graphlink_task_config as config
+from backend.providers.base import ToolSpec
 
 
 class StructuredOutputError(RuntimeError):
@@ -139,11 +147,15 @@ def _validate_against_schema(data, schema: dict, path: str = "$") -> list[str]:
 
 def _native_kwargs_for_active_provider(state, schema: dict, schema_name: str) -> dict | None:
     """None means the active provider/mode has no native structured-output
-    affordance (Anthropic today) - the caller falls back to a schema-guided
-    system message instead. Branches on the exact same snapshot fields
-    api_provider.chat() itself branches on (state.use_api_mode/
-    local_provider_type/api_provider_type), so "which provider is active"
-    is never derived two different, potentially-divergent ways."""
+    affordance at all - the caller falls back to a schema-guided system
+    message instead. As of ADR-013 stage 13.3 that is no longer any real
+    provider (Anthropic now has a native path too, via tool-forcing below) -
+    None stays reachable only for a provider/mode this function doesn't
+    recognize, so the fallback remains a real safety net, not dead code.
+    Branches on the exact same snapshot fields api_provider.chat() itself
+    branches on (state.use_api_mode/local_provider_type/api_provider_type),
+    so "which provider is active" is never derived two different,
+    potentially-divergent ways."""
     if not state.use_api_mode:
         if state.local_provider_type == config.LOCAL_PROVIDER_OLLAMA:
             # Ollama's `format` accepts a raw JSON Schema dict directly
@@ -175,8 +187,23 @@ def _native_kwargs_for_active_provider(state, schema: dict, schema_name: str) ->
         # by GeminiProvider._request_body, and Google's protobuf-JSON codec
         # accepts either casing on ingest.
         return {"response_mime_type": "application/json", "response_schema": schema}
-    # Anthropic (config.API_PROVIDER_ANTHROPIC): no native mode - None
-    # signals the schema-guided fallback below.
+    if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
+        # ADR-013 stage 13.3: no native JSON-schema RESPONSE mode, but a
+        # forced tool call's arguments ARE hard-schema-constrained - define
+        # one single-purpose tool named `schema_name` whose input_schema is
+        # exactly the caller's schema, and force it. AnthropicProvider.
+        # complete() reads the tool call back as the structured result
+        # instead of visible text (see its own request.tool_choice handling).
+        return {
+            "tools": (
+                ToolSpec(
+                    name=schema_name,
+                    description=f"Return the {schema_name} result, matching the required schema exactly.",
+                    input_schema=schema,
+                ),
+            ),
+            "tool_choice": schema_name,
+        }
     return None
 
 

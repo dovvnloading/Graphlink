@@ -7,9 +7,11 @@ for why (scene_payload() resends every node on every publish_scene() call,
 so inlined bytes there would compound in size on every unrelated mutation).
 Instead the frontend fetches them on demand from this dedicated HTTP route,
 addressed by the opaque image_asset_id each image-kind SceneNode carries.
-R6.2's chart nodes REUSE this exact same route/dict for their own
-display-resolution PNG (chart_asset_id, same image_assets store) - no
-parallel asset store.
+R6.2's chart nodes used to REUSE this exact same route/dict for their own
+display-resolution PNG (chart_asset_id, same image_assets store) - ADR-013
+stage 13.4 retired that render outright (see ChartState's own docstring,
+backend/domain/node_states.py), so this route today serves only real
+image-kind nodes.
 
 This route needs to reach the SAME SceneDocument instance register_canvas()
 built for a given session - not a fresh one - so it goes through the same
@@ -24,10 +26,22 @@ R6.2 ALSO adds a second, genuinely new route: GET /api/assets/chart/{node_id}
 resolution RE-RENDER (legacy ChartItem.EXPORT_SCALE), not a lookup of
 anything cached in image_assets - so it is a distinct endpoint, not a query
 flag on the shared one.
+
+ADR-013 stage 13.4: export_chart's render (~50-108ms of synchronous
+matplotlib work, measured) is the LAST inline render this app makes -
+add_chart_node/resize_chart's own display-PNG renders were retired outright
+once stage 13.2's client-side interactive renderer made them dead weight
+(see ChartState's own docstring, backend/domain/node_states.py). Wrapped in
+asyncio.to_thread so this route no longer blocks the event loop (closing
+C6/M1's own finding) - a plain `async def` route handler awaiting a
+synchronous call would otherwise still stall every other in-flight request
+on this same process for the full render duration. Also gained a real SVG
+export option this same stage - vector, so no dpi_scale multiplier applies.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 
 from fastapi import FastAPI, Response
@@ -35,7 +49,7 @@ from fastapi.responses import JSONResponse
 
 from backend.events import EventBus, UnknownSessionError
 from backend.session_context import get_session_context
-from graphlink_chart_rendering import render_chart_png
+from graphlink_chart_rendering import render_chart_png, render_chart_svg
 
 # 3x the display resolution - mirrors legacy ChartItem.EXPORT_SCALE exactly.
 CHART_EXPORT_DPI_SCALE = 3.0
@@ -83,7 +97,7 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
         return Response(content=image_bytes, media_type=mime_type)
 
     @app.get("/api/assets/chart/{node_id}/export")
-    async def export_chart(node_id: str, session: str = "default") -> Response:
+    async def export_chart(node_id: str, session: str = "default", fmt: str = "png") -> Response:
         try:
             document = get_session_context(bus.session(session)).canvas_document
         except UnknownSessionError:
@@ -93,15 +107,35 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
         if node is None or node.kind != "chart":
             return JSONResponse({"error": "unknown chart"}, status_code=404)
 
-        png_bytes = render_chart_png(
+        normalized_format = str(fmt or "png").strip().lower()
+        if normalized_format not in ("png", "svg"):
+            return JSONResponse({"error": "unsupported export format"}, status_code=400)
+
+        title = node.state.chart_data.get("title") if isinstance(node.state.chart_data, dict) else ""
+        filename = _sanitize_chart_filename(title)
+
+        if normalized_format == "svg":
+            svg_bytes = await asyncio.to_thread(
+                render_chart_svg,
+                node.state.chart_type,
+                node.state.chart_data,
+                node.state.chart_width,
+                node.state.chart_height,
+            )
+            return Response(
+                content=svg_bytes,
+                media_type="image/svg+xml",
+                headers={"Content-Disposition": f'attachment; filename="{filename}.svg"'},
+            )
+
+        png_bytes = await asyncio.to_thread(
+            render_chart_png,
             node.state.chart_type,
             node.state.chart_data,
             node.state.chart_width,
             node.state.chart_height,
             dpi_scale=CHART_EXPORT_DPI_SCALE,
         )
-        title = node.state.chart_data.get("title") if isinstance(node.state.chart_data, dict) else ""
-        filename = _sanitize_chart_filename(title)
         return Response(
             content=png_bytes,
             media_type="image/png",

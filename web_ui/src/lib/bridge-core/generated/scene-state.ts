@@ -86,8 +86,6 @@ export interface SceneNodeRow {
   chartType: string;
   chartData: ChartDataRow;
   chartError: string;
-  chartAssetId: string;
-  chartAssetVersion: number;
   chartWidth: number;
   chartHeight: number;
   chartAspectLocked: boolean;
@@ -163,6 +161,7 @@ export interface GitlinkPendingChangeRow {
 }
 
 export interface ChartDataRow {
+  version?: number | null;
   type?: "bar" | "line" | "pie" | "histogram" | "sankey" | null;
   title?: string | null;
   labels?: string[] | null;
@@ -654,16 +653,6 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     else { if (typeof fieldValue !== "string") errors.push(`${path}.chartError` + ": expected string"); }
   }
   {
-    const fieldValue = value["chartAssetId"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.chartAssetId: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.chartAssetId` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["chartAssetVersion"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.chartAssetVersion: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.chartAssetVersion` + ": expected number"); }
-  }
-  {
     const fieldValue = value["chartWidth"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.chartWidth: missing required field`);
     else { if (typeof fieldValue !== "number") errors.push(`${path}.chartWidth` + ": expected number"); }
@@ -976,6 +965,10 @@ function checkGitlinkPendingChangeRow(value: unknown, path: string, errors: stri
 
 function checkChartDataRow(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["version"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.version` + ": expected number"); }
+  }
   {
     const fieldValue = value["type"];
     if (fieldValue !== undefined && fieldValue !== null) { if (!["bar", "line", "pie", "histogram", "sankey"].includes(fieldValue as string)) errors.push(`${path}.type` + `: ${JSON.stringify(fieldValue)} is not one of [` + "bar, line, pie, histogram, sankey" + `]`); }

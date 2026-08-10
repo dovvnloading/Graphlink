@@ -11,9 +11,127 @@ MAX_SANKEY_FLOWS = 300
 MAX_LABEL_LENGTH = 160
 MAX_TITLE_LENGTH = 200
 
+# ADR-013 stage 13.1: the canonical shape's own schema version - every spec
+# canonicalize_chart_data produces today is version 1. Bumped only when this
+# function's OUTPUT shape changes incompatibly (a renamed/removed key, a new
+# required field) - not on every chart-type addition, which stays additive.
+CHART_SPEC_VERSION = 1
+
 
 class ChartDataError(ValueError):
     """Raised when a chart payload cannot be converted to the canonical schema."""
+
+
+# -- ADR-013 stage 13.3: chart generation via respond_json --------------------
+#
+# The JSON Schema respond_json (backend/structured_output.py) constrains a
+# model's chart-generation output to, and the system/user messages that ask
+# for it - shared by backend/agents.py's _call_chart_agent (the real
+# generation path) and backend/evals/runner.py's chart eval fixture (so the
+# eval drives the SAME shape actually shipping, not a stand-in). Kept here
+# rather than in backend/ since chart-shape knowledge already lives in this
+# module (SUPPORTED_CHART_TYPES/canonicalize_chart_data) and both callers
+# need it Qt-free. These schemas are deliberately looser than
+# canonicalize_chart_data's own rules (no length caps, no cross-field checks
+# like "pie values must be positive") - canonicalize_chart_data remains the
+# single source of truth for what's actually ACCEPTED; this schema only
+# exists to steer generation and give the provider's own native constraint
+# something concrete to enforce, catching the most common shape mistakes
+# (wrong container type, missing key) before canonicalize_chart_data's own,
+# stricter pass.
+_SERIES_PROPERTIES = {
+    "title": {"type": "string"},
+    "labels": {"type": "array", "items": {"type": "string"}},
+    "values": {"type": "array", "items": {"type": "number"}},
+    "xAxis": {"type": "string"},
+    "yAxis": {"type": "string"},
+}
+
+CHART_JSON_SCHEMAS: dict[str, dict] = {
+    "bar": {
+        "type": "object",
+        "properties": {"type": {"type": "string", "enum": ["bar"]}, **_SERIES_PROPERTIES},
+        "required": ["type", "labels", "values"],
+    },
+    "line": {
+        "type": "object",
+        "properties": {"type": {"type": "string", "enum": ["line"]}, **_SERIES_PROPERTIES},
+        "required": ["type", "labels", "values"],
+    },
+    "pie": {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["pie"]},
+            "title": {"type": "string"},
+            "labels": {"type": "array", "items": {"type": "string"}},
+            "values": {"type": "array", "items": {"type": "number"}},
+        },
+        "required": ["type", "labels", "values"],
+    },
+    "histogram": {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["histogram"]},
+            "title": {"type": "string"},
+            "values": {"type": "array", "items": {"type": "number"}},
+            "bins": {"type": "integer"},
+            "xAxis": {"type": "string"},
+            "yAxis": {"type": "string"},
+        },
+        "required": ["type", "values"],
+    },
+    "sankey": {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["sankey"]},
+            "title": {"type": "string"},
+            "flows": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string"},
+                        "target": {"type": "string"},
+                        "value": {"type": "number"},
+                    },
+                    "required": ["source", "target", "value"],
+                },
+            },
+        },
+        "required": ["type", "flows"],
+    },
+}
+
+
+# Registered in graphlink_prompts.py's prompt registry ("chart-generation-
+# system") as its own STABLE constant rather than embedded inline in
+# chart_generation_messages below - that registry's own convention is
+# "only stable template text is registered, per-request interpolation
+# (chart type, source text) stays at the call site" (see
+# BASE_SYSTEM_PROMPT/CONTEXT_SUMMARY_SYSTEM_PROMPT's identical shape). The
+# chart TYPE lives in the user message instead of being f-string-baked into
+# this text, specifically so this string never varies per call.
+CHART_GENERATION_SYSTEM_PROMPT = (
+    "You are Graphlink's chart data extractor. Read the source text and "
+    "produce a chart payload as a single JSON object matching the required "
+    "schema exactly for the requested chart type. Use only data present in "
+    "the source text - never invent numbers. Keep the title concise."
+)
+
+
+def chart_generation_messages(source_text: str, chart_type: str) -> list[dict]:
+    """The system+user pair respond_json sends to extract `chart_type` chart
+    data from `source_text`. A plain data function (no api_provider/
+    respond_json import here - see this section's own module-level comment
+    on why this stays in graphlink_chart_data.py) so both real callers build
+    the identical request rather than maintaining their own copies."""
+    return [
+        {"role": "system", "content": CHART_GENERATION_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": f"Chart type: {chart_type}\n\n--- SOURCE TEXT ---\n{source_text}",
+        },
+    ]
 
 
 def _finite_number(value, field_name):
@@ -112,6 +230,7 @@ def canonicalize_chart_data(data, chart_type=None):
         raise ChartDataError(f"Chart payload type must be {expected_type}")
 
     result = {
+        "version": CHART_SPEC_VERSION,
         "type": expected_type,
         "title": _clean_text(
             data.get("title"),

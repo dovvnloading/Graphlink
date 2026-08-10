@@ -7,6 +7,7 @@
   },
   "scripted_response": "{\"type\": \"line\", \"title\": \"Daily Active Users This Week\", \"labels\": [\"Monday\", \"Tuesday\", \"Wednesday\", \"Thursday\", \"Friday\", \"Saturday\", \"Sunday\"], \"values\": [3200, 3450, 3100, 3800, 4200, 2900, 2700], \"xAxis\": \"Day\", \"yAxis\": \"Active Users\"}",
   "expected": {
+    "version": 1,
     "type": "line",
     "title": "Daily Active Users This Week",
     "labels": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],

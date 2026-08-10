@@ -101,7 +101,6 @@ py-modules = [
     "api_provider",
     "graphlink_artifact_agent",
     "graphlink_audio",
-    "graphlink_chart_agent",
     "graphlink_chart_data",
     "graphlink_chart_rendering",
     "graphlink_chat_agent",
