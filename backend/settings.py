@@ -131,6 +131,28 @@ def _api_model_catalog_for_wire(manager: SettingsManager, provider: str) -> list
     ]
 
 
+def _mcp_servers_for_wire(manager: SettingsManager) -> list[dict[str, Any]]:
+    # SettingsManager.get_mcp_servers (graphlink_settings_store.py) always
+    # returns snake_case enabled_tools keys - its own internal convention,
+    # not this payload's - same boundary-mapping posture as
+    # _api_model_catalog_for_wire above, which maps model_id -> modelId for
+    # exactly the same reason. ADR-012 stage 12.6: the read side of the new
+    # setMcpServers intent (backend/api/intents_settings_general.py).
+    return [
+        {
+            "name": entry["name"],
+            "command": entry["command"],
+            "args": list(entry.get("args", [])),
+            "scopes": list(entry.get("scopes", [])),
+            "approval": entry.get("approval", "always"),
+            "enabledTools": list(entry.get("enabled_tools", [])),
+            "enabled": bool(entry.get("enabled", True)),
+            "timeout": float(entry.get("timeout", 30.0)),
+        }
+        for entry in manager.get_mcp_servers()
+    ]
+
+
 def _flatten_ollama_assignment(assignment: Any) -> str:
     # Wire representation collapses {"mode": ..., "model_id": ...} to a
     # single string ("inherit"/"auto"/an explicit model id) - matches the
@@ -205,6 +227,15 @@ def settings_payload(manager: SettingsManager) -> dict[str, Any]:
         # policy api_provider's auto-fallback consults when neither an
         # explicit task assignment nor a node/branch override exists.
         "autoModelPolicy": manager.get_auto_model_policy(),
+        # ADR-012 stage 12.2: "system" | "light" | "dark" - the frontend
+        # stamps this straight onto <html data-theme=...> (or removes the
+        # attribute entirely for "system", handing off to
+        # prefers-color-scheme - see App.tsx's own applyTheme).
+        "theme": manager.get_theme(),
+        # ADR-012 stage 12.6: whether the first-run onboarding wizard has
+        # ever been completed/dismissed - see AppSettingsStatePayload's own
+        # field doc for the full contract.
+        "hasCompletedOnboarding": manager.get_has_completed_onboarding(),
     }
 
 
@@ -248,6 +279,15 @@ def _api_key_source(stored: bool, provider: str) -> str:
 def _build_settings_payload(manager: SettingsManager, state: SettingsSessionState) -> dict[str, Any]:
     payload = settings_payload(manager)
     payload["activeSection"] = state.active_section
+    # ADR-012 stage 12.6: the provider-mode switcher's read side - which of
+    # the 3 mode pages (Ollama/Llama.cpp/API Endpoint) is actually live.
+    # ADR-006 stage 6.5 added setProviderMode as the write side but nothing
+    # ever surfaced this back to the frontend, so the per-mode Settings
+    # pages had no way to show which mode was active or reflect a switch
+    # that just happened. Same value bootstrap_provider_state (backend/
+    # agents.py) applies at startup and setProviderMode persists at
+    # runtime - one field, one source of truth.
+    payload["providerMode"] = manager.get_current_mode()
     viewing_provider = state.viewing_api_provider
     payload["activeApiProvider"] = manager.get_api_provider()
     payload["viewingApiProvider"] = viewing_provider
@@ -311,6 +351,14 @@ def _build_settings_payload(manager: SettingsManager, state: SettingsSessionStat
     payload["llamaCppScanSummary"] = _llama_cpp_scan_summary(manager)
     payload["llamaCppScanStatus"] = state.llama_scan_status
     payload["llamaCppNotice"] = state.llama_notice
+
+    # ADR-012 stage 12.6: MCP Servers page - the read side of the new
+    # setMcpServers intent (backend/api/intents_settings_general.py). The
+    # ADR-007 stage 7.5 gap backend/mcp_client.py's own module docstring
+    # explicitly deferred to ADR-012: an McpServerConfig dataclass and
+    # SettingsManager.get_mcp_servers/set_mcp_servers persistence already
+    # existed with zero UI surface to view or edit the configured list.
+    payload["mcpServers"] = _mcp_servers_for_wire(manager)
     return payload
 
 

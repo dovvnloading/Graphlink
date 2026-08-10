@@ -57,6 +57,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
   };
 });
 
+import { CanvasSearchProvider } from "./CanvasSearchContext";
 import { SceneCanvas } from "./SceneCanvas";
 import { SceneStore, initialSceneState } from "./sceneStore";
 import { PinOverlay } from "../chrome/PinOverlay";
@@ -217,10 +218,12 @@ describe("pin/search jump navigates to an off-viewport target with onlyRenderVis
     render(
       <OverlayProvider>
         <ReactFlowProvider>
-          <SceneCanvas store={store} onOpenDocumentView={() => {}} />
-          <OpenSurfaceOnMount name="search">
-            <SearchOverlay store={store} />
-          </OpenSurfaceOnMount>
+          <CanvasSearchProvider>
+            <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+            <OpenSurfaceOnMount name="search">
+              <SearchOverlay store={store} />
+            </OpenSurfaceOnMount>
+          </CanvasSearchProvider>
         </ReactFlowProvider>
       </OverlayProvider>,
     );

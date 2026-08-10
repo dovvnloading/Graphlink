@@ -1,10 +1,22 @@
 import { ReactFlowProvider, useReactFlow } from "@xyflow/react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { TOPIC_VALIDATORS } from "../lib/api-contract/topics";
 import type { AppSettingsState } from "../lib/bridge-core/generated/app-settings-state";
 import { isTextEditable } from "../lib/bridge-core/textFocus";
 import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport";
+import { applyTheme } from "./applyTheme";
+import { getAnnouncement, subscribeAnnouncer } from "./announcer";
 import { connectionBadgeLabel } from "./connectionBadge";
+import { CanvasSearchProvider } from "./canvas/CanvasSearchContext";
 import { ExecutionLimitsProvider } from "./canvas/ExecutionLimitsContext";
 import { SceneCanvas, measuredNodeSize } from "./canvas/SceneCanvas";
 import { SceneStore } from "./canvas/sceneStore";
@@ -21,6 +33,7 @@ import { DiagnosticsDialog } from "./chrome/DiagnosticsDialog";
 import { KnowledgeSearchDialog } from "./chrome/KnowledgeSearchDialog";
 import { BuilderLaunchDialog } from "./chrome/BuilderLaunchDialog";
 import { NotificationBanner } from "./chrome/NotificationBanner";
+import { OnboardingDialog } from "./chrome/OnboardingDialog";
 import { PinOverlay } from "./chrome/PinOverlay";
 import { PluginPicker } from "./chrome/PluginPicker";
 import { SearchOverlay } from "./chrome/SearchOverlay";
@@ -322,6 +335,12 @@ function App() {
     return { provider, modelId };
   }, [composerStore]);
 
+  // ADR-012 stage 12.3: the one aria-live announcer region's own text - see
+  // announcer.ts's own doc for why this reads a module-level store instead
+  // of sceneStore/composerStore directly (both write into it, and neither
+  // imports the other).
+  const announcement = useSyncExternalStore(subscribeAnnouncer, getAnnouncement);
+
   useEffect(() => {
     const offStatus = transport.onStatus(setStatus);
     const offSystem = transport.subscribe("system", (payload) => {
@@ -334,6 +353,7 @@ function App() {
       const validated = TOPIC_VALIDATORS["app-settings"](payload);
       if (validated.ok) {
         setSettingsVisibility({ showTokenCounter: (validated.value as AppSettingsState).showTokenCounter });
+        applyTheme((validated.value as AppSettingsState).theme);
       } else {
         console.error("[app-settings] rejected snapshot:", validated.errors);
       }
@@ -356,6 +376,26 @@ function App() {
       <ReactFlowProvider>
         <GlobalShortcuts store={sceneStore} />
         <div className="app-shell">
+          {/* ADR-012 stage 12.3: the very first focusable element in the
+              page, per the standard skip-link convention - invisible until
+              it itself receives focus (Tab from anywhere before the canvas
+              lands here first). Jumps a keyboard user straight to the
+              composer, bypassing every node on the canvas in one activation
+              instead of N individual Tab presses (React Flow's own node
+              wrapper is a real tab stop per node - see NodeMenu.tsx's own
+              stage-12.3 doc for why that's not changed here). */}
+          <a href="#composer-message-input" className="skip-link">
+            Skip to message composer
+          </a>
+          {/* ADR-012 stage 12.3: the one aria-live region for streaming
+              start/finish and per-node run status - see announcer.ts. Always
+              mounted (not gated behind any dialog/overlay) so a transition
+              that fires while, say, Settings is open is never silently
+              dropped. Visually hidden, not display:none - a display:none
+              live region is never announced by any screen reader. */}
+          <div aria-live="polite" role="status" className="visually-hidden">
+            {announcement}
+          </div>
           <header className="app-topbar">
             <span className="app-title">Graphlink</span>
             <AppBar store={sceneStore} />
@@ -373,43 +413,62 @@ function App() {
                 onClose={onCloseDocumentView}
               />
               <div className="app-canvas-content">
+                {/* ADR-012 stage 12.6: widened from "wraps just SceneCanvas"
+                    to "wraps this whole content region" so SettingsDialog's
+                    own read-only Resource Limits section (below) can reach
+                    the same useExecutionLimits() the code-execution approval
+                    gate uses - a Context.Provider renders no DOM of its own,
+                    so this costs nothing layout-wise, and every other child
+                    here simply ignores a Context it doesn't consume. */}
                 <ExecutionLimitsProvider transport={transport}>
-                  <SceneCanvas
-                    store={sceneStore}
-                    onOpenDocumentView={onOpenDocumentView}
-                    getComposerRoute={getComposerRoute}
-                  />
+                  {/* ADR-012 stage 12.5: wraps both the canvas (NodeMarkdown's
+                      own search-highlighting read) and SearchOverlay (the
+                      query's only writer) - see CanvasSearchContext.tsx. */}
+                  <CanvasSearchProvider>
+                    <SceneCanvas
+                      store={sceneStore}
+                      onOpenDocumentView={onOpenDocumentView}
+                      getComposerRoute={getComposerRoute}
+                    />
+                    <div className="app-search-layer">
+                      <SearchOverlay store={sceneStore} />
+                    </div>
+                  </CanvasSearchProvider>
+                  <PinOverlay store={sceneStore} />
+                  <ViewPopover store={sceneStore} />
+                  <PluginPicker transport={transport} store={sceneStore} />
+                  <div className="app-notification-layer">
+                    <NotificationBanner store={composerStore} />
+                  </div>
+                  <div className="app-composer-layer">
+                    <Composer
+                      store={composerStore}
+                      sceneStore={sceneStore}
+                      showTokenCounter={settingsVisibility.showTokenCounter !== false}
+                    />
+                  </div>
+                  <CommandPalette store={sceneStore} />
+                  <AboutDialog transport={transport} />
+                  {/* ADR-012 stage 12.6: not lazy, unlike Help/Settings/
+                      Library just below - it has to be mounted from the
+                      start so its own app-settings subscription can decide
+                      whether to auto-open itself on a fresh machine; nothing
+                      else opens it first the way a user click opens those
+                      three. */}
+                  <OnboardingDialog transport={transport} store={sceneStore} />
+                  <LazySurface overlayName="help">
+                    <HelpDialog />
+                  </LazySurface>
+                  <DiagnosticsDialog transport={transport} />
+                  <KnowledgeSearchDialog transport={transport} />
+                  <BuilderLaunchDialog transport={transport} />
+                  <LazySurface overlayName="settings">
+                    <SettingsDialog transport={transport} />
+                  </LazySurface>
+                  <LazySurface overlayName="library">
+                    <ChatLibraryDialog transport={transport} />
+                  </LazySurface>
                 </ExecutionLimitsProvider>
-                <div className="app-search-layer">
-                  <SearchOverlay store={sceneStore} />
-                </div>
-                <PinOverlay store={sceneStore} />
-                <ViewPopover store={sceneStore} />
-                <PluginPicker transport={transport} store={sceneStore} />
-                <div className="app-notification-layer">
-                  <NotificationBanner store={composerStore} />
-                </div>
-                <div className="app-composer-layer">
-                  <Composer
-                    store={composerStore}
-                    sceneStore={sceneStore}
-                    showTokenCounter={settingsVisibility.showTokenCounter !== false}
-                  />
-                </div>
-                <CommandPalette store={sceneStore} />
-                <AboutDialog transport={transport} />
-                <LazySurface overlayName="help">
-                  <HelpDialog />
-                </LazySurface>
-                <DiagnosticsDialog transport={transport} />
-                <KnowledgeSearchDialog transport={transport} />
-                <BuilderLaunchDialog transport={transport} />
-                <LazySurface overlayName="settings">
-                  <SettingsDialog transport={transport} />
-                </LazySurface>
-                <LazySurface overlayName="library">
-                  <ChatLibraryDialog transport={transport} />
-                </LazySurface>
               </div>
             </div>
           </main>

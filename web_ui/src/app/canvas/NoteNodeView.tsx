@@ -1,7 +1,8 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { memo, useRef, useState } from "react";
+import { type Node, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, useRef, useState } from "react";
 import { GroupColorPicker, NOTE_SYSTEM_PROMPT_BORDER_COLOR } from "./GroupColorPicker";
 import { NodeMarkdown } from "./NodeMarkdown";
+import { NodeShell } from "./NodeShell";
 
 /**
  * The note node (Qt-removal plan R6.1) - the free-floating markdown sticky
@@ -59,6 +60,17 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
   // "revert without committing" contract would be silently undone a tick
   // later by that same blur calling onSetContent anyway.
   const skipBlurRef = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Moves focus into the edit textarea imperatively (rather than JSX
+  // autoFocus) the moment `editing` flips true - same "focus follows entry
+  // into edit mode" UX as autoFocus would give, but scoped to this one
+  // mount-of-editing transition instead of every mount of the component.
+  useEffect(() => {
+    if (editing) {
+      textareaRef.current?.focus();
+    }
+  }, [editing]);
 
   function beginEdit() {
     setDraft(data.content);
@@ -97,72 +109,73 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
   }
 
   return (
-    <div
-      className={
-        "scene-node note-node" +
-        (selected ? " selected" : "") +
-        (data.isSystemPrompt ? " system-prompt" : "")
-      }
+    <NodeShell
+      kindClassName={"note-node" + (data.isSystemPrompt ? " system-prompt" : "")}
+      selected={!!selected}
+      // Notes render NO Handle-driven collapse/LOD posture of their own -
+      // see this file's own module doc - so this is always false, never
+      // wired to useLodVisibility.
+      collapsed={false}
       style={{
         backgroundColor: data.color ?? undefined,
         borderColor: data.isSystemPrompt ? NOTE_SYSTEM_PROMPT_BORDER_COLOR : undefined,
       }}
-    >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title note-node-header" style={{ backgroundColor: data.headerColor ?? undefined }}>
-        <span className="note-node-badges">
-          <span>Note</span>
-          {data.isSystemPrompt && (
-            <span className="note-node-badge" title="System Prompt" aria-label="System Prompt">
-              ⚙
-            </span>
-          )}
-          {data.isSummaryNote && (
-            <span className="note-node-badge" title="Summary Note" aria-label="Summary Note">
-              ⧉
-            </span>
-          )}
-          {data.isBranchComparison && (
-            <span
-              className="note-node-badge"
-              title={`Branch Comparison (${data.compareSourceNodeIds.length} sources)`}
-              aria-label="Branch Comparison"
-            >
-              ⇄
-            </span>
-          )}
-        </span>
-        <div className="note-node-controls">
-          <GroupColorPicker color={data.color} headerColor={data.headerColor} onSelect={data.onSetColor} />
-          <button type="button" className="note-node-delete-btn nodrag" aria-label="Delete note" onClick={data.onDelete}>
-            ×
-          </button>
-        </div>
-      </div>
-      <div className="scene-node-body note-node-content" onDoubleClick={beginEdit}>
-        {editing ? (
-          <textarea
-            className="note-node-editor nodrag"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={onKeyDown}
-            onBlur={onBlur}
-            autoFocus
-            spellCheck={false}
-          />
-        ) : (
-          // Nested wrapper (not applied to the outer scene-node-body div,
-          // which is shared with the textarea above) - same established
-          // pattern ArtifactBubble/ConversationBubble already use to scope
-          // .chat-node-content's shared markdown-body rules to just the
-          // rendered markdown, not a sibling edit control.
-          <div className="chat-node-content note-node-markdown">
-            <NodeMarkdown content={data.content} />
+      header={
+        <div className="scene-node-title note-node-header" style={{ backgroundColor: data.headerColor ?? undefined }}>
+          <span className="note-node-badges">
+            <span>Note</span>
+            {data.isSystemPrompt && (
+              <span className="note-node-badge" title="System Prompt" aria-label="System Prompt">
+                ⚙
+              </span>
+            )}
+            {data.isSummaryNote && (
+              <span className="note-node-badge" title="Summary Note" aria-label="Summary Note">
+                ⧉
+              </span>
+            )}
+            {data.isBranchComparison && (
+              <span
+                className="note-node-badge"
+                title={`Branch Comparison (${data.compareSourceNodeIds.length} sources)`}
+                aria-label="Branch Comparison"
+              >
+                ⇄
+              </span>
+            )}
+          </span>
+          <div className="note-node-controls">
+            <GroupColorPicker color={data.color} headerColor={data.headerColor} onSelect={data.onSetColor} />
+            <button type="button" className="note-node-delete-btn nodrag" aria-label="Delete note" onClick={data.onDelete}>
+              ×
+            </button>
           </div>
-        )}
-      </div>
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-    </div>
+        </div>
+      }
+      bodyClassName="note-node-content"
+      onBodyDoubleClick={beginEdit}
+    >
+      {editing ? (
+        <textarea
+          ref={textareaRef}
+          className="note-node-editor nodrag"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={onKeyDown}
+          onBlur={onBlur}
+          spellCheck={false}
+        />
+      ) : (
+        // Nested wrapper (not applied to the outer scene-node-body div,
+        // which is shared with the textarea above) - same established
+        // pattern ArtifactBubble/ConversationBubble already use to scope
+        // .chat-node-content's shared markdown-body rules to just the
+        // rendered markdown, not a sibling edit control.
+        <div className="chat-node-content note-node-markdown">
+          <NodeMarkdown content={data.content} />
+        </div>
+      )}
+    </NodeShell>
   );
 }
 

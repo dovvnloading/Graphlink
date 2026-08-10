@@ -1,4 +1,4 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS } from "./canvasConstants";
@@ -7,6 +7,7 @@ import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -921,15 +922,16 @@ export const ChatNodeView = memo(function ChatNodeView({
   }, [data.content]);
 
   return (
-    <div
-      className={`scene-node chat-node${data.isUser ? " user" : " assistant"}${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName={`chat-node${data.isUser ? " user" : " assistant"}`}
+      selected={!!selected}
+      collapsed={collapsed}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
-    >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title chat-node-role">
+      header={
+        <div className="scene-node-title chat-node-role">
         <span className="chat-node-role-group">
           {/* Node redesign, stage 3: a small avatar chip - purely visual
               (aria-hidden, the real role text right after it already
@@ -1090,40 +1092,97 @@ export const ChatNodeView = memo(function ChatNodeView({
           </button>
         </span>
       </div>
-      {!collapsed && (
-        <div className="chat-node-content-shell">
-          <div
-            className={`scene-node-body chat-node-content${contentExpanded ? " expanded" : ""}`}
-            ref={contentRef}
-            onScroll={onScroll}
-          >
-            {/* ADR-006 stage 6.4: while a Regenerate is in flight, shows live
-                streamed deltas instead of the persisted content; once it
-                completes (pendingRequestId back to null), falls back to the
-                static, already-persisted content field - same render swap as
-                CodeSandboxNodeView's live terminal. Review fix: before the
-                first delta lands, an empty markdown body rendered as a blank
-                card - the placeholder covers that window, same posture as
-                ConversationNodeView's own streaming bubble. */}
-            {data.pendingRequestId && !streamedContent ? (
-              <span className="chat-node-streaming-placeholder">Waiting for response…</span>
-            ) : (
-              <NodeMarkdown content={data.pendingRequestId ? streamedContent : data.content} />
-            )}
-          </div>
-          {contentOverflows && !contentExpanded && (
-            <div className="chat-node-content-fade" aria-hidden="true" />
-          )}
-          {contentOverflows && (
-            <button
-              type="button"
-              className="chat-node-show-more nodrag"
-              onClick={() => setContentExpanded((expanded) => !expanded)}
-            >
-              {contentExpanded ? "Show less" : "Show more"}
-            </button>
-          )}
-        </div>
+      }
+      bodyClassName="chat-node-content-shell"
+      menu={
+        menuPosition && (
+          <ChatNodeMenu
+            position={menuPosition}
+            nodeId={id}
+            content={data.content}
+            isUser={data.isUser}
+            isCollapsed={data.isCollapsed}
+            dockedChildren={data.dockedChildren}
+            onToggleCollapse={data.onToggleCollapse}
+            onDelete={data.onDelete}
+            onUndockChild={data.onUndockChild}
+            onRegenerate={data.onRegenerate}
+            onGenerateImage={data.onGenerateImage}
+            onGenerateChart={data.onGenerateChart}
+            onGenerateKeyTakeaway={data.onGenerateKeyTakeaway}
+            onGenerateExplainerNote={data.onGenerateExplainerNote}
+            onOpenDocumentView={data.onOpenDocumentView}
+            isBranchFocusActive={data.isBranchFocusActive}
+            onToggleBranchFocus={data.onToggleBranchFocus}
+            onBranchFromHere={data.onBranchFromHere}
+            branchStatus={data.branchStatus}
+            isFinalDeliverable={data.isFinalDeliverable}
+            onSetBranchStatus={data.onSetBranchStatus}
+            onSetFinalDeliverable={data.onSetFinalDeliverable}
+            onCollapseBranch={data.onCollapseBranch}
+            overrideModelId={data.overrideModelId}
+            onPinToCurrentModel={data.onPinToCurrentModel}
+            onClearModelOverride={data.onClearModelOverride}
+            onClose={() => setMenuPosition(null)}
+          />
+        )
+      }
+    >
+      {/* ADR-012 stage 12.5 (NodeShell migration): this file's body is
+          uniquely shaped among content-card node kinds - a positioned shell
+          (for the content-fade overlay), a scrollable content div carrying
+          its own ref/onScroll (scroll-position restore + debounced
+          reporting, R6.3), and three further conditionally-rendered panels
+          (tool invocations, the streaming Stop action, the interrupted
+          banner) that legacy rendered as SIBLINGS of the padded content div,
+          not descendants of it. NodeShell owns exactly one padded wrapper
+          div per its own fixed contract (bodyClassName="chat-node-content-
+          shell" above supplies the position:relative role that div used to
+          carry itself); everything below is that div's children, unwrapped,
+          with the redundant per-block `!collapsed &&` checks dropped since
+          NodeShell's own children slot already gates all of this on
+          !collapsed. Net effect versus the pre-migration DOM: the primary
+          message text and the fade overlay render at an IDENTICAL position
+          (padding relocated one level up nets out to the same inset for the
+          text; the fade's absolute offsets resolve against the padding edge
+          either way - unaffected by how much padding that edge encloses).
+          The Show more/less button and the three trailing panels, being
+          normal-flow children of a now-padded ancestor instead of a
+          zero-padding one, render inset ~10px further from the card's edges
+          than before - a real, flagged, secondary-chrome-only deviation
+          from a byte-for-byte "pure" wrapper swap, forced by NodeShell
+          having no slot for "sibling of the body div, still gated on
+          !collapsed." */}
+      <div
+        className={`chat-node-content${contentExpanded ? " expanded" : ""}`}
+        ref={contentRef}
+        onScroll={onScroll}
+      >
+        {/* ADR-006 stage 6.4: while a Regenerate is in flight, shows live
+            streamed deltas instead of the persisted content; once it
+            completes (pendingRequestId back to null), falls back to the
+            static, already-persisted content field - same render swap as
+            CodeSandboxNodeView's live terminal. Review fix: before the
+            first delta lands, an empty markdown body rendered as a blank
+            card - the placeholder covers that window, same posture as
+            ConversationNodeView's own streaming bubble. */}
+        {data.pendingRequestId && !streamedContent ? (
+          <span className="chat-node-streaming-placeholder">Waiting for response…</span>
+        ) : (
+          <NodeMarkdown content={data.pendingRequestId ? streamedContent : data.content} />
+        )}
+      </div>
+      {contentOverflows && !contentExpanded && (
+        <div className="chat-node-content-fade" aria-hidden="true" />
+      )}
+      {contentOverflows && (
+        <button
+          type="button"
+          className="chat-node-show-more nodrag"
+          onClick={() => setContentExpanded((expanded) => !expanded)}
+        >
+          {contentExpanded ? "Show less" : "Show more"}
+        </button>
       )}
       {/* ADR-007 stage 7.4: an assistant turn's tool calls + results - the
           ADR's own "renders the calls and their results (collapsible)".
@@ -1134,7 +1193,7 @@ export const ChatNodeView = memo(function ChatNodeView({
           keyboard/AT support for a debug-style panel like this one. Hidden
           entirely (not just collapsed) when the turn made no tool calls -
           the overwhelming majority of chat nodes. */}
-      {!collapsed && data.toolInvocations.length > 0 && (
+      {data.toolInvocations.length > 0 && (
         <details className="chat-node-tool-invocations">
           <summary>
             {data.toolInvocations.length === 1
@@ -1158,7 +1217,7 @@ export const ChatNodeView = memo(function ChatNodeView({
           ChatNodeData. Rendered only while this node's own request is
           genuinely in flight, the same conditional-render pattern
           ConversationNodeView's Cancel button already uses. */}
-      {!collapsed && data.pendingRequestId && (
+      {data.pendingRequestId && (
         <div className="chat-node-streaming-actions">
           <button
             type="button"
@@ -1177,7 +1236,7 @@ export const ChatNodeView = memo(function ChatNodeView({
           inline Regenerate button fires the SAME regenerateResponse intent
           the card menu's own "Regenerate Response" item uses (no new
           intent), gated on !isUser exactly like that menu item. */}
-      {!collapsed && data.responseIncomplete && !data.pendingRequestId && (
+      {data.responseIncomplete && !data.pendingRequestId && (
         <div className="chat-node-incomplete-banner" role="status">
           <span>Response interrupted — use Regenerate to retry.</span>
           {!data.isUser && (
@@ -1191,38 +1250,6 @@ export const ChatNodeView = memo(function ChatNodeView({
           )}
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-      {menuPosition && (
-        <ChatNodeMenu
-          position={menuPosition}
-          nodeId={id}
-          content={data.content}
-          isUser={data.isUser}
-          isCollapsed={data.isCollapsed}
-          dockedChildren={data.dockedChildren}
-          onToggleCollapse={data.onToggleCollapse}
-          onDelete={data.onDelete}
-          onUndockChild={data.onUndockChild}
-          onRegenerate={data.onRegenerate}
-          onGenerateImage={data.onGenerateImage}
-          onGenerateChart={data.onGenerateChart}
-          onGenerateKeyTakeaway={data.onGenerateKeyTakeaway}
-          onGenerateExplainerNote={data.onGenerateExplainerNote}
-          onOpenDocumentView={data.onOpenDocumentView}
-          isBranchFocusActive={data.isBranchFocusActive}
-          onToggleBranchFocus={data.onToggleBranchFocus}
-          onBranchFromHere={data.onBranchFromHere}
-          branchStatus={data.branchStatus}
-          isFinalDeliverable={data.isFinalDeliverable}
-          onSetBranchStatus={data.onSetBranchStatus}
-          onSetFinalDeliverable={data.onSetFinalDeliverable}
-          onCollapseBranch={data.onCollapseBranch}
-          overrideModelId={data.overrideModelId}
-          onPinToCurrentModel={data.onPinToCurrentModel}
-          onClearModelOverride={data.onClearModelOverride}
-          onClose={() => setMenuPosition(null)}
-        />
-      )}
-    </div>
+    </NodeShell>
   );
 }, chatNodePropsAreEqual);

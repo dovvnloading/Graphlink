@@ -234,6 +234,17 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
     lastTriggerRef.current?.focus();
   }
 
+  // Escape-to-cancel while either delete-confirm button has focus. Attached
+  // to the buttons themselves (both are native, already-focusable elements)
+  // rather than the wrapping div, so no synthetic tabIndex/role interactivity
+  // is needed just to catch the key.
+  function onDeleteConfirmKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelDelete();
+    }
+  }
+
   const total = state.rows.length;
   const resultsAnnouncement =
     total === 0 ? "" : filtered.length === 0 ? "No chats match" : `${filtered.length} results`;
@@ -358,21 +369,14 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
                             </button>
                           </div>
                         ) : isConfirmingDelete ? (
-                          <div
-                            className="library-row-confirm"
-                            onKeyDown={(event) => {
-                              if (event.key === "Escape") {
-                                event.preventDefault();
-                                cancelDelete();
-                              }
-                            }}
-                          >
+                          <div className="library-row-confirm">
                             <span className="library-row-confirm-label">Delete?</span>
                             <button
                               type="button"
                               className="library-icon-button library-icon-button-confirm-delete"
                               aria-label={`Confirm delete "${row.title}"`}
                               onClick={confirmDelete}
+                              onKeyDown={onDeleteConfirmKeyDown}
                             >
                               <Icon name="check" />
                             </button>
@@ -382,6 +386,7 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
                               className="library-icon-button"
                               aria-label="Cancel delete"
                               onClick={cancelDelete}
+                              onKeyDown={onDeleteConfirmKeyDown}
                             >
                               <Icon name="x" />
                             </button>

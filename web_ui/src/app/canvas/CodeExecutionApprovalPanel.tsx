@@ -374,6 +374,7 @@ export function CodeExecutionApprovalPanel({
           )}
           <div
             className="chat-node-content code-exec-approval-code"
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable, non-interactive code region; tabIndex=0 is the documented WCAG 2.1.1 keyboard-focusable-scroll-container pattern (see jsx-a11y/no-noninteractive-tabindex's own docs), not a button/link stand-in
             tabIndex={0}
             role="region"
             aria-label="Pending code"

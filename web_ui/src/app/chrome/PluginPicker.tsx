@@ -81,7 +81,7 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
             </div>
             <ul className="plugin-picker-list" role="listbox" aria-label={`${activeCategory.name} plugins`}>
               {activeCategory.plugins.map((plugin) => (
-                <li key={plugin.name} role="option">
+                <li key={plugin.name} role="option" aria-selected={false}>
                   <button
                     type="button"
                     className="plugin-picker-row"

@@ -1,8 +1,9 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import { withAuthToken } from "../../lib/auth/token";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -211,46 +212,47 @@ function ImageNodeViewImpl({ id, data, selected }: NodeProps<ImageFlowNode>) {
   const altText = data.prompt || "Generated image";
 
   return (
-    <div
-      className={`scene-node image-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName="image-node"
+      selected={!!selected}
+      collapsed={collapsed}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
-    >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title image-node-title">
-        <span>{data.prompt || "Image"}</span>
-      </div>
-      {!collapsed && (
-        <div className="scene-node-body image-node-content">
-          {imageFailed ? (
-            <div className="image-node-placeholder">Image unavailable</div>
-          ) : (
-            <img
-              className="image-node-img"
-              src={assetUrl(data.imageAssetId)}
-              alt={altText}
-              onError={() => setImageFailed(true)}
-            />
-          )}
+      header={
+        <div className="scene-node-title image-node-title">
+          <span>{data.prompt || "Image"}</span>
         </div>
-      )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-      {menuPosition && (
-        <ImageNodeMenu
-          position={menuPosition}
-          imageAssetId={data.imageAssetId}
-          filename={buildDownloadFilename(id, data.prompt)}
-          prompt={data.prompt}
-          onDelete={data.onDelete}
-          onRegenerate={data.onRegenerate}
-          isBranchFocusActive={data.isBranchFocusActive}
-          onToggleBranchFocus={data.onToggleBranchFocus}
-          onClose={() => setMenuPosition(null)}
+      }
+      bodyClassName="image-node-content"
+      menu={
+        menuPosition && (
+          <ImageNodeMenu
+            position={menuPosition}
+            imageAssetId={data.imageAssetId}
+            filename={buildDownloadFilename(id, data.prompt)}
+            prompt={data.prompt}
+            onDelete={data.onDelete}
+            onRegenerate={data.onRegenerate}
+            isBranchFocusActive={data.isBranchFocusActive}
+            onToggleBranchFocus={data.onToggleBranchFocus}
+            onClose={() => setMenuPosition(null)}
+          />
+        )
+      }
+    >
+      {imageFailed ? (
+        <div className="image-node-placeholder">Image unavailable</div>
+      ) : (
+        <img
+          className="image-node-img"
+          src={assetUrl(data.imageAssetId)}
+          alt={altText}
+          onError={() => setImageFailed(true)}
         />
       )}
-    </div>
+    </NodeShell>
   );
 }
 

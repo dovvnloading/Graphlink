@@ -11,12 +11,99 @@
    `scrollbar-color` inherits, so setting it once on :root covers the page
    and every inner scroll container of every island.
 
-   --gl-neutral-button-border is the same runtime-injected token island
-   cards already use for their borders; before the bridge's first theme
-   snapshot the declaration is simply invalid-and-ignored, which only
-   matters if something scrolls during the first frames. */
+   --gl-neutral-button-border is the same token node cards already use for
+   their borders (web_ui/src/lib/tokens/gl-vars-dev.css) - it resolves via
+   the ordinary CSS cascade like any other custom property, so it already
+   follows theme switching (ADR-012 stage 12.1/12.2) with no extra wiring
+   here.
+
+   color-scheme tells the browser what native form controls (this file's
+   own scrollbar-color target, plus date pickers, checkboxes, etc.) should
+   render as - it must track the SAME light/dark cascade as the tokens
+   above it, or native controls would mismatch the page's own theme. Same
+   three-layer structure as gl-vars-dev.css's own header explains: dark is
+   the unconditional default (:root), overridden by prefers-color-scheme
+   for a user who hasn't explicitly chosen, overridden again by an explicit
+   [data-theme] choice regardless of OS preference. */
 :root {
   color-scheme: dark;
   scrollbar-color: var(--gl-neutral-button-border) transparent;
   scrollbar-width: thin;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/* ADR-012 stage 12.3: a shared home for these two - prior to this stage,
+   every "hidden until needed" text in the app (DocumentViewSearch.tsx,
+   ChatLibraryDialog.tsx) rolled its own scoped class with the same clip-based
+   technique. `.visually-hidden` is the standard clip-not-display:none
+   pattern (a display:none or visibility:hidden element is invisible to
+   assistive tech too, not just sighted users - clipping to a 1px box while
+   staying in the accessibility tree is what actually works). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ADR-012 stage 12.3: the first focusable element on the page (see
+   App.tsx's own render) - .visually-hidden's clip technique is deliberately
+   NOT reused here, because a skip-link must become visible on focus (a
+   sighted keyboard user needs to see it exists to use it), which
+   .visually-hidden's permanent clip doesn't support. */
+.skip-link {
+  position: absolute;
+  top: -9999px;
+  left: 0;
+  z-index: 10000;
+  padding: 8px 16px;
+  background: var(--gl-composer-shell-background, #1f1f1f);
+  color: var(--gl-composer-input-text, #eeeeee);
+  border: 1px solid var(--gl-focus-ring, #f0f0f0);
+  border-radius: var(--gl-radius-sm, 4px);
+}
+
+.skip-link:focus {
+  top: 8px;
+  left: 8px;
+}
+
+/* ADR-012 stage 12.4: prefers-reduced-motion, applied once here rather than
+   annotating each of styles.css's own ~17 individual `transition:`
+   declarations - a blanket override is both the standard approach (WCAG
+   2.3.3's own recommended technique) and the lower-risk one: a future
+   transition added anywhere in the app is covered automatically, instead of
+   silently NOT being covered until someone remembers to also touch this
+   file. `!important` is deliberate and necessary - it must win over every
+   transition's own specific duration/easing values without this file
+   needing to know what they are or be loaded after them in source order.
+   `animation` is included for the same blanket-coverage reason even though
+   this app has zero `@keyframes` today (confirmed by repo-wide search) -
+   this rule stays correct if one is ever added.
+   React Flow's own zoom/pan animations (fitView/zoomIn/zoomOut/setCenter)
+   are NOT CSS and cannot be reached from here - each of THOSE call sites
+   passes an explicit `{ duration }` option instead, see reducedMotion.ts's
+   own doc for why that has to be a separate, imperative check. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

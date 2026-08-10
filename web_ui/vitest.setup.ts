@@ -37,3 +37,27 @@ class ResizeObserverStub {
 if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
+
+// ADR-012 stage 12.4: jsdom implements no window.matchMedia at all (not even
+// a no-op stub) - reducedMotion.ts's own prefersReducedMotion() throws
+// "matchMedia is not a function" in any test that exercises a component
+// calling it (AppBar.tsx's zoom/fit buttons, PinOverlay.tsx/SearchOverlay.tsx's
+// jump-to-target). `matches: false` is the correct default for a test
+// environment with no real OS-level reduced-motion preference to report -
+// same "closed-vocabulary default, no test cares about the OTHER branch
+// unless it explicitly opts in" posture as the ResizeObserver/scrollIntoView
+// stubs above. A test that DOES care (a future reduced-motion-specific test)
+// overrides this locally with its own vi.fn() returning matches: true.
+if (!window.matchMedia) {
+  window.matchMedia = (query: string) =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => {},
+      removeListener: () => {},
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      dispatchEvent: () => false,
+    }) as MediaQueryList;
+}

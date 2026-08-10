@@ -1,10 +1,11 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useState } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CodeExecutionApprovalPanel } from "./CodeExecutionApprovalPanel";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -259,27 +260,77 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
   }
 
   return (
-    <div
-      className={`scene-node code-sandbox-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName="code-sandbox-node"
+      selected={!!selected}
+      collapsed={collapsed}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
+      header={
+        <div className="scene-node-title chat-node-role">
+          <span>Virtual Environment Runner</span>
+          <button
+            type="button"
+            className="chat-node-collapse-btn"
+            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
+            onClick={data.onToggleCollapse}
+          >
+            {data.isCollapsed ? "▸" : "▾"}
+          </button>
+        </div>
+      }
+      bodyClassName="code-sandbox-node-content"
+      menu={
+        <>
+          {/* R8a: this panel must render regardless of `collapsed` (a
+              blocking approval prompt must never unmount mid-decision on
+              collapse/LOD) - it self-hides via its own `if
+              (!awaitingApproval) return null`. NodeShell's `children` slot is
+              internally gated by `!collapsed`, so this can't live there; it's
+              placed in `menu` instead, which - like `header` - NodeShell
+              always renders unconditionally. CodeExecutionApprovalPanel
+              itself renders through a `createPortal(..., document.body)` (see
+              that file), so its position among NodeShell's props has no
+              effect on the actual rendered DOM's structure, order, or
+              stacking either way. */}
+          <CodeExecutionApprovalPanel
+            nodeId={id}
+            kind="code_sandbox"
+            code={data.codeSandboxCode}
+            awaitingApproval={data.codeSandboxAwaitingApproval}
+            // R5.4 CODESANDBOX fix: the approval panel must show the FROZEN
+            // manifest snapshot the pending approval actually refers to
+            // (codeSandboxApprovalRequirements), NOT the live, still-editable
+            // codeSandboxRequirements draft. The Requirements textarea above
+            // is never disabled during a run, so the user can keep typing a
+            // manifest for their NEXT run while this approval is still
+            // pending - reading the live field here would show that
+            // in-progress edit instead of what the paused run actually asked
+            // to install (backend/canvas.py freezes this at the moment
+            // code_sandbox_awaiting_approval flips true; see
+            // AgentDispatcher.start_code_sandbox_run).
+            requirements={data.codeSandboxApprovalRequirements}
+            allowSourceBuilds={data.codeSandboxApprovalAllowSourceBuilds}
+            onToggleAllowSourceBuilds={data.onToggleAllowSourceBuilds}
+            isRepairApproval={data.codeSandboxApprovalIsRepair}
+            busy={approvalBusy}
+            onApprove={handleApprove}
+            onDeny={handleDeny}
+          />
+          {menuPosition && (
+            <CodeSandboxNodeMenu
+              position={menuPosition}
+              isCollapsed={data.isCollapsed}
+              onToggleCollapse={data.onToggleCollapse}
+              onDelete={data.onDelete}
+              onClose={() => setMenuPosition(null)}
+            />
+          )}
+        </>
+      }
     >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title chat-node-role">
-        <span>Virtual Environment Runner</span>
-        <button
-          type="button"
-          className="chat-node-collapse-btn"
-          aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-          onClick={data.onToggleCollapse}
-        >
-          {data.isCollapsed ? "▸" : "▾"}
-        </button>
-      </div>
-      {!collapsed && (
-        <div className="scene-node-body code-sandbox-node-content">
           <label className="code-sandbox-node-field-row">
             <span className="code-sandbox-node-field-label">Requirements</span>
             <textarea
@@ -363,47 +414,6 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
               </div>
             </div>
           )}
-
-        </div>
-      )}
-      {/* R8a: OUTSIDE the {!collapsed} gate on purpose - this is a
-          blocking approval prompt, and collapsing the node or zooming
-          past the LOD threshold used to unmount it mid-decision. It
-          self-hides via `if (!awaitingApproval) return null`. */}
-        <CodeExecutionApprovalPanel
-          nodeId={id}
-          kind="code_sandbox"
-          code={data.codeSandboxCode}
-          awaitingApproval={data.codeSandboxAwaitingApproval}
-          // R5.4 CODESANDBOX fix: the approval panel must show the FROZEN
-          // manifest snapshot the pending approval actually refers to
-          // (codeSandboxApprovalRequirements), NOT the live, still-editable
-          // codeSandboxRequirements draft. The Requirements textarea above
-          // is never disabled during a run, so the user can keep typing a
-          // manifest for their NEXT run while this approval is still
-          // pending - reading the live field here would show that
-          // in-progress edit instead of what the paused run actually asked
-          // to install (backend/canvas.py freezes this at the moment
-          // code_sandbox_awaiting_approval flips true; see
-          // AgentDispatcher.start_code_sandbox_run).
-          requirements={data.codeSandboxApprovalRequirements}
-          allowSourceBuilds={data.codeSandboxApprovalAllowSourceBuilds}
-          onToggleAllowSourceBuilds={data.onToggleAllowSourceBuilds}
-          isRepairApproval={data.codeSandboxApprovalIsRepair}
-          busy={approvalBusy}
-          onApprove={handleApprove}
-          onDeny={handleDeny}
-        />
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-      {menuPosition && (
-        <CodeSandboxNodeMenu
-          position={menuPosition}
-          isCollapsed={data.isCollapsed}
-          onToggleCollapse={data.onToggleCollapse}
-          onDelete={data.onDelete}
-          onClose={() => setMenuPosition(null)}
-        />
-      )}
-    </div>
+    </NodeShell>
   );
 }, codeSandboxNodePropsAreEqual);

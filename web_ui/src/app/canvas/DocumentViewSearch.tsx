@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * Document View full redesign, stage 3 ("in-document search/find"). A
@@ -60,6 +60,21 @@ export function DocumentViewSearch({
     return () => clearTimeout(timer);
   }, [countText]);
 
+  // Deliberate autofocus: the input should grab focus the moment the search
+  // bar appears, exactly like a browser/editor "Find" bar, so a keyboard
+  // user can start typing immediately without an extra Tab. This component
+  // itself never unmounts (DocumentViewPanel.tsx always renders it; only the
+  // `isOpen` early return below toggles whether the JSX below - including
+  // this <input> - exists), so a plain "focus on component mount" effect
+  // would only fire the very first time and never again on subsequent
+  // reopens. A stable callback ref instead fires exactly when the <input>
+  // DOM node itself is created, i.e. every time this bar reopens - matching
+  // the JSX `autoFocus` behavior it replaces without tripping
+  // jsx-a11y/no-autofocus.
+  const focusInputOnMount = useCallback((element: HTMLInputElement | null) => {
+    element?.focus();
+  }, []);
+
   if (!isOpen) return null;
 
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
@@ -85,7 +100,7 @@ export function DocumentViewSearch({
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
         onKeyDown={onKeyDown}
-        autoFocus
+        ref={focusInputOnMount}
       />
       <span className="document-view-search-count" aria-hidden="true">
         {countText}

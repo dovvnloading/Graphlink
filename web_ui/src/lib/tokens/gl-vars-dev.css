@@ -1,21 +1,60 @@
-/* GENERATED - do not hand-edit. Source of truth: graphlink_styles.py::css_root_block("dark").
+/* ADR-012 stage 12.1: the real, hand-authored source-of-truth token file -
+ * NOT generated, despite the historical "-dev" filename and the header this
+ * file carried before this stage (which cited graphlink_styles.py::
+ * css_root_block("dark") and a Qt island-injection mechanism,
+ * graphlink_web_island_host.py::_inline_bundle(), both deleted in the
+ * Qt-removal cutover - see main.tsx's own comment on why this file is now
+ * imported unconditionally, not behind import.meta.env.DEV as its old
+ * header claimed). There is no other consumer left to generate this FROM -
+ * the SPA is the only client, and it ships these values directly. Hand-edit
+ * it; that is now correct, not a violation of anything.
  *
- * DEV-SERVER ONLY. In the real app these values are injected into the island's
- * <head> at construction time by graphlink_web_island_host.py::_inline_bundle(),
- * for whichever theme is actually active. `npm run dev` has no Python in the
- * loop, so without this file every var(--gl-*) in island CSS would resolve to
- * nothing and the composer would render unstyled in a browser.
+ * Two palettes, one file, three cascade layers (lowest to highest
+ * precedence - CSS custom properties resolve to whichever rule wins the
+ * cascade for a given element):
+ *   1. `:root { }` - dark, unconditional. Covers data-theme="dark" AND the
+ *      no-preference/no-explicit-choice case (dark was always this app's
+ *      historical default, so that stays the safe fallback for an old
+ *      browser with no prefers-color-scheme support at all).
+ *   2. `@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) }`
+ *      - light, but ONLY when the OS says light AND the user hasn't
+ *      explicitly forced dark. `:not([data-theme="dark"])` (not a
+ *      `[data-theme="light"]` positive match) is deliberate: it also
+ *      covers "system"/no explicit choice, which is exactly what
+ *      prefers-color-scheme is for.
+ *   3. `:root[data-theme="light"] { }` - light again, unconditional on OS
+ *      preference. Applies when the user explicitly chose light in
+ *      Settings, regardless of what their OS prefers. Equal CSS
+ *      specificity to rule 2's selector (0,1,1 either way - `:not()` costs
+ *      nothing beyond its argument), so it wins ties purely by appearing
+ *      later in this file - not fragile, but real; do not reorder these
+ *      three blocks.
+ * data-theme is stamped on <html> by an effect in App.tsx (ADR-012 stage
+ * 12.2), driven by a real `theme` Settings field - re-added fresh in that
+ * same stage; a prior theme setting existed and was removed for being
+ * provably inert (commit 585d747, "R8a: remove the dead Theme setting"),
+ * which is a DIFFERENT, now-resolved problem this stage's setting does not
+ * repeat: this one actually paints.
  *
- * Imported ONLY behind import.meta.env.DEV so Vite statically drops it from the
- * production bundle. It must never be imported unconditionally: an always-on
- * sheet would land later in <head> than the injected block at equal specificity
- * and silently override the real theme's values with dark's - and would mask a
- * missing injection instead of letting it fail visibly.
+ * DRIFT/CONTRAST GUARD: web_ui/src/lib/tokens/token-theme-contrast.test.ts
+ * (Vitest) parses both palettes out of this exact file and checks (a) every
+ * dark-mode token name has a light-mode counterpart and vice versa (no
+ * theme can silently fall back to the other's value for a token it forgot
+ * to define), and (b) WCAG AA contrast (4.5:1) for the surface/text pairs
+ * that carry real body copy. Keep it green - it is this file's own
+ * replacement for the deleted Qt-era Python drift test
+ * (test_gl_vars_dev_css.py), now enforced entirely in the frontend
+ * toolchain since there is no other side left that could drift against.
  *
- * Values are dark's purely because it is the default theme; this file is a
- * development convenience, not a statement about what any island should look
- * like. A pytest fails if it drifts from what regenerating it now would
- * produce. */
+ * The light palette below is not free-hand-picked: it is a systematic
+ * per-token derivation from the dark palette (every solid color in this
+ * app is a pure gray, R=G=B - a deliberate "graphite" monochrome design,
+ * not colorful branding), inverted per-channel for solid hex tokens and
+ * polarity-flipped for alpha-wash tokens, then spot-checked against real
+ * WCAG relative-luminance contrast ratios (not raw RGB distance) - one
+ * token (--gl-surface-text-muted) needed a manual correction beyond the
+ * mechanical inversion to match its dark-mode counterpart's own contrast
+ * ratio; every other token is the direct derivation. */
 :root {
   --gl-composer-attach-button-background: rgba(255, 255, 255, 0.018);
   --gl-composer-attach-button-border: rgba(150, 150, 150, 0.28);
@@ -60,6 +99,16 @@
   --gl-composer-status-action-text: #bdbdbd;
   --gl-composer-status-failed-text: #b0b0b0;
   --gl-composer-status-text: #b0b0b0;
+  /* ADR-012 stage 12.3: the ONE deliberate high-contrast neutral in this
+     otherwise-grayscale-derivation-only palette (see this file's own header)
+     - not derived by the per-channel-inversion rule the rest of the light
+     palette follows, because a focus ring needs the highest achievable
+     contrast against its own surface, not a value visually consistent with
+     the surrounding UI (the whole point is that it should NOT blend in).
+     Distinct from --gl-palette-selection (used for .scene-node.selected's
+     box-shadow) by design AND by CSS property (outline vs box-shadow) - see
+     styles.css's own .react-flow__node:focus-visible rule. */
+  --gl-focus-ring: #F0F0F0;
   --gl-font-family: 'Segoe UI', sans-serif;
   --gl-frame-blue: #828282;
   --gl-frame-dark-gray: #414141;
@@ -134,6 +183,270 @@
   --gl-syntax-keyword: #909090;
   --gl-syntax-number: #A2A2A2;
   --gl-syntax-string: #B5B5B5;
+  --gl-text-base: 14px;
+  --gl-text-lg: 16px;
+  --gl-text-sm: 13px;
+  --gl-text-xl: 20px;
+  --gl-text-xs: 12px;
+  --gl-weight-regular: 400;
+  --gl-weight-semibold: 600;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --gl-composer-attach-button-background: rgba(0, 0, 0, 0.018);
+    --gl-composer-attach-button-border: rgba(150, 150, 150, 0.42);
+    --gl-composer-attach-button-hover-background: rgba(160, 160, 160, 0.15);
+    --gl-composer-attach-button-hover-border: rgba(160, 160, 160, 0.95);
+    --gl-composer-attach-button-hover-icon: #0B0B0B;
+    --gl-composer-attach-button-icon: #3F3F3F;
+    --gl-composer-attachment-count-background: #AAAAAA;
+    --gl-composer-attachment-count-border: #E0E0E0;
+    --gl-composer-attachment-count-hover-background: #999999;
+    --gl-composer-attachment-count-hover-text: #000000;
+    --gl-composer-attachment-count-text: #121212;
+    --gl-composer-button-focus-outline: rgba(156, 156, 156, 0.95);
+    --gl-composer-control-active-background: rgba(0, 0, 0, 0.045);
+    --gl-composer-control-active-border: rgba(160, 160, 160, 0.51);
+    --gl-composer-control-active-text: #0F0F0F;
+    --gl-composer-control-icon: #6F6F6F;
+    --gl-composer-control-kicker-text: #757575;
+    --gl-composer-control-text: #3F3F3F;
+    --gl-composer-control-value-text: #222222;
+    --gl-composer-input-placeholder: #777777;
+    --gl-composer-input-scrollbar-thumb: #AAAAAA;
+    --gl-composer-input-text: #111111;
+    --gl-composer-restored-pill-background: rgba(160, 160, 160, 0.12);
+    --gl-composer-restored-pill-border: rgba(150, 150, 150, 0.42);
+    --gl-composer-restored-pill-text: #383838;
+    --gl-composer-root-text: #181818;
+    --gl-composer-send-button-background: #BEBEBE;
+    --gl-composer-send-button-border: rgba(0, 0, 0, 0.15);
+    --gl-composer-send-button-cancel-background: #B5B5B5;
+    --gl-composer-send-button-cancel-shadow: rgba(0, 0, 0, 0.09);
+    --gl-composer-send-button-hover-background: #AAAAAA;
+    --gl-composer-send-button-icon: #000000;
+    --gl-composer-send-button-shadow: rgba(0, 0, 0, 0.099);
+    --gl-composer-shell-background: #E0E0E0;
+    --gl-composer-shell-border: rgba(150, 150, 150, 0.51);
+    --gl-composer-shell-focus-border: rgba(160, 160, 160, 0.95);
+    --gl-composer-shell-focus-ring: rgba(160, 160, 160, 0.18);
+    --gl-composer-shell-focus-shadow-drop: rgba(0, 0, 0, 0.099);
+    --gl-composer-shell-shadow-drop: rgba(0, 0, 0, 0.09);
+    --gl-composer-shell-shadow-inset: rgba(255, 255, 255, 0.018);
+    --gl-composer-status-action-text: #424242;
+    --gl-composer-status-failed-text: #4F4F4F;
+    --gl-composer-status-text: #4F4F4F;
+    /* ADR-012 stage 12.3: see the dark block's own comment on this token -
+       #0F0F0F is the exact per-channel inversion of dark's #F0F0F0, kept
+       even though this token isn't derived like the rest of the palette,
+       so light mode's focus ring is exactly as far from its own window
+       background as dark mode's is from its window background. */
+    --gl-focus-ring: #0F0F0F;
+    --gl-font-family: 'Segoe UI', sans-serif;
+    --gl-frame-blue: #7D7D7D;
+    --gl-frame-dark-gray: #BEBEBE;
+    --gl-frame-green: #7C7C7C;
+    --gl-frame-mid-gray: #A6A6A6;
+    --gl-frame-orange: #7E7E7E;
+    --gl-frame-purple: #838383;
+    --gl-frame-red: #838383;
+    --gl-frame-yellow: #717171;
+    --gl-graph-node-badge-fill: #B7B7B7;
+    --gl-graph-node-body-end: #D6D6D6;
+    --gl-graph-node-body-start: #CFCFCF;
+    --gl-graph-node-header-end: #CCCCCC;
+    --gl-graph-node-header-start: #C3C3C3;
+    --gl-graph-node-panel-fill: #DFDFDF;
+    --gl-motion-base: 200ms;
+    --gl-motion-ease: cubic-bezier(0.2, 0, 0, 1);
+    --gl-motion-fast: 150ms;
+    --gl-neutral-button-background: #C6C6C6;
+    --gl-neutral-button-border: #A7A7A7;
+    --gl-neutral-button-hover: #B7B7B7;
+    --gl-neutral-button-icon: #0F0F0F;
+    --gl-neutral-button-muted-icon: #424242;
+    --gl-neutral-button-pressed: #CBCBCB;
+    --gl-palette-ai-node: #7D7D7D;
+    --gl-palette-nav-highlight: #6B6B6B;
+    --gl-palette-selection: #7A7A7A;
+    --gl-palette-user-node: #7C7C7C;
+    --gl-radius-lg: 12px;
+    --gl-radius-md: 8px;
+    --gl-radius-sm: 4px;
+    --gl-semantic-artifact: #7D7D7D;
+    --gl-semantic-conversation-ai-bubble: #CDCDCD;
+    --gl-semantic-conversation-user-bubble: #969696;
+    --gl-semantic-default: #7A7A7A;
+    --gl-semantic-search-highlight: #6B6B6B;
+    --gl-semantic-status-error: #7B7B7B;
+    --gl-semantic-status-info: #7D7D7D;
+    --gl-semantic-status-success: #7C7C7C;
+    --gl-semantic-status-warning: #6E6E6E;
+    --gl-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.18);
+    --gl-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.203);
+    --gl-shadow-3: 0 8px 28px rgba(0, 0, 0, 0.248);
+    --gl-space-1: 4px;
+    --gl-space-2: 8px;
+    --gl-space-3: 12px;
+    --gl-space-4: 16px;
+    --gl-space-5: 20px;
+    --gl-space-6: 24px;
+    --gl-space-8: 32px;
+    --gl-surface-border: #C0C0C0;
+    --gl-surface-border-strong: #AFAFAF;
+    --gl-surface-chrome-inactive: #777777;
+    --gl-surface-divider: #BDBDBD;
+    --gl-surface-field: #D8D8D8;
+    --gl-surface-handle: #AAAAAA;
+    --gl-surface-handle-hover: #959595;
+    --gl-surface-inset: #DFDFDF;
+    --gl-surface-inset-deep: #EDEDED;
+    --gl-surface-node-body: #DADADA;
+    --gl-surface-text-bright: #000000;
+    --gl-surface-text-label: #5B5B5B;
+    --gl-surface-text-muted: #717171;
+    --gl-surface-text-primary: #1F1F1F;
+    --gl-surface-text-secondary: #424242;
+    --gl-surface-text-soft: #333333;
+    --gl-surface-text-strong: #0E0E0E;
+    --gl-surface-window: #E1E1E1;
+    --gl-syntax-builtin: #5D5D5D;
+    --gl-syntax-comment: #9D9D9D;
+    --gl-syntax-function: #5C5C5C;
+    --gl-syntax-keyword: #6F6F6F;
+    --gl-syntax-number: #5D5D5D;
+    --gl-syntax-string: #4A4A4A;
+    --gl-text-base: 14px;
+    --gl-text-lg: 16px;
+    --gl-text-sm: 13px;
+    --gl-text-xl: 20px;
+    --gl-text-xs: 12px;
+    --gl-weight-regular: 400;
+    --gl-weight-semibold: 600;
+  }
+}
+
+:root[data-theme="light"] {
+  --gl-composer-attach-button-background: rgba(0, 0, 0, 0.018);
+  --gl-composer-attach-button-border: rgba(150, 150, 150, 0.42);
+  --gl-composer-attach-button-hover-background: rgba(160, 160, 160, 0.15);
+  --gl-composer-attach-button-hover-border: rgba(160, 160, 160, 0.95);
+  --gl-composer-attach-button-hover-icon: #0B0B0B;
+  --gl-composer-attach-button-icon: #3F3F3F;
+  --gl-composer-attachment-count-background: #AAAAAA;
+  --gl-composer-attachment-count-border: #E0E0E0;
+  --gl-composer-attachment-count-hover-background: #999999;
+  --gl-composer-attachment-count-hover-text: #000000;
+  --gl-composer-attachment-count-text: #121212;
+  --gl-composer-button-focus-outline: rgba(156, 156, 156, 0.95);
+  --gl-composer-control-active-background: rgba(0, 0, 0, 0.045);
+  --gl-composer-control-active-border: rgba(160, 160, 160, 0.51);
+  --gl-composer-control-active-text: #0F0F0F;
+  --gl-composer-control-icon: #6F6F6F;
+  --gl-composer-control-kicker-text: #757575;
+  --gl-composer-control-text: #3F3F3F;
+  --gl-composer-control-value-text: #222222;
+  --gl-composer-input-placeholder: #777777;
+  --gl-composer-input-scrollbar-thumb: #AAAAAA;
+  --gl-composer-input-text: #111111;
+  --gl-composer-restored-pill-background: rgba(160, 160, 160, 0.12);
+  --gl-composer-restored-pill-border: rgba(150, 150, 150, 0.42);
+  --gl-composer-restored-pill-text: #383838;
+  --gl-composer-root-text: #181818;
+  --gl-composer-send-button-background: #BEBEBE;
+  --gl-composer-send-button-border: rgba(0, 0, 0, 0.15);
+  --gl-composer-send-button-cancel-background: #B5B5B5;
+  --gl-composer-send-button-cancel-shadow: rgba(0, 0, 0, 0.09);
+  --gl-composer-send-button-hover-background: #AAAAAA;
+  --gl-composer-send-button-icon: #000000;
+  --gl-composer-send-button-shadow: rgba(0, 0, 0, 0.099);
+  --gl-composer-shell-background: #E0E0E0;
+  --gl-composer-shell-border: rgba(150, 150, 150, 0.51);
+  --gl-composer-shell-focus-border: rgba(160, 160, 160, 0.95);
+  --gl-composer-shell-focus-ring: rgba(160, 160, 160, 0.18);
+  --gl-composer-shell-focus-shadow-drop: rgba(0, 0, 0, 0.099);
+  --gl-composer-shell-shadow-drop: rgba(0, 0, 0, 0.09);
+  --gl-composer-shell-shadow-inset: rgba(255, 255, 255, 0.018);
+  --gl-composer-status-action-text: #424242;
+  --gl-composer-status-failed-text: #4F4F4F;
+  --gl-composer-status-text: #4F4F4F;
+  /* ADR-012 stage 12.3: see the dark block's own comment on this token. */
+  --gl-focus-ring: #0F0F0F;
+  --gl-font-family: 'Segoe UI', sans-serif;
+  --gl-frame-blue: #7D7D7D;
+  --gl-frame-dark-gray: #BEBEBE;
+  --gl-frame-green: #7C7C7C;
+  --gl-frame-mid-gray: #A6A6A6;
+  --gl-frame-orange: #7E7E7E;
+  --gl-frame-purple: #838383;
+  --gl-frame-red: #838383;
+  --gl-frame-yellow: #717171;
+  --gl-graph-node-badge-fill: #B7B7B7;
+  --gl-graph-node-body-end: #D6D6D6;
+  --gl-graph-node-body-start: #CFCFCF;
+  --gl-graph-node-header-end: #CCCCCC;
+  --gl-graph-node-header-start: #C3C3C3;
+  --gl-graph-node-panel-fill: #DFDFDF;
+  --gl-motion-base: 200ms;
+  --gl-motion-ease: cubic-bezier(0.2, 0, 0, 1);
+  --gl-motion-fast: 150ms;
+  --gl-neutral-button-background: #C6C6C6;
+  --gl-neutral-button-border: #A7A7A7;
+  --gl-neutral-button-hover: #B7B7B7;
+  --gl-neutral-button-icon: #0F0F0F;
+  --gl-neutral-button-muted-icon: #424242;
+  --gl-neutral-button-pressed: #CBCBCB;
+  --gl-palette-ai-node: #7D7D7D;
+  --gl-palette-nav-highlight: #6B6B6B;
+  --gl-palette-selection: #7A7A7A;
+  --gl-palette-user-node: #7C7C7C;
+  --gl-radius-lg: 12px;
+  --gl-radius-md: 8px;
+  --gl-radius-sm: 4px;
+  --gl-semantic-artifact: #7D7D7D;
+  --gl-semantic-conversation-ai-bubble: #CDCDCD;
+  --gl-semantic-conversation-user-bubble: #969696;
+  --gl-semantic-default: #7A7A7A;
+  --gl-semantic-search-highlight: #6B6B6B;
+  --gl-semantic-status-error: #7B7B7B;
+  --gl-semantic-status-info: #7D7D7D;
+  --gl-semantic-status-success: #7C7C7C;
+  --gl-semantic-status-warning: #6E6E6E;
+  --gl-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.18);
+  --gl-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.203);
+  --gl-shadow-3: 0 8px 28px rgba(0, 0, 0, 0.248);
+  --gl-space-1: 4px;
+  --gl-space-2: 8px;
+  --gl-space-3: 12px;
+  --gl-space-4: 16px;
+  --gl-space-5: 20px;
+  --gl-space-6: 24px;
+  --gl-space-8: 32px;
+  --gl-surface-border: #C0C0C0;
+  --gl-surface-border-strong: #AFAFAF;
+  --gl-surface-chrome-inactive: #777777;
+  --gl-surface-divider: #BDBDBD;
+  --gl-surface-field: #D8D8D8;
+  --gl-surface-handle: #AAAAAA;
+  --gl-surface-handle-hover: #959595;
+  --gl-surface-inset: #DFDFDF;
+  --gl-surface-inset-deep: #EDEDED;
+  --gl-surface-node-body: #DADADA;
+  --gl-surface-text-bright: #000000;
+  --gl-surface-text-label: #5B5B5B;
+  --gl-surface-text-muted: #717171;
+  --gl-surface-text-primary: #1F1F1F;
+  --gl-surface-text-secondary: #424242;
+  --gl-surface-text-soft: #333333;
+  --gl-surface-text-strong: #0E0E0E;
+  --gl-surface-window: #E1E1E1;
+  --gl-syntax-builtin: #5D5D5D;
+  --gl-syntax-comment: #9D9D9D;
+  --gl-syntax-function: #5C5C5C;
+  --gl-syntax-keyword: #6F6F6F;
+  --gl-syntax-number: #5D5D5D;
+  --gl-syntax-string: #4A4A4A;
   --gl-text-base: 14px;
   --gl-text-lg: 16px;
   --gl-text-sm: 13px;

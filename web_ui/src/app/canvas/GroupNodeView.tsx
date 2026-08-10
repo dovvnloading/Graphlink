@@ -1,5 +1,5 @@
 import { NodeResizer, type Node, type NodeProps } from "@xyflow/react";
-import { memo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { GroupColorPicker } from "./GroupColorPicker";
 import { GROUP_RESIZE_MIN_HEIGHT, GROUP_RESIZE_MIN_WIDTH } from "./canvasConstants";
 
@@ -110,6 +110,7 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
   // Same "programmatic unmount fires a redundant blur" guard as
   // NoteNodeView's own editor - see that component's doc comment.
   const skipBlurRef = useRef(false);
+  const labelInputRef = useRef<HTMLInputElement>(null);
   const [hovered, setHovered] = useState(false);
   const showGhostPreview = !isFrame && data.isCollapsed && hovered && data.memberKinds.length > 0;
   const hasBodyColor = data.color !== null;
@@ -128,6 +129,17 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
     setDraft(data.label);
     setEditing(true);
   }
+
+  // Imperative focus (instead of the JSX autoFocus prop) so entering rename
+  // mode still focuses the input for a sighted keyboard user, without
+  // tripping jsx-a11y/no-autofocus - the input element itself only exists
+  // while `editing` is true (see the ternary below), so this fires exactly
+  // once per edit session, same as autoFocus would have.
+  useEffect(() => {
+    if (editing) {
+      labelInputRef.current?.focus();
+    }
+  }, [editing]);
 
   function commit(value: string) {
     data.onSetLabel(value);
@@ -161,13 +173,13 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
 
   const labelNode = editing ? (
     <input
+      ref={labelInputRef}
       type="text"
       className="group-node-label-input nodrag"
       value={draft}
       onChange={(event) => setDraft(event.target.value)}
       onKeyDown={onKeyDown}
       onBlur={onBlur}
-      autoFocus
     />
   ) : (
     <span className="group-node-label">{data.label}</span>

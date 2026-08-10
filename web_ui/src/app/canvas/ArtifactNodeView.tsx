@@ -1,8 +1,9 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -180,101 +181,102 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
   const submitLabel = hasContent ? "Refine" : "Generate";
 
   return (
-    <div
-      className={`scene-node artifact-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName="artifact-node"
+      selected={!!selected}
+      collapsed={collapsed}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
+      header={
+        <div className="scene-node-title chat-node-role">
+          <span>Artifact</span>
+          <button
+            type="button"
+            className="chat-node-collapse-btn"
+            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
+            onClick={data.onToggleCollapse}
+          >
+            {data.isCollapsed ? "▸" : "▾"}
+          </button>
+        </div>
+      }
+      bodyClassName="artifact-node-content"
+      menu={
+        menuPosition && (
+          <ArtifactNodeMenu
+            position={menuPosition}
+            isCollapsed={data.isCollapsed}
+            onToggleCollapse={data.onToggleCollapse}
+            onDelete={data.onDelete}
+            onClose={() => setMenuPosition(null)}
+          />
+        )
+      }
     >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title chat-node-role">
-        <span>Artifact</span>
-        <button
-          type="button"
-          className="chat-node-collapse-btn"
-          aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-          onClick={data.onToggleCollapse}
-        >
-          {data.isCollapsed ? "▸" : "▾"}
-        </button>
+      <div className="artifact-node-document">
+        {hasContent ? (
+          <div className="chat-node-content artifact-node-document-content">
+            <NodeMarkdown content={data.artifactContent} />
+          </div>
+        ) : (
+          <p className="artifact-node-empty">Document is currently empty.</p>
+        )}
       </div>
-      {!collapsed && (
-        <div className="scene-node-body artifact-node-content">
-          <div className="artifact-node-document">
-            {hasContent ? (
-              <div className="chat-node-content artifact-node-document-content">
-                <NodeMarkdown content={data.artifactContent} />
-              </div>
-            ) : (
-              <p className="artifact-node-empty">Document is currently empty.</p>
-            )}
-          </div>
 
-          {data.history.length > 0 && (
-            <div className="artifact-node-messages">
-              {data.history.map((message, index) => (
-                // No per-message id on the wire shape - render order is
-                // always the true history order, so index is a correct and
-                // sufficient key here (same posture as ConversationBubble's
-                // own key).
-                <ArtifactBubble key={index} message={message} />
-              ))}
-            </div>
-          )}
-
-          <div className="artifact-node-input-row">
-            <textarea
-              className="artifact-node-input"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                // Enter-to-submit / Shift+Enter-for-newline - same convention
-                // ConversationNodeView's own input (and the Composer's own
-                // onKeyDown handler) already use.
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-              placeholder="Describe what to generate or refine…"
-              aria-label="Instruction"
-              rows={1}
-              spellCheck
-            />
-            <div className="artifact-node-input-actions">
-              <button
-                type="button"
-                className="artifact-node-submit-btn"
-                disabled={!draft.trim() || !!data.pendingRequestId}
-                onClick={submit}
-              >
-                {submitLabel}
-              </button>
-              {data.pendingRequestId && (
-                <button
-                  type="button"
-                  className="artifact-node-cancel-btn"
-                  onClick={() => data.onCancel()}
-                  title="Cancel response"
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
-          </div>
+      {data.history.length > 0 && (
+        <div className="artifact-node-messages">
+          {data.history.map((message, index) => (
+            // No per-message id on the wire shape - render order is
+            // always the true history order, so index is a correct and
+            // sufficient key here (same posture as ConversationBubble's
+            // own key).
+            <ArtifactBubble key={index} message={message} />
+          ))}
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-      {menuPosition && (
-        <ArtifactNodeMenu
-          position={menuPosition}
-          isCollapsed={data.isCollapsed}
-          onToggleCollapse={data.onToggleCollapse}
-          onDelete={data.onDelete}
-          onClose={() => setMenuPosition(null)}
+
+      <div className="artifact-node-input-row">
+        <textarea
+          className="artifact-node-input"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter-to-submit / Shift+Enter-for-newline - same convention
+            // ConversationNodeView's own input (and the Composer's own
+            // onKeyDown handler) already use.
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              submit();
+            }
+          }}
+          placeholder="Describe what to generate or refine…"
+          aria-label="Instruction"
+          rows={1}
+          spellCheck
         />
-      )}
-    </div>
+        <div className="artifact-node-input-actions">
+          <button
+            type="button"
+            className="artifact-node-submit-btn"
+            disabled={!draft.trim() || !!data.pendingRequestId}
+            onClick={submit}
+          >
+            {submitLabel}
+          </button>
+          {data.pendingRequestId && (
+            <button
+              type="button"
+              className="artifact-node-cancel-btn"
+              onClick={() => data.onCancel()}
+              title="Cancel response"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      </div>
+    </NodeShell>
   );
 }, artifactNodePropsAreEqual);

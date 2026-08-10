@@ -1,8 +1,12 @@
-/* GENERATED - do not hand-edit. Source of truth: graphlink_styles.py::tailwind_theme_css().
- * Regenerate whenever THEME_TOKENS/frame-color/FONT_FAMILY token NAMES change (not values -
- * values are supplied separately, at runtime or build-time, by work this file deliberately
- * does not do yet). A pytest in graphlink_app/tests/ fails if this file drifts from what
- * regenerating it now would produce. */
+/* ADR-012 stage 12.1: hand-authored, like gl-vars-dev.css - the Python
+ * generator this file's old header cited (graphlink_styles.py::
+ * tailwind_theme_css()) is long gone (Qt-removal cutover), and there is no
+ * other consumer left to regenerate this FROM. Kept separate from
+ * gl-vars-dev.css deliberately: this is purely a Tailwind @theme NAME-alias
+ * layer (every entry is `var(--gl-*)`, no independent literal value), so it
+ * needs editing only when a token NAME is added/removed/renamed in
+ * gl-vars-dev.css - never when a theme's VALUES change. Light/dark palette
+ * switching (gl-vars-dev.css's own job) does not touch this file at all. */
 @theme {
   --font-gl: var(--gl-font-family);
   --color-gl-frame-blue: var(--gl-frame-blue);

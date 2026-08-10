@@ -10,6 +10,17 @@ export interface ApiModelDescriptor {
   available: boolean;
 }
 
+export interface McpServerConfig {
+  name: string;
+  command: string;
+  args: string[];
+  scopes: string[];
+  approval: string;
+  enabledTools: string[];
+  enabled: boolean;
+  timeout: number;
+}
+
 export interface AppSettingsState {
   schemaVersion: number;
   revision: number;
@@ -21,6 +32,9 @@ export interface AppSettingsState {
   secretsEncryptedAtRest: boolean;
   logLevel: string;
   autoModelPolicy: string;
+  theme: string;
+  hasCompletedOnboarding: boolean;
+  providerMode: string;
   activeApiProvider: string;
   viewingApiProvider: string;
   apiBaseUrl: string;
@@ -51,6 +65,7 @@ export interface AppSettingsState {
   llamaCppScanSummary: string;
   llamaCppScanStatus: string;
   llamaCppNotice: string;
+  mcpServers: McpServerConfig[];
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -96,6 +111,53 @@ function checkApiModelDescriptor(value: unknown, path: string, errors: string[])
     const fieldValue = value["available"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.available: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.available` + ": expected boolean"); }
+  }
+}
+
+function checkMcpServerConfig(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["name"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.name: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.name` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["command"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.command: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.command` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["args"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.args: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.args` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.args` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["scopes"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.scopes: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.scopes` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.scopes` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["approval"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.approval: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.approval` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["enabledTools"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.enabledTools: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.enabledTools` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.enabledTools` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["enabled"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.enabled: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.enabled` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["timeout"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.timeout: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.timeout` + ": expected number"); }
   }
 }
 
@@ -151,6 +213,21 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     const fieldValue = value["autoModelPolicy"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.autoModelPolicy: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.autoModelPolicy` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["theme"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.theme: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.theme` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["hasCompletedOnboarding"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.hasCompletedOnboarding: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.hasCompletedOnboarding` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["providerMode"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.providerMode: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.providerMode` + ": expected string"); }
   }
   {
     const fieldValue = value["activeApiProvider"];
@@ -310,6 +387,12 @@ function checkAppSettingsState(value: unknown, path: string, errors: string[]): 
     const fieldValue = value["llamaCppNotice"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppNotice: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppNotice` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["mcpServers"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.mcpServers: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.mcpServers` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkMcpServerConfig(item, `${path}.mcpServers` + `[${i}]`, errors); }); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];

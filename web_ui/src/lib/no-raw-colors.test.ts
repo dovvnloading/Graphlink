@@ -9,10 +9,14 @@
  * future component automatically, with nobody needing to remember this file.
  *
  * EXCLUDED, and why:
- * - src/lib/tokens/*.css (gl-theme.css, gl-vars-dev.css) are GENERATED and
- *   contain real color values by design - that is their entire purpose.
- *   Each already has its own staleness pytest guarding its content; this
- *   file only cares about hand-authored island CSS.
+ * - src/lib/tokens/*.css (gl-theme.css, gl-vars-dev.css) are the hand-
+ *   authored token source of truth (ADR-012 stage 12.1 - the Python
+ *   generator these files' old headers cited is long gone) and contain
+ *   real color values by design - that is their entire purpose.
+ *   gl-vars-dev.css has its own dedicated guard,
+ *   token-theme-contrast.test.ts (name parity between light/dark, the two
+ *   duplicated light blocks staying identical, WCAG contrast); this file
+ *   only cares about hand-authored island CSS.
  * - a document's
  *   `<meta name="theme-color" content="#1a1a1a">` is a deliberate, narrow
  *   exception, not an oversight: it is a browser/OS chrome hint (the tab/

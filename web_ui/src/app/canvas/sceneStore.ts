@@ -23,6 +23,8 @@ import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
 import type { ScenePatch, StreamListener, WsTransport } from "../../lib/ws/transport";
 import type { BridgeRejection } from "../../lib/bridge-core/islandState";
+import { announce } from "../announcer";
+import { describeNodeRunTransition } from "./nodeRunAnnouncements";
 
 // ADR-003 stage 3.1 review-fix: matches composerStore's own
 // NATIVE_DIALOG_TIMEOUT_MS - pickGitlinkLocalRoot opens a native OS folder
@@ -163,6 +165,21 @@ export class SceneStore {
   // the same reason selectedNodeId/replyTargetNodeId already live on this
   // store rather than in whichever single component happens to set them.
   private focusAcceptedPaths = false;
+  // ADR-012 stage 12.5 ("node filter-by-kind/status"): the same "local,
+  // unpersisted, view-only lens" posture as focusAcceptedPaths just above -
+  // its trigger (ViewPopover.tsx's own FILTER section) and consumer
+  // (SceneCanvas.tsx's toFlowNodes) are two separate components, hence
+  // living here rather than as either one's own component state. An EMPTY
+  // set means "no filter active, show every kind/status" (mirrors
+  // focusAcceptedPaths=false's own "off" semantics) - a non-empty set means
+  // "only nodes matching one of these are shown at full opacity, everything
+  // else is dimmed the same way Focus Accepted Paths already dims a
+  // rejected branch." Two independent sets, not one combined predicate: a
+  // user filtering to kind="code" AND status="accepted" wants the
+  // intersection, which computeFilteredOutNodeIds (SceneCanvas.tsx)
+  // implements by dimming a node excluded by EITHER axis.
+  private filterKinds: ReadonlySet<string> = new Set();
+  private filterStatuses: ReadonlySet<string> = new Set();
   // ADR-011 stage 11.2: true for exactly the duration of one
   // exportCanvasAsPng capture (exportCanvasPng.ts) - local UI state only,
   // same posture as focusAcceptedPaths above (its trigger, the app bar's
@@ -262,6 +279,12 @@ export class SceneStore {
     let nodes = this.scene.nodes;
     let edges = this.scene.edges;
     let meta: Record<string, unknown> = {};
+    // ADR-012 stage 12.3: collected during the loop below, fired only after
+    // the whole patch is confirmed valid and committed (see the bottom of
+    // this method) - a patch that gets refused mid-loop or fails the
+    // post-loop TOPIC_VALIDATORS check must never announce a transition for
+    // a mutation that didn't actually land.
+    const runAnnouncements: string[] = [];
     try {
       for (const op of patch.ops) {
         switch (op.op) {
@@ -269,6 +292,12 @@ export class SceneStore {
             if (!isWireRow<SceneNodeRow>(op.node)) return this.refusePatch("upsertNode.node is not a row", op);
             const node = op.node;
             const index = nodes.findIndex((n) => n.id === node.id);
+            // ADR-012 stage 12.3: diffed against the row this patch is about
+            // to REPLACE (undefined for a genuinely new node, which
+            // describeNodeRunTransition treats as "say nothing" - a create
+            // is not a running->done transition).
+            const message = describeNodeRunTransition(index === -1 ? undefined : nodes[index], node);
+            if (message) runAnnouncements.push(message);
             nodes = index === -1 ? [...nodes, node] : nodes.map((n, i) => (i === index ? node : n));
             break;
           }
@@ -344,6 +373,9 @@ export class SceneStore {
     // closes.
     this.sceneVersionRecovering = false;
     this.updateSceneBlockedState();
+    // ADR-012 stage 12.3: only now, after the patch is confirmed committed -
+    // see runAnnouncements' own doc above for why this can't fire earlier.
+    for (const message of runAnnouncements) announce(message);
     this.emit();
     return true;
   }
@@ -521,6 +553,8 @@ export class SceneStore {
   getReplyTargetNodeId = (): string | null => this.replyTargetNodeId;
   getSynthesizeTargetNodeIds = (): string[] | null => this.synthesizeTargetNodeIds;
   getFocusAcceptedPaths = (): boolean => this.focusAcceptedPaths;
+  getFilterKinds = (): ReadonlySet<string> => this.filterKinds;
+  getFilterStatuses = (): ReadonlySet<string> => this.filterStatuses;
   getExportInProgress = (): boolean => this.exportInProgress;
 
   // R5.1: no-op-if-unchanged, same discipline as every other setter here that
@@ -547,6 +581,30 @@ export class SceneStore {
   setFocusAcceptedPaths(value: boolean): void {
     if (value === this.focusAcceptedPaths) return;
     this.focusAcceptedPaths = value;
+    this.emit();
+  }
+
+  // Toggles membership rather than exposing a raw setter - ViewPopover.tsx's
+  // FILTER buttons only ever need "flip this one kind/status," never a bulk
+  // replace, so the read-modify-write lives here (one place) rather than in
+  // every caller. A fresh Set each time (not a mutate-in-place add/delete on
+  // the existing one) keeps getFilterKinds' returned reference stable
+  // between calls that don't change anything, matching useSyncExternalStore's
+  // snapshot-stability requirement the same way every other Set/array-typed
+  // getter on this store already does.
+  toggleFilterKind(kind: string): void {
+    const next = new Set(this.filterKinds);
+    if (next.has(kind)) next.delete(kind);
+    else next.add(kind);
+    this.filterKinds = next;
+    this.emit();
+  }
+
+  toggleFilterStatus(status: string): void {
+    const next = new Set(this.filterStatuses);
+    if (next.has(status)) next.delete(status);
+    else next.add(status);
+    this.filterStatuses = next;
     this.emit();
   }
 
@@ -1105,6 +1163,14 @@ export class SceneStore {
 
   organizeNodes(): void {
     this.transport.fireIntent("scene", "organizeNodes", []);
+  }
+
+  // ADR-012 stage 12.6: the bundled sample workspace - a small, fixed 3-node
+  // demo the backend hardcodes (see backend/api/intents_onboarding.py's own
+  // docstring). Called from both SceneCanvas.tsx's empty-canvas hint and
+  // OnboardingDialog.tsx's "load the sample workspace" step.
+  loadSampleWorkspace(): void {
+    this.transport.fireIntent("scene", "loadSampleWorkspace", []);
   }
 
   // R6.5: session save - targets "app-chat-library", not "scene", since

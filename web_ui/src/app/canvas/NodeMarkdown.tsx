@@ -8,6 +8,8 @@ import rehypeKatex from "rehype-katex";
 import Zoom from "react-medium-image-zoom";
 import "react-medium-image-zoom/dist/styles.css";
 import "katex/dist/katex.min.css";
+import { useCanvasSearchQuery } from "./CanvasSearchContext";
+import { rehypeHighlightSearchMatches } from "./documentViewSearchHighlight";
 
 /**
  * Shared markdown renderer for scene NODE cards (node redesign, stage 1 of 4
@@ -42,9 +44,22 @@ import "katex/dist/katex.min.css";
  *   would each get `id="notes"`, a genuine DOM-id collision across
  *   currently-mounted elements that Document View's single-document
  *   architecture never has to worry about.
- * - In-document search highlighting (rehypeHighlightSearchMatches): a
- *   Document-View-panel-specific feature (its own search bar), not
- *   something node cards have a UI for.
+ *
+ * ADR-012 stage 12.5 added search-match highlighting here too, reusing
+ * documentViewSearchHighlight.ts's own rehypeHighlightSearchMatches plugin
+ * unchanged (down to its hardcoded "document-view-search-match" class,
+ * which styles.css's own `mark.document-view-search-match` rule matches by
+ * class alone - no ancestor-scoping - so it paints correctly on a node card
+ * exactly as it does inside Document View) - the query comes from
+ * CanvasSearchContext (SearchOverlay.tsx's own input), not a prop, since
+ * this file is instantiated by every node card on the canvas and prop-
+ * threading the live query through 15 *NodeView.tsx components' own `data`
+ * shape for one leaf renderer would be pure duplication. Unlike Document
+ * View's own DocumentViewSearch.tsx, there is no per-node "current match"
+ * concept here - SearchOverlay's Next/Previous jumps between NODES (it
+ * recenters the viewport), it does not track a match index within any one
+ * node's rendered text, so every node highlights every occurrence of the
+ * live query identically, with no `-current` variant ever applied.
  *
  * Component overrides use a `node-md-` class prefix (not `document-view-`)
  * but are styled to EXTEND `.chat-node-content`'s existing shared base
@@ -148,10 +163,16 @@ function TableWrapper({ node: _node, ...props }: JSX.IntrinsicElements["table"] 
   );
 }
 
-function ZoomImage({ node: _node, ...props }: JSX.IntrinsicElements["img"] & ExtraProps) {
+function ZoomImage({ node: _node, alt, ...props }: JSX.IntrinsicElements["img"] & ExtraProps) {
+  // alt comes from the markdown source itself (`![alt](url)`) via
+  // react-markdown's own parsing - pass it through explicitly rather than
+  // relying on the `{...props}` spread, which satisfies jsx-a11y/alt-text
+  // (a spread alone isn't statically verifiable) while keeping the real
+  // author-provided text. Empty alt is a legitimate markdown state
+  // (`![](url)`), not a suppression - falls back to "" rather than undefined.
   return (
     <Zoom wrapElement="span">
-      <img {...props} />
+      <img alt={alt ?? ""} {...props} />
     </Zoom>
   );
 }
@@ -177,10 +198,11 @@ function SafeAnchor({ node: _node, href, children, ...props }: JSX.IntrinsicElem
 }
 
 export function NodeMarkdown({ content }: { content: string }) {
+  const searchQuery = useCanvasSearchQuery();
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkAlert, remarkMath]}
-      rehypePlugins={[rehypeHighlight, rehypeKatex]}
+      rehypePlugins={[rehypeHighlight, rehypeKatex, [rehypeHighlightSearchMatches, searchQuery]]}
       components={{ pre: CodeBlock, table: TableWrapper, img: ZoomImage, a: SafeAnchor }}
     >
       {content}

@@ -108,6 +108,21 @@ export function CommandPalette({ store }: { store: SceneStore }) {
         <ul className="palette-results" role="listbox" aria-label="Commands" ref={resultsRef}>
           {filtered.length === 0 && <li className="palette-empty">No matching commands</li>}
           {filtered.map((command, index) => (
+            // ADR-012 stage 12.3: this <li>'s onClick is a mouse-only
+            // affordance duplicating what the <input>'s own onKeyDown above
+            // already does via a virtual selection (selectedIndex/
+            // clampedIndex, ArrowUp/Down + Enter) while real DOM focus stays
+            // on the input the whole time. Giving the <li> itself its own
+            // tabIndex/onKeyDown would add a SECOND, uncoordinated keyboard
+            // path with no roving-tabindex/aria-activedescendant to keep it
+            // in sync with clampedIndex - Tab would jump real focus to
+            // whichever <li> is first in DOM order, not the one currently
+            // highlighted, and Enter there would run the WRONG command.
+            // The existing input-driven path is the real, tested keyboard
+            // equivalent (see the file's own 5-test suite); this mirrors
+            // PluginPicker.tsx's identical role=listbox/option pattern,
+            // which also leaves its <li> unfocusable for the same reason.
+            // eslint-disable-next-line jsx-a11y/click-events-have-key-events
             <li
               key={command.id}
               role="option"

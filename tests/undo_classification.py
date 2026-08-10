@@ -173,6 +173,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "fitFrameToContent", "A", "content: size is document state"),
     Classified("scene", "ungroup", "A", "content: delete grouping"),
 
+    # -- backend/api/intents_onboarding.py (scene) - ADR-012 stage 12.6 -----
+    Classified("scene", "loadSampleWorkspace", "A", "content: 3-node fixture create, wrapped in one composite command"),
+
     # -- backend/api/intents_model_routing.py (scene) - ADR-018 stage 18.3 --
     Classified("scene", "setModelOverride", "A", "content: model pin is document state, same posture as setGroupColor"),
     Classified("scene", "clearModelOverride", "A", "content: model pin is document state, same posture as setGroupColor"),
@@ -243,6 +246,11 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "setLogLevel", "B", "preference: local logging verbosity"),
     # ADR-018 stage 18.4:
     Classified("app-settings", "setAutoModelPolicy", "B", "preference: auto-routing policy, not document content"),
+    # ADR-012 stage 12.2:
+    Classified("app-settings", "setTheme", "B", "preference: local theme choice, not document content"),
+    # ADR-012 stage 12.6:
+    Classified("app-settings", "setHasCompletedOnboarding", "B", "preference: first-run wizard's own completion flag, not document content"),
+    Classified("app-settings", "setMcpServers", "B", "preference: MCP server list is settings-store configuration, not document content"),
 
     # -- backend/api/intents_settings_api_provider.py (app-settings) --------
     Classified("app-settings", "setViewingApiProvider", "B", "preference: which provider sub-page is viewed"),

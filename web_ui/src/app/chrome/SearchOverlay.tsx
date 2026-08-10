@@ -1,18 +1,27 @@
 import { useReactFlow } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCanvasSearchQuery, useSetCanvasSearchQuery } from "../canvas/CanvasSearchContext";
 import type { SceneStore } from "../canvas/sceneStore";
+import { motionDuration } from "../reducedMotion";
 import { useOverlays } from "../overlays/overlays";
 
 /**
  * The search overlay (Qt-removal plan R2.4) - search-overlay island's
  * successor. Searches both a node's title and its full text content, the
  * same haystack the legacy SearchOverlay matched conversation text against.
+ *
+ * ADR-012 stage 12.5: the query itself now lives in CanvasSearchContext
+ * (this component still owns everything else - currentIndex, matches,
+ * navigation) so NodeMarkdown.tsx can highlight matches inside every
+ * rendered node card without prop-drilling through 15 *NodeView.tsx
+ * components - see that Context's own doc for the full reasoning.
  */
 export function SearchOverlay({ store }: { store: SceneStore }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const overlays = useOverlays();
   const { setCenter } = useReactFlow();
-  const [query, setQuery] = useState("");
+  const query = useCanvasSearchQuery();
+  const setQuery = useSetCanvasSearchQuery();
   const [currentIndex, setCurrentIndex] = useState(-1);
   const inputRef = useRef<HTMLInputElement>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
@@ -53,7 +62,7 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
 
   function jumpTo(index: number) {
     const match = matches[index];
-    if (match) setCenter(match.x, match.y, { zoom: 1, duration: 300 });
+    if (match) setCenter(match.x, match.y, { zoom: 1, duration: motionDuration(300) });
   }
 
   function next() {

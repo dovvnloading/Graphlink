@@ -1,9 +1,10 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import { CodeExecutionApprovalPanel } from "./CodeExecutionApprovalPanel";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -176,130 +177,136 @@ function PyCoderNodeViewImpl({ id, data, selected }: NodeProps<PyCoderFlowNode>)
   }
 
   return (
-    <div
-      className={`scene-node pycoder-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName="pycoder-node"
+      selected={!!selected}
+      collapsed={collapsed}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
+      header={
+        <div className="scene-node-title chat-node-role">
+          <span>Py-Coder</span>
+          <button
+            type="button"
+            className="chat-node-collapse-btn"
+            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
+            onClick={data.onToggleCollapse}
+          >
+            {data.isCollapsed ? "▸" : "▾"}
+          </button>
+        </div>
+      }
+      bodyClassName="pycoder-node-content"
+      menu={
+        <>
+          {/* R8a: rendered here (NodeShell's `menu` slot is unconditional,
+              unlike `children`, which is gated behind !collapsed) - this is
+              a blocking approval prompt, and collapsing the node or zooming
+              past the LOD threshold used to unmount it mid-decision. It
+              self-hides via `if (!awaitingApproval) return null`, and
+              renders through a portal to document.body regardless of where
+              it sits in this tree, so its position among NodeShell's own
+              slots has no visual effect. */}
+          <CodeExecutionApprovalPanel
+            nodeId={id}
+            kind="pycoder"
+            code={data.pycoderCode}
+            awaitingApproval={data.pycoderAwaitingApproval}
+            busy={approvalBusy}
+            onApprove={handleApprove}
+            onDeny={handleDeny}
+          />
+          {menuPosition && (
+            <PyCoderNodeMenu
+              position={menuPosition}
+              isCollapsed={data.isCollapsed}
+              onToggleCollapse={data.onToggleCollapse}
+              onDelete={data.onDelete}
+              onClose={() => setMenuPosition(null)}
+            />
+          )}
+        </>
+      }
     >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title chat-node-role">
-        <span>Py-Coder</span>
+      <div className="pycoder-node-mode-toggle" role="group" aria-label="Mode">
         <button
           type="button"
-          className="chat-node-collapse-btn"
-          aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-          onClick={data.onToggleCollapse}
+          aria-pressed={!isManual}
+          className={`pycoder-node-mode-btn${!isManual ? " active" : ""}`}
+          onClick={() => data.onSetMode("ai_driven")}
         >
-          {data.isCollapsed ? "▸" : "▾"}
+          AI-Driven
+        </button>
+        <button
+          type="button"
+          aria-pressed={isManual}
+          className={`pycoder-node-mode-btn${isManual ? " active" : ""}`}
+          onClick={() => data.onSetMode("manual")}
+        >
+          Manual
         </button>
       </div>
-      {!collapsed && (
-        <div className="scene-node-body pycoder-node-content">
-          <div className="pycoder-node-mode-toggle" role="group" aria-label="Mode">
-            <button
-              type="button"
-              aria-pressed={!isManual}
-              className={`pycoder-node-mode-btn${!isManual ? " active" : ""}`}
-              onClick={() => data.onSetMode("ai_driven")}
-            >
-              AI-Driven
-            </button>
-            <button
-              type="button"
-              aria-pressed={isManual}
-              className={`pycoder-node-mode-btn${isManual ? " active" : ""}`}
-              onClick={() => data.onSetMode("manual")}
-            >
-              Manual
-            </button>
-          </div>
 
-          <textarea
-            className="pycoder-node-input"
-            value={inputDraft}
-            onChange={(event) => setInputDraft(event.target.value)}
-            placeholder={isManual ? "Write Python code…" : "Describe what the code should do…"}
-            aria-label={isManual ? "Code" : "Prompt"}
-            rows={4}
-            spellCheck={!isManual}
-          />
+      <textarea
+        className="pycoder-node-input"
+        value={inputDraft}
+        onChange={(event) => setInputDraft(event.target.value)}
+        placeholder={isManual ? "Write Python code…" : "Describe what the code should do…"}
+        aria-label={isManual ? "Code" : "Prompt"}
+        rows={4}
+        spellCheck={!isManual}
+      />
 
-          <div className="pycoder-node-run-row">
-            <button type="button" disabled={!inputDraft.trim() || busy} onClick={runNow}>
-              Run
-            </button>
-            {data.pendingRequestId && (
-              <button type="button" onClick={() => data.onCancel()} title="Cancel Py-Coder request">
-                Cancel
-              </button>
-            )}
-          </div>
+      <div className="pycoder-node-run-row">
+        <button type="button" disabled={!inputDraft.trim() || busy} onClick={runNow}>
+          Run
+        </button>
+        {data.pendingRequestId && (
+          <button type="button" onClick={() => data.onCancel()} title="Cancel Py-Coder request">
+            Cancel
+          </button>
+        )}
+      </div>
 
-          {data.pycoderError && (
-            <div className="pycoder-node-banner-error" role="alert">
-              {data.pycoderError}
-            </div>
-          )}
-
-          {data.pycoderLastRunFailed && (
-            <p className="pycoder-node-failed-badge">Last run failed - result may still be repaired code.</p>
-          )}
-
-          {data.pycoderCode && (
-            <div className="pycoder-node-section">
-              <span className="pycoder-node-section-label">Code</span>
-              <div className="chat-node-content pycoder-node-code">
-                <NodeMarkdown content={toPythonFence(data.pycoderCode)} />
-              </div>
-            </div>
-          )}
-
-          {data.pycoderOutput && (
-            <div className="pycoder-node-section">
-              <span className="pycoder-node-section-label">Output</span>
-              <div className="chat-node-content pycoder-node-output">
-                <NodeMarkdown content={toPlainFence(data.pycoderOutput)} />
-              </div>
-            </div>
-          )}
-
-          {data.pycoderAnalysis && (
-            <div className="pycoder-node-section">
-              <span className="pycoder-node-section-label">Analysis</span>
-              <div className="chat-node-content pycoder-node-analysis">
-                <NodeMarkdown content={data.pycoderAnalysis} />
-              </div>
-            </div>
-          )}
-
+      {data.pycoderError && (
+        <div className="pycoder-node-banner-error" role="alert">
+          {data.pycoderError}
         </div>
       )}
-      {/* R8a: OUTSIDE the {!collapsed} gate on purpose - this is a
-          blocking approval prompt, and collapsing the node or zooming
-          past the LOD threshold used to unmount it mid-decision. It
-          self-hides via `if (!awaitingApproval) return null`. */}
-        <CodeExecutionApprovalPanel
-          nodeId={id}
-          kind="pycoder"
-          code={data.pycoderCode}
-          awaitingApproval={data.pycoderAwaitingApproval}
-          busy={approvalBusy}
-          onApprove={handleApprove}
-          onDeny={handleDeny}
-        />
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-      {menuPosition && (
-        <PyCoderNodeMenu
-          position={menuPosition}
-          isCollapsed={data.isCollapsed}
-          onToggleCollapse={data.onToggleCollapse}
-          onDelete={data.onDelete}
-          onClose={() => setMenuPosition(null)}
-        />
+
+      {data.pycoderLastRunFailed && (
+        <p className="pycoder-node-failed-badge">Last run failed - result may still be repaired code.</p>
       )}
-    </div>
+
+      {data.pycoderCode && (
+        <div className="pycoder-node-section">
+          <span className="pycoder-node-section-label">Code</span>
+          <div className="chat-node-content pycoder-node-code">
+            <NodeMarkdown content={toPythonFence(data.pycoderCode)} />
+          </div>
+        </div>
+      )}
+
+      {data.pycoderOutput && (
+        <div className="pycoder-node-section">
+          <span className="pycoder-node-section-label">Output</span>
+          <div className="chat-node-content pycoder-node-output">
+            <NodeMarkdown content={toPlainFence(data.pycoderOutput)} />
+          </div>
+        </div>
+      )}
+
+      {data.pycoderAnalysis && (
+        <div className="pycoder-node-section">
+          <span className="pycoder-node-section-label">Analysis</span>
+          <div className="chat-node-content pycoder-node-analysis">
+            <NodeMarkdown content={data.pycoderAnalysis} />
+          </div>
+        </div>
+      )}
+    </NodeShell>
   );
 }
 

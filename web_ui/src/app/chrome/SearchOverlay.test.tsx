@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { SearchOverlay } from "./SearchOverlay";
+import { CanvasSearchProvider } from "../canvas/CanvasSearchContext";
 import { initialSceneState } from "../canvas/sceneStore";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 
@@ -41,10 +42,12 @@ function setup() {
   render(
     <OverlayProvider>
       <ReactFlowProvider>
-        <OpenSearchButton />
-        <button type="button">elsewhere</button>
-        {/* @ts-expect-error - test double */}
-        <SearchOverlay store={store} />
+        <CanvasSearchProvider>
+          <OpenSearchButton />
+          <button type="button">elsewhere</button>
+          {/* @ts-expect-error - test double */}
+          <SearchOverlay store={store} />
+        </CanvasSearchProvider>
       </ReactFlowProvider>
     </OverlayProvider>,
   );

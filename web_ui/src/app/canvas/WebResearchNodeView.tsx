@@ -1,8 +1,9 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -195,146 +196,147 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
   const showProgress = showStepper && data.researchTotal > 0;
 
   return (
-    <div
-      className={`scene-node web-research-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName="web-research-node"
+      selected={!!selected}
+      collapsed={collapsed}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
+      header={
+        <div className="scene-node-title chat-node-role">
+          <span>Web Research</span>
+          <button
+            type="button"
+            className="chat-node-collapse-btn"
+            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
+            onClick={data.onToggleCollapse}
+          >
+            {data.isCollapsed ? "▸" : "▾"}
+          </button>
+        </div>
+      }
+      bodyClassName="web-research-node-content"
+      menu={
+        menuPosition && (
+          <WebResearchNodeMenu
+            position={menuPosition}
+            isCollapsed={data.isCollapsed}
+            onToggleCollapse={data.onToggleCollapse}
+            onDelete={data.onDelete}
+            onClose={() => setMenuPosition(null)}
+          />
+        )
+      }
     >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title chat-node-role">
-        <span>Web Research</span>
-        <button
-          type="button"
-          className="chat-node-collapse-btn"
-          aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-          onClick={data.onToggleCollapse}
-        >
-          {data.isCollapsed ? "▸" : "▾"}
-        </button>
+      <div className="web-research-node-query-row">
+        <input
+          type="text"
+          className="web-research-node-query-input"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              run();
+            }
+          }}
+          placeholder="Research a question…"
+          aria-label="Research query"
+        />
+        <div className="web-research-node-query-actions">
+          <button
+            type="button"
+            className="web-research-node-run-btn"
+            disabled={!draft.trim() || !!data.pendingRequestId}
+            onClick={run}
+          >
+            Run
+          </button>
+          {data.pendingRequestId && (
+            <button
+              type="button"
+              className="web-research-node-cancel-btn"
+              onClick={() => data.onCancel()}
+              title="Cancel research"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
-      {!collapsed && (
-        <div className="scene-node-body web-research-node-content">
-          <div className="web-research-node-query-row">
-            <input
-              type="text"
-              className="web-research-node-query-input"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  run();
-                }
-              }}
-              placeholder="Research a question…"
-              aria-label="Research query"
-            />
-            <div className="web-research-node-query-actions">
-              <button
-                type="button"
-                className="web-research-node-run-btn"
-                disabled={!draft.trim() || !!data.pendingRequestId}
-                onClick={run}
-              >
-                Run
-              </button>
-              {data.pendingRequestId && (
-                <button
-                  type="button"
-                  className="web-research-node-cancel-btn"
-                  onClick={() => data.onCancel()}
-                  title="Cancel research"
-                >
-                  Cancel
-                </button>
-              )}
-            </div>
+
+      {showStepper && (
+        <div className="web-research-node-stepper">
+          {STAGE_STEPS.map((step, index) => (
+            <span
+              key={step.key}
+              className={
+                "web-research-node-step" +
+                (index < stageIndex ? " done" : index === stageIndex ? " active" : " pending")
+              }
+            >
+              {step.label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {showProgress && (
+        <p className="web-research-node-progress">
+          Fetching source {Math.min(data.researchCompleted + 1, data.researchTotal)} of{" "}
+          {data.researchTotal}…
+        </p>
+      )}
+
+      {isFailed && (
+        <div className="web-research-node-banner web-research-node-banner-failed">
+          {data.researchError || "Research failed."}
+        </div>
+      )}
+      {isCancelled && (
+        <div className="web-research-node-banner web-research-node-banner-cancelled">
+          {data.researchError || "Research was cancelled."}
+        </div>
+      )}
+
+      {data.researchResult && (
+        <div className="web-research-node-result">
+          {/* Reuses .chat-node-content's full markdown-body rule set
+              verbatim (same shared-class convention
+              ConversationBubble's own -content div establishes).
+              answerMarkdown is LLM-generated from untrusted web
+              evidence, so a javascript:/file: scheme must never be
+              allowed to navigate - this view USED to carry its own
+              bespoke anchor override for exactly that reason, but
+              NodeMarkdown.tsx's own SafeAnchor now provides the
+              identical http(s)-only allowlist (and every OTHER node
+              kind's markdown gets the same protection too, which none
+              of them had before - see NodeMarkdown.tsx's own doc
+              comment), so this view no longer needs a special case. */}
+          <div className="chat-node-content web-research-node-answer">
+            <NodeMarkdown content={data.researchResult.answerMarkdown} />
           </div>
 
-          {showStepper && (
-            <div className="web-research-node-stepper">
-              {STAGE_STEPS.map((step, index) => (
-                <span
-                  key={step.key}
-                  className={
-                    "web-research-node-step" +
-                    (index < stageIndex ? " done" : index === stageIndex ? " active" : " pending")
-                  }
-                >
-                  {step.label}
-                </span>
+          {data.researchResult.warnings.length > 0 && (
+            <ul className="web-research-node-warnings">
+              {data.researchResult.warnings.map((warning, index) => (
+                <li key={index}>{warning}</li>
               ))}
-            </div>
+            </ul>
           )}
 
-          {showProgress && (
-            <p className="web-research-node-progress">
-              Fetching source {Math.min(data.researchCompleted + 1, data.researchTotal)} of{" "}
-              {data.researchTotal}…
-            </p>
-          )}
-
-          {isFailed && (
-            <div className="web-research-node-banner web-research-node-banner-failed">
-              {data.researchError || "Research failed."}
-            </div>
-          )}
-          {isCancelled && (
-            <div className="web-research-node-banner web-research-node-banner-cancelled">
-              {data.researchError || "Research was cancelled."}
-            </div>
-          )}
-
-          {data.researchResult && (
-            <div className="web-research-node-result">
-              {/* Reuses .chat-node-content's full markdown-body rule set
-                  verbatim (same shared-class convention
-                  ConversationBubble's own -content div establishes).
-                  answerMarkdown is LLM-generated from untrusted web
-                  evidence, so a javascript:/file: scheme must never be
-                  allowed to navigate - this view USED to carry its own
-                  bespoke anchor override for exactly that reason, but
-                  NodeMarkdown.tsx's own SafeAnchor now provides the
-                  identical http(s)-only allowlist (and every OTHER node
-                  kind's markdown gets the same protection too, which none
-                  of them had before - see NodeMarkdown.tsx's own doc
-                  comment), so this view no longer needs a special case. */}
-              <div className="chat-node-content web-research-node-answer">
-                <NodeMarkdown content={data.researchResult.answerMarkdown} />
-              </div>
-
-              {data.researchResult.warnings.length > 0 && (
-                <ul className="web-research-node-warnings">
-                  {data.researchResult.warnings.map((warning, index) => (
-                    <li key={index}>{warning}</li>
-                  ))}
-                </ul>
-              )}
-
-              {data.researchResult.sources.length > 0 && (
-                <div className="web-research-node-sources">
-                  {data.researchResult.sources.map((source) => (
-                    <WebResearchSourceChip key={source.sourceId} source={source} />
-                  ))}
-                </div>
-              )}
+          {data.researchResult.sources.length > 0 && (
+            <div className="web-research-node-sources">
+              {data.researchResult.sources.map((source) => (
+                <WebResearchSourceChip key={source.sourceId} source={source} />
+              ))}
             </div>
           )}
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-      {menuPosition && (
-        <WebResearchNodeMenu
-          position={menuPosition}
-          isCollapsed={data.isCollapsed}
-          onToggleCollapse={data.onToggleCollapse}
-          onDelete={data.onDelete}
-          onClose={() => setMenuPosition(null)}
-        />
-      )}
-    </div>
+    </NodeShell>
   );
 }
 

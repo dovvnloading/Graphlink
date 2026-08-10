@@ -1,6 +1,43 @@
 import { useSyncExternalStore } from "react";
+import { FILTERABLE_NODE_KINDS } from "../canvas/SceneCanvas";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover } from "../overlays/overlays";
+
+// ADR-012 stage 12.5: display labels for FILTERABLE_NODE_KINDS' own raw
+// kind strings - most already read fine title-cased, but "web_research"/
+// "code_sandbox"/"pycoder" need a human label. Kept local to this file (not
+// exported from SceneCanvas.tsx) since nothing else needs a display label
+// for a node kind today.
+const FILTER_KIND_LABELS: Record<string, string> = {
+  chat: "Chat",
+  code: "Code",
+  document: "Document",
+  thinking: "Thinking",
+  html: "HTML",
+  image: "Image",
+  conversation: "Conversation",
+  web_research: "Web Research",
+  plan: "Plan",
+  artifact: "Artifact",
+  gitlink: "Gitlink",
+  pycoder: "Py-Coder",
+  code_sandbox: "Code Sandbox",
+  note: "Note",
+  chart: "Chart",
+};
+
+// ADR-012 stage 12.5: mirrors backend/domain/branches.py's own
+// BRANCH_STATUS_VALUES exactly (SceneDocument.set_branch_status's legal
+// values) - "active" is every node's default (including every non-chat
+// kind, which never has a real branch status of its own - see graph.py's
+// own wire-builder), so it reads first as the common case.
+const FILTER_STATUS_VALUES = ["active", "accepted", "rejected", "superseded"] as const;
+const FILTER_STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  accepted: "Accepted",
+  rejected: "Rejected",
+  superseded: "Superseded",
+};
 
 /**
  * The View popover (Qt-removal plan R2, audit P5): ONE surface consolidating
@@ -20,6 +57,11 @@ export function ViewPopover({ store }: { store: SceneStore }) {
   // that field's own comment for why: a view-only review lens, the same
   // posture as "Hide Other Branches", not a real document property).
   const focusAcceptedPaths = useSyncExternalStore(store.subscribe, store.getFocusAcceptedPaths);
+  // ADR-012 stage 12.5: "node filter-by-kind/status" - same local,
+  // unpersisted posture as focusAcceptedPaths just above, see
+  // sceneStore.ts's own comment on filterKinds/filterStatuses.
+  const filterKinds = useSyncExternalStore(store.subscribe, store.getFilterKinds);
+  const filterStatuses = useSyncExternalStore(store.subscribe, store.getFilterStatuses);
 
   const dragPercent = Math.round(scene.dragFactor * 100);
 
@@ -189,6 +231,44 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           />
           Focus Accepted Paths
         </label>
+      </section>
+
+      <section className="view-section" aria-label="Filter">
+        <p className="view-section-title">FILTER</p>
+        {/* ADR-012 stage 12.5: multi-select toggle chips, same view-row/
+            view-preset-btn markup every other section's preset row already
+            uses - "active" here means "toggled into the filter set," not
+            mutual exclusion (unlike, say, the grid-size presets above, a
+            click here only ever flips ITS OWN membership in
+            sceneStore's filterKinds Set, see toggleFilterKind's own doc).
+            An empty set (no chip active) means no filter at all - every
+            node shows at full opacity, exactly as before this stage. */}
+        <div className="view-row" role="group" aria-label="Filter by node kind">
+          {FILTERABLE_NODE_KINDS.map((kind) => (
+            <button
+              key={kind}
+              type="button"
+              className={"view-preset-btn" + (filterKinds.has(kind) ? " active" : "")}
+              aria-pressed={filterKinds.has(kind)}
+              onClick={() => store.toggleFilterKind(kind)}
+            >
+              {FILTER_KIND_LABELS[kind]}
+            </button>
+          ))}
+        </div>
+        <div className="view-row" role="group" aria-label="Filter by branch status">
+          {FILTER_STATUS_VALUES.map((status) => (
+            <button
+              key={status}
+              type="button"
+              className={"view-preset-btn" + (filterStatuses.has(status) ? " active" : "")}
+              aria-pressed={filterStatuses.has(status)}
+              onClick={() => store.toggleFilterStatus(status)}
+            >
+              {FILTER_STATUS_LABELS[status]}
+            </button>
+          ))}
+        </div>
       </section>
     </Popover>
   );

@@ -273,6 +273,52 @@ body,
   background-color: var(--gl-surface-window);
 }
 
+/* ADR-012 stage 12.6: the empty-canvas hint - a fresh session's blank scene
+   otherwise looks indistinguishable from a broken one. Centered flex column
+   over the full canvas, same layout shape as .scene-bridge-error above (a
+   proven "replace/annotate the whole canvas region" pattern in this file),
+   but layered ON TOP of a working canvas rather than instead of a broken
+   one, so pointer-events is none on the wrapper - panning/the double-click-
+   to-create-node gesture on .scene-canvas underneath must keep working -
+   with only the button itself opting back in so it stays clickable. */
+.scene-empty-hint {
+  position: absolute;
+  inset: 0;
+  z-index: var(--gl-z-canvas-hud);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.scene-empty-hint-text {
+  margin: 0;
+  max-width: 360px;
+  font-size: 13px;
+  color: var(--gl-surface-text-muted);
+}
+
+.scene-empty-hint-button {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.scene-empty-hint-button:hover {
+  border-color: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
+}
+
 .scene-node {
   min-width: 160px;
   background-color: var(--gl-surface-node-body);
@@ -312,6 +358,20 @@ body,
 .scene-node.selected {
   border-color: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
   box-shadow: 0 0 0 1px var(--gl-surface-border-strong), var(--gl-shadow-3);
+}
+
+/* ADR-012 stage 12.3: the actually-tabbable element for a node is React
+   Flow's OWN wrapper div (.react-flow__node, one level up from .scene-node -
+   see NodeMenu.tsx's own stage-12.3 doc for why), not .scene-node itself, so
+   this targets that wrapper rather than the card. A real `outline` (not a
+   box-shadow) at a dedicated --gl-focus-ring token, offset so it never
+   overlaps .selected's own border/box-shadow treatment above - the two are
+   deliberately independent CSS properties on independent elements, so a
+   node that is BOTH keyboard-focused AND selected shows both rings clearly
+   layered rather than one silently winning a specificity fight. */
+.react-flow__node:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 3px;
 }
 
 .scene-node-title {
@@ -2707,6 +2767,34 @@ body,
   color: var(--gl-surface-text-muted);
 }
 
+/* -- Onboarding dialog (ADR-012 stage 12.6) ------------------------------- */
+
+.onboarding-dialog {
+  min-width: 360px;
+  max-width: 460px;
+}
+
+.onboarding-step-label {
+  margin: 0 0 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--gl-surface-text-muted);
+}
+
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.onboarding-step p {
+  margin: 0;
+}
+
 /* -- Help dialog (R2.5b) -------------------------------------------------- */
 
 .help-dialog {
@@ -4146,6 +4234,43 @@ mark.document-view-search-match-current {
 
 .settings-checkbox-row:hover {
   background-color: var(--gl-neutral-button-hover);
+}
+
+/* ADR-012 stage 12.6: MCP Servers page - one configured-server row per
+   entry. Reuses .settings-checkbox-row verbatim for the enabled toggle plus
+   name/command text (the label IS a .settings-checkbox-row), with a Remove
+   button pinned to the row's trailing edge via this wrapper's own flex row. */
+.settings-mcp-server-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-mcp-server-toggle {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-mcp-server-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-mcp-server-name {
+  font-weight: 600;
+}
+
+.settings-mcp-server-command {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
+.settings-mcp-server-remove {
+  flex-shrink: 0;
 }
 
 .settings-fieldset {

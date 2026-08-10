@@ -5,10 +5,12 @@ import {
   applyGroupDragDelta,
   buildDragSizeCache,
   computeDimmedNodeIds,
+  computeFilteredOutNodeIds,
   computeNonAcceptedNodeIds,
   computeSmartGuideFrame,
   conversationHistoryToDocumentMarkdown,
   createToFlowNodesCache,
+  FILTERABLE_NODE_KINDS,
   flowNodeOwnSize,
   groupDragKindOf,
   handleSelectionChange,
@@ -2035,6 +2037,99 @@ describe("computeNonAcceptedNodeIds (ADR-002 Workstream 1 - Focus Accepted Paths
   });
 });
 
+describe("computeFilteredOutNodeIds (ADR-012 stage 12.5 - node filter-by-kind/status)", () => {
+  it("returns an empty set when both filter sets are empty (feature off)", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "a", kind: "chat" }), baseNode({ id: "b", kind: "note" })],
+    });
+    expect(computeFilteredOutNodeIds(scene, new Set(), new Set())).toEqual(new Set());
+  });
+
+  it("excludes every node whose kind is not in a non-empty kind filter", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "chat-1", kind: "chat" }),
+        baseNode({ id: "code-1", kind: "code" }),
+        baseNode({ id: "note-1", kind: "note" }),
+      ],
+    });
+    expect(computeFilteredOutNodeIds(scene, new Set(["chat", "note"]), new Set())).toEqual(new Set(["code-1"]));
+  });
+
+  it("excludes every node whose branchStatus is not in a non-empty status filter", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "active-1", kind: "chat", branchStatus: "active" }),
+        baseNode({ id: "rejected-1", kind: "chat", branchStatus: "rejected" }),
+        baseNode({ id: "accepted-1", kind: "code", branchStatus: "accepted" }),
+      ],
+    });
+    expect(computeFilteredOutNodeIds(scene, new Set(), new Set(["active", "accepted"]))).toEqual(
+      new Set(["rejected-1"]),
+    );
+  });
+
+  it("ANDs both axes when both filters are active - a node must pass both to survive", () => {
+    const scene = baseScene({
+      nodes: [
+        // Passes both: kind=code AND status=accepted.
+        baseNode({ id: "keep", kind: "code", branchStatus: "accepted" }),
+        // Fails kind only.
+        baseNode({ id: "wrong-kind", kind: "note", branchStatus: "accepted" }),
+        // Fails status only.
+        baseNode({ id: "wrong-status", kind: "code", branchStatus: "rejected" }),
+        // Fails both.
+        baseNode({ id: "wrong-both", kind: "note", branchStatus: "rejected" }),
+      ],
+    });
+    const excluded = computeFilteredOutNodeIds(scene, new Set(["code"]), new Set(["accepted"]));
+    expect(excluded).toEqual(new Set(["wrong-kind", "wrong-status", "wrong-both"]));
+  });
+
+  it("never excludes frame/container nodes, even with an active kind filter that omits them", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "frame-1", kind: "frame" }),
+        baseNode({ id: "container-1", kind: "container" }),
+        baseNode({ id: "chat-1", kind: "chat" }),
+      ],
+    });
+    const excluded = computeFilteredOutNodeIds(scene, new Set(["chat"]), new Set());
+    expect(excluded).toEqual(new Set());
+  });
+
+  it("every kind FILTERABLE_NODE_KINDS lists round-trips through the filter unexcluded when selected alone", () => {
+    for (const kind of FILTERABLE_NODE_KINDS) {
+      const scene = baseScene({ nodes: [baseNode({ id: "n", kind })] });
+      expect(computeFilteredOutNodeIds(scene, new Set([kind]), new Set())).toEqual(new Set());
+    }
+  });
+
+  it("toFlowNodes' own filterKinds/filterStatuses params reach isDimmed's style output", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "chat-1", kind: "chat" }),
+        baseNode({ id: "note-1", kind: "note" }),
+      ],
+    });
+    const store = makeStore();
+
+    // No filter active - neither node is dimmed.
+    const unfiltered = toFlowNodes(
+      scene, store, () => {}, null, () => {}, false, createToFlowNodesCache(), undefined, new Set(), new Set(),
+    );
+    expect(unfiltered.find((n) => n.id === "chat-1")?.style).toBeUndefined();
+    expect(unfiltered.find((n) => n.id === "note-1")?.style).toBeUndefined();
+
+    // Filtered to kind="chat" - the note node is dimmed, the chat node is not.
+    const filtered = toFlowNodes(
+      scene, store, () => {}, null, () => {}, false, createToFlowNodesCache(), undefined, new Set(["chat"]), new Set(),
+    );
+    expect(filtered.find((n) => n.id === "chat-1")?.style).toBeUndefined();
+    expect(filtered.find((n) => n.id === "note-1")?.style).toEqual({ opacity: 0.18 });
+  });
+});
+
 describe("toFlowNodes (R6.3 html node splitter state)", () => {
   it("maps a saved htmlSplitterState onto the flow node's data", () => {
     const scene = baseScene({
@@ -3035,5 +3130,81 @@ describe("SceneCanvas version-rejection gate (ADR-003 stage 3.5)", () => {
     // were null, CanvasInner would have just mounted against stale data.
     expect(screen.getByRole("alert")).toBeInTheDocument();
     expect(store.getSceneBlockingRejection()).not.toBeNull();
+  });
+});
+
+describe("SceneCanvas empty-canvas hint (ADR-012 stage 12.6)", () => {
+  type StateListener = (payload: Record<string, unknown>) => void;
+
+  // Same minimal transport shape as makeStoreWithVersionControl above (a
+  // sibling, not reused, since it is scoped to that describe block) - just
+  // enough of WsTransport's surface for SceneCanvas to mount and for a test
+  // to push a real scene snapshot afterward.
+  function makeStoreForEmptyHint() {
+    const stateListeners = new Map<string, StateListener>();
+    const transport = {
+      subscribe: vi.fn((topic: string, listener: StateListener) => {
+        stateListeners.set(topic, listener);
+        return () => stateListeners.delete(topic);
+      }),
+      intent: vi.fn(),
+      fireIntent: vi.fn(),
+      subscribePatch: vi.fn(),
+      onVersionRejection: vi.fn((_topic: string, listener: (r: BridgeRejection | null) => void) => {
+        listener(null);
+        return () => {};
+      }),
+      setTopicBlocked: vi.fn(),
+    } as unknown as WsTransport;
+    const store = new SceneStore(transport);
+    store.connect();
+    return { store, transport, stateListeners };
+  }
+
+  const HINT_TEXT = "Type a message to start, or load the sample workspace.";
+
+  it("renders the empty-canvas hint when the scene has no nodes", () => {
+    const { store } = makeStoreForEmptyHint();
+
+    render(
+      <ReactFlowProvider>
+        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+      </ReactFlowProvider>,
+    );
+
+    expect(screen.getByText(HINT_TEXT)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load Sample Workspace" })).toBeInTheDocument();
+  });
+
+  it("hides the empty-canvas hint once the scene has a real node", () => {
+    const { store, stateListeners } = makeStoreForEmptyHint();
+
+    render(
+      <ReactFlowProvider>
+        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByText(HINT_TEXT)).toBeInTheDocument();
+
+    act(() => {
+      stateListeners.get("scene")!(
+        baseScene({ nodes: [baseNode({ id: "n1" })] }) as unknown as Record<string, unknown>,
+      );
+    });
+
+    expect(screen.queryByText(HINT_TEXT)).toBeNull();
+  });
+
+  it("the Load Sample Workspace button fires the scene-topic loadSampleWorkspace intent", () => {
+    const { store, transport } = makeStoreForEmptyHint();
+
+    render(
+      <ReactFlowProvider>
+        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+      </ReactFlowProvider>,
+    );
+
+    screen.getByRole("button", { name: "Load Sample Workspace" }).click();
+    expect(transport.fireIntent).toHaveBeenCalledWith("scene", "loadSampleWorkspace", []);
   });
 });

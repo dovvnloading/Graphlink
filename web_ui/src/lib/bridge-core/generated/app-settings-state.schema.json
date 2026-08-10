@@ -90,6 +90,9 @@
     "githubTokenConfigured": {
       "type": "boolean"
     },
+    "hasCompletedOnboarding": {
+      "type": "boolean"
+    },
     "llamaCppChatFormat": {
       "type": "string"
     },
@@ -128,6 +131,58 @@
     },
     "logLevel": {
       "type": "string"
+    },
+    "mcpServers": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "approval": {
+            "type": "string"
+          },
+          "args": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "command": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "enabledTools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "timeout": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "name",
+          "command",
+          "args",
+          "scopes",
+          "approval",
+          "enabledTools",
+          "enabled",
+          "timeout"
+        ],
+        "type": "object"
+      },
+      "type": "array"
     },
     "minCompatibleSchemaVersion": {
       "type": "integer"
@@ -168,6 +223,9 @@
       },
       "type": "array"
     },
+    "providerMode": {
+      "type": "string"
+    },
     "revision": {
       "type": "integer"
     },
@@ -179,6 +237,9 @@
     },
     "showTokenCounter": {
       "type": "boolean"
+    },
+    "theme": {
+      "type": "string"
     },
     "viewingApiProvider": {
       "type": "string"
@@ -195,6 +256,9 @@
     "secretsEncryptedAtRest",
     "logLevel",
     "autoModelPolicy",
+    "theme",
+    "hasCompletedOnboarding",
+    "providerMode",
     "activeApiProvider",
     "viewingApiProvider",
     "apiBaseUrl",
@@ -224,7 +288,8 @@
     "llamaCppScannedModels",
     "llamaCppScanSummary",
     "llamaCppScanStatus",
-    "llamaCppNotice"
+    "llamaCppNotice",
+    "mcpServers"
   ],
   "title": "AppSettingsState",
   "type": "object"

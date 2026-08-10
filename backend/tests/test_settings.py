@@ -42,6 +42,8 @@ def test_settings_payload_shape_matches_generated_validator_shape(manager):
         "secretsEncryptedAtRest",
         "logLevel",
         "autoModelPolicy",
+        "theme",
+        "hasCompletedOnboarding",
     }
 
 
@@ -55,6 +57,8 @@ def test_settings_payload_reflects_real_manager_defaults(manager):
     assert payload["logLevel"] == "INFO"
     # ADR-018 stage 18.4: "cheapest-capable" by default.
     assert payload["autoModelPolicy"] == "cheapest-capable"
+    # ADR-012 stage 12.2: "system" by default - defers to prefers-color-scheme.
+    assert payload["theme"] == "system"
 
 
 def test_settings_never_imports_qt():
@@ -164,6 +168,37 @@ def test_set_log_level_intent_rejects_unknown_level_without_touching_root_logger
         assert logging.getLogger().level == root_level_before  # unchanged
     finally:
         logging.getLogger().setLevel(root_level_before)
+
+
+# -- ADR-012 stage 12.2: theme setting -----------------------------------
+
+
+def test_get_theme_defaults_to_system(manager):
+    assert manager.get_theme() == "system"
+
+
+def test_set_theme_persists_and_rejects_unknown_themes(manager):
+    manager.set_theme("dark")
+    assert manager.get_theme() == "dark"
+
+    manager.set_theme("not-a-real-theme")
+    assert manager.get_theme() == "dark"  # unchanged, not overwritten with garbage
+
+
+def test_set_theme_intent_persists_and_republishes(manager):
+    bus = SessionBus("settings-theme-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setTheme", ["light"]))
+    assert manager.get_theme() == "light"
+
+
+def test_set_theme_intent_rejects_unknown_theme(manager):
+    bus = SessionBus("settings-theme-reject-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setTheme", ["not-a-real-theme"]))
+    assert manager.get_theme() == "system"  # unchanged
 
 
 def test_set_notification_preference_intent_updates_a_single_type(manager):
@@ -2181,6 +2216,185 @@ def test_set_provider_mode_failure_does_not_persist_the_mode(manager, monkeypatc
     assert manager.get_current_mode() == config.MODE_API_ENDPOINT  # unchanged
     assert notifications.msg_type == "error"
     assert "ollama daemon unreachable" in notifications.message
+
+
+# -- ADR-012 stage 12.6: providerMode on the app-settings snapshot - the
+# -- switcher's read side. setProviderMode (above) has existed since ADR-006
+# -- stage 6.5 with nothing in the wire payload ever surfacing which mode was
+# -- actually active, so the frontend had no way to render current state.
+
+
+def test_provider_mode_is_exposed_on_the_app_settings_snapshot(manager):
+    bus = SessionBus("settings-provider-mode-snapshot-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.publish("app-settings"))
+
+    # manager.get_current_mode()'s own default (graphlink_settings_store.py).
+    assert recorder.messages[-1]["payload"]["providerMode"] == config.MODE_OLLAMA_LOCAL
+
+
+def test_provider_mode_on_the_snapshot_updates_after_a_successful_switch(manager, monkeypatch):
+    monkeypatch.setattr(api_provider, "initialize_local_provider", lambda *a, **k: None)
+    manager.set_current_mode(config.MODE_API_ENDPOINT)
+    notifications = NotificationState()
+    bus = SessionBus("settings-provider-mode-snapshot-switch-test")
+    bus.register_topic("notification", notifications.payload)
+    register_settings(bus, manager, notifications)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setProviderMode", [config.MODE_OLLAMA_LOCAL]))
+
+    assert recorder.messages[-1]["payload"]["providerMode"] == config.MODE_OLLAMA_LOCAL
+
+
+def test_provider_mode_on_the_snapshot_is_untouched_by_a_failed_switch(manager, monkeypatch):
+    def _boom(*a, **k):
+        raise RuntimeError("ollama daemon unreachable")
+
+    monkeypatch.setattr(api_provider, "initialize_local_provider", _boom)
+    manager.set_current_mode(config.MODE_API_ENDPOINT)
+    notifications = NotificationState()
+    bus = SessionBus("settings-provider-mode-snapshot-failure-test")
+    bus.register_topic("notification", notifications.payload)
+    register_settings(bus, manager, notifications)
+    recorder = Recorder()
+    bus.attach(recorder)
+    asyncio.run(bus.publish("app-settings"))  # seed one snapshot to inspect below
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setProviderMode", [config.MODE_OLLAMA_LOCAL]))
+
+    # set_provider_mode's except branch (intents_settings_general.py)
+    # publishes "notification", never "app-settings" - so no NEW snapshot
+    # exists; the only one on record is the seed publish above, still
+    # showing the untouched persisted mode.
+    app_settings_messages = [m for m in recorder.messages if m["topic"] == "app-settings"]
+    assert len(app_settings_messages) == 1
+    assert app_settings_messages[-1]["payload"]["providerMode"] == config.MODE_API_ENDPOINT
+
+
+# -- ADR-012 stage 12.6: setMcpServers - the deferred UI-write half of
+# -- ADR-007 stage 7.5's MCP client (backend/mcp_client.py's own module
+# -- docstring explicitly deferred this surface to ADR-012). Bulk-replace,
+# -- same "whole value" persistence shape as SettingsManager.get_mcp_servers/
+# -- set_mcp_servers themselves.
+
+
+def test_set_mcp_servers_is_registered_on_app_settings(manager):
+    bus = SessionBus("settings-set-mcp-servers-registration-test")
+    register_settings(bus, manager)
+
+    assert ("app-settings", "setMcpServers") in bus._intents
+
+
+def test_set_mcp_servers_round_trips_a_valid_call(manager):
+    bus = SessionBus("settings-set-mcp-servers-round-trip-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [[
+        {
+            "name": "fs",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            "scopes": ["fs.read"],
+            "approval": "always",
+            "enabledTools": ["read_file"],
+            "enabled": True,
+            "timeout": 45.0,
+        },
+    ]]))
+
+    # Persisted through SettingsManager.set_mcp_servers' own snake_case shape...
+    assert manager.get_mcp_servers() == [
+        {
+            "name": "fs",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            "scopes": ["fs.read"],
+            "approval": "always",
+            "enabled_tools": ["read_file"],
+            "enabled": True,
+            "timeout": 45.0,
+        },
+    ]
+    # ...and republished on the wire in the camelCase shape the frontend reads.
+    assert recorder.messages[-1]["topic"] == "app-settings"
+    assert recorder.messages[-1]["payload"]["mcpServers"] == [
+        {
+            "name": "fs",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+            "scopes": ["fs.read"],
+            "approval": "always",
+            "enabledTools": ["read_file"],
+            "enabled": True,
+            "timeout": 45.0,
+        },
+    ]
+
+
+def test_set_mcp_servers_is_a_bulk_replace_not_a_merge(manager):
+    bus = SessionBus("settings-set-mcp-servers-bulk-replace-test")
+    register_settings(bus, manager)
+    asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [[{"name": "fs", "command": "npx"}]]))
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [[{"name": "git", "command": "uvx"}]]))
+
+    assert [entry["name"] for entry in manager.get_mcp_servers()] == ["git"]
+
+
+def test_set_mcp_servers_rejects_a_non_list_payload_without_persisting(manager):
+    manager.set_mcp_servers([{"name": "fs", "command": "npx"}])  # seed a pre-existing config
+    notifications = NotificationState()
+    bus = SessionBus("settings-set-mcp-servers-non-list-test")
+    bus.register_topic("notification", notifications.payload)
+    register_settings(bus, manager, notifications)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [{"not": "a list"}]))
+
+    # The seeded config survives untouched...
+    assert [entry["name"] for entry in manager.get_mcp_servers()] == ["fs"]
+    # ...and the rejection is surfaced, not silent.
+    assert notifications.msg_type == "warning"
+    assert "malformed" in notifications.message.lower()
+    # No new app-settings snapshot was published - only the notification.
+    assert all(m["topic"] != "app-settings" for m in recorder.messages)
+
+
+def test_set_mcp_servers_rejects_a_list_containing_a_non_dict_entry(manager):
+    manager.set_mcp_servers([{"name": "fs", "command": "npx"}])  # seed a pre-existing config
+    bus = SessionBus("settings-set-mcp-servers-non-dict-entry-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [["not a dict"]]))
+
+    assert [entry["name"] for entry in manager.get_mcp_servers()] == ["fs"]
+
+
+def test_mcp_servers_is_exposed_on_the_app_settings_snapshot(manager):
+    manager.set_mcp_servers([{"name": "git", "command": "uvx", "enabled": False}])
+    bus = SessionBus("settings-mcp-servers-snapshot-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.publish("app-settings"))
+
+    servers = recorder.messages[-1]["payload"]["mcpServers"]
+    assert len(servers) == 1
+    assert servers[0]["name"] == "git"
+    assert servers[0]["command"] == "uvx"
+    assert servers[0]["enabled"] is False
+    # camelCase on the wire, not SettingsManager's own snake_case.
+    assert "enabledTools" in servers[0]
+    assert "enabled_tools" not in servers[0]
 
 
 # -- ADR-008 stage 8.6: Builder recipes ---------------------------------------
