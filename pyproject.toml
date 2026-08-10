@@ -33,6 +33,13 @@ dependencies = [
     "reportlab",
     "requests",
     "tiktoken",
+    # ADR-014 stage 14.1: backend/plugin_sdk.py parses plugin.toml via
+    # stdlib tomllib, which is only available from Python 3.11 onward -
+    # this repo's own requires-python floor is 3.10. tomli is the
+    # conditional fallback for that gap (CI/dev both already run 3.12+, so
+    # this branch is dead in practice today, but is real correctness for
+    # the declared support floor, not speculative).
+    'tomli; python_version < "3.11"',
 ]
 
 # llama-cpp-python is lazily imported (api_provider._load_llama_cpp_class) only when

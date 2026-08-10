@@ -97,6 +97,7 @@ from backend.domain.node_states import (
     GitlinkState,
     HtmlState,
     ImageState,
+    NodeState,
     NoteState,
     PlanState,
     PycoderState,
@@ -1944,6 +1945,32 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
                 # there is no longer a chart-owned image_assets entry to
                 # clean up here.
                 self._detach_node_from_membership(node_id)
+
+    # -- ADR-014 stage 14.1: Plugin SDK node-creation primitive -------------
+
+    def add_plugin_node(
+        self, kind: str, x: float, y: float, parent_id: str, *,
+        title: str = "", content: str = "", state: NodeState | None = None,
+    ) -> SceneNode:
+        """Generic node-creation primitive for ADR-014's Plugin SDK
+        (backend/plugin_sdk.py). Mirrors add_web_research_node's own body
+        exactly - mint an id off the SAME self._counter every add_X_node
+        method already uses, insert into self.nodes, connect to the
+        parent. `kind` arrives here ALREADY namespaced as
+        f"{plugin_id}.{local_kind}" (backend/plugin_sdk.py's HostContext.
+        register_node_kind) - this method itself does no namespacing or
+        validation of its own, same "trust the caller, one required-parent
+        posture" contract as add_web_research_node/add_gitlink_node/etc."""
+        if parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id, x=float(x), y=float(y),
+            title=str(title) or kind, kind=str(kind), content=str(content), state=state,
+        )
+        self.nodes[node_id] = node
+        self.connect(parent_id, node_id)
+        return node
 
     # -- edges -------------------------------------------------------------
 
