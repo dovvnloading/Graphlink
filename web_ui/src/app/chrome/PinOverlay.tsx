@@ -1,6 +1,7 @@
 import { useReactFlow } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
+import { motionDuration } from "../reducedMotion";
 import { Popover } from "../overlays/overlays";
 
 // Mirrors graphlink_navigation_pins.py's MAX_PIN_TITLE_LENGTH/
@@ -164,7 +165,7 @@ export function PinOverlay({ store }: { store: SceneStore }) {
                 <button
                   type="button"
                   className="pins-jump"
-                  onClick={() => setCenter(pin.x, pin.y, { zoom: 1, duration: 300 })}
+                  onClick={() => setCenter(pin.x, pin.y, { zoom: 1, duration: motionDuration(300) })}
                   title={pin.note || pin.title}
                 >
                   {pin.title}

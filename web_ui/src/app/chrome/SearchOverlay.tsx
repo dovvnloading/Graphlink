@@ -1,6 +1,7 @@
 import { useReactFlow } from "@xyflow/react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
+import { motionDuration } from "../reducedMotion";
 import { useOverlays } from "../overlays/overlays";
 
 /**
@@ -53,7 +54,7 @@ export function SearchOverlay({ store }: { store: SceneStore }) {
 
   function jumpTo(index: number) {
     const match = matches[index];
-    if (match) setCenter(match.x, match.y, { zoom: 1, duration: 300 });
+    if (match) setCenter(match.x, match.y, { zoom: 1, duration: motionDuration(300) });
   }
 
   function next() {

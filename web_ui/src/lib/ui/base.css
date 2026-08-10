@@ -81,3 +81,29 @@
   top: 8px;
   left: 8px;
 }
+
+/* ADR-012 stage 12.4: prefers-reduced-motion, applied once here rather than
+   annotating each of styles.css's own ~17 individual `transition:`
+   declarations - a blanket override is both the standard approach (WCAG
+   2.3.3's own recommended technique) and the lower-risk one: a future
+   transition added anywhere in the app is covered automatically, instead of
+   silently NOT being covered until someone remembers to also touch this
+   file. `!important` is deliberate and necessary - it must win over every
+   transition's own specific duration/easing values without this file
+   needing to know what they are or be loaded after them in source order.
+   `animation` is included for the same blanket-coverage reason even though
+   this app has zero `@keyframes` today (confirmed by repo-wide search) -
+   this rule stays correct if one is ever added.
+   React Flow's own zoom/pan animations (fitView/zoomIn/zoomOut/setCenter)
+   are NOT CSS and cannot be reached from here - each of THOSE call sites
+   passes an explicit `{ duration }` option instead, see reducedMotion.ts's
+   own doc for why that has to be a separate, imperative check. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

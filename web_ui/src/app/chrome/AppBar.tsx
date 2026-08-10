@@ -1,6 +1,7 @@
 import { useReactFlow } from "@xyflow/react";
 import { useSyncExternalStore } from "react";
 import { exportCanvasAsPng } from "../canvas/exportCanvasPng";
+import { motionDuration } from "../reducedMotion";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
 
@@ -89,7 +90,7 @@ export function AppBar({ store }: { store: SceneStore }) {
 
   const resetZoom = () => {
     const viewport = getViewport();
-    setViewport({ ...viewport, zoom: 1 }, { duration: 200 });
+    setViewport({ ...viewport, zoom: 1 }, { duration: motionDuration(200) });
   };
   const exportPng = () =>
     void exportCanvasAsPng(
@@ -163,7 +164,7 @@ export function AppBar({ store }: { store: SceneStore }) {
         type="button"
         className="appbar-btn appbar-tier"
         data-tier="3"
-        onClick={() => zoomIn({ duration: 150 })}
+        onClick={() => zoomIn({ duration: motionDuration(150) })}
       >
         Zoom In
       </button>
@@ -171,7 +172,7 @@ export function AppBar({ store }: { store: SceneStore }) {
         type="button"
         className="appbar-btn appbar-tier"
         data-tier="3"
-        onClick={() => zoomOut({ duration: 150 })}
+        onClick={() => zoomOut({ duration: motionDuration(150) })}
       >
         Zoom Out
       </button>
@@ -182,7 +183,7 @@ export function AppBar({ store }: { store: SceneStore }) {
         type="button"
         className="appbar-btn appbar-tier"
         data-tier="3"
-        onClick={() => fitView({ duration: 200 })}
+        onClick={() => fitView({ duration: motionDuration(200) })}
       >
         Fit All
       </button>
@@ -291,7 +292,7 @@ export function AppBar({ store }: { store: SceneStore }) {
           className="appbar-overflow-item"
           data-tier="3"
           onClick={() => {
-            zoomIn({ duration: 150 });
+            zoomIn({ duration: motionDuration(150) });
             closeOverflow();
           }}
         >
@@ -302,7 +303,7 @@ export function AppBar({ store }: { store: SceneStore }) {
           className="appbar-overflow-item"
           data-tier="3"
           onClick={() => {
-            zoomOut({ duration: 150 });
+            zoomOut({ duration: motionDuration(150) });
             closeOverflow();
           }}
         >
@@ -324,7 +325,7 @@ export function AppBar({ store }: { store: SceneStore }) {
           className="appbar-overflow-item"
           data-tier="3"
           onClick={() => {
-            fitView({ duration: 200 });
+            fitView({ duration: motionDuration(200) });
             closeOverflow();
           }}
         >
