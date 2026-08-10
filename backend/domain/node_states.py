@@ -199,10 +199,12 @@ class ChartState(NodeState):
       node creation entirely.
     - chart_error: non-empty if generation/canonicalization degraded to a
       placeholder - the chart still has a real (if minimal) chart_asset_id
-      and renders SOMETHING, never a blank/broken state (mirrors
-      ChartDataAgent's own get_response/repair_chart_data/
-      heuristic_chart_data degrade-gracefully chain, which never
-      hard-fails outright for a genuine LLM response).
+      and renders SOMETHING, never a blank/broken state (the intent layer's
+      own never-hard-fail contract - ADR-013 stage 13.3's respond_json
+      raises StructuredOutputError rather than silently degrading through
+      several fallback tiers the way the retired ChartDataAgent used to;
+      catching that and showing a placeholder is this layer's job, not
+      generation's).
     - chart_asset_id: opaque key into the EXISTING
       SceneDocument.image_assets dict (REUSED, not a parallel store - same
       dict R3.21's image nodes already use, see that field's own

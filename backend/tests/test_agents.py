@@ -6139,16 +6139,15 @@ def test_remove_code_sandbox_scratch_dir_refuses_a_blank_sandbox_id():
     asyncio.run(run())
 
 
-# -- R6.2: start_chart_generation/_call_chart_agent - the independent chart
-# generation slot -------------------------------------------------------------
+# -- ADR-013 stage 13.3: start_chart_generation/_call_chart_agent - the
+# independent chart generation slot -------------------------------------------
 #
 # Mirrors the R5.2 artifact section's own structure: these tests never touch
-# Ollama/api_provider.chat plumbing - start_chart_generation's only real
-# dependency is ChartDataAgent.get_response, monkeypatched directly on the
-# class (agents.py constructs a fresh ChartDataAgent() instance per call, so
-# patching the class method is the seam, mirroring how ArtifactAgent.
-# get_response and WebResearchService.run are patched as class-level seams
-# for their own dispatch paths).
+# Ollama/api_provider.chat plumbing directly - start_chart_generation's only
+# real dependency is backend.structured_output.respond_json, monkeypatched
+# directly on the `respond_json` name backend/agents.py imported (retired
+# ChartDataAgent's own class-method seam - respond_json is a plain function,
+# not a class ChartDataAgent-style instance-per-call agents.py constructs).
 
 
 def _make_chart_env():
@@ -6160,26 +6159,54 @@ def _make_chart_env():
     return bus, notifications, dispatcher
 
 
-def test_call_chart_agent_calls_get_response_and_returns_the_parsed_dict(monkeypatch):
+def test_call_chart_agent_calls_respond_json_and_returns_the_parsed_dict(monkeypatch):
     captured = []
 
-    def fake_get_response(self, text, chart_type):
-        captured.append((text, chart_type))
-        return '{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}'
+    def fake_respond_json(task, messages, schema, **kwargs):
+        captured.append((task, messages, schema, kwargs))
+        return {"type": "bar", "title": "T", "labels": ["A"], "values": [1]}
 
-    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", fake_get_response)
+    monkeypatch.setattr(agents_module, "respond_json", fake_respond_json)
 
     result = agents_module._call_chart_agent("some source text", "bar")
 
     assert result == {"type": "bar", "title": "T", "labels": ["A"], "values": [1]}
-    assert captured == [("some source text", "bar")]
+    assert len(captured) == 1
+    task, messages, schema, kwargs = captured[0]
+    assert task == config.TASK_CHART
+    assert messages[-1]["content"].endswith("some source text")
+    assert schema == agents_module.CHART_JSON_SCHEMAS["bar"]
+    assert kwargs["schema_name"] == "bar_chart"
+    assert kwargs["cancellation_event"] is None
+
+
+def test_call_chart_agent_forwards_cancel_event_to_respond_json(monkeypatch):
+    # ADR-013 stage 13.3 exit criterion: "cancel not swallowed" - the run's
+    # own cancel_event reaches respond_json's cancellation_event kwarg,
+    # rather than being discarded (the pre-13.3 ChartDataAgent had no
+    # cancellation checkpoint of its own to receive it at all).
+    captured = []
+    monkeypatch.setattr(
+        agents_module, "respond_json",
+        lambda task, messages, schema, **kwargs: (
+            captured.append(kwargs)
+            or {"type": "bar", "title": "T", "labels": ["A"], "values": [1]}
+        ),
+    )
+    event = threading.Event()
+
+    agents_module._call_chart_agent("text", "bar", event)
+
+    assert captured[0]["cancellation_event"] is event
 
 
 def test_start_chart_generation_calls_on_success_with_the_parsed_result_then_clears_the_slot(monkeypatch):
-    def fake_get_response(self, text, chart_type):
-        return '{"type": "bar", "title": "T", "labels": ["A", "B"], "values": [1, 2]}'
-
-    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", fake_get_response)
+    monkeypatch.setattr(
+        agents_module, "respond_json",
+        lambda task, messages, schema, **kwargs: {
+            "type": "bar", "title": "T", "labels": ["A", "B"], "values": [1, 2],
+        },
+    )
 
     async def run():
         bus, notifications, dispatcher = _make_chart_env()
@@ -6212,12 +6239,12 @@ def test_start_chart_generation_second_call_while_in_flight_is_rejected(monkeypa
     started = threading.Event()
     release = threading.Event()
 
-    def blocking_get_response(self, text, chart_type):
+    def blocking_respond_json(task, messages, schema, **kwargs):
         started.set()
         release.wait(5)
-        return '{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}'
+        return {"type": "bar", "title": "T", "labels": ["A"], "values": [1]}
 
-    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", blocking_get_response)
+    monkeypatch.setattr(agents_module, "respond_json", blocking_respond_json)
 
     async def run():
         bus, notifications, dispatcher = _make_chart_env()
@@ -6268,15 +6295,15 @@ def test_start_chart_generation_second_call_while_in_flight_is_rejected(monkeypa
     asyncio.run(run())
 
 
-def test_start_chart_generation_top_level_error_key_calls_on_failure_and_shows_notification_never_calls_on_success(monkeypatch):
-    # Mirrors ChartWorkerThread.run()'s own `if 'error' in parsed: raise
-    # ValueError(...)` check at the one legacy call site - a fully-degraded
-    # ChartDataAgent response (even its own heuristic fallback found
-    # nothing) must never reach on_success.
-    def fake_get_response(self, text, chart_type):
-        return '{"error": "Could not find sufficient data to generate a bar chart."}'
+def test_start_chart_generation_structured_output_error_calls_on_failure_and_shows_notification_never_calls_on_success(monkeypatch):
+    # _call_chart_agent's own contract: respond_json's StructuredOutputError
+    # (the model never produced schema-conforming JSON, even after its own
+    # one repair attempt) becomes a top-level "error" key dict - must never
+    # reach on_success.
+    def failing_respond_json(task, messages, schema, **kwargs):
+        raise agents_module.StructuredOutputError("Could not find sufficient data to generate a bar chart.")
 
-    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", fake_get_response)
+    monkeypatch.setattr(agents_module, "respond_json", failing_respond_json)
 
     async def run():
         bus, notifications, dispatcher = _make_chart_env()
@@ -6311,11 +6338,11 @@ def test_start_chart_generation_top_level_error_key_calls_on_failure_and_shows_n
 def test_start_chart_generation_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):
     monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.05)
 
-    def slow_get_response(self, text, chart_type):
+    def slow_respond_json(task, messages, schema, **kwargs):
         time.sleep(0.3)
-        return '{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}'
+        return {"type": "bar", "title": "T", "labels": ["A"], "values": [1]}
 
-    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", slow_get_response)
+    monkeypatch.setattr(agents_module, "respond_json", slow_respond_json)
 
     async def run():
         bus, notifications, dispatcher = _make_chart_env()
@@ -6344,6 +6371,64 @@ def test_start_chart_generation_timeout_fires_the_exact_message_and_clears_the_s
     asyncio.run(run())
 
 
+def test_start_chart_generation_cancellation_mid_flight_is_silent_no_notification_no_failure_callback(monkeypatch):
+    # ADR-013 stage 13.3 exit criterion: cancel is not swallowed - the run's
+    # own cancel_event now reaches respond_json's cancellation_event kwarg
+    # for real, so a cancelled generation raises
+    # api_provider.RequestCancelledError instead of running to completion
+    # with its result silently discarded (the pre-13.3 gap). run_single_shot's
+    # own cancel-aware exception handling (shared by every kind through that
+    # skeleton) treats this as a clean cancel: no on_failure, no
+    # notification - UNLIKE chat's own cancellation path (a different
+    # dispatch surface entirely, see test_cancellation_mid_flight_fires_
+    # info_notification_and_clears_registry above), which does show an info
+    # toast. That asymmetry is deliberate, not a gap: chat's cancel path
+    # predates run_single_shot's shared skeleton and was never migrated onto
+    # it.
+    started = threading.Event()
+
+    def blocking_then_cancelled(task, messages, schema, cancellation_event=None, **kwargs):
+        started.set()
+        while not cancellation_event.is_set():
+            time.sleep(0.01)
+        raise api_provider.RequestCancelledError("Request cancelled.")
+
+    monkeypatch.setattr(agents_module, "respond_json", blocking_then_cancelled)
+
+    async def run():
+        bus, notifications, dispatcher = _make_chart_env()
+        successes = []
+        failures = []
+
+        await dispatcher.start_chart_generation(
+            bus=bus,
+            notifications_state=notifications,
+            node_id="n1",
+            chart_type="bar",
+            source_text="text",
+            on_success=lambda result: successes.append(result),
+            on_failure=lambda message: failures.append(message),
+        )
+        handle = next(h for h in dispatcher._runs.values() if h.kind == "chart")
+
+        await asyncio.to_thread(started.wait, 5)
+        # AgentDispatcher.cancel() is chat-only (hardcoded kind="chat" - see
+        # its own docstring); chart has no dedicated per-kind cancel entry
+        # point, only cancel_all() reaches it - the same mechanism the
+        # release-on-cancel test above (test_cancel_all_now_cancels_a_
+        # chart_generation...) already exercises for this exact kind.
+        dispatcher.cancel_all()
+
+        await handle.task
+
+        assert successes == []
+        assert failures == []
+        assert busy_count(dispatcher, "chart") == 0
+        assert notifications.visible is False
+
+    asyncio.run(run())
+
+
 def test_chart_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
     """ADR-002 stage 2.3 regression guard: chat and chart now claim into
     the SAME self._runs registry (previously two fully disjoint dicts),
@@ -6363,13 +6448,13 @@ def test_chart_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
         chat_release.wait(5)
         return {"message": {"content": "chat reply"}}
 
-    def blocking_get_response(self, text, chart_type):
+    def blocking_respond_json(task, messages, schema, **kwargs):
         chart_started.set()
         chart_release.wait(5)
-        return '{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}'
+        return {"type": "bar", "title": "T", "labels": ["A"], "values": [1]}
 
     _configure_fake_ollama(monkeypatch, blocking_chat)
-    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", blocking_get_response)
+    monkeypatch.setattr(agents_module, "respond_json", blocking_respond_json)
 
     async def run():
         bus, notifications, composer_document, dispatcher = _make_dispatch_env()
@@ -7097,12 +7182,12 @@ def test_cancel_all_now_cancels_a_chart_generation_and_frees_its_slot_immediatel
     started = threading.Event()
     release = threading.Event()
 
-    def blocking_get_response(self, text, chart_type):
+    def blocking_respond_json(task, messages, schema, **kwargs):
         started.set()
         release.wait(5)
-        return '{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}'
+        return {"type": "bar", "title": "T", "labels": ["A"], "values": [1]}
 
-    monkeypatch.setattr(agents_module.ChartDataAgent, "get_response", blocking_get_response)
+    monkeypatch.setattr(agents_module, "respond_json", blocking_respond_json)
 
     async def run():
         bus, notifications, dispatcher = _make_chart_env()

@@ -145,7 +145,8 @@ def _history_turn_text(turn: dict) -> str:
     """Flattens one chat_branch_history entry's "content" into plain text,
     for callers whose interface is a flat string (token estimation here;
     _chart_source_text below has its own, separate flattening for
-    ChartDataAgent). A turn's content is a plain str for an ordinary
+    backend/agents.py's _call_chart_agent). A turn's content is a plain str
+    for an ordinary
     message, or (R8a attachments) a content_parts list of {"type", ...}
     dicts - only the "text" part has a token-count analog, so image/audio
     parts are skipped rather than stringified."""
@@ -171,8 +172,10 @@ def _chart_source_text(branch_history: list[dict]) -> str:
     """R6.2: flattens chat_branch_history's own {"role","content"} list (the
     SAME branch walk web_research/pycoder/gitlink already reuse via
     document.chat_branch_history - see this module's own docstring
-    convention) into the single plain-text string ChartDataAgent.get_response
-    expects. NOT a new branch-walking helper (chat_branch_history already IS
+    convention) into the single plain-text string backend/agents.py's
+    _call_chart_agent (ADR-013 stage 13.3: respond_json-based, replacing the
+    retired ChartDataAgent.get_response) expects. NOT a new branch-walking
+    helper (chat_branch_history already IS
     that, reused as-is) - just the formatting step its list-of-dicts shape
     needs before it can be handed to an agent whose interface is a flat
     string, mirroring legacy graphlink_window_actions.py's own
@@ -215,8 +218,8 @@ def _format_branches_for_comparison(branches: list[tuple[str, list[dict]]]) -> s
 def _placeholder_chart_data(chart_type: str) -> dict[str, Any]:
     """R6.2: a minimal, already-canonical-SHAPED payload (matching
     canonicalize_chart_data's own output keys exactly) for the rare
-    defensive case in generate_chart below where ChartDataAgent's response
-    carries no top-level "error" key yet still fails
+    defensive case in generate_chart below where _call_chart_agent's
+    response carries no top-level "error" key yet still fails
     canonicalize_chart_data - see that function's own call site for the full
     reasoning. One trivial data point per chart kind: just enough for
     render_chart_png to draw SOMETHING rather than leave the request a

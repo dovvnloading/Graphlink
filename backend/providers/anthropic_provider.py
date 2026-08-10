@@ -48,6 +48,23 @@ from backend.providers.base import (
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 
 
+def _extract_anthropic_tool_input(response, tool_name: str) -> dict:
+    """ADR-013 stage 13.3: walk a non-streaming response's `content` blocks
+    for the forced tool's `tool_use` block and return its already-parsed
+    `input` dict. Mirrors stream()'s own content_block_start/tool_use
+    handling, but reads one complete response object instead of an event
+    stream - a forced single-tool call always has exactly one such block."""
+    for block in _extract_response_field(response, "content", []) or []:
+        block_type = str(_extract_response_field(block, "type", "")).strip().lower()
+        if block_type != "tool_use":
+            continue
+        block_name = str(_extract_response_field(block, "name", "") or "")
+        if block_name and block_name != tool_name:
+            continue
+        return _extract_response_field(block, "input", {}) or {}
+    raise RuntimeError(f"Anthropic did not return a {tool_name!r} tool call despite tool_choice forcing it.")
+
+
 def _system_blocks_with_cache_control(system_prompt: str) -> list[dict]:
     """ADR-006 stage 6.7: send the system prompt as a content-block list
     with cache_control instead of a bare string, so Anthropic caches the
@@ -82,6 +99,14 @@ class AnthropicProvider:
             # native tool use unconditionally (base.py's own
             # ProviderCapabilities.tools comment) - no capability call needed.
             tools=True,
+            # ADR-013 stage 13.3: complete() now honors request.tool_choice
+            # by forcing a single tool call and returning its arguments as
+            # JSON text - see complete()'s own comment for the mechanism.
+            # Anthropic joins OpenAI/Gemini/Ollama/llama.cpp, all of which
+            # already had a real native structured-output mode; this closes
+            # the one documented gap structured_output.py's own module
+            # docstring named.
+            structured_output=True,
             # ADR-017 stage 17.3: Anthropic has no embeddings API at all
             # (unlike audio, which is a real "this provider genuinely
             # cannot" case with the same False value) - False, and this
@@ -89,11 +114,16 @@ class AnthropicProvider:
             embedding=False,
         )
 
-    # ADR-007 stage 7.1: deliberately NOT given tool-call support, matching
-    # every other provider's complete() - it returns a bare str with no
-    # channel for ToolCall events, and its callers never supply
-    # request.tools. A future caller passing tools here has them silently
-    # ignored (no `tools` kwarg built below).
+    # ADR-007 stage 7.1: complete() carried no tool-call support at first,
+    # matching every other provider's blocking path - it returns a bare str
+    # with no channel for ToolCall events, and no caller supplied
+    # request.tools. ADR-013 stage 13.3 gives it exactly ONE tool-shaped
+    # use: request.tool_choice forces a single named tool (never "the model
+    # picks among several"), and the tool call's arguments become the
+    # returned string instead of visible text - see below. A caller that
+    # sets request.tools without tool_choice still gets the OLD behavior
+    # (tools declared but never forced, text extracted as always) since
+    # nothing in this codebase does that on the blocking path today.
 
     def complete(self, request: ChatRequest, cancel: CancelToken) -> str:
         system_prompt, anthropic_messages = _prepare_anthropic_messages(
@@ -108,6 +138,21 @@ class AnthropicProvider:
         }
         if system_prompt:
             request_kwargs["system"] = _system_blocks_with_cache_control(system_prompt)
+        if request.tools:
+            # Same {"name","description","input_schema"} shape stream()
+            # already builds for streaming tool use (ADR-007 stage 7.1) -
+            # Anthropic's native tool param is the ToolSpec's own three
+            # fields verbatim.
+            request_kwargs["tools"] = [
+                {"name": tool.name, "description": tool.description, "input_schema": tool.input_schema}
+                for tool in request.tools
+            ]
+        if request.tool_choice:
+            # ADR-013 stage 13.3: force exactly this tool - Anthropic's
+            # documented shape for "the model MUST call this specific tool",
+            # not the default "tools are available, model decides" behavior
+            # request.tools alone would otherwise leave in place.
+            request_kwargs["tool_choice"] = {"type": "tool", "name": request.tool_choice}
 
         create_callable = getattr(getattr(self.client, "messages", None), "create", None)
         if callable(create_callable):
@@ -132,6 +177,14 @@ class AnthropicProvider:
                 _extract_response_field(response_usage, "input_tokens", None),
                 _extract_response_field(response_usage, "output_tokens", None),
             )
+        if request.tool_choice:
+            # ADR-013 stage 13.3: a forced tool call's `input` (already a
+            # parsed dict, same as every ToolCall.arguments elsewhere in
+            # this codebase) IS the structured result - re-serialized to a
+            # JSON string so this still matches complete()'s -> str
+            # contract, letting respond_json's own json.loads(...) parse it
+            # exactly like any other provider's raw text content.
+            return json.dumps(_extract_anthropic_tool_input(response, request.tool_choice))
         return _extract_anthropic_text(response)
 
     def stream(self, request: ChatRequest, cancel: CancelToken) -> Iterator[ProviderEvent]:

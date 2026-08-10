@@ -3027,6 +3027,13 @@ def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
     # ADR-018 stage 18.4: popped the same way - only used by the auto-
     # fallback rung below, never forwarded to a provider call.
     settings_manager = kwargs.pop("settings_manager", None)
+    # ADR-013 stage 13.3: popped the same way and threaded into ChatRequest
+    # explicitly below (not left in extra_kwargs) - only backend/
+    # structured_output.py's Anthropic native path sets these today (a
+    # single forced tool whose input_schema is the caller's JSON schema),
+    # but the shape is provider-agnostic should a future caller need it.
+    tools = kwargs.pop("tools", ())
+    tool_choice = kwargs.pop("tool_choice", None)
 
     # One consistent view of the provider state for the whole request (#9). Worker
     # threads call chat() while the UI thread can re-run initialize_* at any time;
@@ -3048,7 +3055,10 @@ def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
             from backend.providers.base import CancelToken, ChatRequest
 
             provider = _provider_for_model_ref(model_ref, state)
-            chat_request = ChatRequest(task=task, messages=messages, extra_kwargs=kwargs, model_ref=model_ref)
+            chat_request = ChatRequest(
+                task=task, messages=messages, extra_kwargs=kwargs,
+                tools=tools, tool_choice=tool_choice, model_ref=model_ref,
+            )
             token = CancelToken(cancel_event)
             if model_ref.provider == config.LOCAL_PROVIDER_LLAMACPP:
                 # llama.cpp is excluded from transport retry - in-process
@@ -3091,7 +3101,8 @@ def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
                         # still fires, just without a notification.
                         return chat(
                             task, messages, model_ref=auto_ref, settings_manager=settings_manager,
-                            cancellation_event=cancel_event, runtime=runtime, **kwargs,
+                            cancellation_event=cancel_event, runtime=runtime,
+                            tools=tools, tool_choice=tool_choice, **kwargs,
                         )
                     raise ValueError(f"No Ollama model configured for task: {task}")
 
@@ -3172,7 +3183,8 @@ def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
                 # fallback attempt.
                 return chat(
                     task, messages, model_ref=auto_ref, settings_manager=settings_manager,
-                    cancellation_event=cancel_event, runtime=runtime, **kwargs,
+                    cancellation_event=cancel_event, runtime=runtime,
+                    tools=tools, tool_choice=tool_choice, **kwargs,
                 )
             raise RuntimeError(
                 f"No API model configured for task '{task}'.\n"
@@ -3187,7 +3199,9 @@ def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
         # the OpenAI content-part format instead of being passed through raw.
         from backend.providers.base import CancelToken, ChatRequest
 
-        chat_request = ChatRequest(task=task, messages=messages, extra_kwargs=kwargs)
+        chat_request = ChatRequest(
+            task=task, messages=messages, extra_kwargs=kwargs, tools=tools, tool_choice=tool_choice,
+        )
         token = CancelToken(cancel_event)
 
         if state.api_provider_type == config.API_PROVIDER_OPENAI:

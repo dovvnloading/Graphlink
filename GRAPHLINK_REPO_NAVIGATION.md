@@ -19,7 +19,7 @@ Last refreshed: 2026-07-27 (post R7.6b Qt-removal cutover)
   - 18 loose top-level `.py` modules at the repo root (see list below) - unchanged content, just living at the repo root now instead of inside `graphlink_app/`.
   - `tests/` - not a package (no `__init__.py`). Currently one file, `test_no_qt_anywhere.py`, the permanent Qt-removal gate.
   - `doc/` - **gitignored** (`.gitignore` has `/doc/`), local-only planning scratch. It is never pushed to the remote and is not part of what a clone or contributor sees. Treat it as a historical record of past planning, not shipped documentation - do not "fix" its content as if it were user-facing.
-- 18 loose top-level `.py` modules (unchanged content, relocated over R7.2 and earlier increments): `api_provider.py`, `graphlink_artifact_agent.py`, `graphlink_audio.py`, `graphlink_chart_agent.py`, `graphlink_chart_data.py`, `graphlink_chart_rendering.py`, `graphlink_chat_agent.py`, `graphlink_desktop.py`, `graphlink_grid_view_settings.py`, `graphlink_memory.py`, `graphlink_model_catalog.py`, `graphlink_navigation_pins.py`, `graphlink_prompts.py`, `graphlink_secrets.py`, `graphlink_settings_store.py`, `graphlink_task_config.py`, `graphlink_token_estimator.py`, `graphlink_version.py`.
+- 18 loose top-level `.py` modules (unchanged content, relocated over R7.2 and earlier increments): `api_provider.py`, `graphlink_artifact_agent.py`, `graphlink_audio.py`, `graphlink_chart_data.py`, `graphlink_chart_rendering.py`, `graphlink_chat_agent.py`, `graphlink_desktop.py`, `graphlink_grid_view_settings.py`, `graphlink_memory.py`, `graphlink_model_catalog.py`, `graphlink_navigation_pins.py`, `graphlink_prompts.py`, `graphlink_secrets.py`, `graphlink_settings_store.py`, `graphlink_task_config.py`, `graphlink_token_estimator.py`, `graphlink_version.py`.
 - Real entry point: `graphlink_desktop.py` (repo root). `pyproject.toml`'s `[project.gui-scripts]` reads `graphlink = "graphlink_desktop:main"`.
 - Runtime modes exposed in Settings: `Ollama (Local)`, `Llama.cpp (Local)`, `API Endpoint` (OpenAI-Compatible / Anthropic Claude / Google Gemini). The AppBar's own provider-mode `<select>` is still hardcoded-disabled to one option (`Ollama (Local)`) with `title="Switching provider modes isn't available yet"` - see the Architecture Truths section.
 - Runtime persistence outside the repo:
@@ -321,7 +321,7 @@ This is the practical lookup map for where code actually lives today.
 - `graphlink_task_config.py` - task keys, mode labels, `API_PROVIDER_*` constants.
 - `graphlink_desktop.py` - the real entry point (see Runtime Ownership Map).
 - `graphlink_memory.py` - branch/history helpers used by `backend/canvas.py::send_message`.
-- `graphlink_chart_agent.py`, `graphlink_chart_data.py`, `graphlink_chart_rendering.py` - the chart-node pipeline (spec extraction/repair, rendering to PNG).
+- `graphlink_chart_data.py` - canonical chart-data validation/schemas + the shared respond_json prompt (ADR-013 stage 13.3); `graphlink_chart_rendering.py` - chart rendering to PNG.
 - `graphlink_artifact_agent.py`, `graphlink_chat_agent.py` - LLM-facing agent logic `backend/agents.py`/`backend/canvas.py` call into.
 - `graphlink_wire_schema.py` - dataclass -> JSON Schema generation + payload validation (ADR-003 stage 3.2). Shared by `contracts/codegen.py` (dev-time TS generation) and `backend/events.py` (runtime intent-arg validation) - lives at the repo root, not inside `contracts/`, specifically so the runtime backend can import it (`contracts/` is excluded from the shipped wheel).
 

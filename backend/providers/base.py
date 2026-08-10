@@ -185,12 +185,26 @@ class ChatRequest:
     provider still gets its model at construction time exactly as before
     (each `*Provider.__init__` takes `model`); this field never overrides
     that. None for every call site that predates ADR-018 (nothing has
-    broken; `model_ref` is purely additive)."""
+    broken; `model_ref` is purely additive).
+
+    `tool_choice` (ADR-013 stage 13.3): the name of a tool in `tools` to
+    FORCE the model to call - never optional/auto. None (every caller before
+    this stage) means the model chooses freely among `tools`, exactly as
+    today. This is the mechanism backend/structured_output.py's respond_json
+    uses to get schema-constrained JSON out of Anthropic, which has no
+    native JSON-schema response mode (unlike OpenAI/Gemini/Ollama/
+    llama.cpp): it defines one single-purpose tool whose input_schema IS the
+    caller's schema, forces it, and reads the tool call's arguments back as
+    the structured result - see AnthropicProvider.complete()'s own handling.
+    A provider whose capabilities.tools is False must never receive a
+    non-None tool_choice (same caller-checks-capabilities contract `tools`
+    itself already documents)."""
 
     task: str
     messages: list
     extra_kwargs: Mapping[str, Any] = field(default_factory=dict)
     tools: tuple[ToolSpec, ...] = ()
+    tool_choice: str | None = None
     model_ref: ModelRef | None = None
 
 

@@ -3,7 +3,7 @@ agent/chart/structured-output paths.
 
 Local-only, reproducible, off-CI by default. Three dimensions:
 
-- **chart**: does ``ChartDataAgent.get_response`` + ``canonicalize_chart_data``
+- **chart**: does ``respond_json`` (ADR-013 stage 13.3) + ``canonicalize_chart_data``
   turn a scripted model response into the exact canonical chart payload
   (backend/api/intents_chart.py's own downstream shape)? Real, working code.
 - **structured_output**: does ``backend.structured_output.respond_json`` parse

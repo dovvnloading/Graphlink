@@ -25,8 +25,8 @@ from dataclasses import dataclass
 from unittest import mock
 
 import api_provider
-from graphlink_chart_agent import ChartDataAgent
-from graphlink_chart_data import ChartDataError, canonicalize_chart_data
+import graphlink_task_config as config
+from graphlink_chart_data import CHART_JSON_SCHEMAS, ChartDataError, canonicalize_chart_data, chart_generation_messages
 
 from backend.evals.fixtures import EvalFixture, load_fixtures
 from backend.structured_output import StructuredOutputError, respond_json
@@ -71,32 +71,29 @@ def _scripted_chat(fixture: EvalFixture):
 
 
 def run_chart_fixture(fixture: EvalFixture, *, live: bool = False) -> EvalResult:
-    """Drives the real ChartDataAgent.get_response, then canonicalizes the
-    result exactly the way backend/api/intents_chart.py's generate_chart
-    does downstream (``canonicalize_chart_data(result, chart_type)`` on the
-    parsed agent output) before diffing against fixture.expected."""
+    """ADR-013 stage 13.3: drives the real backend.agents._call_chart_agent
+    path's own machinery directly - respond_json against
+    graphlink_chart_data.CHART_JSON_SCHEMAS/chart_generation_messages, the
+    exact schema+messages backend/agents.py's _call_chart_agent builds -
+    then canonicalizes the result exactly the way backend/api/
+    intents_chart.py's generate_chart does downstream
+    (``canonicalize_chart_data(result, chart_type)``) before diffing against
+    fixture.expected. Calls respond_json directly rather than importing
+    backend.agents (a much heavier module - SessionBus/RunLifecycle/etc -
+    for a single function this eval doesn't otherwise need)."""
     chart_type = fixture.input["chart_type"]
     source_text = fixture.input["source_text"]
-    agent = ChartDataAgent()
-
-    if live:
-        raw = agent.get_response(source_text, chart_type)
-    else:
-        with _scripted_chat(fixture):
-            raw = agent.get_response(source_text, chart_type)
+    messages = chart_generation_messages(source_text, chart_type)
+    schema = CHART_JSON_SCHEMAS[chart_type]
 
     try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        return EvalResult(
-            fixture.name, "chart", "failed",
-            f"agent response was not valid JSON: {exc}\nraw response: {raw[:500]}",
-        )
-
-    # Mirrors start_chart_generation's own check (backend/agents.py) for
-    # ChartDataAgent's fully-degraded case.
-    if isinstance(parsed, dict) and "error" in parsed:
-        return EvalResult(fixture.name, "chart", "failed", f"agent returned an error payload: {parsed['error']}")
+        if live:
+            parsed = respond_json(config.TASK_CHART, messages, schema, schema_name=f"{chart_type}_chart")
+        else:
+            with _scripted_chat(fixture):
+                parsed = respond_json(config.TASK_CHART, messages, schema, schema_name=f"{chart_type}_chart")
+    except StructuredOutputError as exc:
+        return EvalResult(fixture.name, "chart", "failed", f"respond_json raised StructuredOutputError: {exc}")
 
     try:
         canonical = canonicalize_chart_data(parsed, chart_type)

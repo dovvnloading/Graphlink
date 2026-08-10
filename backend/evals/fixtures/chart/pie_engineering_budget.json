@@ -7,6 +7,7 @@
   },
   "scripted_response": "{\"type\": \"pie\", \"title\": \"Engineering Budget Allocation\", \"labels\": [\"Infrastructure\", \"Personnel\", \"Tooling\", \"Contingency\"], \"values\": [45, 30, 15, 10]}",
   "expected": {
+    "version": 1,
     "type": "pie",
     "title": "Engineering Budget Allocation",
     "labels": ["Infrastructure", "Personnel", "Tooling", "Contingency"],

@@ -185,7 +185,7 @@ class TestRunChart:
         source = document.add_chat_node(0, 0, "sales: Q1 10, Q2 20, Q3 15", False)
         monkeypatch.setattr(
             agents_module, "_call_chart_agent",
-            lambda text, chart_type: {"labels": ["Q1", "Q2", "Q3"], "values": [10, 20, 15]},
+            lambda text, chart_type, cancel_event=None: {"labels": ["Q1", "Q2", "Q3"], "values": [10, 20, 15]},
         )
 
         result = run_node(registry, make_ctx(run_id="build-9"), source.id, action="chart", chart_type="bar")
@@ -201,7 +201,7 @@ class TestRunChart:
         source = document.add_chat_node(0, 0, "unchartable", False)
         monkeypatch.setattr(
             agents_module, "_call_chart_agent",
-            lambda text, chart_type: {"error": "no numeric series found"},
+            lambda text, chart_type, cancel_event=None: {"error": "no numeric series found"},
         )
 
         result = run_node(registry, make_ctx(), source.id, action="chart", chart_type="bar")
@@ -233,7 +233,7 @@ class TestRunChart:
         document, dispatcher, registry = make_setup()
         source = document.add_chat_node(0, 0, "sales: Q1 10, Q2 20", False)
         raw = {"labels": ["Q1", "Q2"], "values": [10, 20]}
-        monkeypatch.setattr(agents_module, "_call_chart_agent", lambda text, chart_type: dict(raw))
+        monkeypatch.setattr(agents_module, "_call_chart_agent", lambda text, chart_type, cancel_event=None: dict(raw))
 
         result = run_node(registry, make_ctx(), source.id, action="chart", chart_type="bar")
 
@@ -249,7 +249,7 @@ class TestRunChart:
         source = document.add_chat_node(0, 0, "bad data", False)
         monkeypatch.setattr(
             agents_module, "_call_chart_agent",
-            lambda text, chart_type: {"labels": ["a", "b"], "values": [1, float("nan")]},
+            lambda text, chart_type, cancel_event=None: {"labels": ["a", "b"], "values": [1, float("nan")]},
         )
 
         result = run_node(registry, make_ctx(), source.id, action="chart", chart_type="bar")

@@ -26,6 +26,7 @@ Layer map:
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -763,6 +764,81 @@ def test_anthropic_system_prompt_carries_cache_control_on_the_rest_transport(mon
     # No system message: the key is absent entirely, exactly as before.
     provider.complete(CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT())
     assert "system" not in rest_calls["body"]
+
+
+def test_anthropic_complete_with_tool_choice_forces_the_tool_and_sends_its_shape(monkeypatch):
+    # ADR-013 stage 13.3: request.tools/tool_choice on the BLOCKING path -
+    # previously only stream() ever built a `tools` kwarg.
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR, ToolSpec
+
+    captured = {}
+
+    def fake_post(url, body, **kwargs):
+        captured.update(body)
+        return {
+            "content": [
+                {"type": "tool_use", "id": "call_1", "name": "bar_chart", "input": {"labels": ["A"], "values": [1]}}
+            ]
+        }
+
+    monkeypatch.setattr("backend.providers.anthropic_provider._anthropic_post_json", fake_post)
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    request = CR(
+        task=config.TASK_CHART,
+        messages=[{"role": "user", "content": "extract"}],
+        tools=(ToolSpec(name="bar_chart", description="Return the bar_chart result.", input_schema={"type": "object"}),),
+        tool_choice="bar_chart",
+    )
+    result = provider.complete(request, CT())
+
+    assert captured["tools"] == [
+        {"name": "bar_chart", "description": "Return the bar_chart result.", "input_schema": {"type": "object"}}
+    ]
+    assert captured["tool_choice"] == {"type": "tool", "name": "bar_chart"}
+    assert json.loads(result) == {"labels": ["A"], "values": [1]}
+
+
+def test_anthropic_complete_without_tool_choice_still_extracts_visible_text(monkeypatch):
+    # request.tools alone (no tool_choice) keeps the OLD behavior - tools
+    # declared but not forced, text extracted as always. Nothing in this
+    # codebase actually does this on the blocking path today, but the
+    # branch exists and should not regress silently.
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR
+
+    def fake_post(url, body, **kwargs):
+        assert "tool_choice" not in body
+        return {"content": [{"type": "text", "text": "plain answer"}]}
+
+    monkeypatch.setattr("backend.providers.anthropic_provider._anthropic_post_json", fake_post)
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    result = provider.complete(
+        CR(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]), CT()
+    )
+    assert result == "plain answer"
+
+
+def test_anthropic_complete_with_tool_choice_raises_when_the_model_ignores_the_force(monkeypatch):
+    from backend.providers import AnthropicProvider, CancelToken as CT, ChatRequest as CR, ToolSpec
+
+    def fake_post(url, body, **kwargs):
+        return {"content": [{"type": "text", "text": "I decided not to call the tool"}]}
+
+    monkeypatch.setattr("backend.providers.anthropic_provider._anthropic_post_json", fake_post)
+    provider = AnthropicProvider(
+        client={"provider": "anthropic", "transport": "rest"}, api_key="k", model="claude-opus-5"
+    )
+    request = CR(
+        task=config.TASK_CHART,
+        messages=[{"role": "user", "content": "extract"}],
+        tools=(ToolSpec(name="bar_chart", description="d", input_schema={"type": "object"}),),
+        tool_choice="bar_chart",
+    )
+    with pytest.raises(RuntimeError, match="bar_chart"):
+        provider.complete(request, CT())
 
 
 def test_gemini_deletes_uploaded_files_even_when_the_generation_call_fails(monkeypatch):

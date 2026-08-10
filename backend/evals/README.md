@@ -9,8 +9,11 @@ be reproducible locally with either a scripted response or a real model.
 
 ## The three dimensions
 
-- **chart** - drives the real `ChartDataAgent.get_response` (in
-  `graphlink_chart_agent.py`) and canonicalizes the result the same way
+- **chart** - drives the real `backend.structured_output.respond_json` call
+  against `graphlink_chart_data.CHART_JSON_SCHEMAS`/`chart_generation_messages`
+  (the exact schema+messages `backend/agents.py`'s `_call_chart_agent` uses -
+  ADR-013 stage 13.3 retired the old `ChartDataAgent` pipeline this dimension
+  used to drive) and canonicalizes the result the same way
   `backend/api/intents_chart.py`'s `generate_chart` does downstream, via
   `graphlink_chart_data.canonicalize_chart_data`.
 - **structured_output** - drives the real `backend.structured_output.respond_json`
@@ -70,8 +73,7 @@ Each fixture is one JSON file under `backend/evals/fixtures/<kind>/`, where
 `input` needs `chart_type` (`"bar"` / `"line"` / `"pie"` / `"histogram"` /
 `"sankey"`) and `source_text` (what a user's node history would contain).
 `scripted_response` is the exact raw JSON text a model would emit for that
-`chart_type`, matching the `STRUCTURE` documented in
-`ChartDataAgent.CHART_PROMPTS[chart_type]` in `graphlink_chart_agent.py`.
+`chart_type`, matching `graphlink_chart_data.CHART_JSON_SCHEMAS[chart_type]`.
 
 `expected` must be the **actual** output of
 `canonicalize_chart_data(json.loads(scripted_response), chart_type)` - do

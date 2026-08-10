@@ -81,11 +81,12 @@ def register_chart_intents(
                 chart_data = canonicalize_chart_data(result, normalized_chart_type)
                 chart_error = ""
             except ChartDataError as exc:
-                # R6.2 contract: ChartDataAgent's own validate_chart_data
-                # pipeline (repair round trip, then heuristic fallback)
-                # already tries hard to guarantee canonical output before
-                # ever returning successfully - this is the rare defensive
-                # case where it still somehow didn't. Never a silent no-op:
+                # R6.2 contract, ADR-013 stage 13.3: _call_chart_agent's own
+                # respond_json call (one repair round trip against the real
+                # JSON Schema, then StructuredOutputError) already tries
+                # hard to guarantee schema-conforming output before ever
+                # returning successfully - this is the rare defensive case
+                # where it still somehow didn't. Never a silent no-op:
                 # still create a real chart node with a minimal placeholder
                 # shape and chart_error set, same "degrade gracefully, never
                 # drop the request" contract as the agent's own internal

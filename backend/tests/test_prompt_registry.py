@@ -24,8 +24,11 @@ EXPECTED_PROMPT_IDS = frozenset(
     {
         "chat-system-core",
         "context-summary",
-        "chart-output-hard-rules",
-        "chart-schema-templates",
+        # ADR-013 stage 13.3: replaces the retired ChartDataAgent's two
+        # entries (chart-output-hard-rules/chart-schema-templates) with the
+        # one stable system prompt respond_json-based chart generation
+        # actually sends now.
+        "chart-generation-system",
         "note-key-takeaway",
         "note-branch-comparison",
         "note-branch-synthesis",
