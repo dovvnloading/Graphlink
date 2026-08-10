@@ -22,6 +22,8 @@ function OpenViewOnMount({ children }: { children: React.ReactNode }) {
 function makeStore(
   sceneOverrides: Partial<typeof initialSceneState> = {},
   focusAcceptedPaths = false,
+  filterKinds: ReadonlySet<string> = new Set(),
+  filterStatuses: ReadonlySet<string> = new Set(),
 ) {
   const listeners = new Set<() => void>();
   const scene = { ...initialSceneState, ...sceneOverrides };
@@ -30,6 +32,8 @@ function makeStore(
   const setOrthogonalConnections = vi.fn();
   const setSmartGuides = vi.fn();
   const setFocusAcceptedPaths = vi.fn();
+  const toggleFilterKind = vi.fn();
+  const toggleFilterStatus = vi.fn();
   const store = {
     subscribe: (l: () => void) => {
       listeners.add(l);
@@ -43,6 +47,10 @@ function makeStore(
     // `scene` - see sceneStore.ts's own comment on why this field is
     // local UI state rather than backend-synced.
     getFocusAcceptedPaths: () => focusAcceptedPaths,
+    // ADR-012 stage 12.5: same "local UI state" posture as
+    // getFocusAcceptedPaths just above.
+    getFilterKinds: () => filterKinds,
+    getFilterStatuses: () => filterStatuses,
     setDragFactor: vi.fn(),
     setGridSize: vi.fn(),
     setGridOpacityPercent: vi.fn(),
@@ -53,11 +61,22 @@ function makeStore(
     setOrthogonalConnections,
     setSmartGuides,
     setFocusAcceptedPaths,
+    toggleFilterKind,
+    toggleFilterStatus,
     setFontFamily: vi.fn(),
     setFontSize: vi.fn(),
     setFontColor: vi.fn(),
   };
-  return { store, setFadeConnections, setSnapToGrid, setOrthogonalConnections, setSmartGuides, setFocusAcceptedPaths };
+  return {
+    store,
+    setFadeConnections,
+    setSnapToGrid,
+    setOrthogonalConnections,
+    setSmartGuides,
+    setFocusAcceptedPaths,
+    toggleFilterKind,
+    toggleFilterStatus,
+  };
 }
 
 function renderOpen(store: unknown) {
@@ -177,5 +196,45 @@ describe("ViewPopover (ADR-002 Workstream 1 Focus Accepted Paths checkbox)", () 
     expect(setFocusAcceptedPaths).toHaveBeenCalledWith(true);
     expect(setSmartGuides).not.toHaveBeenCalled();
     expect(setFadeConnections).not.toHaveBeenCalled();
+  });
+});
+
+// ADR-012 stage 12.5 ("node filter-by-kind/status"): same posture as the
+// other new-control describe blocks above - only the new section is
+// covered.
+describe("ViewPopover (ADR-012 stage 12.5 node filter)", () => {
+  it("reflects an inactive kind chip as unpressed and an active one as pressed", () => {
+    const { store } = makeStore({}, false, new Set(["code"]));
+    renderOpen(store);
+    expect(screen.getByRole("button", { name: "Code" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Chat" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("calls store.toggleFilterKind with the clicked kind's raw value", async () => {
+    const user = userEvent.setup();
+    const { store, toggleFilterKind } = makeStore();
+    renderOpen(store);
+
+    await user.click(screen.getByRole("button", { name: "Web Research" }));
+
+    expect(toggleFilterKind).toHaveBeenCalledWith("web_research");
+  });
+
+  it("reflects an inactive status chip as unpressed and an active one as pressed", () => {
+    const { store } = makeStore({}, false, new Set(), new Set(["rejected"]));
+    renderOpen(store);
+    expect(screen.getByRole("button", { name: "Rejected" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Active" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("calls store.toggleFilterStatus with the clicked status's raw value, independent of the kind chips", async () => {
+    const user = userEvent.setup();
+    const { store, toggleFilterStatus, toggleFilterKind } = makeStore();
+    renderOpen(store);
+
+    await user.click(screen.getByRole("button", { name: "Superseded" }));
+
+    expect(toggleFilterStatus).toHaveBeenCalledWith("superseded");
+    expect(toggleFilterKind).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 import { memo, useEffect, useRef } from "react";
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -115,100 +116,101 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   }, [data.builderAwaitingToolApproval, collapsed]);
 
   return (
-    <div className={`scene-node plan-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}>
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title plan-node-title">
-        <span className="plan-node-badge">Build</span>
-        <span className="plan-node-goal">{data.planGoal || "Untitled build"}</span>
+    <NodeShell
+      kindClassName="plan-node"
+      selected={!!selected}
+      collapsed={collapsed}
+      header={
+        <div className="scene-node-title plan-node-title">
+          <span className="plan-node-badge">Build</span>
+          <span className="plan-node-goal">{data.planGoal || "Untitled build"}</span>
+        </div>
+      }
+      bodyClassName="plan-node-body"
+    >
+      <div className={`plan-node-status plan-node-status-${data.builderStatus}`}>
+        {STATUS_LABELS[data.builderStatus] ?? data.builderStatus}
+        {data.builderMode === "autopilot" && (
+          <span className="plan-node-mode-chip">autopilot</span>
+        )}
       </div>
-      {!collapsed && (
-        <div className="scene-node-body plan-node-body">
-          <div className={`plan-node-status plan-node-status-${data.builderStatus}`}>
-            {STATUS_LABELS[data.builderStatus] ?? data.builderStatus}
-            {data.builderMode === "autopilot" && (
-              <span className="plan-node-mode-chip">autopilot</span>
-            )}
+      {data.builderStatusDetail && (
+        <p className="plan-node-detail" role={data.builderStatus === "failed" ? "alert" : undefined}>
+          {data.builderStatusDetail}
+        </p>
+      )}
+
+      {data.planSteps.length > 0 && (
+        <ul className="plan-node-steps">
+          {data.planSteps.map((step) => (
+            <li key={step.id} className={`plan-node-step plan-node-step-${step.status}`}>
+              <span className="plan-node-step-marker" aria-hidden="true">
+                {STEP_MARKERS[step.status] ?? "○"}
+              </span>
+              <span className="plan-node-step-title">{step.title}</span>
+              {step.detail && <span className="plan-node-step-detail">{step.detail}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="plan-node-budgets">
+        <span>
+          Steps {data.builderSpentSteps}/{data.builderMaxSteps}
+        </span>
+        <span>
+          Tokens {data.builderSpentTokens.toLocaleString()}/{data.builderMaxTokens.toLocaleString()}
+        </span>
+        <span>
+          Time {data.builderSpentWallSeconds}s/{data.builderMaxWallSeconds}s
+        </span>
+      </div>
+
+      {data.builderAwaitingToolApproval && (
+        <div className="plan-node-approval" role="group" aria-label="Builder tool approval">
+          <div className="plan-node-approval-title">
+            The Builder wants to run: <code>{data.builderApprovalToolName}</code>
           </div>
-          {data.builderStatusDetail && (
-            <p className="plan-node-detail" role={data.builderStatus === "failed" ? "alert" : undefined}>
-              {data.builderStatusDetail}
-            </p>
-          )}
-
-          {data.planSteps.length > 0 && (
-            <ul className="plan-node-steps">
-              {data.planSteps.map((step) => (
-                <li key={step.id} className={`plan-node-step plan-node-step-${step.status}`}>
-                  <span className="plan-node-step-marker" aria-hidden="true">
-                    {STEP_MARKERS[step.status] ?? "○"}
-                  </span>
-                  <span className="plan-node-step-title">{step.title}</span>
-                  {step.detail && <span className="plan-node-step-detail">{step.detail}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="plan-node-budgets">
-            <span>
-              Steps {data.builderSpentSteps}/{data.builderMaxSteps}
-            </span>
-            <span>
-              Tokens {data.builderSpentTokens.toLocaleString()}/{data.builderMaxTokens.toLocaleString()}
-            </span>
-            <span>
-              Time {data.builderSpentWallSeconds}s/{data.builderMaxWallSeconds}s
-            </span>
-          </div>
-
-          {data.builderAwaitingToolApproval && (
-            <div className="plan-node-approval" role="group" aria-label="Builder tool approval">
-              <div className="plan-node-approval-title">
-                The Builder wants to run: <code>{data.builderApprovalToolName}</code>
-              </div>
-              <pre className="plan-node-approval-summary">{data.builderApprovalSummary}</pre>
-              <div className="plan-node-approval-actions">
-                <button type="button" className="plan-node-button nodrag" onClick={data.onApproveTool}>
-                  Approve
-                </button>
-                <button
-                  type="button"
-                  className="plan-node-button plan-node-button-deny nodrag"
-                  onClick={data.onDenyTool}
-                  ref={denyButtonRef}
-                >
-                  Deny
-                </button>
-              </div>
-            </div>
-          )}
-
-          <div className="plan-node-actions">
-            {resumable && (
-              <button type="button" className="plan-node-button plan-node-button-start nodrag" onClick={data.onStartExecution}>
-                {startLabel}
-              </button>
-            )}
-            {running && (
-              <button type="button" className="plan-node-button plan-node-button-stop nodrag" onClick={data.onCancel}>
-                Stop
-              </button>
-            )}
-            {UNDOABLE.has(data.builderStatus) && data.builderRunId && (
-              <button type="button" className="plan-node-button nodrag" onClick={data.onUndoBuild}>
-                Undo build
-              </button>
-            )}
-            {data.builderStatus === "done" && data.planSteps.length > 0 && (
-              <button type="button" className="plan-node-button nodrag" onClick={data.onSaveRecipe}>
-                Save as recipe
-              </button>
-            )}
+          <pre className="plan-node-approval-summary">{data.builderApprovalSummary}</pre>
+          <div className="plan-node-approval-actions">
+            <button type="button" className="plan-node-button nodrag" onClick={data.onApproveTool}>
+              Approve
+            </button>
+            <button
+              type="button"
+              className="plan-node-button plan-node-button-deny nodrag"
+              onClick={data.onDenyTool}
+              ref={denyButtonRef}
+            >
+              Deny
+            </button>
           </div>
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-    </div>
+
+      <div className="plan-node-actions">
+        {resumable && (
+          <button type="button" className="plan-node-button plan-node-button-start nodrag" onClick={data.onStartExecution}>
+            {startLabel}
+          </button>
+        )}
+        {running && (
+          <button type="button" className="plan-node-button plan-node-button-stop nodrag" onClick={data.onCancel}>
+            Stop
+          </button>
+        )}
+        {UNDOABLE.has(data.builderStatus) && data.builderRunId && (
+          <button type="button" className="plan-node-button nodrag" onClick={data.onUndoBuild}>
+            Undo build
+          </button>
+        )}
+        {data.builderStatus === "done" && data.planSteps.length > 0 && (
+          <button type="button" className="plan-node-button nodrag" onClick={data.onSaveRecipe}>
+            Save as recipe
+          </button>
+        )}
+      </div>
+    </NodeShell>
   );
 }
 

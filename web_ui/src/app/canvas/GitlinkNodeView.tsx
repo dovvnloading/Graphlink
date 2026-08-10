@@ -1,9 +1,10 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -331,30 +332,40 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
   const canApply = data.gitlinkPendingChanges.length > 0 && !!data.gitlinkChangeFingerprint;
 
   return (
-    <div
-      className={`scene-node gitlink-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName="gitlink-node"
+      selected={!!selected}
+      collapsed={collapsed}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
-      // ADR-012 stage 12.3: keyboard-reachable via Shift+F10/ContextMenu -
-      // see SceneCanvas.tsx's own stage-12.3 doc for the global handler.
-      aria-haspopup="menu"
+      header={
+        <div className="scene-node-title chat-node-role">
+          <span>Gitlink</span>
+          <button
+            type="button"
+            className="chat-node-collapse-btn"
+            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
+            onClick={data.onToggleCollapse}
+          >
+            {data.isCollapsed ? "▸" : "▾"}
+          </button>
+        </div>
+      }
+      bodyClassName="gitlink-node-content"
+      menu={
+        menuPosition && (
+          <GitlinkNodeMenu
+            position={menuPosition}
+            isCollapsed={data.isCollapsed}
+            onToggleCollapse={data.onToggleCollapse}
+            onDelete={data.onDelete}
+            onClose={() => setMenuPosition(null)}
+          />
+        )
+      }
     >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title chat-node-role">
-        <span>Gitlink</span>
-        <button
-          type="button"
-          className="chat-node-collapse-btn"
-          aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-          onClick={data.onToggleCollapse}
-        >
-          {data.isCollapsed ? "▸" : "▾"}
-        </button>
-      </div>
-      {!collapsed && (
-        <div className="scene-node-body gitlink-node-content">
           <div className="gitlink-node-tabs" role="tablist" aria-label="Gitlink sections">
             {TABS.map((tab) => (
               <button
@@ -642,19 +653,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
               </Dialog>
             </div>
           )}
-        </div>
-      )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-      {menuPosition && (
-        <GitlinkNodeMenu
-          position={menuPosition}
-          isCollapsed={data.isCollapsed}
-          onToggleCollapse={data.onToggleCollapse}
-          onDelete={data.onDelete}
-          onClose={() => setMenuPosition(null)}
-        />
-      )}
-    </div>
+    </NodeShell>
   );
 }
 

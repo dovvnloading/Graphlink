@@ -1,7 +1,8 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -307,63 +308,61 @@ function DocumentNodeViewImpl({ data, selected }: NodeProps<DocumentFlowNode>) {
   const fallbackTitle = isAudio ? "Audio Attachment" : "File Attachment";
 
   return (
-    <div
-      className={`scene-node document-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName="document-node"
+      selected={!!selected}
+      collapsed={collapsed}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
-      // ADR-012 stage 12.3: keyboard-reachable via Shift+F10/ContextMenu -
-      // see SceneCanvas.tsx's own stage-12.3 doc for the global handler.
-      aria-haspopup="menu"
+      header={
+        <div className="scene-node-title chat-node-role">
+          <span>{data.title || fallbackTitle}</span>
+          <button
+            type="button"
+            className="chat-node-collapse-btn"
+            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
+            onClick={data.onToggleCollapse}
+          >
+            {data.isCollapsed ? "▸" : "▾"}
+          </button>
+        </div>
+      }
+      bodyClassName="document-node-content"
+      menu={
+        menuPosition && (
+          <DocumentNodeMenu
+            position={menuPosition}
+            content={data.content}
+            attachmentKind={data.attachmentKind}
+            filePath={data.filePath}
+            isCollapsed={data.isCollapsed}
+            onToggleCollapse={data.onToggleCollapse}
+            onDock={data.onDock}
+            onDelete={data.onDelete}
+            isBranchFocusActive={data.isBranchFocusActive}
+            onToggleBranchFocus={data.onToggleBranchFocus}
+            onClose={() => setMenuPosition(null)}
+          />
+        )
+      }
     >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title chat-node-role">
-        <span>{data.title || fallbackTitle}</span>
-        <button
-          type="button"
-          className="chat-node-collapse-btn"
-          aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-          onClick={data.onToggleCollapse}
-        >
-          {data.isCollapsed ? "▸" : "▾"}
-        </button>
-      </div>
-      {!collapsed && (
-        <div className="scene-node-body document-node-content">
-          <dl className="document-node-metadata">
-            {metadataRows.map((row) => (
-              <div className="document-node-metadata-row" key={row.label}>
-                <dt>{row.label}</dt>
-                <dd>{row.value}</dd>
-              </div>
-            ))}
-          </dl>
-          {showPreview && (
-            <div className="document-node-preview">
-              <p className="document-node-preview-label">Contents</p>
-              <pre className="document-node-preview-text">{data.content.trim()}</pre>
-            </div>
-          )}
+      <dl className="document-node-metadata">
+        {metadataRows.map((row) => (
+          <div className="document-node-metadata-row" key={row.label}>
+            <dt>{row.label}</dt>
+            <dd>{row.value}</dd>
+          </div>
+        ))}
+      </dl>
+      {showPreview && (
+        <div className="document-node-preview">
+          <p className="document-node-preview-label">Contents</p>
+          <pre className="document-node-preview-text">{data.content.trim()}</pre>
         </div>
       )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-      {menuPosition && (
-        <DocumentNodeMenu
-          position={menuPosition}
-          content={data.content}
-          attachmentKind={data.attachmentKind}
-          filePath={data.filePath}
-          isCollapsed={data.isCollapsed}
-          onToggleCollapse={data.onToggleCollapse}
-          onDock={data.onDock}
-          onDelete={data.onDelete}
-          isBranchFocusActive={data.isBranchFocusActive}
-          onToggleBranchFocus={data.onToggleBranchFocus}
-          onClose={() => setMenuPosition(null)}
-        />
-      )}
-    </div>
+    </NodeShell>
   );
 }
 

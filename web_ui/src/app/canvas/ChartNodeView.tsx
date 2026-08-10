@@ -1,4 +1,4 @@
-import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflow/react";
+import { NodeResizer, type Node, type NodeProps } from "@xyflow/react";
 import { lazy, memo, Suspense, useEffect, useRef } from "react";
 import type { ChartDataRow } from "../../lib/bridge-core/generated/scene-state";
 import { withAuthToken } from "../../lib/auth/token";
@@ -9,6 +9,7 @@ import {
   CHART_MIN_WIDTH,
   CHART_RESIZE_DEBOUNCE_MS,
 } from "./canvasConstants";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 // ADR-013 stage 13.2: the interactive renderer lives in its own lazily
@@ -175,66 +176,67 @@ export const ChartNodeView = memo(function ChartNodeView({
   const title = typeof rawTitle === "string" && rawTitle.trim() ? rawTitle : "Chart";
 
   return (
-    <div
-      className={`scene-node chart-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName="chart-node"
+      selected={!!selected}
+      collapsed={collapsed}
       style={{ width: "100%", height: "100%" }}
-    >
-      <NodeResizer
-        nodeId={id}
-        isVisible={selected && !collapsed}
-        minWidth={CHART_MIN_WIDTH}
-        minHeight={CHART_MIN_HEIGHT}
-        maxWidth={CHART_MAX_WIDTH}
-        maxHeight={CHART_MAX_HEIGHT}
-        keepAspectRatio={data.chartAspectLocked}
-        onResizeEnd={(_event, params) => {
-          makeDebouncedChartResize(resizeTimerRef, data.onResize)(params.width, params.height);
-        }}
-      />
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title chart-node-title">
-        <span className="chart-node-name">{title}</span>
-        <span className="chart-node-badge">{chartTypeBadgeLabel(data.chartType)}</span>
-        {data.chartError && (
-          <span className="chart-node-error-badge" title={data.chartError} aria-label="Chart generation warning">
-            ⚠
-          </span>
-        )}
-      </div>
-      {!collapsed && (
-        <div className="scene-node-body chart-node-content">
-          <Suspense fallback={<div className="chart-node-placeholder">Loading chart…</div>}>
-            <LazyChartRenderer chartType={data.chartType} chartData={data.chartData} />
-          </Suspense>
-          <div className="chart-node-toolbar nodrag">
-            <button
-              type="button"
-              className="chart-node-btn"
-              onClick={data.onToggleAspectLock}
-              aria-pressed={data.chartAspectLocked}
-            >
-              {data.chartAspectLocked ? "Unlock Aspect" : "Lock Aspect"}
-            </button>
-            <a
-              className="chart-node-btn chart-node-export-link"
-              href={chartExportUrl(id, "png")}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Export PNG
-            </a>
-            <a
-              className="chart-node-btn chart-node-export-link"
-              href={chartExportUrl(id, "svg")}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Export SVG
-            </a>
-          </div>
+      resizer={
+        <NodeResizer
+          nodeId={id}
+          isVisible={selected && !collapsed}
+          minWidth={CHART_MIN_WIDTH}
+          minHeight={CHART_MIN_HEIGHT}
+          maxWidth={CHART_MAX_WIDTH}
+          maxHeight={CHART_MAX_HEIGHT}
+          keepAspectRatio={data.chartAspectLocked}
+          onResizeEnd={(_event, params) => {
+            makeDebouncedChartResize(resizeTimerRef, data.onResize)(params.width, params.height);
+          }}
+        />
+      }
+      header={
+        <div className="scene-node-title chart-node-title">
+          <span className="chart-node-name">{title}</span>
+          <span className="chart-node-badge">{chartTypeBadgeLabel(data.chartType)}</span>
+          {data.chartError && (
+            <span className="chart-node-error-badge" title={data.chartError} aria-label="Chart generation warning">
+              ⚠
+            </span>
+          )}
         </div>
-      )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-    </div>
+      }
+      bodyClassName="chart-node-content"
+    >
+      <Suspense fallback={<div className="chart-node-placeholder">Loading chart…</div>}>
+        <LazyChartRenderer chartType={data.chartType} chartData={data.chartData} />
+      </Suspense>
+      <div className="chart-node-toolbar nodrag">
+        <button
+          type="button"
+          className="chart-node-btn"
+          onClick={data.onToggleAspectLock}
+          aria-pressed={data.chartAspectLocked}
+        >
+          {data.chartAspectLocked ? "Unlock Aspect" : "Lock Aspect"}
+        </button>
+        <a
+          className="chart-node-btn chart-node-export-link"
+          href={chartExportUrl(id, "png")}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Export PNG
+        </a>
+        <a
+          className="chart-node-btn chart-node-export-link"
+          href={chartExportUrl(id, "svg")}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Export SVG
+        </a>
+      </div>
+    </NodeShell>
   );
 }, chartNodePropsAreEqual);

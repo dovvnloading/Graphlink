@@ -165,6 +165,21 @@ export class SceneStore {
   // the same reason selectedNodeId/replyTargetNodeId already live on this
   // store rather than in whichever single component happens to set them.
   private focusAcceptedPaths = false;
+  // ADR-012 stage 12.5 ("node filter-by-kind/status"): the same "local,
+  // unpersisted, view-only lens" posture as focusAcceptedPaths just above -
+  // its trigger (ViewPopover.tsx's own FILTER section) and consumer
+  // (SceneCanvas.tsx's toFlowNodes) are two separate components, hence
+  // living here rather than as either one's own component state. An EMPTY
+  // set means "no filter active, show every kind/status" (mirrors
+  // focusAcceptedPaths=false's own "off" semantics) - a non-empty set means
+  // "only nodes matching one of these are shown at full opacity, everything
+  // else is dimmed the same way Focus Accepted Paths already dims a
+  // rejected branch." Two independent sets, not one combined predicate: a
+  // user filtering to kind="code" AND status="accepted" wants the
+  // intersection, which computeFilteredOutNodeIds (SceneCanvas.tsx)
+  // implements by dimming a node excluded by EITHER axis.
+  private filterKinds: ReadonlySet<string> = new Set();
+  private filterStatuses: ReadonlySet<string> = new Set();
   // ADR-011 stage 11.2: true for exactly the duration of one
   // exportCanvasAsPng capture (exportCanvasPng.ts) - local UI state only,
   // same posture as focusAcceptedPaths above (its trigger, the app bar's
@@ -538,6 +553,8 @@ export class SceneStore {
   getReplyTargetNodeId = (): string | null => this.replyTargetNodeId;
   getSynthesizeTargetNodeIds = (): string[] | null => this.synthesizeTargetNodeIds;
   getFocusAcceptedPaths = (): boolean => this.focusAcceptedPaths;
+  getFilterKinds = (): ReadonlySet<string> => this.filterKinds;
+  getFilterStatuses = (): ReadonlySet<string> => this.filterStatuses;
   getExportInProgress = (): boolean => this.exportInProgress;
 
   // R5.1: no-op-if-unchanged, same discipline as every other setter here that
@@ -564,6 +581,30 @@ export class SceneStore {
   setFocusAcceptedPaths(value: boolean): void {
     if (value === this.focusAcceptedPaths) return;
     this.focusAcceptedPaths = value;
+    this.emit();
+  }
+
+  // Toggles membership rather than exposing a raw setter - ViewPopover.tsx's
+  // FILTER buttons only ever need "flip this one kind/status," never a bulk
+  // replace, so the read-modify-write lives here (one place) rather than in
+  // every caller. A fresh Set each time (not a mutate-in-place add/delete on
+  // the existing one) keeps getFilterKinds' returned reference stable
+  // between calls that don't change anything, matching useSyncExternalStore's
+  // snapshot-stability requirement the same way every other Set/array-typed
+  // getter on this store already does.
+  toggleFilterKind(kind: string): void {
+    const next = new Set(this.filterKinds);
+    if (next.has(kind)) next.delete(kind);
+    else next.add(kind);
+    this.filterKinds = next;
+    this.emit();
+  }
+
+  toggleFilterStatus(status: string): void {
+    const next = new Set(this.filterStatuses);
+    if (next.has(status)) next.delete(status);
+    else next.add(status);
+    this.filterStatuses = next;
     this.emit();
   }
 

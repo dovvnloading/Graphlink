@@ -1,4 +1,4 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
 import {
   HTML_SPLIT_DEFAULT,
@@ -7,6 +7,7 @@ import {
   HTML_SPLIT_TOTAL_PX,
   HTML_SPLITTER_REPORT_DEBOUNCE_MS,
 } from "./canvasConstants";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -189,83 +190,84 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
   const previewHeightPx = HTML_SPLIT_TOTAL_PX - sourceHeightPx;
 
   return (
-    <div className={`scene-node html-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}>
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title html-node-header">
-        <span>HTML</span>
-        <div className="html-node-controls">
-          <button type="button" className="html-node-header-btn" onClick={data.onToggleCollapse}>
-            {data.isCollapsed ? "Expand" : "Collapse"}
-          </button>
-          <button
-            type="button"
-            className="html-node-header-btn"
-            disabled
-            title="Popout view isn't built yet - opening untrusted HTML in a separate window needs a security review first"
-          >
-            Popout
-          </button>
-          <button
-            type="button"
-            className="html-node-header-btn html-node-delete-btn"
-            onClick={data.onDelete}
-          >
-            Delete
-          </button>
+    <NodeShell
+      kindClassName="html-node"
+      selected={!!selected}
+      collapsed={collapsed}
+      header={
+        <div className="scene-node-title html-node-header">
+          <span>HTML</span>
+          <div className="html-node-controls">
+            <button type="button" className="html-node-header-btn" onClick={data.onToggleCollapse}>
+              {data.isCollapsed ? "Expand" : "Collapse"}
+            </button>
+            <button
+              type="button"
+              className="html-node-header-btn"
+              disabled
+              title="Popout view isn't built yet - opening untrusted HTML in a separate window needs a security review first"
+            >
+              Popout
+            </button>
+            <button
+              type="button"
+              className="html-node-header-btn html-node-delete-btn"
+              onClick={data.onDelete}
+            >
+              Delete
+            </button>
+          </div>
         </div>
+      }
+      bodyClassName="html-node-content"
+    >
+      <div className="html-node-section">
+        <p className="html-node-section-label">Source</p>
+        <textarea
+          className="html-node-source"
+          style={{ height: sourceHeightPx }}
+          value={sourceText}
+          onChange={(event) => setSourceText(event.target.value)}
+          spellCheck={false}
+        />
       </div>
-      {!collapsed && (
-        <div className="scene-node-body html-node-content">
-          <div className="html-node-section">
-            <p className="html-node-section-label">Source</p>
-            <textarea
-              className="html-node-source"
-              style={{ height: sourceHeightPx }}
-              value={sourceText}
-              onChange={(event) => setSourceText(event.target.value)}
-              spellCheck={false}
-            />
-          </div>
-          {/* R6.3: the draggable split handle - `nodrag` keeps React Flow's
-              own node-drag gesture from hijacking this pointer-down (same
-              convention as GroupNodeView's label input / ChartNodeView's
-              toolbar). Purely a resize handle for the Source pane above it;
-              the Preview pane below takes up whatever's left of
-              HTML_SPLIT_TOTAL_PX. */}
-          <div
-            className="html-node-splitter nodrag"
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="Resize source and preview panes"
-            onPointerDown={onSplitterPointerDown}
-          />
-          <button
-            type="button"
-            className="html-node-render-btn"
-            onClick={() => setRenderedDoc(buildSandboxedHtmlDocument(sourceText))}
-          >
-            Render
-          </button>
-          <div className="html-node-section">
-            <p className="html-node-section-label">Preview</p>
-            {/* sandbox is EXACTLY "allow-scripts" - no allow-same-origin (no
-                access to this app's origin/storage/parent DOM), no
-                allow-popups, no allow-top-navigation, no allow-forms, no
-                allow-modals. srcDoc (never a blob: URL, never `src`, never
-                dangerouslySetInnerHTML) is the only content-delivery path,
-                and it only ever holds buildSandboxedHtmlDocument's output. */}
-            <iframe
-              className="html-node-preview"
-              style={{ height: previewHeightPx }}
-              sandbox="allow-scripts"
-              srcDoc={renderedDoc}
-              title="HTML preview"
-            />
-          </div>
-        </div>
-      )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-    </div>
+      {/* R6.3: the draggable split handle - `nodrag` keeps React Flow's
+          own node-drag gesture from hijacking this pointer-down (same
+          convention as GroupNodeView's label input / ChartNodeView's
+          toolbar). Purely a resize handle for the Source pane above it;
+          the Preview pane below takes up whatever's left of
+          HTML_SPLIT_TOTAL_PX. */}
+      <div
+        className="html-node-splitter nodrag"
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize source and preview panes"
+        onPointerDown={onSplitterPointerDown}
+      />
+      <button
+        type="button"
+        className="html-node-render-btn"
+        onClick={() => setRenderedDoc(buildSandboxedHtmlDocument(sourceText))}
+      >
+        Render
+      </button>
+      <div className="html-node-section">
+        <p className="html-node-section-label">Preview</p>
+        {/* sandbox is EXACTLY "allow-scripts" - no allow-same-origin (no
+            access to this app's origin/storage/parent DOM), no
+            allow-popups, no allow-top-navigation, no allow-forms, no
+            allow-modals. srcDoc (never a blob: URL, never `src`, never
+            dangerouslySetInnerHTML) is the only content-delivery path,
+            and it only ever holds buildSandboxedHtmlDocument's output. */}
+        <iframe
+          className="html-node-preview"
+          style={{ height: previewHeightPx }}
+          sandbox="allow-scripts"
+          srcDoc={renderedDoc}
+          title="HTML preview"
+        />
+      </div>
+    </NodeShell>
   );
 }
 

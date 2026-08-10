@@ -1,9 +1,10 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useState, type ReactNode } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -414,130 +415,125 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
   }
 
   return (
-    <div
-      className={`scene-node conversation-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName="conversation-node"
+      selected={!!selected}
+      collapsed={collapsed}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
-      // ADR-012 stage 12.3: keyboard-reachable via Shift+F10/ContextMenu -
-      // see SceneCanvas.tsx's own stage-12.3 doc for the global handler.
-      // (The per-bubble menu below is deliberately NOT given this - its
-      // actions are already reachable via each bubble's own quick-action
-      // buttons, a keyboard path that predates this stage.)
-      aria-haspopup="menu"
+      header={
+        <div className="scene-node-title chat-node-role">
+          <span>Conversation</span>
+          <button
+            type="button"
+            className="chat-node-collapse-btn"
+            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
+            onClick={data.onToggleCollapse}
+          >
+            {data.isCollapsed ? "▸" : "▾"}
+          </button>
+        </div>
+      }
+      bodyClassName="conversation-node-content"
+      menu={
+        menuPosition && (
+          <ConversationNodeMenu
+            position={menuPosition}
+            isCollapsed={data.isCollapsed}
+            onToggleCollapse={data.onToggleCollapse}
+            onDelete={data.onDelete}
+            onOpenDocumentView={data.onOpenDocumentView}
+            onClose={() => setMenuPosition(null)}
+          />
+        )
+      }
     >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title chat-node-role">
-        <span>Conversation</span>
-        <button
-          type="button"
-          className="chat-node-collapse-btn"
-          aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-          onClick={data.onToggleCollapse}
-        >
-          {data.isCollapsed ? "▸" : "▾"}
-        </button>
-      </div>
-      {!collapsed && (
-        <div className="scene-node-body conversation-node-content">
-          <div className="conversation-node-messages">
-            {data.history.map((message, index) => (
-              // No per-message id on the wire shape - render order is
-              // always the true history order, so index is a correct and
-              // sufficient key here.
-              <ConversationBubble
-                key={index}
-                message={message}
-                index={index}
-                onDeleteMessage={data.onDeleteMessage}
-              />
-            ))}
-            {/* ADR-006 stage 6.4: the in-flight assistant reply, rendered as
-                its own live bubble after the persisted history while this
-                node's pendingRequestId is set. Deliberately NOT a
-                ConversationBubble - it has no history index yet (no
-                copy/delete/menu can target it); the committed message
-                arrives through the next scene snapshot the moment the
-                stream ends. */}
-            {data.pendingRequestId && (
-              <div className="conversation-node-bubble assistant conversation-node-bubble-streaming">
-                <div className="conversation-node-bubble-header">
-                  <span className="conversation-node-bubble-role-group">
-                    <span className="chat-node-avatar" aria-hidden="true">
-                      A
-                    </span>
-                    <span className="conversation-node-bubble-role">Assistant</span>
-                  </span>
-                </div>
-                <div className="chat-node-content conversation-node-bubble-content">
-                  {streamedReply ? (
-                    <NodeMarkdown content={streamedReply} />
-                  ) : (
-                    <span className="conversation-node-streaming-placeholder">Waiting for response…</span>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-          <div className="conversation-node-input-row">
-            <textarea
-              className="conversation-node-input"
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                // Enter-to-send / Shift+Enter-for-newline - same convention
-                // the existing Composer already uses (Composer.tsx's own
-                // onKeyDown handler), including the IME-composing guard: an
-                // IME's Enter-to-commit keystroke also reports
-                // key==="Enter", so without it, confirming a composed
-                // character sent the half-typed buffer.
-                if (event.nativeEvent.isComposing) return;
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  send();
-                }
-              }}
-              placeholder="Send a message…"
-              aria-label="Message"
-              rows={1}
-              spellCheck
-            />
-            <div className="conversation-node-input-actions">
-              <button
-                type="button"
-                className="conversation-node-send-btn"
-                disabled={!draft.trim() || !!data.pendingRequestId}
-                onClick={send}
-              >
-                Send
-              </button>
-              {data.pendingRequestId && (
-                <button
-                  type="button"
-                  className="conversation-node-cancel-btn"
-                  onClick={() => data.onCancel()}
-                  title="Cancel response"
-                >
-                  Cancel
-                </button>
+      <div className="conversation-node-messages">
+        {data.history.map((message, index) => (
+          // No per-message id on the wire shape - render order is
+          // always the true history order, so index is a correct and
+          // sufficient key here.
+          <ConversationBubble
+            key={index}
+            message={message}
+            index={index}
+            onDeleteMessage={data.onDeleteMessage}
+          />
+        ))}
+        {/* ADR-006 stage 6.4: the in-flight assistant reply, rendered as
+            its own live bubble after the persisted history while this
+            node's pendingRequestId is set. Deliberately NOT a
+            ConversationBubble - it has no history index yet (no
+            copy/delete/menu can target it); the committed message
+            arrives through the next scene snapshot the moment the
+            stream ends. */}
+        {data.pendingRequestId && (
+          <div className="conversation-node-bubble assistant conversation-node-bubble-streaming">
+            <div className="conversation-node-bubble-header">
+              <span className="conversation-node-bubble-role-group">
+                <span className="chat-node-avatar" aria-hidden="true">
+                  A
+                </span>
+                <span className="conversation-node-bubble-role">Assistant</span>
+              </span>
+            </div>
+            <div className="chat-node-content conversation-node-bubble-content">
+              {streamedReply ? (
+                <NodeMarkdown content={streamedReply} />
+              ) : (
+                <span className="conversation-node-streaming-placeholder">Waiting for response…</span>
               )}
             </div>
           </div>
-        </div>
-      )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-      {menuPosition && (
-        <ConversationNodeMenu
-          position={menuPosition}
-          isCollapsed={data.isCollapsed}
-          onToggleCollapse={data.onToggleCollapse}
-          onDelete={data.onDelete}
-          onOpenDocumentView={data.onOpenDocumentView}
-          onClose={() => setMenuPosition(null)}
+        )}
+      </div>
+      <div className="conversation-node-input-row">
+        <textarea
+          className="conversation-node-input"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter-to-send / Shift+Enter-for-newline - same convention
+            // the existing Composer already uses (Composer.tsx's own
+            // onKeyDown handler), including the IME-composing guard: an
+            // IME's Enter-to-commit keystroke also reports
+            // key==="Enter", so without it, confirming a composed
+            // character sent the half-typed buffer.
+            if (event.nativeEvent.isComposing) return;
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              send();
+            }
+          }}
+          placeholder="Send a message…"
+          aria-label="Message"
+          rows={1}
+          spellCheck
         />
-      )}
-    </div>
+        <div className="conversation-node-input-actions">
+          <button
+            type="button"
+            className="conversation-node-send-btn"
+            disabled={!draft.trim() || !!data.pendingRequestId}
+            onClick={send}
+          >
+            Send
+          </button>
+          {data.pendingRequestId && (
+            <button
+              type="button"
+              className="conversation-node-cancel-btn"
+              onClick={() => data.onCancel()}
+              title="Cancel response"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      </div>
+    </NodeShell>
   );
 }
 

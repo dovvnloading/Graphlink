@@ -1,9 +1,10 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import { downloadTextFile } from "./downloadTextFile";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -221,40 +222,38 @@ export const CodeNodeView = memo(function CodeNodeView({
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
 
   return (
-    <div
-      className={`scene-node code-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName="code-node"
+      selected={!!selected}
+      collapsed={collapsed}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
-      // ADR-012 stage 12.3: keyboard-reachable via Shift+F10/ContextMenu -
-      // see SceneCanvas.tsx's own stage-12.3 doc for the global handler.
-      aria-haspopup="menu"
-    >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title code-node-language">
-        <span>{data.language || "code"}</span>
-      </div>
-      {!collapsed && (
-        <div className="scene-node-body code-node-content chat-node-content">
-          <NodeMarkdown content={toFencedCodeBlock(data.code, data.language)} />
+      header={
+        <div className="scene-node-title code-node-language">
+          <span>{data.language || "code"}</span>
         </div>
-      )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-      {menuPosition && (
-        <CodeNodeMenu
-          position={menuPosition}
-          nodeId={id}
-          code={data.code}
-          language={data.language}
-          parentChatNodeId={data.parentChatNodeId}
-          onRegenerate={data.onRegenerate}
-          onDelete={data.onDelete}
-          isBranchFocusActive={data.isBranchFocusActive}
-          onToggleBranchFocus={data.onToggleBranchFocus}
-          onClose={() => setMenuPosition(null)}
-        />
-      )}
-    </div>
+      }
+      bodyClassName="code-node-content chat-node-content"
+      menu={
+        menuPosition && (
+          <CodeNodeMenu
+            position={menuPosition}
+            nodeId={id}
+            code={data.code}
+            language={data.language}
+            parentChatNodeId={data.parentChatNodeId}
+            onRegenerate={data.onRegenerate}
+            onDelete={data.onDelete}
+            isBranchFocusActive={data.isBranchFocusActive}
+            onToggleBranchFocus={data.onToggleBranchFocus}
+            onClose={() => setMenuPosition(null)}
+          />
+        )
+      }
+    >
+      <NodeMarkdown content={toFencedCodeBlock(data.code, data.language)} />
+    </NodeShell>
   );
 }, codeNodePropsAreEqual);

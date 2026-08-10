@@ -1210,6 +1210,44 @@ describe("SceneStore", () => {
     expect(seen).toHaveBeenCalledTimes(1);
   });
 
+  // ADR-012 stage 12.5 ("node filter-by-kind/status"): same "local UI state
+  // only, no WS intent" posture as Focus Accepted Paths above.
+  it("toggleFilterKind adds an absent kind and removes a present one, notifying listeners each time", () => {
+    const { transport } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    expect(store.getFilterKinds()).toEqual(new Set());
+    store.toggleFilterKind("code");
+    expect(store.getFilterKinds()).toEqual(new Set(["code"]));
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    store.toggleFilterKind("note");
+    expect(store.getFilterKinds()).toEqual(new Set(["code", "note"]));
+    expect(seen).toHaveBeenCalledTimes(2);
+
+    store.toggleFilterKind("code");
+    expect(store.getFilterKinds()).toEqual(new Set(["note"]));
+    expect(seen).toHaveBeenCalledTimes(3);
+  });
+
+  it("toggleFilterStatus adds an absent status and removes a present one, independent of filterKinds", () => {
+    const { transport } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    store.toggleFilterStatus("rejected");
+    expect(store.getFilterStatuses()).toEqual(new Set(["rejected"]));
+    expect(store.getFilterKinds()).toEqual(new Set());
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    store.toggleFilterStatus("rejected");
+    expect(store.getFilterStatuses()).toEqual(new Set());
+    expect(seen).toHaveBeenCalledTimes(2);
+  });
+
   it("setGroupLabel sends the scene-topic setGroupLabel intent with [nodeId, text]", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

@@ -16,6 +16,7 @@ import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport
 import { applyTheme } from "./applyTheme";
 import { getAnnouncement, subscribeAnnouncer } from "./announcer";
 import { connectionBadgeLabel } from "./connectionBadge";
+import { CanvasSearchProvider } from "./canvas/CanvasSearchContext";
 import { ExecutionLimitsProvider } from "./canvas/ExecutionLimitsContext";
 import { SceneCanvas, measuredNodeSize } from "./canvas/SceneCanvas";
 import { SceneStore } from "./canvas/sceneStore";
@@ -411,16 +412,21 @@ function App() {
                 onClose={onCloseDocumentView}
               />
               <div className="app-canvas-content">
-                <ExecutionLimitsProvider transport={transport}>
-                  <SceneCanvas
-                    store={sceneStore}
-                    onOpenDocumentView={onOpenDocumentView}
-                    getComposerRoute={getComposerRoute}
-                  />
-                </ExecutionLimitsProvider>
-                <div className="app-search-layer">
-                  <SearchOverlay store={sceneStore} />
-                </div>
+                {/* ADR-012 stage 12.5: wraps both the canvas (NodeMarkdown's
+                    own search-highlighting read) and SearchOverlay (the
+                    query's only writer) - see CanvasSearchContext.tsx. */}
+                <CanvasSearchProvider>
+                  <ExecutionLimitsProvider transport={transport}>
+                    <SceneCanvas
+                      store={sceneStore}
+                      onOpenDocumentView={onOpenDocumentView}
+                      getComposerRoute={getComposerRoute}
+                    />
+                  </ExecutionLimitsProvider>
+                  <div className="app-search-layer">
+                    <SearchOverlay store={sceneStore} />
+                  </div>
+                </CanvasSearchProvider>
                 <PinOverlay store={sceneStore} />
                 <ViewPopover store={sceneStore} />
                 <PluginPicker transport={transport} store={sceneStore} />

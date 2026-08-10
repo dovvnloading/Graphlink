@@ -1,8 +1,9 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -122,38 +123,36 @@ function ThinkingNodeViewImpl({ data, selected }: NodeProps<ThinkingFlowNode>) {
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
 
   return (
-    <div
-      className={`scene-node thinking-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}
+    <NodeShell
+      kindClassName="thinking-node"
+      selected={!!selected}
+      collapsed={collapsed}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
-      // ADR-012 stage 12.3: keyboard-reachable via Shift+F10/ContextMenu -
-      // see SceneCanvas.tsx's own stage-12.3 doc for the global handler.
-      aria-haspopup="menu"
-    >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title thinking-node-label">
-        <span>Thinking</span>
-      </div>
-      {!collapsed && (
-        <div className="scene-node-body thinking-node-content chat-node-content">
-          <NodeMarkdown content={data.thinkingText} />
+      header={
+        <div className="scene-node-title thinking-node-label">
+          <span>Thinking</span>
         </div>
-      )}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-      {menuPosition && (
-        <ThinkingNodeMenu
-          position={menuPosition}
-          thinkingText={data.thinkingText}
-          onDock={data.onDock}
-          onDelete={data.onDelete}
-          isBranchFocusActive={data.isBranchFocusActive}
-          onToggleBranchFocus={data.onToggleBranchFocus}
-          onClose={() => setMenuPosition(null)}
-        />
-      )}
-    </div>
+      }
+      bodyClassName="thinking-node-content chat-node-content"
+      menu={
+        menuPosition && (
+          <ThinkingNodeMenu
+            position={menuPosition}
+            thinkingText={data.thinkingText}
+            onDock={data.onDock}
+            onDelete={data.onDelete}
+            isBranchFocusActive={data.isBranchFocusActive}
+            onToggleBranchFocus={data.onToggleBranchFocus}
+            onClose={() => setMenuPosition(null)}
+          />
+        )
+      }
+    >
+      <NodeMarkdown content={data.thinkingText} />
+    </NodeShell>
   );
 }
 

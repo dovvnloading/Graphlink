@@ -1,14 +1,18 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { CanvasSearchProvider, useSetCanvasSearchQuery } from "./CanvasSearchContext";
 import { NodeMarkdown } from "./NodeMarkdown";
 
 // Node redesign, stage 1 ("shared node markdown renderer"): a code-block
 // copy button + language badge, a wide-table scroll wrapper, image zoom,
 // GitHub-style callouts, and safe external links - shared by every
 // text-bearing node kind. See NodeMarkdown.tsx's own doc comment for why
-// heading anchors and search highlighting (both real in
-// DocumentViewMarkdown.tsx) are deliberately NOT here.
+// heading anchors (real in DocumentViewMarkdown.tsx) are deliberately NOT
+// here - search-match highlighting WAS in that same "deliberately not here"
+// list until ADR-012 stage 12.5, which added it (see the describe block
+// below and NodeMarkdown.tsx's own updated doc).
 
 describe("NodeMarkdown", () => {
   it("renders plain markdown content", () => {
@@ -222,5 +226,63 @@ describe("NodeMarkdown", () => {
       expect(container.querySelector(".markdown-alert")).toBeNull();
       expect(container.querySelector("blockquote")).not.toBeNull();
     });
+  });
+});
+
+function QuerySetter({ query }: { query: string }) {
+  const setQuery = useSetCanvasSearchQuery();
+  useEffect(() => setQuery(query), [query, setQuery]);
+  return null;
+}
+
+function renderWithQuery(content: string, query: string) {
+  return render(
+    <CanvasSearchProvider>
+      <QuerySetter query={query} />
+      <NodeMarkdown content={content} />
+    </CanvasSearchProvider>,
+  );
+}
+
+describe("NodeMarkdown search-match highlighting (ADR-012 stage 12.5)", () => {
+  it("renders plain content with no <mark> when there is no active search query", () => {
+    const { container } = render(
+      <CanvasSearchProvider>
+        <NodeMarkdown content="hello world" />
+      </CanvasSearchProvider>,
+    );
+    expect(container.querySelector("mark")).toBeNull();
+    expect(screen.getByText("hello world")).toBeInTheDocument();
+  });
+
+  it("renders plain content with no <mark> outside any CanvasSearchProvider", () => {
+    const { container } = render(<NodeMarkdown content="hello world" />);
+    expect(container.querySelector("mark")).toBeNull();
+  });
+
+  it("wraps every case-insensitive match of the live search query in a <mark>", () => {
+    const { container } = renderWithQuery("hello world, HELLO again", "hello");
+    const marks = container.querySelectorAll("mark.document-view-search-match");
+    expect(marks).toHaveLength(2);
+    expect(marks[0]).toHaveTextContent("hello");
+    expect(marks[1]).toHaveTextContent("HELLO");
+  });
+
+  it("re-renders highlighting when the query changes", () => {
+    const { container, rerender } = render(
+      <CanvasSearchProvider>
+        <QuerySetter query="world" />
+        <NodeMarkdown content="hello world" />
+      </CanvasSearchProvider>,
+    );
+    expect(container.querySelectorAll("mark")).toHaveLength(1);
+
+    rerender(
+      <CanvasSearchProvider>
+        <QuerySetter query="zzz" />
+        <NodeMarkdown content="hello world" />
+      </CanvasSearchProvider>,
+    );
+    expect(container.querySelectorAll("mark")).toHaveLength(0);
   });
 });

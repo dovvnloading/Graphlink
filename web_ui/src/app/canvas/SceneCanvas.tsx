@@ -384,6 +384,66 @@ export function computeNonAcceptedNodeIds(scene: SceneState): Set<string> {
 }
 
 /**
+ * ADR-012 stage 12.5 ("node filter-by-kind/status"): every real content kind
+ * a node card can be, in the order ViewPopover.tsx's own FILTER section
+ * renders its toggle buttons. "frame"/"container" are deliberately absent -
+ * the same exclusion NodeShell.tsx's own doc gives for the shared node-view
+ * shell: they are the structural backdrop a filtered-down set of content
+ * nodes still sits inside, not content a user would filter for themselves.
+ */
+export const FILTERABLE_NODE_KINDS = [
+  "chat",
+  "code",
+  "document",
+  "thinking",
+  "html",
+  "image",
+  "conversation",
+  "web_research",
+  "plan",
+  "artifact",
+  "gitlink",
+  "pycoder",
+  "code_sandbox",
+  "note",
+  "chart",
+] as const;
+
+/**
+ * Computes which node ids the live kind/status filter (ViewPopover.tsx's
+ * FILTER section, backed by sceneStore's own filterKinds/filterStatuses -
+ * see those fields' own comment) excludes - dimmed via the SAME isDimmed
+ * union toFlowNodes already composes computeDimmedNodeIds/
+ * computeNonAcceptedNodeIds through below, not a separate hide/show
+ * mechanism. Frame/container nodes are exempt from both axes (never
+ * excluded here) for the same reason FILTERABLE_NODE_KINDS omits them.
+ *
+ * The two axes are ANDed, not ORed: a node is excluded if it fails EITHER
+ * an active kind filter OR an active status filter, so a user who has
+ * narrowed to kind="code" and then additionally narrows to status=
+ * "accepted" sees the intersection (accepted code nodes only), not the
+ * union - the ordinary meaning of stacking two facets. An axis with an
+ * empty set never excludes anything on its own (mirrors focusAcceptedPaths'
+ * own "off by default" semantics); both empty short-circuits to an empty
+ * result without walking scene.nodes at all.
+ */
+export function computeFilteredOutNodeIds(
+  scene: SceneState,
+  filterKinds: ReadonlySet<string>,
+  filterStatuses: ReadonlySet<string>,
+): Set<string> {
+  const excluded = new Set<string>();
+  if (filterKinds.size === 0 && filterStatuses.size === 0) return excluded;
+  for (const node of scene.nodes) {
+    if (node.kind === "frame" || node.kind === "container") continue;
+    const kindExcluded = filterKinds.size > 0 && !filterKinds.has(node.kind);
+    const statusExcluded = filterStatuses.size > 0 && !filterStatuses.has(node.branchStatus);
+    if (kindExcluded || statusExcluded) excluded.add(node.id);
+  }
+  return excluded;
+}
+
+/**
  * ADR-011 stage 11.1: one shared O(N+E) index-map pass, consumed by both
  * toFlowNodes and toFlowEdges below in place of the three separate ad hoc
  * maps they used to build on their own (toFlowNodes' own nodesById;
@@ -909,6 +969,13 @@ export function toFlowNodes(
   // the resulting Pin action would just pin to an empty ref, exactly as
   // unreachable in a real session as this default itself.
   getComposerRoute: () => { provider: string; modelId: string } = () => ({ provider: "", modelId: "" }),
+  // ADR-012 stage 12.5: ViewPopover.tsx's own FILTER section, backed by
+  // sceneStore's filterKinds/filterStatuses - see computeFilteredOutNodeIds'
+  // own doc. Both default to an empty set (feature off), same posture as
+  // focusAcceptedPaths defaulting to false, so every existing caller that
+  // omits these two keeps working unchanged.
+  filterKinds: ReadonlySet<string> = new Set(),
+  filterStatuses: ReadonlySet<string> = new Set(),
 ): SceneFlowNode[] {
   // ADR-011 stage 11.1: ONE upfront O(N+E) pass replacing this function's
   // old standalone `nodesById` map build, PLUS the O(N*E) per-node edge
@@ -926,7 +993,11 @@ export function toFlowNodes(
   // defaulting to null. Composed (unioned) with dimmedIds below rather
   // than picked between - both dimming lenses can be active at once.
   const nonAcceptedIds = focusAcceptedPaths ? computeNonAcceptedNodeIds(scene) : new Set<string>();
-  const isDimmed = (id: string) => dimmedIds.has(id) || nonAcceptedIds.has(id);
+  // ADR-012 stage 12.5: a third dimming lens, same "cheap no-op when off"
+  // posture as nonAcceptedIds above (computeFilteredOutNodeIds itself
+  // short-circuits when both filter sets are empty).
+  const filteredOutIds = computeFilteredOutNodeIds(scene, filterKinds, filterStatuses);
+  const isDimmed = (id: string) => dimmedIds.has(id) || nonAcceptedIds.has(id) || filteredOutIds.has(id);
   // BRANCH_FOCUS_KINDS-wide flag (chat/code/document/thinking/image only -
   // every other kind's data below never reads it): whether "Hide Other
   // Branches" is active from ANY origin, scene-wide. Computed once here
@@ -1175,12 +1246,16 @@ export function toFlowNodes(
       // entry exists on this node's own header, and ChatNodeView's own
       // dockedChildren/undock badge is kind-agnostic already, so undocking
       // it is still possible from the parent chat node's side).
-      // No isDimmed/isBranchFocusActive here - HtmlNodeView never carried
-      // this menu item (see BRANCH_FOCUS_KINDS above), so node-reference-
-      // only cache invalidation is already exact for this kind.
+      // No isBranchFocusActive here - HtmlNodeView never carried this menu
+      // item (see BRANCH_FOCUS_KINDS above). isDimmed IS wired below as of
+      // ADR-012 stage 12.5 - dimmedIds/nonAcceptedIds are always empty for
+      // this kind (both are BRANCH_FOCUS_KINDS-gated), so this only ever
+      // reflects the node filter's own dimming.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeHtmlFns);
-      if (cached) {
+      if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
         continue;
       }
@@ -1188,6 +1263,7 @@ export function toFlowNodes(
         id: n.id,
         type: "html" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           htmlContent: n.content,
           isCollapsed: n.isCollapsed,
@@ -1201,7 +1277,7 @@ export function toFlowNodes(
           ...fns,
         },
       };
-      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      cache.flowNodes.set(n, { extraSig, flowNode });
       flowNodes.push(flowNode);
       continue;
     }
@@ -1242,9 +1318,12 @@ export function toFlowNodes(
       // action, so this kind never sets isDocked=true through any UI path
       // of its own; the generic `if (n.isDocked) continue` guard above still
       // covers it correctly if it were ever docked via a direct WS call.
-      // No isDimmed/isBranchFocusActive here either - see the html branch's
-      // own comment above (ConversationNodeView is also outside
-      // BRANCH_FOCUS_KINDS), so node-reference-only invalidation is exact.
+      // No isBranchFocusActive here either - see the html branch's own
+      // comment above (ConversationNodeView is also outside
+      // BRANCH_FOCUS_KINDS). isDimmed IS wired below as of ADR-012 stage
+      // 12.5 - see the html branch's own comment for why that's safe.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(
         cache,
@@ -1252,7 +1331,7 @@ export function toFlowNodes(
         { n, store, onOpenDocumentView, onToggleBranchFocus },
         makeConversationFns,
       );
-      if (cached) {
+      if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
         continue;
       }
@@ -1260,6 +1339,7 @@ export function toFlowNodes(
         id: n.id,
         type: "conversation" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           history: n.history,
           isCollapsed: n.isCollapsed,
@@ -1267,7 +1347,7 @@ export function toFlowNodes(
           ...fns,
         },
       };
-      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      cache.flowNodes.set(n, { extraSig, flowNode });
       flowNodes.push(flowNode);
       continue;
     }
@@ -1276,8 +1356,11 @@ export function toFlowNodes(
       // branches above) - WebResearchNodeView never offers a dock-into-parent
       // action; the generic `if (n.isDocked) continue` guard above still
       // covers it correctly if it were ever docked via a direct WS call.
-      // No isDimmed/isBranchFocusActive here either - see the html branch's
-      // own comment above.
+      // No isBranchFocusActive here either - see the html branch's own
+      // comment above. isDimmed IS wired below as of ADR-012 stage 12.5 -
+      // see the html branch's own comment for why that's safe.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(
         cache,
@@ -1285,7 +1368,7 @@ export function toFlowNodes(
         { n, store, onOpenDocumentView, onToggleBranchFocus },
         makeWebResearchFns,
       );
-      if (cached) {
+      if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
         continue;
       }
@@ -1293,6 +1376,7 @@ export function toFlowNodes(
         id: n.id,
         type: "web_research" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           query: n.content,
           isCollapsed: n.isCollapsed,
@@ -1306,19 +1390,23 @@ export function toFlowNodes(
           ...fns,
         },
       };
-      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      cache.flowNodes.set(n, { extraSig, flowNode });
       flowNodes.push(flowNode);
       continue;
     }
     if (n.kind === "plan") {
       // ADR-008 stage 8.3. No onDock (plan nodes are never docked) and no
-      // isDimmed/branch-focus wiring - same reasoning as the web_research
-      // branch above. No flowNode cache extraSig needed: every builder
-      // field lives on the row itself, so a changed row object IS the
-      // cache miss.
+      // branch-focus wiring - same reasoning as the web_research branch
+      // above. isDimmed IS wired below as of ADR-012 stage 12.5 - see the
+      // html branch's own comment for why that's safe. Every OTHER builder
+      // field lives on the row itself, so a changed row object IS a cache
+      // miss on its own - dimmedVal is folded into extraSig for the same
+      // reason every other kind's own extraSig exists.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makePlanFns);
-      if (cached) {
+      if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
         continue;
       }
@@ -1326,6 +1414,7 @@ export function toFlowNodes(
         id: n.id,
         type: "plan" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           planGoal: n.planGoal,
           planSteps: n.planSteps,
@@ -1347,7 +1436,7 @@ export function toFlowNodes(
           ...fns,
         },
       };
-      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      cache.flowNodes.set(n, { extraSig, flowNode });
       flowNodes.push(flowNode);
       continue;
     }
@@ -1356,11 +1445,14 @@ export function toFlowNodes(
       // web_research branches above) - ArtifactNodeView never offers a
       // dock-into-parent action; the generic `if (n.isDocked) continue` guard
       // above still covers it correctly if it were ever docked via a direct
-      // WS call. No isDimmed/isBranchFocusActive here either - see the html
-      // branch's own comment above.
+      // WS call. No isBranchFocusActive here either - see the html branch's
+      // own comment above. isDimmed IS wired below as of ADR-012 stage 12.5 -
+      // see that same comment for why that's safe.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeArtifactFns);
-      if (cached) {
+      if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
         continue;
       }
@@ -1368,6 +1460,7 @@ export function toFlowNodes(
         id: n.id,
         type: "artifact" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           artifactContent: n.artifactContent,
           history: n.history,
@@ -1376,7 +1469,7 @@ export function toFlowNodes(
           ...fns,
         },
       };
-      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      cache.flowNodes.set(n, { extraSig, flowNode });
       flowNodes.push(flowNode);
       continue;
     }
@@ -1388,10 +1481,14 @@ export function toFlowNodes(
       // direct WS call. gitlinkContextXml is deliberately absent below - it
       // is never part of the scene wire payload (fetched lazily on demand via
       // fetchGitlinkContext instead - see GitlinkNodeView's own Context tab).
-      // No isDimmed/isBranchFocusActive here either.
+      // No isBranchFocusActive here either. isDimmed IS wired below as of
+      // ADR-012 stage 12.5 - see the html branch's own comment for why
+      // that's safe.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeGitlinkFns);
-      if (cached) {
+      if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
         continue;
       }
@@ -1399,6 +1496,7 @@ export function toFlowNodes(
         id: n.id,
         type: "gitlink" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           gitlinkRepo: n.gitlinkRepo,
           gitlinkBranch: n.gitlinkBranch,
@@ -1421,7 +1519,7 @@ export function toFlowNodes(
           ...fns,
         },
       };
-      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      cache.flowNodes.set(n, { extraSig, flowNode });
       flowNodes.push(flowNode);
       continue;
     }
@@ -1430,10 +1528,14 @@ export function toFlowNodes(
       // plugin-node branch above) - PyCoderNodeView never offers a
       // dock-into-parent action; the generic `if (n.isDocked) continue`
       // guard above still covers it correctly if it were ever docked via a
-      // direct WS call. No isDimmed/isBranchFocusActive here either.
+      // direct WS call. No isBranchFocusActive here either. isDimmed IS
+      // wired below as of ADR-012 stage 12.5 - see the html branch's own
+      // comment for why that's safe.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makePyCoderFns);
-      if (cached) {
+      if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
         continue;
       }
@@ -1441,6 +1543,7 @@ export function toFlowNodes(
         id: n.id,
         type: "pycoder" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           pycoderMode: n.pycoderMode,
           pycoderPrompt: n.pycoderPrompt,
@@ -1455,7 +1558,7 @@ export function toFlowNodes(
           ...fns,
         },
       };
-      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      cache.flowNodes.set(n, { extraSig, flowNode });
       flowNodes.push(flowNode);
       continue;
     }
@@ -1467,8 +1570,11 @@ export function toFlowNodes(
       // direct WS call. code_sandbox_sandbox_id is deliberately absent below
       // - it is pure internal server bookkeeping (a sandbox directory name),
       // never part of the scene wire payload at all (see scene-state.ts) and
-      // never read/forwarded anywhere in this mapping. No isDimmed/
-      // isBranchFocusActive here either.
+      // never read/forwarded anywhere in this mapping. No isBranchFocusActive
+      // here either. isDimmed IS wired below as of ADR-012 stage 12.5 - see
+      // the html branch's own comment for why that's safe.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(
         cache,
@@ -1476,7 +1582,7 @@ export function toFlowNodes(
         { n, store, onOpenDocumentView, onToggleBranchFocus },
         makeCodeSandboxFns,
       );
-      if (cached) {
+      if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
         continue;
       }
@@ -1484,6 +1590,7 @@ export function toFlowNodes(
         id: n.id,
         type: "code_sandbox" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           codeSandboxRequirements: n.codeSandboxRequirements,
           codeSandboxApprovalRequirements: n.codeSandboxApprovalRequirements,
@@ -1500,7 +1607,7 @@ export function toFlowNodes(
           ...fns,
         },
       };
-      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      cache.flowNodes.set(n, { extraSig, flowNode });
       flowNodes.push(flowNode);
       continue;
     }
@@ -1508,11 +1615,18 @@ export function toFlowNodes(
       // No onDock here either (same reasoning as every non-dockable kind
       // above) - a note never offers a dock-into-parent action of its own;
       // the generic `if (n.isDocked) continue` guard above still covers it
-      // correctly if it were ever docked via a direct WS call. No isDimmed/
-      // isBranchFocusActive here either.
+      // correctly if it were ever docked via a direct WS call. No
+      // isBranchFocusActive here either. isDimmed IS wired below as of
+      // ADR-012 stage 12.5 - see the html branch's own comment for why
+      // that's safe. NodeShell.tsx's own note-migration comment notes this
+      // kind hardcodes collapsed=false (no LOD posture of its own) - the
+      // filter's own opacity dimming is unaffected by that, since it's
+      // driven by this style prop, not the collapsed gate.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeNoteFns);
-      if (cached) {
+      if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
         continue;
       }
@@ -1520,6 +1634,7 @@ export function toFlowNodes(
         id: n.id,
         type: "note" as const,
         position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           content: n.content,
           color: n.color ?? null,
@@ -1534,7 +1649,7 @@ export function toFlowNodes(
           ...fns,
         },
       };
-      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      cache.flowNodes.set(n, { extraSig, flowNode });
       flowNodes.push(flowNode);
       continue;
     }
@@ -1624,10 +1739,17 @@ export function toFlowNodes(
       // are part of the ordinary 9-field wire contract (scene_payload()
       // exposes them like every other chart field), so they're ALSO
       // duplicated into `data` below rather than living only on the flow
-      // node object. No isDimmed/isBranchFocusActive here either.
+      // node object. No isBranchFocusActive here either. isDimmed IS wired
+      // below as of ADR-012 stage 12.5 - see the html branch's own comment
+      // for why that's safe; this flow-node-level `style` is React Flow's
+      // own per-node styling (opacity only) and is unrelated to
+      // ChartNodeView.tsx's own internal 100%/100% fill style on its inner
+      // wrapper div, so the two never conflict.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeChartFns);
-      if (cached) {
+      if (cached && cached.extraSig === extraSig) {
         flowNodes.push(cached.flowNode);
         continue;
       }
@@ -1637,6 +1759,7 @@ export function toFlowNodes(
         position: { x: n.x, y: n.y },
         width: n.chartWidth,
         height: n.chartHeight,
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           chartType: n.chartType,
           chartData: n.chartData,
@@ -1648,7 +1771,7 @@ export function toFlowNodes(
           ...fns,
         },
       };
-      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      cache.flowNodes.set(n, { extraSig, flowNode });
       flowNodes.push(flowNode);
       continue;
     }
@@ -2054,6 +2177,11 @@ function CanvasInner({
   // component, hence living on sceneStore rather than as useState here -
   // see that field's own comment).
   const focusAcceptedPaths = useSyncExternalStore(store.subscribe, store.getFocusAcceptedPaths);
+  // ADR-012 stage 12.5: the FILTER section's own two toggle groups, same
+  // "sibling component, hence living on sceneStore" reasoning as
+  // focusAcceptedPaths just above.
+  const filterKinds = useSyncExternalStore(store.subscribe, store.getFilterKinds);
+  const filterStatuses = useSyncExternalStore(store.subscribe, store.getFilterStatuses);
   // ADR-011 stage 11.2: true for exactly the duration of one
   // exportCanvasAsPng capture (AppBar.tsx's exportPng/commands.ts's
   // export-canvas-png, both routed through SceneStore.setExportInProgress) -
@@ -2223,13 +2351,15 @@ function CanvasInner({
           // can't prove that across the mutable ref indirection.
           toFlowNodesCacheRef.current!,
           getComposerRoute,
+          filterKinds,
+          filterStatuses,
         ),
         current,
       ),
     );
   }, [
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
-    getComposerRoute,
+    getComposerRoute, filterKinds, filterStatuses,
   ]);
 
   // ADR-012 stage 12.3: Shift+F10 / the ContextMenu key opens a node's menu

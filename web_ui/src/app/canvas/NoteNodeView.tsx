@@ -1,7 +1,8 @@
-import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
+import { type Node, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
 import { GroupColorPicker, NOTE_SYSTEM_PROMPT_BORDER_COLOR } from "./GroupColorPicker";
 import { NodeMarkdown } from "./NodeMarkdown";
+import { NodeShell } from "./NodeShell";
 
 /**
  * The note node (Qt-removal plan R6.1) - the free-floating markdown sticky
@@ -108,72 +109,73 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
   }
 
   return (
-    <div
-      className={
-        "scene-node note-node" +
-        (selected ? " selected" : "") +
-        (data.isSystemPrompt ? " system-prompt" : "")
-      }
+    <NodeShell
+      kindClassName={"note-node" + (data.isSystemPrompt ? " system-prompt" : "")}
+      selected={!!selected}
+      // Notes render NO Handle-driven collapse/LOD posture of their own -
+      // see this file's own module doc - so this is always false, never
+      // wired to useLodVisibility.
+      collapsed={false}
       style={{
         backgroundColor: data.color ?? undefined,
         borderColor: data.isSystemPrompt ? NOTE_SYSTEM_PROMPT_BORDER_COLOR : undefined,
       }}
-    >
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title note-node-header" style={{ backgroundColor: data.headerColor ?? undefined }}>
-        <span className="note-node-badges">
-          <span>Note</span>
-          {data.isSystemPrompt && (
-            <span className="note-node-badge" title="System Prompt" aria-label="System Prompt">
-              ⚙
-            </span>
-          )}
-          {data.isSummaryNote && (
-            <span className="note-node-badge" title="Summary Note" aria-label="Summary Note">
-              ⧉
-            </span>
-          )}
-          {data.isBranchComparison && (
-            <span
-              className="note-node-badge"
-              title={`Branch Comparison (${data.compareSourceNodeIds.length} sources)`}
-              aria-label="Branch Comparison"
-            >
-              ⇄
-            </span>
-          )}
-        </span>
-        <div className="note-node-controls">
-          <GroupColorPicker color={data.color} headerColor={data.headerColor} onSelect={data.onSetColor} />
-          <button type="button" className="note-node-delete-btn nodrag" aria-label="Delete note" onClick={data.onDelete}>
-            ×
-          </button>
-        </div>
-      </div>
-      <div className="scene-node-body note-node-content" onDoubleClick={beginEdit}>
-        {editing ? (
-          <textarea
-            ref={textareaRef}
-            className="note-node-editor nodrag"
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={onKeyDown}
-            onBlur={onBlur}
-            spellCheck={false}
-          />
-        ) : (
-          // Nested wrapper (not applied to the outer scene-node-body div,
-          // which is shared with the textarea above) - same established
-          // pattern ArtifactBubble/ConversationBubble already use to scope
-          // .chat-node-content's shared markdown-body rules to just the
-          // rendered markdown, not a sibling edit control.
-          <div className="chat-node-content note-node-markdown">
-            <NodeMarkdown content={data.content} />
+      header={
+        <div className="scene-node-title note-node-header" style={{ backgroundColor: data.headerColor ?? undefined }}>
+          <span className="note-node-badges">
+            <span>Note</span>
+            {data.isSystemPrompt && (
+              <span className="note-node-badge" title="System Prompt" aria-label="System Prompt">
+                ⚙
+              </span>
+            )}
+            {data.isSummaryNote && (
+              <span className="note-node-badge" title="Summary Note" aria-label="Summary Note">
+                ⧉
+              </span>
+            )}
+            {data.isBranchComparison && (
+              <span
+                className="note-node-badge"
+                title={`Branch Comparison (${data.compareSourceNodeIds.length} sources)`}
+                aria-label="Branch Comparison"
+              >
+                ⇄
+              </span>
+            )}
+          </span>
+          <div className="note-node-controls">
+            <GroupColorPicker color={data.color} headerColor={data.headerColor} onSelect={data.onSetColor} />
+            <button type="button" className="note-node-delete-btn nodrag" aria-label="Delete note" onClick={data.onDelete}>
+              ×
+            </button>
           </div>
-        )}
-      </div>
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-    </div>
+        </div>
+      }
+      bodyClassName="note-node-content"
+      onBodyDoubleClick={beginEdit}
+    >
+      {editing ? (
+        <textarea
+          ref={textareaRef}
+          className="note-node-editor nodrag"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={onKeyDown}
+          onBlur={onBlur}
+          spellCheck={false}
+        />
+      ) : (
+        // Nested wrapper (not applied to the outer scene-node-body div,
+        // which is shared with the textarea above) - same established
+        // pattern ArtifactBubble/ConversationBubble already use to scope
+        // .chat-node-content's shared markdown-body rules to just the
+        // rendered markdown, not a sibling edit control.
+        <div className="chat-node-content note-node-markdown">
+          <NodeMarkdown content={data.content} />
+        </div>
+      )}
+    </NodeShell>
   );
 }
 
