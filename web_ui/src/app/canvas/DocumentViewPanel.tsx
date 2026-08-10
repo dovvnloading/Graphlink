@@ -525,6 +525,16 @@ export function DocumentViewPanel({
           <DocumentViewMarkdown content={content ?? ""} searchQuery={searchQuery} />
         </div>
       </div>
+      {/* This is the ARIA APG "window splitter" pattern: a focusable,
+          interactive separator you drag (or keyboard-reset) to resize the
+          adjacent pane. It is deliberately NOT role="button" - it has no
+          single click-to-activate action, and reporting it as a button
+          would misrepresent its semantics to screen reader users, who rely
+          on the "separator" role to know this is a movable boundary, not a
+          button. jsx-a11y's default role classification doesn't special-
+          case this ARIA-legitimate interactive variant of role="separator",
+          hence the two scoped disables below rather than a role change. */}
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- interactive separator/splitter widget per ARIA APG, not a button (see comment above) */}
       <div
         className="document-view-panel-resize-handle"
         onPointerDown={onResizeStart}
@@ -534,6 +544,7 @@ export function DocumentViewPanel({
         onDoubleClick={onResetWidth}
         onKeyDown={onResizeHandleKeyDown}
         role="separator"
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- focusable separator (splitter) per ARIA APG; intentionally role="separator", not role="button"
         tabIndex={0}
         aria-orientation="vertical"
         aria-label="Resize Document View panel. Press Enter to reset to the default width."

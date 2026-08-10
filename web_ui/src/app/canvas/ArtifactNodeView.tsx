@@ -186,6 +186,11 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
+      // ADR-012 stage 12.3: this card's menu is also reachable via
+      // Shift+F10/the ContextMenu key - see SceneCanvas.tsx's own
+      // stage-12.3 doc for the global handler that makes that true for
+      // every onContextMenu-driven node menu without any OTHER change here.
+      aria-haspopup="menu"
     >
       <Handle type="target" position={Position.Top} className="scene-node-handle" />
       <div className="scene-node-title chat-node-role">

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ComposerStore, initialComposerState } from "./composerStore";
+import { subscribeAnnouncer, getAnnouncement } from "../announcer";
 import type { WsTransport } from "../../lib/ws/transport";
 
 type StateListener = (payload: Record<string, unknown>) => void;
@@ -257,5 +258,96 @@ describe("ComposerStore stream subscription lifecycle (R4.4)", () => {
     store.connect();
     listeners.get("app-composer")!(validComposerPayload());
     expect(() => store.dispose()).not.toThrow();
+  });
+});
+
+describe("ComposerStore aria-live announcements (ADR-012 stage 12.3)", () => {
+  function requestState(state: string, id: string | null = "req-1") {
+    return { id, state, message: "", canSend: false, canCancel: false, canRetry: false };
+  }
+
+  // announcer.ts appends an invisible zero-width marker on every OTHER call
+  // (see its own doc) so a screen reader re-announces even identical
+  // repeated text - stripped here since these tests assert the human-
+  // readable message, not the marker's presence, and the module-level call
+  // count (hence which calls get the marker) depends on total announce()
+  // calls across this whole file, not just the current test.
+  function plain(text: string): string {
+    return text.replace(/[^\x20-\x7E]/g, "");
+  }
+
+  it("announces when a request starts generating", () => {
+    const { transport, listeners } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    store.connect();
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("waiting") }));
+    const heard: string[] = [];
+    const unsub = subscribeAnnouncer(() => heard.push(getAnnouncement()));
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("generating") }));
+    expect(heard.map(plain)).toEqual(["Assistant is responding"]);
+    unsub();
+  });
+
+  it("announces completion when generating succeeds", () => {
+    const { transport, listeners } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    store.connect();
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("generating") }));
+    const heard: string[] = [];
+    const unsub = subscribeAnnouncer(() => heard.push(getAnnouncement()));
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("succeeded") }));
+    expect(heard.map(plain)).toEqual(["Response complete"]);
+    unsub();
+  });
+
+  it("announces failure/cancellation distinctly", () => {
+    const { transport, listeners } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    store.connect();
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("generating") }));
+    const heard: string[] = [];
+    const unsub = subscribeAnnouncer(() => heard.push(getAnnouncement()));
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("failed") }));
+    expect(heard.map(plain)).toEqual(["Response failed"]);
+    unsub();
+  });
+
+  it("does not announce a regenerate-in-place (id changes, state stays generating)", () => {
+    const { transport, listeners } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    store.connect();
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("generating", "req-1") }));
+    const heard: string[] = [];
+    const unsub = subscribeAnnouncer(() => heard.push(getAnnouncement()));
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("generating", "req-2") }));
+    expect(heard.map(plain)).toEqual([]);
+    unsub();
+  });
+
+  it("does not announce housekeeping transitions before generating starts", () => {
+    const { transport, listeners } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    store.connect();
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("idle") }));
+    const heard: string[] = [];
+    const unsub = subscribeAnnouncer(() => heard.push(getAnnouncement()));
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("preparing") }));
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("uploading") }));
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("waiting") }));
+    expect(heard.map(plain)).toEqual([]);
+    unsub();
+  });
+
+  it("does not announce when the terminal state is reached via finalizing", () => {
+    const { transport, listeners } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    store.connect();
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("generating") }));
+    const heard: string[] = [];
+    const unsub = subscribeAnnouncer(() => heard.push(getAnnouncement()));
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("finalizing") }));
+    listeners.get("app-composer")!(validComposerPayload({ request: requestState("succeeded") }));
+    expect(heard.map(plain)).toEqual(["Response complete"]);
+    unsub();
   });
 });

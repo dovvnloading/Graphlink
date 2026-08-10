@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useEffect, useRef } from "react";
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -94,6 +94,25 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   const running = data.builderStatus === "running" || data.builderStatus === "planning";
   const resumable = RESUMABLE.has(data.builderStatus);
   const startLabel = data.builderStatus === "awaiting_start" ? "Start build" : "Resume";
+  const denyButtonRef = useRef<HTMLButtonElement>(null);
+
+  // The tool-approval panel mounts fresh each time the Builder pauses for
+  // approval (see the block-level comment above); Deny is the safe default,
+  // so move focus there the moment the panel appears - same UX an autoFocus
+  // prop would give, but as an imperative effect so it doesn't trip
+  // jsx-a11y/no-autofocus. `collapsed` is ALSO a dependency, not just
+  // builderAwaitingToolApproval: the panel is gated by `!collapsed &&
+  // data.builderAwaitingToolApproval` below (both must hold for the button
+  // to actually be in the DOM), and LOD collapse-on-zoom-out or a manual
+  // collapse toggle can flip `collapsed` independently while approval stays
+  // pending the whole time - without this, expanding the node back out
+  // while already awaiting approval would mount the button for the first
+  // time with nothing left to re-fire the effect, leaving it unfocused.
+  useEffect(() => {
+    if (data.builderAwaitingToolApproval && !collapsed) {
+      denyButtonRef.current?.focus();
+    }
+  }, [data.builderAwaitingToolApproval, collapsed]);
 
   return (
     <div className={`scene-node plan-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}>
@@ -152,7 +171,12 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
                 <button type="button" className="plan-node-button nodrag" onClick={data.onApproveTool}>
                   Approve
                 </button>
-                <button type="button" className="plan-node-button plan-node-button-deny nodrag" onClick={data.onDenyTool} autoFocus>
+                <button
+                  type="button"
+                  className="plan-node-button plan-node-button-deny nodrag"
+                  onClick={data.onDenyTool}
+                  ref={denyButtonRef}
+                >
                   Deny
                 </button>
               </div>

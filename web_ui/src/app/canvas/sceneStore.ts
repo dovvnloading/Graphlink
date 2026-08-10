@@ -23,6 +23,8 @@ import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
 import type { ScenePatch, StreamListener, WsTransport } from "../../lib/ws/transport";
 import type { BridgeRejection } from "../../lib/bridge-core/islandState";
+import { announce } from "../announcer";
+import { describeNodeRunTransition } from "./nodeRunAnnouncements";
 
 // ADR-003 stage 3.1 review-fix: matches composerStore's own
 // NATIVE_DIALOG_TIMEOUT_MS - pickGitlinkLocalRoot opens a native OS folder
@@ -262,6 +264,12 @@ export class SceneStore {
     let nodes = this.scene.nodes;
     let edges = this.scene.edges;
     let meta: Record<string, unknown> = {};
+    // ADR-012 stage 12.3: collected during the loop below, fired only after
+    // the whole patch is confirmed valid and committed (see the bottom of
+    // this method) - a patch that gets refused mid-loop or fails the
+    // post-loop TOPIC_VALIDATORS check must never announce a transition for
+    // a mutation that didn't actually land.
+    const runAnnouncements: string[] = [];
     try {
       for (const op of patch.ops) {
         switch (op.op) {
@@ -269,6 +277,12 @@ export class SceneStore {
             if (!isWireRow<SceneNodeRow>(op.node)) return this.refusePatch("upsertNode.node is not a row", op);
             const node = op.node;
             const index = nodes.findIndex((n) => n.id === node.id);
+            // ADR-012 stage 12.3: diffed against the row this patch is about
+            // to REPLACE (undefined for a genuinely new node, which
+            // describeNodeRunTransition treats as "say nothing" - a create
+            // is not a running->done transition).
+            const message = describeNodeRunTransition(index === -1 ? undefined : nodes[index], node);
+            if (message) runAnnouncements.push(message);
             nodes = index === -1 ? [...nodes, node] : nodes.map((n, i) => (i === index ? node : n));
             break;
           }
@@ -344,6 +358,9 @@ export class SceneStore {
     // closes.
     this.sceneVersionRecovering = false;
     this.updateSceneBlockedState();
+    // ADR-012 stage 12.3: only now, after the patch is confirmed committed -
+    // see runAnnouncements' own doc above for why this can't fire earlier.
+    for (const message of runAnnouncements) announce(message);
     this.emit();
     return true;
   }

@@ -148,10 +148,16 @@ function TableWrapper({ node: _node, ...props }: JSX.IntrinsicElements["table"] 
   );
 }
 
-function ZoomImage({ node: _node, ...props }: JSX.IntrinsicElements["img"] & ExtraProps) {
+function ZoomImage({ node: _node, alt, ...props }: JSX.IntrinsicElements["img"] & ExtraProps) {
+  // alt comes from the markdown source itself (`![alt](url)`) via
+  // react-markdown's own parsing - pass it through explicitly rather than
+  // relying on the `{...props}` spread, which satisfies jsx-a11y/alt-text
+  // (a spread alone isn't statically verifiable) while keeping the real
+  // author-provided text. Empty alt is a legitimate markdown state
+  // (`![](url)`), not a suppression - falls back to "" rather than undefined.
   return (
     <Zoom wrapElement="span">
-      <img {...props} />
+      <img alt={alt ?? ""} {...props} />
     </Zoom>
   );
 }

@@ -25,6 +25,23 @@ import type { ReactNode } from "react";
  * It also fixes two things the old inline menus never handled: the menu is
  * clamped so it cannot open off the edge of the window, and it is capped in
  * height so a long menu scrolls instead of running its last items off-screen.
+ *
+ * ADR-012 stage 12.3: full WAI-ARIA menu keyboard pattern, added here once
+ * rather than in each of the 11 callers - every caller renders its items as
+ * plain `<button role="menuitem">` children with no shared item-list shape,
+ * so this component's own DOM (menuRef's subtree) is the only place that can
+ * see the CURRENT set of items regardless of which caller is open or which
+ * conditionally-rendered submenu (ChatNodeMenu's Mark Status/Generate Chart)
+ * is expanded at the moment. On open: focus moves to the first menuitem
+ * (matches every OS's own native context menu). Arrow Up/Down rove focus
+ * among items, wrapping; Home/End jump to the first/last. On close (by
+ * ANY path - Escape, outside click, or an item's own onClick calling
+ * onClose): focus returns to whatever had it before the menu opened, so a
+ * keyboard user doing Shift+F10 -> arrow to an item -> Enter never loses
+ * their place on the canvas. Re-queries `[role="menuitem"]` on every
+ * keypress rather than caching the list once, so a toggled-open submenu's
+ * items are picked up (and a toggled-closed one's are correctly skipped)
+ * without this component needing to know submenus exist at all.
  */
 
 const VIEWPORT_MARGIN = 8;
@@ -56,6 +73,41 @@ export function NodeMenu({
   // at the requested spot first (rather than hiding until measured) keeps the
   // menu from visibly jumping in the common case where no clamping is needed.
   const [placement, setPlacement] = useState(position);
+
+  // ADR-012 stage 12.3: captured once, at mount - this is whatever the
+  // document's active element was the instant BEFORE this menu's own portal
+  // took focus, i.e. the trigger (a node card opened via Shift+F10, or a
+  // toggle button for the surfaces that pass ignoreRef). Restored on
+  // unmount below. A ref (not state) because this is a write-once-read-once
+  // value with no rendering implication of its own.
+  const triggerRef = useRef<HTMLElement | null>(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
+
+  useEffect(() => {
+    // Move focus into the menu once, on mount - every native OS context menu
+    // and every WAI-ARIA menu pattern implementation does this regardless of
+    // whether the menu was opened by mouse or keyboard, so a screen-reader
+    // user doesn't have to guess that a new interactive surface appeared.
+    const first = menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]');
+    first?.focus();
+    // Captured into a local, not read via triggerRef.current directly in the
+    // cleanup below - triggerRef itself never gets reassigned after mount
+    // (nothing else in this component writes to it), but react-hooks/
+    // exhaustive-deps can't see that invariant, and copying into the
+    // closure is the standard, genuinely-correct fix rather than a
+    // suppression of a real "ref may have changed" class of bug.
+    const trigger = triggerRef.current;
+    return () => {
+      // Restore focus to the trigger on unmount, via ANY close path -
+      // Escape, an outside click, or an item's own onClick calling onClose.
+      // Skipped if the trigger is gone (e.g. its node was deleted while the
+      // menu was open) - focus() on a detached element is a silent no-op in
+      // every browser, so the `isConnected` guard is belt-and-suspenders,
+      // not load-bearing, but makes the intent explicit.
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, []);
 
   useLayoutEffect(() => {
     const menu = menuRef.current;
@@ -91,7 +143,25 @@ export function NodeMenu({
         // dialog or overlay is open behind the canvas and closes that too.
         event.stopPropagation();
         onClose();
+        return;
       }
+      // ADR-012 stage 12.3: Arrow/Home/End roving-focus among the CURRENTLY
+      // rendered menuitems - only reachable while focus is actually inside
+      // this menu (the mount effect above puts it there on open), so a
+      // stray arrow-key press elsewhere on the page is never intercepted.
+      if (!menuRef.current?.contains(document.activeElement)) return;
+      const items = Array.from(menuRef.current.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+      if (items.length === 0) return;
+      const currentIndex = items.indexOf(document.activeElement as HTMLElement);
+      let nextIndex: number | null = null;
+      if (event.key === "ArrowDown") nextIndex = currentIndex < items.length - 1 ? currentIndex + 1 : 0;
+      else if (event.key === "ArrowUp") nextIndex = currentIndex > 0 ? currentIndex - 1 : items.length - 1;
+      else if (event.key === "Home") nextIndex = 0;
+      else if (event.key === "End") nextIndex = items.length - 1;
+      if (nextIndex === null) return;
+      event.preventDefault();
+      event.stopPropagation();
+      items[nextIndex].focus();
     };
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("keydown", onKeyDown, true);

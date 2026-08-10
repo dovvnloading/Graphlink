@@ -1,10 +1,20 @@
 import { ReactFlowProvider, useReactFlow } from "@xyflow/react";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { TOPIC_VALIDATORS } from "../lib/api-contract/topics";
 import type { AppSettingsState } from "../lib/bridge-core/generated/app-settings-state";
 import { isTextEditable } from "../lib/bridge-core/textFocus";
 import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport";
 import { applyTheme } from "./applyTheme";
+import { getAnnouncement, subscribeAnnouncer } from "./announcer";
 import { connectionBadgeLabel } from "./connectionBadge";
 import { ExecutionLimitsProvider } from "./canvas/ExecutionLimitsContext";
 import { SceneCanvas, measuredNodeSize } from "./canvas/SceneCanvas";
@@ -323,6 +333,12 @@ function App() {
     return { provider, modelId };
   }, [composerStore]);
 
+  // ADR-012 stage 12.3: the one aria-live announcer region's own text - see
+  // announcer.ts's own doc for why this reads a module-level store instead
+  // of sceneStore/composerStore directly (both write into it, and neither
+  // imports the other).
+  const announcement = useSyncExternalStore(subscribeAnnouncer, getAnnouncement);
+
   useEffect(() => {
     const offStatus = transport.onStatus(setStatus);
     const offSystem = transport.subscribe("system", (payload) => {
@@ -358,6 +374,26 @@ function App() {
       <ReactFlowProvider>
         <GlobalShortcuts store={sceneStore} />
         <div className="app-shell">
+          {/* ADR-012 stage 12.3: the very first focusable element in the
+              page, per the standard skip-link convention - invisible until
+              it itself receives focus (Tab from anywhere before the canvas
+              lands here first). Jumps a keyboard user straight to the
+              composer, bypassing every node on the canvas in one activation
+              instead of N individual Tab presses (React Flow's own node
+              wrapper is a real tab stop per node - see NodeMenu.tsx's own
+              stage-12.3 doc for why that's not changed here). */}
+          <a href="#composer-message-input" className="skip-link">
+            Skip to message composer
+          </a>
+          {/* ADR-012 stage 12.3: the one aria-live region for streaming
+              start/finish and per-node run status - see announcer.ts. Always
+              mounted (not gated behind any dialog/overlay) so a transition
+              that fires while, say, Settings is open is never silently
+              dropped. Visually hidden, not display:none - a display:none
+              live region is never announced by any screen reader. */}
+          <div aria-live="polite" role="status" className="visually-hidden">
+            {announcement}
+          </div>
           <header className="app-topbar">
             <span className="app-title">Graphlink</span>
             <AppBar store={sceneStore} />

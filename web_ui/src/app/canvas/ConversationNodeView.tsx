@@ -420,6 +420,12 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
+      // ADR-012 stage 12.3: keyboard-reachable via Shift+F10/ContextMenu -
+      // see SceneCanvas.tsx's own stage-12.3 doc for the global handler.
+      // (The per-bubble menu below is deliberately NOT given this - its
+      // actions are already reachable via each bubble's own quick-action
+      // buttons, a keyboard path that predates this stage.)
+      aria-haspopup="menu"
     >
       <Handle type="target" position={Position.Top} className="scene-node-handle" />
       <div className="scene-node-title chat-node-role">

@@ -177,6 +177,11 @@ export function Composer({
       <div className="composer-input-wrap">
         <textarea
           ref={inputRef}
+          // ADR-012 stage 12.3: the skip-link's own jump target - see
+          // App.tsx's ".skip-link" anchor, which lets a keyboard user bypass
+          // every node on the canvas (an N-node canvas is otherwise N tab
+          // stops before reaching this) in one activation.
+          id="composer-message-input"
           className="composer-input"
           value={composer.draft.text}
           onChange={(e) => store.updateDraft(e.target.value)}

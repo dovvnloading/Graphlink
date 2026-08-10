@@ -99,6 +99,16 @@
   --gl-composer-status-action-text: #bdbdbd;
   --gl-composer-status-failed-text: #b0b0b0;
   --gl-composer-status-text: #b0b0b0;
+  /* ADR-012 stage 12.3: the ONE deliberate high-contrast neutral in this
+     otherwise-grayscale-derivation-only palette (see this file's own header)
+     - not derived by the per-channel-inversion rule the rest of the light
+     palette follows, because a focus ring needs the highest achievable
+     contrast against its own surface, not a value visually consistent with
+     the surrounding UI (the whole point is that it should NOT blend in).
+     Distinct from --gl-palette-selection (used for .scene-node.selected's
+     box-shadow) by design AND by CSS property (outline vs box-shadow) - see
+     styles.css's own .react-flow__node:focus-visible rule. */
+  --gl-focus-ring: #F0F0F0;
   --gl-font-family: 'Segoe UI', sans-serif;
   --gl-frame-blue: #828282;
   --gl-frame-dark-gray: #414141;
@@ -227,6 +237,12 @@
     --gl-composer-status-action-text: #424242;
     --gl-composer-status-failed-text: #4F4F4F;
     --gl-composer-status-text: #4F4F4F;
+    /* ADR-012 stage 12.3: see the dark block's own comment on this token -
+       #0F0F0F is the exact per-channel inversion of dark's #F0F0F0, kept
+       even though this token isn't derived like the rest of the palette,
+       so light mode's focus ring is exactly as far from its own window
+       background as dark mode's is from its window background. */
+    --gl-focus-ring: #0F0F0F;
     --gl-font-family: 'Segoe UI', sans-serif;
     --gl-frame-blue: #7D7D7D;
     --gl-frame-dark-gray: #BEBEBE;
@@ -355,6 +371,8 @@
   --gl-composer-status-action-text: #424242;
   --gl-composer-status-failed-text: #4F4F4F;
   --gl-composer-status-text: #4F4F4F;
+  /* ADR-012 stage 12.3: see the dark block's own comment on this token. */
+  --gl-focus-ring: #0F0F0F;
   --gl-font-family: 'Segoe UI', sans-serif;
   --gl-frame-blue: #7D7D7D;
   --gl-frame-dark-gray: #BEBEBE;

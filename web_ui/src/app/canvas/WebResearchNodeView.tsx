@@ -201,6 +201,9 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
         event.preventDefault();
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
+      // ADR-012 stage 12.3: keyboard-reachable via Shift+F10/ContextMenu -
+      // see SceneCanvas.tsx's own stage-12.3 doc for the global handler.
+      aria-haspopup="menu"
     >
       <Handle type="target" position={Position.Top} className="scene-node-handle" />
       <div className="scene-node-title chat-node-role">

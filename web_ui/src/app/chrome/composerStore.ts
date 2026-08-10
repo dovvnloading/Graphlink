@@ -10,6 +10,7 @@ import type { AppComposerState } from "../../lib/bridge-core/generated/app-compo
 import type { TokenCounterState } from "../../lib/bridge-core/generated/token-counter-state";
 import type { NotificationState } from "../../lib/bridge-core/generated/notification-state";
 import type { WsTransport } from "../../lib/ws/transport";
+import { announce } from "../announcer";
 
 // ADR-003 stage 3.1 review-fix: a native OS file dialog waits on the user,
 // not the network - long enough that a person genuinely browsing for a file
@@ -104,8 +105,10 @@ export class ComposerStore {
     this.unsubscribers.push(
       this.bind<AppComposerState>("app-composer", (v) => {
         const prevId = this.composer.request.id;
+        const prevState = this.composer.request.state;
         this.composer = v;
         this.syncStream(prevId, v.request.id);
+        this.announceRequestStateChange(prevState, v.request.state);
       }),
       this.bind<TokenCounterState>("token-counter", (v) => (this.tokenCounter = v)),
       this.bind<NotificationState>("notification", (v) => (this.notification = v)),
@@ -134,6 +137,28 @@ export class ComposerStore {
         else this.streamText += delta;
         this.emit();
       });
+    }
+  }
+
+  /** ADR-012 stage 12.3: screen-reader announcement for the main assistant
+   * reply's own lifecycle - "generating" is the one state a sighted user
+   * sees as a visible spinner/stream preview (Composer.tsx's own
+   * composer-stream-preview) with no non-visual equivalent before this.
+   * Deliberately keyed off `request.state`, not `request.id` (syncStream's
+   * own key) - an id can flip to a new value while staying "generating"
+   * (regenerate-in-place), which must NOT re-announce "responding" as if a
+   * fresh request had started. */
+  private announceRequestStateChange(
+    prevState: AppComposerState["request"]["state"] | undefined,
+    nextState: AppComposerState["request"]["state"],
+  ): void {
+    if (nextState === prevState) return;
+    if (nextState === "generating") {
+      announce("Assistant is responding");
+    } else if (prevState === "generating" || prevState === "finalizing") {
+      if (nextState === "succeeded") announce("Response complete");
+      else if (nextState === "failed") announce("Response failed");
+      else if (nextState === "canceled") announce("Response canceled");
     }
   }
 

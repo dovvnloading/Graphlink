@@ -314,6 +314,20 @@ body,
   box-shadow: 0 0 0 1px var(--gl-surface-border-strong), var(--gl-shadow-3);
 }
 
+/* ADR-012 stage 12.3: the actually-tabbable element for a node is React
+   Flow's OWN wrapper div (.react-flow__node, one level up from .scene-node -
+   see NodeMenu.tsx's own stage-12.3 doc for why), not .scene-node itself, so
+   this targets that wrapper rather than the card. A real `outline` (not a
+   box-shadow) at a dedicated --gl-focus-ring token, offset so it never
+   overlaps .selected's own border/box-shadow treatment above - the two are
+   deliberately independent CSS properties on independent elements, so a
+   node that is BOTH keyboard-focused AND selected shows both rings clearly
+   layered rather than one silently winning a specificity fight. */
+.react-flow__node:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 3px;
+}
+
 .scene-node-title {
   padding: 6px 10px;
   font-weight: 600;

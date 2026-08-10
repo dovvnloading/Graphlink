@@ -125,14 +125,21 @@ function TableWrapper({ node: _node, ...props }: JSX.IntrinsicElements["table"] 
   );
 }
 
-function ZoomImage({ node: _node, ...props }: JSX.IntrinsicElements["img"] & ExtraProps) {
+function ZoomImage({ node: _node, alt, ...props }: JSX.IntrinsicElements["img"] & ExtraProps) {
   // wrapElement="span": an <img> can legally appear INLINE inside a
   // <p> (e.g. "see this diagram: ![...](...)"), and Zoom's own default
   // wrapper is a <div> - a block element nested inside a <p> is invalid
   // HTML and would trigger React's own DOM-nesting warning.
+  //
+  // `alt` is destructured out (rather than left folded into `...props`) so
+  // eslint-plugin-jsx-a11y can see a real, explicit alt attribute here: the
+  // markdown source's `![alt text](src)` syntax is what populates it via
+  // ReactMarkdown's own img props, and `?? ""` covers the `![](src)` case
+  // (no alt text authored) by falling back to an explicitly-decorative
+  // empty alt rather than leaving it undefined.
   return (
     <Zoom wrapElement="span">
-      <img {...props} />
+      <img alt={alt ?? ""} {...props} />
     </Zoom>
   );
 }

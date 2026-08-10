@@ -42,6 +42,7 @@ import {
   GROUP_FALLBACK_WIDTH,
   VIEWPORT_REPORT_DEBOUNCE_MS,
 } from "./canvasConstants";
+import { handleKeyboardContextMenu } from "./keyboardContextMenu";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
 import { computeSmartGuideSnap, type GuideLine, type Rect } from "./smartGuides";
 import { useLodVisibility } from "./useLodVisibility";
@@ -2230,6 +2231,15 @@ function CanvasInner({
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
     getComposerRoute,
   ]);
+
+  // ADR-012 stage 12.3: Shift+F10 / the ContextMenu key opens a node's menu
+  // via the keyboard - see keyboardContextMenu.ts's own doc for why this
+  // needs a document-level listener rather than anything attached to
+  // .scene-node itself.
+  useEffect(() => {
+    document.addEventListener("keydown", handleKeyboardContextMenu);
+    return () => document.removeEventListener("keydown", handleKeyboardContextMenu);
+  }, []);
 
   // ADR-011 stage 11.3 (P4): toFlowEdges rebuilds the WHOLE edges array (an
   // O(E) map over every edge) - hoveredEdgeId is only EVER read inside that

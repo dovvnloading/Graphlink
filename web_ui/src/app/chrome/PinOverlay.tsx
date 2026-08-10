@@ -1,5 +1,5 @@
 import { useReactFlow } from "@xyflow/react";
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover } from "../overlays/overlays";
 
@@ -28,6 +28,16 @@ export function PinOverlay({ store }: { store: SceneStore }) {
   const [draftTitle, setDraftTitle] = useState("");
   const [draftNote, setDraftNote] = useState("");
   const [draftError, setDraftError] = useState<string | null>(null);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  // Focus the title field the moment a pin's edit row mounts, matching the
+  // old autoFocus behavior without the jsx-a11y/no-autofocus violation - the
+  // JSX attribute autofocuses unconditionally on every mount (including ones
+  // a screen-reader user didn't initiate), whereas this only fires when we
+  // deliberately entered edit mode for a specific pin.
+  useEffect(() => {
+    if (editingId) titleInputRef.current?.focus();
+  }, [editingId]);
 
   const filtered = useMemo(() => {
     const term = query.trim().toLowerCase();
@@ -123,13 +133,13 @@ export function PinOverlay({ store }: { store: SceneStore }) {
             editingId === pin.id ? (
               <li key={pin.id} className="pins-edit-row">
                 <input
+                  ref={titleInputRef}
                   type="text"
                   className="pins-edit-title"
                   value={draftTitle}
                   onChange={(e) => setDraftTitle(e.target.value)}
                   onKeyDown={onEditKeyDown}
                   aria-label="Pin title"
-                  autoFocus
                 />
                 <textarea
                   className="pins-edit-note"

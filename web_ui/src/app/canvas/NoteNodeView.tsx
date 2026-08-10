@@ -1,5 +1,5 @@
 import { Handle, Position, type Node, type NodeProps } from "@xyflow/react";
-import { memo, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { GroupColorPicker, NOTE_SYSTEM_PROMPT_BORDER_COLOR } from "./GroupColorPicker";
 import { NodeMarkdown } from "./NodeMarkdown";
 
@@ -59,6 +59,17 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
   // "revert without committing" contract would be silently undone a tick
   // later by that same blur calling onSetContent anyway.
   const skipBlurRef = useRef(false);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Moves focus into the edit textarea imperatively (rather than JSX
+  // autoFocus) the moment `editing` flips true - same "focus follows entry
+  // into edit mode" UX as autoFocus would give, but scoped to this one
+  // mount-of-editing transition instead of every mount of the component.
+  useEffect(() => {
+    if (editing) {
+      textareaRef.current?.focus();
+    }
+  }, [editing]);
 
   function beginEdit() {
     setDraft(data.content);
@@ -142,12 +153,12 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
       <div className="scene-node-body note-node-content" onDoubleClick={beginEdit}>
         {editing ? (
           <textarea
+            ref={textareaRef}
             className="note-node-editor nodrag"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={onKeyDown}
             onBlur={onBlur}
-            autoFocus
             spellCheck={false}
           />
         ) : (

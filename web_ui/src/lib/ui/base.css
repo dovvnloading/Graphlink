@@ -40,3 +40,44 @@
 :root[data-theme="light"] {
   color-scheme: light;
 }
+
+/* ADR-012 stage 12.3: a shared home for these two - prior to this stage,
+   every "hidden until needed" text in the app (DocumentViewSearch.tsx,
+   ChatLibraryDialog.tsx) rolled its own scoped class with the same clip-based
+   technique. `.visually-hidden` is the standard clip-not-display:none
+   pattern (a display:none or visibility:hidden element is invisible to
+   assistive tech too, not just sighted users - clipping to a 1px box while
+   staying in the accessibility tree is what actually works). */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ADR-012 stage 12.3: the first focusable element on the page (see
+   App.tsx's own render) - .visually-hidden's clip technique is deliberately
+   NOT reused here, because a skip-link must become visible on focus (a
+   sighted keyboard user needs to see it exists to use it), which
+   .visually-hidden's permanent clip doesn't support. */
+.skip-link {
+  position: absolute;
+  top: -9999px;
+  left: 0;
+  z-index: 10000;
+  padding: 8px 16px;
+  background: var(--gl-composer-shell-background, #1f1f1f);
+  color: var(--gl-composer-input-text, #eeeeee);
+  border: 1px solid var(--gl-focus-ring, #f0f0f0);
+  border-radius: var(--gl-radius-sm, 4px);
+}
+
+.skip-link:focus {
+  top: 8px;
+  left: 8px;
+}
