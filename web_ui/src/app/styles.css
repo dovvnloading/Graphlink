@@ -6768,62 +6768,131 @@ mark.document-view-search-match-current {
 .plan-node-button-stop { border-color: var(--gl-semantic-status-error); }
 .plan-node-button-deny { border-color: var(--gl-semantic-status-warning); }
 
-.builder-launch-dialog {
+/* <Dialog>'s own `className` lands on the PANEL (.overlay-dialog), never on
+   the body - so a dialog's form layout has to be scoped to
+   .overlay-dialog-body here, exactly the way .settings-dialog/.help-dialog/
+   .library-dialog already scope theirs. This block previously put the
+   column layout on .builder-launch-dialog itself, which only ever spaced
+   the header away from the body: the body stayed a plain block, so the
+   Recipe label, its <select>, and the goal label - all inline-level - ran
+   together on one line before the full-width <textarea> broke it. */
+.builder-launch-dialog { width: 540px; }
+
+.builder-launch-dialog .overlay-dialog-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  min-width: 420px;
+  gap: 16px;
 }
+
+.builder-launch-field { display: flex; flex-direction: column; gap: 6px; }
 .builder-launch-label { font-size: 13px; font-weight: 600; }
-.builder-launch-recipe {
-  font: inherit;
-  padding: 5px 8px;
-  background: var(--gl-surface-node-body);
-  color: var(--gl-surface-text-primary);
-  border: 1px solid var(--gl-surface-border);
-  border-radius: 6px;
-}
-.builder-launch-goal {
-  width: 100%;
-  resize: vertical;
-  font: inherit;
-  padding: 6px 8px;
+.builder-launch-hint { margin: 0; font-size: 11px; color: var(--gl-surface-text-muted); }
+
+/* One shared control box for all three input kinds - the number inputs
+   previously had no styling at all beyond a width, so they rendered as
+   stark default-white browser fields inside a dark dialog. */
+.builder-launch-select,
+.builder-launch-goal,
+.builder-launch-number {
   box-sizing: border-box;
-  background: var(--gl-surface-node-body);
+  width: 100%;
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px;
   color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
 }
-.builder-launch-mode, .builder-launch-budgets {
+.builder-launch-goal { resize: vertical; min-height: 72px; line-height: 1.45; }
+
+.builder-launch-select:focus-visible,
+.builder-launch-goal:focus-visible,
+.builder-launch-number:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
+
+.builder-launch-fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 12px;
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
 }
-.builder-launch-budgets { flex-direction: row; flex-wrap: wrap; gap: 12px; }
-.builder-launch-budgets label {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-.builder-launch-budgets input { width: 110px; }
-.builder-launch-disclosure {
+.builder-launch-fieldset legend {
+  padding: 0 4px;
   font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
+/* Whole-row radio targets (title + description), so the click area is the
+   card rather than the 13px control itself. */
+.builder-launch-choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 9px;
+  row-gap: 2px;
+  align-items: start;
+  padding: 8px 9px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.builder-launch-choice:hover { background-color: var(--gl-neutral-button-hover); }
+.builder-launch-choice.selected {
+  border-color: var(--gl-semantic-status-info);
+  background-color: var(--gl-neutral-button-hover);
+}
+/* Spans both text rows so the title/description stack beside it - the
+   title and description stay DIRECT label children (rather than sharing a
+   wrapper) so jsx-a11y's label-has-associated-control can still see the
+   label's own text at its default search depth. */
+.builder-launch-choice input {
+  grid-row: span 2;
   margin: 2px 0 0;
-  color: var(--gl-semantic-status-warning);
+  accent-color: var(--gl-semantic-status-info);
 }
+.builder-launch-choice-title { font-size: 13px; font-weight: 600; }
+.builder-launch-choice-desc { font-size: 11px; color: var(--gl-surface-text-muted); }
+
+.builder-launch-disclosure {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--gl-surface-text-primary);
+  background-color: color-mix(in srgb, var(--gl-semantic-status-warning) 12%, transparent);
+  border-left: 2px solid var(--gl-semantic-status-warning);
+  border-radius: 4px;
+}
+
+.builder-launch-budgets { display: flex; gap: 10px; }
+.builder-launch-budget {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+  min-width: 0;
+}
+.builder-launch-budget-label { font-size: 11px; color: var(--gl-surface-text-muted); }
+
 .builder-launch-error { color: var(--gl-semantic-status-error); font-size: 12px; margin: 0; }
 .builder-launch-actions { display: flex; justify-content: flex-end; }
 .builder-launch-start {
   font-size: 13px;
-  padding: 6px 14px;
+  font-family: inherit;
+  padding: 8px 16px;
   border-radius: 6px;
   border: 1px solid var(--gl-semantic-status-info);
   background: var(--gl-neutral-button-background);
   color: var(--gl-surface-text-primary);
   cursor: pointer;
 }
-.builder-launch-start:hover { background: var(--gl-neutral-button-hover); }
+.builder-launch-start:hover:not(:disabled) { background: var(--gl-neutral-button-hover); }
+/* Disabled is the DEFAULT state here (no goal typed yet) and previously
+   looked identical to enabled - the primary action read as clickable
+   before it ever was. */
+.builder-launch-start:disabled { opacity: 0.45; cursor: default; }
