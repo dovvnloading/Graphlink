@@ -1,5 +1,5 @@
 import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflow/react";
-import { memo, useEffect, useRef, useState } from "react";
+import { lazy, memo, Suspense, useEffect, useRef } from "react";
 import type { ChartDataRow } from "../../lib/bridge-core/generated/scene-state";
 import { withAuthToken } from "../../lib/auth/token";
 import {
@@ -11,17 +11,25 @@ import {
 } from "./canvasConstants";
 import { useLodVisibility } from "./useLodVisibility";
 
+// ADR-013 stage 13.2: the interactive renderer lives in its own lazily
+// loaded chunk (web_ui/src/app/canvas/charts/) - a plain SVG/React
+// implementation with no new charting dependency, code-split the same way
+// ChatLibraryDialog/HelpDialog/SettingsDialog already are. Defined once at
+// module scope (not inside the component) so every chart node on the canvas
+// shares the same lazy promise instead of each mounting its own chunk load.
+const LazyChartRenderer = lazy(() => import("./charts/ChartRenderer"));
+
 /**
- * The chart node (Qt-removal plan R6.2) - graphlink_canvas_chart_item.py's
- * React successor: a card wrapping a backend-rendered PNG (bar/line/pie/
- * histogram/sankey). Push-only, same as every other content card - the
- * chart DATA arrives already canonicalized via the scene document; this
- * view never touches matplotlib or chart math itself (see
- * graphlink_chart_rendering.py for that). Unlike the legacy QPainter chart
- * item, there is no "card chrome painted on top of the chart image" here at
- * all: the rounded-rect/header/badge/resize-handle chrome legacy drew
- * itself is now just this ordinary React/CSS card wrapping a plain <img> -
- * matplotlib already renders the bars/lines/pie/etc into that image.
+ * The chart node (Qt-removal plan R6.2, re-rendered client-side as of
+ * ADR-013 stage 13.2) - graphlink_canvas_chart_item.py's React successor: a
+ * card wrapping an interactive SVG chart (bar/line/pie/histogram/sankey)
+ * drawn directly from `chartData` in the browser. Unlike the legacy
+ * QPainter chart item, there is no "card chrome painted on top of the chart
+ * image" here at all: the rounded-rect/header/badge/resize-handle chrome
+ * legacy drew itself is now just this ordinary React/CSS card; the chart
+ * ITSELF used to be a backend-rendered PNG (R6.2's original cut) and is now
+ * charts/ChartRenderer.tsx's own SVG, re-validated client-side via
+ * chartSpec.ts (stage 13.1) rather than trusted blindly off the wire.
  *
  * Sizing works exactly like GroupNodeView.tsx's R6.1 frame/container: width/
  * height are set on the FLOW NODE OBJECT itself (SceneCanvas.tsx's
@@ -32,34 +40,37 @@ import { useLodVisibility } from "./useLodVisibility";
  * `data` (part of the 9-field wire contract every other chart field rides
  * through) - the flow-node-level width/height exists purely for the
  * NodeResizer controlled-mode technique, not as the single source of truth.
+ * ChartRenderer itself doesn't read either one - it measures its own
+ * rendered box directly (see charts/chartHooks.ts's useElementSize).
  *
- * Resize -> re-render: every resize needs a REAL matplotlib re-layout at the
- * settled size (see backend/canvas.py's resize_chart), not a cheap CSS
- * stretch of the existing PNG - so onResizeEnd is debounced
- * (CHART_RESIZE_DEBOUNCE_MS, see makeDebouncedChartResize below) before
- * firing resizeChart, guarding against a user chaining several quick resize
- * gestures in a row each hitting the network. Aspect-lock uses xyflow's own
- * NodeResizer `keepAspectRatio` prop rather than any hand-rolled ratio math -
- * the backend's own resize_chart still re-derives/clamps against MIN/MAX
- * server-side regardless of what the client sends (this component's MIN/MAX
- * are just a UI-side floor/ceiling matching legacy's own bounds, not the
- * authoritative clamp - same posture as GROUP_RESIZE_MIN_WIDTH/HEIGHT).
+ * Resize -> re-render: the interactive renderer re-lays-out INSTANTLY at
+ * any size (no network round-trip - stage 13.2's whole point), but
+ * onResizeEnd is still debounced (CHART_RESIZE_DEBOUNCE_MS, see
+ * makeDebouncedChartResize below) before firing resizeChart, because that
+ * call still persists the settled chartWidth/chartHeight server-side (and,
+ * until stage 13.4 lands, still regenerates the export-quality PNG the
+ * Export link downloads) - guarding against a user chaining several quick
+ * resize gestures each hitting the network for no display-visible benefit.
+ * Aspect-lock uses xyflow's own NodeResizer `keepAspectRatio` prop rather
+ * than any hand-rolled ratio math - the backend's own resize_chart still
+ * re-derives/clamps against MIN/MAX server-side regardless of what the
+ * client sends (this component's MIN/MAX are just a UI-side floor/ceiling
+ * matching legacy's own bounds, not the authoritative clamp - same posture
+ * as GROUP_RESIZE_MIN_WIDTH/HEIGHT).
  *
  * chartError never hides or blocks the card (the backend's own
- * never-hard-fail contract guarantees SOME renderable PNG always exists,
- * even a placeholder one) - it only adds a small inline warning badge
- * carrying the error text in its title, next to the type badge.
+ * never-hard-fail contract guarantees a renderable chart always exists) -
+ * it only adds a small inline warning badge carrying the error text in its
+ * title, next to the type badge. A chartData shape ChartRenderer itself
+ * can't render (fails its own canonicalizeChartSpec re-check) shows its own
+ * inline placeholder instead of crashing - see ChartRenderer.tsx.
  *
- * The asset URL reuses the exact `/api/assets/{assetId}` convention
- * ImageNodeView.tsx established, with a `?v=chartAssetVersion` cache-buster
- * appended so a resize's freshly re-rendered bytes (same assetId, new bytes -
- * see backend/canvas.py's resize_chart) actually reload instead of showing a
- * browser-cached stale image. Export hits a DISTINCT endpoint (a real
- * 3x-resolution re-render, not the cached display asset) - opened directly
- * in a new tab, the simpler of the two download patterns this codebase
- * already uses (ImageNodeView.tsx's fetch->blob->object-URL dance is only
- * needed there because that same code path also backs Copy Image; chart
- * export has no such second consumer, so a plain link is enough).
+ * Export still hits the dedicated export endpoint (a real 3x-resolution
+ * matplotlib re-render server-side, not anything this renderer draws) -
+ * opened directly in a new tab. That stays server-side deliberately (a
+ * downloadable, print-quality raster/vector asset is a different job than
+ * "draw this interactively," and stage 13.4 is where that path moves off
+ * the event loop and gains a real SVG export option).
  */
 
 export interface ChartNodeData extends Record<string, unknown> {
@@ -77,21 +88,6 @@ export interface ChartNodeData extends Record<string, unknown> {
 }
 
 export type ChartFlowNode = Node<ChartNodeData, "chart">;
-
-/** Same one-place-builds-the-URL discipline as ImageNodeView.tsx's own
- * assetUrl() - the <img> render below is the only call site, so nothing else
- * can disagree with it about the endpoint shape. The `v` query param is
- * chartAssetVersion, not something this endpoint itself enforces - it exists
- * purely so the BROWSER treats a re-rendered chart (same assetId, new bytes)
- * as a different URL and actually refetches instead of serving a cached
- * response. */
-export function chartAssetUrl(chartAssetId: string, version: number): string {
-  // ADR-004 stage 4.1: the capability token appends AFTER the `v` param
-  // (withAuthToken picks "&" because a query string already exists), same
-  // browser-image-loader-cannot-send-headers reason as ImageNodeView's own
-  // assetUrl. A no-op when no token is present.
-  return withAuthToken(`/api/assets/${chartAssetId}?v=${version}`);
-}
 
 /** The dedicated export endpoint (a real 3x-resolution re-render - see
  * graphlink_chart_rendering.py's dpi_scale - never the cached display
@@ -130,22 +126,23 @@ export function makeDebouncedChartResize(
   };
 }
 
-function chartTitlesEqual(a: ChartDataRow, b: ChartDataRow): boolean {
-  if (a === b) return true;
-  return (a.title ?? null) === (b.title ?? null);
-}
-
-/** ADR-011 stage 11.1: React.memo comparator - id (read into the resizer's
- * nodeId and chartExportUrl), selected, and only the ChartNodeData fields
- * this component actually reads. chartWidth/chartHeight/chartSourceNodeId
- * ride on the wire (see this file's own module doc) but this component never
- * reads them directly - the node's own width/height comes through the flow
- * node object itself, not `data` - so they're deliberately excluded rather
- * than compared for no reason. chartData is object-shaped but only its
- * `.title` is ever read here, so the compare is scoped to that field instead
- * of the whole object reference: a plain `===` would make this comparator
- * too tight, forcing a re-render whenever an upstream rebuild mints a fresh,
- * value-identical chartData object. */
+/** ADR-011 stage 11.1 comparator, widened under ADR-013 stage 13.2: id (read
+ * into the resizer's nodeId and chartExportUrl), selected, and only the
+ * ChartNodeData fields this component actually reads. chartWidth/
+ * chartHeight/chartSourceNodeId ride on the wire (see this file's own
+ * module doc) but this component never reads them directly - the node's
+ * own width/height comes through the flow node object itself, not `data` -
+ * so they're deliberately excluded rather than compared for no reason.
+ * Likewise chartAssetId/chartAssetVersion are no longer compared: the
+ * interactive renderer draws from `chartData` alone now, not a PNG asset
+ * URL, so those two fields are dead weight in this comparator even though
+ * they still ride the wire (stage 13.4 is where their backend role gets
+ * revisited). chartData IS now compared by reference rather than scoped to
+ * `.title` - the renderer reads the whole shape, and SceneCanvas.tsx's own
+ * toFlowNodes cache (keyed by the raw scene-node object) guarantees a fresh
+ * chartData reference only appears when the underlying node actually
+ * changed, so a plain `===` here is both correct and cheap (no risk of
+ * forcing a re-render off a value-identical-but-freshly-rebuilt object). */
 export function chartNodePropsAreEqual(prev: NodeProps<ChartFlowNode>, next: NodeProps<ChartFlowNode>): boolean {
   if (prev.id !== next.id || prev.selected !== next.selected) return false;
   const a = prev.data;
@@ -153,12 +150,10 @@ export function chartNodePropsAreEqual(prev: NodeProps<ChartFlowNode>, next: Nod
   return (
     a.chartType === b.chartType &&
     a.chartError === b.chartError &&
-    a.chartAssetId === b.chartAssetId &&
-    a.chartAssetVersion === b.chartAssetVersion &&
     a.chartAspectLocked === b.chartAspectLocked &&
     a.onToggleAspectLock === b.onToggleAspectLock &&
     a.onResize === b.onResize &&
-    chartTitlesEqual(a.chartData, b.chartData)
+    a.chartData === b.chartData
   );
 }
 
@@ -168,7 +163,6 @@ export const ChartNodeView = memo(function ChartNodeView({
   selected,
 }: NodeProps<ChartFlowNode>) {
   const collapsed = useLodVisibility();
-  const [imageFailed, setImageFailed] = useState(false);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
@@ -210,16 +204,9 @@ export const ChartNodeView = memo(function ChartNodeView({
       </div>
       {!collapsed && (
         <div className="scene-node-body chart-node-content">
-          {imageFailed ? (
-            <div className="chart-node-placeholder">Chart unavailable</div>
-          ) : (
-            <img
-              className="chart-node-img"
-              src={chartAssetUrl(data.chartAssetId, data.chartAssetVersion)}
-              alt={title}
-              onError={() => setImageFailed(true)}
-            />
-          )}
+          <Suspense fallback={<div className="chart-node-placeholder">Loading chart…</div>}>
+            <LazyChartRenderer chartType={data.chartType} chartData={data.chartData} />
+          </Suspense>
           <div className="chart-node-toolbar nodrag">
             <button
               type="button"
