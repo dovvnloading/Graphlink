@@ -23,7 +23,7 @@ from backend.plugin_sdk import (
     PluginRegistrationError,
     discover_plugins,
 )
-from backend.plugins import _PLUGINS, register_plugins
+from backend.plugins import register_plugins
 from backend.session_load import restore_chat_into_document
 from backend.session_save import build_chat_data
 
@@ -150,16 +150,53 @@ def test_malformed_manifest_sdk_api_version_out_of_range_is_skipped(tmp_path):
 # -- picker-name collisions: raised/recorded, never silently overwritten ---
 
 
-def test_picker_name_collision_with_a_builtin_name_is_recorded_not_silently_merged(tmp_path):
-    builtin_name = _PLUGINS[0][0]  # "System Prompt" today - any real built-in name works
-    _write_plugin(tmp_path, "colliding_plugin", kind="greet", picker_name=builtin_name)
+def test_picker_name_collision_with_a_reserved_name_is_recorded_not_silently_merged(tmp_path):
+    # ADR-014 stage 14.3: the 8 pre-SDK built-ins are now real discovered
+    # plugins themselves (plugins/web_research/, plugins/gitlink/, ...), so
+    # backend/plugins.py's own register_plugins() no longer calls
+    # discover_plugins(builtin_names=...) with a real argument - collisions
+    # between a migrated built-in and a third-party plugin are now caught
+    # by the SAME picker_entries/builtin_actions collision check any two
+    # plugins are checked with (see the two tests below this one). The
+    # `builtin_names` mechanism itself stays real, generic SDK surface -
+    # exercised here directly with a synthetic reserved-name set, the way
+    # any host embedding this SDK could still reserve a name that has no
+    # registry entry of its own yet.
+    _write_plugin(tmp_path, "colliding_plugin", kind="greet", picker_name="Reserved Name")
 
-    registry = discover_plugins(tmp_path, builtin_names=frozenset(p[0] for p in _PLUGINS))
+    registry = discover_plugins(tmp_path, builtin_names=frozenset({"Reserved Name"}))
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "colliding_plugin"
-    assert builtin_name not in registry.picker_entries
+    assert "Reserved Name" not in registry.picker_entries
     assert "colliding_plugin.greet" not in registry.node_kinds
+
+
+def test_picker_name_collision_with_a_real_builtin_action_name_is_recorded_not_silently_merged(tmp_path):
+    # ADR-014 stage 14.3: a third-party plugin naming itself "Web Research"
+    # (a real migrated built-in's name, registered via
+    # register_builtin_plugin rather than register_picker_entry) must still
+    # be rejected - the two registration mechanisms share one flat name
+    # space. Directory name "aaa_colliding" sorts before "web_research" in
+    # glob() order, so this plugin is merged FIRST and the real
+    # plugins/web_research/ package collides against IT, proving the check
+    # is symmetric (either registration order loses to the other).
+    _write_plugin(tmp_path, "aaa_colliding", kind="greet", picker_name="Web Research")
+    # Copy the real web_research plugin's manifest/module into this same
+    # tmp_path root so discover_plugins() sees both in one scan.
+    import shutil
+
+    from backend.plugin_sdk import DEFAULT_PLUGINS_ROOT
+
+    shutil.copytree(DEFAULT_PLUGINS_ROOT / "web_research", tmp_path / "web_research")
+
+    registry = discover_plugins(tmp_path)
+
+    assert len(registry.load_errors) == 1
+    assert registry.load_errors[0].plugin_dir == "web_research"
+    assert registry.picker_entries["Web Research"].plugin_id == "aaa_colliding"
+    assert "aaa_colliding.greet" in registry.node_kinds
+    assert "Web Research" not in registry.builtin_actions
 
 
 def test_picker_name_collision_between_two_plugins_is_recorded_first_wins_not_overwritten(tmp_path):
@@ -213,6 +250,98 @@ def test_host_context_register_intent_stores_a_real_spec():
     assert spec.plugin_id == "intent_plugin"
     assert spec.name == "do_thing"
     assert spec.handler is handler
+
+
+# -- ADR-014 stage 14.3: HostContext.register_builtin_plugin() --------------
+#
+# The first-party migration escape hatch - see BuiltinActionSpec/
+# HostContext.register_builtin_plugin's own docstrings (backend/
+# plugin_sdk.py) for the full contract. Declaration-time behavior only
+# here; end-to-end dispatch through executePlugin is covered by the
+# per-built-in tests in backend/tests/test_plugins.py.
+
+
+def test_host_context_register_builtin_plugin_stores_a_real_spec():
+    host = HostContext("some_plugin")
+
+    def _handler(document, run_ctx, parent_node_id):
+        return "unused-in-this-test"
+
+    host.register_builtin_plugin(
+        name="Some Action", description="does a thing", category="More Plugins",
+        handler=_handler,
+    )
+
+    assert len(host._builtin_actions) == 1
+    spec = host._builtin_actions["Some Action"]
+    assert spec.plugin_id == "some_plugin"
+    assert spec.name == "Some Action"
+    assert spec.description == "does a thing"
+    assert spec.category == "More Plugins"
+    assert spec.handler is _handler
+
+
+def test_host_context_register_builtin_plugin_same_plugin_name_reuse_raises():
+    host = HostContext("some_plugin")
+    host.register_builtin_plugin(
+        name="Dup", description="d", category="More Plugins", handler=lambda d, r, p: None,
+    )
+
+    with pytest.raises(PluginRegistrationError):
+        host.register_builtin_plugin(
+            name="Dup", description="d2", category="More Plugins", handler=lambda d, r, p: None,
+        )
+
+
+def test_builtin_action_name_collision_between_two_plugins_is_recorded_first_wins(tmp_path):
+    # Two synthetic plugins each calling register_builtin_plugin (NOT
+    # register_picker_entry) with the same name - directory names chosen so
+    # sorted glob() ordering is deterministic.
+    py_body_a = "from backend.plugin_sdk import HostContext\n\n\ndef register(host: HostContext) -> None:\n    host.register_builtin_plugin(name='Shared Builtin', description='a', category='More Plugins', handler=lambda d, r, p: None)\n"
+    py_body_b = "from backend.plugin_sdk import HostContext\n\n\ndef register(host: HostContext) -> None:\n    host.register_builtin_plugin(name='Shared Builtin', description='b', category='More Plugins', handler=lambda d, r, p: None)\n"
+    _write_plugin(tmp_path, "plugin_a", dir_name="plugin_a", py_body=py_body_a, toml_body=None)
+    _write_plugin(tmp_path, "plugin_b", dir_name="plugin_b", py_body=py_body_b, toml_body=None)
+
+    registry = discover_plugins(tmp_path)
+
+    assert len(registry.load_errors) == 1
+    assert registry.load_errors[0].plugin_dir == "plugin_b"
+    assert registry.builtin_actions["Shared Builtin"].plugin_id == "plugin_a"
+
+
+def test_builtin_action_name_collision_with_a_picker_entry_name_is_recorded(tmp_path):
+    # A register_builtin_plugin name colliding against an ALREADY-merged
+    # register_picker_entry name (from a different plugin) must be
+    # rejected too - one flat name space across both mechanisms.
+    py_body_builtin = "from backend.plugin_sdk import HostContext\n\n\ndef register(host: HostContext) -> None:\n    host.register_builtin_plugin(name='Shared Name', description='b', category='More Plugins', handler=lambda d, r, p: None)\n"
+    _write_plugin(tmp_path, "plugin_a", dir_name="plugin_a", kind="greet", picker_name="Shared Name")
+    _write_plugin(tmp_path, "plugin_b", dir_name="plugin_b", py_body=py_body_builtin, toml_body=None)
+
+    registry = discover_plugins(tmp_path)
+
+    assert len(registry.load_errors) == 1
+    assert registry.load_errors[0].plugin_dir == "plugin_b"
+    assert registry.picker_entries["Shared Name"].plugin_id == "plugin_a"
+    assert "Shared Name" not in registry.builtin_actions
+
+
+def test_resolve_builtin_action_returns_none_for_unknown_name(tmp_path):
+    py_body = (
+        "from backend.plugin_sdk import HostContext\n\n\n"
+        "def register(host: HostContext) -> None:\n"
+        "    host.register_builtin_plugin(\n"
+        "        name='Real', description='d', category='More Plugins',\n"
+        "        handler=lambda d, r, p: None,\n"
+        "    )\n"
+    )
+    _write_plugin(tmp_path, "some_plugin", py_body=py_body, toml_body=None)
+
+    registry = discover_plugins(tmp_path)
+
+    resolved = registry.resolve_builtin_action("Real")
+    assert resolved is not None
+    assert resolved.plugin_id == "some_plugin"
+    assert registry.resolve_builtin_action("Nope") is None
 
 
 # -- discovery memoization ----------------------------------------------------

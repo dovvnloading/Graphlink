@@ -1,0 +1,18 @@
+# plugins/code_sandbox/plugin.toml
+#
+# ADR-014 stage 14.3: first-party migration of the pre-SDK "Virtual
+# Environment Runner" built-in picker action - see
+# plugins/web_research/plugin.toml's own comment for the shared rationale
+# (register_builtin_plugin, not register_node_kind, to keep the
+# already-shipped "code_sandbox" kind string unchanged).
+
+[plugin]
+id = "code_sandbox"
+name = "Virtual Environment Runner"
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "Runs Python inside an isolated virtualenv with your full user-account privileges (isolates installed packages, not the operating system) and lets you declare per-node requirements.txt dependencies."
+
+[frontend]
+view = "generic"

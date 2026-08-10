@@ -1,0 +1,18 @@
+# plugins/conversation_node/plugin.toml
+#
+# ADR-014 stage 14.3: first-party migration of the pre-SDK "Conversation
+# Node" built-in picker action - see plugins/web_research/plugin.toml's
+# own comment for the shared rationale (register_builtin_plugin, not
+# register_node_kind, to keep the already-shipped "conversation" kind
+# string unchanged).
+
+[plugin]
+id = "conversation_node"
+name = "Conversation Node"
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "Adds a node for a self-contained, linear chat conversation."
+
+[frontend]
+view = "generic"

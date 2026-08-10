@@ -1,29 +1,39 @@
-"""Plugin picker listing for the new architecture (Qt-removal plan R2.5).
+"""Plugin picker listing for the new architecture (Qt-removal plan R2.5,
+migrated onto the ADR-014 Plugin SDK at stage 14.3).
 
-An INDEPENDENT Qt-free reimplementation of PluginPortal.get_plugin_categories()
-- not an import - because graphlink_plugin_portal.py imports PySide6.QtCore
-at module scope AND every node_cls it registers (ChatNode, PyCoderNode,
-WebNode, GitlinkNode, ArtifactNode, CodeSandboxNode, HtmlViewNode,
-ConversationNode) is itself transitively Qt-coupled through 8+ modules,
-invisible to test_no_qt_anywhere.py's single-file scan. Same reimplement-
-not-import precedent as backend/composer.py.
+ADR-014 stage 14.3: the 8 built-in picker actions that used to be a
+hardcoded if-chain here (System Prompt, Conversation Node, Web Research,
+Gitlink, Py-Coder, Virtual Environment Runner, HTML Renderer, Artifact /
+Drafter) are now real discovered plugin packages under plugins/ - see
+plugins/web_research/plugin.py (and its 7 siblings) for the migrated
+handler bodies. Each registers via
+`backend.plugin_sdk.HostContext.register_builtin_plugin` rather than
+`register_node_kind`/`register_picker_entry`: their kind strings
+(web_research, gitlink, pycoder, code_sandbox, html, artifact,
+conversation, note) are already baked into web_ui's NODE_TYPES map, the
+wire contract, and session_save.py/session_load.py's hand-written per-kind
+serializers - routing them through the generic, auto-namespaced
+PluginNodeSeed/add_plugin_node path would rename every one of those kinds
+and be an invasive, unnecessary breaking change for zero benefit. See
+HostContext.register_builtin_plugin's own docstring (backend/plugin_sdk.py)
+for the full escape-hatch rationale.
 
-The category/plugin metadata below (names, descriptions, grouping) is
-hand-ported VERBATIM from PLUGIN_CATEGORY_META and the 8 _register_plugin()
-call sites in graphlink_plugin_portal.py, reproducing get_plugin_categories()'s
-exact algorithm: iterate categories in order, skip empty ones, append a
-synthetic "More Plugins" catch-all only if any plugin is uncategorized
-(today: none are). Icons are dropped everywhere in this migration, per the
-established About/Help precedent - no icon-library dependency exists in the
-web layer.
+This means EVERY name executePlugin sees today - built-in or third-party -
+flows through the exact same generic dispatch path
+(_execute_discovered_plugin below): look up plugin_registry.builtin_actions
+first (the migrated built-ins' escape hatch), then
+plugin_registry.picker_entries (the generic PluginNodeSeed path). There is
+no longer a separate hardcoded fast path for the built-ins, and no
+"_PLUGINS" static list - discover_plugins() is the single source of truth
+for every picker entry's existence, and get_plugin_categories' grouping
+below reflects whatever it found.
 
-executePlugin's real effect - instantiating a typed QGraphicsItem node - is
-NOT reimplemented here: it is out of scope until R3 (real node types in the
-scene model) and R5 (a redesigned, replayable plugin-portal-v2 intent
-contract), per recon. Selecting a plugin in R2.5 surfaces a real, honest
-notification via the already-shipped notifications topic rather than
-silently doing nothing or fabricating node creation.
-"""
+_CATEGORY_META is NOT built-in-specific scaffolding - it is the general,
+fixed 5-category taxonomy any discovered plugin's `category` (built-in or
+third-party) joins; it stays exactly as it was pre-migration. A category
+with zero entries is skipped; anything landing in the HostContext default
+"More Plugins" (or naming an unrecognized category) falls into a synthetic
+catch-all appended last."""
 
 from __future__ import annotations
 
@@ -68,35 +78,27 @@ _CATEGORY_META = [
     },
 ]
 
-# (name, description, category) - registration order matches
-# PluginPortal._discover_plugins() exactly.
-_PLUGINS = [
-    ("System Prompt", "Adds a special node to override the default system prompt for a conversation branch.", "Branch Foundations"),
-    ("Conversation Node", "Adds a node for a self-contained, linear chat conversation.", "Branch Foundations"),
-    ("Web Research", "Searches, retrieves, and summarizes cited web sources under a bounded network policy.", "Reasoning & Research"),
-    ("Gitlink", "Loads a GitHub repository into structured XML context, prepares file-level changes, and only writes after explicit approval.", "Build & Execution"),
-    ("Py-Coder", "Opens a Python execution environment to run code and get AI analysis.", "Build & Execution"),
-    ("Virtual Environment Runner", "Runs Python inside an isolated virtualenv with your full user-account privileges (isolates installed packages, not the operating system) and lets you declare per-node requirements.txt dependencies.", "Build & Execution"),
-    ("HTML Renderer", "Adds a node to render HTML code from a parent node.", "Build & Execution"),
-    ("Artifact / Drafter", "A split-pane node for iteratively drafting and refining living documents (Markdown).", "Workflow & Drafting"),
-]
-
 
 def get_plugin_categories(plugin_registry: "PluginRegistry | None" = None) -> list[dict[str, Any]]:
-    """Reproduces PluginPortal.get_plugin_categories()'s exact algorithm.
-
-    ADR-014 stage 14.1: `plugin_registry`, when given, contributes every
-    discovered plugin's picker entries alongside the 8 built-ins BEFORE the
-    existing category-grouping loop runs, unchanged - a discovered entry's
-    `category` joining one of _CATEGORY_META's 5 fixed names lands in that
-    flyout exactly like a built-in would; any other category (including the
-    HostContext default "More Plugins") falls into the same synthetic
-    catch-all uncategorized entries already fall into."""
-    entries = list(_PLUGINS)
+    """Groups every discovered picker entry (both `picker_entries` - the
+    generic PluginNodeSeed path - and `builtin_actions` - the ADR-014 stage
+    14.3 first-party escape hatch the 8 migrated built-ins use) by
+    _CATEGORY_META, in that fixed order, skipping any category with zero
+    entries; anything uncategorized (including every entry whose category
+    doesn't match a _CATEGORY_META name) falls into a synthetic "More
+    Plugins" catch-all appended last. `plugin_registry=None` (the default)
+    yields an empty listing - unlike the pre-14.3 hardcoded 8, there is no
+    picker entry that exists independent of a real discovered registry
+    anymore."""
+    entries: list[tuple[str, str, str]] = []
     if plugin_registry is not None:
         entries += [
             (entry.name, entry.description, entry.category)
             for entry in plugin_registry.picker_entries.values()
+        ]
+        entries += [
+            (spec.name, spec.description, spec.category)
+            for spec in plugin_registry.builtin_actions.values()
         ]
 
     categorized_names: set[str] = set()
@@ -144,11 +146,35 @@ async def _execute_discovered_plugin(
     name: str,
     parent_node_id: str | None,
 ):
-    """ADR-014 stage 14.1: the generic executePlugin path for anything
-    discover_plugins() found that is NOT a built-in _PLUGINS name. Kept as
-    a top-level function (not nested inside register_plugins) so
-    register_plugins itself stays under tests/test_register_function_length.py's
-    300-line register* cap."""
+    """The single executePlugin dispatch path for EVERY name - built-in or
+    third-party alike, since ADR-014 stage 14.3 migrated the last hardcoded
+    branch off this file. Extracted to a top-level function (not nested
+    inside register_plugins) so register_plugins itself stays under
+    tests/test_register_function_length.py's 300-line register* cap.
+
+    Two registration mechanisms, checked in this order:
+
+    1. `plugin_registry.builtin_actions` - ADR-014 stage 14.3's first-party
+       escape hatch (HostContext.register_builtin_plugin). 'handler' is
+       SYNC and does its own record_command/parent-validation internally,
+       exactly like the pre-migration hardcoded branch it replaces - this
+       uniform post-handler publish rule ("scene" if the handler returned a
+       real id, else "notification") matches every one of the 8 migrated
+       branches, including System Prompt's dedup path, which publishes
+       "scene" and returns an EXISTING id without creating anything new.
+    2. `plugin_registry.picker_entries` (via resolve_picker_name) - the
+       generic PluginNodeSeed/add_plugin_node path every third-party plugin
+       (and the two demo plugins, hello_node/counter_node) uses.
+
+    A name matching neither shows the same "Unknown plugin" warning
+    regardless of which mechanism a real match would have used."""
+    builtin_spec = plugin_registry.builtin_actions.get(name)
+    if builtin_spec is not None:
+        run_ctx = PluginRunContext(plugin_id=builtin_spec.plugin_id, notifications=notifications)
+        result = builtin_spec.handler(canvas_document, run_ctx, parent_node_id)
+        await bus.publish("scene" if result is not None else "notification")
+        return result
+
     resolved = plugin_registry.resolve_picker_name(name)
     if resolved is None:
         notifications.show(f'Unknown plugin: "{name}"', "warning")
@@ -197,8 +223,15 @@ def register_plugins(
     # the signature and every existing call site
     # (register_plugins(bus, notifications_state, canvas_document)) are
     # otherwise UNCHANGED.
+    #
+    # ADR-014 stage 14.3: no more `builtin_names=` argument here - the 8
+    # built-ins are real discovered plugins now, checked for name
+    # collisions against every OTHER plugin the same way any two plugins
+    # are (PluginRegistry.picker_entries/builtin_actions, via
+    # _merge_into_registry in backend/plugin_sdk.py), not via a
+    # separately-supplied reserved-name set.
     if plugin_registry is None:
-        plugin_registry = discover_plugins(builtin_names=frozenset(p[0] for p in _PLUGINS))
+        plugin_registry = discover_plugins()
 
     # ADR-014 stage 14.2: populate the live-wire half of the Plugin SDK's
     # generic persistence seam - see SceneDocument.plugin_node_serializers'
@@ -219,239 +252,13 @@ def register_plugins(
 
     async def execute_plugin(plugin_name: str, parent_node_id: str | None = None):
         name = str(plugin_name).strip()
-        valid_names = {p[0] for p in _PLUGINS}
-        if name not in valid_names:
-            # ADR-014 stage 14.1: not a built-in name - the generic plugin-SDK
-            # path (a discovered plugin's picker entry), extracted to a
-            # top-level helper so register_plugins itself stays under the
-            # 300-line register* cap (tests/test_register_function_length.py).
-            return await _execute_discovered_plugin(
-                bus, notifications, canvas_document, plugin_registry, name, parent_node_id,
-            )
-
-        if name == "Web Research":
-            # R5.1: the first real node-creation plugin - every other plugin
-            # name below is still an honest deferred notice. A Web Research
-            # node is a branch-point child (same posture as thinking/html/
-            # image/conversation nodes), so it always requires a real, valid
-            # parent to branch from - there is no unparented/root form.
-            if not parent_node_id or parent_node_id not in canvas_document.nodes:
-                notifications.show(
-                    "Please select a valid node to branch from before adding a Web Node.",
-                    "warning",
-                )
-                await bus.publish("notification")
-                return None
-            parent = canvas_document.nodes[parent_node_id]
-            node, _command = canvas_document.record_command(
-                "pluginWebResearch", "user",
-                lambda: canvas_document.add_web_research_node(
-                    parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
-                ),
-                node_ids=[parent_node_id],
-            )
-            await bus.publish("scene")
-            return node.id
-
-        if name == "Gitlink":
-            # R5.3: the third real node-creation plugin, same posture as Web
-            # Research/Artifact above - Gitlink is a branch-point child (same
-            # as thinking/html/image/conversation/web_research/artifact
-            # nodes), so it always requires a real, valid parent to branch
-            # from - there is no unparented/root form (confirmed against
-            # graphlink_plugin_portal.py's own no_selection_message/
-            # invalid_parent_message for Gitlink).
-            if not parent_node_id or parent_node_id not in canvas_document.nodes:
-                notifications.show(
-                    "Please select a valid node to branch from before adding a Gitlink node.",
-                    "warning",
-                )
-                await bus.publish("notification")
-                return None
-            parent = canvas_document.nodes[parent_node_id]
-            node, _command = canvas_document.record_command(
-                "pluginGitlink", "user",
-                lambda: canvas_document.add_gitlink_node(
-                    parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
-                ),
-                node_ids=[parent_node_id],
-            )
-            await bus.publish("scene")
-            return node.id
-
-        if name == "Py-Coder":
-            # R5.4: the fourth real node-creation plugin, same posture as
-            # Web Research/Artifact/Gitlink above - Py-Coder is a
-            # branch-point child (same as thinking/html/image/conversation/
-            # web_research/artifact/gitlink nodes), so it always requires a
-            # real, valid parent to branch from - there is no unparented/
-            # root form.
-            if not parent_node_id or parent_node_id not in canvas_document.nodes:
-                notifications.show(
-                    "Please select a valid node to branch from before adding a Py-Coder node.",
-                    "warning",
-                )
-                await bus.publish("notification")
-                return None
-            parent = canvas_document.nodes[parent_node_id]
-            node, _command = canvas_document.record_command(
-                "pluginPyCoder", "user",
-                lambda: canvas_document.add_pycoder_node(
-                    parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
-                ),
-                node_ids=[parent_node_id],
-            )
-            await bus.publish("scene")
-            return node.id
-
-        if name == "Virtual Environment Runner":
-            # R5.4: the fifth real node-creation plugin, same posture as
-            # every prior real node-creation plugin above.
-            if not parent_node_id or parent_node_id not in canvas_document.nodes:
-                notifications.show(
-                    "Please select a valid node to branch from before adding a Virtual Environment Runner node.",
-                    "warning",
-                )
-                await bus.publish("notification")
-                return None
-            parent = canvas_document.nodes[parent_node_id]
-            node, _command = canvas_document.record_command(
-                "pluginCodeSandbox", "user",
-                lambda: canvas_document.add_code_sandbox_node(
-                    parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
-                ),
-                node_ids=[parent_node_id],
-            )
-            await bus.publish("scene")
-            return node.id
-
-        if name == "Artifact / Drafter":
-            # R5.2: the second real node-creation plugin, same posture as
-            # Web Research above - an Artifact node is a branch-point child
-            # (same as thinking/html/image/conversation/web_research nodes),
-            # so it always requires a real, valid parent to branch from -
-            # there is no unparented/root form.
-            if not parent_node_id or parent_node_id not in canvas_document.nodes:
-                notifications.show(
-                    "Please select a valid node to branch from before adding an Artifact node.",
-                    "warning",
-                )
-                await bus.publish("notification")
-                return None
-            parent = canvas_document.nodes[parent_node_id]
-            node, _command = canvas_document.record_command(
-                "pluginArtifact", "user",
-                lambda: canvas_document.add_artifact_node(
-                    parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
-                ),
-                node_ids=[parent_node_id],
-            )
-            await bus.publish("scene")
-            return node.id
-
-        if name == "System Prompt":
-            # R6.1: the sixth real node-creation plugin, same "requires a
-            # real, valid parent_node_id" posture as every real
-            # node-creation plugin above - legacy places a System Prompt
-            # note near/above a branch root, which only makes sense relative
-            # to a selected node. UNLIKE the branch-point-child plugins
-            # above (which attach as a CHILD of parent_node_id, one
-            # MESSAGE_VERTICAL_SPACING below it), this note attaches to
-            # parent_node_id's BRANCH ROOT (SceneDocument.get_branch_root -
-            # the same parent-edge walk backend/agents.py's
-            # _resolve_branch_system_prompt uses at send time), positioned
-            # roughly 150px ABOVE that root, and connects note -> root (the
-            # edge DIRECTION _resolve_branch_system_prompt looks for -
-            # reversed from the child-plugins' root -> child edges above).
-            if not parent_node_id or parent_node_id not in canvas_document.nodes:
-                notifications.show(
-                    "Please select a valid node to branch from before adding a System Prompt node.",
-                    "warning",
-                )
-                await bus.publish("notification")
-                return None
-            root = canvas_document.get_branch_root(parent_node_id)
-            # A root can only ever have ONE effective system-prompt note -
-            # backend/agents.py._resolve_branch_system_prompt has no
-            # deterministic "which one wins" rule for two at once. Reuse an
-            # existing one instead of creating a silently-inert duplicate.
-            existing = next(
-                (
-                    canvas_document.nodes[edge.source]
-                    for edge in canvas_document.edges.values()
-                    if edge.target == root.id
-                    and edge.source in canvas_document.nodes
-                    and canvas_document.nodes[edge.source].kind == "note"
-                    and canvas_document.nodes[edge.source].state.is_system_prompt
-                ),
-                None,
-            )
-            if existing is not None:
-                await bus.publish("scene")
-                return existing.id
-            # The only plugin branch that creates AND connects - both are
-            # captured by one command, so undoing it removes the note and
-            # its edge together rather than leaving a dangling edge.
-            def _create_system_prompt_note():
-                created = canvas_document.add_note(root.x, root.y - 150, is_system_prompt=True)
-                canvas_document.connect(created.id, root.id)
-                return created
-
-            note, _command = canvas_document.record_command(
-                "pluginSystemPrompt", "user", _create_system_prompt_note,
-                node_ids=[root.id],
-            )
-            await bus.publish("scene")
-            return note.id
-
-        if name == "Conversation Node":
-            # R7.5a: ConversationNode has existed since R3.25 with zero
-            # creation path - add_conversation_node was only ever reachable
-            # from backend tests, never from a real UI action. Same
-            # "branch-point child, real valid parent required" posture as
-            # every real node-creation plugin above.
-            if not parent_node_id or parent_node_id not in canvas_document.nodes:
-                notifications.show(
-                    "Please select a valid node to branch from before adding a Conversation Node.",
-                    "warning",
-                )
-                await bus.publish("notification")
-                return None
-            parent = canvas_document.nodes[parent_node_id]
-            node, _command = canvas_document.record_command(
-                "pluginConversationNode", "user",
-                lambda: canvas_document.add_conversation_node(parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id),
-                node_ids=[parent_node_id],
-            )
-            await bus.publish("scene")
-            return node.id
-
-        if name == "HTML Renderer":
-            # R7.5a: HtmlViewNode has existed since R3.17 with zero creation
-            # path, same gap class as Conversation Node above. Starts with
-            # empty html_content - the same "create blank, then edit in
-            # place" posture add_note's System Prompt branch above and the
-            # plain "Add Note" command already use, since the plugin picker
-            # has no field to source initial HTML from.
-            if not parent_node_id or parent_node_id not in canvas_document.nodes:
-                notifications.show(
-                    "Please select a valid node to branch from before adding an HTML Renderer node.",
-                    "warning",
-                )
-                await bus.publish("notification")
-                return None
-            parent = canvas_document.nodes[parent_node_id]
-            node, _command = canvas_document.record_command(
-                "pluginHtmlRenderer", "user",
-                lambda: canvas_document.add_html_node(parent.x, parent.y + MESSAGE_VERTICAL_SPACING, "", parent_node_id),
-                node_ids=[parent_node_id],
-            )
-            await bus.publish("scene")
-            return node.id
-
-        notifications.show(f'"{name}" node creation isn\'t available yet.', "info")
-        await bus.publish("notification")
-        return None
+        # ADR-014 stage 14.3: every name - built-in or third-party alike -
+        # flows through the same generic dispatch helper now. See
+        # _execute_discovered_plugin's own docstring for the two
+        # registration mechanisms it checks, in order.
+        return await _execute_discovered_plugin(
+            bus, notifications, canvas_document, plugin_registry, name, parent_node_id,
+        )
 
     bus.register_intent("app-plugins", "executePlugin", execute_plugin, args_schema=ExecutePluginArgs)
 

@@ -195,6 +195,27 @@ class PluginIntentSpec:
     args_schema: "type | None" = None
 
 
+# ADR-014 stage 14.3: the first-party migration escape hatch. 'document' is
+# the live SceneDocument, 'run_ctx' the same per-invocation context a
+# NodeFactory receives, 'parent_node_id' whatever executePlugin's wire call
+# carried (may be None/unknown - the handler validates it itself, exactly
+# like every pre-migration hardcoded branch did). Returns the created/
+# resolved node's id on success, or None if it already showed its own
+# notification - see HostContext.register_builtin_plugin's own docstring for
+# the full contract this signature encodes.
+BuiltinActionHandler = Callable[[SceneDocument, PluginRunContext, "str | None"], "str | None"]
+
+
+@dataclass(frozen=True)
+class BuiltinActionSpec:
+    plugin_id: str
+    name: str  # the picker label AND executePlugin's dispatch key - same
+    # name-doubles-as-key contract PickerEntrySpec already uses
+    description: str
+    category: str
+    handler: BuiltinActionHandler
+
+
 class HostContext:
     """Constructed fresh per plugin, once, at discovery time - NEVER shared
     across plugins, so plugin_id provenance is free on every call and one
@@ -205,6 +226,7 @@ class HostContext:
         self.plugin_id = plugin_id
         self._node_kinds: dict[str, NodeKindSpec] = {}  # namespaced kind -> spec
         self._picker_entries: dict[str, PickerEntrySpec] = {}  # display name -> entry
+        self._builtin_actions: dict[str, BuiltinActionSpec] = {}  # display name -> spec
         self._intents: list[PluginIntentSpec] = []
 
     def register_node_kind(
@@ -305,6 +327,61 @@ class HostContext:
             category=category, node_kind=namespaced,
         )
 
+    def register_builtin_plugin(
+        self, *, name: str, description: str, category: str, handler: BuiltinActionHandler,
+    ) -> None:
+        """ADR-014 stage 14.3: the first-party migration escape hatch - lets
+        a plugin's register() call attach a picker entry directly to an
+        existing, already-rich SceneDocument mutator (e.g.
+        add_web_research_node) rather than going through register_node_kind/
+        PluginNodeSeed/add_plugin_node's generic, auto-namespaced wire
+        format. Exists ONLY to migrate the 8 pre-SDK built-in picker actions
+        onto real plugin packages under plugins/ without renaming their
+        already-shipped, already-persisted kind strings (web_research,
+        gitlink, pycoder, code_sandbox, html, artifact, conversation, note) -
+        renaming any of those would be an invasive, unnecessary breaking
+        change across the frontend's NODE_TYPES map, the wire contract, and
+        session_save.py/session_load.py's hand-written per-kind
+        serializers, for zero benefit. A third-party plugin should almost
+        always use register_node_kind/register_picker_entry instead; this
+        method is NOT namespaced and performs NO validation of any kind
+        (node existence, parent liveness, ...) - 'handler' is trusted to do
+        exactly what it needs, including its own record_command call
+        (with whatever command_type string it chooses), its own
+        parent-validation notification text, and its own
+        return-None-on-failure/return-created-or-resolved-id-on-success
+        contract.
+
+        'handler' is SYNC, not async - every one of the 8 branches this
+        method replaces has a fully synchronous body (record_command's
+        mutator is always a plain zero-arg closure); wrapping it in an
+        async def would be needless ceremony this call path has no use for.
+        The caller (backend/plugins.py's _execute_discovered_plugin) applies
+        one uniform post-handler rule around every registered handler:
+        publish "scene" if the handler returned a real id, else publish
+        "notification" - matching every one of the 8 migrated branches'
+        own "show warning, return None" vs "create/resolve, return id"
+        shape, including System Prompt's dedup path (resolves an EXISTING
+        note's id, creates nothing new, still publishes "scene").
+
+        'name' is the picker label AND executePlugin's dispatch key - same
+        name-doubles-as-key contract PickerEntrySpec already uses. Same-
+        plugin name reuse (two register_builtin_plugin calls with equal
+        'name' from ONE plugin) is an error, raised here; cross-plugin
+        collisions (against every other plugin's register_picker_entry AND
+        register_builtin_plugin names) are checked once, globally, by
+        _merge_into_registry - not here, since a single HostContext never
+        sees another plugin's declarations."""
+        if name in self._builtin_actions:
+            raise PluginRegistrationError(
+                f'plugin "{self.plugin_id}": builtin action "{name}" already registered by '
+                f"this plugin"
+            )
+        self._builtin_actions[name] = BuiltinActionSpec(
+            plugin_id=self.plugin_id, name=name, description=description,
+            category=category, handler=handler,
+        )
+
     def register_intent(
         self, name: str, handler: PluginIntentHandler, *, args_schema: "type | None" = None,
     ) -> None:
@@ -339,6 +416,7 @@ class PluginRegistry:
     def __init__(self) -> None:
         self.node_kinds: dict[str, NodeKindSpec] = {}  # namespaced kind -> spec
         self.picker_entries: dict[str, PickerEntrySpec] = {}  # display name -> entry
+        self.builtin_actions: dict[str, BuiltinActionSpec] = {}  # display name -> spec
         self.intents: list[PluginIntentSpec] = []
         self.load_errors: list[PluginLoadError] = []
 
@@ -347,6 +425,14 @@ class PluginRegistry:
         if entry is None:
             return None
         return self.node_kinds[entry.node_kind], entry
+
+    def resolve_builtin_action(self, name: str) -> "BuiltinActionSpec | None":
+        """ADR-014 stage 14.3's lookup mirror of resolve_picker_name above -
+        None for any name that isn't a registered builtin action (including
+        one that IS a real picker_entries name; the two dicts are checked
+        by the caller in whichever order it prefers, since _merge_into_
+        registry already guarantees no name is ever in both)."""
+        return self.builtin_actions.get(name)
 
 
 _REGISTRY_CACHE: dict[Path, PluginRegistry] = {}
@@ -467,28 +553,53 @@ def _merge_into_registry(
     """Folds one plugin's HostContext declarations into the shared registry.
     Node-kind collisions are structurally impossible (namespaced per
     plugin_id, checked already within HostContext itself) so need no check
-    here. Picker NAME collisions - against the built-in plugin names AND
-    against every already-merged plugin - ARE checked here, raising rather
-    than silently overwriting."""
-    for name, entry in host._picker_entries.items():
+    here. Picker NAME collisions - against 'builtin_names' AND against
+    every already-merged plugin's picker_entries/builtin_actions - ARE
+    checked here, raising rather than silently overwriting.
+
+    ADR-014 stage 14.3: 'builtin_names' has no real caller-supplied argument
+    left in this repo (the 8 pre-SDK built-ins are now real discovered
+    plugins themselves, checked against every other plugin the same way any
+    two plugins are), but stays a real, generic, tested SDK mechanism - any
+    host embedding this SDK can still reserve a name that has no registry
+    entry of its own yet. 'builtin_actions' is the ADR-014 stage 14.3 sibling
+    of 'picker_entries' - a name must be globally unique across BOTH dicts,
+    checked below, so the picker's displayed/dispatched name space is one
+    flat namespace regardless of which registration mechanism produced an
+    entry."""
+    for name in host._picker_entries:
         if name in builtin_names:
             raise PluginRegistrationError(
                 f'plugin "{host.plugin_id}": picker entry "{name}" collides with a '
                 f"built-in plugin name"
             )
-        existing = registry.picker_entries.get(name)
+        existing = registry.picker_entries.get(name) or registry.builtin_actions.get(name)
         if existing is not None:
             raise PluginRegistrationError(
                 f'plugin "{host.plugin_id}": picker entry "{name}" collides with the same '
                 f'entry already registered by plugin "{existing.plugin_id}"'
             )
+    for name in host._builtin_actions:
+        if name in builtin_names:
+            raise PluginRegistrationError(
+                f'plugin "{host.plugin_id}": builtin action "{name}" collides with a '
+                f"built-in plugin name"
+            )
+        existing = registry.picker_entries.get(name) or registry.builtin_actions.get(name)
+        if existing is not None:
+            raise PluginRegistrationError(
+                f'plugin "{host.plugin_id}": builtin action "{name}" collides with the same '
+                f'entry already registered by plugin "{existing.plugin_id}"'
+            )
     # Two passes (validate-all-then-merge-all) so a collision on the SECOND
-    # picker entry a plugin declares doesn't leave the FIRST one partially
-    # merged into the shared registry.
+    # picker entry/builtin action a plugin declares doesn't leave the FIRST
+    # one partially merged into the shared registry.
     for kind, spec in host._node_kinds.items():
         registry.node_kinds[kind] = spec
     for name, entry in host._picker_entries.items():
         registry.picker_entries[name] = entry
+    for name, spec in host._builtin_actions.items():
+        registry.builtin_actions[name] = spec
     registry.intents.extend(host._intents)
 
 

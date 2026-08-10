@@ -1,0 +1,23 @@
+# plugins/web_research/plugin.toml
+#
+# ADR-014 stage 14.3: first-party migration of the pre-SDK "Web Research"
+# built-in picker action onto a real plugin package. Uses
+# HostContext.register_builtin_plugin (NOT register_node_kind/
+# register_picker_entry) - see plugins/web_research/plugin.py's own
+# docstring and HostContext.register_builtin_plugin's docstring
+# (backend/plugin_sdk.py) for why: the "web_research" kind string is
+# already baked into the frontend's NODE_TYPES map, the wire contract, and
+# session_save.py/session_load.py's hand-written serializer, so this
+# plugin reuses SceneDocument.add_web_research_node directly rather than
+# going through the generic, auto-namespaced PluginNodeSeed path.
+
+[plugin]
+id = "web_research"
+name = "Web Research"
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "Searches, retrieves, and summarizes cited web sources under a bounded network policy."
+
+[frontend]
+view = "generic"
