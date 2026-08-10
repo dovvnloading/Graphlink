@@ -163,6 +163,7 @@ export interface GitlinkPendingChangeRow {
 }
 
 export interface ChartDataRow {
+  version?: number | null;
   type?: "bar" | "line" | "pie" | "histogram" | "sankey" | null;
   title?: string | null;
   labels?: string[] | null;
@@ -976,6 +977,10 @@ function checkGitlinkPendingChangeRow(value: unknown, path: string, errors: stri
 
 function checkChartDataRow(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["version"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.version` + ": expected number"); }
+  }
   {
     const fieldValue = value["type"];
     if (fieldValue !== undefined && fieldValue !== null) { if (!["bar", "line", "pie", "histogram", "sankey"].includes(fieldValue as string)) errors.push(`${path}.type` + `: ${JSON.stringify(fieldValue)} is not one of [` + "bar, line, pie, histogram, sankey" + `]`); }

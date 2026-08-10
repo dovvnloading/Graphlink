@@ -170,6 +170,9 @@
                 },
                 "type": "array"
               },
+              "version": {
+                "type": "integer"
+              },
               "xAxis": {
                 "type": "string"
               },

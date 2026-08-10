@@ -17,7 +17,7 @@ construct a real Qt ChatScene and stay behind).
 """
 
 from graphlink_chart_agent import ChartDataAgent
-from graphlink_chart_data import ChartDataError, canonicalize_chart_data
+from graphlink_chart_data import CHART_SPEC_VERSION, ChartDataError, canonicalize_chart_data
 
 
 def _bar_data(**overrides):
@@ -94,6 +94,14 @@ def test_chart_data_agent_validate_chart_data_uses_the_canonical_contract():
     valid, error = agent.validate_chart_data(_bar_data(), "bar")
     assert valid is True
     assert error is None
+
+
+def test_canonicalize_chart_data_stamps_the_spec_version():
+    # ADR-013 stage 13.1: every canonical shape carries an explicit,
+    # typed version - a future migration reads this rather than sniffing
+    # field presence to know which shape it's looking at.
+    canonical = canonicalize_chart_data(_bar_data(), "bar")
+    assert canonical["version"] == CHART_SPEC_VERSION == 1
 
 
 def test_chart_data_agent_validate_chart_data_canonicalizes_the_dict_in_place():

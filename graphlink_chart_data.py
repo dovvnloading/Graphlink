@@ -11,6 +11,12 @@ MAX_SANKEY_FLOWS = 300
 MAX_LABEL_LENGTH = 160
 MAX_TITLE_LENGTH = 200
 
+# ADR-013 stage 13.1: the canonical shape's own schema version - every spec
+# canonicalize_chart_data produces today is version 1. Bumped only when this
+# function's OUTPUT shape changes incompatibly (a renamed/removed key, a new
+# required field) - not on every chart-type addition, which stays additive.
+CHART_SPEC_VERSION = 1
+
 
 class ChartDataError(ValueError):
     """Raised when a chart payload cannot be converted to the canonical schema."""
@@ -112,6 +118,7 @@ def canonicalize_chart_data(data, chart_type=None):
         raise ChartDataError(f"Chart payload type must be {expected_type}")
 
     result = {
+        "version": CHART_SPEC_VERSION,
         "type": expected_type,
         "title": _clean_text(
             data.get("title"),

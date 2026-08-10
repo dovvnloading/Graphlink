@@ -295,6 +295,12 @@ class ChartDataRow:
     the file's existing `gitlinkChangeFingerprint`-style fields already
     accept."""
 
+    # ADR-013 stage 13.1: the spec's own schema version - canonicalize_chart_data
+    # always stamps 1 today. Bumped only when the CANONICAL SHAPE this dataclass
+    # describes changes incompatibly (a new required field, a renamed key) - not
+    # on every feature addition. A future migration reads this to know which
+    # shape it's looking at rather than sniffing field presence.
+    version: int | None = None
     type: Literal["bar", "line", "pie", "histogram", "sankey"] | None = None
     title: str | None = None
     # bar/line/pie
