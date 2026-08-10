@@ -33,6 +33,7 @@ import { DiagnosticsDialog } from "./chrome/DiagnosticsDialog";
 import { KnowledgeSearchDialog } from "./chrome/KnowledgeSearchDialog";
 import { BuilderLaunchDialog } from "./chrome/BuilderLaunchDialog";
 import { NotificationBanner } from "./chrome/NotificationBanner";
+import { OnboardingDialog } from "./chrome/OnboardingDialog";
 import { PinOverlay } from "./chrome/PinOverlay";
 import { PluginPicker } from "./chrome/PluginPicker";
 import { SearchOverlay } from "./chrome/SearchOverlay";
@@ -412,48 +413,62 @@ function App() {
                 onClose={onCloseDocumentView}
               />
               <div className="app-canvas-content">
-                {/* ADR-012 stage 12.5: wraps both the canvas (NodeMarkdown's
-                    own search-highlighting read) and SearchOverlay (the
-                    query's only writer) - see CanvasSearchContext.tsx. */}
-                <CanvasSearchProvider>
-                  <ExecutionLimitsProvider transport={transport}>
+                {/* ADR-012 stage 12.6: widened from "wraps just SceneCanvas"
+                    to "wraps this whole content region" so SettingsDialog's
+                    own read-only Resource Limits section (below) can reach
+                    the same useExecutionLimits() the code-execution approval
+                    gate uses - a Context.Provider renders no DOM of its own,
+                    so this costs nothing layout-wise, and every other child
+                    here simply ignores a Context it doesn't consume. */}
+                <ExecutionLimitsProvider transport={transport}>
+                  {/* ADR-012 stage 12.5: wraps both the canvas (NodeMarkdown's
+                      own search-highlighting read) and SearchOverlay (the
+                      query's only writer) - see CanvasSearchContext.tsx. */}
+                  <CanvasSearchProvider>
                     <SceneCanvas
                       store={sceneStore}
                       onOpenDocumentView={onOpenDocumentView}
                       getComposerRoute={getComposerRoute}
                     />
-                  </ExecutionLimitsProvider>
-                  <div className="app-search-layer">
-                    <SearchOverlay store={sceneStore} />
+                    <div className="app-search-layer">
+                      <SearchOverlay store={sceneStore} />
+                    </div>
+                  </CanvasSearchProvider>
+                  <PinOverlay store={sceneStore} />
+                  <ViewPopover store={sceneStore} />
+                  <PluginPicker transport={transport} store={sceneStore} />
+                  <div className="app-notification-layer">
+                    <NotificationBanner store={composerStore} />
                   </div>
-                </CanvasSearchProvider>
-                <PinOverlay store={sceneStore} />
-                <ViewPopover store={sceneStore} />
-                <PluginPicker transport={transport} store={sceneStore} />
-                <div className="app-notification-layer">
-                  <NotificationBanner store={composerStore} />
-                </div>
-                <div className="app-composer-layer">
-                  <Composer
-                    store={composerStore}
-                    sceneStore={sceneStore}
-                    showTokenCounter={settingsVisibility.showTokenCounter !== false}
-                  />
-                </div>
-                <CommandPalette store={sceneStore} />
-                <AboutDialog transport={transport} />
-                <LazySurface overlayName="help">
-                  <HelpDialog />
-                </LazySurface>
-                <DiagnosticsDialog transport={transport} />
-                <KnowledgeSearchDialog transport={transport} />
-                <BuilderLaunchDialog transport={transport} />
-                <LazySurface overlayName="settings">
-                  <SettingsDialog transport={transport} />
-                </LazySurface>
-                <LazySurface overlayName="library">
-                  <ChatLibraryDialog transport={transport} />
-                </LazySurface>
+                  <div className="app-composer-layer">
+                    <Composer
+                      store={composerStore}
+                      sceneStore={sceneStore}
+                      showTokenCounter={settingsVisibility.showTokenCounter !== false}
+                    />
+                  </div>
+                  <CommandPalette store={sceneStore} />
+                  <AboutDialog transport={transport} />
+                  {/* ADR-012 stage 12.6: not lazy, unlike Help/Settings/
+                      Library just below - it has to be mounted from the
+                      start so its own app-settings subscription can decide
+                      whether to auto-open itself on a fresh machine; nothing
+                      else opens it first the way a user click opens those
+                      three. */}
+                  <OnboardingDialog transport={transport} store={sceneStore} />
+                  <LazySurface overlayName="help">
+                    <HelpDialog />
+                  </LazySurface>
+                  <DiagnosticsDialog transport={transport} />
+                  <KnowledgeSearchDialog transport={transport} />
+                  <BuilderLaunchDialog transport={transport} />
+                  <LazySurface overlayName="settings">
+                    <SettingsDialog transport={transport} />
+                  </LazySurface>
+                  <LazySurface overlayName="library">
+                    <ChatLibraryDialog transport={transport} />
+                  </LazySurface>
+                </ExecutionLimitsProvider>
               </div>
             </div>
           </main>

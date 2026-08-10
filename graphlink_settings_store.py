@@ -663,6 +663,18 @@ class SettingsManager:
         self.state["enable_system_prompt"] = bool(enabled)
         self._save_state()
 
+    def get_has_completed_onboarding(self):
+        # ADR-012 stage 12.6: False by default so a fresh machine's first
+        # launch auto-opens the onboarding wizard (OnboardingDialog.tsx) -
+        # the wizard sets this True itself on dismiss/completion so it never
+        # auto-shows again, mirroring show_token_counter's own default-False/
+        # explicit-opt-in shape just above.
+        return self.state.get("has_completed_onboarding", False)
+
+    def set_has_completed_onboarding(self, completed: bool):
+        self.state["has_completed_onboarding"] = bool(completed)
+        self._save_state()
+
     def get_auto_model_policy(self):
         # ADR-018 stage 18.4. "cheapest-capable" by default - matching the
         # ADR's own framing (cost-aware routing is the headline feature;

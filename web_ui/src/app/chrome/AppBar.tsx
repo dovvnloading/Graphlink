@@ -26,10 +26,19 @@ import { Popover, useOverlays } from "../overlays/overlays";
  *
  * R8a (UI/UX issue list finding #8): the provider-mode <select> that used to
  * sit here was permanently `disabled`, held exactly one hardcoded option
- * ("Ollama (Local)"), and its onChange was a literal no-op - there has never
- * been a setProviderMode intent anywhere in backend/ for it to call. Removed
- * outright rather than left as a dead control; Settings' own provider pages
- * are the real, complete switcher.
+ * ("Ollama (Local)"), and its onChange was a literal no-op - at the time,
+ * there was no setProviderMode intent anywhere in backend/ for it to call.
+ * Removed outright rather than left as a dead control.
+ *
+ * ADR-006 stage 6.5 later added a real setProviderMode intent
+ * (backend/api/intents_settings_general.py), and ADR-012 stage 12.6 wired
+ * it up - but NOT back into this toolbar. A cramped toolbar select was
+ * exactly what got removed above for being broken, and Settings' 3 per-mode
+ * pages (Ollama/Llama.cpp/API Endpoint - SettingsDialog.tsx) already give a
+ * user somewhere to configure whichever mode they're switching to; each
+ * page's own "Use This Provider" action is the real switch trigger,
+ * co-located with that mode's config instead of living in a second place
+ * that would need to stay in sync with it.
  *
  * R8a (finding #5): below ~1120px window width this toolbar's 12 buttons
  * (13 with the now-removed select) had no shrink/wrap/overflow behavior at

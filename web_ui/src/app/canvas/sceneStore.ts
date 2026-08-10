@@ -1165,6 +1165,14 @@ export class SceneStore {
     this.transport.fireIntent("scene", "organizeNodes", []);
   }
 
+  // ADR-012 stage 12.6: the bundled sample workspace - a small, fixed 3-node
+  // demo the backend hardcodes (see backend/api/intents_onboarding.py's own
+  // docstring). Called from both SceneCanvas.tsx's empty-canvas hint and
+  // OnboardingDialog.tsx's "load the sample workspace" step.
+  loadSampleWorkspace(): void {
+    this.transport.fireIntent("scene", "loadSampleWorkspace", []);
+  }
+
   // R6.5: session save - targets "app-chat-library", not "scene", since
   // Save is a chat-library concern (it needs chat_id/title bookkeeping the
   // scene topic has no notion of), matching loadChat's own home despite

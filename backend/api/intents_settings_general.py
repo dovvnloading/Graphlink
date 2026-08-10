@@ -11,6 +11,14 @@ ADR-006 stage 6.5 adds setProviderMode - the first runtime path back to
 Ollama/Llama.cpp from API mode without a restart. It routes through
 backend.agents.apply_provider_mode (the exact same three-way dispatch
 bootstrap_provider_state uses at startup) and persists the choice.
+
+ADR-012 stage 12.6 adds setMcpServers - the deferred UI-write half of
+ADR-007 stage 7.5's MCP client (backend/mcp_client.py's own module
+docstring explicitly deferred this surface to ADR-012). Bulk-replace, same
+"whole value" persistence shape as SettingsManager.get_mcp_servers/
+set_mcp_servers themselves (graphlink_settings_store.py) - the frontend's
+MCP Servers page always sends the FULL updated array, never a single-
+server patch.
 """
 
 from __future__ import annotations
@@ -33,6 +41,47 @@ _KNOWN_PROVIDER_MODES = (
     config.MODE_LLAMACPP_LOCAL,
     config.MODE_API_ENDPOINT,
 )
+
+
+def _mcp_servers_from_wire(servers: object) -> list[dict] | None:
+    """Maps setMcpServers' wire-shaped args (camelCase, mirroring
+    AppSettingsStatePayload's own McpServerConfigPayload) back to the
+    snake_case keys SettingsManager.set_mcp_servers expects - the write-
+    side counterpart of backend/settings.py's _mcp_servers_for_wire, kept
+    here rather than there since intents_settings_*.py modules cannot
+    import backend.settings (see _settings_shared.py's own docstring on
+    why: backend.settings imports THIS module to register these intents,
+    so the reverse import would be circular).
+
+    Returns None when the payload isn't even list-of-dicts shaped - the
+    ONE thing set_mcp_servers below rejects outright, matching
+    setProviderMode's own "reject a shape validation can't make sense of,
+    without touching persisted state" posture just above. Per-entry field
+    problems (a blank name/command, wrong-typed args/scopes/timeout) are
+    deliberately NOT re-validated here: SettingsManager.set_mcp_servers
+    already does its own tolerant normalization on the way in (name/command
+    required, everything else defaulted - see its own docstring), the same
+    "malformed entries dropped, not raised on" policy get_mcp_servers reads
+    back with. Duplicating that per-field logic here would just be a second
+    copy that could drift from the one SettingsManager itself is already
+    tested against."""
+    if not isinstance(servers, list):
+        return None
+    normalized = []
+    for entry in servers:
+        if not isinstance(entry, dict):
+            return None
+        normalized.append({
+            "name": entry.get("name", ""),
+            "command": entry.get("command", ""),
+            "args": entry.get("args", []),
+            "scopes": entry.get("scopes", []),
+            "approval": entry.get("approval", "always"),
+            "enabled_tools": entry.get("enabledTools", []),
+            "enabled": entry.get("enabled", True),
+            "timeout": entry.get("timeout", 30.0),
+        })
+    return normalized
 
 
 def register_settings_general_intents(
@@ -93,6 +142,14 @@ def register_settings_general_intents(
         await asyncio.to_thread(run_locked, manager.set_theme, str(theme))
         await bus.publish("app-settings")
 
+    async def set_has_completed_onboarding(completed: bool):
+        # ADR-012 stage 12.6: persist only, same shape as set_theme above -
+        # OnboardingDialog.tsx fires this the moment it closes (any
+        # dismissal, not only a "Done" click) so the wizard never auto-opens
+        # again once the user has seen it once.
+        await asyncio.to_thread(run_locked, manager.set_has_completed_onboarding, bool(completed))
+        await bus.publish("app-settings")
+
     async def set_notification_preference(notification_type: str, enabled: bool):
         await asyncio.to_thread(
             run_locked, manager.set_notification_preferences, {str(notification_type): bool(enabled)}
@@ -143,13 +200,29 @@ def register_settings_general_intents(
             await bus.publish("notification")
         await bus.publish("app-settings")
 
+    async def set_mcp_servers(servers: object):
+        # ADR-012 stage 12.6: bulk-replace, matching SettingsManager.
+        # set_mcp_servers' own "replace the whole collection" posture (see
+        # its docstring) - the MCP Servers settings page always sends the
+        # FULL updated array, never a single-server patch.
+        normalized = _mcp_servers_from_wire(servers)
+        if normalized is None:
+            if notifications is not None:
+                notifications.show("MCP server list is malformed - nothing was saved.", "warning")
+                await bus.publish("notification")
+            return
+        await asyncio.to_thread(run_locked, manager.set_mcp_servers, normalized)
+        await bus.publish("app-settings")
+
     bus.register_intent("app-settings", "setActiveSection", set_active_section)
     bus.register_intent("app-settings", "setShowTokenCounter", set_show_token_counter)
     bus.register_intent("app-settings", "setEnableSystemPrompt", set_enable_system_prompt)
     bus.register_intent("app-settings", "setLogLevel", set_log_level)
     bus.register_intent("app-settings", "setAutoModelPolicy", set_auto_model_policy)
     bus.register_intent("app-settings", "setTheme", set_theme)
+    bus.register_intent("app-settings", "setHasCompletedOnboarding", set_has_completed_onboarding)
     bus.register_intent("app-settings", "setNotificationPreference", set_notification_preference)
     bus.register_intent("app-settings", "setGithubToken", set_github_token)
     bus.register_intent("app-settings", "clearGithubToken", clear_github_token)
     bus.register_intent("app-settings", "setProviderMode", set_provider_mode)
+    bus.register_intent("app-settings", "setMcpServers", set_mcp_servers)

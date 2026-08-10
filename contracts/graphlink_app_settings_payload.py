@@ -31,6 +31,32 @@ class ApiModelDescriptorPayload:
 
 
 @dataclass
+class McpServerConfigPayload:
+    """One configured MCP server - the wire counterpart of backend/
+    mcp_client.py's McpServerConfig, sourced from SettingsManager.
+    get_mcp_servers' own snake_case dict shape (graphlink_settings_store.py)
+    and camelCased at the boundary exactly like ApiModelDescriptorPayload
+    above camelCases get_api_model_catalog's snake_case model_id - every
+    other field in this wire contract is camelCase, that mapping happens in
+    backend/settings.py's own _mcp_servers_for_wire, not by bending either
+    module's native convention. ADR-012 stage 12.6: the read side of the
+    new setMcpServers intent (backend/api/intents_settings_general.py) -
+    the MCP Servers settings page reads the CURRENT list from here and
+    always writes back the FULL replacement array (bulk-replace, matching
+    SettingsManager.set_mcp_servers' own "replace the whole collection"
+    posture, not an incrementally-patched map)."""
+
+    name: str
+    command: str
+    args: list[str]
+    scopes: list[str]
+    approval: str
+    enabledTools: list[str]
+    enabled: bool
+    timeout: float
+
+
+@dataclass
 class AppSettingsStatePayload:
     schemaVersion: int
     revision: int
@@ -51,6 +77,23 @@ class AppSettingsStatePayload:
     autoModelPolicy: str
     # ADR-012 stage 12.2: General page - "system" | "light" | "dark".
     theme: str
+    # ADR-012 stage 12.6: has the first-run onboarding wizard
+    # (OnboardingDialog.tsx) ever been completed/dismissed - False on a
+    # fresh machine, which is what auto-opens the wizard on first launch;
+    # the wizard sets this True itself the moment it closes (any dismissal,
+    # not only its own "Done" step) so it never auto-shows again. Also
+    # flips True via a manual "Show onboarding" entry point re-opening it
+    # later, exactly like the flag it started as.
+    hasCompletedOnboarding: bool
+    # ADR-012 stage 12.6: the currently ACTIVE provider mode - one of
+    # graphlink_task_config.py's MODE_OLLAMA_LOCAL / MODE_LLAMACPP_LOCAL /
+    # MODE_API_ENDPOINT strings, which are also SettingsDialog.tsx's own
+    # SECTIONS labels for those 3 pages. Read side of the setProviderMode
+    # intent (ADR-006 stage 6.5, backend/api/intents_settings_general.py) -
+    # that intent existed for 2 stages with nothing in the wire payload ever
+    # exposing what it last set, so the frontend had no way to know which
+    # mode was live without this.
+    providerMode: str
     # R7.4a: API-provider page.
     activeApiProvider: str
     viewingApiProvider: str
@@ -88,4 +131,10 @@ class AppSettingsStatePayload:
     llamaCppScanSummary: str
     llamaCppScanStatus: str
     llamaCppNotice: str
+    # ADR-012 stage 12.6: MCP Servers page - the read side of the new
+    # setMcpServers intent (backend/api/intents_settings_general.py). The
+    # backend/mcp_client.py module docstring's own deferred-to-ADR-012
+    # gap: an McpServerConfig dataclass and SettingsManager.get_mcp_servers/
+    # set_mcp_servers persistence already existed with zero UI surface.
+    mcpServers: list[McpServerConfigPayload]
     minCompatibleSchemaVersion: int | None = None

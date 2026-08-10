@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { SettingsDialog } from "./SettingsDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
+import { ExecutionLimitsProvider } from "../canvas/ExecutionLimitsContext";
 import type { WsTransport } from "../../lib/ws/transport";
 
 // R7.4a: the first dedicated test file for SettingsDialog.tsx - recon for
@@ -25,6 +26,12 @@ const snapshot = {
   logLevel: "INFO",
   autoModelPolicy: "cheapest-capable",
   theme: "system",
+  // ADR-012 stage 12.6: required by the app-settings-state contract - see
+  // OnboardingDialog.test.tsx for the surface that actually exercises this.
+  hasCompletedOnboarding: false,
+  // ADR-012 stage 12.6: required by the app-settings-state contract
+  // (SettingsDialog.tsx's own initialState default is "Ollama (Local)").
+  providerMode: "Ollama (Local)",
   activeApiProvider: "OpenAI-Compatible",
   viewingApiProvider: "OpenAI-Compatible",
   apiBaseUrl: "https://api.openai.com/v1",
@@ -55,16 +62,23 @@ const snapshot = {
   llamaCppScanSummary: "No saved GGUF scan yet. Run a system scan or choose a folder to build the local model list.",
   llamaCppScanStatus: "idle",
   llamaCppNotice: "",
+  // ADR-012 stage 12.6: required by the app-settings-state contract.
+  mcpServers: [],
 };
 
 function makeTransport() {
   const intents: unknown[][] = [];
-  let listener: ((payload: Record<string, unknown>) => void) | null = null;
+  // Topic-keyed, not a single shared listener slot - ADR-012 stage 12.6's
+  // new Resource Limits section pulls in ExecutionLimitsProvider (below),
+  // which subscribes to its own "execution-limits" topic on mount alongside
+  // this dialog's own "app-settings" subscribe. Mirrors
+  // ExecutionLimitsContext.test.tsx's own makeFakeTransport shape.
+  const listeners = new Map<string, (payload: Record<string, unknown>) => void>();
   const transport = {
-    subscribe: (_topic: string, l: (payload: Record<string, unknown>) => void) => {
-      listener = l;
+    subscribe: (topic: string, l: (payload: Record<string, unknown>) => void) => {
+      listeners.set(topic, l);
       return () => {
-        listener = null;
+        listeners.delete(topic);
       };
     },
     intent: (topic: string, intent: string, args: unknown[]) => {
@@ -79,7 +93,8 @@ function makeTransport() {
   return {
     transport,
     intents,
-    push: (payload: Record<string, unknown>) => listener?.(payload),
+    push: (payload: Record<string, unknown>) => listeners.get("app-settings")?.(payload),
+    pushExecutionLimits: (payload: Record<string, unknown>) => listeners.get("execution-limits")?.(payload),
   };
 }
 
@@ -98,7 +113,14 @@ function setup(initial: Record<string, unknown> = snapshot) {
   render(
     <OverlayProvider>
       <OpenSettingsButton />
-      <SettingsDialog transport={fake.transport} />
+      {/* Mirrors App.tsx's own real wiring (ADR-012 stage 12.6 widened
+          ExecutionLimitsProvider's scope to cover SettingsDialog, not just
+          SceneCanvas) - without this ancestor, useExecutionLimits() inside
+          the new Resource Limits page would silently fall back to blank
+          text rather than exercising the real subscribe path. */}
+      <ExecutionLimitsProvider transport={fake.transport}>
+        <SettingsDialog transport={fake.transport} />
+      </ExecutionLimitsProvider>
     </OverlayProvider>,
   );
   act(() => fake.push(initial));
@@ -138,6 +160,26 @@ async function goToLlamaCpp(
   await user.click(screen.getByText("open settings"));
   await user.click(screen.getByRole("button", { name: "Llama.cpp (Local)" }));
   act(() => push({ ...snapshot, ...overrides, activeSection: "llama.cpp (local)" }));
+}
+
+async function goToResourceLimits(
+  user: ReturnType<typeof userEvent.setup>,
+  push: (payload: Record<string, unknown>) => void,
+  overrides: Record<string, unknown> = {},
+) {
+  await user.click(screen.getByText("open settings"));
+  await user.click(screen.getByRole("button", { name: "Resource Limits" }));
+  act(() => push({ ...snapshot, ...overrides, activeSection: "resource limits" }));
+}
+
+async function goToMcpServers(
+  user: ReturnType<typeof userEvent.setup>,
+  push: (payload: Record<string, unknown>) => void,
+  overrides: Record<string, unknown> = {},
+) {
+  await user.click(screen.getByText("open settings"));
+  await user.click(screen.getByRole("button", { name: "MCP Servers" }));
+  act(() => push({ ...snapshot, ...overrides, activeSection: "mcp servers" }));
 }
 
 // Settings' selects are CustomSelect.tsx (chrome/CustomSelect.tsx), not
@@ -744,5 +786,243 @@ describe("SettingsDialog", () => {
     await goToOllama(user, push, { ollamaScanStatus: "running" });
 
     expect(screen.getByText("Scan Folder...")).toBeDisabled();
+  });
+
+  // ADR-012 stage 12.6: the provider-mode switcher (ProviderModeSwitch in
+  // SettingsDialog.tsx) - previously nothing in the frontend ever called
+  // ADR-006 stage 6.5's setProviderMode intent at all. One component shared
+  // by all 3 mode pages, so one representative "reflects the active mode"
+  // case plus one "switch fires the right intent" case per page is enough
+  // to pin both the read side (state.providerMode) and the write side
+  // (which mode string each page's own button sends) without re-testing
+  // ProviderModeSwitch's internals 3 times over.
+  it("Ollama page shows itself as the active provider mode and renders no switch button when it already is", async () => {
+    const { user, push } = setup();
+    await goToOllama(user, push, { providerMode: "Ollama (Local)" });
+
+    expect(screen.getByText("Ollama (Local) is the active provider mode.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use This Provider" })).toBeNull();
+  });
+
+  it("Ollama page offers a switch action when a different mode is active, and it fires setProviderMode", async () => {
+    const { user, push, intents } = setup();
+    await goToOllama(user, push, { providerMode: "API Endpoint" });
+
+    expect(
+      screen.getByText("Ollama (Local) is configured here, but API Endpoint is the active provider mode."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Use This Provider" }));
+
+    expect(intents).toContainEqual(["app-settings", "setProviderMode", ["Ollama (Local)"]]);
+  });
+
+  it("Llama.cpp page offers a switch action when a different mode is active, and it fires setProviderMode", async () => {
+    const { user, push, intents } = setup();
+    await goToLlamaCpp(user, push, { providerMode: "Ollama (Local)" });
+
+    expect(
+      screen.getByText("Llama.cpp (Local) is configured here, but Ollama (Local) is the active provider mode."),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Use This Provider" }));
+
+    expect(intents).toContainEqual(["app-settings", "setProviderMode", ["Llama.cpp (Local)"]]);
+  });
+
+  it("API Endpoint page shows itself as the active provider mode and renders no switch button when it already is", async () => {
+    const { user, push } = setup();
+    await goToApiEndpoint(user, push, { providerMode: "API Endpoint" });
+
+    expect(screen.getByText("API Endpoint is the active provider mode.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use This Provider" })).toBeNull();
+  });
+
+  it("API Endpoint page offers a switch action when a different mode is active, and it fires setProviderMode", async () => {
+    const { user, push, intents } = setup();
+    await goToApiEndpoint(user, push, { providerMode: "Ollama (Local)" });
+
+    await user.click(screen.getByRole("button", { name: "Use This Provider" }));
+
+    expect(intents).toContainEqual(["app-settings", "setProviderMode", ["API Endpoint"]]);
+  });
+
+  // ADR-012 stage 12.6: the new read-only Resource Limits section - the SAME
+  // useExecutionLimits() disclosure CodeExecutionApprovalPanel.tsx renders
+  // before a human approves code execution, made reachable ahead of time
+  // instead of only mid-approval. No fireIntent call exists on this page at
+  // all (see ResourceLimitsPage's own doc comment), so unlike every other
+  // section above there is nothing here to pin an intents assertion to -
+  // these tests only cover rendering.
+  it("navigating to Resource Limits fires setActiveSection with its own key", async () => {
+    const { user, push, intents } = setup();
+    await goToResourceLimits(user, push);
+
+    expect(intents).toContainEqual(["app-settings", "setActiveSection", ["resource limits"]]);
+  });
+
+  it("Resource Limits page renders both the Py-Coder and Virtual Environment Runner disclosure text", async () => {
+    const { user, push, pushExecutionLimits } = setup();
+    await goToResourceLimits(user, push);
+    act(() =>
+      pushExecutionLimits({
+        schemaVersion: 1,
+        minCompatibleSchemaVersion: 1,
+        revision: 1,
+        pycoderResourceLimitsText: "Execution is capped at approximately 2 GB of memory and 64 concurrent processes.",
+        codeSandboxResourceLimitsText:
+          "Execution is capped at approximately 2 GB of memory and 64 concurrent processes. Binary packages only.",
+      }),
+    );
+
+    expect(
+      screen.getByText("Execution is capped at approximately 2 GB of memory and 64 concurrent processes."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Execution is capped at approximately 2 GB of memory and 64 concurrent processes. Binary packages only.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("Resource Limits page falls back to a placeholder message before any snapshot arrives", async () => {
+    const { user, push } = setup();
+    await goToResourceLimits(user, push);
+
+    expect(screen.getByText("No resource limits have been reported by the backend yet.")).toBeInTheDocument();
+  });
+
+  // ADR-012 stage 12.6: the MCP Servers page - the deferred UI half of
+  // ADR-007 stage 7.5's MCP client. Every mutation sends the FULL updated
+  // array via setMcpServers (bulk-replace, matching SettingsManager.
+  // set_mcp_servers' own "replace the whole collection" posture), so each
+  // mutating test below pins the exact resulting array, not just that SOME
+  // intent fired.
+  describe("MCP Servers page", () => {
+    const fsServer = {
+      name: "fs",
+      command: "npx",
+      args: ["-y", "server-filesystem"],
+      scopes: [],
+      approval: "always",
+      enabledTools: [],
+      enabled: true,
+      timeout: 30,
+    };
+
+    it("navigating to MCP Servers fires setActiveSection with its own key", async () => {
+      const { user, push, intents } = setup();
+      await goToMcpServers(user, push);
+
+      expect(intents).toContainEqual(["app-settings", "setActiveSection", ["mcp servers"]]);
+    });
+
+    it("shows a placeholder when no servers are configured", async () => {
+      const { user, push } = setup();
+      await goToMcpServers(user, push);
+
+      expect(screen.getByText("No MCP servers configured yet.")).toBeInTheDocument();
+    });
+
+    it("lists a configured server's name, command+args, and enabled state", async () => {
+      const { user, push } = setup();
+      await goToMcpServers(user, push, { mcpServers: [fsServer] });
+
+      expect(screen.getByText("fs")).toBeInTheDocument();
+      expect(screen.getByText("npx -y server-filesystem")).toBeInTheDocument();
+      expect(screen.getByRole("checkbox")).toBeChecked();
+    });
+
+    it("unchecking a server's enabled toggle fires setMcpServers with the full array, that entry flipped", async () => {
+      const { user, push, intents } = setup();
+      await goToMcpServers(user, push, { mcpServers: [fsServer] });
+
+      await user.click(screen.getByRole("checkbox"));
+
+      expect(intents).toContainEqual([
+        "app-settings",
+        "setMcpServers",
+        [[{ ...fsServer, enabled: false }]],
+      ]);
+    });
+
+    it("Add Server stays disabled until both a name and a command are filled in", async () => {
+      const { user, push } = setup();
+      await goToMcpServers(user, push);
+
+      const addButton = screen.getByRole("button", { name: "Add Server" });
+      expect(addButton).toBeDisabled();
+
+      await user.type(screen.getByLabelText("Server Name"), "git");
+      expect(addButton).toBeDisabled();
+
+      await user.type(screen.getByLabelText("Command"), "uvx");
+      expect(addButton).toBeEnabled();
+    });
+
+    it("Add Server fires setMcpServers with the full array plus the new entry (args split on whitespace), and clears the draft", async () => {
+      const { user, push, intents } = setup();
+      await goToMcpServers(user, push, { mcpServers: [fsServer] });
+
+      await user.type(screen.getByLabelText("Server Name"), "git");
+      await user.type(screen.getByLabelText("Command"), "uvx");
+      await user.type(screen.getByLabelText("Arguments (optional, space-separated)"), "mcp-server-git --repo /tmp");
+      await user.click(screen.getByRole("button", { name: "Add Server" }));
+
+      expect(intents).toContainEqual([
+        "app-settings",
+        "setMcpServers",
+        [[
+          fsServer,
+          {
+            name: "git",
+            command: "uvx",
+            args: ["mcp-server-git", "--repo", "/tmp"],
+            scopes: [],
+            approval: "always",
+            enabledTools: [],
+            enabled: true,
+            timeout: 30,
+          },
+        ]],
+      ]);
+      expect(screen.getByLabelText("Server Name")).toHaveValue("");
+      expect(screen.getByLabelText("Command")).toHaveValue("");
+      expect(screen.getByLabelText("Arguments (optional, space-separated)")).toHaveValue("");
+    });
+
+    it('Add Server with no arguments typed sends an empty args array, not [""]', async () => {
+      const { user, push, intents } = setup();
+      await goToMcpServers(user, push);
+
+      await user.type(screen.getByLabelText("Server Name"), "git");
+      await user.type(screen.getByLabelText("Command"), "uvx");
+      await user.click(screen.getByRole("button", { name: "Add Server" }));
+
+      const addCall = intents.find(([, intent]) => intent === "setMcpServers");
+      expect(addCall).toBeDefined();
+      const [, , args] = addCall as [string, string, unknown[]];
+      const [addedServers] = args as [{ name: string; args: string[] }[]];
+      expect(addedServers[0].args).toEqual([]);
+    });
+
+    it("Remove fires setMcpServers with the full array minus that entry", async () => {
+      const gitServer = {
+        name: "git",
+        command: "uvx",
+        args: [],
+        scopes: [],
+        approval: "always",
+        enabledTools: [],
+        enabled: true,
+        timeout: 30,
+      };
+      const { user, push, intents } = setup();
+      await goToMcpServers(user, push, { mcpServers: [fsServer, gitServer] });
+
+      await user.click(screen.getByRole("button", { name: "Remove fs" }));
+
+      expect(intents).toContainEqual(["app-settings", "setMcpServers", [[gitServer]]]);
+    });
   });
 });

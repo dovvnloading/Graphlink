@@ -1129,6 +1129,13 @@ describe("SceneStore", () => {
     ]);
   });
 
+  it("loadSampleWorkspace sends the scene-topic loadSampleWorkspace intent with no args", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.loadSampleWorkspace();
+    expect(intents).toEqual([{ topic: "scene", intent: "loadSampleWorkspace", args: [] }]);
+  });
+
   it("setNoteContent sends the scene-topic setNoteContent intent with [nodeId, content]", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

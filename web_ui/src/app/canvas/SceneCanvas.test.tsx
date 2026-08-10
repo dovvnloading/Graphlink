@@ -3132,3 +3132,79 @@ describe("SceneCanvas version-rejection gate (ADR-003 stage 3.5)", () => {
     expect(store.getSceneBlockingRejection()).not.toBeNull();
   });
 });
+
+describe("SceneCanvas empty-canvas hint (ADR-012 stage 12.6)", () => {
+  type StateListener = (payload: Record<string, unknown>) => void;
+
+  // Same minimal transport shape as makeStoreWithVersionControl above (a
+  // sibling, not reused, since it is scoped to that describe block) - just
+  // enough of WsTransport's surface for SceneCanvas to mount and for a test
+  // to push a real scene snapshot afterward.
+  function makeStoreForEmptyHint() {
+    const stateListeners = new Map<string, StateListener>();
+    const transport = {
+      subscribe: vi.fn((topic: string, listener: StateListener) => {
+        stateListeners.set(topic, listener);
+        return () => stateListeners.delete(topic);
+      }),
+      intent: vi.fn(),
+      fireIntent: vi.fn(),
+      subscribePatch: vi.fn(),
+      onVersionRejection: vi.fn((_topic: string, listener: (r: BridgeRejection | null) => void) => {
+        listener(null);
+        return () => {};
+      }),
+      setTopicBlocked: vi.fn(),
+    } as unknown as WsTransport;
+    const store = new SceneStore(transport);
+    store.connect();
+    return { store, transport, stateListeners };
+  }
+
+  const HINT_TEXT = "Type a message to start, or load the sample workspace.";
+
+  it("renders the empty-canvas hint when the scene has no nodes", () => {
+    const { store } = makeStoreForEmptyHint();
+
+    render(
+      <ReactFlowProvider>
+        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+      </ReactFlowProvider>,
+    );
+
+    expect(screen.getByText(HINT_TEXT)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load Sample Workspace" })).toBeInTheDocument();
+  });
+
+  it("hides the empty-canvas hint once the scene has a real node", () => {
+    const { store, stateListeners } = makeStoreForEmptyHint();
+
+    render(
+      <ReactFlowProvider>
+        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByText(HINT_TEXT)).toBeInTheDocument();
+
+    act(() => {
+      stateListeners.get("scene")!(
+        baseScene({ nodes: [baseNode({ id: "n1" })] }) as unknown as Record<string, unknown>,
+      );
+    });
+
+    expect(screen.queryByText(HINT_TEXT)).toBeNull();
+  });
+
+  it("the Load Sample Workspace button fires the scene-topic loadSampleWorkspace intent", () => {
+    const { store, transport } = makeStoreForEmptyHint();
+
+    render(
+      <ReactFlowProvider>
+        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+      </ReactFlowProvider>,
+    );
+
+    screen.getByRole("button", { name: "Load Sample Workspace" }).click();
+    expect(transport.fireIntent).toHaveBeenCalledWith("scene", "loadSampleWorkspace", []);
+  });
+});
