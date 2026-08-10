@@ -183,6 +183,16 @@ def _resolve_gitlink_system() -> str:
     return GitlinkAgent.SYSTEM_PROMPT
 
 
+def _resolve_builder_planner() -> str:
+    from backend import builder
+    return builder.BUILDER_PLANNER_PROMPT
+
+
+def _resolve_builder_executor() -> str:
+    from backend import builder
+    return builder.BUILDER_EXECUTOR_PROMPT
+
+
 def _resolve_reasoning_hint_low() -> str:
     import api_provider
     return api_provider.reasoning_budget_hint("low")
@@ -212,6 +222,8 @@ _PROMPT_RESOLVERS = {
     "code-sandbox-generation": _resolve_code_sandbox_generation,
     "code-sandbox-repair": _resolve_code_sandbox_repair,
     "gitlink-system": _resolve_gitlink_system,
+    "builder-planner": _resolve_builder_planner,
+    "builder-executor": _resolve_builder_executor,
     "reasoning-hint-low": _resolve_reasoning_hint_low,
     "reasoning-hint-high": _resolve_reasoning_hint_high,
 }
@@ -254,6 +266,11 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         ("code-sandbox-generation", 1, "04cc4084d03cc840cefeadb59571d9f9b69635f4a1dab05b7ae49a01d36414b6"),
         ("code-sandbox-repair", 1, "8056b58c18a8d48d332669a81edcf83906f70a4161a77ae651aa211531223bd3"),
         ("gitlink-system", 1, "6b0afb63bdc521da5437f1f3a44efba031bf003992fb85f7c570b96ee9813689"),
+        # ADR-008 stage 8.3: the Builder's two prompts (backend/builder.py
+        # owns the text). Terse by design - in a multi-step loop every
+        # system-prompt token recurs per turn.
+        ("builder-planner", 1, "4350943bb0b668dcf02c9714ddb139a5d8d874f804f9f71ba40c531fda0a05fc"),
+        ("builder-executor", 1, "c8741101ff52bc8e72bdbe61d8962620e58c40aab80571abc7d537c987f14bf6"),
         ("reasoning-hint-low", 1, "87d4a1d2e09416005d656faaca77fa2fb2305f0c4b52940f0dbaf0d234669552"),
         ("reasoning-hint-high", 1, "7a004877f0362c73208a61bdd81103d22d5b1eaafe998e82138d970273919d9b"),
     ]

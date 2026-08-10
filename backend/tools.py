@@ -167,6 +167,14 @@ class ToolRegistry:
             raise ValueError(f"Tool {spec.name!r} is already registered.")
         self._registrations[spec.name] = _Registration(spec, handler, scope_set, approval)
 
+    def scopes_for(self, name: str) -> frozenset[str] | None:
+        """The scope set `name` was registered with, or None for an unknown
+        tool - ADR-008's mode-aware approval router keys autopilot's
+        auto-approve decision on this (a call whose scopes fit inside the
+        autopilot set proceeds; anything touching net.fetch still prompts)."""
+        registration = self._registrations.get(name)
+        return frozenset(registration.scopes) if registration is not None else None
+
     def specs(self) -> tuple[ToolSpec, ...]:
         """Every registered tool's neutral spec, in registration order - what
         a caller passes as ChatRequest.tools for a run granted access to all
@@ -215,5 +223,13 @@ class ToolRegistry:
 
         try:
             return await registration.handler(call, ctx)
+        except RequestCancelledError:
+            # ADR-008 stage 8.2: a long-running handler (run_node parks in
+            # code execution / model calls for minutes) observing the SAME
+            # cancel event this function checks at its own checkpoints must
+            # follow the same contract - cancellation propagates to the
+            # loop, never fed back to the model as a tool "error" it would
+            # then try to reason about.
+            raise
         except Exception as exc:
             return ToolResult(content=f"Tool {call.name!r} raised {type(exc).__name__}: {exc}", is_error=True)

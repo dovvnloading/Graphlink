@@ -102,6 +102,21 @@ MIGRATED_KIND_FIELDS = {
         "code_sandbox_awaiting_approval", "code_sandbox_approval_requirements",
         "code_sandbox_approved_fingerprint", "code_sandbox_error",
     ],
+    # ADR-008 stage 8.3: the Builder plan node - born state-typed (never a
+    # bare-SceneNode field era to migrate FROM), listed here so the bare-
+    # attribute ban covers it from day one. Every name carries a plan_/
+    # builder_ prefix specifically so this table needs no
+    # _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES exemptions (the generic
+    # candidates - goal/steps/mode/run_id - collide with Command.run_id
+    # and friends all over the command layer).
+    "plan": [
+        "plan_goal", "plan_steps", "builder_status", "builder_mode",
+        "builder_run_id", "builder_max_steps", "builder_max_tokens",
+        "builder_max_wall_seconds", "builder_spent_steps",
+        "builder_spent_tokens", "builder_spent_wall_seconds",
+        "builder_awaiting_tool_approval", "builder_approval_tool_name",
+        "builder_approval_summary", "builder_status_detail",
+    ],
 }
 
 
@@ -315,6 +330,12 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "completionTokens", "promptTokens",
     "researchResult", "researchStage", "researchTotal", "responseIncomplete",
     "synthesisInstructions", "title", "toolCalls", "x", "y",
+    # ADR-008 stage 8.3: the Builder plan node's 15 fields.
+    "planGoal", "planSteps", "builderStatus", "builderMode", "builderRunId",
+    "builderMaxSteps", "builderMaxTokens", "builderMaxWallSeconds",
+    "builderSpentSteps", "builderSpentTokens", "builderSpentWallSeconds",
+    "builderAwaitingToolApproval", "builderApprovalToolName",
+    "builderApprovalSummary", "builderStatusDetail",
 ])
 
 

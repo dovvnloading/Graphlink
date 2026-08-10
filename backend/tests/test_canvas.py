@@ -2105,10 +2105,21 @@ class Recorder:
 
 class _FakeSettingsManager:
     """Stand-in for AgentDispatcher's settings_manager - canvas tests only
-    need persona() to resolve, not real settings persistence."""
+    need persona() to resolve, not real settings persistence. ADR-008
+    stage 8.6 adds the in-memory recipe pair so builder intents exercise
+    the real list/save flow against it."""
+
+    def __init__(self):
+        self._recipes: list = []
 
     def get_enable_system_prompt(self):
         return True
+
+    def get_recipes(self):
+        return list(self._recipes)
+
+    def set_recipes(self, recipes):
+        self._recipes = list(recipes or [])
 
 
 def make_bus_with_dispatcher():
@@ -5196,6 +5207,37 @@ def test_remove_nodes_does_not_touch_the_repl_dict_when_no_pycoder_node_is_delet
             "a still-live pycoder node's REPL must not be disposed just "
             "because a DIFFERENT node was deleted"
         )
+
+    asyncio.run(run())
+
+
+def test_remove_nodes_cancels_a_live_builder_run_on_the_deleted_plan_node():
+    """review-fix: a plan node's own live Builder run has no timeout on
+    its approval pause either (the same "wait for a human, however long
+    that takes" design as pycoder/code_sandbox above) - deleting the node
+    without cancelling first stranded the run forever: RunRegistry stayed
+    busy for kind="builder" for the whole session (locking out every
+    other build), and undo could not recover it either since commands.py
+    deliberately nulls pending_request_id on restore."""
+    async def run():
+        import threading
+
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        node = document.add_plan_node(0, 0, "goal")
+        cancel_event = threading.Event()
+        handle = dispatcher._runs.claim("builder", node_id=node.id, cancel_event=cancel_event)
+        node.pending_request_id = handle.request_id
+        node.state.builder_status = "awaiting_approval"
+
+        await bus.dispatch_intent("scene", "removeNodes", [[node.id]])
+
+        assert node.id not in document.nodes
+        assert not dispatcher._runs.is_busy("builder"), (
+            "deleting a plan node with a live run must cancel it - "
+            "otherwise the 'builder' slot stays claimed forever and no "
+            "other build can ever start"
+        )
+        assert cancel_event.is_set()
 
     asyncio.run(run())
 

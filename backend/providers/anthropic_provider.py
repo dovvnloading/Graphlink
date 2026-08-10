@@ -289,7 +289,16 @@ class AnthropicProvider:
                         arguments=json.loads(buf["json"]) if buf["json"] else {},
                     ),
                 )
-            yield ProviderEvent("done", "".join(answer_parts).strip())
+            # review-fix: prompt_tokens/completion_tokens were already
+            # collected above (message_start/message_delta fire regardless
+            # of whether the turn ends in tool calls or text) but this
+            # short-circuit dropped them - every builder tool-call turn
+            # silently reported usage=None and the token budget went
+            # unenforced on real spend.
+            yield ProviderEvent(
+                "done", "".join(answer_parts).strip(),
+                usage=normalize_usage(prompt_tokens, completion_tokens),
+            )
             return
 
         # The same composition contract as _extract_anthropic_text gives the

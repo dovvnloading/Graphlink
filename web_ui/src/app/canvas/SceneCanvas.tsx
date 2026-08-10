@@ -36,6 +36,7 @@ import { OrthogonalEdge } from "./OrthogonalEdge";
 import { PyCoderNodeView, type PyCoderFlowNode } from "./PyCoderNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNodeView";
+import { PlanNodeView, type PlanFlowNode } from "./PlanNodeView";
 import {
   GROUP_FALLBACK_HEIGHT,
   GROUP_FALLBACK_WIDTH,
@@ -77,7 +78,8 @@ export type SceneFlowNode =
   | CodeSandboxFlowNode
   | NoteFlowNode
   | GroupFlowNode
-  | ChartFlowNode;
+  | ChartFlowNode
+  | PlanFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   // ADR-011 stage 11.6/11.1 dedup: was its own local
@@ -122,6 +124,8 @@ const NODE_TYPES = {
   // R6.2: real chart nodes (bar/line/pie/histogram/sankey) - a backend-
   // rendered PNG card, see ChartNodeView.tsx's own module doc.
   chart: ChartNodeView,
+  // ADR-008 stage 8.3: the Builder's plan node - see PlanNodeView.tsx.
+  plan: PlanNodeView,
 };
 
 // R7.5b-2: the first custom edge type registered in this codebase - see
@@ -704,6 +708,44 @@ function makeWebResearchFns(id: string, liveRef: { current: DispatcherLive }) {
   };
 }
 
+function makePlanFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    onStartExecution: () => liveRef.current.store.startBuilderExecution(id),
+    onCancel: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.cancelBuilderRun(n.pendingRequestId);
+    },
+    // Zero-argument approve/deny closed over the CURRENT snapshot's
+    // pendingRequestId - the CodeExecutionApprovalPanel posture: the
+    // panel structurally cannot name a different request than the one
+    // this row shows.
+    onApproveTool: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.approveBuilderTool(n.pendingRequestId);
+    },
+    onDenyTool: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.denyBuilderTool(n.pendingRequestId);
+    },
+    // ADR-008 stage 8.4: "undo this build" - the ADR-010 stage-10.5
+    // machinery (scene/undoRun) finally gets its affordance. Keyed on the
+    // ROW's builderRunId, not pendingRequestId: the run is over when this
+    // is offered.
+    onUndoBuild: () => {
+      const { n, store } = liveRef.current;
+      if (n.builderRunId) store.undoRun(n.builderRunId);
+    },
+    // ADR-008 stage 8.6: save-your-build - the backend derives the name
+    // from the goal when none is given.
+    onSaveRecipe: () => liveRef.current.store.saveBuilderRecipe(id),
+  };
+}
+
 function makeArtifactFns(id: string, liveRef: { current: DispatcherLive }) {
   return {
     onToggleCollapse: () => {
@@ -1260,6 +1302,47 @@ export function toFlowNodes(
           researchActiveSourceId: n.researchActiveSourceId ?? null,
           researchError: n.researchError,
           researchResult: n.researchResult ?? null,
+          ...fns,
+        },
+      };
+      cache.flowNodes.set(n, { extraSig: "", flowNode });
+      flowNodes.push(flowNode);
+      continue;
+    }
+    if (n.kind === "plan") {
+      // ADR-008 stage 8.3. No onDock (plan nodes are never docked) and no
+      // isDimmed/branch-focus wiring - same reasoning as the web_research
+      // branch above. No flowNode cache extraSig needed: every builder
+      // field lives on the row itself, so a changed row object IS the
+      // cache miss.
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makePlanFns);
+      if (cached) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
+        id: n.id,
+        type: "plan" as const,
+        position: { x: n.x, y: n.y },
+        data: {
+          planGoal: n.planGoal,
+          planSteps: n.planSteps,
+          builderStatus: n.builderStatus,
+          builderMode: n.builderMode,
+          builderRunId: n.builderRunId,
+          builderMaxSteps: n.builderMaxSteps,
+          builderMaxTokens: n.builderMaxTokens,
+          builderMaxWallSeconds: n.builderMaxWallSeconds,
+          builderSpentSteps: n.builderSpentSteps,
+          builderSpentTokens: n.builderSpentTokens,
+          builderSpentWallSeconds: n.builderSpentWallSeconds,
+          builderAwaitingToolApproval: n.builderAwaitingToolApproval,
+          builderApprovalToolName: n.builderApprovalToolName,
+          builderApprovalSummary: n.builderApprovalSummary,
+          builderStatusDetail: n.builderStatusDetail,
+          isCollapsed: n.isCollapsed,
+          pendingRequestId: n.pendingRequestId ?? null,
           ...fns,
         },
       };

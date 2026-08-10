@@ -756,3 +756,67 @@ class ChatState(NodeState):
     # honest snapshot, not a promise of continuous re-indexing this
     # codebase cannot make yet).
     index_into_knowledge: bool = False
+
+
+@dataclass
+class PlanState(NodeState):
+    """ADR-008 stage 8.3: the Builder's plan node - the single source of
+    truth for a build. The ADR's own decision #2: "Planning is explicit
+    and visible: the plan is itself a node (a checklist the user sees and
+    can edit before execution proceeds)."
+
+    THE PLAN NODE IS THE RESUME POINT, not any in-memory loop state: a
+    paused/interrupted build resumes by claiming a NEW run and rebuilding
+    executor context from goal + steps (+ the built nodes' own content via
+    graph.read_subgraph) - never from a held transcript. That is what
+    makes pause survive app restarts for free (design doc D6), and why
+    every field the loop needs to continue lives HERE.
+
+    `steps` items are plain dicts {"id": str, "title": str, "status": str,
+    "detail": str} - status one of pending|running|done|failed|skipped.
+    Kept as dicts (not a nested dataclass) matching tool_invocations'
+    own precedent directly above: the wire layer owns the typed row
+    (PlanStepRow in contracts/), the domain keeps the flexible shape.
+
+    `builder_status` is the loop's own state machine:
+      draft -> planning -> awaiting_start -> running <-> awaiting_approval
+      running -> paused (budget breach; resumable)
+      running -> done | failed | stopped   (terminal)
+      any non-terminal on session load -> "interrupted" (terminal,
+      resumable - a load-time normalization in session_load, since a
+      RunHandle never survives a restart and a stale "running" would
+      render a spinner no run backs).
+
+    `run_id` is the LIVE (or most recent) run's RunHandle.request_id -
+    what undo_run keys on for "Undo this build", re-stamped on every
+    resume (each resume is its own run; undo of a resumed build reverts
+    per-run segments, newest first - consistent with undo_run's own
+    stop-at-first-non-matching contract).
+
+    Budgets are per-BUILD (not per-run): spent_* accumulate across
+    pauses/resumes, so resuming is never a budget reset. Hard ceilings,
+    checked before every model turn and every tool invocation - a breach
+    pauses with state intact, never silently truncates (the ADR's own
+    "Budgets are hard" decision)."""
+
+    plan_goal: str = ""
+    plan_steps: list[dict[str, Any]] = field(default_factory=list)
+    builder_status: str = "draft"
+    builder_mode: str = "copilot"  # "copilot" | "autopilot"
+    builder_run_id: str = ""
+    builder_max_steps: int = 12
+    builder_max_tokens: int = 150_000
+    builder_max_wall_seconds: int = 900
+    builder_spent_steps: int = 0
+    builder_spent_tokens: int = 0
+    builder_spent_wall_seconds: int = 0
+    # Live approval surface (copilot): mirrors the pycoder/code_sandbox
+    # *AwaitingApproval + frozen-requirements pattern - the panel renders
+    # from these; approve/deny resolve the run's approval_future.
+    builder_awaiting_tool_approval: bool = False
+    builder_approval_tool_name: str = ""
+    builder_approval_summary: str = ""
+    # Pause reason / failure text / final summary - one field, keyed by
+    # builder_status, mirroring how research_error/research_stage share a
+    # single narrative surface per state.
+    builder_status_detail: str = ""

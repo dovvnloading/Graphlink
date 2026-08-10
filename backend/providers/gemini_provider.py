@@ -252,7 +252,12 @@ class GeminiProvider:
         if tool_calls:
             for call in tool_calls:
                 yield ProviderEvent("tool_call", tool_call=call)
-            yield ProviderEvent("done", final)
+            # review-fix: usageMetadata was already being collected from
+            # every payload above (including the trailing frame of a
+            # function-call response) but this short-circuit dropped it -
+            # every builder tool-call turn silently reported usage=None
+            # and the token budget went unenforced on real spend.
+            yield ProviderEvent("done", final, usage=usage)
             return
 
         yield ProviderEvent("done", final, usage=usage)

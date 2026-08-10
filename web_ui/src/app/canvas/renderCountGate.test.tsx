@@ -147,6 +147,21 @@ function chatRow(id: string, x: number): SceneNodeRow {
         overrideProvider: "", // ADR-018 stage 18.3
         overrideModelId: "",
         indexIntoKnowledge: false, // ADR-017 stage 17.5
+        planGoal: "",
+        planSteps: [],
+        builderStatus: "",
+        builderMode: "",
+        builderRunId: "",
+        builderMaxSteps: 0,
+        builderMaxTokens: 0,
+        builderMaxWallSeconds: 0,
+        builderSpentSteps: 0,
+        builderSpentTokens: 0,
+        builderSpentWallSeconds: 0,
+        builderAwaitingToolApproval: false,
+        builderApprovalToolName: "",
+        builderApprovalSummary: "",
+        builderStatusDetail: "",
       }),
     ) as unknown as SceneNodeRow),
   };

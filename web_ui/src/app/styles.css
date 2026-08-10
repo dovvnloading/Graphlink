@@ -6451,3 +6451,186 @@ mark.document-view-search-match-current {
   color: var(--gl-surface-text-primary);
   background-color: var(--gl-neutral-button-hover);
 }
+
+/* -- ADR-008 stage 8.3: the Builder (plan node + launcher) ---------------- */
+
+.plan-node {
+  min-width: 300px;
+  max-width: 420px;
+}
+.plan-node-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.plan-node-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--gl-semantic-status-info);
+  color: var(--gl-semantic-status-info);
+  flex-shrink: 0;
+}
+.plan-node-goal {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-node-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.plan-node-status {
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--gl-surface-text-primary);
+}
+.plan-node-status-failed { color: var(--gl-semantic-status-error); }
+.plan-node-status-done { color: var(--gl-semantic-status-success); }
+.plan-node-status-paused, .plan-node-status-interrupted { color: var(--gl-semantic-status-warning); }
+.plan-node-mode-chip {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid currentColor;
+  opacity: 0.8;
+}
+.plan-node-detail {
+  font-size: 12px;
+  margin: 0;
+  color: var(--gl-surface-text-muted);
+}
+.plan-node-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.plan-node-step {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+}
+.plan-node-step-marker { flex-shrink: 0; width: 14px; text-align: center; }
+.plan-node-step-running .plan-node-step-marker { color: var(--gl-semantic-status-info); }
+.plan-node-step-done { opacity: 0.75; }
+.plan-node-step-done .plan-node-step-marker { color: var(--gl-semantic-status-success); }
+.plan-node-step-failed .plan-node-step-marker { color: var(--gl-semantic-status-error); }
+.plan-node-step-detail {
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+.plan-node-budgets {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+  flex-wrap: wrap;
+}
+.plan-node-approval {
+  border: 1px solid var(--gl-semantic-status-warning);
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.plan-node-approval-title { font-size: 12px; font-weight: 600; }
+.plan-node-approval-summary {
+  font-size: 11px;
+  margin: 0;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.plan-node-approval-actions, .plan-node-actions {
+  display: flex;
+  gap: 8px;
+}
+.plan-node-button {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--gl-neutral-button-border);
+  background: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+  cursor: pointer;
+}
+.plan-node-button:hover { background: var(--gl-neutral-button-hover); }
+.plan-node-button-start { border-color: var(--gl-semantic-status-info); }
+.plan-node-button-stop { border-color: var(--gl-semantic-status-error); }
+.plan-node-button-deny { border-color: var(--gl-semantic-status-warning); }
+
+.builder-launch-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 420px;
+}
+.builder-launch-label { font-size: 13px; font-weight: 600; }
+.builder-launch-recipe {
+  font: inherit;
+  padding: 5px 8px;
+  background: var(--gl-surface-node-body);
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+.builder-launch-goal {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  padding: 6px 8px;
+  box-sizing: border-box;
+  background: var(--gl-surface-node-body);
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+.builder-launch-mode, .builder-launch-budgets {
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+.builder-launch-budgets { flex-direction: row; flex-wrap: wrap; gap: 12px; }
+.builder-launch-budgets label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.builder-launch-budgets input { width: 110px; }
+.builder-launch-disclosure {
+  font-size: 12px;
+  margin: 2px 0 0;
+  color: var(--gl-semantic-status-warning);
+}
+.builder-launch-error { color: var(--gl-semantic-status-error); font-size: 12px; margin: 0; }
+.builder-launch-actions { display: flex; justify-content: flex-end; }
+.builder-launch-start {
+  font-size: 13px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--gl-semantic-status-info);
+  background: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+  cursor: pointer;
+}
+.builder-launch-start:hover { background: var(--gl-neutral-button-hover); }

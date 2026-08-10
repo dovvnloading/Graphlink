@@ -781,6 +781,33 @@ export class SceneStore {
     this.transport.fireIntent("scene", "cancelWebResearchRequest", [requestId]);
   }
 
+  // ADR-008 stage 8.3: the Builder's run controls - same requestId-shaped
+  // cancel and the shared approval-future resolvers, plus the plan node's
+  // own start/resume trigger (node-id-shaped: which BUILD, not which run).
+  startBuilderExecution(nodeId: string): void {
+    this.transport.fireIntent("builder", "startExecution", [nodeId]);
+  }
+
+  cancelBuilderRun(requestId: string): void {
+    this.transport.fireIntent("builder", "cancel", [requestId]);
+  }
+
+  approveBuilderTool(requestId: string): void {
+    this.transport.fireIntent("builder", "approveTool", [requestId]);
+  }
+
+  denyBuilderTool(requestId: string): void {
+    this.transport.fireIntent("builder", "denyTool", [requestId]);
+  }
+
+  setPlanSteps(nodeId: string, steps: { id: string; title: string; status: string; detail: string }[]): void {
+    this.transport.fireIntent("scene", "setPlanSteps", [nodeId, steps]);
+  }
+
+  saveBuilderRecipe(nodeId: string): void {
+    this.transport.fireIntent("builder", "saveRecipe", [nodeId, ""]);
+  }
+
   // R5.2: real Artifact/Drafter plugin - sendArtifactMessage appends a real
   // user instruction AND triggers ArtifactAgent.get_response(current_artifact,
   // history) for an existing artifact node; cancelArtifactRequest targets it

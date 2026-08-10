@@ -79,3 +79,28 @@ def test_a_lookup_with_no_invalidation_never_touches_ollama_show_a_second_time(m
 
     mock_show.assert_called_once()
     assert first == second == {"vision"}
+
+
+def test_a_transient_probe_failure_is_not_cached_so_the_next_call_retries(monkeypatch):
+    """review-fix: a failed probe (daemon unreachable, a brief restart)
+    used to be cached as None forever - ollama_supports_tools/embedding
+    map None to False, so one bad moment permanently and silently blocked
+    the Builder with a false "model does not support tool calling" error
+    even after the daemon came back up. Same negative-caching bug class
+    as crawl_etiquette's robots.txt fix."""
+    monkeypatch.setattr(api_provider, "_OLLAMA_CAPABILITY_CACHE", {})
+
+    with patch("api_provider.ollama.show", side_effect=ConnectionError("daemon unreachable")) as mock_show:
+        first = api_provider._get_ollama_capabilities("model-a")
+
+    assert first is None
+    assert "model-a" not in api_provider._OLLAMA_CAPABILITY_CACHE, (
+        "a transient probe exception must not poison the cache with a "
+        "permanent negative result"
+    )
+
+    with patch("api_provider.ollama.show", return_value={"capabilities": ["tools"]}) as mock_show_2:
+        second = api_provider._get_ollama_capabilities("model-a")
+
+    mock_show_2.assert_called_once()
+    assert second == {"tools"}, "the next call must retry the probe fresh, not serve a cached failure"

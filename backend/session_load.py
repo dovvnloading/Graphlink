@@ -195,6 +195,7 @@ from backend.canvas import (
     GitlinkState,
     HtmlState,
     ImageState,
+    PlanState,
     PycoderState,
     SceneDocument,
     SceneNode,
@@ -681,6 +682,62 @@ def _restore_code_sandbox_payload(payload: dict[str, Any]) -> SceneNode:
     )
 
 
+_BUILDER_TERMINAL_STATUSES = ("done", "failed", "stopped", "interrupted")
+
+
+def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
+    """ADR-008 stage 8.3. The one load-time normalization: a NON-terminal
+    builder_status ("running"/"awaiting_approval"/...) describes a
+    RunHandle that cannot survive a restart - restoring it verbatim would
+    render a spinner/approval panel no run backs. It lands as
+    "interrupted": terminal, honest, and resumable (the plan node is the
+    resume point - PlanState's own docstring)."""
+    x, y = _position(payload)
+    goal = str(payload.get("goal", ""))
+    raw_status = str(payload.get("builder_status", "draft") or "draft")
+    status = raw_status if raw_status in _BUILDER_TERMINAL_STATUSES + ("draft",) else "interrupted"
+    steps = []
+    for raw in payload.get("steps") or []:
+        if isinstance(raw, dict) and raw.get("title"):
+            steps.append({
+                "id": str(raw.get("id", f"s{len(steps) + 1}")),
+                "title": str(raw.get("title", "")),
+                # A step caught mid-flight ("running") is normalized the
+                # same way the whole build is - it did not finish.
+                "status": (
+                    str(raw.get("status", "pending"))
+                    if str(raw.get("status", "pending")) != "running" else "failed"
+                ),
+                "detail": str(raw.get("detail", "")),
+            })
+    mode = str(payload.get("builder_mode", "copilot") or "copilot")
+    return SceneNode(
+        id="", x=x, y=y,
+        title=f"Build: {goal[:40]}" if goal else "Build",
+        kind="plan",
+        content=goal,
+        state=PlanState(
+            plan_goal=goal,
+            plan_steps=steps,
+            builder_status=status,
+            builder_mode=mode if mode in ("copilot", "autopilot") else "copilot",
+            builder_run_id=str(payload.get("builder_run_id", "")),
+            builder_max_steps=int(payload.get("max_steps", 12) or 12),
+            builder_max_tokens=int(payload.get("max_tokens", 150_000) or 150_000),
+            builder_max_wall_seconds=int(payload.get("max_wall_seconds", 900) or 900),
+            builder_spent_steps=int(payload.get("spent_steps", 0) or 0),
+            builder_spent_tokens=int(payload.get("spent_tokens", 0) or 0),
+            builder_spent_wall_seconds=int(payload.get("spent_wall_seconds", 0) or 0),
+            builder_status_detail=(
+                str(payload.get("status_detail", ""))
+                if raw_status == status
+                else "Interrupted by an app restart - resume to continue from the plan."
+            ),
+        ),
+        is_collapsed=bool(payload.get("is_collapsed", False)),
+    )
+
+
 _NODE_RESTORERS = {
     "chat": lambda payload, document: _restore_chat_payload(payload),
     "code": lambda payload, document: _restore_code_payload(payload),
@@ -694,6 +751,7 @@ _NODE_RESTORERS = {
     "gitlink": lambda payload, document: _restore_gitlink_payload(payload),
     "pycoder": lambda payload, document: _restore_pycoder_payload(payload),
     "code_sandbox": lambda payload, document: _restore_code_sandbox_payload(payload),
+    "plan": lambda payload, document: _restore_plan_payload(payload),
 }
 
 # Verified directly against both serializers.py (which field each isinstance

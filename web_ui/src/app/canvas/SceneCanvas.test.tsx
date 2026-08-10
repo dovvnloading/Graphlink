@@ -139,6 +139,21 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     overrideModelId: "",
     // ADR-017 stage 17.5
     indexIntoKnowledge: false,
+  planGoal: "",
+  planSteps: [],
+  builderStatus: "",
+  builderMode: "",
+  builderRunId: "",
+  builderMaxSteps: 0,
+  builderMaxTokens: 0,
+  builderMaxWallSeconds: 0,
+  builderSpentSteps: 0,
+  builderSpentTokens: 0,
+  builderSpentWallSeconds: 0,
+  builderAwaitingToolApproval: false,
+  builderApprovalToolName: "",
+  builderApprovalSummary: "",
+  builderStatusDetail: "",
     ...overrides,
   };
 }

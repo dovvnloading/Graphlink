@@ -79,6 +79,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterable, TypeVar
 
+from backend.domain.node_states import PlanState
+
 if TYPE_CHECKING:
     from backend.domain.model import SceneEdge, SceneNode
     from graphlink_navigation_pins import NavigationPinRecord
@@ -211,6 +213,29 @@ def _restore(live: dict, snapshot: dict) -> None:
             # refused the undo/redo if a REAL run is live on this node.
             if hasattr(restored, "pending_request_id"):
                 restored.pending_request_id = None
+            # review-fix: the same phantom-state hazard applies to a plan
+            # node's builder_status. A builderReplan/builderPlan command
+            # recorded MID-RUN snapshots the node while builder_status was
+            # a run-owned value ("running"/"planning"/"awaiting_approval").
+            # By the same _guard_live_runs guarantee above (pending_
+            # request_id already proven not-live on the CURRENT node before
+            # any undo/redo of a plan node reaches here), that run has
+            # necessarily already landed a terminal/paused status for real -
+            # restoring the snapshot's stale run-owned value would render
+            # the node permanently "Building..."/"Waiting for approval"
+            # with no live run behind it and no button that can advance it.
+            # Normalize to "interrupted", the same resume-safe landing
+            # session reload already uses for exactly this situation.
+            if isinstance(getattr(restored, "state", None), PlanState) and restored.state.builder_status in (
+                "running", "planning", "awaiting_approval",
+            ):
+                restored.state.builder_status = "interrupted"
+                restored.state.builder_status_detail = (
+                    "Restored from undo/redo history - resume to continue."
+                )
+                restored.state.builder_awaiting_tool_approval = False
+                restored.state.builder_approval_tool_name = ""
+                restored.state.builder_approval_summary = ""
             live[key] = restored
 
 
@@ -299,7 +324,7 @@ class UndoRefusedError(Exception):
     failed - carries a message meant to be shown to the user verbatim."""
 
 
-def _merge_commands(command_type, provenance, commands):
+def _merge_commands(command_type, provenance, commands, run_id=None):
     """ADR-010 stage 10.3: folds a composite's buffered commands into one.
 
     Merge order matters and is asymmetric: for the BEFORE state the FIRST
@@ -307,17 +332,24 @@ def _merge_commands(command_type, provenance, commands):
     while for the AFTER state the LAST write wins (the final value is what
     the group ended up producing). Getting this backwards would make undo
     restore an intermediate state rather than the state before the action.
+
+    `run_id` (ADR-008): the composite's own run attribution. Applied to the
+    single-command passthrough as well as the merged case - a composite
+    that happened to buffer exactly one real command must still come out
+    run-stamped, or undo_run would skip that step of a build.
     """
     real = [c for c in commands if not c.is_noop]
     if not real:
         return None
     if len(real) == 1:
+        if run_id and real[0].run_id is None:
+            real[0].run_id = run_id
         return real[0]
 
     merged = Command(
         command_type=command_type,
         provenance=provenance,
-        run_id=next((c.run_id for c in real if c.run_id), None),
+        run_id=run_id or next((c.run_id for c in real if c.run_id), None),
     )
     for command in real:
         for field_name in ("node_before", "edge_before", "asset_before"):
@@ -369,6 +401,7 @@ class CommandOps:
         *,
         node_ids: Iterable[str] = (),
         edge_ids: Iterable[str] = (),
+        run_id: "str | None" = None,
     ) -> "tuple[T, Command]":
         """Runs `mutator` (a zero-arg closure wrapping exactly one call into
         an existing SceneDocument mutator, e.g. `lambda:
@@ -530,6 +563,7 @@ class CommandOps:
             asset_after=asset_after_out,
             pin_before=pin_before_out,
             pin_after=pin_after_out,
+            run_id=run_id,
         )
         # A no-op command (an idempotent connect() that created nothing, a
         # setter called with the value it already had) is never logged -
@@ -558,7 +592,7 @@ class CommandOps:
         self.command_log.append(command)
 
     @contextmanager
-    def composite(self, command_type: str, provenance: str = "user"):
+    def composite(self, command_type: str, provenance: str = "user", *, run_id: "str | None" = None):
         """ADR-010 stage 10.3: groups every command recorded inside the block
         into ONE undoable action.
 
@@ -583,7 +617,7 @@ class CommandOps:
             if outermost:
                 buffered = list(self._composite_buffer)
                 self._composite_buffer.clear()
-                merged = _merge_commands(command_type, provenance, buffered)
+                merged = _merge_commands(command_type, provenance, buffered, run_id=run_id)
                 # is_noop is re-checked AFTER merging, not just on the inputs:
                 # a group whose steps cancel out (create a node then delete it
                 # inside the same composite) has real non-noop members but

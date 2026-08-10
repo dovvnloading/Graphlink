@@ -65,6 +65,45 @@
           "branchStatus": {
             "type": "string"
           },
+          "builderApprovalSummary": {
+            "type": "string"
+          },
+          "builderApprovalToolName": {
+            "type": "string"
+          },
+          "builderAwaitingToolApproval": {
+            "type": "boolean"
+          },
+          "builderMaxSteps": {
+            "type": "integer"
+          },
+          "builderMaxTokens": {
+            "type": "integer"
+          },
+          "builderMaxWallSeconds": {
+            "type": "integer"
+          },
+          "builderMode": {
+            "type": "string"
+          },
+          "builderRunId": {
+            "type": "string"
+          },
+          "builderSpentSteps": {
+            "type": "integer"
+          },
+          "builderSpentTokens": {
+            "type": "integer"
+          },
+          "builderSpentWallSeconds": {
+            "type": "integer"
+          },
+          "builderStatus": {
+            "type": "string"
+          },
+          "builderStatusDetail": {
+            "type": "string"
+          },
           "byteSize": {
             "type": "integer"
           },
@@ -392,6 +431,36 @@
           "pendingRequestId": {
             "type": "string"
           },
+          "planGoal": {
+            "type": "string"
+          },
+          "planSteps": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "detail": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "status",
+                "detail"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "previewLabel": {
             "type": "string"
           },
@@ -696,7 +765,22 @@
           "toolCalls",
           "overrideProvider",
           "overrideModelId",
-          "indexIntoKnowledge"
+          "indexIntoKnowledge",
+          "planGoal",
+          "planSteps",
+          "builderStatus",
+          "builderMode",
+          "builderRunId",
+          "builderMaxSteps",
+          "builderMaxTokens",
+          "builderMaxWallSeconds",
+          "builderSpentSteps",
+          "builderSpentTokens",
+          "builderSpentWallSeconds",
+          "builderAwaitingToolApproval",
+          "builderApprovalToolName",
+          "builderApprovalSummary",
+          "builderStatusDetail"
         ],
         "type": "object"
       },

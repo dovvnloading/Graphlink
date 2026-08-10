@@ -98,6 +98,21 @@ export interface SceneNodeRow {
   overrideProvider: string;
   overrideModelId: string;
   indexIntoKnowledge: boolean;
+  planGoal: string;
+  planSteps: PlanStepRow[];
+  builderStatus: string;
+  builderMode: string;
+  builderRunId: string;
+  builderMaxSteps: number;
+  builderMaxTokens: number;
+  builderMaxWallSeconds: number;
+  builderSpentSteps: number;
+  builderSpentTokens: number;
+  builderSpentWallSeconds: number;
+  builderAwaitingToolApproval: boolean;
+  builderApprovalToolName: string;
+  builderApprovalSummary: string;
+  builderStatusDetail: string;
 }
 
 export interface ConversationMessageRow {
@@ -170,6 +185,13 @@ export interface ToolInvocationRow {
   argumentsJson: string;
   result: string;
   isError: boolean;
+}
+
+export interface PlanStepRow {
+  id: string;
+  title: string;
+  status: string;
+  detail: string;
 }
 
 export interface SceneEdgeRow {
@@ -691,6 +713,82 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.indexIntoKnowledge: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.indexIntoKnowledge` + ": expected boolean"); }
   }
+  {
+    const fieldValue = value["planGoal"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.planGoal: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.planGoal` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["planSteps"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.planSteps: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.planSteps` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkPlanStepRow(item, `${path}.planSteps` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["builderStatus"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderStatus: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.builderStatus` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["builderMode"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderMode: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.builderMode` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["builderRunId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderRunId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.builderRunId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["builderMaxSteps"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderMaxSteps: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.builderMaxSteps` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["builderMaxTokens"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderMaxTokens: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.builderMaxTokens` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["builderMaxWallSeconds"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderMaxWallSeconds: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.builderMaxWallSeconds` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["builderSpentSteps"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderSpentSteps: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.builderSpentSteps` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["builderSpentTokens"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderSpentTokens: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.builderSpentTokens` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["builderSpentWallSeconds"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderSpentWallSeconds: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.builderSpentWallSeconds` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["builderAwaitingToolApproval"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderAwaitingToolApproval: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.builderAwaitingToolApproval` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["builderApprovalToolName"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderApprovalToolName: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.builderApprovalToolName` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["builderApprovalSummary"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderApprovalSummary: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.builderApprovalSummary` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["builderStatusDetail"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderStatusDetail: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.builderStatusDetail` + ": expected string"); }
+  }
 }
 
 function checkConversationMessageRow(value: unknown, path: string, errors: string[]): void {
@@ -960,6 +1058,30 @@ function checkToolInvocationRow(value: unknown, path: string, errors: string[]):
     const fieldValue = value["isError"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.isError: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.isError` + ": expected boolean"); }
+  }
+}
+
+function checkPlanStepRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["id"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["title"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.title: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.title` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["status"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.status: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.status` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["detail"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.detail: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.detail` + ": expected string"); }
   }
 }
 
