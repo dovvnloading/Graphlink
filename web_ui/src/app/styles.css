@@ -4485,6 +4485,53 @@ mark.document-view-search-match-current {
   opacity: 0.88;
 }
 
+/* -- ADR-020 stage 20.2: workspace switcher + tag filter chips --------
+   Both reuse .view-preset-btn/.view-row VERBATIM by className (that pair
+   is not scoped under .view-popover in this file's selectors - it is
+   already a globally-reusable pair, not a popover-local one) rather than
+   duplicating its padding/radius/font-size/color values under a new name -
+   see ViewPopover.tsx's own FILTER section for the identical multi-select
+   toggle-chip markup this dialog's tag row mirrors, and its grid-size
+   preset row for the single-select tab pattern the workspace row mirrors.
+   Only the ROW WRAPPERS below are new: .view-row/.overlay-popover's own
+   ambient 12px/14px padding is what every OTHER .view-row consumer relies
+   on for its horizontal gutter, and this dialog's .overlay-dialog-body is
+   padding:0 (see that rule above) - so each wrapper supplies its own
+   horizontal padding, matching .library-header's existing 20px gutter,
+   rather than .view-row silently touching the dialog's edges here. */
+
+.library-workspace-tabs {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+
+/* Sizes the inline "new workspace" input to something reasonable for a
+   short name, the same way .view-popover's own `width: 250px` is an
+   arbitrary-but-intentional sizing choice for its content - the input
+   itself is .library-row-rename-input, reused verbatim (same idiom as the
+   per-row rename input this whole interaction is modeled on). */
+.library-workspace-new-input-wrap {
+  flex: 0 0 160px;
+}
+
+/* Prevents the Archived toggle chip (a .view-preset-btn dropped directly
+   into .library-header's flex row, next to the search box) from being
+   squeezed by .library-search-wrap's own `flex: 1` - .library-new-chat-
+   button already sets this for the same reason. */
+.library-archived-toggle {
+  flex-shrink: 0;
+}
+
+.library-tag-filter-row {
+  flex-shrink: 0;
+  padding: 10px 20px 0;
+}
+
 .library-visually-hidden {
   position: absolute;
   width: 1px;

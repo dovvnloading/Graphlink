@@ -15,8 +15,17 @@ function row(overrides: Record<string, unknown>) {
     updatedAtIso: "2026-01-01T08:00:00",
     preview: "",
     messageCount: 0,
+    // ADR-020 stage 20.2.
+    workspaceId: 1,
+    favorite: false,
+    archived: false,
+    tags: [] as string[],
     ...overrides,
   };
+}
+
+function workspace(overrides: Record<string, unknown>) {
+  return { id: 1, name: "Default", icon: "", archived: false, ...overrides };
 }
 
 const snapshot = {
@@ -41,6 +50,7 @@ const snapshot = {
       updatedAtIso: "2026-01-14T08:00:00",
     }),
   ],
+  workspaces: [workspace({})],
   notice: null,
 };
 
@@ -123,7 +133,7 @@ describe("ChatLibraryDialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("New Chat dispatches the newChat intent and closes the dialog", async () => {
+  it("New Chat dispatches the newChat intent with no workspaceId while 'All' is selected, and closes the dialog", async () => {
     const { user, intents } = setup();
     await user.click(screen.getByText("open library"));
 
@@ -280,5 +290,191 @@ describe("ChatLibraryDialog", () => {
     await user.click(screen.getByText("open library"));
 
     expect(screen.getByText("Could not load saved chats: disk error")).toBeInTheDocument();
+  });
+
+  // -- ADR-020 stage 20.2: workspace switcher -------------------------------
+
+  it("workspace tabs: switching to a specific workspace filters the visible list to that workspace's graphs, 'All' shows every workspace", async () => {
+    const { user, push } = setup();
+    act(() =>
+      push({
+        ...snapshot,
+        workspaces: [workspace({ id: 1, name: "Default" }), workspace({ id: 2, name: "Work" })],
+        rows: [
+          row({ id: 1, title: "First Chat", workspaceId: 1 }),
+          row({ id: 2, title: "Second Chat", workspaceId: 2 }),
+        ],
+      }),
+    );
+    await user.click(screen.getByText("open library"));
+
+    // "All" is the default selection - both workspaces' graphs are visible.
+    expect(screen.getByText("First Chat")).toBeInTheDocument();
+    expect(screen.getByText("Second Chat")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Work" }));
+    expect(screen.queryByText("First Chat")).toBeNull();
+    expect(screen.getByText("Second Chat")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "All" }));
+    expect(screen.getByText("First Chat")).toBeInTheDocument();
+    expect(screen.getByText("Second Chat")).toBeInTheDocument();
+  });
+
+  it("New Chat passes the selected workspace's id once a specific workspace tab (not All) is active", async () => {
+    const { user, push, intents } = setup();
+    act(() => push({ ...snapshot, workspaces: [workspace({ id: 1, name: "Default" }), workspace({ id: 2, name: "Work" })] }));
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByRole("button", { name: "Work" }));
+    await user.click(screen.getByRole("button", { name: "New Chat" }));
+
+    expect(intents).toContainEqual(["app-chat-library", "newChat", [2]]);
+  });
+
+  it("the + Workspace affordance reveals an inline input; Enter commits createWorkspace with the trimmed name", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByRole("button", { name: "+ Workspace" }));
+    const input = screen.getByLabelText("New workspace name");
+    await user.type(input, "  Research  {Enter}");
+
+    expect(intents).toContainEqual(["app-chat-library", "createWorkspace", ["Research"]]);
+  });
+
+  it("Escape while creating a workspace cancels without dispatching createWorkspace", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByRole("button", { name: "+ Workspace" }));
+    await user.keyboard("{Escape}");
+
+    expect(intents.filter((i) => i[1] === "createWorkspace")).toEqual([]);
+    expect(screen.queryByLabelText("New workspace name")).toBeNull();
+  });
+
+  // -- ADR-020 stage 20.2: tag filter chips (AND semantics) -----------------
+
+  it("tag filter chips use AND semantics: a graph must carry every selected tag to remain visible", async () => {
+    const { user, push } = setup();
+    act(() =>
+      push({
+        ...snapshot,
+        rows: [
+          row({ id: 1, title: "Alpha", tags: ["work", "urgent"] }),
+          row({ id: 2, title: "Beta", tags: ["work"] }),
+          row({ id: 3, title: "Gamma", tags: ["urgent"] }),
+        ],
+      }),
+    );
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByRole("button", { name: "work" }));
+    expect(screen.getByText("Alpha")).toBeInTheDocument();
+    expect(screen.getByText("Beta")).toBeInTheDocument();
+    expect(screen.queryByText("Gamma")).toBeNull();
+
+    // Adding a second chip narrows further (AND, not OR) - only the row
+    // carrying BOTH selected tags remains.
+    await user.click(screen.getByRole("button", { name: "urgent" }));
+    expect(screen.getByText("Alpha")).toBeInTheDocument();
+    expect(screen.queryByText("Beta")).toBeNull();
+    expect(screen.queryByText("Gamma")).toBeNull();
+  });
+
+  // -- ADR-020 stage 20.2: favorite / archive icon buttons ------------------
+
+  it("the star icon button fires setGraphFavorite with the toggled value", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Add "First Chat" to favorites'));
+    expect(intents).toContainEqual(["app-chat-library", "setGraphFavorite", [1, true]]);
+  });
+
+  it("an already-favorited row's star button reads 'remove from favorites' and fires favorite:false", async () => {
+    const { user, push, intents } = setup();
+    act(() => push({ ...snapshot, rows: [row({ id: 1, title: "First Chat", favorite: true })] }));
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Remove "First Chat" from favorites'));
+    expect(intents).toContainEqual(["app-chat-library", "setGraphFavorite", [1, false]]);
+  });
+
+  it("the archive icon button fires setGraphArchived, and archived rows are hidden by default until the Archived toggle is switched on", async () => {
+    const { user, push, intents } = setup();
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Archive "First Chat"'));
+    expect(intents).toContainEqual(["app-chat-library", "setGraphArchived", [1, true]]);
+
+    // Simulate the backend republishing with the row now archived.
+    act(() => push({ ...snapshot, rows: [row({ id: 1, title: "First Chat", archived: true }), snapshot.rows[1]] }));
+    expect(screen.queryByText("First Chat")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Archived" }));
+    expect(screen.getByText("First Chat")).toBeInTheDocument();
+  });
+
+  it("the Archived toggle defaults off: archived rows are excluded from the list on first render", async () => {
+    const { user, push } = setup();
+    act(() =>
+      push({
+        ...snapshot,
+        rows: [row({ id: 1, title: "First Chat", archived: true }), row({ id: 2, title: "Second Chat", archived: false })],
+      }),
+    );
+    await user.click(screen.getByText("open library"));
+
+    expect(screen.queryByText("First Chat")).toBeNull();
+    expect(screen.getByText("Second Chat")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Archived" }));
+    expect(screen.getByText("First Chat")).toBeInTheDocument();
+  });
+
+  it("shows a distinct 'no matches' state for filters (not search), with a Clear filters action", async () => {
+    const { user, push } = setup();
+    act(() =>
+      push({
+        ...snapshot,
+        rows: [row({ id: 1, title: "First Chat", archived: true }), row({ id: 2, title: "Second Chat", archived: true })],
+      }),
+    );
+    await user.click(screen.getByText("open library"));
+
+    expect(screen.getByText("No chats match the current filters.")).toBeInTheDocument();
+
+    await user.click(screen.getByText("Clear filters"));
+    expect(screen.getByText("First Chat")).toBeInTheDocument();
+  });
+
+  // -- ADR-020 stage 20.2: inline tag editing --------------------------------
+
+  it("tag editing: the tag icon opens an inline input pre-filled with the row's tags; Enter commits the trimmed/split list via setGraphTags", async () => {
+    const { user, push, intents } = setup();
+    act(() => push({ ...snapshot, rows: [row({ id: 1, title: "First Chat", tags: ["work", "urgent"] }), snapshot.rows[1]] }));
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Edit tags for "First Chat"'));
+    const input = screen.getByLabelText('Edit tags for "First Chat"') as HTMLInputElement;
+    expect(input.value).toBe("work, urgent");
+
+    await user.clear(input);
+    await user.type(input, "one, two{Enter}");
+
+    expect(intents).toContainEqual(["app-chat-library", "setGraphTags", [1, ["one", "two"]]]);
+  });
+
+  it("tag editing: Escape cancels without dispatching setGraphTags", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Edit tags for "First Chat"'));
+    await user.keyboard("{Escape}");
+
+    expect(intents.filter((i) => i[1] === "setGraphTags")).toEqual([]);
+    expect(screen.getByText("First Chat")).toBeInTheDocument();
   });
 });
