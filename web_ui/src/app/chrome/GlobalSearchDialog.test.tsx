@@ -119,7 +119,7 @@ describe("GlobalSearchDialog", () => {
     await user.type(screen.getByPlaceholderText(/search every workspace/i), "secret phrase");
     await user.click(screen.getByRole("button", { name: "Search" }));
 
-    expect(intents).toContainEqual(["search", "globalSearch", ["secret phrase", 10]]);
+    expect(intents).toContainEqual(["globalSearch", "search", ["secret phrase", 10]]);
   });
 
   it('renders "N results found" with N matching the real result count', async () => {

@@ -32,6 +32,7 @@ import { ComposerStore } from "./chrome/composerStore";
 import { DiagnosticsDialog } from "./chrome/DiagnosticsDialog";
 import { GlobalSearchDialog } from "./chrome/GlobalSearchDialog";
 import { KnowledgeSearchDialog } from "./chrome/KnowledgeSearchDialog";
+import { QuickSwitcherDialog } from "./chrome/QuickSwitcherDialog";
 import { BuilderLaunchDialog } from "./chrome/BuilderLaunchDialog";
 import { NotificationBanner } from "./chrome/NotificationBanner";
 import { OnboardingDialog } from "./chrome/OnboardingDialog";
@@ -152,6 +153,8 @@ function GlobalShortcuts({ store }: { store: SceneStore }) {
           return overlays.toggle("palette", "dialog");
         case "toggle-search":
           return overlays.toggle("search", "popover");
+        case "toggle-quick-switcher":
+          return overlays.toggle("quick-switcher", "dialog");
         // ADR-010 stage 10.2: the backend owns the stack, so these are a
         // straight forward - the frontend never decides WHAT gets undone.
         // A refusal (nothing to undo, or a node still generating) comes
@@ -449,6 +452,7 @@ function App() {
                     />
                   </div>
                   <CommandPalette store={sceneStore} />
+                  <QuickSwitcherDialog transport={transport} />
                   <AboutDialog transport={transport} />
                   {/* ADR-012 stage 12.6: not lazy, unlike Help/Settings/
                       Library just below - it has to be mounted from the

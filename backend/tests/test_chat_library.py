@@ -18,6 +18,8 @@ import backend.autosave as autosave_module
 import backend.chat_library as chat_library_module
 import backend.db_backup as db_backup_module
 import backend.knowledge_store as knowledge_store_module
+import backend.native_dialogs as native_dialogs_module
+import backend.workspace_archive as workspace_archive_module
 from backend.api.intents_global_search import register_global_search_intents
 from backend.autosave import autosave_tick, register_autosave
 from backend.canvas import SceneDocument
@@ -3205,3 +3207,156 @@ class TestGlobalSearchAcrossWorkspaces:
         hit = result["results"][0]
         assert hit["sourceNodeId"] is None
         assert hit["graphId"] is None
+
+
+class TestExportWorkspaceIntent:
+    """ADR-020 stage 20.5: exportWorkspace - see register_chat_library's own
+    export_workspace closure for the full contract. native_dialogs.
+    pick_save_file is monkeypatched exactly like test_canvas.py's own
+    pickGitlinkLocalRoot tests monkeypatch pick_folder - a fake async
+    function, never a real OS dialog."""
+
+    def test_exports_only_the_target_workspaces_graphs_as_a_real_archive(self, db_path, tmp_path, monkeypatch):
+        get_all_chats(db_path)  # bootstraps a fully-migrated db (Default = workspace A)
+        workspace_a = get_all_workspaces(db_path)[0]
+        workspace_b = create_workspace(db_path, "Workspace B")
+
+        save_chat_atomically_row(
+            db_path, None, "Graph A", {"nodes": [
+                {"node_type": "chat", "id": "a1", "raw_content": "hi from A", "is_user": True},
+            ]}, [], [], workspace_id=workspace_a["id"],
+        )
+        save_chat_atomically_row(
+            db_path, None, "Graph B", {"nodes": [
+                {"node_type": "chat", "id": "b1", "raw_content": "hi from B", "is_user": True},
+            ]}, [], [], workspace_id=workspace_b["id"],
+        )
+
+        target = tmp_path / "export.graphlink"
+
+        async def _fake_pick_save_file(default_name, file_types=(), directory=""):
+            return str(target)
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", _fake_pick_save_file)
+        bus, _document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace_a["id"]]))
+
+        assert target.exists()
+        archive = workspace_archive_module.read_archive(target)
+        assert len(archive["chats"]) == 1
+        assert archive["chats"][0]["title"] == "Graph A"
+        assert notifications.visible and notifications.msg_type == "success"
+        assert '"Default"' in notifications.message  # the WORKSPACE name is quoted in the toast
+        assert "1 graph" in notifications.message
+
+    def test_seeds_the_dialog_with_a_sanitized_workspace_name(self, db_path, tmp_path, monkeypatch):
+        workspace = create_workspace(db_path, "Client / Project #1")
+        save_chat_atomically_row(
+            db_path, None, "G", {"nodes": [
+                {"node_type": "chat", "id": "n1", "raw_content": "hi", "is_user": True},
+            ]}, [], [], workspace_id=workspace["id"],
+        )
+        seen_names = []
+
+        async def _fake_pick_save_file(default_name, file_types=(), directory=""):
+            seen_names.append(default_name)
+            return str(tmp_path / "out.graphlink")
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", _fake_pick_save_file)
+        bus, _document, _notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+
+        assert seen_names == ["Client_Project_1.graphlink"]
+
+    def test_a_cancelled_dialog_is_a_silent_no_op(self, db_path, tmp_path, monkeypatch):
+        workspace = create_workspace(db_path, "Workspace")
+        save_chat_atomically_row(
+            db_path, None, "G", {"nodes": [
+                {"node_type": "chat", "id": "n1", "raw_content": "hi", "is_user": True},
+            ]}, [], [], workspace_id=workspace["id"],
+        )
+
+        async def _fake_pick_save_file(default_name, file_types=(), directory=""):
+            return None
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", _fake_pick_save_file)
+        bus, _document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+
+        assert notifications.visible is False
+
+    def test_an_empty_workspace_warns_without_ever_opening_the_dialog(self, db_path, monkeypatch):
+        workspace = create_workspace(db_path, "Empty Workspace")
+        dialog_calls = []
+
+        async def _fake_pick_save_file(default_name, file_types=(), directory=""):
+            dialog_calls.append(default_name)
+            return None
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", _fake_pick_save_file)
+        bus, _document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+
+        assert dialog_calls == []
+        assert notifications.visible and notifications.msg_type == "warning"
+
+    def test_an_unknown_workspace_id_is_a_silent_no_op(self, db_path, monkeypatch):
+        dialog_calls = []
+
+        async def _fake_pick_save_file(default_name, file_types=(), directory=""):
+            dialog_calls.append(default_name)
+            return None
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", _fake_pick_save_file)
+        bus, _document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [999999]))
+
+        assert dialog_calls == []
+        assert notifications.visible is False
+
+    def test_a_dialog_failure_shows_an_error_notification(self, db_path, monkeypatch):
+        workspace = create_workspace(db_path, "Workspace")
+        save_chat_atomically_row(
+            db_path, None, "G", {"nodes": [
+                {"node_type": "chat", "id": "n1", "raw_content": "hi", "is_user": True},
+            ]}, [], [], workspace_id=workspace["id"],
+        )
+
+        async def _boom(default_name, file_types=(), directory=""):
+            raise OSError("no save dialog available")
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", _boom)
+        bus, _document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+
+        assert notifications.visible and notifications.msg_type == "error"
+
+    def test_two_different_workspaces_export_two_different_archives(self, db_path, tmp_path, monkeypatch):
+        # Regression guard: exportWorkspace must scope by workspace_id, not
+        # export every graph in chats.db regardless of workspace - the same
+        # "workspace filter actually filters" property TestGlobalSearchAcross
+        # Workspaces's own scoped-search test proves for search.
+        workspace_a = create_workspace(db_path, "A")
+        workspace_b = create_workspace(db_path, "B")
+        save_chat_atomically_row(
+            db_path, None, "Graph A1", {"nodes": []}, [], [], workspace_id=workspace_a["id"],
+        )
+        save_chat_atomically_row(
+            db_path, None, "Graph A2", {"nodes": []}, [], [], workspace_id=workspace_a["id"],
+        )
+        save_chat_atomically_row(
+            db_path, None, "Graph B1", {"nodes": []}, [], [], workspace_id=workspace_b["id"],
+        )
+
+        target = tmp_path / "a-only.graphlink"
+
+        async def _fake_pick_save_file(default_name, file_types=(), directory=""):
+            return str(target)
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", _fake_pick_save_file)
+        bus, _document, _notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace_a["id"]]))
+
+        archive = workspace_archive_module.read_archive(target)
+        titles = {chat["title"] for chat in archive["chats"]}
+        assert titles == {"Graph A1", "Graph A2"}

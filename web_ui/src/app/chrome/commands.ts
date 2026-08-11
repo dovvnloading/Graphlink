@@ -202,6 +202,18 @@ export function buildCommands(
       enabled: () => true,
     },
     {
+      // ADR-020 stage 20.5: the quick switcher - see QuickSwitcherDialog.tsx.
+      // Same registration shape as "open-global-search" above (ADR-012's own
+      // "register every new surface in the palette" rule) - its real
+      // trigger is Ctrl+P (chrome/shortcuts.ts), this is the discoverable
+      // palette twin, same posture as "open-library"'s own Ctrl+L twin.
+      id: "open-quick-switcher",
+      name: "Quick Switcher",
+      aliases: ["go to graph", "jump to graph", "recent graphs", "switch graph"],
+      run: () => overlays.open("quick-switcher", "dialog"),
+      enabled: () => true,
+    },
+    {
       // ADR-020 stage 20.4: search every workspace's graphs and knowledge
       // documents at once - see GlobalSearchDialog.tsx. Same registration
       // shape as "open-library"/"open-plugins" above (ADR-012's own

@@ -307,4 +307,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_global_search.py - ADR-020 stage 20.4 --
     Classified("globalSearch", "search", "B", "read-only: queries the FTS index across graphs/documents/workspaces, no document mutation"),
+
+    # -- backend/chat_library.py (app-chat-library) - ADR-020 stage 20.5 --
+    Classified("app-chat-library", "exportWorkspace", "B", "read-only: reads chats.db and writes an external .graphlink file, no document mutation"),
 )

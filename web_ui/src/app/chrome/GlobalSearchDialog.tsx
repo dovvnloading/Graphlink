@@ -37,7 +37,7 @@ import { Dialog, useOverlays } from "../overlays/overlays";
  *
  * Wire contract note (frontend/backend built concurrently against ADR-020
  * stage 20.4's shared design doc, no live handshake): this file calls
- * transport.request("search", "globalSearch", [query, k]) and
+ * transport.request("globalSearch", "search", [query, k]) and
  * transport.request("app-chat-library", "loadGraphAndFocusNode",
  * [graphId, nodeId]) - the exact topic/intent names and result field names
  * (chunkId/documentId/documentTitle/sourceUri/text/offsetStart/offsetEnd,
@@ -180,7 +180,7 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
     setSearching(true);
     setError(null);
     transport
-      .request("search", "globalSearch", [trimmed, 10])
+      .request("globalSearch", "search", [trimmed, 10])
       .then((value) => {
         if (requestId !== latestRequestId.current) return; // a newer search has since been sent
         const payload = value as { results: GlobalSearchResult[] };

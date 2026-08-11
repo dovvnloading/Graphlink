@@ -94,6 +94,58 @@ def test_pick_folder_returns_none_when_the_user_cancels(monkeypatch):
     assert result is None
 
 
+def test_pick_save_file_returns_none_when_no_window_exists(monkeypatch):
+    monkeypatch.setattr(webview, "windows", [])
+
+    result = asyncio.run(native_dialogs.pick_save_file("Default.graphlink"))
+
+    assert result is None
+
+
+def test_pick_save_file_calls_save_dialog_with_default_name_and_returns_the_path(monkeypatch):
+    # Unlike pick_file/pick_folder's own tuple-wrapped return, a real
+    # pywebview SAVE dialog resolves to a plain string - see pick_save_file's
+    # own docstring for why.
+    fake = _FakeWindow(return_value="C:/exports/My Workspace.graphlink")
+    monkeypatch.setattr(webview, "windows", [fake])
+
+    result = asyncio.run(
+        native_dialogs.pick_save_file("My Workspace.graphlink", file_types=("Graphlink Archive (*.graphlink)",))
+    )
+
+    assert result == "C:/exports/My Workspace.graphlink"
+    assert fake.calls == [
+        {
+            "dialog_type": webview.FileDialog.SAVE,
+            "directory": "",
+            "allow_multiple": False,
+            "save_filename": "My Workspace.graphlink",
+            "file_types": ("Graphlink Archive (*.graphlink)",),
+        }
+    ]
+
+
+def test_pick_save_file_returns_none_when_the_user_cancels(monkeypatch):
+    fake = _FakeWindow(return_value=None)
+    monkeypatch.setattr(webview, "windows", [fake])
+
+    result = asyncio.run(native_dialogs.pick_save_file("Default.graphlink"))
+
+    assert result is None
+
+
+def test_pick_save_file_returns_none_when_the_dialog_resolves_to_an_empty_string(monkeypatch):
+    # Defensive: some pywebview builds resolve a cancelled SAVE dialog to ""
+    # rather than None - pick_save_file's own `result or None` must treat
+    # both the same way.
+    fake = _FakeWindow(return_value="")
+    monkeypatch.setattr(webview, "windows", [fake])
+
+    result = asyncio.run(native_dialogs.pick_save_file("Default.graphlink"))
+
+    assert result is None
+
+
 def test_uses_the_first_window_when_multiple_exist():
     # webview.windows can only ever grow (create_window appends, nothing
     # removes) - confirms the module reads index 0, not "the last one" or
