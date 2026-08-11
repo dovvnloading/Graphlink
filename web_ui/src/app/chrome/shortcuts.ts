@@ -27,6 +27,7 @@ export type ShortcutId =
   | "synthesize-branches"
   | "toggle-palette"
   | "toggle-search"
+  | "toggle-quick-switcher"
   | "navigate-up"
   | "navigate-down"
   | "navigate-left"
@@ -57,6 +58,13 @@ const GATED_WHILE_TYPING = new Set<ShortcutId>([
   "new-chat",
   "toggle-library",
   "toggle-search",
+  // ADR-020 stage 20.5: the quick switcher is a "jump to a different
+  // document" surface, same posture as toggle-library right above it, not
+  // Ctrl+K's own exempt "summon key, idempotent handler" posture (see this
+  // file's own module doc for why Save/palette are the deliberate
+  // exceptions) - Ctrl+P mid-sentence in the composer or a node's inline
+  // editor must stay a plain "p", not hijack the field to open a dialog.
+  "toggle-quick-switcher",
   "create-frame",
   "create-container",
   "compare-branches",
@@ -122,6 +130,15 @@ export function resolveShortcut(event: ShortcutKeyEvent): ShortcutId | null {
       return event.shiftKey ? null : "toggle-palette";
     case "f":
       return event.shiftKey ? null : "toggle-search";
+    // ADR-020 stage 20.5: Ctrl+P is a new binding (no legacy key to match,
+    // same posture as compare-branches/synthesize-branches above) - the
+    // conventional "quick open"/"go to file" key VS Code and Sublime both
+    // use, which is exactly what this surface is for a graph. The browser's
+    // own native Ctrl+P (print) is already suppressed the same way every
+    // other ctrl-matched binding here is - see onKeyDown's own
+    // event.preventDefault() in App.tsx's GlobalShortcuts.
+    case "p":
+      return event.shiftKey ? null : "toggle-quick-switcher";
     // Ctrl+G -> Frame, Ctrl+Shift+G -> Container: two distinct legacy
     // bindings (graphlink_window.py:312-313), not one with a modifier.
     case "g":

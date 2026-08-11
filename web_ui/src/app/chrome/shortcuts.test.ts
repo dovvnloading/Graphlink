@@ -19,6 +19,7 @@ describe("resolveShortcut", () => {
     expect(resolveShortcut(key("k"))).toBe("toggle-palette");
     expect(resolveShortcut(key("f"))).toBe("toggle-search");
     expect(resolveShortcut(key("g"))).toBe("create-frame");
+    expect(resolveShortcut(key("p"))).toBe("toggle-quick-switcher");
     expect(resolveShortcut(key("ArrowUp"))).toBe("navigate-up");
     expect(resolveShortcut(key("ArrowDown"))).toBe("navigate-down");
     expect(resolveShortcut(key("ArrowLeft"))).toBe("navigate-left");
@@ -88,12 +89,16 @@ describe("isGatedWhileTyping", () => {
   // contract-tests, PLUS "compare-branches"/"synthesize-branches" (ADR-002
   // Workstream 1 - new shortcuts, not legacy ports, gated for the same
   // reason as their closest sibling create-frame/create-container - see
-  // shortcuts.ts's own comment). Mirrored here so a future edit to the set
-  // has to be deliberate rather than incidental.
+  // shortcuts.ts's own comment) PLUS "toggle-quick-switcher" (ADR-020 stage
+  // 20.5 - a new shortcut, gated for the same "jump to a different
+  // document" reason as toggle-library - see shortcuts.ts's own comment).
+  // Mirrored here so a future edit to the set has to be deliberate rather
+  // than incidental.
   const GATED: ShortcutId[] = [
     "new-chat",
     "toggle-library",
     "toggle-search",
+    "toggle-quick-switcher",
     "create-frame",
     "create-container",
     "compare-branches",
@@ -113,9 +118,9 @@ describe("isGatedWhileTyping", () => {
     expect(isGatedWhileTyping(id)).toBe(false);
   });
 
-  it("gates exactly the 9 legacy combinations plus compare-branches/synthesize-branches (11 total), no more and no fewer", () => {
+  it("gates exactly the 9 legacy combinations plus compare-branches/synthesize-branches/toggle-quick-switcher (12 total), no more and no fewer", () => {
     const all: ShortcutId[] = [...GATED, ...EXEMPT];
-    expect(all.filter(isGatedWhileTyping)).toHaveLength(11);
+    expect(all.filter(isGatedWhileTyping)).toHaveLength(12);
   });
 });
 

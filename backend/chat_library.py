@@ -52,6 +52,8 @@ logger = logging.getLogger(__name__)
 
 from backend import db_backup
 from backend import knowledge_store
+from backend import native_dialogs
+from backend import workspace_archive
 from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -2424,6 +2426,117 @@ class LoadGraphAndFocusNodeArgs:
     nodeId: str
 
 
+@dataclass
+class ExportWorkspaceArgs:
+    """ADR-020 stage 20.5. See register_chat_library's own export_workspace
+    closure for the full contract this backs."""
+
+    workspaceId: int
+
+
+def _safe_export_filename(name: str) -> str:
+    """Sanitizes a workspace name into a default `.graphlink` SAVE-dialog
+    filename - a cosmetic prefill, not a security boundary (the user's own
+    native OS dialog, not this string, decides the real write path - see
+    native_dialogs.pick_save_file's own docstring). Unlike backend/assets.
+    py's own _sanitize_chart_filename (which strips to ASCII because it
+    feeds an HTTP header), this keeps full Unicode letters/digits - a real
+    local filesystem filename has no such restriction - and only strips
+    characters a filesystem path genuinely cannot contain (path separators,
+    control characters, drive-letter colons) plus collapses whitespace to a
+    single underscore, matching that function's own collapse convention."""
+    text = str(name or "")
+    safe = "".join(ch for ch in text if ch.isalnum() or ch in (" ", "-", "_")).strip()
+    safe = re.sub(r"\s+", "_", safe)
+    return safe or "workspace"
+
+
+def make_export_workspace(bus: SessionBus, resolved_path: Path, notifications: NotificationState | None):
+    """Factory for register_chat_library's own exportWorkspace intent -
+    lifted out to a top-level function purely to keep register_chat_library
+    itself under ADR-002's 300-line registration-function cap (stage 2.7),
+    the same "one definition, kept under the cap" precedent make_serialize_
+    mutating_intent/make_load_chat/make_load_graph_and_focus_node already
+    established in this file.
+
+    ADR-020 stage 20.5: exports every graph in `workspace_id` as one
+    `.graphlink` archive - backend/workspace_archive.py's own export_archive,
+    ADR-009 stage 9.4's own primitive (format/scrub/atomic-publish already
+    built, tested, and simply never wired to a real intent until now - see
+    that module's own docstring).
+
+    Read-only against chats.db and never touches canvas_document, so - like
+    register_chat_library's own createWorkspace/renameWorkspace/
+    archiveWorkspace/setWorkspaceDefaultModel closures - this needs neither
+    _serialize_mutating_intent's reentrancy guard nor an app-chat-library
+    republish; nothing this function does changes what that topic's own
+    snapshot would report.
+
+    The native SAVE dialog (native_dialogs.pick_save_file) is what actually
+    decides the destination - a cancelled dialog is a silent no-op, the SAME
+    "no window/user-cancelled -> quiet return" contract pick_gitlink_local_
+    root already established for every other native-dialog-backed intent in
+    this app, not a special case invented here."""
+
+    async def export_workspace(workspace_id: int):
+        workspaces = await asyncio.to_thread(get_all_workspaces, resolved_path)
+        workspace = next((w for w in workspaces if int(w["id"]) == int(workspace_id)), None)
+        if workspace is None:
+            return
+
+        all_chats = await asyncio.to_thread(get_all_chats, resolved_path)
+        graph_ids = [int(row["id"]) for row in all_chats if int(row["workspaceId"]) == int(workspace_id)]
+        if not graph_ids:
+            if notifications is not None:
+                notifications.show(f'"{workspace["name"]}" has no graphs to export.', "warning")
+                await bus.publish("notification")
+            return
+
+        default_name = f"{_safe_export_filename(str(workspace['name']))}.graphlink"
+        try:
+            target = await native_dialogs.pick_save_file(
+                default_name, file_types=("Graphlink Archive (*.graphlink)",),
+            )
+        except Exception as exc:  # noqa: BLE001 - a local file path, not a credential
+            if notifications is not None:
+                notifications.show(f"Could not open the save dialog: {exc}", "error")
+                await bus.publish("notification")
+            return
+        if not target:
+            return
+
+        def _load_one(graph_id: int) -> dict[str, Any]:
+            row = load_chat_row(resolved_path, graph_id)
+            return {
+                "title": row["title"] if row else "Untitled",
+                "data": row["data"] if row else {},
+                "notes": load_notes_rows(resolved_path, graph_id),
+                "pins": load_pins_rows(resolved_path, graph_id),
+            }
+
+        def _do_export() -> Path:
+            chats = [_load_one(graph_id) for graph_id in graph_ids]
+            return workspace_archive.export_archive(Path(target), chats, live_assets=store_for(resolved_path))
+
+        try:
+            written = await asyncio.to_thread(_do_export)
+        except OSError as exc:
+            if notifications is not None:
+                notifications.show(f"Could not export workspace: {exc}", "error")
+                await bus.publish("notification")
+            return
+
+        if notifications is not None:
+            plural = "" if len(graph_ids) == 1 else "s"
+            notifications.show(
+                f'Exported {len(graph_ids)} graph{plural} from "{workspace["name"]}" to {written.name}.',
+                "success",
+            )
+            await bus.publish("notification")
+
+    return export_workspace
+
+
 def register_chat_library(
     bus: SessionBus,
     db_path: Path | None = None,
@@ -2675,6 +2788,8 @@ def register_chat_library(
         )
         await bus.publish("app-chat-library")
 
+    export_workspace = make_export_workspace(bus, resolved_path, notifications)
+
     bus.register_intent("app-chat-library", "renameChat", rename)
     bus.register_intent("app-chat-library", "deleteChat", delete)
     bus.register_intent("app-chat-library", "loadChat", _serialize_mutating_intent(load_chat))
@@ -2701,13 +2816,12 @@ def register_chat_library(
     bus.register_intent("app-chat-library", "setGraphTags", set_tags, args_schema=SetGraphTagsArgs)
     bus.register_intent("app-chat-library", "createWorkspace", create_ws, args_schema=CreateWorkspaceArgs)
     bus.register_intent("app-chat-library", "renameWorkspace", rename_ws, args_schema=RenameWorkspaceArgs)
-    bus.register_intent(
-        "app-chat-library", "archiveWorkspace", archive_ws, args_schema=ArchiveWorkspaceArgs,
-    )
+    bus.register_intent("app-chat-library", "archiveWorkspace", archive_ws, args_schema=ArchiveWorkspaceArgs)
     bus.register_intent(
         "app-chat-library", "setWorkspaceDefaultModel", set_workspace_default_model_intent,
         args_schema=SetWorkspaceDefaultModelArgs,
     )
+    bus.register_intent("app-chat-library", "exportWorkspace", export_workspace, args_schema=ExportWorkspaceArgs)
 
     if canvas_document is not None and autosave_interval_seconds is not None:
         # R6.6: local import - backend/autosave.py itself imports several

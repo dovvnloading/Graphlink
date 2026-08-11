@@ -80,6 +80,11 @@ type BucketKey = "Today" | "Yesterday" | "Previous 7 Days" | "Previous 30 Days" 
 const BUCKET_ORDER: BucketKey[] = ["Today", "Yesterday", "Previous 7 Days", "Previous 30 Days", "Older"];
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// ADR-020 stage 20.5: matches sceneStore.ts's/composerStore.ts's own
+// NATIVE_DIALOG_TIMEOUT_MS - exportWorkspace opens a native OS SAVE dialog
+// server-side and waits on the user, not the network.
+const NATIVE_DIALOG_TIMEOUT_MS = 5 * 60_000;
+
 function startOfLocalDay(date: Date): number {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
@@ -259,11 +264,24 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
   const lastTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
-    return transport.subscribe("app-chat-library", (payload) => {
+    const unsubscribe = transport.subscribe("app-chat-library", (payload) => {
       const validated = TOPIC_VALIDATORS["app-chat-library"](payload);
       if (validated.ok) setState(validated.value as AppChatLibraryState);
       else console.error("[app-chat-library] rejected snapshot:", validated.errors);
     });
+    // ADR-020 stage 20.5: WsTransport.subscribe() only sends a real wire-
+    // level "subscribe" (and so only gets a fresh snapshot back) for the
+    // TOPIC's first-ever listener - a second, independent subscriber (this
+    // dialog is lazy-mounted, per App.tsx's own LazySurface, so it now
+    // often loses that race to QuickSwitcherDialog.tsx's own eager,
+    // always-mounted "app-chat-library" subscription) would otherwise sit
+    // on initialState - "No saved chats yet" even with a real, populated
+    // library - until some unrelated future mutation happens to republish
+    // the topic. resubscribe() forces that fresh snapshot unconditionally,
+    // the same recovery primitive sceneStore.ts's own "scene" topic
+    // handling already relies on for an analogous re-sync need.
+    transport.resubscribe("app-chat-library");
+    return unsubscribe;
   }, [transport]);
 
   // ADR-020 stage 20.3: see this file's own module docstring for why this
@@ -420,6 +438,17 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
   function setWorkspaceDefaultModel(workspaceId: number, modelId: string) {
     const provider = modelId === "" ? "" : composerState.route.provider;
     transport.fireIntent("app-chat-library", "setWorkspaceDefaultModel", [workspaceId, provider, modelId], undefined, true);
+  }
+
+  // ADR-020 stage 20.5: fire-and-forget from this component's own
+  // perspective (the native SAVE dialog + a success/cancelled/error
+  // notification is the entire feedback loop - see register_chat_library's
+  // own export_workspace closure) - NOT queueable (unlike setWorkspaceDefault
+  // Model above): a save dialog waiting on the user has nothing sensible to
+  // replay after a reconnect, the same "native-dialog intents don't queue"
+  // posture attachFile/pickGitlinkLocalRoot already established.
+  function exportWorkspace(workspaceId: number) {
+    transport.fireIntent("app-chat-library", "exportWorkspace", [workspaceId], NATIVE_DIALOG_TIMEOUT_MS);
   }
 
   function startCreateWorkspace() {
@@ -661,6 +690,19 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
                 ]}
                 onChange={(modelId) => setWorkspaceDefaultModel(expandedWorkspace.id, modelId)}
               />
+            </div>
+            <div className="settings-field">
+              <span className="settings-field-label">Export</span>
+              <p className="settings-update-status">
+                Save every graph in &quot;{expandedWorkspace.name}&quot; as one .graphlink file.
+              </p>
+              <button
+                type="button"
+                className="library-new-chat-button"
+                onClick={() => exportWorkspace(expandedWorkspace.id)}
+              >
+                Export Workspace…
+              </button>
             </div>
           </div>
         )}

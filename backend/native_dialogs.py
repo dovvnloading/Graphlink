@@ -65,3 +65,29 @@ async def pick_folder(directory: str = "") -> str | None:
         return None
     result = await asyncio.to_thread(window.create_file_dialog, webview.FileDialog.FOLDER, directory=directory)
     return result[0] if result else None
+
+
+async def pick_save_file(default_name: str, file_types: Sequence[str] = (), directory: str = "") -> str | None:
+    """Opens a native SAVE file dialog (ADR-020 stage 20.5's own workspace
+    export). Returns the chosen path, or None if no window exists or the
+    user cancelled.
+
+    Unlike pick_file/pick_folder above, pywebview's own SAVE dialog returns
+    a single string (or None on cancel), not a one-element tuple - OPEN's
+    and FOLDER's own tuple shape exists for their allow_multiple capability,
+    which a save dialog has no equivalent of (there is only ever one
+    destination path). `default_name` seeds the dialog's own filename field
+    (pywebview's `save_filename` kwarg) - matches pick_file's own
+    `directory` seeding precedent of not leaving a starting value to
+    whatever the OS defaults to."""
+    window = _active_window()
+    if window is None:
+        return None
+    result = await asyncio.to_thread(
+        window.create_file_dialog,
+        webview.FileDialog.SAVE,
+        directory=directory,
+        save_filename=default_name,
+        file_types=tuple(file_types),
+    )
+    return result or None

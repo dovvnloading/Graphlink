@@ -2659,6 +2659,21 @@ body,
   color: var(--gl-surface-text-muted);
 }
 
+/* ADR-020 stage 20.5: the quick switcher's two-line result rows - a plain
+   command name (CommandPalette.tsx's own .palette-result content) needs no
+   secondary line, but a graph needs its workspace/recency disambiguated
+   from every other graph sharing the same title. */
+.quick-switcher-result-title {
+  display: block;
+}
+
+.quick-switcher-result-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+
 .app-search-layer {
   position: absolute;
   top: var(--gl-chrome-inset);

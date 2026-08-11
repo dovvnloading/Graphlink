@@ -253,12 +253,13 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # stage 20.2 added app-chat-library's own setGraphFavorite/
     # setGraphArchived/setGraphTags/createWorkspace/renameWorkspace/
     # archiveWorkspace sextet, 165 -> 166 when ADR-020 stage 20.3 added
-    # app-chat-library's own setWorkspaceDefaultModel, and 166 -> 168 when
+    # app-chat-library's own setWorkspaceDefaultModel, 166 -> 168 when
     # ADR-020 stage 20.4 added app-chat-library's own loadGraphAndFocusNode
-    # plus the new "globalSearch" topic's own search intent.
+    # plus the new "globalSearch" topic's own search intent, and 168 -> 169
+    # when ADR-020 stage 20.5 added app-chat-library's own exportWorkspace.
     real = _collect_real_registrations()
-    assert len(real) == 168, (
-        f"expected exactly 168 real registered intents, found {len(real)} - "
+    assert len(real) == 169, (
+        f"expected exactly 169 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

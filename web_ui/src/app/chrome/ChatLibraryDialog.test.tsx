@@ -104,6 +104,7 @@ function composerSnapshot(overrides: Record<string, unknown> = {}) {
 // push() defaults to "app-chat-library" so those calls stay unchanged.
 function makeTransport() {
   const intents: unknown[][] = [];
+  const resubscribes: string[] = [];
   const listeners = new Map<string, (payload: Record<string, unknown>) => void>();
   const transport = {
     subscribe: (topic: string, l: (payload: Record<string, unknown>) => void) => {
@@ -111,6 +112,13 @@ function makeTransport() {
       return () => {
         listeners.delete(topic);
       };
+    },
+    // ADR-020 stage 20.5: ChatLibraryDialog.tsx now calls this unconditionally
+    // right after subscribe() - see that file's own comment for why (a
+    // second, independent "app-chat-library" subscriber, QuickSwitcherDialog.
+    // tsx, can otherwise steal the one-time fresh-snapshot push).
+    resubscribe: (topic: string) => {
+      resubscribes.push(topic);
     },
     intent: (topic: string, intent: string, args: unknown[]) => {
       intents.push([topic, intent, args]);
@@ -124,6 +132,7 @@ function makeTransport() {
   return {
     transport,
     intents,
+    resubscribes,
     push: (payload: Record<string, unknown>, topic: string = "app-chat-library") => listeners.get(topic)?.(payload),
   };
 }
@@ -658,5 +667,46 @@ describe("ChatLibraryDialog", () => {
 
     await chooseCustomOption(user, 'Default model for "Default"', "No workspace default");
     expect(intents).toContainEqual(["app-chat-library", "setWorkspaceDefaultModel", [1, "", ""]]);
+  });
+
+  // -- ADR-020 stage 20.5: workspace export ----------------------------------
+
+  it("the gear panel's Export Workspace button fires exportWorkspace with the workspace id", async () => {
+    const { user, push, intents } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    act(() => push({ ...snapshot, workspaces: [workspace({ id: 1, name: "Default" }), workspace({ id: 2, name: "Work" })] }));
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Show default model settings for "Work"'));
+    await user.click(screen.getByRole("button", { name: "Export Workspace…" }));
+
+    expect(intents).toContainEqual(["app-chat-library", "exportWorkspace", [2]]);
+  });
+
+  it("names the target workspace in the export panel's own description", async () => {
+    const { user, push } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    act(() => push({ ...snapshot, workspaces: [workspace({ id: 1, name: "Client Alpha" })] }));
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Show default model settings for "Client Alpha"'));
+
+    expect(screen.getByText(/Save every graph in "Client Alpha" as one \.graphlink file\./)).toBeInTheDocument();
+  });
+
+  it("regression: resubscribes to app-chat-library on mount, so a late subscribe still gets a fresh snapshot", () => {
+    // ADR-020 stage 20.5: in the real app this dialog is lazy-mounted
+    // (App.tsx's own LazySurface), so it is no longer guaranteed to be the
+    // FIRST subscriber to "app-chat-library" - QuickSwitcherDialog.tsx now
+    // also subscribes, eagerly, from app start. WsTransport.subscribe()
+    // only sends a real wire-level "subscribe" (and gets a fresh snapshot
+    // back) for a topic's first-ever listener - without this dialog's own
+    // resubscribe() call on mount, opening Library after the quick switcher
+    // had already claimed that slot left it stuck on empty initialState
+    // ("No saved chats yet" with a real, populated library) - confirmed via
+    // a live browser repro before this fix, not a hypothetical.
+    const { resubscribes } = setup();
+
+    expect(resubscribes).toContain("app-chat-library");
   });
 });
