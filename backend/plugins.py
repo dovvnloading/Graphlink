@@ -37,6 +37,7 @@ catch-all appended last."""
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +45,7 @@ from backend.canvas import MESSAGE_VERTICAL_SPACING, SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.plugin_sdk import PluginRegistry, PluginRunContext, discover_plugins
+from graphlink_settings_store import SettingsManager
 
 
 @dataclass
@@ -54,6 +56,38 @@ class ExecutePluginArgs:
 
     plugin_name: str
     parent_node_id: str | None = None
+
+
+@dataclass
+class InvokePluginIntentArgs:
+    """ADR-014 stage 14.4: args schema for invokePluginIntent - mirrors
+    invoke_plugin_intent's own signature below exactly (dataclass field
+    order is the positional mapping dispatch_intent validates against).
+    v1 supports zero-argument custom intents only: the two demo plugins
+    (hello_node/counter_node) don't call HostContext.register_intent at
+    all, and no production caller needs a richer variadic payload yet -
+    extending this to forward real positional arguments to a plugin's own
+    handler is a natural follow-up once a real third-party plugin needs
+    it, not a gap this addition's own purpose (closing stage 14.1's
+    deferred custom-intent-wiring gap, see backend/plugin_sdk.py's module
+    docstring) requires closing now."""
+
+    plugin_id: str
+    name: str
+
+
+@dataclass
+class SetPluginGrantArgs:
+    """ADR-014 stage 14.4: args schema for setPluginGrant - the Settings >
+    Plugins page's one write path (a single checkbox per row, mirroring
+    McpServersPage's own per-field setters rather than setMcpServers' whole-
+    collection replace - see SettingsManager.set_plugin_grant's own
+    docstring for why this intent is a single-plugin write, not a bulk
+    one)."""
+
+    plugin_id: str
+    granted: bool
+
 
 _CATEGORY_META = [
     {
@@ -134,8 +168,47 @@ def get_plugin_categories(plugin_registry: "PluginRegistry | None" = None) -> li
     return grouped
 
 
-def plugins_payload(plugin_registry: "PluginRegistry | None" = None) -> dict[str, Any]:
-    return {"categories": get_plugin_categories(plugin_registry)}
+def _plugin_grants_payload(
+    plugin_registry: "PluginRegistry | None", settings_manager: "SettingsManager | None",
+) -> list[dict[str, Any]]:
+    """ADR-014 stage 14.4: one row per DISTINCT non-built-in plugin_id - NOT
+    one row per picker entry (a plugin with multiple picker entries still
+    gets exactly one grants row). Built-ins never appear here at all: this
+    walks `plugin_registry.picker_entries` (the generic PluginNodeSeed path
+    every third-party plugin, and the two demo plugins, register through),
+    never `plugin_registry.builtin_actions` (the ADR-014 stage 14.3 escape
+    hatch the 8 first-party built-ins use) - the same distinction backend/
+    plugins.py's own module docstring draws between the two dispatch
+    mechanisms. `settings_manager=None` (a bare plugins_payload() call with
+    no manager available) yields every discovered plugin as ungranted -
+    the same deny-by-default answer a real manager with no stored entry for
+    that plugin_id would give, just without a store to read from."""
+    if plugin_registry is None:
+        return []
+    grants_state = settings_manager.get_plugin_grants() if settings_manager is not None else {}
+    plugin_ids = sorted({entry.plugin_id for entry in plugin_registry.picker_entries.values()})
+    rows = []
+    for plugin_id in plugin_ids:
+        manifest = plugin_registry.manifests.get(plugin_id)
+        rows.append({
+            "pluginId": plugin_id,
+            "name": manifest.name if manifest is not None else plugin_id,
+            "scopes": sorted(manifest.scopes_grants) if manifest is not None else [],
+            "granted": bool(grants_state.get(plugin_id, False)),
+        })
+    return rows
+
+
+def plugins_payload(
+    plugin_registry: "PluginRegistry | None" = None,
+    settings_manager: "SettingsManager | None" = None,
+) -> dict[str, Any]:
+    return {
+        "categories": get_plugin_categories(plugin_registry),
+        # ADR-014 stage 14.4: the Settings > Plugins grants list - see
+        # _plugin_grants_payload's own docstring.
+        "grants": _plugin_grants_payload(plugin_registry, settings_manager),
+    }
 
 
 async def _execute_discovered_plugin(
@@ -143,6 +216,7 @@ async def _execute_discovered_plugin(
     notifications: NotificationState,
     canvas_document: SceneDocument,
     plugin_registry: "PluginRegistry",
+    settings_manager: SettingsManager,
     name: str,
     parent_node_id: str | None,
 ):
@@ -162,9 +236,22 @@ async def _execute_discovered_plugin(
        real id, else "notification") matches every one of the 8 migrated
        branches, including System Prompt's dedup path, which publishes
        "scene" and returns an EXISTING id without creating anything new.
+       ADR-014 stage 14.4 deliberately does NOT gate this branch on any
+       grant - built-ins are first-party, ship with the app, and are never
+       subject to install-time consent (see this module's own docstring).
     2. `plugin_registry.picker_entries` (via resolve_picker_name) - the
        generic PluginNodeSeed/add_plugin_node path every third-party plugin
-       (and the two demo plugins, hello_node/counter_node) uses.
+       (and the two demo plugins, hello_node/counter_node) uses. ADR-014
+       stage 14.4: gated on SettingsManager.get_plugin_grants() BEFORE the
+       parent-node validation and BEFORE `kind_spec.factory(...)` ever runs -
+       the same "cheap, static check first" ordering ToolRegistry.invoke()
+       already uses for its own scope gate (backend/tools.py) - so an
+       ungranted plugin is denied regardless of what parent was selected,
+       never even reaching the factory that would otherwise mutate the
+       document. This is a COARSE, binary, install-time gate ("has the user
+       consented to this plugin acting at all"), not a per-scope-string
+       enforcement boundary - see PluginManifest.scopes_grants' own field
+       comment for the honest limit of what this actually verifies.
 
     A name matching neither shows the same "Unknown plugin" warning
     regardless of which mechanism a real match would have used."""
@@ -181,6 +268,14 @@ async def _execute_discovered_plugin(
         await bus.publish("notification")
         return None
     kind_spec, picker_entry = resolved
+
+    if not settings_manager.get_plugin_grants().get(kind_spec.plugin_id, False):
+        notifications.show(
+            f'"{picker_entry.name}" needs your approval before it can create nodes - '
+            f'grant it in Settings > Plugins.', "warning",
+        )
+        await bus.publish("notification")
+        return None
 
     if not parent_node_id or parent_node_id not in canvas_document.nodes:
         notifications.show(
@@ -206,10 +301,75 @@ async def _execute_discovered_plugin(
     return node.id
 
 
+async def _invoke_discovered_plugin_intent(
+    bus: SessionBus,
+    notifications: NotificationState,
+    canvas_document: SceneDocument,
+    plugin_registry: "PluginRegistry",
+    settings_manager: SettingsManager,
+    plugin_id: str,
+    name: str,
+):
+    """The single invokePluginIntent dispatch path - ADR-014 stage 14.4's
+    resolution of stage 14.1's own deferred gap (see backend/plugin_sdk.py's
+    module docstring): a plugin's HostContext.register_intent()-declared
+    custom intent is inherently dynamic (unknown until a third-party plugin,
+    living outside backend/, is discovered at runtime), so it can never be a
+    fixed tests/undo_classification.py table entry the way a literal
+    (topic, intent) pair can. Rather than wire each discovered intent onto
+    the bus individually (which tests/test_undo_classification_gate.py's
+    hard-locked literal-(topic, intent) invariant structurally forbids), this
+    is the ONE static chokepoint every dynamically-discovered plugin intent
+    funnels through - "invokePluginIntent" itself IS the literal (topic,
+    intent) pair the gate sees; what it dispatches to at runtime is this
+    function's own business, exactly the same relationship executePlugin
+    already has to whichever picker entry/builtin action a given call
+    resolves to.
+
+    Looks up the matching PluginIntentSpec by (plugin_id, name), then checks
+    the SAME grant _execute_discovered_plugin does BEFORE calling
+    spec.handler - mirroring ToolRegistry.invoke()'s own "scope check runs
+    before any approval/handler" ordering (backend/tools.py): an ungranted
+    plugin's custom intent can never fire, a structural property of this one
+    chokepoint rather than something every future plugin author has to
+    remember to check themselves.
+
+    Deliberately does NOT itself call record_command - if a plugin's own
+    handler mutates the document, IT calls record_command (same "handler
+    is trusted to do exactly what it needs, including its own
+    record_command call" contract HostContext.register_builtin_plugin's own
+    docstring already documents for the built-in escape hatch); this
+    function's job ends at "was this dispatch allowed to happen at all"."""
+    plugin_id = str(plugin_id).strip()
+    name = str(name).strip()
+    spec = next(
+        (s for s in plugin_registry.intents if s.plugin_id == plugin_id and s.name == name),
+        None,
+    )
+    if spec is None:
+        notifications.show(f'Unknown plugin intent: "{plugin_id}:{name}"', "warning")
+        await bus.publish("notification")
+        return None
+
+    if not settings_manager.get_plugin_grants().get(plugin_id, False):
+        notifications.show(
+            f'"{plugin_id}" needs your approval before it can run this action - '
+            f'grant it in Settings > Plugins.', "warning",
+        )
+        await bus.publish("notification")
+        return None
+
+    run_ctx = PluginRunContext(plugin_id=plugin_id, notifications=notifications)
+    if inspect.iscoroutinefunction(spec.handler):
+        return await spec.handler(canvas_document, run_ctx)
+    return spec.handler(canvas_document, run_ctx)
+
+
 def register_plugins(
     bus: SessionBus,
     notifications: NotificationState,
     canvas_document: SceneDocument,
+    settings_manager: SettingsManager,
     plugin_registry: "PluginRegistry | None" = None,
 ) -> None:
     # ADR-014 stage 14.1: real discovery is triggered HERE, lazily, the
@@ -247,43 +407,56 @@ def register_plugins(
     # Topic name "app-plugins" (matching the codegen artifact's derived
     # name - same reasoning as "app-composer"/"app-about"): no existing
     # "plugins" schema collision today, but the pattern is now consistent
-    # across every R2.3-R2.5 topic that has a distinct SPA payload.
-    bus.register_topic("app-plugins", lambda: plugins_payload(plugin_registry))
+    # across every R2.3-R2.5 topic that has a distinct SPA payload. ADR-014
+    # stage 14.4: now also carries the "grants" array (settings_manager
+    # threaded through so it can answer the current granted/not-granted
+    # state for every non-built-in discovered plugin) - see
+    # _plugin_grants_payload's own docstring.
+    bus.register_topic("app-plugins", lambda: plugins_payload(plugin_registry, settings_manager))
 
     async def execute_plugin(plugin_name: str, parent_node_id: str | None = None):
         name = str(plugin_name).strip()
         # ADR-014 stage 14.3: every name - built-in or third-party alike -
         # flows through the same generic dispatch helper now. See
         # _execute_discovered_plugin's own docstring for the two
-        # registration mechanisms it checks, in order.
+        # registration mechanisms it checks, in order, and (stage 14.4) the
+        # grant gate the generic path now enforces.
         return await _execute_discovered_plugin(
-            bus, notifications, canvas_document, plugin_registry, name, parent_node_id,
+            bus, notifications, canvas_document, plugin_registry, settings_manager, name, parent_node_id,
         )
 
     bus.register_intent("app-plugins", "executePlugin", execute_plugin, args_schema=ExecutePluginArgs)
 
-    # ADR-014 stage 14.1 DEVIATION from the design sketch, recorded here
-    # rather than silently dropped: the design's own text says a plugin's
-    # HostContext.register_intent()-declared custom intents are "Wired at
-    # SESSION-ACTIVATION time" onto the bus. That collides with a real,
-    # pre-existing, deliberately hard-locked invariant this repo already
-    # enforces - tests/test_undo_classification_gate.py (ADR-010 close-out)
-    # raises AssertionError on ANY backend/ register_intent() call whose
-    # (topic, intent) isn't a source-literal string pair, specifically so
-    # every mutating action can be enumerated in a static, hand-reviewed
-    # A/B undo-classification table ("no more wandering or patchwork...
-    # all doors closed on this matter" - that file's own docstring). A
-    # plugin-declared intent name (f"plugin:{plugin_id}:{name}") is
-    # necessarily dynamic - it does not exist until a THIRD-PARTY plugin,
-    # living entirely outside backend/ (so invisible to that gate's own
-    # SCAN_DIR regardless), is discovered at runtime - so it can never be
-    # a fixed entry in that closed table by construction, not just today.
-    # HostContext.register_intent()/PluginIntentSpec/PluginRegistry.intents
-    # are still fully real and populated (a plugin's register() call
-    # collecting one is exercised and tested) - only the LIVE bus wiring is
-    # deferred, pending a real decision on how undo-classification should
-    # treat a dynamically-sized, third-party-declared action surface. That
-    # decision belongs with stage 14.4 (scope/consent enforcement for
-    # plugin actions), a natural adjacent-governance companion, not a call
-    # this stage should make unilaterally by quietly loosening someone
-    # else's explicit gate.
+    # ADR-014 stage 14.4: closes stage 14.1's own deferred gap (see this
+    # module's own former comment here, and backend/plugin_sdk.py's module
+    # docstring) - ONE new static (topic, intent) pair,
+    # ("app-plugins", "invokePluginIntent"), whose handler looks up its real
+    # target DYNAMICALLY at call time and grant-checks before dispatch. This
+    # satisfies tests/test_undo_classification_gate.py's literal-(topic,
+    # intent) requirement trivially (one more entry, same as "executePlugin"
+    # already is) while making every dynamically-discovered plugin intent
+    # name gate-compliant by construction, regardless of how many plugins/
+    # intents exist at runtime - see _invoke_discovered_plugin_intent's own
+    # docstring for the full mechanism.
+    async def invoke_plugin_intent(plugin_id: str, name: str):
+        return await _invoke_discovered_plugin_intent(
+            bus, notifications, canvas_document, plugin_registry, settings_manager, plugin_id, name,
+        )
+
+    bus.register_intent(
+        "app-plugins", "invokePluginIntent", invoke_plugin_intent, args_schema=InvokePluginIntentArgs,
+    )
+
+    async def set_plugin_grant(plugin_id: str, granted: bool):
+        # ADR-014 stage 14.4: the Settings > Plugins page's one write path -
+        # persists via SettingsManager.set_plugin_grant (single-plugin write,
+        # not a whole-collection replace - see that method's own docstring),
+        # then re-publishes "app-plugins" so both the picker and any
+        # Settings UI observing the same topic pick up the new granted/not-
+        # granted state immediately, same "mutate then re-publish this
+        # topic" shape every other settings-store write in this codebase
+        # already uses (e.g. setMcpServers).
+        settings_manager.set_plugin_grant(str(plugin_id).strip(), bool(granted))
+        await bus.publish("app-plugins")
+
+    bus.register_intent("app-plugins", "setPluginGrant", set_plugin_grant, args_schema=SetPluginGrantArgs)

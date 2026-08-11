@@ -41,6 +41,36 @@
       },
       "type": "array"
     },
+    "grants": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "granted": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pluginId": {
+            "type": "string"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "pluginId",
+          "name",
+          "scopes",
+          "granted"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
     "minCompatibleSchemaVersion": {
       "type": "integer"
     },
@@ -54,7 +84,8 @@
   "required": [
     "schemaVersion",
     "revision",
-    "categories"
+    "categories",
+    "grants"
   ],
   "title": "AppPluginsState",
   "type": "object"

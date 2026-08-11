@@ -29,3 +29,11 @@ description = "Reference plugin for ADR-014 stage 14.1."   # optional, default "
 # renders via the existing generic placeholder-card fallback. Any other
 # value is a discovery-time error, not a silently-ignored no-op.
 view = "generic"
+
+[scopes]
+# ADR-014 stage 14.4: this plugin creates a node (add_plugin_node), so it
+# declares graph.mutate - a subset of backend.tools.KNOWN_SCOPES, validated
+# at discovery. Self-reported, not enforced by itself - the real gate is the
+# user's install-time grant in Settings > Plugins (SettingsManager.
+# get_plugin_grants/set_plugin_grant), deny-by-default until then.
+grants = ["graph.mutate"]

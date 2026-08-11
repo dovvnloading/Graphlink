@@ -86,6 +86,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/plugins.py (app-plugins) ------------------------------------
     Classified("app-plugins", "executePlugin", "A", "content: creates a new node (Web Research/Gitlink/PyCoder/Sandbox/Artifact/System-Prompt note/Conversation/HTML) - every branch wraps its own pluginX command_type"),
+    # ADR-014 stage 14.4:
+    Classified("app-plugins", "invokePluginIntent", "B", "run-lifecycle: dispatches to a plugin's own custom intent handler defined outside backend/ (invisible to this same-file AST walk) - if that handler mutates the document it must call record_command itself, same posture as register_builtin_plugin's own escape-hatch handler"),
+    Classified("app-plugins", "setPluginGrant", "B", "preference: plugin install-time consent grant is settings-store configuration, not document content, same posture as setMcpServers"),
 
     # -- backend/api/intents_grid.py (grid-control) --------------------------
     Classified("grid-control", "setGridSize", "B", "preference: grid appearance"),

@@ -26,6 +26,7 @@ from backend.plugin_sdk import (
 from backend.plugins import register_plugins
 from backend.session_load import restore_chat_into_document
 from backend.session_save import build_chat_data
+from graphlink_settings_store import SettingsManager
 
 
 def _write_plugin(
@@ -367,13 +368,32 @@ def test_discover_plugins_is_memoized_by_resolved_path(tmp_path):
 # -- end-to-end through register_plugins + execute_plugin -------------------
 
 
-def _make_wired_bus(plugin_registry):
+def _make_wired_bus(plugin_registry, tmp_path):
+    # ADR-014 stage 14.4: register_plugins now requires a real
+    # SettingsManager (the deny-by-default plugin-grant store) and every
+    # non-built-in plugin dispatch is now grant-gated - every plugin_id this
+    # registry knows about (both node_kinds' and picker_entries' plugin_id,
+    # covering a kind registered but not yet exposed via a picker entry too)
+    # is pre-granted here so the pre-existing tests in this file keep
+    # proving the mechanism they were written for (discovery, dispatch,
+    # persistence, undo, live-wire) rather than incidentally re-proving the
+    # grant gate on every single call site. The grant gate itself gets its
+    # own dedicated tests further down this file.
+    settings_manager = SettingsManager(tmp_path / "session.dat")
+    plugin_ids = {spec.plugin_id for spec in plugin_registry.node_kinds.values()} | {
+        entry.plugin_id for entry in plugin_registry.picker_entries.values()
+    }
+    for plugin_id in plugin_ids:
+        settings_manager.set_plugin_grant(plugin_id, True)
+
     bus = SessionBus("plugin-sdk-e2e-test")
     notifications = NotificationState()
     bus.register_topic("notification", notifications.payload)
     canvas_document = SceneDocument()
     bus.register_topic("scene", canvas_document.scene_payload)
-    register_plugins(bus, notifications, canvas_document, plugin_registry=plugin_registry)
+    register_plugins(
+        bus, notifications, canvas_document, settings_manager, plugin_registry=plugin_registry,
+    )
     return bus, notifications, canvas_document
 
 
@@ -381,7 +401,7 @@ def test_execute_plugin_end_to_end_creates_a_real_node_with_content_and_parent_e
     _write_plugin(tmp_path, "e2e_plugin", kind="thing", picker_name="E2E Thing")
     registry = discover_plugins(tmp_path)
 
-    bus, notifications, canvas_document = _make_wired_bus(registry)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
 
     result = asyncio.run(
@@ -401,7 +421,7 @@ def test_execute_plugin_end_to_end_creates_a_real_node_with_content_and_parent_e
 def test_execute_plugin_requires_a_valid_parent_for_a_discovered_plugin(tmp_path):
     _write_plugin(tmp_path, "needs_parent_plugin", kind="thing", picker_name="Needs Parent Thing")
     registry = discover_plugins(tmp_path)
-    bus, notifications, canvas_document = _make_wired_bus(registry)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
 
     result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Needs Parent Thing"]))
 
@@ -419,7 +439,7 @@ def test_undo_reverts_a_plugin_created_node_and_its_parent_edge(tmp_path):
     _write_plugin(tmp_path, "undo_plugin", kind="thing", picker_name="Undo Thing")
     registry = discover_plugins(tmp_path)
 
-    bus, notifications, canvas_document = _make_wired_bus(registry)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
 
     result = asyncio.run(
@@ -514,7 +534,7 @@ def test_plugin_node_with_no_serializer_round_trips_title_and_content_only(tmp_p
     # reload regardless of anything this stage changes.
     _write_plugin(tmp_path, "no_state_plugin", kind="thing", picker_name="No State Thing")
     registry = discover_plugins(tmp_path)
-    bus, notifications, canvas_document = _make_wired_bus(registry)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
 
     node_id = asyncio.run(
@@ -548,7 +568,7 @@ def test_plugin_node_with_real_state_round_trips_custom_fields_through_save_and_
         picker_name="Stateful Widget",
     )
     registry = discover_plugins(tmp_path)
-    bus, notifications, canvas_document = _make_wired_bus(registry)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
 
     node_id = asyncio.run(
@@ -586,7 +606,7 @@ def test_plugin_node_whose_kind_is_no_longer_registered_is_dropped_not_crashed(t
     # R5-closeout deleted with the exact same tolerant behavior).
     _write_plugin(tmp_path, "temporary_plugin", kind="thing", picker_name="Temporary Thing")
     registry = discover_plugins(tmp_path)
-    bus, notifications, canvas_document = _make_wired_bus(registry)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
     node_id = asyncio.run(
         bus.dispatch_intent("app-plugins", "executePlugin", ["Temporary Thing", parent.id])
@@ -620,7 +640,7 @@ def test_live_wire_scene_payload_includes_plugin_state_when_serializer_registere
         picker_name="Stateful Widget",
     )
     registry = discover_plugins(tmp_path)
-    bus, notifications, canvas_document = _make_wired_bus(registry)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
 
     node_id = asyncio.run(
@@ -641,7 +661,7 @@ def test_live_wire_scene_payload_includes_plugin_state_when_serializer_registere
 def test_live_wire_plugin_state_is_empty_for_a_plugin_kind_with_no_serializer(tmp_path):
     _write_plugin(tmp_path, "no_state_plugin", kind="thing", picker_name="No State Thing")
     registry = discover_plugins(tmp_path)
-    bus, notifications, canvas_document = _make_wired_bus(registry)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
 
     node_id = asyncio.run(
@@ -674,7 +694,7 @@ def test_a_plugin_serializer_that_raises_degrades_to_empty_plugin_state_on_the_w
     """)
     _write_plugin(tmp_path, "raising_plugin", py_body=raising_body, kind="boom", picker_name="Boom Thing")
     registry = discover_plugins(tmp_path)
-    bus, notifications, canvas_document = _make_wired_bus(registry)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
 
     node_id = asyncio.run(
@@ -705,9 +725,9 @@ def test_a_plugin_serializer_that_raises_degrades_to_empty_plugin_state_on_the_w
 # discovery root - the production configuration, not just the test harness.
 
 
-def test_real_hello_node_plugin_round_trips_through_save_and_reload():
+def test_real_hello_node_plugin_round_trips_through_save_and_reload(tmp_path):
     registry = discover_plugins()
-    bus, notifications, canvas_document = _make_wired_bus(registry)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
 
     node_id = asyncio.run(
@@ -723,9 +743,9 @@ def test_real_hello_node_plugin_round_trips_through_save_and_reload():
     assert plugin_node.state is None
 
 
-def test_real_counter_node_plugin_round_trips_its_custom_state_through_save_and_reload():
+def test_real_counter_node_plugin_round_trips_its_custom_state_through_save_and_reload(tmp_path):
     registry = discover_plugins()
-    bus, notifications, canvas_document = _make_wired_bus(registry)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
 
     node_id = asyncio.run(

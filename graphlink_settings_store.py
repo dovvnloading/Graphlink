@@ -357,13 +357,14 @@ class SettingsManager:
         providers whose compute is free to the user) - see that commit's own
         CURRENT_SCHEMA_VERSION bump comment.
 
-        mcp_servers (ADR-007 stage 7.5) is grouped in here too even though
-        it was added later without its own CURRENT_SCHEMA_VERSION bump -
-        there is no version number to place it at. Since every migration in
-        this chain always runs on every load regardless of the file's own
-        declared version (see _load_state's own comment on why), attaching
-        it to the chain's current terminal function is the deliberate,
-        least-surprising home for it, not a guess."""
+        mcp_servers (ADR-007 stage 7.5) and plugin_grants (ADR-014 stage
+        14.4) are both grouped in here too even though neither was added
+        alongside its own CURRENT_SCHEMA_VERSION bump - there is no version
+        number to place either at. Since every migration in this chain
+        always runs on every load regardless of the file's own declared
+        version (see _load_state's own comment on why), attaching them to
+        the chain's current terminal function is the deliberate,
+        least-surprising home for them, not a guess."""
         if 'ollama_reasoning_level' not in state:
             # R8a: reasoning went from a 2-value Ollama/Llama.cpp bool
             # "mode" to a graded 4-value level shared by every provider -
@@ -394,6 +395,14 @@ class SettingsManager:
             # configured yet is the correct, safe starting point, not an
             # error.
             state['mcp_servers'] = []
+        if 'plugin_grants' not in state or not isinstance(state.get('plugin_grants'), dict):
+            # ADR-014 stage 14.4: install-time consent grants for discovered
+            # third-party plugins - same "no version number to place it at,
+            # attach it to the chain's current terminal function" posture as
+            # mcp_servers directly above. Absent -> {}, matching the
+            # initial-state default in _create_initial_state: a plugin_id
+            # with no entry here is NOT granted (deny-by-default).
+            state['plugin_grants'] = {}
         return state
 
     def _load_state(self):
@@ -547,6 +556,10 @@ class SettingsManager:
             # ADR-007 stage 7.5: MCP client configuration - see
             # get_mcp_servers/set_mcp_servers' own docstrings.
             "mcp_servers": [],
+            # ADR-014 stage 14.4: install-time consent grants for discovered
+            # third-party plugins - see get_plugin_grants/set_plugin_grant's
+            # own docstrings.
+            "plugin_grants": {},
         }
         self._save_state(state)
         return state
@@ -1213,6 +1226,46 @@ class SettingsManager:
                 "timeout": float(entry.get("timeout", 30.0) or 30.0),
             })
         self.state["mcp_servers"] = normalized
+        self._save_state()
+
+    def get_plugin_grants(self) -> dict:
+        """ADR-014 stage 14.4: install-time consent grants for discovered
+        THIRD-PARTY/demo-mechanism plugins - built-in plugins never consult
+        this at all (see backend/plugins.py's own _execute_discovered_plugin
+        for the enforcement point). Keyed by plugin_id -> bool. A plugin_id
+        with no entry here reads as NOT granted via the caller's own
+        `.get(plugin_id, False)` (this method does not synthesize that
+        default itself - it returns exactly what is persisted, same posture
+        as get_mcp_servers above returning exactly the persisted, validated
+        server list rather than padding in every possible name). Malformed
+        entries (a non-string key, an empty key) are dropped rather than
+        raised on, same fail-soft posture as every other collection getter
+        in this class."""
+        raw = self.state.get("plugin_grants", {})
+        if not isinstance(raw, dict):
+            return {}
+        grants = {}
+        for plugin_id, granted in raw.items():
+            key = str(plugin_id).strip()
+            if not key:
+                continue
+            grants[key] = bool(granted)
+        return grants
+
+    def set_plugin_grant(self, plugin_id: str, granted: bool) -> None:
+        """Sets ONE plugin's grant, leaving every other plugin's grant
+        untouched - deliberately NOT set_mcp_servers' whole-collection-
+        replace posture (that fits an add/remove/edit-a-server list editor;
+        this fits a single Settings checkbox toggling exactly one plugin's
+        consent at a time, ADR-014 stage 14.4's own "install-time consent"
+        model - decided once, ahead of time, per plugin, not a live per-call
+        approval prompt)."""
+        key = str(plugin_id or "").strip()
+        if not key:
+            return
+        grants = self.get_plugin_grants()
+        grants[key] = bool(granted)
+        self.state["plugin_grants"] = grants
         self._save_state()
 
     @staticmethod

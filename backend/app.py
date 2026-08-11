@@ -271,7 +271,10 @@ def _configure_session(
     # R5.1: register_plugins needs the same session's canvas_document (built
     # just above) so "Web Research" can create a real node - this ordering
     # (canvas_document exists before register_plugins runs) is load-bearing.
-    register_plugins(bus, notifications_state, canvas_document)
+    # ADR-014 stage 14.4: settings_manager threaded through too - it's the
+    # deny-by-default grant store _execute_discovered_plugin/
+    # invokePluginIntent consult before letting a non-built-in plugin act.
+    register_plugins(bus, notifications_state, canvas_document, settings_manager)
     # R7.4a: register_settings now takes notifications_state too, so the
     # API-provider page's save-validation/init-failure paths can surface a
     # real banner (same load-bearing ordering precedent as register_plugins/

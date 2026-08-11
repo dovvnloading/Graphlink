@@ -25,8 +25,28 @@ class AppPluginCategoryPayload:
 
 
 @dataclass
+class AppPluginGrantPayload:
+    """ADR-014 stage 14.4: one row per DISTINCT non-built-in discovered
+    plugin_id - see backend/plugins.py's own _plugin_grants_payload for the
+    exact "one row per plugin, not per picker entry, built-ins never
+    appear here" construction rule. `scopes` is the plugin's own
+    self-reported [scopes].grants manifest declaration (read-only in the
+    Settings UI, matching McpServerConfigPayload.scopes' own read-only
+    posture there); `granted` is the ONE thing a Settings checkbox actually
+    writes back, via the new setPluginGrant intent."""
+
+    pluginId: str
+    name: str
+    scopes: list[str]
+    granted: bool
+
+
+@dataclass
 class AppPluginsStatePayload:
     schemaVersion: int
     revision: int
     categories: list[AppPluginCategoryPayload]
+    # ADR-014 stage 14.4: the Settings > Plugins page's own data - see
+    # AppPluginGrantPayload's own docstring.
+    grants: list[AppPluginGrantPayload]
     minCompatibleSchemaVersion: int | None = None

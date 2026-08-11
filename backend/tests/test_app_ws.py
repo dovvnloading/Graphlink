@@ -377,7 +377,7 @@ def test_junk_args_never_crash_or_disconnect_any_registered_intent():
         assert ws.receive_json()["kind"] == "result"
 
 
-def test_args_schema_is_scoped_to_exactly_the_3_intents_this_stage_migrated():
+def test_args_schema_is_scoped_to_exactly_the_known_5_intents():
     # ADR-003 stage 3.2 review-fix: the fuzz sweep above proves every intent
     # replies safely, but it only checks message["kind"], not the error TEXT
     # - a schema-validation rejection and an unmigrated handler's own generic
@@ -385,9 +385,14 @@ def test_args_schema_is_scoped_to_exactly_the_3_intents_this_stage_migrated():
     # sweep alone could not catch a FUTURE mutation that accidentally added
     # (or removed) an args_schema on the wrong intent. This test asserts the
     # real registry's args_schema is not None set directly against the exact
-    # 3 intents this stage's own PR description claims to have migrated -
-    # silent scope drift on this security/correctness-adjacent mechanism
-    # would fail here even though it wouldn't fail the fuzz sweep.
+    # intents that carry one - silent scope drift on this security/
+    # correctness-adjacent mechanism would fail here even though it wouldn't
+    # fail the fuzz sweep. Originally the exact 3 intents ADR-003 stage 3.2's
+    # own PR description claimed to have migrated (showInfo/showError/
+    # executePlugin); ADR-014 stage 14.4 added 2 more
+    # (invokePluginIntent/setPluginGrant), both deliberately, not drift -
+    # a real intentional additions to this set updates it explicitly, the
+    # same discipline this test itself exists to enforce.
     client = make_client()
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"kind": "subscribe", "topics": ["system"]})
@@ -402,6 +407,8 @@ def test_args_schema_is_scoped_to_exactly_the_3_intents_this_stage_migrated():
             ("notification", "showInfo"),
             ("notification", "showError"),
             ("app-plugins", "executePlugin"),
+            ("app-plugins", "invokePluginIntent"),
+            ("app-plugins", "setPluginGrant"),
         }
 
 

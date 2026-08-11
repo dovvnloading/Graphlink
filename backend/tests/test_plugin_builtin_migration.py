@@ -29,6 +29,8 @@ adds only the picker-entry pin and the command_type/undo pin that section
 didn't previously need."""
 
 import asyncio
+import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -37,6 +39,7 @@ from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.plugin_sdk import discover_plugins
 from backend.plugins import get_plugin_categories, register_plugins
+from graphlink_settings_store import SettingsManager
 
 
 def _make_bus():
@@ -45,7 +48,14 @@ def _make_bus():
     bus.register_topic("notification", notifications.payload)
     canvas_document = SceneDocument()
     bus.register_topic("scene", canvas_document.scene_payload)
-    register_plugins(bus, notifications, canvas_document)
+    # ADR-014 stage 14.4: register_plugins now requires a real
+    # SettingsManager - every case in this file dispatches a BUILT-IN
+    # picker action (never grant-gated), so a throwaway store is enough;
+    # see backend/tests/test_plugins.py's own _fresh_settings_manager for
+    # the same "tempfile dir, explicitly sanctioned by conftest.py's own
+    # guard docstring" posture.
+    settings_manager = SettingsManager(Path(tempfile.mkdtemp()) / "session.dat")
+    register_plugins(bus, notifications, canvas_document, settings_manager)
     return bus, notifications, canvas_document
 
 

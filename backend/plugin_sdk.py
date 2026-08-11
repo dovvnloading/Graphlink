@@ -26,22 +26,30 @@ collide with one; no reserved-kind blocklist is needed. `requires_parent`
 is v1-only-True: `PluginPicker.tsx`'s `executePlugin(name, parentId)` wire
 call carries no x/y for a parentless node to spawn at.
 
-DEVIATION from the design's own sketch, recorded here: `HostContext.
-register_intent()` is real and fully functional (a plugin's `register()`
-call populates `PluginRegistry.intents`), but backend/plugins.py does NOT
-yet wire a discovered intent onto a session's live SessionBus. That
-activation step collides with a real, pre-existing, deliberately
-hard-locked invariant - tests/test_undo_classification_gate.py (ADR-010
-close-out) requires every `bus.register_intent()` call under backend/ to
-use a source-literal `(topic, intent)` pair, so every mutating action can
-be enumerated in one static, hand-reviewed undo A/B table. A
-plugin-declared intent name is inherently dynamic (unknown until a
-third-party plugin - living outside backend/, invisible to that gate's
-own scan regardless - is discovered at runtime), so it can never be a
-fixed table entry by construction. See backend/plugins.py's own comment,
-right where the design's session-activation loop would have gone, for the
-full reasoning. This is scoped to stage 14.4 (plugin scope/consent), an
-adjacent governance decision, rather than made unilaterally here.
+DEVIATION from the design's own sketch, recorded here (RESOLVED at stage
+14.4, see below): the design's own text said a plugin's `HostContext.
+register_intent()`-declared custom intent would be "wired at
+SESSION-ACTIVATION time" onto the bus, one live registration per declared
+intent. That collided with a real, pre-existing, deliberately hard-locked
+invariant - tests/test_undo_classification_gate.py (ADR-010 close-out)
+requires every `bus.register_intent()` call under backend/ to use a
+source-literal `(topic, intent)` pair, so every mutating action can be
+enumerated in one static, hand-reviewed undo A/B table. A plugin-declared
+intent name is inherently dynamic (unknown until a third-party plugin -
+living outside backend/, invisible to that gate's own scan regardless - is
+discovered at runtime), so it can never be a fixed table entry by
+construction. Stage 14.1 left this activation step deliberately undone,
+scoped to stage 14.4 (plugin scope/consent) as the natural adjacent-
+governance decision rather than made unilaterally here.
+
+Stage 14.4 resolved it with ONE new static (topic, intent) pair instead of
+one-per-declared-intent: `("app-plugins", "invokePluginIntent")`
+(backend/plugins.py) looks up the real target DYNAMICALLY at call time from
+`PluginRegistry.intents` and grant-checks (SettingsManager.
+get_plugin_grants) before dispatch - see
+`_invoke_discovered_plugin_intent`'s own docstring for the full mechanism.
+`HostContext.register_intent()`/`PluginIntentSpec`/`PluginRegistry.intents`
+are unchanged by this - still populated exactly as stage 14.1 built them.
 
 See doc/adr/ADR-014 stage 14.1's design for the full rationale (private,
 not part of this repo)."""
@@ -71,6 +79,12 @@ except ModuleNotFoundError:  # pragma: no cover - not exercised on this repo's C
 from backend.canvas import SceneDocument, SceneNode
 from backend.domain.node_states import NodeState
 from backend.notifications import NotificationState
+# ADR-014 stage 14.4: reused, never re-declared - a plugin manifest's
+# [scopes].grants entries are validated against the SAME closed vocabulary
+# backend/tools.py's ToolRegistry already gates real tool calls with, so
+# "graph.mutate" means the same thing whether it is a plugin's self-reported
+# manifest checklist or a tool-call's enforced scope set.
+from backend.tools import KNOWN_SCOPES
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +118,21 @@ class PluginManifest:
     description: str
     view: str  # always "generic" in this stage; validated at load
     source_dir: Path
+    # ADR-014 stage 14.4: the plugin's SELF-REPORTED declared-scope checklist
+    # from an optional [scopes] table - a subset of backend.tools.KNOWN_SCOPES
+    # (reused, never re-declared), validated at discovery time so an unknown
+    # scope string fails this ONE plugin's load, same fail-soft per-plugin
+    # skip as every other manifest error. Omitting [scopes] entirely yields
+    # frozenset() here - NOT the same as "trusted": this stage has no way to
+    # verify a plugin's code actually stays within what it declares (real
+    # capability sandboxing is stage 14.5's job, out-of-process execution);
+    # this field only feeds the Settings grants list's read-only "scopes"
+    # column and the discovery-time validation above. The separate, actually
+    # enforced gate - "has the user granted this plugin at all" - lives in
+    # SettingsManager.get_plugin_grants()/set_plugin_grant(), consulted by
+    # backend/plugins.py's _execute_discovered_plugin BEFORE any factory
+    # call, not here.
+    scopes_grants: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -152,9 +181,23 @@ NodeDeserializeHook = Callable[["dict[str, Any]"], "NodeState | None"]
 class PluginRunContext:
     """Handed to a NodeFactory/intent handler at CALL time, per invocation -
     the SDK's analog of backend/tools.py's RunContext. Deliberately minimal
-    in v1: no granted_scopes/approval fields yet - a later stage adds those
-    as NEW FIELDS here rather than plugins needing a second, later-invented
-    context object."""
+    in v1: no granted_scopes/approval fields here.
+
+    ADR-014 stage 14.4 (plugin scope/consent) resolved the gap this
+    docstring used to flag ("a later stage adds those as NEW FIELDS here")
+    WITHOUT adding fields here after all: the grant check
+    (SettingsManager.get_plugin_grants, deny-by-default) runs entirely in
+    backend/plugins.py's _execute_discovered_plugin/
+    _invoke_discovered_plugin_intent, BEFORE a PluginRunContext is even
+    constructed for a given call - a plugin whose factory/intent handler
+    actually runs has, by construction, already passed the gate, so there is
+    nothing for the handler itself to inspect or re-check via its own
+    context object. This is deliberately COARSER than backend/tools.py's own
+    RunContext.granted_scopes (a per-tool-call scope SET a handler can
+    consult mid-call) - 14.4's gate is a single install-time yes/no per
+    plugin, not a scope-by-scope capability boundary; see PluginManifest.
+    scopes_grants' own field comment for the honest limit of what a
+    manifest's declared scopes actually verify."""
 
     plugin_id: str
     notifications: NotificationState
@@ -419,6 +462,15 @@ class PluginRegistry:
         self.builtin_actions: dict[str, BuiltinActionSpec] = {}  # display name -> spec
         self.intents: list[PluginIntentSpec] = []
         self.load_errors: list[PluginLoadError] = []
+        # ADR-014 stage 14.4: plugin_id -> its own parsed manifest, populated
+        # ONLY for a plugin that finished loading successfully (same
+        # all-or-nothing posture as every other registry dict here - a
+        # plugin whose merge collided never gets an entry either). The
+        # Settings grants payload (backend/plugins.py's plugins_payload)
+        # reads this for each non-built-in plugin's display name and
+        # declared scopes list - the registry held no manifest at all before
+        # this stage, since nothing needed one past discovery time.
+        self.manifests: dict[str, PluginManifest] = {}
 
     def resolve_picker_name(self, name: str) -> "tuple[NodeKindSpec, PickerEntrySpec] | None":
         entry = self.picker_entries.get(name)
@@ -496,6 +548,27 @@ def _load_manifest(manifest_path: Path, plugin_dir: Path) -> PluginManifest:
                 f'14.5 - "generic" is the only legal value'
             )
 
+    # ADR-014 stage 14.4: optional [scopes] table - see PluginManifest.
+    # scopes_grants' own field comment for the full "self-reported checklist,
+    # not an enforced boundary" contract. Absent entirely -> frozenset()
+    # (still requires an explicit Settings grant to run at all - that gate
+    # is independent of what a plugin declares here).
+    scopes_table = raw.get("scopes", {})
+    scopes_grants: frozenset[str] = frozenset()
+    if isinstance(scopes_table, dict) and "grants" in scopes_table:
+        raw_grants = scopes_table["grants"]
+        if not isinstance(raw_grants, list) or not all(isinstance(g, str) for g in raw_grants):
+            raise PluginRegistrationError(
+                f"{manifest_path}: [scopes].grants must be a list of strings"
+            )
+        scopes_grants = frozenset(raw_grants)
+        unknown_scopes = scopes_grants - KNOWN_SCOPES
+        if unknown_scopes:
+            raise PluginRegistrationError(
+                f"{manifest_path}: [scopes].grants contains unknown scope(s) "
+                f"{sorted(unknown_scopes)} - must be a subset of {sorted(KNOWN_SCOPES)}"
+            )
+
     return PluginManifest(
         id=plugin_id,
         name=str(plugin_table["name"]),
@@ -505,6 +578,7 @@ def _load_manifest(manifest_path: Path, plugin_dir: Path) -> PluginManifest:
         description=str(plugin_table.get("description", "")),
         view=view,
         source_dir=plugin_dir,
+        scopes_grants=scopes_grants,
     )
 
 
@@ -629,6 +703,7 @@ def discover_plugins(
                 host = HostContext(manifest.id)
                 register_fn(host)
                 _merge_into_registry(registry, host, builtin_names)
+                registry.manifests[manifest.id] = manifest
             except Exception as exc:
                 registry.load_errors.append(
                     PluginLoadError(plugin_dir.name, f"{type(exc).__name__}: {exc}")

@@ -17,3 +17,9 @@ description = "Reference plugin for ADR-014 stage 14.2 - a real NodeState subcla
 
 [frontend]
 view = "generic"
+
+[scopes]
+# ADR-014 stage 14.4: this plugin creates a node (add_plugin_node), so it
+# declares graph.mutate - see plugins/hello_node/plugin.toml's own [scopes]
+# comment for the full "self-reported, not itself enforced" contract.
+grants = ["graph.mutate"]

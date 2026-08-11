@@ -5,12 +5,26 @@ name/description/category/command_type/undo pinning tests this migration
 added)."""
 
 import asyncio
+import tempfile
+from pathlib import Path
 
 from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.plugin_sdk import discover_plugins
 from backend.plugins import get_plugin_categories, plugins_payload, register_plugins
+from graphlink_settings_store import SettingsManager
+
+
+def _fresh_settings_manager() -> SettingsManager:
+    # ADR-014 stage 14.4: register_plugins now requires a real SettingsManager
+    # (the deny-by-default plugin-grant store). A bare stdlib tempfile dir -
+    # explicitly sanctioned by conftest.py's own "tmp_path/TemporaryDirectory-
+    # derived override" guard docstring - avoids threading a pytest tmp_path
+    # fixture through every one of this file's test functions (every real
+    # dispatch below is a BUILT-IN plugin, never grant-gated, so nothing here
+    # actually needs the store to persist across calls).
+    return SettingsManager(Path(tempfile.mkdtemp()) / "session.dat")
 
 
 # ADR-014 stage 14.3: the 4 structural tests below used to call
@@ -71,12 +85,14 @@ def test_get_plugin_categories_covers_every_plugin_exactly_once():
 
 
 def test_plugins_payload_shape_matches_generated_validator_shape():
-    payload = plugins_payload(discover_plugins())
-    assert set(payload) == {"categories"}
+    payload = plugins_payload(discover_plugins(), _fresh_settings_manager())
+    assert set(payload) == {"categories", "grants"}
     for category in payload["categories"]:
         assert set(category) == {"name", "description", "plugins"}
         for plugin in category["plugins"]:
             assert set(plugin) == {"name", "description"}
+    for grant in payload["grants"]:
+        assert set(grant) == {"pluginId", "name", "scopes", "granted"}
 
 
 def test_plugins_never_imports_qt():
@@ -103,7 +119,7 @@ def test_plugins_never_imports_qt():
 def test_register_plugins_publishes_on_the_app_plugins_topic():
     bus = SessionBus("plugins-test")
     notifications = NotificationState()
-    register_plugins(bus, notifications, SceneDocument())
+    register_plugins(bus, notifications, SceneDocument(), _fresh_settings_manager())
 
     class Recorder:
         def __init__(self):
@@ -136,7 +152,7 @@ def test_execute_plugin_shows_warning_notification_for_unknown_plugin():
     bus = SessionBus("plugins-exec-unknown-test")
     notifications = NotificationState()
     bus.register_topic("notification", notifications.payload)
-    register_plugins(bus, notifications, SceneDocument())
+    register_plugins(bus, notifications, SceneDocument(), _fresh_settings_manager())
 
     asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Not A Real Plugin"]))
     assert notifications.visible is True
@@ -153,7 +169,7 @@ def _make_plugins_bus():
     bus.register_topic("notification", notifications.payload)
     canvas_document = SceneDocument()
     bus.register_topic("scene", canvas_document.scene_payload)
-    register_plugins(bus, notifications, canvas_document)
+    register_plugins(bus, notifications, canvas_document, _fresh_settings_manager())
     return bus, notifications, canvas_document
 
 
