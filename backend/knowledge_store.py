@@ -70,6 +70,7 @@ from typing import Any, NamedTuple
 from backend import db_backup
 from backend.notifications import NotificationState
 from graphlink_migrations import run_sqlite_migrations
+from graphlink_token_estimator import TokenEstimator
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ BACKUP_FILENAME_PREFIX = "knowledge-"
 # a mid-batch crash without re-snapshotting on every single document.
 BACKUP_CADENCE_SECONDS = 600.0
 
-KNOWLEDGE_DB_SCHEMA_VERSION = 4
+KNOWLEDGE_DB_SCHEMA_VERSION = 5
 
 
 def content_hash(text: str) -> str:
@@ -271,11 +272,40 @@ def _migration_004_workspace_scoped_collections(conn: sqlite3.Connection) -> Non
     conn.execute("CREATE INDEX IF NOT EXISTS idx_collections_workspace_id ON collections (workspace_id)")
 
 
+def _migration_005_graph_node_chunks(conn: sqlite3.Connection) -> None:
+    """4 -> 5 (ADR-020 stage 20.4): `chunks.source_node_id` - the column
+    that lets a search HIT be traced back to which node, inside which
+    graph, produced it. NULL for every chunk that predates this stage (a
+    real ingested document's chunk - backend.knowledge_ingest's own
+    add_document_with_chunks call path never sets it) and for every chunk
+    a real document ingest produces from here on too; populated ONLY by
+    backend/chat_library.py's own graph-reindexing path
+    (knowledge_store.reindex_graph_content, below), one row per node in a
+    saved chat graph.
+
+    `documents.source_uri` already uniquely identifies WHICH graph a chunk
+    came from (the synthetic `f"graph:{graph_id}"` scheme reindex_graph_
+    content writes - see that function's own docstring), so no analogous
+    "source_graph_id" column is needed on either table: the graph id is
+    always one `int(source_uri.removeprefix("graph:"))` away from a
+    document row already joined into every real query here (search_chunks,
+    below).
+
+    Guarded exactly like every migration in this module and its sibling
+    backend/chat_library.py: a PRAGMA table_info probe before the ALTER
+    TABLE, so a second run against an already-migrated database is a pure
+    no-op."""
+    chunks_columns = [info[1] for info in conn.execute("PRAGMA table_info(chunks)").fetchall()]
+    if "source_node_id" not in chunks_columns:
+        conn.execute("ALTER TABLE chunks ADD COLUMN source_node_id TEXT")
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_fts5_lexical_index,
     3: _migration_003_vector_index,
     4: _migration_004_workspace_scoped_collections,
+    5: _migration_005_graph_node_chunks,
 }
 
 
@@ -613,6 +643,155 @@ def delete_document(db_path: Path, document_id: int) -> bool:
         conn.close()
 
 
+# -- graph node indexing (ADR-020 stage 20.4) --------------------------------
+#
+# One `documents` row per GRAPH (source_uri = f"graph:{graph_id}", a
+# synthetic scheme that can never collide with a real file/branch/web-
+# research source_uri - the CALLING code is what feeds `node_chunks`,
+# already normalized per-node text - see backend/chat_library.py's own
+# node-content normalization), one `chunks` row per NODE inside it. Unlike
+# add_document_with_chunks's content-hash idempotency (built for immutable-
+# once-ingested files), a graph is mutated and re-saved constantly - see
+# reindex_graph_content's own docstring for why this is delete-then-
+# reinsert on every call instead.
+
+
+def _graph_source_uri(graph_id: int) -> str:
+    return f"graph:{graph_id}"
+
+
+def reindex_graph_content(
+    db_path: Path,
+    *,
+    graph_id: int,
+    workspace_id: int,
+    title: str,
+    node_chunks: list[tuple[str, str]],
+    notifications: NotificationState | None = None,
+    last_saved: dict[str, Any] | None = None,
+) -> None:
+    """The graph re-indexing strategy this stage's own design settled on:
+    graphs are MUTABLE (unlike a real ingested file - this module's own
+    content-hash-idempotency docstring explicitly assumes immutable-once-
+    ingested content), so a content-hash idempotent-insert would never hit
+    (a graph's own content_hash changes on every save) and would just
+    accumulate one stale document+chunks row per save, forever. Instead:
+    DELETE every existing documents+chunks row for this graph (looked up by
+    `source_uri = f"graph:{graph_id}"`, never by content_hash), then INSERT
+    a fresh documents row + fresh chunks rows reflecting the graph's CURRENT
+    content - called on EVERY save, insert or resave alike (see backend/
+    chat_library.py's save_chat_atomically_row, this function's one real
+    caller). `chunks_fts`'s own DELETE trigger (migration "2") keeps the
+    FTS index in sync automatically when the old chunks rows are deleted
+    (ON DELETE CASCADE fires the child table's own triggers - see that
+    migration's own docstring, already verified empirically there); this
+    function never touches chunks_fts directly.
+
+    `node_chunks` is `[(node_id, text), ...]`, already normalized and
+    already filtered to non-empty text by the caller - this function trusts
+    what it is given, matching this module's own "the caller resolves
+    content, this function only writes" division of labor (see e.g. how
+    add_document_with_chunks already trusts its own `chunks` param). An
+    empty list (a graph with no indexable node content at all right now)
+    still runs the DELETE below - clearing any STALE prior index for this
+    same graph_id, which matters when a graph's last node with real content
+    was just removed or emptied - but skips the INSERT, since there is
+    nothing left to write a document row for.
+
+    `workspace_id` resolves this graph's real knowledge collection via
+    get_or_create_workspace_collection - called BEFORE this function's own
+    write transaction opens (not nested inside it), specifically so it
+    never has to wait out its own separate connection's write lock against
+    the one this function is about to open on the SAME db file (a nested
+    call here would self-contend under WAL's own single-writer rule until
+    busy_timeout expired).
+
+    `content_hash` is still populated (the schema's own NOT NULL) even
+    though this path deliberately never CONSULTS it for idempotency (unlike
+    add_document_with_chunks) - computed from `source_uri` PLUS the graph's
+    own concatenated node text, not the text alone: `documents` declares
+    `UNIQUE(content_hash, collection_id)`, and two DIFFERENT graphs in the
+    SAME workspace/collection with byte-identical node content (a real,
+    reachable case - e.g. two graphs both created from a duplicated
+    starting template) are deliberately NOT the same document the way two
+    real files with identical extracted text are (add_document_with_chunks'
+    own content-hash-idempotency docstring) - each graph is its own
+    document, tracked by its own unique source_uri, regardless of what its
+    nodes happen to say. Folding source_uri into the hash input keeps this
+    per-graph-unique by construction (empirically verified - see this
+    function's own test_two_different_graphs_do_not_collide test) rather
+    than colliding on the UNIQUE constraint the moment two graphs' content
+    happens to match."""
+    collection_id = get_or_create_workspace_collection(db_path, workspace_id)
+    source_uri = _graph_source_uri(graph_id)
+    estimator = TokenEstimator()
+
+    conn = _connect(db_path, notifications=notifications)
+    try:
+        with conn:
+            if last_saved is not None:
+                maybe_backup_before_write(db_path, last_saved)
+
+            existing_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT id FROM documents WHERE source_uri = ?", (source_uri,)
+                ).fetchall()
+            ]
+            for existing_id in existing_ids:
+                # ON DELETE CASCADE removes this document's own chunks rows,
+                # which fires chunks_fts' own AFTER DELETE trigger for each
+                # one - chunks_fts needs no direct touch here.
+                conn.execute("DELETE FROM documents WHERE id = ?", (existing_id,))
+
+            if not node_chunks:
+                return
+
+            full_text = "\n\n".join(text for _, text in node_chunks)
+            cursor = conn.execute(
+                "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    collection_id, source_uri, title, "text/graph",
+                    content_hash(f"{source_uri}\n{full_text}"), _now_iso(),
+                ),
+            )
+            document_id = cursor.lastrowid
+            conn.executemany(
+                "INSERT INTO chunks "
+                "(document_id, ordinal, text, token_count, offset_start, offset_end, source_node_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (document_id, ordinal, text, estimator.count_tokens(text), 0, len(text), node_id)
+                    for ordinal, (node_id, text) in enumerate(node_chunks)
+                ],
+            )
+    finally:
+        conn.close()
+
+
+def delete_graph_index(db_path: Path, graph_id: int) -> bool:
+    """The deletion-side mirror of reindex_graph_content: removes this
+    graph's own documents+chunks rows (ON DELETE CASCADE + chunks_fts' own
+    DELETE trigger keep chunks/chunks_fts in sync, same as reindex_graph_
+    content's own DELETE above) - called from backend/chat_library.py's
+    delete_chat, so a deleted graph's content stops being a real, jump-to-
+    node-able global-search hit rather than lingering as an orphaned index
+    entry for a graph that no longer exists. Returns whether a row was
+    actually deleted - False for a graph with nothing indexed (never saved
+    with any indexable node content, or already deleted) is a normal
+    outcome, not an error - mirrors delete_document's own return contract."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM documents WHERE source_uri = ?", (_graph_source_uri(graph_id),)
+            )
+            return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
 # -- embedding cache/index CRUD (ADR-017 stage 17.3) -------------------------
 #
 # Deliberately byte-blob level - no numpy import in this module. Packing a
@@ -682,12 +861,19 @@ def list_embeddings_for_search(
     directly - the same fields search_chunks() (FTS5) already returns,
     matching shapes so stage 17.4's fusion can treat both result lists
     uniformly. `vector` is the raw packed BLOB - unpacking is
-    knowledge_embeddings.vector_search's job, not this module's."""
+    knowledge_embeddings.vector_search's job, not this module's.
+
+    ADR-020 stage 20.4: also carries `source_node_id` (migration "5") - a
+    fused hybrid_search() result found ONLY via this vector path still
+    needs to be traceable back to its origin node the same way a
+    search_chunks() (FTS5) hit already is, so a graph-derived chunk that
+    happens to have been embedded is never mistaken for a real ingested-
+    document hit downstream."""
     conn = _connect(db_path)
     try:
         query = (
             "SELECT e.chunk_id, e.dim, e.vector, c.document_id, c.ordinal, c.text, c.token_count, "
-            "c.offset_start, c.offset_end, d.title, d.source_uri "
+            "c.offset_start, c.offset_end, d.title, d.source_uri, c.source_node_id "
             "FROM embeddings e "
             "JOIN chunks c ON c.id = e.chunk_id "
             "JOIN documents d ON d.id = c.document_id "
@@ -703,6 +889,7 @@ def list_embeddings_for_search(
                 "chunk_id": row[0], "dim": row[1], "vector": row[2], "document_id": row[3],
                 "ordinal": row[4], "text": row[5], "token_count": row[6], "offset_start": row[7],
                 "offset_end": row[8], "document_title": row[9], "source_uri": row[10],
+                "source_node_id": row[11],
             }
             for row in rows
         ]
@@ -743,6 +930,16 @@ def search_chunks(
     matching everything (an empty FTS5 MATCH string is itself invalid
     syntax, and "no terms" has no reasonable non-empty answer).
 
+    ADR-020 stage 20.4: also carries `source_node_id` (migration "5",
+    NULL for every real ingested-document chunk, a real node id for a
+    chunk backend.chat_library.reindex_graph_content wrote) - this is what
+    lets a caller (backend/api/intents_global_search.py's own result
+    formatter) tell a "graph/node" hit apart from a real document hit
+    without a second query: `document_id` -> `documents.source_uri` is
+    already joined into every row here, and a graph-sourced document's own
+    `source_uri` is always the synthetic `f"graph:{graph_id}"` scheme
+    reindex_graph_content writes.
+
     `k` bounds the result count outright, not a suggestion - a caller doing
     budget-aware selection still needs a hard upper bound on rows actually
     pulled from SQLite before it starts trimming by token budget."""
@@ -762,7 +959,7 @@ def search_chunks(
         rows = conn.execute(
             f"""
             SELECT c.id, c.document_id, c.ordinal, c.text, c.token_count, c.offset_start, c.offset_end,
-                   d.title, d.source_uri, bm25(chunks_fts) AS score
+                   d.title, d.source_uri, bm25(chunks_fts) AS score, c.source_node_id
             FROM chunks_fts
             JOIN chunks c ON c.id = chunks_fts.rowid
             JOIN documents d ON d.id = c.document_id
@@ -777,6 +974,7 @@ def search_chunks(
                 "chunk_id": row[0], "document_id": row[1], "ordinal": row[2], "text": row[3],
                 "token_count": row[4], "offset_start": row[5], "offset_end": row[6],
                 "document_title": row[7], "source_uri": row[8], "score": row[9],
+                "source_node_id": row[10],
             }
             for row in rows
         ]

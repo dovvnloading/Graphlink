@@ -17,6 +17,8 @@ import pytest
 import backend.autosave as autosave_module
 import backend.chat_library as chat_library_module
 import backend.db_backup as db_backup_module
+import backend.knowledge_store as knowledge_store_module
+from backend.api.intents_global_search import register_global_search_intents
 from backend.autosave import autosave_tick, register_autosave
 from backend.canvas import SceneDocument
 from backend.chat_library import (
@@ -57,6 +59,7 @@ from backend.chat_library import (
 )
 from backend.events import IntentValidationError, SessionBus
 from backend.notifications import NotificationState
+from backend.session_save import build_chat_data
 
 
 @pytest.fixture
@@ -2740,3 +2743,465 @@ def test_concurrent_save_conflict_message_names_the_chat(db_path):
         save_chat_atomically_row(
             db_path, chat_id, "T", {"nodes": []}, [], [], expected_updated_at=updated_at,
         )
+
+
+# -- ADR-020 stage 20.4: global FTS search + cross-workspace jump-to-node ----
+
+
+@pytest.fixture
+def knowledge_db_path(tmp_path):
+    return tmp_path / "knowledge" / "knowledge.db"
+
+
+class TestExtractIndexableNodeChunks:
+    """Unit tests for chat_library.py's own node-content normalization -
+    _extract_node_index_text/_extract_indexable_node_chunks, the piece that
+    turns a saved chat_data["nodes"] list into `[(node_id, text), ...]` for
+    backend.knowledge_store.reindex_graph_content. Ground-truthed against
+    backend/session_save.py's real per-kind _NODE_SERIALIZERS field names
+    (session_save.py:198-527) - see _TEXT_FIELD_BY_NODE_TYPE's own
+    docstring for exactly why each field name below is what it is, not a
+    guess (e.g. "code" nodes use wire key "code", NOT "content")."""
+
+    def test_chat_node_plain_string_raw_content(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "chat", "id": "n1", "raw_content": "Hello there"}]}
+        )
+        assert chunks == [("n1", "Hello there")]
+
+    def test_chat_node_multimodal_list_raw_content_only_text_parts_contribute(self):
+        chunks = chat_library_module._extract_indexable_node_chunks({
+            "nodes": [{
+                "node_type": "chat", "id": "n1",
+                "raw_content": [
+                    {"type": "text", "text": "a real phrase"},
+                    {"type": "image_bytes", "data": "not text"},
+                ],
+            }],
+        })
+        assert chunks == [("n1", "a real phrase")]
+
+    def test_code_node_uses_the_code_field_not_content(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "code", "id": "n1", "code": "print('hi')", "language": "python"}]}
+        )
+        assert chunks == [("n1", "print('hi')")]
+
+    def test_document_node_uses_content_and_title(self):
+        chunks = chat_library_module._extract_indexable_node_chunks({
+            "nodes": [{"node_type": "document", "id": "n1", "title": "Spec", "content": "the body text"}],
+        })
+        assert chunks == [("n1", "Spec the body text")]
+
+    def test_artifact_node_uses_content(self):
+        chunks = chat_library_module._extract_indexable_node_chunks({
+            "nodes": [{
+                "node_type": "artifact", "id": "n1", "instruction": "build it", "content": "the artifact body",
+            }],
+        })
+        assert chunks == [("n1", "the artifact body")]
+
+    def test_thinking_node_uses_thinking_text(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "thinking", "id": "n1", "thinking_text": "reasoning here"}]}
+        )
+        assert chunks == [("n1", "reasoning here")]
+
+    def test_html_node_uses_html_content(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "html", "id": "n1", "html_content": "<p>hi</p>"}]}
+        )
+        assert chunks == [("n1", "<p>hi</p>")]
+
+    def test_conversation_node_flattens_its_own_history(self):
+        # conversation has NO other text-bearing field at all - see
+        # session_save.py's own _serialize_conversation_node - so this is
+        # the only way it is ever findable.
+        chunks = chat_library_module._extract_indexable_node_chunks({
+            "nodes": [{
+                "node_type": "conversation", "id": "n1",
+                "conversation_history": [
+                    {"role": "user", "content": "what is a widget"},
+                    {"role": "assistant", "content": "a small mechanical thing"},
+                ],
+            }],
+        })
+        assert chunks == [("n1", "user: what is a widget\n\nassistant: a small mechanical thing")]
+
+    def test_web_research_node_uses_query(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "web_research", "id": "n1", "query": "best hiking trails"}]}
+        )
+        assert chunks == [("n1", "best hiking trails")]
+
+    def test_gitlink_node_uses_task_prompt(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "gitlink", "id": "n1", "task_prompt": "refactor the widget module"}]}
+        )
+        assert chunks == [("n1", "refactor the widget module")]
+
+    def test_pycoder_node_uses_prompt_not_code(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "pycoder", "id": "n1", "prompt": "sort this list", "code": "x.sort()"}]}
+        )
+        assert chunks == [("n1", "sort this list")]
+
+    def test_code_sandbox_node_uses_prompt(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "code_sandbox", "id": "n1", "prompt": "install numpy and plot"}]}
+        )
+        assert chunks == [("n1", "install numpy and plot")]
+
+    def test_plan_node_uses_goal(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "plan", "id": "n1", "goal": "build a REST API"}]}
+        )
+        assert chunks == [("n1", "build a REST API")]
+
+    def test_image_node_uses_prompt(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "image", "id": "n1", "prompt": "a cat on a skateboard"}]}
+        )
+        assert chunks == [("n1", "a cat on a skateboard")]
+
+    def test_a_plugin_node_falls_back_to_the_universal_content_and_title_fields(self):
+        chunks = chat_library_module._extract_indexable_node_chunks({
+            "nodes": [{"node_type": "my_plugin.widget", "id": "n1", "title": "Widget", "content": "plugin body text"}],
+        })
+        assert chunks == [("n1", "Widget plugin body text")]
+
+    def test_a_node_with_no_id_is_skipped(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "code", "code": "no id on this node"}]}
+        )
+        assert chunks == []
+
+    def test_a_node_with_nothing_indexable_is_skipped_entirely(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "thinking", "id": "n1", "thinking_text": ""}]}
+        )
+        assert chunks == []
+
+    def test_non_dict_and_malformed_entries_in_nodes_do_not_crash(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": ["not-a-dict", {"node_type": "code", "id": "n1", "code": "ok"}, None]}
+        )
+        assert chunks == [("n1", "ok")]
+
+
+class TestSaveChatAtomicallyRowIndexesIntoKnowledgeStore:
+    """ADR-020 stage 20.4: save_chat_atomically_row's own knowledge-store
+    re-indexing hook (_reindex_graph_into_knowledge_store) - proven here
+    against the REAL save path, not backend.knowledge_store.
+    reindex_graph_content in isolation (backend/tests/test_knowledge_store.
+    py's own TestReindexGraphContent covers that primitive directly)."""
+
+    def test_a_save_makes_node_content_findable_via_search_chunks(self, db_path, knowledge_db_path):
+        chat_data = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "a phrase about narwhals", "is_user": True},
+        ]}
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "Narwhal Graph", chat_data, [], [], knowledge_db_path=knowledge_db_path,
+        )
+        results = knowledge_store_module.search_chunks(knowledge_db_path, "narwhals")
+        assert len(results) == 1
+        assert results[0]["source_node_id"] == "n1"
+        assert results[0]["source_uri"] == f"graph:{chat_id}"
+        assert results[0]["document_title"] == "Narwhal Graph"
+
+    def test_resaving_with_changed_content_updates_the_index(self, db_path, knowledge_db_path):
+        chat_data_v0 = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "the old phrase", "is_user": True},
+        ]}
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "T", chat_data_v0, [], [], knowledge_db_path=knowledge_db_path,
+        )
+        assert len(knowledge_store_module.search_chunks(knowledge_db_path, "old phrase")) == 1
+
+        chat_data_v1 = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "the new phrase", "is_user": True},
+        ]}
+        save_chat_atomically_row(
+            db_path, chat_id, "T", chat_data_v1, [], [], knowledge_db_path=knowledge_db_path,
+        )
+        assert knowledge_store_module.search_chunks(knowledge_db_path, "old phrase") == []
+        new_results = knowledge_store_module.search_chunks(knowledge_db_path, "new phrase")
+        assert len(new_results) == 1
+        assert new_results[0]["source_node_id"] == "n1"
+
+    def test_the_indexed_workspace_is_the_graphs_real_workspace_on_a_resave(self, db_path, knowledge_db_path):
+        # UPDATE branch: workspace_id is never re-passed on a resave (see
+        # save_chat_atomically_row's own docstring) - the reindex hook must
+        # still resolve the graph's REAL, already-assigned workspace, not
+        # silently fall back to some default/global collection.
+        get_all_chats(db_path)  # bootstraps a fully-migrated db
+        workspace = create_workspace(db_path, "Research")
+        chat_data = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "scoped phrase", "is_user": True},
+        ]}
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "T", chat_data, [], [],
+            workspace_id=workspace["id"], knowledge_db_path=knowledge_db_path,
+        )
+        # Resave with NO workspace_id arg at all (the default, None).
+        save_chat_atomically_row(db_path, chat_id, "T", chat_data, [], [], knowledge_db_path=knowledge_db_path)
+
+        collection_id = knowledge_store_module.get_or_create_workspace_collection(knowledge_db_path, workspace["id"])
+        results = knowledge_store_module.search_chunks(knowledge_db_path, "scoped phrase", collection_id=collection_id)
+        assert len(results) == 1
+
+    def test_a_knowledge_store_failure_never_breaks_the_chats_db_save(self, db_path, knowledge_db_path, monkeypatch):
+        # Best-effort: a broken knowledge.db write must never take down the
+        # correctness-critical chats.db save with it.
+        def _boom(*args, **kwargs):
+            raise sqlite3.OperationalError("simulated knowledge.db failure")
+
+        monkeypatch.setattr(chat_library_module.knowledge_store, "reindex_graph_content", _boom)
+        chat_data = {"nodes": [{"node_type": "chat", "id": "n1", "raw_content": "hi", "is_user": True}]}
+        chat_id, _updated_at = save_chat_atomically_row(
+            db_path, None, "T", chat_data, [], [], knowledge_db_path=knowledge_db_path,
+        )
+        assert chat_id is not None
+        assert load_chat_row(db_path, chat_id)["data"] == chat_data
+
+
+class TestDeleteChatRemovesTheKnowledgeIndexToo:
+    def test_deleting_a_graph_removes_its_indexed_content(self, db_path, knowledge_db_path):
+        chat_data = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "a phrase about octopi", "is_user": True},
+        ]}
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "T", chat_data, [], [], knowledge_db_path=knowledge_db_path,
+        )
+        assert len(knowledge_store_module.search_chunks(knowledge_db_path, "octopi")) == 1
+
+        delete_chat(db_path, chat_id, knowledge_db_path=knowledge_db_path)
+
+        assert knowledge_store_module.search_chunks(knowledge_db_path, "octopi") == []
+        assert get_all_chats(db_path) == []  # the chats.db row is gone too
+
+    def test_a_knowledge_store_failure_never_breaks_the_chats_db_delete(self, db_path, knowledge_db_path, monkeypatch):
+        chat_data = {"nodes": [{"node_type": "chat", "id": "n1", "raw_content": "hi", "is_user": True}]}
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "T", chat_data, [], [], knowledge_db_path=knowledge_db_path,
+        )
+
+        def _boom(*args, **kwargs):
+            raise sqlite3.OperationalError("simulated knowledge.db failure")
+
+        monkeypatch.setattr(chat_library_module.knowledge_store, "delete_graph_index", _boom)
+        delete_chat(db_path, chat_id, knowledge_db_path=knowledge_db_path)  # must not raise
+        assert get_all_chats(db_path) == []
+
+
+class TestLoadGraphAndFocusNodeIntent:
+    """ADR-020 stage 20.4: the request/reply intent - see
+    make_load_graph_and_focus_node's own docstring for the full contract."""
+
+    def test_returns_the_real_node_coordinates_after_loading_a_different_graph(self, db_path):
+        # A REAL saved graph, built via a real live document/save cycle (so
+        # its own persisted "id" is a genuine, counter-minted SceneNode id,
+        # never a hand-typed guess) - then looked up against a COMPLETELY
+        # FRESH document/bus (a different SessionBus, own fresh id counter),
+        # exactly the real "jump into a graph THIS session has never loaded
+        # before" scenario - see make_load_graph_and_focus_node's own
+        # docstring for why the two documents' ids are never expected to
+        # match (RELOAD PATH: resolved by ordinal position, not by id).
+        seed_document = SceneDocument()
+        seed_node = seed_document.add_chat_node(123.5, 456.0, "hi", is_user=True)
+        seed_chat_data = build_chat_data(seed_document)
+        seed_notes = seed_chat_data.pop("notes_data", [])
+        seed_pins = seed_chat_data.pop("pins_data", [])
+        chat_id, _ = save_chat_atomically_row(db_path, None, "Target Graph", seed_chat_data, seed_notes, seed_pins)
+        saved_node_id = seed_node.id
+
+        bus, document, notifications = _bus_with_canvas(db_path)
+
+        result = asyncio.run(
+            bus.dispatch_intent("app-chat-library", "loadGraphAndFocusNode", [chat_id, saved_node_id])
+        )
+
+        assert result == {"x": 123.5, "y": 456.0}
+        assert document.current_chat_id == chat_id
+        assert len(document.nodes) == 1
+        live_node = next(iter(document.nodes.values()))
+        assert live_node.x == 123.5 and live_node.y == 456.0
+
+    def test_the_fast_path_skips_the_reload_when_already_on_the_target_graph(self, db_path):
+        # The SAVED id is deliberately irrelevant here (never compared
+        # against in the fast path) - only the LIVE id (captured after the
+        # real load, below) matters.
+        chat_data = {"nodes": [
+            {"node_type": "chat", "id": "irrelevant-saved-id", "raw_content": "hi", "is_user": True,
+             "position": {"x": 10.0, "y": 20.0}},
+        ]}
+        chat_id = _insert_chat(db_path, "Already Open", data=json.dumps(chat_data))
+        bus, document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+        assert notifications.visible
+        notifications.dismiss()  # reset so we can prove NO second "Loaded ..." notice fires
+        live_node_id = next(iter(document.nodes.values())).id
+
+        result = asyncio.run(
+            bus.dispatch_intent("app-chat-library", "loadGraphAndFocusNode", [chat_id, live_node_id])
+        )
+
+        assert result == {"x": 10.0, "y": 20.0}
+        assert notifications.visible is False, "the fast path must not reload (and re-notify) a graph already open"
+
+    def test_returns_none_for_a_stale_search_result_pointing_at_a_deleted_node(self, db_path):
+        chat_data = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "hi", "is_user": True, "position": {"x": 0, "y": 0}},
+        ]}
+        chat_id = _insert_chat(db_path, "Graph", data=json.dumps(chat_data))
+        bus, document, notifications = _bus_with_canvas(db_path)
+
+        result = asyncio.run(bus.dispatch_intent(
+            "app-chat-library", "loadGraphAndFocusNode", [chat_id, "node-that-no-longer-exists"],
+        ))
+
+        assert result is None
+        assert document.current_chat_id == chat_id  # the graph itself DID load successfully
+
+    def test_returns_none_for_a_stale_search_result_pointing_at_a_deleted_graph(self, db_path):
+        bus, document, notifications = _bus_with_canvas(db_path)
+
+        result = asyncio.run(bus.dispatch_intent("app-chat-library", "loadGraphAndFocusNode", [999999, "n1"]))
+
+        assert result is None
+        assert notifications.visible and notifications.msg_type == "error"
+
+
+class TestGlobalSearchAcrossWorkspaces:
+    """ADR-020 stage 20.4's own exit criterion, proven literally end to
+    end: two workspaces, a graph in each with distinct node content, a
+    search from global scope (collection_id=None) finds a phrase that
+    exists ONLY in workspace B's graph while the "current" session context
+    is workspace A, the search result correctly identifies the source
+    graph_id/node_id, and calling loadGraphAndFocusNode with that graph_id/
+    node_id returns the real node's real x/y coordinates - the full
+    backend chain, not just the FTS query in isolation."""
+
+    def test_a_phrase_in_a_closed_graph_in_another_workspace_is_found_and_focused(
+        self, db_path, knowledge_db_path, monkeypatch,
+    ):
+        import backend.api.intents_global_search as igs_module
+        # intents_global_search.py imports DEFAULT_DB_PATH BY NAME (the same
+        # shape backend/api/intents_knowledge.py already uses, and this
+        # exact test's own precedent - test_intents_knowledge.py's own
+        # module docstring on why this monkeypatch, not the module-level
+        # one, is what's needed for a NAME import).
+        monkeypatch.setattr(igs_module, "DEFAULT_DB_PATH", knowledge_db_path)
+
+        get_all_chats(db_path)  # bootstraps a fully-migrated db (Default = workspace A)
+        workspace_a = get_all_workspaces(db_path)[0]
+        workspace_b = create_workspace(db_path, "Workspace B")
+
+        graph_a_data = {"nodes": [
+            {"node_type": "chat", "id": "a1", "raw_content": "notes about apples", "is_user": True,
+             "position": {"x": 1.0, "y": 2.0}},
+        ]}
+        graph_a_id, _ = save_chat_atomically_row(
+            db_path, None, "Graph A", graph_a_data, [], [],
+            workspace_id=workspace_a["id"], knowledge_db_path=knowledge_db_path,
+        )
+
+        graph_b_data = {"nodes": [
+            {"node_type": "chat", "id": "b1", "raw_content": "a very unique phrase about zephyrsaurus",
+             "is_user": True, "position": {"x": 777.0, "y": 888.0}},
+        ]}
+        graph_b_id, _ = save_chat_atomically_row(
+            db_path, None, "Graph B", graph_b_data, [], [],
+            workspace_id=workspace_b["id"], knowledge_db_path=knowledge_db_path,
+        )
+
+        # The "current" session context is workspace A - it loaded Graph A
+        # (the graph the user is CURRENTLY looking at) and never opened
+        # Graph B at all.
+        bus, document, notifications = _bus_with_canvas(db_path)
+        register_global_search_intents(bus)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [graph_a_id]))
+        assert document.current_chat_id == graph_a_id
+        assert document.current_workspace_id == workspace_a["id"]
+
+        # Global scope (no workspaceId filter) must find the phrase that
+        # exists ONLY in workspace B's graph.
+        search_result = asyncio.run(bus.dispatch_intent("globalSearch", "search", ["zephyrsaurus", 10]))
+        results = search_result["results"]
+        assert len(results) == 1
+        hit = results[0]
+        assert hit["graphId"] == graph_b_id
+        assert hit["sourceNodeId"] == "b1"
+        assert "zephyrsaurus" in hit["text"].lower()
+
+        # The SAME global search also finds Graph A's own exclusive phrase -
+        # proving this is a real cross-workspace search, not an accident of
+        # only one workspace's collection being queried.
+        apples_result = asyncio.run(bus.dispatch_intent("globalSearch", "search", ["apples", 10]))
+        assert len(apples_result["results"]) == 1
+        assert apples_result["results"][0]["graphId"] == graph_a_id
+        assert apples_result["results"][0]["sourceNodeId"] == "a1"
+
+        # The full chain: loadGraphAndFocusNode with the search result's OWN
+        # graph_id/node_id returns the real node's real x/y - while the
+        # session is STILL sitting on Graph A (a genuine cross-workspace
+        # jump, not a same-graph lookup).
+        focus_result = asyncio.run(bus.dispatch_intent(
+            "app-chat-library", "loadGraphAndFocusNode", [hit["graphId"], hit["sourceNodeId"]],
+        ))
+        assert focus_result == {"x": 777.0, "y": 888.0}
+        assert document.current_chat_id == graph_b_id  # the session really did switch graphs
+
+    def test_a_workspace_filter_scopes_the_search_to_one_workspace(self, db_path, knowledge_db_path, monkeypatch):
+        import backend.api.intents_global_search as igs_module
+        monkeypatch.setattr(igs_module, "DEFAULT_DB_PATH", knowledge_db_path)
+
+        get_all_chats(db_path)
+        workspace_a = get_all_workspaces(db_path)[0]
+        workspace_b = create_workspace(db_path, "Workspace B")
+
+        save_chat_atomically_row(
+            db_path, None, "Graph A", {"nodes": [
+                {"node_type": "chat", "id": "a1", "raw_content": "shared search term alpha", "is_user": True},
+            ]}, [], [], workspace_id=workspace_a["id"], knowledge_db_path=knowledge_db_path,
+        )
+        save_chat_atomically_row(
+            db_path, None, "Graph B", {"nodes": [
+                {"node_type": "chat", "id": "b1", "raw_content": "shared search term beta", "is_user": True},
+            ]}, [], [], workspace_id=workspace_b["id"], knowledge_db_path=knowledge_db_path,
+        )
+
+        bus, _document, _notifications = _bus_with_canvas(db_path)
+        register_global_search_intents(bus)
+
+        unscoped = asyncio.run(bus.dispatch_intent("globalSearch", "search", ["shared search term", 10]))
+        assert len(unscoped["results"]) == 2
+
+        scoped_to_b = asyncio.run(
+            bus.dispatch_intent("globalSearch", "search", ["shared search term", 10, workspace_b["id"]])
+        )
+        assert len(scoped_to_b["results"]) == 1
+        assert scoped_to_b["results"][0]["sourceNodeId"] == "b1"
+
+    def test_a_document_hit_carries_no_graph_id_or_source_node_id(self, db_path, knowledge_db_path, monkeypatch):
+        # A real ingested document (not a graph) must be distinguishable
+        # from a graph/node hit - sourceNodeId/graphId both None.
+        import backend.api.intents_global_search as igs_module
+        monkeypatch.setattr(igs_module, "DEFAULT_DB_PATH", knowledge_db_path)
+
+        from backend.knowledge_chunking import chunk_text
+
+        text = "A real ingested document about jackalopes."
+        knowledge_store_module.add_document_with_chunks(
+            knowledge_db_path, source_uri="notes.txt", title="Notes", mime="text/plain",
+            text=text, chunks=chunk_text(text, target_tokens=1000),
+        )
+
+        bus, _document, _notifications = _bus_with_canvas(db_path)
+        register_global_search_intents(bus)
+        result = asyncio.run(bus.dispatch_intent("globalSearch", "search", ["jackalopes", 10]))
+
+        assert len(result["results"]) == 1
+        hit = result["results"][0]
+        assert hit["sourceNodeId"] is None
+        assert hit["graphId"] is None

@@ -51,6 +51,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from backend import db_backup
+from backend import knowledge_store
 from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -195,6 +196,187 @@ def _extract_preview_and_message_count(chat_data: dict[str, Any]) -> tuple[str, 
         text = str(last_content or "")
     preview = " ".join(text.split())[:_PREVIEW_MAX_CHARS]
     return preview, len(chat_nodes)
+
+
+def _flatten_content_part_text(content: Any) -> str:
+    """Shared by both raw_content (chat) and conversation_history entries
+    (conversation/chat/html) below - the SAME "text is either a plain
+    string, or a list of {"type","text"} content-part dicts, only the
+    text-type parts count" shape _extract_preview_and_message_count above
+    already established as this codebase's own precedent for raw_content
+    specifically; conversation_history messages (backend/domain/
+    content_codec.py's own _serialize_history, each `{"role", "content"}`)
+    use the identical shape for their own `content` field."""
+    if isinstance(content, list):
+        return " ".join(
+            str(part.get("text", "")) for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+    return str(content or "")
+
+
+def _flatten_conversation_history(history: Any) -> str:
+    """ADR-020 stage 20.4: mirrors backend/api/intents_knowledge.py's own
+    branch_history_to_text exactly (same "role: text" per-turn join) -
+    conversation nodes have no OTHER text-bearing field at all (see
+    backend/session_save.py's own _serialize_conversation_node: node_type/
+    conversation_history/is_collapsed, nothing else), so without this a
+    conversation node would be completely unindexable, not even findable
+    by a title (it has none - see _extract_node_index_text's own
+    docstring)."""
+    if not isinstance(history, list):
+        return ""
+    lines = []
+    for turn in history:
+        if not isinstance(turn, dict):
+            continue
+        text = _flatten_content_part_text(turn.get("content")).strip()
+        if text:
+            lines.append(f"{turn.get('role', 'user')}: {text}")
+    return "\n\n".join(lines)
+
+
+# ADR-020 stage 20.4: one dominant, obviously-text-shaped field per kind,
+# ground-truthed against backend/session_save.py's real _NODE_SERIALIZERS
+# (session_save.py:198-527) - the SAVED WIRE key each kind's own serializer
+# actually writes, not a guess at the live domain object's own attribute
+# name (which often differs - e.g. a "code" node's domain field is
+# node.state.code, but _serialize_code_node writes it out under the wire
+# key "code", while an "artifact" node's domain field is node.state.
+# artifact_content but _serialize_artifact_node writes it under the wire
+# key "content", the SAME key "document" nodes use for their own content).
+# NAMED, HONEST GAP: only each kind's single most obviously-dominant
+# prompt/instruction/body field is indexed here - pycoder/code_sandbox's
+# own code/output/analysis, gitlink's own context_xml/proposal_data, plan's
+# own steps, and web_research's own research_result body are NOT indexed,
+# per this stage's own explicit "a reasonable single text field is enough;
+# skip the rest" allowance for kinds with no one obvious whole-content
+# field. "chat" and "conversation" are handled separately, immediately
+# below this map (see _extract_node_index_text).
+_TEXT_FIELD_BY_NODE_TYPE = {
+    "code": "code",
+    "document": "content",
+    "artifact": "content",
+    "thinking": "thinking_text",
+    "html": "html_content",
+    "web_research": "query",
+    "gitlink": "task_prompt",
+    "pycoder": "prompt",
+    "code_sandbox": "prompt",
+    "plan": "goal",
+    "image": "prompt",
+}
+
+
+def _extract_node_index_text(node: dict[str, Any]) -> str:
+    """One indexable text string for a single node in chat_data["nodes"]
+    (the already-serialized wire shape - see _TEXT_FIELD_BY_NODE_TYPE's own
+    docstring for why this is grounded in session_save.py's real per-kind
+    serializers, not guessed). Concatenates the node's own "title" (only
+    "document" nodes and Plugin SDK nodes - backend/session_save.py's own
+    _serialize_plugin_node universal fields - carry one; every other
+    built-in kind has none, so title contributes nothing there, which is
+    fine: title is a bonus, not the only signal) with a best-effort
+    dominant body field:
+
+      chat: raw_content - a plain string, or a list of {"type","text"}
+        content parts - the SAME shape/handling
+        _extract_preview_and_message_count above already established.
+      conversation: its own conversation_history, flattened (see
+        _flatten_conversation_history's own docstring - this is the ONLY
+        text this kind has at all).
+      every kind in _TEXT_FIELD_BY_NODE_TYPE: that one field, verbatim.
+      anything else (a Plugin SDK node not in the map above): falls back
+        to the generic "content" field _serialize_plugin_node's own
+        universal fields always write.
+
+    Returns "" (title + body both empty/absent) for a node with nothing
+    worth indexing - the caller (_extract_indexable_node_chunks) skips
+    writing a chunk row for that node entirely rather than indexing an
+    empty string under a real chunk id."""
+    node_type = node.get("node_type")
+    title = node.get("title")
+    title_text = title.strip() if isinstance(title, str) else ""
+
+    if node_type == "chat":
+        body_text = _flatten_content_part_text(node.get("raw_content")).strip()
+    elif node_type == "conversation":
+        body_text = _flatten_conversation_history(node.get("conversation_history")).strip()
+    else:
+        field_name = _TEXT_FIELD_BY_NODE_TYPE.get(node_type, "content")
+        raw_value = node.get(field_name)
+        body_text = str(raw_value).strip() if isinstance(raw_value, str) else ""
+
+    return " ".join(part for part in (title_text, body_text) if part)
+
+
+def _extract_indexable_node_chunks(chat_data: dict[str, Any]) -> list[tuple[str, str]]:
+    """Walks chat_data["nodes"] (already-serialized, pre-json.dumps - the
+    SAME dict _extract_preview_and_message_count above reads from, at the
+    same save-time point) and returns `[(node_id, text), ...]` for every
+    node with real indexable content - the input backend/knowledge_store.
+    py's own reindex_graph_content turns into one chunks row per node.
+    Nodes with no id, or with _extract_node_index_text returning "" (see
+    that function's own docstring), are skipped outright - never written
+    as an empty chunk under a real id."""
+    chunks: list[tuple[str, str]] = []
+    for node in chat_data.get("nodes", []):
+        if not isinstance(node, dict):
+            continue
+        node_id = node.get("id")
+        if not isinstance(node_id, str) or not node_id:
+            continue
+        text = _extract_node_index_text(node)
+        if text:
+            chunks.append((node_id, text))
+    return chunks
+
+
+def _reindex_graph_into_knowledge_store(
+    graph_id: int,
+    workspace_id: int,
+    title: str,
+    chat_data: dict[str, Any],
+    knowledge_db_path: Path | None,
+) -> None:
+    """The one call site save_chat_atomically_row uses to keep this graph's
+    global-search index in step with what was just written to chats.db -
+    see that function's own docstring for exactly where this runs (after
+    the chats.db write has already committed).
+
+    `knowledge_db_path` resolves knowledge_store.DEFAULT_DB_PATH here, at
+    CALL time (a live module-attribute read via `knowledge_store.
+    DEFAULT_DB_PATH`, never a value captured at import time) when the
+    caller passes None - the same "resolve the real default only when
+    asked to, read fresh every call" idiom this module's own
+    register_chat_library already uses for chats.db's own DEFAULT_DB_PATH.
+    This is what lets backend/tests/conftest.py's own real-user-data guard
+    fixture safely redirect EVERY caller that omits this parameter to a
+    throwaway tmp path by monkeypatching knowledge_store.DEFAULT_DB_PATH
+    alone, with no changes needed to any of this suite's many pre-existing
+    save_chat_atomically_row call sites - see that fixture's own comment.
+
+    Best-effort: indexing failure is logged and swallowed, never raised -
+    the chats.db write this runs after is the correctness-critical one and
+    must never be rolled back or reported as failed over a SECONDARY
+    search-index write. A knowledge.db that is locked, mid corruption-
+    rescue, or otherwise briefly unavailable just means global search is
+    stale for this one graph until its next save, not a lost or corrupted
+    chat."""
+    resolved_knowledge_db_path = (
+        knowledge_db_path if knowledge_db_path is not None else knowledge_store.DEFAULT_DB_PATH
+    )
+    try:
+        node_chunks = _extract_indexable_node_chunks(chat_data)
+        knowledge_store.reindex_graph_content(
+            resolved_knowledge_db_path,
+            graph_id=graph_id, workspace_id=workspace_id, title=title, node_chunks=node_chunks,
+        )
+    except Exception:
+        logger.exception(
+            "save: failed to index graph %s into the knowledge store - global search may be stale",
+            graph_id,
+        )
 
 
 def _connect(
@@ -933,9 +1115,28 @@ def rename_chat(db_path: Path, chat_id: int, new_title: str) -> None:
         )
 
 
-def delete_chat(db_path: Path, chat_id: int) -> None:
+def delete_chat(db_path: Path, chat_id: int, *, knowledge_db_path: Path | None = None) -> None:
+    """ADR-020 stage 20.4: also removes this graph's own indexed content
+    from knowledge_store.py's knowledge.db (backend.knowledge_store.
+    delete_graph_index - the deletion-side mirror of save_chat_atomically_
+    row's own reindex_graph_content call) - a deleted graph's chunks would
+    otherwise linger as a real, jump-to-node-able global-search hit
+    pointing at a graph that no longer exists, a user-visible bug, not a
+    cosmetic one. Best-effort and non-blocking, same posture and same
+    resolve-DEFAULT_DB_PATH-at-call-time shape as save_chat_atomically_row's
+    own indexing call - see _reindex_graph_into_knowledge_store's own
+    docstring for why."""
     with contextlib.closing(_connect(db_path)) as conn, conn:
         conn.execute("DELETE FROM graphs WHERE id = ?", (chat_id,))
+    resolved_knowledge_db_path = (
+        knowledge_db_path if knowledge_db_path is not None else knowledge_store.DEFAULT_DB_PATH
+    )
+    try:
+        knowledge_store.delete_graph_index(resolved_knowledge_db_path, chat_id)
+    except Exception:
+        logger.exception(
+            "delete: failed to remove graph %s's indexed content from the knowledge store", chat_id,
+        )
 
 
 # -- ADR-020 stage 20.2: favorite/archived/tags + workspaces CRUD -----------
@@ -1268,6 +1469,7 @@ def save_chat_atomically_row(
     *,
     expected_updated_at: str | None = None,
     workspace_id: int | None = None,
+    knowledge_db_path: Path | None = None,
 ) -> tuple[int, str]:
     """Mirrors ChatDatabase.save_chat_atomically (database.py:271-315): ONE
     shared connection - UPDATE if `chat_id` is truthy, else INSERT (the
@@ -1344,7 +1546,19 @@ def save_chat_atomically_row(
     function trusts the value it is given rather than re-querying
     workspaces here, matching save_chat_atomically_row's own long-standing
     "the caller resolves titles/ids, this function only writes" division of
-    labor (see e.g. how `title` itself already arrives fully resolved)."""
+    labor (see e.g. how `title` itself already arrives fully resolved).
+
+    ADR-020 stage 20.4: after the chats.db write above has fully committed,
+    this graph's content is re-indexed into knowledge_store.py's own
+    knowledge.db for global search - see _reindex_graph_into_knowledge_
+    store's own docstring for the exact strategy (delete-then-reinsert,
+    since a graph is mutated and re-saved constantly, unlike an immutable-
+    once-ingested file) and why a failure there is logged and swallowed
+    rather than raised. `knowledge_db_path` defaults (None) to
+    knowledge_store.DEFAULT_DB_PATH, resolved at call time - see that
+    helper's own docstring for why this specific resolution shape is what
+    keeps every pre-existing test call site of this function safe from
+    accidentally touching the real ~/.graphlink/knowledge/knowledge.db."""
     chat_data_json = json.dumps(chat_data)
     preview, message_count = _extract_preview_and_message_count(chat_data)
     with contextlib.closing(_connect(db_path)) as conn:
@@ -1433,6 +1647,25 @@ def save_chat_atomically_row(
                     ),
                 )
 
+        # ADR-020 stage 20.4: runs AFTER the `with conn:` block above has
+        # committed (or, on a ConcurrentSaveConflict, never reached here at
+        # all - that exception propagates straight out of the `with conn:`
+        # block, so this line is unreachable for a lost write race, exactly
+        # as it should be: nothing was actually written, so nothing here
+        # needs re-indexing). One extra cheap read on the SAME still-open
+        # connection - graphs.workspace_id is always a real, non-NULL int
+        # for resolved_chat_id regardless of which branch above ran (the
+        # INSERT branches always populate it - explicitly when `workspace_id`
+        # was given, via the schema's own DEFAULT otherwise; the UPDATE
+        # branch never changes it - see this function's own workspace_id
+        # paragraph above), so this is never the graph's SOURCE of workspace
+        # truth, only a resolve-what-was-just-written convenience read.
+        resolved_workspace_id = conn.execute(
+            "SELECT workspace_id FROM graphs WHERE id = ?", (resolved_chat_id,)
+        ).fetchone()[0]
+        _reindex_graph_into_knowledge_store(
+            resolved_chat_id, int(resolved_workspace_id), title, chat_data, knowledge_db_path,
+        )
         return resolved_chat_id, now
 
 
@@ -1640,7 +1873,21 @@ def make_serialize_mutating_intent(
     register_chat_library itself under ADR-002's 300-line registration-
     function cap (stage 2.7). Captures nothing register_chat_library's own
     callers couldn't already reach via bus.chat_mutation_guard, which is
-    the SAME dict passed in here as mutation_in_progress."""
+    the SAME dict passed in here as mutation_in_progress.
+
+    ADR-020 stage 20.4: `wrapped` now RETURNS `handler`'s own return value
+    (see the `return await handler(...)` line below) rather than discarding
+    it - every pre-20.4 intent this wraps (loadChat/saveChat/newChat) is
+    fire-and-forget from the frontend (transport.fireIntent never inspects
+    the resolved value), so this was a silent no-op difference for all
+    three, never previously worth fixing on its own. ADR-020 stage 20.4's
+    own loadGraphAndFocusNode is the first REQUEST/REPLY intent wrapped
+    through this same guard (it needs the SAME reentrancy protection
+    loadChat/saveChat/newChat already get, since it also mutates
+    canvas_document via a real load) - without this fix, dispatch_intent
+    would resolve the frontend's transport.request(...) promise with `None`
+    on every successful call, silently breaking the one thing that makes
+    request/reply the right shape here (see that intent's own docstring)."""
 
     def _claim_guard(owner: str) -> None:
         mutation_in_progress["active"] = True
@@ -1675,7 +1922,7 @@ def make_serialize_mutating_intent(
 
             _claim_guard(USER_OWNER)
             try:
-                await handler(*args, **kwargs)
+                return await handler(*args, **kwargs)
             finally:
                 _release_guard()
 
@@ -1825,6 +2072,148 @@ def make_load_chat(
             await bus.publish("notification")
 
     return load_chat
+
+
+# backend/domain/graph.py's own register_restored_node - used ONLY by the
+# session loader - mints a BRAND NEW id for every node on EVERY restore and
+# permanently discards whatever "id" the saved payload carried (see that
+# function's own docstring: "Assigns a fresh id ... is overwritten here -
+# backend ids are a different namespace/format than legacy's uuid-based
+# persistent ids"). This is deliberate and permanent, not a gap: two
+# DIFFERENT saved graphs' own "id" values routinely collide (each graph's
+# session minted its own "n1, n2, ..." independently), so reusing a saved
+# id verbatim on restore could collide with an already-live node from
+# whatever this document is CURRENTLY holding.
+#
+# Consequence for make_load_graph_and_focus_node below: node_id (sourced
+# from a PAST save's own recorded id - see _extract_indexable_node_chunks)
+# can be looked up directly against canvas_document.nodes ONLY when no
+# restore has happened since that save (the FAST PATH - ids are stable for
+# the entire time one graph stays continuously loaded). The moment a fresh
+# restore runs (the graph was NOT already open), that comparison is
+# comparing two unrelated id namespaces and must not be attempted - see
+# that function's own RELOAD PATH comment for the ordinal-position-based
+# fix this uses instead.
+_NON_REGULAR_NODE_KINDS = frozenset({"note", "chart", "frame", "container"})
+
+
+def make_load_graph_and_focus_node(
+    resolved_path: Path, canvas_document: SceneDocument | None, load_chat: Callable[..., Any],
+):
+    """Factory for register_chat_library's own loadGraphAndFocusNode intent
+    (ADR-020 stage 20.4) - see make_load_chat's own docstring immediately
+    above for why this is a top-level factory rather than a closure defined
+    inline.
+
+    REQUEST/REPLY, not fire-and-forget, unlike loadChat itself (which this
+    reuses without duplicating - see below): the frontend's global-search
+    "jump to this node, even in a graph from another workspace" action
+    needs the target node's real x/y coordinates back in hand before it can
+    call useReactFlow().setCenter(...) - there is no "wait for the next
+    matching scene state" primitive anywhere in this codebase's own
+    transport.ts to build that some other way (only persistent subscribe*
+    helpers), and this stage deliberately does not invent one. Returning
+    the coordinates directly in the resolved reply means the frontend never
+    has to wait for or inspect the "scene" topic separately, and no race is
+    possible: the reply literally cannot resolve before the restore below
+    (when one runs) has fully landed in canvas_document.
+
+    REUSE, NOT DUPLICATION: does exactly what load_chat already does
+    (restore_chat_into_document, set current_chat_id/current_workspace_id,
+    bus.publish("scene"), the "Loaded ..." notification) by calling straight
+    through to the SAME `load_chat` closure register_chat_library's own
+    loadChat intent is built from - not a second, parallel restore
+    implementation. `load_chat` never returns a value (loadChat's own
+    fire-and-forget contract is unchanged - this does not alter that
+    function at all, only calls it), so this function does its own node
+    lookup afterward rather than threading anything back through it.
+
+    FAST PATH vs. RELOAD PATH - see _NON_REGULAR_NODE_KINDS' own comment
+    immediately above for the full "node ids are NOT stable across a
+    restore" reasoning this split exists to handle correctly:
+
+      FAST PATH: `graph_id` already equals canvas_document's own
+      current_chat_id (the target graph is already the one open, so NO
+      restore runs here) - node_id is looked up directly against the live
+      document. Correct because ids never change while a graph stays
+      continuously loaded, and also a cheap, correctness-neutral
+      optimization (skips a pointless full scene reload + notification).
+
+      RELOAD PATH: a different graph was open (or none was), so load_chat
+      runs a REAL restore, which mints entirely new ids for every node -
+      node_id (recorded by a PAST save) can never be compared against
+      those directly. Instead: the saved row is re-read (load_chat_row,
+      the exact same row load_chat itself just restored FROM), node_id's
+      ORDINAL POSITION is found within THAT row's own "nodes" array (the
+      exact array _extract_indexable_node_chunks walked to produce this id
+      in the first place - i.e. this is comparing node_id against the
+      SAME payload it came from, never against live ids), and that ordinal
+      is mapped onto the freshly-restored live document's own "regular"
+      nodes (backend/session_save.py's own build_chat_data writes "nodes"
+      from exactly this filtered, array-ordered set - _NON_REGULAR_NODE_
+      KINDS' own exclusion mirrors that filter without importing session_
+      save.py's private constants) in RESTORE order, which - since
+      session_load.py restores each "nodes" array entry in array order -
+      is the same order as the saved array. The Nth saved entry and the
+      Nth freshly-restored live node are therefore the same node.
+
+    Returns `{"x": ..., "y": ...}` (real floats) on success, or `None` when
+    the target graph could not be loaded (a stale search result pointing at
+    a since-deleted graph - load_chat already shows its own "could not be
+    found" notification for that case, so this function raises nothing
+    further), the target node's own saved id is no longer present in the
+    CURRENT saved row at all (deleted since the graph was last saved/
+    indexed), or the ordinal position it resolves to falls outside the
+    freshly-restored live node list (a node that failed to restore for an
+    unrelated reason shifted every later ordinal down by one - a rare,
+    honestly-accepted degraded case, not a crash) - every one of these is
+    the same honest "the world moved on since this was indexed" outcome, a
+    stale search result, not a bug."""
+
+    async def load_graph_and_focus_node(graph_id: int, node_id: str) -> dict[str, float] | None:
+        if canvas_document is None:
+            return None
+        graph_id = int(graph_id)
+        node_id = str(node_id)
+
+        if canvas_document.current_chat_id == graph_id:
+            # FAST PATH - see this factory's own docstring.
+            node = canvas_document.nodes.get(node_id)
+            return {"x": float(node.x), "y": float(node.y)} if node is not None else None
+
+        await load_chat(graph_id)
+        if canvas_document.current_chat_id != graph_id:
+            # load_chat's own row-not-found branch never adopts graph_id as
+            # current_chat_id - see that function's own docstring/body.
+            # Nothing further to do: it already showed its own "could not
+            # be found" notification.
+            return None
+
+        # RELOAD PATH - see this factory's own docstring for the full
+        # ordinal-position reasoning.
+        row = await asyncio.to_thread(load_chat_row, resolved_path, graph_id)
+        if row is None:
+            return None
+        saved_data = row.get("data")
+        saved_nodes = saved_data.get("nodes", []) if isinstance(saved_data, dict) else []
+        ordinal = next(
+            (index for index, saved_node in enumerate(saved_nodes)
+             if isinstance(saved_node, dict) and saved_node.get("id") == node_id),
+            None,
+        )
+        if ordinal is None:
+            return None
+
+        live_regular_nodes = [
+            live_node for live_node in canvas_document.nodes.values()
+            if live_node.kind not in _NON_REGULAR_NODE_KINDS
+        ]
+        if ordinal >= len(live_regular_nodes):
+            return None
+        node = live_regular_nodes[ordinal]
+        return {"x": float(node.x), "y": float(node.y)}
+
+    return load_graph_and_focus_node
 
 
 def make_save_chat(
@@ -2026,6 +2415,15 @@ class SetWorkspaceDefaultModelArgs:
     modelId: str
 
 
+@dataclass
+class LoadGraphAndFocusNodeArgs:
+    """ADR-020 stage 20.4. See make_load_graph_and_focus_node's own
+    docstring for the full request/reply contract this backs."""
+
+    graphId: int
+    nodeId: str
+
+
 def register_chat_library(
     bus: SessionBus,
     db_path: Path | None = None,
@@ -2155,6 +2553,10 @@ def register_chat_library(
     load_chat = make_load_chat(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
     )
+    # ADR-020 stage 20.4: built from the SAME `load_chat` closure just
+    # above, not a second restore implementation - see make_load_graph_
+    # and_focus_node's own docstring.
+    load_graph_and_focus_node = make_load_graph_and_focus_node(resolved_path, canvas_document, load_chat)
     save_chat = make_save_chat(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
     )
@@ -2278,6 +2680,18 @@ def register_chat_library(
     bus.register_intent("app-chat-library", "loadChat", _serialize_mutating_intent(load_chat))
     bus.register_intent("app-chat-library", "saveChat", _serialize_mutating_intent(save_chat))
     bus.register_intent("app-chat-library", "newChat", _serialize_mutating_intent(new_chat))
+    # ADR-020 stage 20.4: REQUEST/REPLY (the frontend uses transport.
+    # request(...), not fireIntent) - see make_load_graph_and_focus_node's
+    # own docstring for why this needs the SAME reentrancy guard loadChat/
+    # saveChat/newChat get (it also mutates canvas_document, via load_chat,
+    # on the non-fast-path) and why _serialize_mutating_intent's own recent
+    # "return the handler's result" fix (see that factory's own docstring)
+    # is what makes returning a real value through this wrapper work at all.
+    bus.register_intent(
+        "app-chat-library", "loadGraphAndFocusNode",
+        _serialize_mutating_intent(load_graph_and_focus_node),
+        args_schema=LoadGraphAndFocusNodeArgs,
+    )
     bus.register_intent(
         "app-chat-library", "setGraphFavorite", set_favorite, args_schema=SetGraphFavoriteArgs,
     )

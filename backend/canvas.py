@@ -262,6 +262,7 @@ from backend.api.intents_chat_image import register_chat_image_intents  # noqa: 
 from backend.api.intents_code_sandbox import register_code_sandbox_intents  # noqa: E402
 from backend.api.intents_conversation import register_conversation_intents  # noqa: E402
 from backend.api.intents_gitlink import register_gitlink_intents  # noqa: E402
+from backend.api.intents_global_search import register_global_search_intents  # noqa: E402
 from backend.api.intents_grid import register_grid_intents  # noqa: E402
 from backend.api.intents_groups import register_groups_intents  # noqa: E402
 from backend.api.intents_knowledge import register_knowledge_intents  # noqa: E402
@@ -373,6 +374,12 @@ def register_canvas(
     # own docstring.
     register_onboarding_intents(bus, document)
     register_knowledge_intents(bus, document, notifications)
+    # ADR-020 stage 20.4: global cross-workspace search - deliberately takes
+    # no `document` (unlike register_knowledge_intents immediately above,
+    # which scopes to the CALLING session's current workspace) - global
+    # search is workspace-agnostic by design (collection_id=None searches
+    # every workspace's corpus at once - see that module's own docstring).
+    register_global_search_intents(bus)
     register_model_routing_intents(bus, document)
     register_pins_intents(bus, document)
     register_view_intents(bus, document)
