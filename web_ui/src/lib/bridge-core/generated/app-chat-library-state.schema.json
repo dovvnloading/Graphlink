@@ -81,6 +81,12 @@
           "archived": {
             "type": "boolean"
           },
+          "defaultModelId": {
+            "type": "string"
+          },
+          "defaultModelProvider": {
+            "type": "string"
+          },
           "icon": {
             "type": "string"
           },
@@ -95,7 +101,9 @@
           "id",
           "name",
           "icon",
-          "archived"
+          "archived",
+          "defaultModelProvider",
+          "defaultModelId"
         ],
         "type": "object"
       },

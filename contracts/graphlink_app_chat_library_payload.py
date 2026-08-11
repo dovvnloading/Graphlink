@@ -52,12 +52,29 @@ class AppWorkspaceRowPayload:
     locally" design - see backend/chat_library.py's get_all_workspaces) -
     the real ChatLibraryDialog switcher hides archived workspaces from its
     tabs by default, client-side, same as it already does for archived
-    graphs."""
+    graphs.
+
+    ADR-020 stage 20.3: defaultModelProvider/defaultModelId are this
+    workspace's own model-routing default (the new "workspace" rung in
+    graphlink_model_catalog.resolve_model_ref's node->branch->workspace->auto
+    chain) - empty string on BOTH means "no workspace default set", matching
+    workspaces.default_model_provider/default_model_id's own NOT NULL
+    DEFAULT '' column shape, not a null/omitted-field sentinel. Defaulted
+    to "" here (rather than left required) so this stage's frontend work can
+    land and typecheck against a real generated wire type ahead of the
+    concurrent backend stage 20.3 commit that populates get_all_workspaces
+    with real values and adds the corresponding DB columns + setWorkspaceDefaultModel
+    intent handler - the same "frontend commit lands referencing a topic the
+    backend hasn't wired a handler for yet, backend's own commit completes
+    it" sequencing stage 20.2's own two commits (5999fbf then 4bd1185) already
+    used for createWorkspace/renameWorkspace/archiveWorkspace."""
 
     id: int
     name: str
     icon: str
     archived: bool
+    defaultModelProvider: str = ""
+    defaultModelId: str = ""
 
 
 @dataclass

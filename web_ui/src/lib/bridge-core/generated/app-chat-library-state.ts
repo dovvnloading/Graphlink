@@ -22,6 +22,8 @@ export interface AppWorkspaceRow {
   name: string;
   icon: string;
   archived: boolean;
+  defaultModelProvider: string;
+  defaultModelId: string;
 }
 
 export interface AppChatLibraryState {
@@ -132,6 +134,16 @@ function checkAppWorkspaceRow(value: unknown, path: string, errors: string[]): v
     const fieldValue = value["archived"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.archived: missing required field`);
     else { if (typeof fieldValue !== "boolean") errors.push(`${path}.archived` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["defaultModelProvider"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.defaultModelProvider: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.defaultModelProvider` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["defaultModelId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.defaultModelId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.defaultModelId` + ": expected string"); }
   }
 }
 

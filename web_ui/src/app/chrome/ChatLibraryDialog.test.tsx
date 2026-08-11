@@ -24,8 +24,11 @@ function row(overrides: Record<string, unknown>) {
   };
 }
 
+// ADR-020 stage 20.3: defaultModelProvider/defaultModelId default to "" -
+// matching AppWorkspaceRowPayload's own "empty string on both = no
+// workspace default set" wire contract, not an omitted/optional field.
 function workspace(overrides: Record<string, unknown>) {
-  return { id: 1, name: "Default", icon: "", archived: false, ...overrides };
+  return { id: 1, name: "Default", icon: "", archived: false, defaultModelProvider: "", defaultModelId: "", ...overrides };
 }
 
 const snapshot = {
@@ -54,14 +57,59 @@ const snapshot = {
   notice: null,
 };
 
+// ADR-020 stage 20.3: a minimal but real AppComposerState snapshot - the
+// workspace default-model picker reads route.modelOptions/route.provider
+// from this same "app-composer" topic Composer.tsx itself reads, per this
+// file's own module docstring.
+function composerSnapshot(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 1,
+    minCompatibleSchemaVersion: 1,
+    revision: 1,
+    draft: { id: "", text: "", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+    context: { anchor: null, items: [], totalTokens: 0, reviewAvailable: false },
+    route: {
+      mode: "ollama",
+      provider: "Ollama (Local)",
+      modelId: "",
+      modelLabel: "",
+      modelOptions: [
+        { id: "llama3", label: "Llama 3" },
+        { id: "mistral", label: "Mistral" },
+      ],
+      reasoning: { level: "off", label: "Off", options: [] },
+      label: "Ollama (Local)",
+      available: true,
+      canChange: true,
+    },
+    request: { id: null, state: "idle", message: "", canSend: true, canCancel: false, canRetry: false },
+    capabilities: {
+      attachments: false,
+      contextReview: false,
+      routeSelection: false,
+      modelSelection: true,
+      reasoningSelection: true,
+      settingsShortcut: true,
+      cancellation: false,
+    },
+    ...overrides,
+  };
+}
+
+// ADR-020 stage 20.3: keyed by topic (not a single shared listener) - this
+// dialog now holds two independent subscriptions ("app-chat-library" and
+// "app-composer", see the module docstring on ChatLibraryDialog.tsx), so a
+// single-listener fake would have the SECOND subscribe() call silently
+// clobber the first, breaking every pre-existing push() call in this file.
+// push() defaults to "app-chat-library" so those calls stay unchanged.
 function makeTransport() {
   const intents: unknown[][] = [];
-  let listener: ((payload: Record<string, unknown>) => void) | null = null;
+  const listeners = new Map<string, (payload: Record<string, unknown>) => void>();
   const transport = {
-    subscribe: (_topic: string, l: (payload: Record<string, unknown>) => void) => {
-      listener = l;
+    subscribe: (topic: string, l: (payload: Record<string, unknown>) => void) => {
+      listeners.set(topic, l);
       return () => {
-        listener = null;
+        listeners.delete(topic);
       };
     },
     intent: (topic: string, intent: string, args: unknown[]) => {
@@ -76,8 +124,20 @@ function makeTransport() {
   return {
     transport,
     intents,
-    push: (payload: Record<string, unknown>) => listener?.(payload),
+    push: (payload: Record<string, unknown>, topic: string = "app-chat-library") => listeners.get(topic)?.(payload),
   };
+}
+
+// ADR-020 stage 20.3: identical helper to SettingsDialog.test.tsx's own -
+// CustomSelect's option panel portals to document.body asynchronously
+// after the trigger click, so the option lookup must be findBy, not getBy.
+async function chooseCustomOption(
+  user: ReturnType<typeof userEvent.setup>,
+  triggerName: string,
+  optionName: string,
+) {
+  await user.click(screen.getByRole("button", { name: triggerName }));
+  await user.click(await screen.findByRole("button", { name: optionName }));
 }
 
 function OpenLibraryButton() {
@@ -476,5 +536,127 @@ describe("ChatLibraryDialog", () => {
 
     expect(intents.filter((i) => i[1] === "setGraphTags")).toEqual([]);
     expect(screen.getByText("First Chat")).toBeInTheDocument();
+  });
+
+  // -- ADR-020 stage 20.3: workspace default-model settings -----------------
+
+  it("the gear settings icon is rendered only for real workspaces, not the 'All' tab", async () => {
+    const { user, push } = setup();
+    act(() => push({ ...snapshot, workspaces: [workspace({ id: 1, name: "Default" }), workspace({ id: 2, name: "Work" })] }));
+    await user.click(screen.getByText("open library"));
+
+    expect(screen.getByLabelText('Show default model settings for "Default"')).toBeInTheDocument();
+    expect(screen.getByLabelText('Show default model settings for "Work"')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Show default model settings for "All"')).toBeNull();
+  });
+
+  it("the gear icon reveals an inline panel (no new modal) showing 'no default set' when unset", async () => {
+    const { user, push } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    await user.click(screen.getByText("open library"));
+
+    expect(screen.queryByText(/Default model for/)).toBeNull();
+
+    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
+
+    // Still the same dialog - no second <Dialog> mounted.
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByText('No default set - dispatch falls through to any node/branch pin, then the auto policy.')).toBeInTheDocument();
+  });
+
+  it("a workspace with a default already set shows its current provider/model instead of the unset message", async () => {
+    const { user, push } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    act(() =>
+      push({
+        ...snapshot,
+        workspaces: [workspace({ id: 1, name: "Default", defaultModelProvider: "Ollama (Local)", defaultModelId: "llama3" })],
+      }),
+    );
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
+
+    expect(screen.getByText("Currently: Ollama (Local) / llama3")).toBeInTheDocument();
+  });
+
+  it("clicking the gear icon again hides the panel", async () => {
+    const { user, push } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    await user.click(screen.getByText("open library"));
+
+    const gear = screen.getByLabelText('Show default model settings for "Default"');
+    await user.click(gear);
+    expect(screen.getByText(/Default model for/)).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('Hide default model settings for "Default"'));
+    expect(screen.queryByText(/Default model for/)).toBeNull();
+  });
+
+  it("choosing a model option fires setWorkspaceDefaultModel with the workspace id, the composer's active provider, and the chosen model id", async () => {
+    const { user, push, intents } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
+    await chooseCustomOption(user, 'Default model for "Default"', "Mistral");
+
+    expect(intents).toContainEqual(["app-chat-library", "setWorkspaceDefaultModel", [1, "Ollama (Local)", "mistral"]]);
+  });
+
+  it("choosing 'No workspace default' fires setWorkspaceDefaultModel with empty provider and model id (clearing)", async () => {
+    const { user, push, intents } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    act(() =>
+      push({
+        ...snapshot,
+        workspaces: [workspace({ id: 1, name: "Default", defaultModelProvider: "Ollama (Local)", defaultModelId: "llama3" })],
+      }),
+    );
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
+    await chooseCustomOption(user, 'Default model for "Default"', "No workspace default");
+
+    expect(intents).toContainEqual(["app-chat-library", "setWorkspaceDefaultModel", [1, "", ""]]);
+  });
+
+  it("a republish with the new value (live re-subscribe) updates the panel without closing/reopening the dialog", async () => {
+    const { user, push } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
+    expect(screen.getByText('No default set - dispatch falls through to any node/branch pin, then the auto policy.')).toBeInTheDocument();
+
+    // Simulate the backend republishing after setWorkspaceDefaultModel commits.
+    act(() =>
+      push({
+        ...snapshot,
+        revision: 2,
+        workspaces: [workspace({ id: 1, name: "Default", defaultModelProvider: "Ollama (Local)", defaultModelId: "mistral" })],
+      }),
+    );
+
+    expect(screen.getByText("Currently: Ollama (Local) / mistral")).toBeInTheDocument();
+  });
+
+  it("when the active provider's catalog has no models, a placeholder message shows in place of options (clearing still works)", async () => {
+    const { user, push, intents } = setup();
+    act(() => push(composerSnapshot({ route: { ...composerSnapshot().route, modelOptions: [] } }), "app-composer"));
+    act(() =>
+      push({
+        ...snapshot,
+        workspaces: [workspace({ id: 1, name: "Default", defaultModelProvider: "Ollama (Local)", defaultModelId: "llama3" })],
+      }),
+    );
+    await user.click(screen.getByText("open library"));
+
+    await user.click(screen.getByLabelText('Show default model settings for "Default"'));
+
+    expect(screen.getByText(/No models found for Ollama \(Local\)\. Run a scan on its Settings page\./)).toBeInTheDocument();
+
+    await chooseCustomOption(user, 'Default model for "Default"', "No workspace default");
+    expect(intents).toContainEqual(["app-chat-library", "setWorkspaceDefaultModel", [1, "", ""]]);
   });
 });

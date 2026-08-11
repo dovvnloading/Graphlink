@@ -4519,6 +4519,36 @@ mark.document-view-search-match-current {
   flex: 0 0 160px;
 }
 
+/* ADR-020 stage 20.3: pairs a workspace tab with its own gear/settings
+   icon button so the two move together if .library-workspace-tabs's own
+   flex-wrap ever breaks the row - a plain inline-flex wrapper, no border/
+   background of its own (both children keep their existing look). */
+.library-workspace-tab-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Reuses .library-icon-button verbatim for size/hover/focus - this class
+   only exists so the gear button isn't accidentally swept up by a future
+   .library-icon-button-scoped selector that assumes every instance sits
+   inside .library-row-actions (this one doesn't). */
+.library-workspace-settings-button {
+  flex-shrink: 0;
+}
+
+/* The inline-reveal panel itself - a plain block below the tabs strip
+   (same "no popover, no modal" posture as .library-row-confirm above),
+   reusing .settings-field/.settings-field-label/.settings-update-status
+   verbatim from SettingsDialog's own pages rather than duplicating that
+   layout under a new name. */
+.library-workspace-settings-panel {
+  flex-shrink: 0;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--gl-surface-border);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
 /* Prevents the Archived toggle chip (a .view-preset-btn dropped directly
    into .library-header's flex row, next to the search box) from being
    squeezed by .library-search-wrap's own `flex: 1` - .library-new-chat-

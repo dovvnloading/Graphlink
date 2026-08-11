@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppChatLibraryRow, AppChatLibraryState, AppWorkspaceRow } from "../../lib/bridge-core/generated/app-chat-library-state";
+import type { AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import { CustomSelect } from "./CustomSelect";
+import { initialComposerState } from "./composerStore";
 
 /**
  * The chat library dialog (Qt-removal plan R2.5e + R6.4 + R6.5, R8a full
@@ -33,6 +36,35 @@ import { Dialog, useOverlays } from "../overlays/overlays";
  * top of the existing search-filter pipeline - the backend always sends
  * every non-deleted graph across every workspace in one payload (see
  * backend/chat_library.py's get_all_chats).
+ *
+ * ADR-020 stage 20.3 adds a small settings affordance per REAL workspace
+ * tab (never "All", which isn't a real workspace row) - a gear icon that
+ * reveals an inline expansion below the tabs strip showing that
+ * workspace's current default model and a control to change it
+ * (workspace.defaultModelProvider/defaultModelId, "" on both meaning "no
+ * default set" - see contracts/graphlink_app_chat_library_payload.py's own
+ * docstring on AppWorkspaceRowPayload). The reveal itself follows this
+ * file's own established inline-expansion idiom (the same "click an icon,
+ * a panel opens in place, no new modal" shape as inline rename/tag-edit
+ * above), but the WIDGET inside it is CustomSelect.tsx (Settings' own
+ * "pick one value from a small catalog" control), not Composer.tsx's
+ * Popover-based ModelPicker - deliberately: CustomSelect's own module
+ * docstring documents exactly why it stays outside the useOverlays()
+ * registry (a Popover opening would flip the registry's openSurface away
+ * from "library", which THIS dialog's own <Dialog name="library"> would
+ * read as "I'm not open anymore" and unmount - the identical class of bug
+ * that docstring already names for Settings). The model catalog itself is
+ * NOT a second data-fetching path - this dialog adds a second, independent
+ * subscription to the existing "app-composer" topic (same dual-subscription
+ * shape SettingsDialog.tsx already uses for app-settings + app-plugins) and
+ * reads route.modelOptions/route.provider, the exact same fields Composer's
+ * own model picker renders from. Since this app has exactly one ACTIVE
+ * provider at a time (see SettingsDialog.tsx's own ProviderModeSwitch), a
+ * workspace default is "pick a model from the currently active provider's
+ * catalog" - the chosen option's id becomes defaultModelId and the
+ * currently active route.provider tags along as defaultModelProvider,
+ * mirroring how Composer's own selectModel(modelId) never takes a separate
+ * provider argument either.
  */
 
 const initialState: AppChatLibraryState = {
@@ -101,7 +133,7 @@ function groupRows(rows: AppChatLibraryRow[]): Array<{ key: BucketKey; rows: App
 function Icon({
   name,
 }: {
-  name: "search" | "pencil" | "trash" | "check" | "x" | "chat" | "star" | "star-filled" | "archive" | "tag";
+  name: "search" | "pencil" | "trash" | "check" | "x" | "chat" | "star" | "star-filled" | "archive" | "tag" | "gear";
 }) {
   switch (name) {
     case "search":
@@ -178,6 +210,16 @@ function Icon({
           <circle cx="8" cy="8.5" r="1.4" />
         </svg>
       );
+    // ADR-020 stage 20.3: a plain 8-spoke gear/settings glyph, same
+    // stroke-only construction (circle + straight paths) as every other
+    // icon in this component - not a filled Material-style cog.
+    case "gear":
+      return (
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
+          <circle cx="12" cy="12" r="3.2" />
+          <path d="M12 3v3.2M12 17.8V21M21 12h-3.2M6.2 12H3M18.36 5.64l-2.26 2.26M7.9 16.1l-2.26 2.26M18.36 18.36l-2.26-2.26M7.9 7.9 5.64 5.64" />
+        </svg>
+      );
   }
 }
 
@@ -199,6 +241,17 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
   const [newWorkspaceDraft, setNewWorkspaceDraft] = useState("");
   const [editingTagsId, setEditingTagsId] = useState<number | null>(null);
   const [tagsDraft, setTagsDraft] = useState("");
+  // ADR-020 stage 20.3: which real workspace's gear-icon settings panel is
+  // currently expanded - dialog-local, same "not scene state, reset on
+  // remount" posture as every other piece of local UI state above.
+  const [workspaceSettingsId, setWorkspaceSettingsId] = useState<number | null>(null);
+  // ADR-020 stage 20.3: a second, independent subscription to "app-composer"
+  // (the same topic Composer.tsx/composerStore.ts already read) - this
+  // dialog reads route.modelOptions/route.provider from it for the
+  // workspace default-model picker, rather than opening a second
+  // data-fetching path. Mirrors SettingsDialog.tsx's own dual "app-settings"
+  // + "app-plugins" subscription shape.
+  const [composerState, setComposerState] = useState<AppComposerState>(initialComposerState);
   const renameRef = useRef<HTMLInputElement>(null);
   const deleteCancelRef = useRef<HTMLButtonElement>(null);
   const newWorkspaceRef = useRef<HTMLInputElement>(null);
@@ -210,6 +263,17 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
       const validated = TOPIC_VALIDATORS["app-chat-library"](payload);
       if (validated.ok) setState(validated.value as AppChatLibraryState);
       else console.error("[app-chat-library] rejected snapshot:", validated.errors);
+    });
+  }, [transport]);
+
+  // ADR-020 stage 20.3: see this file's own module docstring for why this
+  // second subscription reuses "app-composer" rather than opening a new
+  // data-fetching path.
+  useEffect(() => {
+    return transport.subscribe("app-composer", (payload) => {
+      const validated = TOPIC_VALIDATORS["app-composer"](payload);
+      if (validated.ok) setComposerState(validated.value as AppComposerState);
+      else console.error("[app-composer] rejected snapshot:", validated.errors);
     });
   }, [transport]);
 
@@ -251,6 +315,12 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
     setEditingTagsId(null);
     if (selectedWorkspaceId !== null && !visibleWorkspaceIds.has(selectedWorkspaceId)) {
       setSelectedWorkspaceId(null);
+    }
+    // ADR-020 stage 20.3: same "don't strand the panel on a now-hidden tab"
+    // guard selectedWorkspaceId already gets above - an archived workspace
+    // loses its own settings panel too, not just its selected-tab status.
+    if (workspaceSettingsId !== null && !visibleWorkspaceIds.has(workspaceSettingsId)) {
+      setWorkspaceSettingsId(null);
     }
   }
 
@@ -330,6 +400,26 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
       else next.add(tag);
       return next;
     });
+  }
+
+  // ADR-020 stage 20.3: toggles the SAME workspace's panel closed (matching
+  // startRename/startTagEdit's own "click again to close" absence - those
+  // two don't have a re-click-to-close affordance because Save/Cancel
+  // already close them, but a settings panel has no commit step, so the
+  // gear icon itself is the only open/close control it has).
+  function toggleWorkspaceSettings(workspaceId: number) {
+    setWorkspaceSettingsId((prev) => (prev === workspaceId ? null : workspaceId));
+  }
+
+  // ADR-020 stage 20.3: modelId === "" clears the workspace default (both
+  // wire fields go back to "", matching AppWorkspaceRowPayload's own "empty
+  // string on BOTH means unset" contract) - otherwise the CURRENTLY ACTIVE
+  // provider tags along with the chosen model id, the same implicit-
+  // provider posture Composer's own selectModel(modelId) already has (see
+  // this file's own module docstring).
+  function setWorkspaceDefaultModel(workspaceId: number, modelId: string) {
+    const provider = modelId === "" ? "" : composerState.route.provider;
+    transport.fireIntent("app-chat-library", "setWorkspaceDefaultModel", [workspaceId, provider, modelId], undefined, true);
   }
 
   function startCreateWorkspace() {
@@ -478,6 +568,9 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
   const resultsAnnouncement =
     total === 0 ? "" : filtered.length === 0 ? "No chats match" : `${filtered.length} results`;
   const visibleWorkspaces = state.workspaces.filter((w) => !w.archived);
+  // ADR-020 stage 20.3.
+  const expandedWorkspace = visibleWorkspaces.find((w) => w.id === workspaceSettingsId) ?? null;
+  const modelCatalogOptions = composerState.route.modelOptions;
 
   return (
     <Dialog name="library" title="Chat Library" className="library-dialog">
@@ -492,14 +585,27 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
               All
             </button>
             {visibleWorkspaces.map((workspace: AppWorkspaceRow) => (
-              <button
-                key={workspace.id}
-                type="button"
-                className={"view-preset-btn" + (selectedWorkspaceId === workspace.id ? " active" : "")}
-                onClick={() => selectWorkspace(workspace.id)}
-              >
-                {workspace.name}
-              </button>
+              // ADR-020 stage 20.3: wraps the tab + its gear icon so the two
+              // stay visually paired if .library-workspace-tabs's own
+              // flex-wrap ever breaks the row across lines.
+              <div key={workspace.id} className="library-workspace-tab-group">
+                <button
+                  type="button"
+                  className={"view-preset-btn" + (selectedWorkspaceId === workspace.id ? " active" : "")}
+                  onClick={() => selectWorkspace(workspace.id)}
+                >
+                  {workspace.name}
+                </button>
+                <button
+                  type="button"
+                  className="library-icon-button library-workspace-settings-button"
+                  aria-label={`${workspaceSettingsId === workspace.id ? "Hide" : "Show"} default model settings for "${workspace.name}"`}
+                  aria-expanded={workspaceSettingsId === workspace.id}
+                  onClick={() => toggleWorkspaceSettings(workspace.id)}
+                >
+                  <Icon name="gear" />
+                </button>
+              </div>
             ))}
             {isCreatingWorkspace ? (
               <div className="library-workspace-new-input-wrap">
@@ -521,6 +627,41 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
                 + Workspace
               </button>
             )}
+          </div>
+        )}
+
+        {expandedWorkspace && (
+          // ADR-020 stage 20.3: the inline-reveal itself - a plain block
+          // below the tabs strip, not a popover/modal (see this file's own
+          // module docstring for why CustomSelect, not Composer's Popover-
+          // based ModelPicker, is the widget inside it).
+          <div
+            className="library-workspace-settings-panel"
+            role="region"
+            aria-label={`Default model for "${expandedWorkspace.name}"`}
+          >
+            <div className="settings-field">
+              <span className="settings-field-label">Default model for &quot;{expandedWorkspace.name}&quot;</span>
+              <p className="settings-update-status">
+                {expandedWorkspace.defaultModelProvider && expandedWorkspace.defaultModelId
+                  ? `Currently: ${expandedWorkspace.defaultModelProvider} / ${expandedWorkspace.defaultModelId}`
+                  : "No default set - dispatch falls through to any node/branch pin, then the auto policy."}
+              </p>
+              {modelCatalogOptions.length === 0 ? (
+                <p className="settings-update-status">
+                  No models found for {composerState.route.provider}. Run a scan on its Settings page.
+                </p>
+              ) : null}
+              <CustomSelect
+                ariaLabel={`Default model for "${expandedWorkspace.name}"`}
+                value={expandedWorkspace.defaultModelId}
+                options={[
+                  { id: "", label: "No workspace default" },
+                  ...modelCatalogOptions.map((option) => ({ id: option.id, label: option.label })),
+                ]}
+                onChange={(modelId) => setWorkspaceDefaultModel(expandedWorkspace.id, modelId)}
+              />
+            </div>
           </div>
         )}
 
