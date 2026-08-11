@@ -51,15 +51,67 @@ get_plugin_grants) before dispatch - see
 `HostContext.register_intent()`/`PluginIntentSpec`/`PluginRegistry.intents`
 are unchanged by this - still populated exactly as stage 14.1 built them.
 
+ADR-014 STAGE 14.5 STATUS NOTES (out-of-process third-party execution):
+
+- DEVIATION from the design's own sketch: the design described an
+  out-of-process NodeKindSpec's `factory` wrapper closure as doing
+  `asyncio.to_thread(worker_client.call, ...)`. The real, already-landed
+  `_execute_discovered_plugin` (backend/plugins.py) calls `kind_spec.
+  factory(...)` SYNCHRONOUSLY, inside a plain zero-arg `_mutator` closure
+  passed to `SceneDocument.record_command` - never awaited, never inside
+  `asyncio.to_thread` itself. Wrapping the RPC call in `asyncio.to_thread`
+  would require `_mutator`/`record_command` to become async too, which
+  the design's own "ZERO changes needed to _execute_discovered_plugin"
+  requirement forbids. `PluginWorkerClient.call()` is therefore a plain
+  synchronous, blocking method (mirroring McpStdioClient's own private
+  `_call`, not its `async def _handler` wrapper) - see PluginWorkerClient's
+  own class-level comment block for the full reasoning and the accepted
+  consequence (an out-of-process factory call blocks the event loop for its
+  RPC round-trip, exactly as an in-process third-party factory already can
+  today via the same synchronous call site).
+- Confirmed TRUE, not just assumed: `_execute_discovered_plugin` needed
+  ZERO changes for out-of-process plugins to work - `kind_spec.factory` is
+  called with the exact same 3-argument signature regardless of whether it
+  is a direct Python function or an RPC-backed wrapper closure
+  (_make_worker_factory below), and the stage-14.4 grant gate
+  (SettingsManager.get_plugin_grants(), checked BEFORE `kind_spec.factory`
+  ever runs) applies identically either way - see backend/tests/
+  test_plugin_worker.py's own "D" section for the empirical proof.
+- Out-of-process v1 simplification versus the in-process serialize/
+  deserialize hook contract: an out-of-process plugin's own NodeState
+  subclass, if any, needs NO explicit serialize/deserialize hook - the
+  worker (backend/plugin_worker.py) auto-serializes it via
+  `dataclasses.asdict()`, and the host wraps the resulting plain dict in a
+  single generic `GenericPluginState` (below) with generic serialize/
+  deserialize hooks wired onto EVERY out-of-process NodeKindSpec uniformly
+  - there is no unserializable callable to avoid shipping across the RPC
+  boundary the way an in-process factory function itself is unserializable,
+  so requiring one here would be pure ceremony.
+- What is NOT enforced, stated plainly (matching stage 14.4's own honesty
+  about its grant gate): this is a process boundary against the WORKER
+  reading the HOST's secrets/state (proven empirically - a planted
+  GRAPHLINK_OPENAI_API_KEY is genuinely absent from the worker's own
+  os.environ). It is NOT a general-purpose security sandbox - a plugin's
+  own code, once running inside its worker, can still make outbound network
+  calls, write files, or do anything else a plain Python process can do on
+  this machine, bounded only by graphlink_execution_guard's resource caps
+  (memory, active-process count), never by capability. See ADR-014 stage
+  14.5's own "what 14.5 does NOT do" scope note for the full boundary.
+
 See doc/adr/ADR-014 stage 14.1's design for the full rationale (private,
 not part of this repo)."""
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
+import queue
 import re
+import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -85,6 +137,14 @@ from backend.notifications import NotificationState
 # "graph.mutate" means the same thing whether it is a plugin's self-reported
 # manifest checklist or a tool-call's enforced scope set.
 from backend.tools import KNOWN_SCOPES
+# ADR-014 stage 14.5: the SAME resource-cap/env-allowlist primitives
+# PythonREPL/VirtualEnvSandbox already wrap their own subprocesses with
+# (graphlink_execution_guard.py, graphlink_process_env.py) - reused exactly,
+# never reinvented, for the out-of-process plugin worker's own Popen call.
+# See PluginWorkerClient.connect's own docstring for the full call-order
+# contract these two enforce together.
+from graphlink_execution_guard import create_execution_guard
+from graphlink_process_env import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +152,22 @@ SDK_API_VERSION = 1
 MIN_COMPATIBLE_SDK_API_VERSION = 1
 MANIFEST_FILENAME = "plugin.toml"
 DEFAULT_PLUGINS_ROOT = Path(__file__).resolve().parent.parent / "plugins"
+# ADR-014 stage 14.5: the repo root - one level above backend/, the SAME
+# base DEFAULT_PLUGINS_ROOT above is itself derived from. Passed as `cwd=`
+# to the worker subprocess's own Popen call so `python -m backend.
+# plugin_worker` resolves the `backend` package via cwd-insertion into
+# sys.path (Python's own documented -m behavior), regardless of whatever
+# directory the HOST process itself happens to be running from (a pytest
+# run's cwd is not guaranteed to be the repo root) or whether this package
+# is pip-installed at all.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# ADR-014 stage 14.5: the [runtime].isolation closed vocabulary - "in-process"
+# (the default, and the ONLY value every plugin shipped before this stage
+# implicitly had) or "out-of-process" (this stage's new opt-in). Anything
+# else is a discovery-time PluginRegistrationError, same fail-soft
+# per-plugin-skip posture as every other malformed-manifest case.
+KNOWN_RUNTIME_ISOLATION = frozenset({"in-process", "out-of-process"})
 
 _ID_PATTERN = re.compile(r"[a-z0-9_]+")
 
@@ -133,6 +209,15 @@ class PluginManifest:
     # backend/plugins.py's _execute_discovered_plugin BEFORE any factory
     # call, not here.
     scopes_grants: frozenset[str] = frozenset()
+    # ADR-014 stage 14.5: "in-process" (the default - discover_plugins()
+    # imports the plugin's own module directly into the HOST process, byte-
+    # identical to every plugin's behavior before this stage) or
+    # "out-of-process" (discover_plugins() instead spawns a resident worker
+    # subprocess - backend/plugin_worker.py - and never imports this
+    # plugin's code into the host at all). See KNOWN_RUNTIME_ISOLATION's own
+    # comment and _discover_out_of_process_plugin's docstring for the full
+    # mechanism this opts into.
+    runtime_isolation: str = "in-process"
 
 
 @dataclass(frozen=True)
@@ -159,6 +244,42 @@ class PluginNodeSeed:
     title: str
     content: str = ""
     state: NodeState | None = None
+
+
+@dataclass
+class GenericPluginState(NodeState):
+    """ADR-014 stage 14.5: the host-side stand-in for an OUT-OF-PROCESS
+    plugin's PluginNodeSeed.state. An out-of-process plugin's own NodeState
+    subclass (if it declares one, e.g. counter_node's real CounterState) is
+    defined inside the WORKER subprocess and can never be imported by the
+    host - the host importing third-party code at all, for an
+    out-of-process plugin, is exactly the thing this stage's isolation
+    property forbids. So instead of a typed subclass, the host wraps
+    whatever plain, JSON-safe dict the worker's invoke_factory response
+    carried under "state" (backend/plugin_worker.py auto-serializes a
+    dataclass instance via dataclasses.asdict() on the worker side - no
+    explicit serialize/deserialize hook is required of an out-of-process
+    plugin author, unlike the in-process contract, since there is no
+    unserializable callable to avoid shipping across the RPC boundary here).
+
+    _out_of_process_state_serialize/_out_of_process_state_deserialize below
+    are the two generic (never per-plugin) hooks wired onto EVERY
+    out-of-process NodeKindSpec by _discover_out_of_process_plugin - so this
+    class's own `data` dict IS both the live-wire pluginState payload and
+    the persisted save-file plugin_state payload, unchanged, exactly
+    mirroring NodeSerializeHook's existing dual call-site contract."""
+
+    data: dict = field(default_factory=dict)
+
+
+def _out_of_process_state_serialize(node: SceneNode) -> dict:
+    if isinstance(node.state, GenericPluginState):
+        return dict(node.state.data)
+    return {}
+
+
+def _out_of_process_state_deserialize(data: dict) -> "NodeState | None":
+    return GenericPluginState(data=dict(data)) if data else None
 
 
 NodeFactory = Callable[[SceneDocument, "PluginRunContext", str], PluginNodeSeed]
@@ -471,6 +592,22 @@ class PluginRegistry:
         # declared scopes list - the registry held no manifest at all before
         # this stage, since nothing needed one past discovery time.
         self.manifests: dict[str, PluginManifest] = {}
+        # ADR-014 stage 14.5: plugin_id -> its RESIDENT worker subprocess
+        # client, populated ONLY for a successfully-discovered
+        # out-of-process plugin (see _discover_out_of_process_plugin's own
+        # docstring for the spawn-once-at-discovery,
+        # kept-alive-for-process-lifetime v1 lifecycle choice - a crashed
+        # worker's plugin fails until the app restarts, not a live-reload
+        # story). Empty for every registry whose plugins are all in-process
+        # (the overwhelming common case, including every built-in and both
+        # original demo plugins - neither hello_node nor counter_node opts
+        # in). A caller that wants to release these subprocesses explicitly
+        # (tests; a future app-shutdown hook) iterates this dict and calls
+        # .close() on each - production code today has no such caller,
+        # matching how backend/agents.py's own self._mcp_clients are never
+        # explicitly closed either (both rely on OS process-exit cleanup, an
+        # accepted gap ADR-007 stage 8.5 already ships with, not new here).
+        self.worker_clients: dict[str, "PluginWorkerClient"] = {}
 
     def resolve_picker_name(self, name: str) -> "tuple[NodeKindSpec, PickerEntrySpec] | None":
         entry = self.picker_entries.get(name)
@@ -485,6 +622,347 @@ class PluginRegistry:
         by the caller in whichever order it prefers, since _merge_into_
         registry already guarantees no name is ever in both)."""
         return self.builtin_actions.get(name)
+
+
+# ---------------------------------------------------------------------------
+# ADR-014 stage 14.5: out-of-process plugin worker client.
+#
+# PluginWorkerClient is the HOST side of a plugin worker subprocess - one
+# instance per out-of-process plugin, spawned once at discovery time and
+# kept resident for the process's lifetime (see PluginRegistry.
+# worker_clients' own comment). It closely mirrors backend/mcp_client.py's
+# McpStdioClient: newline-delimited JSON-RPC 2.0 over stdio, a reader thread
+# pushing parsed dicts onto a queue.Queue, auto-incrementing integer id
+# correlation, a _READER_CLOSED sentinel for "the worker's stdout closed
+# unexpectedly." Reused as a direct template, not reinvented - the ONE real
+# difference is that `call()` is a synchronous, blocking method (matching
+# McpStdioClient's own private `_call`), never wrapped in `async def` here:
+# the caller this stage actually has (an out-of-process NodeKindSpec's
+# `factory` field, invoked synchronously inside backend/plugins.py's
+# `_execute_discovered_plugin` -> `record_command` -> a plain zero-arg
+# `_mutator` closure, never awaited) is itself fully synchronous by
+# construction (NodeFactory = Callable[[SceneDocument, PluginRunContext,
+# str], PluginNodeSeed], no `async` in that signature) - wrapping `call()`
+# in `asyncio.to_thread` the way backend/mcp_client.py's own
+# `_make_mcp_handler` does would require also making the wrapper factory
+# `async def` and awaiting it, which would in turn require making
+# `_mutator`/`record_command` async too. That is a real, deliberate
+# DEVIATION from this stage's own design sketch (which described the
+# wrapper closure as doing `asyncio.to_thread(...)`) - see this module's own
+# stage-14.5 status notes for why the sketch's assumption did not match the
+# real, already-landed `record_command` contract. The practical consequence:
+# an out-of-process plugin's node-creation RPC round-trip blocks the event
+# loop for its duration, exactly like an IN-PROCESS third-party plugin's
+# factory already can today (that call is ALSO synchronous, ALSO inside the
+# same `_mutator`) - this is not a new regression, just the same
+# already-accepted architecture extended to a second call mechanism.
+# ---------------------------------------------------------------------------
+
+# A reader-thread sentinel distinct from any real JSON-RPC payload (a plain
+# dict) - see McpStdioClient's own _READER_CLOSED for the identical
+# reasoning; a fresh instance here rather than importing backend/
+# mcp_client.py's, so this module has no import-time dependency on that one.
+_WORKER_READER_CLOSED = object()
+
+_DEFAULT_WORKER_TIMEOUT = 30.0
+
+
+class PluginWorkerError(RuntimeError):
+    """Raised for any plugin-worker-level failure: the subprocess failed to
+    start, closed its output unexpectedly (crashed, or exited before
+    responding), returned a JSON-RPC error response, or didn't respond
+    within the configured timeout. Callers (discover_plugins() at discovery
+    time, an RPC-backed factory/intent wrapper at call time) let this
+    propagate as a plain exception - discover_plugins()'s existing per-
+    plugin `except Exception` catches it at discovery time exactly like any
+    other PluginRegistrationError; backend/app.py's existing WS intent
+    dispatch catch-all (`except Exception` around `session.dispatch_intent`)
+    catches it at call time exactly like any other handler bug - NEITHER
+    needed a single new line of exception-handling code to cover this,
+    since both were already generic, pre-existing infrastructure."""
+
+
+class PluginWorkerClient:
+    """One resident worker subprocess for ONE out-of-process plugin -
+    construct, connect() once, then call() as needed, close() when done
+    (app shutdown; a test's own teardown). Not reentrant across concurrent
+    callers beyond the one in-flight-request-at-a-time serialization
+    `_call_lock` already provides internally - matching McpStdioClient's own
+    concurrency contract exactly."""
+
+    def __init__(self, *, plugin_id: str, source_dir: Path, timeout: float = _DEFAULT_WORKER_TIMEOUT):
+        self.plugin_id = plugin_id
+        self.source_dir = source_dir
+        self.timeout = timeout
+        self._process: subprocess.Popen | None = None
+        self._guard = None
+        self._reader_thread: threading.Thread | None = None
+        self._responses: "queue.Queue[Any]" = queue.Queue()
+        self._next_id = 0
+        self._write_lock = threading.Lock()
+        self._call_lock = threading.Lock()
+
+    @property
+    def is_connected(self) -> bool:
+        return self._process is not None and self._process.poll() is None
+
+    def connect(self) -> None:
+        """Spawns the worker subprocess. Call order, matching
+        graphlink_execution_guard.create_execution_guard's own documented
+        contract exactly: (1) create the guard, (2) Popen with
+        guard.popen_kwargs() merged in - POSIX applies its rlimits between
+        fork and exec, so the guard must exist BEFORE the spawn, (3)
+        guard.assign(process.pid) once the real pid exists. `env=
+        safe_subprocess_env()` (graphlink_process_env.py's allowlist, NOT a
+        blocklist of secret names) is the load-bearing containment
+        primitive for this whole stage - the worker never inherits the
+        host's GRAPHLINK_*_API_KEY/etc. environment variables, so a plugin's
+        own os.environ.get(...) call structurally cannot recover them. `cwd=
+        _REPO_ROOT` makes `-m backend.plugin_worker` resolve regardless of
+        the host process's own current directory - see _REPO_ROOT's own
+        comment."""
+        if self._process is not None:
+            return
+        self._guard = create_execution_guard()
+        try:
+            self._process = subprocess.Popen(
+                [sys.executable, "-m", "backend.plugin_worker", self.plugin_id, str(self.source_dir)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=safe_subprocess_env(),
+                cwd=str(_REPO_ROOT),
+                text=True,
+                bufsize=1,
+                **self._guard.popen_kwargs(),
+            )
+        except OSError as exc:
+            raise PluginWorkerError(
+                f'Failed to start plugin worker for "{self.plugin_id}": {exc}'
+            ) from exc
+        self._guard.assign(self._process.pid)
+        self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._reader_thread.start()
+
+    def close(self) -> None:
+        process = self._process
+        self._process = None
+        if process is not None:
+            try:
+                if process.stdin:
+                    process.stdin.close()
+            except Exception:
+                pass
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+        # Exactly-once close, whether or not a process was ever spawned -
+        # create_execution_guard()'s own close() is itself idempotent
+        # (double-close-safe, see graphlink_execution_guard.py's own
+        # adversarial-review fix comment), but this guards the ATTRIBUTE
+        # (None-out after) so a second PluginWorkerClient.close() call is
+        # unambiguously a no-op too.
+        guard, self._guard = self._guard, None
+        if guard is not None:
+            guard.close()
+
+    def call(self, method: str, params: dict) -> dict:
+        """Synchronous, blocking - see this section's own module-level
+        comment for why. Returns the JSON-RPC response's "result" object
+        (or {} if absent), matching McpStdioClient._call's own return
+        contract exactly."""
+        with self._call_lock:
+            self._next_id += 1
+            request_id = self._next_id
+            self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+            deadline = time.monotonic() + self.timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise PluginWorkerError(
+                        f'Plugin worker "{self.plugin_id}" timed out after {self.timeout}s '
+                        f"calling {method!r}."
+                    )
+                try:
+                    payload = self._responses.get(timeout=remaining)
+                except queue.Empty:
+                    raise PluginWorkerError(
+                        f'Plugin worker "{self.plugin_id}" timed out after {self.timeout}s '
+                        f"calling {method!r}."
+                    )
+                if payload is _WORKER_READER_CLOSED:
+                    stderr_tail = ""
+                    if self._process is not None and self._process.stderr is not None:
+                        stderr_tail = self._process.stderr.read(2000)
+                    raise PluginWorkerError(
+                        f'Plugin worker "{self.plugin_id}" closed its output unexpectedly '
+                        f"while calling {method!r}."
+                        + (f" stderr: {stderr_tail}" if stderr_tail.strip() else "")
+                    )
+                if not isinstance(payload, dict) or payload.get("id") != request_id:
+                    # Malformed/unsolicited line - can't happen from a
+                    # well-behaved worker (one call in flight at a time
+                    # under _call_lock), but a corrupted or unexpected line
+                    # must not be mistaken for our response. Matches
+                    # McpStdioClient._call's own tolerance exactly.
+                    continue
+                if "error" in payload:
+                    error = payload["error"]
+                    message_text = error.get("message", error) if isinstance(error, dict) else error
+                    raise PluginWorkerError(f'plugin worker "{self.plugin_id}" {method} failed: {message_text}')
+                return payload.get("result", {}) or {}
+
+    # -- JSON-RPC framing (mirrors McpStdioClient's own private methods) ----
+
+    def _read_loop(self) -> None:
+        process = self._process
+        assert process is not None and process.stdout is not None
+        try:
+            for line in process.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # not a JSON-RPC line - skip, don't crash the reader
+                self._responses.put(payload)
+        finally:
+            self._responses.put(_WORKER_READER_CLOSED)
+
+    def _write(self, message: dict) -> None:
+        process = self._process
+        if process is None or process.stdin is None:
+            raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" is not connected.')
+        with self._write_lock:
+            try:
+                process.stdin.write(json.dumps(message) + "\n")
+                process.stdin.flush()
+            except (BrokenPipeError, ValueError) as exc:
+                raise PluginWorkerError(
+                    f'Plugin worker "{self.plugin_id}" is not accepting input: {exc}'
+                ) from exc
+
+
+def _worker_parent_snapshot(document: SceneDocument, parent_id: str) -> dict:
+    """The data-in half of the "data-in/data-out only" factory contract an
+    out-of-process plugin's factory gets, instead of a live SceneDocument -
+    see this module's own stage-14.5 status notes ("Why host-initiated-only
+    RPC is sufficient") for the full reasoning. Exactly the parent node's
+    public fields (id/title/content/kind) - NOT the whole graph."""
+    parent = document.nodes[parent_id]
+    return {"id": parent.id, "title": parent.title, "content": parent.content, "kind": parent.kind}
+
+
+def _make_worker_factory(worker_client: PluginWorkerClient, local_kind: str) -> NodeFactory:
+    """One RPC-backed wrapper closure per out-of-process node kind - the
+    SAME NodeFactory shape (Callable[[SceneDocument, PluginRunContext, str],
+    PluginNodeSeed]) an in-process plugin's own factory function has, so it
+    slots into backend/plugins.py's `_execute_discovered_plugin` dispatch
+    with ZERO changes needed there (verified against the real landed code,
+    not just asserted - see this module's own stage-14.5 status notes)."""
+
+    def _factory(document: SceneDocument, run_ctx: "PluginRunContext", parent_id: str) -> PluginNodeSeed:
+        result = worker_client.call(
+            "invoke_factory",
+            {"kind": local_kind, "parent_snapshot": _worker_parent_snapshot(document, parent_id)},
+        )
+        raw_state = result.get("state")
+        state = GenericPluginState(data=dict(raw_state)) if isinstance(raw_state, dict) else None
+        return PluginNodeSeed(
+            title=str(result.get("title", "")), content=str(result.get("content", "")), state=state,
+        )
+
+    return _factory
+
+
+def _make_worker_intent_handler(worker_client: PluginWorkerClient, name: str) -> PluginIntentHandler:
+    """One RPC-backed wrapper closure per out-of-process custom intent - a
+    plain sync callable (document, run_ctx) -> Any, the same shape
+    HostContext.register_intent already accepts for an in-process handler.
+    `document`/`run_ctx` are accepted (matching PluginIntentHandler's own
+    signature) but not forwarded across the RPC boundary - v1 out-of-process
+    intents are zero-argument, same limitation InvokePluginIntentArgs
+    already documents for the in-process bus-level path (backend/
+    plugins.py)."""
+
+    def _handler(document: SceneDocument, run_ctx: "PluginRunContext"):
+        result = worker_client.call("invoke_intent", {"name": name, "args": {}})
+        return result.get("result")
+
+    return _handler
+
+
+def _discover_out_of_process_plugin(
+    manifest: PluginManifest, plugin_dir: Path,
+) -> "tuple[HostContext, PluginWorkerClient]":
+    """The out-of-process counterpart of discover_plugins()'s existing
+    in-process branch (import module, construct HostContext, call
+    register(host) directly) - spawns a resident PluginWorkerClient, asks it
+    for its plugin's own registrations via "get_registrations", and
+    reconstructs them into a REAL HostContext using HostContext's OWN
+    PUBLIC register_node_kind/register_picker_entry/register_intent methods
+    (never hand-built dataclass instances) - so namespacing/validation is
+    byte-identical to the in-process path, and _merge_into_registry (the
+    caller) needs no special-casing at all for an out-of-process host's
+    declarations.
+
+    The worker's "get_registrations" response reports each node kind's
+    LOCAL (non-namespaced) name - re-namespacing it here via
+    host.register_node_kind(local_kind, ...) mints the exact same
+    f"{manifest.id}.{local_kind}" string the worker's own HostContext
+    already minted internally, since manifest.id == the worker's own
+    plugin_id by construction (_load_manifest already enforces
+    plugin_id == plugin_dir.name on both sides of the RPC boundary
+    independently).
+
+    On ANY failure (connect failure, a malformed/erroring RPC response, a
+    registration collision inside the reconstructed HostContext itself) the
+    worker subprocess is closed here and the exception re-raised - the
+    caller's own per-plugin `except Exception` records one load_errors entry
+    and moves on to the next plugin, and no half-alive worker is left
+    resident for a plugin that never actually finished loading.
+
+    Returns `(host, worker_client)` rather than registering the worker into
+    a PluginRegistry itself - the CALLER (discover_plugins()) is what adds
+    it to `registry.worker_clients`, and only AFTER `_merge_into_registry`
+    has ALSO succeeded, so a plugin that spawns a working worker but then
+    loses a picker-name collision against a sibling plugin does not leave
+    an orphaned resident subprocess behind for a plugin that never actually
+    finished loading."""
+    worker_client = PluginWorkerClient(plugin_id=manifest.id, source_dir=plugin_dir)
+    try:
+        worker_client.connect()
+        response = worker_client.call("get_registrations", {})
+        host = HostContext(manifest.id)
+        for entry in response.get("node_kinds", []):
+            host.register_node_kind(
+                str(entry["local_kind"]),
+                _make_worker_factory(worker_client, str(entry["local_kind"])),
+                requires_parent=True,
+                serialize=_out_of_process_state_serialize,
+                deserialize=_out_of_process_state_deserialize,
+            )
+        for entry in response.get("picker_entries", []):
+            host.register_picker_entry(
+                node_kind=str(entry["local_kind"]),
+                name=str(entry["name"]),
+                description=str(entry.get("description", "")),
+                category=str(entry.get("category", "More Plugins")),
+            )
+        for entry in response.get("intents", []):
+            name = str(entry["name"])
+            host.register_intent(name, _make_worker_intent_handler(worker_client, name))
+    except Exception:
+        worker_client.close()
+        raise
+    return host, worker_client
 
 
 _REGISTRY_CACHE: dict[Path, PluginRegistry] = {}
@@ -548,6 +1026,20 @@ def _load_manifest(manifest_path: Path, plugin_dir: Path) -> PluginManifest:
                 f'14.5 - "generic" is the only legal value'
             )
 
+    # ADR-014 stage 14.5: optional [runtime] table - see PluginManifest.
+    # runtime_isolation's own field comment. Absent entirely -> "in-process",
+    # byte-identical to every plugin's discovery-time behavior before this
+    # stage existed.
+    runtime_table = raw.get("runtime", {})
+    runtime_isolation = "in-process"
+    if isinstance(runtime_table, dict) and "isolation" in runtime_table:
+        runtime_isolation = str(runtime_table["isolation"])
+        if runtime_isolation not in KNOWN_RUNTIME_ISOLATION:
+            raise PluginRegistrationError(
+                f'{manifest_path}: [runtime].isolation "{runtime_isolation}" is not a known '
+                f"isolation mode - must be one of {sorted(KNOWN_RUNTIME_ISOLATION)}"
+            )
+
     # ADR-014 stage 14.4: optional [scopes] table - see PluginManifest.
     # scopes_grants' own field comment for the full "self-reported checklist,
     # not an enforced boundary" contract. Absent entirely -> frozenset()
@@ -579,6 +1071,7 @@ def _load_manifest(manifest_path: Path, plugin_dir: Path) -> PluginManifest:
         view=view,
         source_dir=plugin_dir,
         scopes_grants=scopes_grants,
+        runtime_isolation=runtime_isolation,
     )
 
 
@@ -697,13 +1190,32 @@ def discover_plugins(
             try:
                 manifest = _load_manifest(manifest_path, plugin_dir)
                 _check_sdk_api_version(manifest)
-                module = _import_entry_module(manifest, plugin_dir)
-                _module_name, _, fn_name = manifest.entry_point.partition(":")
-                register_fn = getattr(module, fn_name)
-                host = HostContext(manifest.id)
-                register_fn(host)
-                _merge_into_registry(registry, host, builtin_names)
+                # ADR-014 stage 14.5: the ONLY branch point discovery gained
+                # this stage. "in-process" (every plugin before this stage,
+                # and every plugin that omits [runtime] entirely) keeps the
+                # EXACT pre-14.5 path - import the module into the host
+                # process, call its real register(host) directly - byte-
+                # identical to before. "out-of-process" never imports the
+                # plugin's module into this process at all; see
+                # _discover_out_of_process_plugin's own docstring.
+                worker_client = None
+                if manifest.runtime_isolation == "out-of-process":
+                    host, worker_client = _discover_out_of_process_plugin(manifest, plugin_dir)
+                else:
+                    module = _import_entry_module(manifest, plugin_dir)
+                    _module_name, _, fn_name = manifest.entry_point.partition(":")
+                    register_fn = getattr(module, fn_name)
+                    host = HostContext(manifest.id)
+                    register_fn(host)
+                try:
+                    _merge_into_registry(registry, host, builtin_names)
+                except Exception:
+                    if worker_client is not None:
+                        worker_client.close()
+                    raise
                 registry.manifests[manifest.id] = manifest
+                if worker_client is not None:
+                    registry.worker_clients[manifest.id] = worker_client
             except Exception as exc:
                 registry.load_errors.append(
                     PluginLoadError(plugin_dir.name, f"{type(exc).__name__}: {exc}")

@@ -45,6 +45,12 @@ from backend.canvas import MESSAGE_VERTICAL_SPACING, SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.plugin_sdk import PluginRegistry, PluginRunContext, discover_plugins
+# ADR-014 stage 14.5: register_plugin_tools' own ToolRegistry-facing
+# dependencies - ToolSpec is the SAME provider-neutral shape every other
+# tool family (backend/tools_graph.py, backend/mcp_client.py) builds its
+# specs from; ToolResult is what a handler must return.
+from backend.providers.base import ToolSpec
+from backend.tools import ToolResult
 from graphlink_settings_store import SettingsManager
 
 
@@ -363,6 +369,105 @@ async def _invoke_discovered_plugin_intent(
     if inspect.iscoroutinefunction(spec.handler):
         return await spec.handler(canvas_document, run_ctx)
     return spec.handler(canvas_document, run_ctx)
+
+
+def register_plugin_tools(
+    tool_registry, plugin_registry: "PluginRegistry", settings_manager: SettingsManager,
+    canvas_document: SceneDocument,
+) -> tuple[str, ...]:
+    """ADR-014 stage 14.5: "tools flow to the registry" - registers every
+    discovered plugin's HostContext.register_intent()-declared custom action
+    as a real Builder-loop tool, namespaced `plugin:<plugin_id>:<name>`.
+    Mirrors backend/mcp_client.py's own register_mcp_server_tools exactly
+    (list, namespace, register with scopes + approval) - the SAME pattern,
+    a different source of specs.
+
+    Works uniformly for BOTH in-process and out-of-process plugins:
+    plugin_registry.intents' PluginIntentSpec.handler is a plain Python
+    callable either way - a direct function for an in-process plugin, an
+    RPC-backed wrapper closure for an out-of-process one (backend/
+    plugin_sdk.py's _make_worker_intent_handler) - this function never knows
+    or cares which, verified against the real landed
+    _invoke_discovered_plugin_intent (stage 14.4), which already treats
+    every PluginIntentSpec.handler identically regardless of origin.
+
+    `scopes=manifest.scopes_grants` - the SAME self-reported [scopes].grants
+    checklist Settings > Plugins already shows (see PluginManifest.
+    scopes_grants' own field comment for the "self-reported, not itself
+    enforced BY ITSELF" honesty note) - ToolRegistry.invoke() DOES enforce
+    it here, the same pre-handler scope gate every other tool gets.
+    `approval="always"` - untrusted third-party code, the SAME posture
+    register_mcp_server_tools' own McpServerConfig default takes for a
+    configured MCP server (backend/mcp_client.py) - a plugin is exactly as
+    trusted as a user-configured MCP server: neither is first-party.
+
+    ALSO enforces the SAME install-time SettingsManager.get_plugin_grants()
+    gate _invoke_discovered_plugin_intent already enforces for the bus-level
+    invokePluginIntent path - checked INSIDE the handler below, since
+    ToolRegistry itself has no install-time-consent concept of its own, only
+    scopes/approval. Without this, a Builder tool call would be a SECOND,
+    ungated way to fire a plugin's custom action the user never approved in
+    Settings > Plugins - this closes that gap rather than leaving it open."""
+    registered: list[str] = []
+    for spec in plugin_registry.intents:
+        manifest = plugin_registry.manifests.get(spec.plugin_id)
+        namespaced_name = f"plugin:{spec.plugin_id}:{spec.name}"
+        tool_spec = ToolSpec(
+            name=namespaced_name,
+            description=f'Invokes plugin "{spec.plugin_id}"\'s "{spec.name}" action.',
+            input_schema={"type": "object", "properties": {}},
+        )
+        tool_registry.register(
+            tool_spec,
+            _make_plugin_tool_handler(plugin_registry, settings_manager, canvas_document, spec.plugin_id, spec.name),
+            scopes=manifest.scopes_grants if manifest is not None else frozenset(),
+            approval="always",
+        )
+        registered.append(namespaced_name)
+    return tuple(registered)
+
+
+def _make_plugin_tool_handler(
+    plugin_registry: "PluginRegistry", settings_manager: SettingsManager,
+    canvas_document: SceneDocument, plugin_id: str, name: str,
+):
+    """One handler per (plugin_id, name) - re-resolves the PluginIntentSpec
+    fresh from plugin_registry.intents on every call (rather than closing
+    over the spec found at registration time) so a plugin's handler is
+    never called from a stale reference, mirroring
+    _invoke_discovered_plugin_intent's own fresh-lookup-per-call pattern.
+
+    NotificationState() is constructed fresh, throwaway, per call - nothing
+    outside this function ever observes it. ToolRegistry's own RunContext
+    has no notification channel at all (a handler's ToolResult.content is
+    the ONLY thing the caller ever sees back), so a plugin handler that
+    calls run_ctx.notifications.show(...) when invoked through THIS path
+    has no visible effect - an honest, documented limitation, not a silent
+    bug: the bus-level invokePluginIntent path (backend/plugins.py's
+    _invoke_discovered_plugin_intent) is what threads a REAL, observed
+    NotificationState through, for a plugin author who needs one."""
+
+    async def _handler(call, ctx) -> ToolResult:
+        if not settings_manager.get_plugin_grants().get(plugin_id, False):
+            return ToolResult(
+                content=f'Plugin "{plugin_id}" needs your approval in Settings > Plugins before '
+                f'this action can run.',
+                is_error=True,
+            )
+        spec = next(
+            (s for s in plugin_registry.intents if s.plugin_id == plugin_id and s.name == name), None,
+        )
+        if spec is None:
+            return ToolResult(content=f'Unknown plugin intent: "{plugin_id}:{name}".', is_error=True)
+        run_ctx = PluginRunContext(plugin_id=plugin_id, notifications=NotificationState())
+        result = (
+            await spec.handler(canvas_document, run_ctx)
+            if inspect.iscoroutinefunction(spec.handler)
+            else spec.handler(canvas_document, run_ctx)
+        )
+        return ToolResult(content="" if result is None else str(result), is_error=False)
+
+    return _handler
 
 
 def register_plugins(
