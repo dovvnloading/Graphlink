@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import shutil
 import textwrap
+import time
 
 import pytest
 
@@ -61,6 +62,8 @@ from backend.plugin_sdk import (
 )
 from backend.plugins import plugins_payload, register_plugin_tools, register_plugins
 from backend.providers.base import ToolCall
+from backend.session_load import restore_chat_into_document
+from backend.session_save import build_chat_data
 from backend.tools import RunContext, ToolRegistry
 from graphlink_settings_store import SettingsManager
 
@@ -448,6 +451,74 @@ def test_a_worker_that_crashes_mid_call_raises_a_clean_plugin_worker_error_not_a
         worker.close()
 
 
+def test_second_call_on_an_already_dead_worker_raises_plugin_worker_error_not_a_hang(tmp_path):
+    """ADR-014 review-fix (finding 3): the FIRST call after a crash is
+    already proven clean by the test immediately above (the reader thread
+    detects the closed pipe mid-call). This test proves the SECOND call on
+    that now-confirmed-dead worker object is ALSO clean - before this fix,
+    nothing stopped that second call from reaching _write() and racing
+    whatever raw, platform-specific exception a write to a dead process's
+    stdin happens to produce (empirically OSError: [Errno 22] Invalid
+    argument on Windows - not caught by _write()'s prior, narrower
+    (BrokenPipeError, ValueError) except clause). call()'s own new
+    is_connected guard now fails this fast, with the documented type,
+    before ever reaching _write() at all."""
+    plugin_dir = _write_out_of_process_plugin(
+        tmp_path / "plugins", "oop_dead_second_call", py_body=_CRASH_MID_CALL_PY_BODY,
+    )
+    worker = PluginWorkerClient(plugin_id="oop_dead_second_call", source_dir=plugin_dir, timeout=10.0)
+    try:
+        worker.connect()
+        worker.call("get_registrations", {})
+        with pytest.raises(PluginWorkerError, match="closed its output unexpectedly"):
+            worker.call(
+                "invoke_factory",
+                {"kind": "thing", "parent_snapshot": {"id": "p1", "title": "Parent", "content": "", "kind": "chat"}},
+            )
+        # Wait for the OS to actually finish reaping the crashed process -
+        # the reader thread's EOF detection (what the call above already
+        # raised on) and the OS-level exit status are two independent
+        # signals that can land a beat apart.
+        deadline = time.monotonic() + 5.0
+        while worker._process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert worker._process.poll() is not None, "worker process never actually exited"
+
+        with pytest.raises(PluginWorkerError, match="not connected"):
+            worker.call("get_registrations", {})
+    finally:
+        worker.close()
+
+
+def test_write_to_an_already_dead_worker_process_raises_plugin_worker_error_not_a_raw_oserror(tmp_path):
+    """ADR-014 review-fix (finding 3): a direct, low-level unit test of
+    _write()'s own except-clause widening - bypasses call()'s is_connected
+    guard entirely (calling _write() straight) to prove specifically that
+    writing to a dead process's stdin pipe now raises the documented
+    PluginWorkerError rather than a raw OSError escaping uncaught."""
+    plugin_dir = _write_out_of_process_plugin(
+        tmp_path / "plugins", "oop_dead_write", py_body=_CRASH_MID_CALL_PY_BODY,
+    )
+    worker = PluginWorkerClient(plugin_id="oop_dead_write", source_dir=plugin_dir, timeout=10.0)
+    try:
+        worker.connect()
+        worker.call("get_registrations", {})
+        with pytest.raises(PluginWorkerError, match="closed its output unexpectedly"):
+            worker.call(
+                "invoke_factory",
+                {"kind": "thing", "parent_snapshot": {"id": "p1", "title": "Parent", "content": "", "kind": "chat"}},
+            )
+        deadline = time.monotonic() + 5.0
+        while worker._process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert worker._process.poll() is not None, "worker process never actually exited"
+
+        with pytest.raises(PluginWorkerError, match="not accepting input"):
+            worker._write({"jsonrpc": "2.0", "id": 999, "method": "noop", "params": {}})
+    finally:
+        worker.close()
+
+
 _SLOW_INTENT_PY_BODY = textwrap.dedent("""\
     import time
 
@@ -687,6 +758,51 @@ def test_register_plugin_tools_works_for_an_in_process_plugins_intent_too(tmp_pa
         _close_workers(registry)
 
 
+def test_register_plugin_tools_isolates_a_registration_failure_so_a_later_plugins_tools_still_register(tmp_path):
+    """ADR-014 review-fix (finding 1): register_plugin_tools now wraps each
+    spec's registration in its own try/except, mirroring
+    _register_configured_mcp_tools' own real per-server isolation (backend/
+    agents.py). BEFORE this fix, a single raising ToolRegistry.register()
+    call (e.g. two PluginIntentSpec entries resolving to the SAME
+    namespaced_name - impossible to construct today through HostContext.
+    register_intent's own new duplicate-name guard, see that guard's
+    dedicated test in test_plugin_sdk.py, but still reachable from a
+    hand-built PluginRegistry that bypasses HostContext entirely, exactly
+    as constructed here) would raise straight out of the `for` loop and
+    silently strip every plugin ENUMERATED AFTER the offender of its
+    Builder tools too - not just the offending one."""
+    from backend.plugin_sdk import PluginIntentSpec, PluginRegistry
+
+    registry = PluginRegistry()
+    registry.intents.append(
+        PluginIntentSpec(plugin_id="dup_plugin", name="run", handler=lambda d, r: "first")
+    )
+    registry.intents.append(
+        # A duplicate (plugin_id, name) pair - real discovery can never
+        # produce this anymore (HostContext.register_intent rejects it at
+        # declaration time), but a hand-built registry still can.
+        PluginIntentSpec(plugin_id="dup_plugin", name="run", handler=lambda d, r: "second")
+    )
+    registry.intents.append(
+        PluginIntentSpec(plugin_id="good_plugin", name="run", handler=lambda d, r: "good")
+    )
+
+    settings_manager = SettingsManager(tmp_path / "store" / "session.dat")
+    canvas_document = SceneDocument()
+    tool_registry = ToolRegistry()
+
+    registered = register_plugin_tools(tool_registry, registry, settings_manager, canvas_document)
+
+    # The offending plugin's FIRST registration succeeded (before the
+    # collision); its duplicate second entry was skipped (logged, not
+    # raised, not re-added to `registered`); the LATER, entirely unrelated
+    # plugin's tool still registered - this last assertion is the one that
+    # would have failed (or the whole call would have raised, uncaught, out
+    # of this test) before the per-item try/except existed.
+    assert registered == ("plugin:dup_plugin:run", "plugin:good_plugin:run")
+    assert tool_registry.scopes_for("plugin:good_plugin:run") is not None
+
+
 # -- G: backend/agents.py's builder_tool_registry() really wires it in ------
 
 
@@ -702,3 +818,175 @@ def test_builder_tool_registry_includes_the_real_shipped_sandboxed_demo_plugin_t
     names = [spec.name for spec in registry.specs()]
     assert "plugin:sandboxed_demo:ping" in names
     assert registry.scopes_for("plugin:sandboxed_demo:ping") == frozenset({"graph.mutate"})
+
+
+# -- H: discover_plugins() concurrent-first-caller race (finding 4) ---------
+
+_MARKER_ON_REGISTER_PY_BODY = textwrap.dedent("""\
+    from pathlib import Path
+
+    from backend.plugin_sdk import HostContext, PluginNodeSeed
+
+
+    def _make(document, run_ctx, parent_id):
+        return PluginNodeSeed(title="T", content="")
+
+
+    def register(host: HostContext) -> None:
+        # Appends one line every time THIS module's register() actually
+        # runs - which only happens once per real worker subprocess spawn
+        # (backend/plugin_worker.py imports this module and calls
+        # register() exactly once per process lifetime). Counting lines in
+        # this file after the race is how the test below proves how many
+        # DISTINCT worker subprocesses actually got spawned, without any
+        # in-memory state that could hide a real inter-process race.
+        marker = Path(__file__).parent / "spawn_marker.txt"
+        with marker.open("a", encoding="utf-8") as fh:
+            fh.write("spawned\\n")
+        host.register_node_kind("thing", _make, requires_parent=True)
+        host.register_picker_entry(
+            node_kind="thing", name="Race Thing", description="d", category="More Plugins",
+        )
+""")
+
+
+def test_discover_plugins_concurrent_first_callers_share_one_registry_and_spawn_one_worker(tmp_path):
+    """ADR-014 review-fix (finding 4): discover_plugins()'s check-then-scan-
+    then-set sequence now runs under a module-level threading.Lock -
+    empirically reproduced here with 2 REAL OS threads racing the SAME
+    never-before-seen plugins_root (a fresh tmp_path key, confirmed absent
+    from _REGISTRY_CACHE). BEFORE this fix, both threads could miss the
+    empty cache, each independently scan and spawn a REAL resident worker
+    subprocess for the out-of-process plugin below, and whichever thread's
+    `_REGISTRY_CACHE[resolved] = registry` write ran last would silently
+    orphan the loser's own live subprocess - discarded with a live PID and
+    no reference anywhere ever able to close() it.
+
+    Currently unreachable via any real production call path (backend/
+    agents.py, backend/plugins.py, backend/session_load.py, backend/
+    session_save.py all call discover_plugins() from synchronous code on
+    the event-loop thread, never from asyncio.to_thread or a second OS
+    thread) - this test is prevention against a future regression, proven
+    with a direct, deliberate 2-thread repro, not a claim this fires in
+    production today."""
+    import threading
+
+    plugins_root = tmp_path / "plugins"
+    _write_out_of_process_plugin(plugins_root, "race_plugin", py_body=_MARKER_ON_REGISTER_PY_BODY)
+
+    results: list = []
+    barrier = threading.Barrier(2)
+
+    def _discover():
+        barrier.wait(timeout=10)  # maximizes the chance both threads race the SAME empty cache
+        results.append(discover_plugins(plugins_root))
+
+    t1 = threading.Thread(target=_discover)
+    t2 = threading.Thread(target=_discover)
+    t1.start()
+    t2.start()
+    t1.join(timeout=30)
+    t2.join(timeout=30)
+
+    assert len(results) == 2
+    registry_a, registry_b = results
+    try:
+        # The SAME PluginRegistry object - not two independently-scanned
+        # registries that merely happen to compare equal.
+        assert registry_a is registry_b
+        assert "race_plugin" in registry_a.worker_clients
+
+        marker = plugins_root / "race_plugin" / "spawn_marker.txt"
+        assert marker.is_file(), "register() never ran at all"
+        spawn_count = marker.read_text(encoding="utf-8").count("spawned")
+        # Exactly ONE worker subprocess actually spawned and ran register()
+        # - the loser thread blocked on the lock and returned the winner's
+        # already-populated registry without scanning or spawning anything
+        # itself.
+        assert spawn_count == 1
+    finally:
+        _close_workers(registry_a)
+
+
+# -- I: out-of-process NodeState round-trip through save/reload (finding 5) -
+
+_STATEFUL_OOP_PY_BODY = textwrap.dedent("""\
+    from dataclasses import dataclass
+
+    from backend.plugin_sdk import HostContext, PluginNodeSeed
+
+
+    @dataclass
+    class WidgetState:
+        clicks: int = 0
+        label: str = ""
+
+
+    def _make(document, run_ctx, parent_id):
+        return PluginNodeSeed(
+            title="OOP Widget", content="", state=WidgetState(clicks=3, label="initial"),
+        )
+
+
+    def register(host: HostContext) -> None:
+        host.register_node_kind("widget", _make, requires_parent=True)
+        host.register_picker_entry(
+            node_kind="widget", name="OOP Widget", description="d", category="More Plugins",
+        )
+""")
+
+
+def test_out_of_process_plugin_node_state_round_trips_through_save_and_reload(tmp_path):
+    """ADR-014 review-fix (finding 5): the out-of-process NodeState
+    round-trip mechanism (backend/plugin_worker.py's _state_to_plain_dict,
+    backend/plugin_sdk.py's GenericPluginState/_out_of_process_state_
+    serialize/_out_of_process_state_deserialize) was real, but nothing
+    SHIPPED exercised it end to end - plugins/sandboxed_demo's only
+    factory never sets PluginNodeSeed.state. This is the missing coverage:
+    a real out-of-process test-fixture plugin with a real dataclass state
+    field (WidgetState, defined and instantiated entirely INSIDE the
+    worker subprocess), taken through the REAL worker subprocess -> save
+    -> reload cycle, and confirmed to restore correctly as a
+    GenericPluginState with the right `data` dict - not merely at the
+    live-node stage, but after a genuine file round-trip."""
+    from backend.plugin_sdk import GenericPluginState
+
+    _write_out_of_process_plugin(
+        tmp_path / "plugins", "oop_widget", py_body=_STATEFUL_OOP_PY_BODY,
+    )
+    registry = discover_plugins(tmp_path / "plugins")
+    try:
+        bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
+        settings_manager.set_plugin_grant("oop_widget", True)
+        parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
+
+        node_id = asyncio.run(
+            bus.dispatch_intent("app-plugins", "executePlugin", ["OOP Widget", parent.id])
+        )
+        assert node_id is not None
+        node = canvas_document.nodes[node_id]
+        assert node.kind == "oop_widget.widget"
+        # Real, out-of-process-produced GenericPluginState - WidgetState
+        # itself was constructed and serialized (dataclasses.asdict)
+        # entirely INSIDE the worker subprocess; the host only ever sees
+        # the resulting plain dict over the RPC boundary.
+        assert isinstance(node.state, GenericPluginState)
+        assert node.state.data == {"clicks": 3, "label": "initial"}
+
+        chat_data = build_chat_data(canvas_document, plugin_registry=registry)
+        notes_data = chat_data.pop("notes_data")
+        pins_data = chat_data.pop("pins_data")
+        saved_payload = next(n for n in chat_data["nodes"] if n["node_type"] == "oop_widget.widget")
+        assert saved_payload["plugin_state"] == {"clicks": 3, "label": "initial"}
+
+        doc2 = SceneDocument()
+        restore_chat_into_document(
+            doc2, {"data": chat_data}, notes_data, pins_data, plugin_registry=registry,
+        )
+
+        reloaded = next(n for n in doc2.nodes.values() if n.kind == "oop_widget.widget")
+        assert reloaded.title == "OOP Widget"
+        assert isinstance(reloaded.state, GenericPluginState)
+        assert reloaded.state.data == {"clicks": 3, "label": "initial"}
+    finally:
+        _close_workers(registry)

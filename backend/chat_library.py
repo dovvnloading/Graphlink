@@ -54,6 +54,7 @@ from backend.session_load import restore_chat_into_document
 from backend.asset_store import store_for
 from backend.session_save import build_chat_data
 from graphlink_migrations import run_sqlite_migrations
+from graphlink_settings_store import SettingsManager
 
 DEFAULT_DB_PATH = Path.home() / ".graphlink" / "chats.db"
 
@@ -1147,6 +1148,7 @@ def make_load_chat(
     notifications: NotificationState | None,
     record_saved: Callable[..., None],
     last_saved: dict[str, Any],
+    settings_manager: "SettingsManager | None" = None,
 ):
     """Factory for register_chat_library's own loadChat intent - lifted out
     to a top-level function purely to keep register_chat_library itself
@@ -1181,7 +1183,7 @@ def make_load_chat(
 
             restore_chat_into_document(
                 canvas_document, row, notes_rows, pins_rows,
-                asset_store=store_for(resolved_path),
+                asset_store=store_for(resolved_path), settings_manager=settings_manager,
             )
             # R6.5: remember which row this scene now corresponds to, so a
             # later Save updates THIS row instead of always inserting a new
@@ -1197,7 +1199,9 @@ def make_load_chat(
                 # first tick after a load would see a payload that
                 # differs only in image representation and rewrite a
                 # row that is already correct.
-                fresh = build_chat_data(canvas_document, asset_store=store_for(resolved_path))
+                fresh = build_chat_data(
+                    canvas_document, asset_store=store_for(resolved_path), settings_manager=settings_manager,
+                )
                 fresh_notes = fresh.pop("notes_data", [])
                 fresh_pins = fresh.pop("pins_data", [])
                 # ADR-009 stage 9.2: row["updated_at"] is the value that
@@ -1252,6 +1256,7 @@ def make_save_chat(
     notifications: NotificationState | None,
     record_saved: Callable[..., None],
     last_saved: dict[str, Any],
+    settings_manager: "SettingsManager | None" = None,
 ):
     """Factory for register_chat_library's own saveChat intent - see
     make_load_chat's own docstring (immediately above) for why this is a
@@ -1283,7 +1288,9 @@ def make_save_chat(
             return
 
         try:
-            chat_data = build_chat_data(canvas_document, asset_store=store_for(resolved_path))
+            chat_data = build_chat_data(
+                canvas_document, asset_store=store_for(resolved_path), settings_manager=settings_manager,
+            )
         except Exception as exc:
             if notifications is not None:
                 notifications.show(f"Failed to prepare chat save payload: {exc}", "error")
@@ -1376,7 +1383,17 @@ def register_chat_library(
     notifications: NotificationState | None = None,
     *,
     autosave_interval_seconds: float | None = 30.0,
+    settings_manager: "SettingsManager | None" = None,
 ) -> None:
+    # ADR-014 review-fix: threaded through to build_chat_data/
+    # restore_chat_into_document (via make_load_chat/make_save_chat/
+    # register_autosave below) so a plugin node's own serialize/deserialize
+    # hook is gated on its current Settings > Plugins grant on every real
+    # save/load/autosave-tick, not just live-wire scene publishes - see
+    # session_save.py's _serialize_plugin_node and session_load.py's
+    # _restore_plugin_payload for the actual check. `None` (every existing
+    # test call site of this function) preserves the exact prior ungated
+    # behavior.
     resolved_path = db_path if db_path is not None else DEFAULT_DB_PATH
     # ADR-009 stage 9.2: stashed on the bus for the same reason bus.
     # chat_mutation_guard/bus.chat_save_state/bus.autosave_task already
@@ -1485,8 +1502,12 @@ def register_chat_library(
             _last_saved["updated_at"] = None
         await bus.publish("app-chat-library")
 
-    load_chat = make_load_chat(bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved)
-    save_chat = make_save_chat(bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved)
+    load_chat = make_load_chat(
+        bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
+    )
+    save_chat = make_save_chat(
+        bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
+    )
 
     async def new_chat():
         # R6.5: the backend counterpart of legacy's "start with an empty
@@ -1523,7 +1544,7 @@ def register_chat_library(
 
         register_autosave(
             bus, resolved_path, canvas_document, notifications, _mutation_in_progress, _last_saved,
-            interval_seconds=autosave_interval_seconds,
+            interval_seconds=autosave_interval_seconds, settings_manager=settings_manager,
         )
 
 

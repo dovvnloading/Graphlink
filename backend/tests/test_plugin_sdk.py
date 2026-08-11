@@ -10,6 +10,7 @@ conftest.py-style real-data-dir guard (discovery never reads/writes
 ~/.graphlink)."""
 
 import asyncio
+import logging
 import textwrap
 
 import pytest
@@ -251,6 +252,29 @@ def test_host_context_register_intent_stores_a_real_spec():
     assert spec.plugin_id == "intent_plugin"
     assert spec.name == "do_thing"
     assert spec.handler is handler
+
+
+def test_host_context_register_intent_same_plugin_name_reuse_raises():
+    # ADR-014 review-fix (finding 1): without this guard, a plugin author's
+    # copy-paste mistake (two register_intent("run", ...) calls from the
+    # SAME plugin) silently produced two PluginIntentSpec entries sharing
+    # one (plugin_id, name) pair - discover_plugins() itself never caught
+    # it (self._intents is a list, not a dict, so no collision check ran
+    # here before this fix), and the duplicate only surfaced much later, as
+    # a raw ToolRegistry "already registered" ValueError inside
+    # register_plugin_tools' loop - see that function's own per-item
+    # try/except (backend/plugins.py) for the belt-and-suspenders fix on
+    # that side too. Mirrors register_builtin_plugin's own identical
+    # duplicate-name test immediately below.
+    host = HostContext("intent_plugin")
+    host.register_intent("run", lambda d, r, *a: None)
+
+    with pytest.raises(PluginRegistrationError):
+        host.register_intent("run", lambda d, r, *a: None)
+
+    # Exactly one real registration survives - the rejected call left no
+    # partial/duplicate trace behind.
+    assert len(host._intents) == 1
 
 
 # -- ADR-014 stage 14.3: HostContext.register_builtin_plugin() --------------
@@ -714,6 +738,54 @@ def test_a_plugin_serializer_that_raises_degrades_to_empty_plugin_state_on_the_w
     saved_payload = next(n for n in chat_data["nodes"] if n["node_type"] == "raising_plugin.boom")
     assert saved_payload["title"] == "Boom"
     assert "plugin_state" not in saved_payload
+
+
+def test_a_plugin_serializer_that_raises_logs_a_warning_on_the_save_path_too(tmp_path, caplog):
+    # ADR-014 review-fix (finding 6): session_save.py's own
+    # _serialize_plugin_node used to silently drop a raising plugin
+    # serializer with ZERO logging, unlike the wire-path equivalent proven
+    # implicitly by the test immediately above (backend/domain/graph.py's
+    # _plugin_state_wire, which already logs "plugin node %s (%s):
+    # serialize hook raised"). This pins save-path parity: the exact same
+    # message shape now fires on save too.
+    raising_body = textwrap.dedent("""\
+        from backend.plugin_sdk import HostContext, PluginNodeSeed
+
+
+        def _make(document, run_ctx, parent_id):
+            return PluginNodeSeed(title="Boom", content="")
+
+
+        def _serialize(node):
+            raise RuntimeError("this plugin's serializer is broken")
+
+
+        def register(host: HostContext) -> None:
+            host.register_node_kind("boom", _make, requires_parent=True, serialize=_serialize)
+            host.register_picker_entry(
+                node_kind="boom", name="Boom Thing", description="raises", category="More Plugins",
+            )
+    """)
+    _write_plugin(tmp_path, "raising_plugin", py_body=raising_body, kind="boom", picker_name="Boom Thing")
+    registry = discover_plugins(tmp_path)
+    bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Boom Thing", parent.id])
+    )
+    assert node_id is not None
+
+    with caplog.at_level(logging.WARNING):
+        chat_data = build_chat_data(canvas_document, plugin_registry=registry)
+
+    saved_payload = next(n for n in chat_data["nodes"] if n["node_type"] == "raising_plugin.boom")
+    assert saved_payload["title"] == "Boom"
+    assert "plugin_state" not in saved_payload
+    assert any(
+        "serialize hook raised" in record.message and node_id in record.message
+        for record in caplog.records
+    )
 
 
 # -- Integration coverage using the REAL shipped demo plugins ---------------

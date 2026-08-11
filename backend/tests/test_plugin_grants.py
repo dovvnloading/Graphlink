@@ -43,6 +43,8 @@ from backend.plugin_sdk import (
     discover_plugins,
 )
 from backend.plugins import plugins_payload, register_plugins
+from backend.session_load import restore_chat_into_document
+from backend.session_save import build_chat_data
 from graphlink_settings_store import SettingsManager
 
 
@@ -227,6 +229,155 @@ def test_builtin_plugin_always_works_regardless_of_grant_state_and_has_no_manife
     assert "web_research" not in granted_plugin_ids
 
 
+# -- 3b: revoking a grant actually stops serialize/deserialize hooks --------
+# -- from running (finding 2) ------------------------------------------------
+#
+# BEFORE this fix, backend/plugins.py's register_plugins wired a plugin's
+# HostContext.register_node_kind(..., serialize=...) hook into
+# SceneDocument.plugin_node_serializers UNCONDITIONALLY - unlike node
+# creation/invokePluginIntent/register_plugin_tools' handler (all three
+# already check settings_manager.get_plugin_grants() before running a
+# plugin's own code), so revoking a plugin's grant in Settings did NOT stop
+# its serialize/deserialize code from continuing to run on every live-wire
+# scene publish, save, and load. These three tests prove each of the three
+# now-gated call sites independently.
+
+
+def _stateful_grant_py_body(picker_name: str) -> str:
+    return textwrap.dedent(f"""\
+        from dataclasses import dataclass
+
+        from backend.domain.node_states import NodeState
+        from backend.plugin_sdk import HostContext, PluginNodeSeed
+
+
+        @dataclass
+        class WidgetState(NodeState):
+            clicks: int = 0
+
+
+        def _make(document, run_ctx, parent_id):
+            return PluginNodeSeed(title="Widget", content="", state=WidgetState(clicks=3))
+
+
+        def _serialize(node):
+            return {{"clicks": node.state.clicks}}
+
+
+        def _deserialize(data):
+            return WidgetState(clicks=int(data.get("clicks", 0)))
+
+
+        def register(host: HostContext) -> None:
+            host.register_node_kind(
+                "widget", _make, requires_parent=True, serialize=_serialize, deserialize=_deserialize,
+            )
+            host.register_picker_entry(
+                node_kind="widget", name="{picker_name}", description="d", category="More Plugins",
+            )
+    """)
+
+
+def test_revoking_a_plugins_grant_stops_its_live_wire_serializer_from_running(tmp_path):
+    _write_grant_test_plugin(
+        tmp_path / "plugins", "statefulgrant1", register_body=_stateful_grant_py_body("Grant Widget 1"),
+    )
+    registry = discover_plugins(tmp_path / "plugins")
+    bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
+    settings_manager.set_plugin_grant("statefulgrant1", True)
+    parent = canvas_document.add_node(10, 20, "parent")
+
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Grant Widget 1", parent.id])
+    )
+    assert node_id is not None
+
+    # Granted: the live wire carries the plugin's own custom state.
+    wire = canvas_document.scene_payload()
+    node_wire = next(n for n in wire["nodes"] if n["id"] == node_id)
+    assert node_wire["pluginState"] == {"clicks": "3"}
+
+    # Revoke - the SAME live node, no re-registration, no session restart.
+    settings_manager.set_plugin_grant("statefulgrant1", False)
+
+    wire2 = canvas_document.scene_payload()
+    node_wire2 = next(n for n in wire2["nodes"] if n["id"] == node_id)
+    # Degrades to {} (the same "no plugin state to show" shape a plugin
+    # with no serializer at all produces) - proving the wrapper re-checks
+    # the CURRENT grant on every publish, not just at registration time.
+    assert node_wire2["pluginState"] == {}
+
+
+def test_ungranted_plugins_serializer_is_skipped_on_save_when_settings_manager_is_passed(tmp_path):
+    _write_grant_test_plugin(
+        tmp_path / "plugins", "statefulgrant2", register_body=_stateful_grant_py_body("Grant Widget 2"),
+    )
+    registry = discover_plugins(tmp_path / "plugins")
+    bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
+    settings_manager.set_plugin_grant("statefulgrant2", True)
+    parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
+
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Grant Widget 2", parent.id])
+    )
+    assert node_id is not None
+
+    # Revoke BEFORE saving.
+    settings_manager.set_plugin_grant("statefulgrant2", False)
+
+    chat_data = build_chat_data(canvas_document, plugin_registry=registry, settings_manager=settings_manager)
+    saved_payload = next(n for n in chat_data["nodes"] if n["node_type"] == "statefulgrant2.widget")
+    # The node's universal title/content still saves; plugin_state is
+    # withheld because the grant was revoked before this save.
+    assert saved_payload["title"] == "Widget"
+    assert "plugin_state" not in saved_payload
+
+    # Backward-compat sanity: WITHOUT settings_manager (this parameter's
+    # own default, and every pre-fix call site), the exact same document
+    # still saves its plugin_state - preserving prior ungated behavior for
+    # any caller that doesn't opt in.
+    chat_data_ungated = build_chat_data(canvas_document, plugin_registry=registry)
+    saved_ungated = next(n for n in chat_data_ungated["nodes"] if n["node_type"] == "statefulgrant2.widget")
+    assert saved_ungated["plugin_state"] == {"clicks": 3}
+
+
+def test_ungranted_plugins_deserializer_is_skipped_on_load_when_settings_manager_is_passed(tmp_path):
+    _write_grant_test_plugin(
+        tmp_path / "plugins", "statefulgrant3", register_body=_stateful_grant_py_body("Grant Widget 3"),
+    )
+    registry = discover_plugins(tmp_path / "plugins")
+    bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
+    settings_manager.set_plugin_grant("statefulgrant3", True)
+    parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
+
+    node_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Grant Widget 3", parent.id])
+    )
+    assert node_id is not None
+
+    # Save while GRANTED, so plugin_state genuinely made it into the file.
+    chat_data = build_chat_data(canvas_document, plugin_registry=registry, settings_manager=settings_manager)
+    notes_data = chat_data.pop("notes_data")
+    pins_data = chat_data.pop("pins_data")
+    saved_payload = next(n for n in chat_data["nodes"] if n["node_type"] == "statefulgrant3.widget")
+    assert saved_payload["plugin_state"] == {"clicks": 3}
+
+    # Revoke BEFORE reloading.
+    settings_manager.set_plugin_grant("statefulgrant3", False)
+
+    doc2 = SceneDocument()
+    restore_chat_into_document(
+        doc2, {"data": chat_data}, notes_data, pins_data,
+        plugin_registry=registry, settings_manager=settings_manager,
+    )
+    reloaded = next(n for n in doc2.nodes.values() if n.kind == "statefulgrant3.widget")
+    # The node itself still round-trips (title/content survive) - only its
+    # custom deserialize()-produced state is withheld because the grant was
+    # revoked before this reload.
+    assert reloaded.title == "Widget"
+    assert reloaded.state is None
+
+
 # -- 4: unknown scope string rejected at discovery, fail-soft ----------------
 
 
@@ -253,6 +404,86 @@ def test_unknown_scope_in_manifest_is_rejected_at_discovery_fail_soft_per_plugin
     # takes down anyone else's discovery.
     assert "goodsibling" in registry.manifests
     assert "Good Sibling Node" in registry.picker_entries
+
+
+# -- 4b: malformed [scopes].grants TYPE (not a list-of-strings at all) -------
+#
+# A distinct code path from "unknown scope string" above: this is the
+# isinstance/type-shape guard (backend/plugin_sdk.py's `if not isinstance(
+# raw_grants, list) or not all(isinstance(g, str) for g in raw_grants)`),
+# not the "known scope set" membership check - a malformed TOML value (a
+# bare string instead of an array, or an array holding a non-string
+# element) never even reaches the KNOWN_SCOPES comparison.
+
+
+def test_grants_value_that_is_a_bare_string_not_a_list_is_rejected_at_discovery_fail_soft_per_plugin(tmp_path):
+    _write_grant_test_plugin(
+        tmp_path / "plugins", "badgrantstype",
+        # TOML-valid, but [scopes].grants must be an array - a bare string
+        # is exactly the "not isinstance(raw_grants, list)" branch.
+        scopes_toml='[scopes]\ngrants = "graph.mutate"',
+        picker_name="Bad Grants Type Node",
+    )
+    _write_grant_test_plugin(
+        tmp_path / "plugins", "goodsibling2",
+        scopes_toml='[scopes]\ngrants = ["graph.mutate"]',
+        picker_name="Good Sibling Two Node",
+    )
+
+    registry = discover_plugins(tmp_path / "plugins")
+
+    assert len(registry.load_errors) == 1
+    assert registry.load_errors[0].plugin_dir == "badgrantstype"
+    assert "must be a list of strings" in registry.load_errors[0].message
+    assert "badgrantstype" not in registry.manifests
+    assert "Bad Grants Type Node" not in registry.picker_entries
+    # The sibling plugin is completely unaffected.
+    assert "goodsibling2" in registry.manifests
+    assert "Good Sibling Two Node" in registry.picker_entries
+
+
+def test_grants_list_containing_a_non_string_element_is_rejected_at_discovery_fail_soft_per_plugin(tmp_path):
+    _write_grant_test_plugin(
+        tmp_path / "plugins", "badgrantselement",
+        # A syntactically real TOML array, but one element is an integer,
+        # not a string - "not all(isinstance(g, str) for g in raw_grants)".
+        scopes_toml="[scopes]\ngrants = [\"graph.mutate\", 42]",
+        picker_name="Bad Grants Element Node",
+    )
+
+    registry = discover_plugins(tmp_path / "plugins")
+
+    assert len(registry.load_errors) == 1
+    assert registry.load_errors[0].plugin_dir == "badgrantselement"
+    assert "must be a list of strings" in registry.load_errors[0].message
+    assert "badgrantselement" not in registry.manifests
+    assert "Bad Grants Element Node" not in registry.picker_entries
+
+
+def test_grants_value_that_is_a_bare_string_raises_at_manifest_load_time_directly():
+    from backend.plugin_sdk import _load_manifest
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        plugin_dir = Path(tmp) / "badgrantstype"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.toml").write_text(
+            textwrap.dedent("""\
+                [plugin]
+                id = "badgrantstype"
+                name = "Bad Grants Type Plugin"
+                version = "0.1.0"
+                sdk_api_version = 1
+                entry_point = "plugin:register"
+
+                [scopes]
+                grants = "graph.mutate"
+            """),
+            encoding="utf-8",
+        )
+        with pytest.raises(PluginRegistrationError, match="must be a list of strings"):
+            _load_manifest(plugin_dir / "plugin.toml", plugin_dir)
 
 
 def test_unknown_scope_error_raises_at_manifest_load_time_directly():

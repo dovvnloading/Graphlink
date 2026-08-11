@@ -564,7 +564,28 @@ class HostContext:
         in stage 14.1 - see this module's own docstring for why (collides
         with tests/test_undo_classification_gate.py's hard-locked
         literal-(topic,intent) invariant). This method's registration-time
-        behavior is fully real and tested regardless."""
+        behavior is fully real and tested regardless.
+
+        ADR-014 review-fix: rejects a same-name duplicate from THIS SAME
+        plugin, mirroring register_picker_entry/register_builtin_plugin's
+        own duplicate-name guards immediately above - self._intents is a
+        list (not a dict keyed by name) purely because two DIFFERENT
+        plugins may legitimately each declare an intent named "run" (the
+        registry namespaces by plugin_id, not this class), but a single
+        plugin declaring "run" twice is always an authoring mistake, never
+        legitimate. Left unguarded, a duplicate here would resolve
+        (silently, to whichever entry happened first) at TWO downstream
+        chokepoints: _invoke_discovered_plugin_intent's own next(...)
+        lookup, and register_plugin_tools' ToolRegistry.register(), where
+        it previously raised "Tool ... is already registered" and aborted
+        registration for every plugin enumerated after the offender -
+        see register_plugin_tools' own docstring (backend/plugins.py) for
+        the belt-and-suspenders per-item isolation added there too."""
+        if any(spec.name == name for spec in self._intents):
+            raise PluginRegistrationError(
+                f'plugin "{self.plugin_id}": intent "{name}" already registered by '
+                f"this plugin"
+            )
         self._intents.append(PluginIntentSpec(
             plugin_id=self.plugin_id, name=name, handler=handler, args_schema=args_schema,
         ))
@@ -776,7 +797,22 @@ class PluginWorkerClient:
         """Synchronous, blocking - see this section's own module-level
         comment for why. Returns the JSON-RPC response's "result" object
         (or {} if absent), matching McpStdioClient._call's own return
-        contract exactly."""
+        contract exactly.
+
+        ADR-014 review-fix: an explicit is_connected check up front, so a
+        call on an already-dead worker (crashed since a PRIOR call - the
+        reader thread already pushed _WORKER_READER_CLOSED and self._process
+        has exited, but the attribute itself is only cleared by close(),
+        which nothing calls automatically here) fails immediately with the
+        documented PluginWorkerError rather than reaching _write() and
+        racing whatever raw OSError the dead pipe happens to produce (empirically
+        confirmed: `OSError: [Errno 22] Invalid argument` writing to a dead
+        process's stdin on Windows - not a BrokenPipeError, so it silently
+        escaped _write()'s prior narrower except clause). _write() itself
+        also now catches OSError as defense in depth for the remaining race
+        (the process dying between this check and the actual write)."""
+        if not self.is_connected:
+            raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" is not connected.')
         with self._call_lock:
             self._next_id += 1
             request_id = self._next_id
@@ -844,7 +880,18 @@ class PluginWorkerClient:
             try:
                 process.stdin.write(json.dumps(message) + "\n")
                 process.stdin.flush()
-            except (BrokenPipeError, ValueError) as exc:
+            except (OSError, ValueError) as exc:
+                # ADR-014 review-fix: OSError (BrokenPipeError's own actual
+                # base class) replaces the narrower (BrokenPipeError,
+                # ValueError) this used to catch - empirically, writing to a
+                # crashed worker's stdin raises a PLAIN OSError on Windows
+                # (`[Errno 22] Invalid argument`), not BrokenPipeError, so it
+                # previously escaped uncaught as a raw platform-specific
+                # exception instead of the documented PluginWorkerError every
+                # other failure mode here raises. BrokenPipeError still
+                # matches first where it's the real cause (POSIX); this is a
+                # strict widening, not a behavior change for the case that
+                # already worked.
                 raise PluginWorkerError(
                     f'Plugin worker "{self.plugin_id}" is not accepting input: {exc}'
                 ) from exc
@@ -966,6 +1013,25 @@ def _discover_out_of_process_plugin(
 
 
 _REGISTRY_CACHE: dict[Path, PluginRegistry] = {}
+# ADR-014 review-fix: guards the whole check-then-scan-then-set sequence
+# below against a concurrent-first-caller race. discover_plugins() is
+# UNREACHABLE via any real production call path today with more than one OS
+# thread in play (backend/agents.py:519, backend/plugins.py:499, backend/
+# session_load.py, backend/session_save.py all call it from plain
+# synchronous code on the event-loop thread, never inside asyncio.to_thread
+# or a second thread) - this lock is prevention against a future regression,
+# not a fix for an active leak. Without it, two threads racing a
+# never-before-seen plugins_root could both miss the cache, both scan, and
+# (for an out-of-process plugin) both spawn a REAL resident worker
+# subprocess - the loser's PluginRegistry (and its live PluginWorkerClient)
+# is then simply discarded by whichever thread's `_REGISTRY_CACHE[resolved]
+# = registry` assignment runs last, orphaning the winner's subprocess with
+# no reference anywhere ever able to close() it. Held across the ENTIRE
+# scan (not just the get/set), which also serializes two genuinely
+# DIFFERENT plugins_root paths against each other - an accepted, harmless
+# cost (discovery is a rare, one-time-per-path operation) for the simplest
+# correct fix.
+_REGISTRY_CACHE_LOCK = threading.Lock()
 
 
 def _load_manifest(manifest_path: Path, plugin_dir: Path) -> PluginManifest:
@@ -1177,49 +1243,56 @@ def discover_plugins(
     process that calls this many times (every create_app() in a pytest
     run, via register_plugins) only pays the real cost once. Tests that
     need isolation pass a distinct tmp_path-derived plugins_root - a fresh
-    key, never touching the shared cache entry for the real repo path."""
-    resolved = plugins_root.resolve()
-    cached = _REGISTRY_CACHE.get(resolved)
-    if cached is not None:
-        return cached
+    key, never touching the shared cache entry for the real repo path.
 
-    registry = PluginRegistry()
-    if resolved.is_dir():
-        for manifest_path in sorted(resolved.glob(f"*/{MANIFEST_FILENAME}")):
-            plugin_dir = manifest_path.parent
-            try:
-                manifest = _load_manifest(manifest_path, plugin_dir)
-                _check_sdk_api_version(manifest)
-                # ADR-014 stage 14.5: the ONLY branch point discovery gained
-                # this stage. "in-process" (every plugin before this stage,
-                # and every plugin that omits [runtime] entirely) keeps the
-                # EXACT pre-14.5 path - import the module into the host
-                # process, call its real register(host) directly - byte-
-                # identical to before. "out-of-process" never imports the
-                # plugin's module into this process at all; see
-                # _discover_out_of_process_plugin's own docstring.
-                worker_client = None
-                if manifest.runtime_isolation == "out-of-process":
-                    host, worker_client = _discover_out_of_process_plugin(manifest, plugin_dir)
-                else:
-                    module = _import_entry_module(manifest, plugin_dir)
-                    _module_name, _, fn_name = manifest.entry_point.partition(":")
-                    register_fn = getattr(module, fn_name)
-                    host = HostContext(manifest.id)
-                    register_fn(host)
+    ADR-014 review-fix: the whole check-then-scan-then-set body now runs
+    under _REGISTRY_CACHE_LOCK - see that lock's own module-level comment
+    for the concurrent-first-caller race this closes and why holding it for
+    the full scan (not just the dict access) is the right, simplest fix."""
+    resolved = plugins_root.resolve()
+    with _REGISTRY_CACHE_LOCK:
+        cached = _REGISTRY_CACHE.get(resolved)
+        if cached is not None:
+            return cached
+
+        registry = PluginRegistry()
+        if resolved.is_dir():
+            for manifest_path in sorted(resolved.glob(f"*/{MANIFEST_FILENAME}")):
+                plugin_dir = manifest_path.parent
                 try:
-                    _merge_into_registry(registry, host, builtin_names)
-                except Exception:
+                    manifest = _load_manifest(manifest_path, plugin_dir)
+                    _check_sdk_api_version(manifest)
+                    # ADR-014 stage 14.5: the ONLY branch point discovery
+                    # gained this stage. "in-process" (every plugin before
+                    # this stage, and every plugin that omits [runtime]
+                    # entirely) keeps the EXACT pre-14.5 path - import the
+                    # module into the host process, call its real
+                    # register(host) directly - byte-identical to before.
+                    # "out-of-process" never imports the plugin's module
+                    # into this process at all; see
+                    # _discover_out_of_process_plugin's own docstring.
+                    worker_client = None
+                    if manifest.runtime_isolation == "out-of-process":
+                        host, worker_client = _discover_out_of_process_plugin(manifest, plugin_dir)
+                    else:
+                        module = _import_entry_module(manifest, plugin_dir)
+                        _module_name, _, fn_name = manifest.entry_point.partition(":")
+                        register_fn = getattr(module, fn_name)
+                        host = HostContext(manifest.id)
+                        register_fn(host)
+                    try:
+                        _merge_into_registry(registry, host, builtin_names)
+                    except Exception:
+                        if worker_client is not None:
+                            worker_client.close()
+                        raise
+                    registry.manifests[manifest.id] = manifest
                     if worker_client is not None:
-                        worker_client.close()
-                    raise
-                registry.manifests[manifest.id] = manifest
-                if worker_client is not None:
-                    registry.worker_clients[manifest.id] = worker_client
-            except Exception as exc:
-                registry.load_errors.append(
-                    PluginLoadError(plugin_dir.name, f"{type(exc).__name__}: {exc}")
-                )
-                logger.warning("plugin discovery: skipping %s (%s)", plugin_dir.name, exc)
-    _REGISTRY_CACHE[resolved] = registry
-    return registry
+                        registry.worker_clients[manifest.id] = worker_client
+                except Exception as exc:
+                    registry.load_errors.append(
+                        PluginLoadError(plugin_dir.name, f"{type(exc).__name__}: {exc}")
+                    )
+                    logger.warning("plugin discovery: skipping %s (%s)", plugin_dir.name, exc)
+        _REGISTRY_CACHE[resolved] = registry
+        return registry

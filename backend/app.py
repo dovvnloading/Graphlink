@@ -285,7 +285,11 @@ def _configure_session(
     # (built above) so loadChat can actually restore a session into it, and
     # notifications_state so a failed/empty load can surface a real banner -
     # same load-bearing ordering precedent as register_plugins above.
-    register_chat_library(bus, chat_db_path, canvas_document, notifications_state)
+    # ADR-014 review-fix: settings_manager threaded through too, the same
+    # reason register_plugins gets it two lines up - a plugin node's own
+    # serialize/deserialize hook must respect its Settings > Plugins grant
+    # on save/load/autosave, not just live-wire scene publishes.
+    register_chat_library(bus, chat_db_path, canvas_document, notifications_state, settings_manager=settings_manager)
 
 
 def _evict_idle_session(bus: SessionBus) -> bool:

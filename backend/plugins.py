@@ -38,6 +38,7 @@ catch-all appended last."""
 from __future__ import annotations
 
 import inspect
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -51,6 +52,8 @@ from backend.plugin_sdk import PluginRegistry, PluginRunContext, discover_plugin
 # specs from; ToolResult is what a handler must return.
 from backend.providers.base import ToolSpec
 from backend.tools import ToolResult
+
+logger = logging.getLogger(__name__)
 from graphlink_settings_store import SettingsManager
 
 
@@ -119,6 +122,44 @@ _CATEGORY_META = [
 ]
 
 
+# ADR-014 review-fix: the original hand-ordered _PLUGINS tuple literal
+# (deleted by the stage 14.3 migration onto real discovered plugin
+# packages under plugins/ - see `git show beb927b:backend/plugins.py` for
+# the exact byte-for-byte source this is copied from) is recreated here as
+# a pure display-order priority list, NOT a registration mechanism -
+# discover_plugins()'s sorted(glob(...)) (backend/plugin_sdk.py) walks
+# plugin DIRECTORIES alphabetically, an axis that has nothing to do with
+# this curated, hand-picked display sequence. Without this, get_plugin_
+# categories below inherited raw discovery order, and Build & Execution
+# silently reflowed to alphabetical-by-directory-name (Virtual Environment
+# Runner/code_sandbox, Gitlink, HTML Renderer, Py-Coder) instead of the
+# original Gitlink, Py-Coder, Virtual Environment Runner, HTML Renderer -
+# a real, user-visible regression for a migration meant to be a
+# byte-faithful relocation. Only these 8 pre-SDK built-ins get a curated
+# slot; every other plugin (a third-party or demo plugin, none of which
+# shipped before this stage existed) sorts AFTER every curated entry
+# within its own category, in whatever order discovery naturally produced
+# - see _builtin_picker_sort_key's own docstring for the stable-sort
+# mechanics that guarantee that.
+_BUILTIN_PICKER_ORDER = (
+    "System Prompt", "Conversation Node", "Web Research", "Gitlink",
+    "Py-Coder", "Virtual Environment Runner", "HTML Renderer", "Artifact / Drafter",
+)
+
+
+def _builtin_picker_sort_key(name: str) -> int:
+    """`name`'s position in _BUILTIN_PICKER_ORDER, or len(...) (one past
+    the last curated index) for anything not in that list. Used as a
+    sort() key, never a comparator - Python's sort is STABLE, so every
+    non-curated name (all sharing the identical fallback key) keeps its
+    original relative order among itself; only the 8 curated names get
+    reordered, into their exact curated sequence."""
+    try:
+        return _BUILTIN_PICKER_ORDER.index(name)
+    except ValueError:
+        return len(_BUILTIN_PICKER_ORDER)
+
+
 def get_plugin_categories(plugin_registry: "PluginRegistry | None" = None) -> list[dict[str, Any]]:
     """Groups every discovered picker entry (both `picker_entries` - the
     generic PluginNodeSeed path - and `builtin_actions` - the ADR-014 stage
@@ -129,7 +170,12 @@ def get_plugin_categories(plugin_registry: "PluginRegistry | None" = None) -> li
     Plugins" catch-all appended last. `plugin_registry=None` (the default)
     yields an empty listing - unlike the pre-14.3 hardcoded 8, there is no
     picker entry that exists independent of a real discovered registry
-    anymore."""
+    anymore.
+
+    ADR-014 review-fix: within each category, `plugins` is now sorted by
+    _builtin_picker_sort_key - see that function's own docstring and
+    _BUILTIN_PICKER_ORDER's own comment for the within-category ordering
+    regression this restores."""
     entries: list[tuple[str, str, str]] = []
     if plugin_registry is not None:
         entries += [
@@ -152,6 +198,7 @@ def get_plugin_categories(plugin_registry: "PluginRegistry | None" = None) -> li
         ]
         if not plugins:
             continue
+        plugins.sort(key=lambda p: _builtin_picker_sort_key(p["name"]))
         categorized_names.update(p["name"] for p in plugins)
         grouped.append({
             "name": category["name"],
@@ -348,6 +395,12 @@ async def _invoke_discovered_plugin_intent(
     function's job ends at "was this dispatch allowed to happen at all"."""
     plugin_id = str(plugin_id).strip()
     name = str(name).strip()
+    # ADR-014 review-fix: HostContext.register_intent (backend/plugin_sdk.py)
+    # now rejects a same-name duplicate intent from the same plugin at
+    # declaration time, so at most one PluginIntentSpec can ever match this
+    # (plugin_id, name) pair - next(..., None) is a genuine lookup here, not
+    # an arbitrary silent tie-break among duplicates (which is what it would
+    # have been before that guard existed).
     spec = next(
         (s for s in plugin_registry.intents if s.plugin_id == plugin_id and s.name == name),
         None,
@@ -407,22 +460,44 @@ def register_plugin_tools(
     ToolRegistry itself has no install-time-consent concept of its own, only
     scopes/approval. Without this, a Builder tool call would be a SECOND,
     ungated way to fire a plugin's custom action the user never approved in
-    Settings > Plugins - this closes that gap rather than leaving it open."""
+    Settings > Plugins - this closes that gap rather than leaving it open.
+
+    ADR-014 review-fix: each spec's registration is now wrapped in its own
+    try/except, mirroring _register_configured_mcp_tools' own real
+    per-server isolation (backend/agents.py) - previously a single raising
+    ToolRegistry.register() call (e.g. two PluginIntentSpec entries that
+    resolve to the same namespaced_name - possible before HostContext.
+    register_intent's own duplicate-name guard existed, and still
+    theoretically reachable from a hand-built PluginRegistry that bypasses
+    HostContext entirely) would raise straight out of the `for` loop and
+    silently strip every plugin ENUMERATED AFTER the offender of its
+    Builder tools too, not just the offending one - a single plugin's
+    authoring mistake taking down every later plugin's tools. Logged, not
+    silently swallowed, so a real registration failure is still visible."""
     registered: list[str] = []
     for spec in plugin_registry.intents:
         manifest = plugin_registry.manifests.get(spec.plugin_id)
         namespaced_name = f"plugin:{spec.plugin_id}:{spec.name}"
-        tool_spec = ToolSpec(
-            name=namespaced_name,
-            description=f'Invokes plugin "{spec.plugin_id}"\'s "{spec.name}" action.',
-            input_schema={"type": "object", "properties": {}},
-        )
-        tool_registry.register(
-            tool_spec,
-            _make_plugin_tool_handler(plugin_registry, settings_manager, canvas_document, spec.plugin_id, spec.name),
-            scopes=manifest.scopes_grants if manifest is not None else frozenset(),
-            approval="always",
-        )
+        try:
+            tool_spec = ToolSpec(
+                name=namespaced_name,
+                description=f'Invokes plugin "{spec.plugin_id}"\'s "{spec.name}" action.',
+                input_schema={"type": "object", "properties": {}},
+            )
+            tool_registry.register(
+                tool_spec,
+                _make_plugin_tool_handler(
+                    plugin_registry, settings_manager, canvas_document, spec.plugin_id, spec.name,
+                ),
+                scopes=manifest.scopes_grants if manifest is not None else frozenset(),
+                approval="always",
+            )
+        except Exception:
+            logger.exception(
+                'plugin "%s": failed to register intent "%s" as a Builder tool - skipping',
+                spec.plugin_id, spec.name,
+            )
+            continue
         registered.append(namespaced_name)
     return tuple(registered)
 
@@ -454,6 +529,8 @@ def _make_plugin_tool_handler(
                 f'this action can run.',
                 is_error=True,
             )
+        # Same duplicate-proof lookup as _invoke_discovered_plugin_intent
+        # above - see that call site's own comment.
         spec = next(
             (s for s in plugin_registry.intents if s.plugin_id == plugin_id and s.name == name), None,
         )
@@ -468,6 +545,41 @@ def _make_plugin_tool_handler(
         return ToolResult(content="" if result is None else str(result), is_error=False)
 
     return _handler
+
+
+def _grant_gated_serialize(plugin_id: str, serialize, settings_manager: SettingsManager):
+    """ADR-014 review-fix: wraps a plugin's own HostContext.register_node_
+    kind(..., serialize=...) hook so a revoked Settings > Plugins grant
+    actually stops it from running, rather than merely hiding the plugin's
+    PICKER entry while its serializer keeps firing on every scene publish
+    forever after. The SAME settings_manager.get_plugin_grants() check
+    _execute_discovered_plugin/_invoke_discovered_plugin_intent/
+    register_plugin_tools' own handler already apply before calling into a
+    plugin's code, extended to this fourth call site.
+
+    Checked FRESH on every call (never cached at wrap time, since this
+    closure is built once per session at register_plugins() time but a
+    grant can be flipped in Settings at any later point in that same
+    session) - a revoke takes effect on the very next scene publish, not
+    just the next session/reload.
+
+    Returns None (not a dict) when ungranted, rather than raising: the
+    caller (backend/domain/graph.py's _plugin_state_wire) already treats
+    any non-dict return as "no plugin state to show" and degrades to {}
+    with no warning logged - correct here, since an ungranted plugin is
+    expected policy, not a plugin bug worth a warning on every publish.
+    session_save.py's own _serialize_plugin_node applies the identical
+    grant check independently for the persisted-file path (build_chat_data
+    threads `settings_manager` through for that, rather than relying on
+    this SceneDocument-only wrapper, since save/load run outside any one
+    session's live SceneDocument)."""
+
+    def _serialize(node):
+        if not settings_manager.get_plugin_grants().get(plugin_id, False):
+            return None
+        return serialize(node)
+
+    return _serialize
 
 
 def register_plugins(
@@ -505,9 +617,21 @@ def register_plugins(
     # itself, is what _node_wire's pluginState field actually reads.
     # Generic against whatever discover_plugins() found - adding a NEW
     # plugin with its own serialize hook needs no edit here.
+    #
+    # ADR-014 review-fix: wrapped in _grant_gated_serialize rather than
+    # stored verbatim - previously this ran a plugin's own serialize(node)
+    # on EVERY scene publish regardless of Settings > Plugins' granted
+    # state, unlike node creation/invokePluginIntent/register_plugin_tools'
+    # handler (all three already check settings_manager.get_plugin_grants()
+    # before calling into a plugin), so revoking a plugin's grant did not
+    # actually stop its code from continuing to run on every live-wire
+    # broadcast. See _grant_gated_serialize's own docstring for the
+    # checked-fresh-per-call/degrade-to-{}-not-crash mechanics.
     for kind, kind_spec in plugin_registry.node_kinds.items():
         if kind_spec.serialize is not None:
-            canvas_document.plugin_node_serializers[kind] = kind_spec.serialize
+            canvas_document.plugin_node_serializers[kind] = _grant_gated_serialize(
+                kind_spec.plugin_id, kind_spec.serialize, settings_manager,
+            )
 
     # Topic name "app-plugins" (matching the codegen artifact's derived
     # name - same reasoning as "app-composer"/"app-about"): no existing

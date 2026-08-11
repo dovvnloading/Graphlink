@@ -207,6 +207,7 @@ from backend.canvas import (
 from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 from graphlink_navigation_pins import NavigationPinRecord
+from graphlink_settings_store import SettingsManager
 
 # ADR-009 stage 9.5: the asset store in effect for the CURRENT restore.
 #
@@ -739,7 +740,11 @@ def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
     )
 
 
-def _restore_plugin_payload(payload: dict[str, Any], kind_spec: "NodeKindSpec") -> SceneNode:
+def _restore_plugin_payload(
+    payload: dict[str, Any],
+    kind_spec: "NodeKindSpec",
+    settings_manager: "SettingsManager | None" = None,
+) -> SceneNode:
     """ADR-014 stage 14.2: the load-side mirror of session_save.py's
     _serialize_plugin_node - restores the universal title/content/
     is_collapsed fields that generic fallback always wrote, unconditionally
@@ -759,13 +764,28 @@ def _restore_plugin_payload(payload: dict[str, Any], kind_spec: "NodeKindSpec") 
     registered in the discovered PluginRegistry) BEFORE reaching here; an
     unregistered plugin kind is treated exactly like any other unrecognized
     node_type (skipped, not resurrected from a bare payload string with no
-    validation)."""
+    validation).
+
+    ADR-014 review-fix: `settings_manager`, when given, gates the
+    kind_spec.deserialize(plugin_state) call on settings_manager.
+    get_plugin_grants() - the load-side mirror of session_save.py's
+    _serialize_plugin_node's own new grant check, see that function's
+    docstring for the full contract. `None` (this parameter's own default)
+    preserves the exact prior ungated behavior. A denied/ungranted node
+    still restores with its universal title/content fields; it just comes
+    back without its custom state for this one load, the same degrade this
+    function already applies when deserialize itself raises or the kind
+    dropped its opt-in entirely."""
     x, y = _position(payload)
     kind = str(payload.get("node_type", "") or "")
     title = str(payload.get("title", "") or kind)
     content = str(payload.get("content", "") or "")
     state = None
-    if kind_spec.deserialize is not None:
+    granted = (
+        settings_manager is None
+        or settings_manager.get_plugin_grants().get(kind_spec.plugin_id, False)
+    )
+    if granted and kind_spec.deserialize is not None:
         plugin_state = payload.get("plugin_state")
         if isinstance(plugin_state, dict):
             try:
@@ -822,6 +842,7 @@ def _restore_node(
     payload: dict[str, Any],
     all_nodes_map: dict[int, str],
     plugin_registry: "PluginRegistry | None" = None,
+    settings_manager: "SettingsManager | None" = None,
 ) -> tuple[SceneNode | None, str | None]:
     """Ports deserialize_node's own dispatch: default to "chat" for an
     untagged payload (old-old sessions predating the node_type tag), and
@@ -850,7 +871,7 @@ def _restore_node(
             kind_spec = plugin_registry.node_kinds.get(node_type)
             if kind_spec is not None:
                 try:
-                    plugin_node = _restore_plugin_payload(payload, kind_spec)
+                    plugin_node = _restore_plugin_payload(payload, kind_spec, settings_manager)
                 except Exception:
                     return None, None
                 return document.register_restored_node(plugin_node), None
@@ -1297,6 +1318,7 @@ def restore_chat_into_document(
     pins_data: list,
     asset_store: Any | None = None,
     plugin_registry: "PluginRegistry | None" = None,
+    settings_manager: "SettingsManager | None" = None,
 ) -> None:
     """ADR-009 stage 9.5 entry point. Publishes `asset_store` for the
     duration of this restore (see _ACTIVE_ASSET_STORE's own comment for why
@@ -1308,10 +1330,16 @@ def restore_chat_into_document(
     build_chat_data(..., plugin_registry=None) precedent exactly - None
     (every real call site: backend/chat_library.py) triggers a real
     discover_plugins() call, memoized by resolved path; tests inject a
-    specific registry for isolation."""
+    specific registry for isolation.
+
+    ADR-014 review-fix: `settings_manager`, when given, is threaded down to
+    _restore_plugin_payload so a plugin's own deserialize hook is gated on
+    its current Settings > Plugins grant - the load-side mirror of
+    build_chat_data's own new `settings_manager` parameter. `None` (this
+    parameter's own default) preserves the exact prior ungated behavior."""
     token = _ACTIVE_ASSET_STORE.set(asset_store)
     try:
-        _restore_chat_into_document(document, chat, notes_data, pins_data, plugin_registry)
+        _restore_chat_into_document(document, chat, notes_data, pins_data, plugin_registry, settings_manager)
     finally:
         _ACTIVE_ASSET_STORE.reset(token)
 
@@ -1322,6 +1350,7 @@ def _restore_chat_into_document(
     notes_data: list,
     pins_data: list,
     plugin_registry: "PluginRegistry | None" = None,
+    settings_manager: "SettingsManager | None" = None,
 ) -> None:
     """The top-level orchestrator - ports SceneDeserializer.restore_chat()'s
     own exact ordering, reimplemented against SceneDocument. See this
@@ -1355,7 +1384,9 @@ def _restore_chat_into_document(
         if not isinstance(node_payload, dict):
             continue
         node_type = node_payload.get("node_type", "chat")
-        node, parent_new_id = _restore_node(document, node_type, node_payload, all_nodes_map, plugin_registry)
+        node, parent_new_id = _restore_node(
+            document, node_type, node_payload, all_nodes_map, plugin_registry, settings_manager,
+        )
         if node is not None:
             all_nodes_map[index] = node.id
             kind_by_new_id[node.id] = node.kind

@@ -57,6 +57,30 @@ def test_get_plugin_categories_groups_in_category_order_and_skips_empty():
         assert category["plugins"]
 
 
+def test_get_plugin_categories_pins_the_original_curated_within_category_order_for_the_8_builtins():
+    # ADR-014 review-fix (finding 7): discover_plugins()'s sorted(glob(...))
+    # (backend/plugin_sdk.py) walks plugin DIRECTORIES alphabetically - an
+    # axis unrelated to the original hand-ordered _PLUGINS tuple literal
+    # (deleted by the stage 14.3 migration; recovered verbatim via
+    # `git show beb927b:backend/plugins.py`). Without _builtin_picker_
+    # sort_key (backend/plugins.py), Build & Execution silently reflowed to
+    # alphabetical-by-directory-name (Virtual Environment Runner's own dir
+    # is "code_sandbox", so it sorted ahead of Gitlink) instead of this
+    # curated sequence - a real, user-visible regression for a migration
+    # meant to be byte-faithful. Pinned here against the REAL shipped
+    # plugins/ root so a future directory rename/addition can't silently
+    # reintroduce the drift without failing a test.
+    grouped = get_plugin_categories(discover_plugins())
+    by_category = {category["name"]: [p["name"] for p in category["plugins"]] for category in grouped}
+
+    assert by_category["Branch Foundations"] == ["System Prompt", "Conversation Node"]
+    assert by_category["Reasoning & Research"] == ["Web Research"]
+    assert by_category["Build & Execution"] == [
+        "Gitlink", "Py-Coder", "Virtual Environment Runner", "HTML Renderer",
+    ]
+    assert by_category["Workflow & Drafting"] == ["Artifact / Drafter"]
+
+
 def test_get_plugin_categories_appends_more_plugins_only_if_uncategorized():
     # Real discovery includes plugins/hello_node/ and plugins/counter_node/,
     # both registered with the HostContext default category ("More
