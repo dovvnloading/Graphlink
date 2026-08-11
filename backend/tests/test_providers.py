@@ -881,7 +881,6 @@ def test_llama_cpp_rejects_media_up_front_with_the_actionable_message():
 def test_chat_routes_every_api_provider_through_its_provider_class(monkeypatch):
     """Seam-wiring for the three API-mode branches - the same not-just-
     behavior-parity proof the Ollama port got."""
-    import types
 
     calls = []
     for module_name, class_name in [
@@ -1510,7 +1509,6 @@ def test_anthropic_sse_reader_parses_data_lines_and_always_closes(monkeypatch):
     lines and blank separators are skipped, each data: line parses to its
     event dict, the request body carries \"stream\": true, and the response is
     closed even when the consumer abandons the generator mid-stream."""
-    import io
     import json as json_module
 
     class FakeHTTPResponse:

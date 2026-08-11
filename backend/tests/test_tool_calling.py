@@ -18,7 +18,6 @@ import json
 import types
 from unittest.mock import patch
 
-import pytest
 
 import api_provider
 import graphlink_task_config as config

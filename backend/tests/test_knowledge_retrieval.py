@@ -8,7 +8,6 @@ untrusted."
 
 from __future__ import annotations
 
-import pytest
 
 from backend.knowledge_chunking import chunk_text
 from backend.knowledge_embeddings import embed_pending_chunks

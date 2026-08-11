@@ -4,7 +4,6 @@ import asyncio
 
 import ollama
 import pytest
-import webview
 from graphlink_settings_store import SettingsManager
 
 import api_provider
@@ -377,7 +376,7 @@ def test_migration_chain_is_a_no_op_on_an_already_current_freshly_created_file(t
     # against a dict _create_initial_state() already fully populated must
     # change nothing at all, not even incidentally.
     state_file = tmp_path / "session.dat"
-    first = SettingsManager(state_file)  # creates the file fresh
+    SettingsManager(state_file)  # creates the file fresh
     on_disk_after_create = state_file.read_text(encoding="utf-8")
 
     SettingsManager(state_file)  # second load - every migration is a no-op

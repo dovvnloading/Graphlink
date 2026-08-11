@@ -30,7 +30,7 @@ from fastapi.testclient import TestClient
 from backend.app import create_app, _evict_idle_session
 from backend.events import DEFAULT_SESSION_ID, EventBus, SessionBus, UnknownSessionError
 from backend.notifications import NotificationState
-from backend.session_context import SessionContext, attach_session_context, get_session_context
+from backend.session_context import SessionContext, attach_session_context
 
 
 # -- layer 1: EventBus.session() issuance restriction ------------------------

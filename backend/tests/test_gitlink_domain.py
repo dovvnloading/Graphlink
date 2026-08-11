@@ -46,7 +46,6 @@ import api_provider
 import graphlink_task_config as config
 from graphlink_plugins.common import github_client as github_client_module
 from graphlink_plugins.common.github_client import GitHubRestClient
-from graphlink_plugins.gitlink import agent as agent_module
 from graphlink_plugins.gitlink import repository as repository_module
 from graphlink_plugins.gitlink.agent import (
     GitlinkAgent,

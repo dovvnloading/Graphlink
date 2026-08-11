@@ -529,7 +529,7 @@ def test_basic_connection_resolves_by_id_when_index_is_wrong():
         nodes=[_chat("a"), _chat("b")],
         content_connections=[{"start_node_index": 99, "start_node_id": "a", "end_node_index": 99, "end_node_id": "b"}],
     )
-    a = next(n for n in document.nodes.values() if n.content == "hi")
+    next(n for n in document.nodes.values() if n.content == "hi")
     assert len(document.edges) == 1
 
 

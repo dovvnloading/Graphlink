@@ -818,8 +818,6 @@ def _build_chat_data(
 
     nodes_index = {n.id: i for i, n in enumerate(all_nodes)}
     notes_index = {n.id: i for i, n in enumerate(notes)}
-    charts_index = {n.id: i for i, n in enumerate(charts)}
-    frames_index = {n.id: i for i, n in enumerate(frames)}
     kind_by_id = {n.id: n.kind for n in document.nodes.values()}
 
     node_slot_count = len(all_nodes)

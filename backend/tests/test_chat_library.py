@@ -43,7 +43,6 @@ from backend.chat_library import (
     chat_library_payload,
     create_workspace,
     delete_chat,
-    flush_dirty_session_before_teardown,
     get_all_chats,
     get_all_workspaces,
     get_workspace_default_model,
@@ -1784,7 +1783,7 @@ def test_fallback_title_matches_legacy_regex_and_truncation():
 def test_resolve_seed_message_uses_last_chat_node_content():
     document = SceneDocument()
     document.add_chat_node(0, 0, "first message", is_user=True)
-    ai = document.add_chat_node(0, 100, "second message", is_user=False)
+    document.add_chat_node(0, 100, "second message", is_user=False)
     assert _resolve_seed_message(document) == "second message"
 
 
@@ -2346,7 +2345,6 @@ class TestBackupBeforeWrite:
         # module doesn't currently guard against, and not what THIS test
         # is trying to pin down).
         counter = {"n": 0}
-        real_timestamp_now = db_backup_module._timestamp_now
 
         def fake_timestamp_now():
             counter["n"] += 1

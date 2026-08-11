@@ -22,7 +22,6 @@ web_ui/, or the desktop entry point may ever import Qt, pin or no pin.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import re
 from pathlib import Path

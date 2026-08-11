@@ -18,11 +18,9 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import tempfile
 import threading
 import time
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -478,7 +476,6 @@ class TestFailOpenFallbackPaths:
 
     def test_set_information_job_object_failure_falls_back_and_closes_the_handle(self, monkeypatch):
         closed_handles = []
-        real_create = guard_module._kernel32.CreateJobObjectW
         real_close = guard_module._kernel32.CloseHandle
 
         def recording_close(handle):

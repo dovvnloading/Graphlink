@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
-import os
 import pathlib
 import subprocess
 import sys

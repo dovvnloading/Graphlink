@@ -303,7 +303,7 @@ def _validator_for(name: str, fields: dict[str, Any]) -> str:
         access = f'value[{json.dumps(field_name)}]'
         field_path = "`${path}." + field_name + "`"
         check = _ts_check_expr(annotation, value_expr="fieldValue", path_expr=field_path)
-        body.append(f"  {{")
+        body.append("  {")
         body.append(f"    const fieldValue = {access};")
         if optional:
             body.append(f"    if (fieldValue !== undefined && fieldValue !== null) {{ {check} }}")

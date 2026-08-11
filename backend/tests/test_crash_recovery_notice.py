@@ -18,8 +18,6 @@ from backend.crash_recovery import CRASH_NOTICE_MESSAGE
 
 # R7.2: api_provider/graphlink_task_config sit at the repo root, a sibling
 # of backend/ - already importable, no ordering constraint.
-import api_provider
-import graphlink_task_config as config
 
 
 def _client(previous_run_crashed: bool) -> TestClient:

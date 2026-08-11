@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
 
 from .domain import (
     CancellationToken,
@@ -15,7 +14,6 @@ from .domain import (
     ResearchResult,
     ResearchSource,
     ResearchStage,
-    SearchResult,
     WebResearchRequest,
 )
 from .ports import ContentExtractor, DocumentFetcher, ResearchModel, SearchProvider
@@ -192,7 +190,7 @@ class WebResearchService:
                 source.error_code = exc.code
                 source.error_message = str(exc)
                 warnings.append(f"Source {index} could not be used ({exc.code}).")
-            except Exception as exc:
+            except Exception:
                 source.status = "failed"
                 source.error_code = "source_failed"
                 source.error_message = "The source failed during research."

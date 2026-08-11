@@ -166,7 +166,7 @@ class TestLegacyPlaintextMigration:
 
     def test_migration_does_not_rewrite_when_nothing_needs_migrating(self, tmp_path):
         state_file = tmp_path / "session.dat"
-        manager = SettingsManager(state_file)  # fresh defaults, all secrets empty
+        SettingsManager(state_file)  # fresh defaults, all secrets empty
         mtime_after_first_load = state_file.stat().st_mtime_ns
 
         SettingsManager(state_file)  # second load - nothing to migrate

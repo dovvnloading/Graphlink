@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 
-import pytest
 
 from backend.knowledge_chunking import chunk_text
 from backend.knowledge_store import add_document_with_chunks
@@ -72,7 +71,7 @@ class TestRegistration:
 class TestInvocation:
     def test_a_real_search_round_trips_through_invoke_with_correct_citation_fields(self, tmp_path):
         db_path = tmp_path / "knowledge.db"
-        outcome = _ingest(db_path)
+        _ingest(db_path)
         registry = _registry(db_path)
 
         result = _run(
