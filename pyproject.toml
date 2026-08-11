@@ -48,7 +48,7 @@ llamacpp = ["llama-cpp-python"]
 # (the prod lockfile). CI installs them ad hoc (see .github/workflows/ci.yml),
 # same pattern ruff already used before this stage; this extra exists so a
 # contributor gets the identical set via one `pip install -e .[dev]`.
-dev = ["pytest", "pytest-cov", "ruff", "mypy", "pip-tools"]
+dev = ["pytest", "pytest-cov", "ruff", "mypy"]
 
 [tool.pytest.ini_options]
 # ADR-015 stage 15.3: --strict-markers rejects a typo'd/unregistered
