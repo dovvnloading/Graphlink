@@ -1033,6 +1033,55 @@ def test_real_usage_flows_to_the_token_counter_and_reply_node(monkeypatch):
     asyncio.run(run())
 
 
+def test_snapshot_active_provider_model_reads_the_dispatcher_now():
+    from backend.api.intents_chat import _snapshot_active_provider_model
+
+    fake_dispatcher = SimpleNamespace(active_provider_model=lambda: ("openai", "gpt-5"))
+    assert _snapshot_active_provider_model(fake_dispatcher) == ("openai", "gpt-5")
+
+
+def test_snapshot_active_provider_model_is_best_effort_on_a_broken_dispatcher():
+    from backend.api.intents_chat import _snapshot_active_provider_model
+
+    def _raise():
+        raise RuntimeError("not configured")
+
+    fake_dispatcher = SimpleNamespace(active_provider_model=_raise)
+    assert _snapshot_active_provider_model(fake_dispatcher) == (None, None)
+
+
+def test_stamp_reply_provenance_sets_exactly_the_given_snapshot():
+    from backend.api.intents_chat import _stamp_reply_provenance
+
+    node = SimpleNamespace(state=SimpleNamespace(provider=None, model=None))
+    _stamp_reply_provenance(node, "anthropic", "claude-opus-5")
+    assert node.state.provider == "anthropic"
+    assert node.state.model == "claude-opus-5"
+
+
+def test_provenance_reflects_the_provider_active_at_request_time_not_completion_time():
+    # ADR-006 leftover #3: a reply node must be stamped with whatever
+    # provider actually generated it - the one active when the request was
+    # DISPATCHED - not whatever the dispatcher reports by the time the
+    # (possibly slow, possibly mid-flight-reconfigured) reply completes.
+    from backend.api.intents_chat import _snapshot_active_provider_model, _stamp_reply_provenance
+
+    live_provider = {"value": ("ollama", "llama3")}
+    fake_dispatcher = SimpleNamespace(active_provider_model=lambda: live_provider["value"])
+
+    # Captured BEFORE dispatch, exactly like both call sites in
+    # register_chat_intents now do.
+    request_provider, request_model = _snapshot_active_provider_model(fake_dispatcher)
+
+    # The user flips Settings mid-flight, before the reply lands.
+    live_provider["value"] = ("openai", "gpt-5")
+
+    node = SimpleNamespace(state=SimpleNamespace(provider=None, model=None))
+    _stamp_reply_provenance(node, request_provider, request_model)
+
+    assert (node.state.provider, node.state.model) == ("ollama", "llama3")
+
+
 # -- 6. bootstrap_provider_state -----------------------------------------------
 
 
@@ -1766,6 +1815,74 @@ def test_start_image_reply_runtime_error_cases_forward_the_exact_message_verbati
         assert notifications.message == f"Image generation failed: {error_message}"
 
     asyncio.run(run())
+
+
+def _fake_openai_image_snapshot(fake_client):
+    return api_provider._ProviderSnapshot(
+        use_api_mode=True,
+        api_provider_type=config.API_PROVIDER_OPENAI,
+        api_client=fake_client,
+        api_key="k",
+        api_base_url=None,
+        local_provider_type=config.LOCAL_PROVIDER_OLLAMA,
+        api_models={config.TASK_IMAGE_GEN: "dall-e-3"},
+        llama_cpp_settings={},
+        ollama_reasoning_level="off",
+        anthropic_reasoning_level="off",
+        gemini_reasoning_level="off",
+        openai_reasoning_level="off",
+    )
+
+
+def test_generate_image_retries_a_transient_5xx_then_succeeds(monkeypatch):
+    # ADR-006 leftover #4: a transient (non-quota) failure must retry the
+    # same way chat()/chat_stream() already do - api_provider.generate_image
+    # previously had zero retry wrapping at all.
+    import base64
+
+    sleeps = []
+    monkeypatch.setattr(api_provider.time, "sleep", lambda seconds: sleeps.append(seconds))
+    calls = {"n": 0}
+
+    class FakeImages:
+        def generate(self, model, prompt, size):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                error = RuntimeError("server error")
+                error.status_code = 500
+                raise error
+            return SimpleNamespace(data=[SimpleNamespace(b64_json=base64.b64encode(b"png-bytes").decode())])
+
+    fake_runtime = SimpleNamespace(
+        snapshot=lambda: _fake_openai_image_snapshot(SimpleNamespace(images=FakeImages()))
+    )
+
+    result = api_provider.generate_image("a cat", runtime=fake_runtime)
+
+    assert result == b"png-bytes"
+    assert calls["n"] == 2
+    assert len(sleeps) == 1
+
+
+def test_generate_image_quota_errors_are_never_retried(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(api_provider.time, "sleep", lambda seconds: sleeps.append(seconds))
+    calls = {"n": 0}
+
+    class FakeImages:
+        def generate(self, model, prompt, size):
+            calls["n"] += 1
+            raise RuntimeError("429 quota exceeded")
+
+    fake_runtime = SimpleNamespace(
+        snapshot=lambda: _fake_openai_image_snapshot(SimpleNamespace(images=FakeImages()))
+    )
+
+    with pytest.raises(RuntimeError, match="Image generation quota exceeded"):
+        api_provider.generate_image("a cat", runtime=fake_runtime)
+
+    assert calls["n"] == 1, "a quota-shaped failure must never be retried"
+    assert sleeps == []
 
 
 def test_start_image_reply_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):

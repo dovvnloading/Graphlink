@@ -77,14 +77,42 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # ADR-015 stage 15.7: pytest/pytest-cov/ruff/mypy/pip-tools are
+      # dev-only tooling, deliberately NOT in requirements.txt (the prod
+      # lockfile a real install pulls in) - see pyproject.toml's
+      # [project.optional-dependencies] dev extra, which lists the
+      # identical set for a contributor's own `pip install -e .[dev]`.
+      # pip-tools specifically is what makes
+      # tests/test_dependency_lock_currency.py's drift check actually run
+      # instead of self-skip (see that test's own module docstring for why
+      # it's a pytest test rather than a shell diff step - pip-compile
+      # embeds its own --output-file value in the lock's header comment,
+      # which breaks a naive diff against a differently-named scratch copy).
+      - name: Install dev tooling (pytest, ruff, mypy, pip-tools - CI-only, not in the prod lockfile)
+        run: pip install --quiet pytest pytest-cov ruff mypy pip-tools
+
       - name: Compile check
         run: python -m compileall -q .
 
       - name: ruff (scoped rule set - see pyproject.toml's own [tool.ruff])
-        run: pip install --quiet ruff && python -m ruff check .
+        run: python -m ruff check .
 
-      - name: Run pytest
-        run: python -m pytest -q
+      - name: mypy (scoped rule set - see pyproject.toml's own [tool.mypy])
+        run: python -m mypy
+
+      - name: Run pytest (with coverage floor - see pyproject.toml's own [tool.coverage])
+        run: python -m pytest -q --cov --cov-report=term-missing --ignore=backend/tests/perf
+
+      # ADR-015 stage 15.4 review: coverage.py's line tracer adds real
+      # per-line overhead - enough to trip test_loop_watchdog.py's own
+      # 100ms stall ceiling under instrumentation (confirmed: it failed
+      # under --cov, passed clean without it). Running the perf suite in
+      # its own uninstrumented invocation is what test_loop_watchdog.py's
+      # own module docstring already asks for (stable timing, no
+      # environmental noise) - coverage instrumentation is exactly the
+      # kind of noise that docstring means.
+      - name: Run pytest (perf suite, uninstrumented - coverage tracing would corrupt its timing assertions)
+        run: python -m pytest -q backend/tests/perf
 
       - name: pip-audit (known-vulnerability scan of the locked dependency set)
         run: pip install --quiet pip-audit && python -m pip_audit -r requirements.txt

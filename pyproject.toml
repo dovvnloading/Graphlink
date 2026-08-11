@@ -19,18 +19,13 @@ dependencies = [
     "uvicorn",
     "pywebview",
     "ddgs",
-    "Markdown",
     "matplotlib",
     "mutagen",
     "ollama",
     "openai>=1.0.0",
-    "packaging",
     "Pillow",
-    "pygments",
     "pypdf",
-    "pyspellchecker",
     "python-docx",
-    "reportlab",
     "requests",
     "tiktoken",
     # ADR-014 stage 14.1: backend/plugin_sdk.py parses plugin.toml via
@@ -48,7 +43,12 @@ dependencies = [
 # for newer Python versions, so requiring it would break installs for most users.
 [project.optional-dependencies]
 llamacpp = ["llama-cpp-python"]
-dev = ["pytest"]
+# ADR-015 stage 15.7: pytest/pytest-cov/ruff/mypy are dev-only tooling, not
+# a runtime dependency of the shipped app - deliberately NOT in requirements.in
+# (the prod lockfile). CI installs them ad hoc (see .github/workflows/ci.yml),
+# same pattern ruff already used before this stage; this extra exists so a
+# contributor gets the identical set via one `pip install -e .[dev]`.
+dev = ["pytest", "pytest-cov", "ruff", "mypy", "pip-tools"]
 
 [tool.pytest.ini_options]
 # ADR-015 stage 15.3: --strict-markers rejects a typo'd/unregistered
@@ -97,6 +97,30 @@ filterwarnings = [
 # the job is killed. Note this DUMPS and continues rather than failing the
 # test outright - the goal is turning a silent hang into a located one.
 faulthandler_timeout = 60
+
+# ADR-015 stage 15.4: measures backend/ + graphlink_plugins/ (the app's real
+# domain logic - contracts/ is build-time codegen, already gated by its own
+# tests/test_generated_artifacts.py drift checks, not by runtime coverage).
+# `omit` excludes the test files themselves - without it, their own
+# near-100%-by-definition self-coverage dilutes into the total and quietly
+# inflates the number (measured 2026-08-11: ~97% WITH test files counted in
+# the source set vs the real ~90.4% production-code figure below once
+# they're excluded - a mistake caught by actually reading the per-file
+# breakdown, not by trusting the headline percentage). Wired into CI's
+# pytest step (.github/workflows/ci.yml), deliberately NOT via this file's
+# own addopts - baking --cov into addopts would gate every local targeted
+# single-file run (`pytest backend/tests/test_foo.py`) against the
+# WHOLE-suite floor, which is meaningless for a file that only exercises a
+# slice of the codebase. fail_under=85 sits with real margin below the
+# ~90.4% measured at landing (coverage 7.15.2) - it exists to catch an
+# actual coverage collapse, not to gate every incremental dip.
+[tool.coverage.run]
+source = ["backend", "graphlink_plugins"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 85
 
 [project.gui-scripts]
 # R7.6b: was `graphlink_app:main`, the Qt entry point, deleted at the cutover.
@@ -173,6 +197,22 @@ exclude = ["graphlink_app", "web_ui"]
 
 [tool.ruff.lint]
 select = ["E9", "F"]
+
+[tool.mypy]
+# ADR-015 stage 15.5: scoped to the modules already fully annotated
+# (contracts/ plus the 3 backend/ modules ADR-015 names: events.py,
+# token_counter.py, graphlink_process_env.py), not the whole backend/ tree -
+# a raw `mypy backend/` run at landing found 642 errors across 34 of 188
+# files, exactly the "big-bang cleanup" this ADR's own philosophy (see
+# [tool.ruff]'s comment above) rejects. Ratchet this list wider as more
+# modules earn real annotations - never narrower.
+files = [
+    "contracts",
+    "backend/events.py",
+    "backend/token_counter.py",
+    "graphlink_process_env.py",
+]
+ignore_missing_imports = true
 
 [tool.ruff.lint.per-file-ignores]
 # backend/canvas.py's own docstring: it deliberately re-imports every

@@ -65,6 +65,25 @@ def _extract_anthropic_tool_input(response, tool_name: str) -> dict:
     raise RuntimeError(f"Anthropic did not return a {tool_name!r} tool call despite tool_choice forcing it.")
 
 
+def _sum_anthropic_prompt_tokens(usage) -> int | None:
+    """ADR-006 leftover #1 (stage 6.8 review): a cache_control-active
+    request's usage block splits the input cost across THREE fields -
+    input_tokens (uncached), cache_creation_input_tokens (this turn wrote
+    the cache), cache_read_input_tokens (this turn hit it) - not one.
+    Reading input_tokens alone (the pre-6.7 shape, before
+    _system_blocks_with_cache_control existed) silently undercounts
+    promptTokens - and the derived cost - on every cache hit. Missing
+    fields count as 0; returns None only when input_tokens itself is
+    absent, so a usage block Anthropic never populated still normalizes
+    to "no usage reported" rather than a fabricated 0."""
+    input_tokens = _extract_response_field(usage, "input_tokens", None)
+    if input_tokens is None:
+        return None
+    cache_creation = _extract_response_field(usage, "cache_creation_input_tokens", 0) or 0
+    cache_read = _extract_response_field(usage, "cache_read_input_tokens", 0) or 0
+    return input_tokens + cache_creation + cache_read
+
+
 def _system_blocks_with_cache_control(system_prompt: str) -> list[dict]:
     """ADR-006 stage 6.7: send the system prompt as a content-block list
     with cache_control instead of a bare string, so Anthropic caches the
@@ -174,7 +193,7 @@ class AnthropicProvider:
         response_usage = _extract_response_field(response, "usage", None)
         if response_usage is not None:
             self.last_usage = normalize_usage(
-                _extract_response_field(response_usage, "input_tokens", None),
+                _sum_anthropic_prompt_tokens(response_usage),
                 _extract_response_field(response_usage, "output_tokens", None),
             )
         if request.tool_choice:
@@ -303,7 +322,7 @@ class AnthropicProvider:
                     message = _extract_response_field(event, "message", {})
                     start_usage = _extract_response_field(message, "usage", None)
                     if start_usage is not None:
-                        prompt_tokens = _extract_response_field(start_usage, "input_tokens", None)
+                        prompt_tokens = _sum_anthropic_prompt_tokens(start_usage)
                 elif event_type == "message_delta":
                     delta_usage = _extract_response_field(event, "usage", None)
                     if delta_usage is not None:

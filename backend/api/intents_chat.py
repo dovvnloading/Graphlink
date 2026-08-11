@@ -142,15 +142,26 @@ def _land_partial_reply_node(document, parent_node, partial_text):
     document.last_chat_node_id = ai_node.id
 
 
-def _stamp_reply_provenance(node, agent_dispatcher) -> None:
-    """ADR-006 stage 6.8: stamp provider/model on an ordinary chat reply
-    node (previously only branch-synthesis recorded them) - resolved from
-    the dispatcher's active runtime snapshot. Best-effort: provenance must
-    never fail the reply."""
+def _snapshot_active_provider_model(agent_dispatcher):
+    """ADR-006 leftover #3: resolved ONCE at request-dispatch time (call
+    this before agent_dispatcher.start_chat_reply is awaited), never at
+    completion time - _stamp_reply_provenance used to re-read the live
+    dispatcher state from inside the completion callback, which
+    mis-attributes a reply to whatever provider happened to be active when
+    the LLM call FINISHED rather than the one that actually generated it
+    (a real divergence if the user flips Settings mid-flight). Best-effort:
+    provenance must never fail the reply."""
     try:
-        provider, model = agent_dispatcher.active_provider_model()
+        return agent_dispatcher.active_provider_model()
     except Exception:
-        return
+        return None, None
+
+
+def _stamp_reply_provenance(node, provider, model) -> None:
+    """ADR-006 stage 6.8: stamp provider/model on an ordinary chat reply
+    node (previously only branch-synthesis recorded them). `provider`/
+    `model` are the request-time snapshot from
+    _snapshot_active_provider_model, not re-resolved here."""
     node.state.provider = provider or None
     node.state.model = model or None
 
@@ -192,15 +203,16 @@ def _make_on_usage(
 
 def _make_regenerate_on_reply(
     document, bus, notifications, token_counter, publish_token_counter, node_to_regenerate,
-    agent_dispatcher=None,
+    provenance_provider=None, provenance_model=None,
 ):
     """regenerate_response's completion callback, built at module level for
     the same 300-line-cap reason as its siblings above (ADR-006 stage 6.4's
     streaming/partial additions pushed register_chat_intents over). Body
     moved VERBATIM from the former inline closure - no step reordered.
-    ADR-006 stage 6.8: `agent_dispatcher` (additive, default-None for older
-    direct callers) enables provider/model provenance stamping on the
-    regenerated node."""
+    ADR-006 stage 6.8: `provenance_provider`/`provenance_model` (additive,
+    default-None for older direct callers) stamp provider/model provenance
+    on the regenerated node - a request-time snapshot the caller resolved
+    via _snapshot_active_provider_model BEFORE dispatch, per leftover #3."""
 
     async def _on_reply(reply_text):
         # R8a: outputTokens reflects what the model actually returned,
@@ -254,8 +266,7 @@ def _make_regenerate_on_reply(
             node_ids=[node_to_regenerate.id, *existing_children],
         )
         # ADR-006 stage 6.8: provenance for the regenerated content.
-        if agent_dispatcher is not None:
-            _stamp_reply_provenance(node_to_regenerate, agent_dispatcher)
+        _stamp_reply_provenance(node_to_regenerate, provenance_provider, provenance_model)
 
         # last_chat_node_id: DELIBERATELY untouched. See §5.
 
@@ -373,6 +384,10 @@ def register_chat_intents(
         # _on_usage (which _dispatch invokes AFTER on_reply on success) can
         # stamp the real counts onto that node.
         reply_ref = {"node_id": None}
+        # ADR-006 leftover #3: resolved here, at request-dispatch time - not
+        # inside _on_reply below, which only fires once the reply completes
+        # (see _snapshot_active_provider_model's own note).
+        request_provider, request_model = _snapshot_active_provider_model(agent_dispatcher)
 
         async def _on_reply(reply_text):
             # R6.3: the assistant's reply has completed (regardless of
@@ -435,7 +450,7 @@ def register_chat_intents(
             # ADR-006 stage 6.8: stamp provider/model provenance on the
             # reply (previously only branch-synthesis nodes carried it),
             # and remember the node for _on_usage's per-node token stamp.
-            _stamp_reply_provenance(ai_node, agent_dispatcher)
+            _stamp_reply_provenance(ai_node, request_provider, request_model)
             reply_ref["node_id"] = ai_node.id
 
             # NOTE: the calls inside _create_reply_nodes above MUST use the
@@ -524,9 +539,13 @@ def register_chat_intents(
         token_counter.reset_real_usage()
         await publish_token_counter()
 
+        # ADR-006 leftover #3: resolved here, before start_chat_reply is
+        # awaited below - not inside _on_reply, which only fires once the
+        # reply completes (see _snapshot_active_provider_model's own note).
+        request_provider, request_model = _snapshot_active_provider_model(agent_dispatcher)
         _on_reply = _make_regenerate_on_reply(
             document, bus, notifications, token_counter, publish_token_counter,
-            node_to_regenerate, agent_dispatcher,
+            node_to_regenerate, request_provider, request_model,
         )
 
         def _on_partial(partial_text):

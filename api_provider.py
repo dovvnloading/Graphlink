@@ -2772,44 +2772,57 @@ def generate_image(prompt: str, size: str = "1024x1024", *, runtime=None) -> byt
             "Please select one in API Settings."
         )
 
-    try:
-        if state.api_provider_type == config.API_PROVIDER_OPENAI:
-            client = state.api_client
-            if not hasattr(client, "images") or not hasattr(client.images, "generate"):
-                raise RuntimeError("The configured OpenAI-compatible client does not expose an images.generate API.")
+    # ADR-006 leftover #4: chat()/chat_stream()'s transport-retry wrapper
+    # (_complete_with_transport_retry) never covered this function - a
+    # single 429/5xx/connection blip failed image generation outright
+    # where an equivalent chat blip would have retried. The quota
+    # special-casing below is unchanged: a 429/quota-shaped failure is
+    # still translated and raised immediately, never retried (retrying an
+    # exhausted quota is pointless) - only OTHER transient-shaped failures
+    # (5xx, connection errors) now get chat()'s same retry treatment.
+    attempt = 0
+    while True:
+        try:
+            if state.api_provider_type == config.API_PROVIDER_OPENAI:
+                client = state.api_client
+                if not hasattr(client, "images") or not hasattr(client.images, "generate"):
+                    raise RuntimeError("The configured OpenAI-compatible client does not expose an images.generate API.")
 
-            response = client.images.generate(
-                model=api_model,
-                prompt=prompt,
-                size=size,
-            )
-            return _extract_openai_image_bytes(response)
+                response = client.images.generate(
+                    model=api_model,
+                    prompt=prompt,
+                    size=size,
+                )
+                return _extract_openai_image_bytes(response)
 
-        if state.api_provider_type == config.API_PROVIDER_GEMINI:
-            payload = _gemini_post_json(
-                f"{GEMINI_BASE_URL}/v1beta/models/{api_model}:generateContent",
-                {
-                    "contents": [{
-                        "parts": [{"text": prompt}],
-                    }],
-                    "generationConfig": {
-                        "responseModalities": ["IMAGE"],
+            if state.api_provider_type == config.API_PROVIDER_GEMINI:
+                payload = _gemini_post_json(
+                    f"{GEMINI_BASE_URL}/v1beta/models/{api_model}:generateContent",
+                    {
+                        "contents": [{
+                            "parts": [{"text": prompt}],
+                        }],
+                        "generationConfig": {
+                            "responseModalities": ["IMAGE"],
+                        },
                     },
-                },
-                timeout=120,
-                api_key=state.api_key,
-            )
-            return _extract_gemini_image_bytes(payload)
+                    timeout=120,
+                    api_key=state.api_key,
+                )
+                return _extract_gemini_image_bytes(payload)
 
-        raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
-    except Exception as exc:
-        error_str = str(exc).lower()
-        if "429" in error_str or "quota" in error_str or "resourceexhausted" in error_str:
-            raise RuntimeError(
-                "Image generation quota exceeded.\n\n"
-                "Please use a lower-cost image model or verify billing is enabled for the selected provider."
-            ) from exc
-        raise
+            raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
+        except Exception as exc:
+            error_str = str(exc).lower()
+            if "429" in error_str or "quota" in error_str or "resourceexhausted" in error_str:
+                raise RuntimeError(
+                    "Image generation quota exceeded.\n\n"
+                    "Please use a lower-cost image model or verify billing is enabled for the selected provider."
+                ) from exc
+            if attempt >= _TRANSPORT_RETRY_MAX_ATTEMPTS or not _is_transient_transport_error(exc):
+                raise
+            _transport_retry_wait(exc, attempt, cancel_event=None)
+            attempt += 1
 
 
 def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
@@ -3276,6 +3289,32 @@ def _is_transient_transport_error(exc: Exception) -> bool:
     return _is_connection_shaped_error(exc)
 
 
+def _retry_after_from_exception(exc: Exception) -> float | None:
+    """ADR-006 leftover #2: Retry-After only ever survived on the REST
+    transport path, via _attach_http_error_metadata's own `.retry_after`
+    attribute - an SDK-raised exception (openai.APIStatusError,
+    anthropic.APIStatusError, google-genai's errors) never got that
+    treatment, so _transport_retry_wait fell back to pure exponential+
+    jitter even when the SDK's own exception carried a real Retry-After
+    header. Both the openai and anthropic SDKs expose `.response` (an
+    httpx.Response) on their status-error classes; read its headers the
+    same way the REST path already does. Duck-typed so a different or
+    absent shape (google-genai, or a future SDK version) degrades to None
+    rather than raising."""
+    retry_after = getattr(exc, "retry_after", None)
+    if retry_after is not None:
+        return retry_after
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) if response is not None else None
+    header_value = headers.get("Retry-After") if headers is not None else None
+    if header_value is None:
+        return None
+    try:
+        return float(str(header_value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _transport_retry_wait(exc: Exception, attempt: int, cancel_event) -> None:
     """One backoff sleep between transport retries: exponential base with
     ±50% jitter, raised to a server-provided Retry-After when larger, capped
@@ -3285,12 +3324,9 @@ def _transport_retry_wait(exc: Exception, attempt: int, cancel_event) -> None:
     _raise_if_cancelled(cancel_event)
     delay = _TRANSPORT_RETRY_BASE_BACKOFF_SECONDS * (2 ** attempt)
     delay *= random.uniform(0.5, 1.5)
-    retry_after = getattr(exc, "retry_after", None)
+    retry_after = _retry_after_from_exception(exc)
     if retry_after:
-        try:
-            delay = max(delay, float(retry_after))
-        except (TypeError, ValueError):
-            pass
+        delay = max(delay, retry_after)
     delay = min(delay, _TRANSPORT_RETRY_MAX_SLEEP_SECONDS)
     if cancel_event is not None:
         cancel_event.wait(delay)

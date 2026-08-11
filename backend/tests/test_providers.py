@@ -2399,6 +2399,62 @@ def test_anthropic_stream_captures_input_and_output_tokens_from_the_event_flow()
     assert events[-1].usage == {"prompt_tokens": 55, "completion_tokens": 21}
 
 
+def test_anthropic_stream_sums_cache_tokens_into_prompt_tokens():
+    # ADR-006 leftover #1: a cache_control-active request's usage splits
+    # input cost across input_tokens/cache_creation_input_tokens/
+    # cache_read_input_tokens - reading input_tokens alone silently
+    # undercounts promptTokens (and derived cost) on every cache hit.
+    import types
+
+    from backend.providers import AnthropicProvider
+
+    events_in = [
+        {
+            "type": "message_start",
+            "message": {
+                "role": "assistant",
+                "usage": {"input_tokens": 10, "cache_creation_input_tokens": 200, "cache_read_input_tokens": 5},
+            },
+        },
+        {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "Answer."}},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 21}},
+        {"type": "message_stop"},
+    ]
+    live = FakeSDKStream(events_in)
+    sdk_client = types.SimpleNamespace(
+        messages=types.SimpleNamespace(create=lambda **kwargs: live)
+    )
+    provider = AnthropicProvider(client=sdk_client, api_key="k", model="claude-opus-5")
+    events = list(provider.stream(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    ))
+    assert events[-1].type == "done"
+    assert events[-1].usage == {"prompt_tokens": 215, "completion_tokens": 21}
+
+
+def test_anthropic_blocking_complete_sums_cache_tokens_into_last_usage():
+    import types
+
+    from backend.providers import AnthropicProvider
+
+    response = types.SimpleNamespace(
+        content=[types.SimpleNamespace(type="text", text="Answer.")],
+        usage=types.SimpleNamespace(
+            input_tokens=10, cache_creation_input_tokens=200, cache_read_input_tokens=5, output_tokens=21,
+        ),
+    )
+    sdk_client = types.SimpleNamespace(
+        messages=types.SimpleNamespace(create=lambda **kwargs: response)
+    )
+    provider = AnthropicProvider(client=sdk_client, api_key="k", model="claude-opus-5")
+    provider.complete(
+        ChatRequest(task=config.TASK_CHAT, messages=[{"role": "user", "content": "hi"}]),
+        CancelToken(),
+    )
+    assert provider.last_usage == {"prompt_tokens": 215, "completion_tokens": 21}
+
+
 def test_gemini_stream_captures_usage_metadata_from_the_trailing_frame(monkeypatch):
     from backend.providers import GeminiProvider
 
@@ -2523,6 +2579,54 @@ def test_429_with_retry_after_sleeps_exactly_that_long_then_succeeds(monkeypatch
     assert response["message"]["content"] == "ok"
     assert chunks == ["ok"]
     assert sleeps == [5.0]
+    assert calls["streams"] == 2
+
+
+def test_retry_after_from_exception_reads_an_sdk_style_response_headers_object():
+    # ADR-006 leftover #2: openai/anthropic SDK exceptions carry
+    # Retry-After on `.response.headers` (an httpx.Response) - the
+    # `.retry_after` attribute only ever existed on the REST transport
+    # path (_attach_http_error_metadata).
+    class FakeSDKResponse:
+        def __init__(self, headers):
+            self.headers = headers
+
+    exc = RuntimeError("rate limited")
+    exc.status_code = 429
+    exc.response = FakeSDKResponse({"Retry-After": "12.5"})
+
+    assert api_provider._retry_after_from_exception(exc) == 12.5
+
+
+def test_retry_after_from_exception_tolerates_no_response_or_no_headers():
+    assert api_provider._retry_after_from_exception(RuntimeError("boom")) is None
+    exc = RuntimeError("boom")
+    exc.response = object()  # SDK response shape that doesn't even have .headers
+    assert api_provider._retry_after_from_exception(exc) is None
+
+
+def test_sdk_exception_retry_after_wins_the_transport_retry_sleep(monkeypatch, ollama_mode):
+    # End-to-end sibling of the REST-path test above: an SDK-shaped
+    # exception (no .retry_after, only .response.headers) still makes
+    # _transport_retry_wait sleep exactly the server-provided duration.
+    sleeps = _capture_transport_sleeps(monkeypatch)
+
+    class FakeSDKResponse:
+        def __init__(self, headers):
+            self.headers = headers
+
+    sdk_error = RuntimeError("rate limited")
+    sdk_error.status_code = 429
+    sdk_error.response = FakeSDKResponse({"Retry-After": "6.0"})
+
+    calls = _install_flaky_ollama_factory(monkeypatch, [sdk_error])
+
+    response = api_provider.chat_stream(
+        config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None
+    )
+
+    assert response["message"]["content"] == "ok"
+    assert sleeps == [6.0]
     assert calls["streams"] == 2
 
 
