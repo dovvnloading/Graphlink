@@ -378,6 +378,15 @@ export function AppBar({ store }: { store: SceneStore }) {
         </button>
         <button
           type="button"
+          className={"appbar-overflow-item" + (overlays.isOpen("global-search") ? " checked" : "")}
+          data-tier="1"
+          aria-pressed={overlays.isOpen("global-search")}
+          onClick={() => overlays.toggle("global-search", "dialog")}
+        >
+          Global Search
+        </button>
+        <button
+          type="button"
           className={"appbar-overflow-item" + (overlays.isOpen("builder-launch") ? " checked" : "")}
           data-tier="1"
           aria-pressed={overlays.isOpen("builder-launch")}
@@ -435,6 +444,16 @@ export function AppBar({ store }: { store: SceneStore }) {
         onClick={() => overlays.toggle("knowledge", "dialog")}
       >
         Knowledge
+      </button>
+      <button
+        type="button"
+        className={chip("global-search") + " appbar-tier"}
+        data-tier="1"
+        data-overlay-trigger="global-search"
+        aria-pressed={overlays.isOpen("global-search")}
+        onClick={() => overlays.toggle("global-search", "dialog")}
+      >
+        Global Search
       </button>
       <button
         type="button"

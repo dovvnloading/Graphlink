@@ -24,11 +24,36 @@ from backend.domain.graph import SceneDocument, SceneError
 from backend.events import SessionBus
 from backend.knowledge_ingest import IngestError, ingest_text
 from backend.knowledge_retrieval import hybrid_search
-from backend.knowledge_store import DEFAULT_DB_PATH
+from backend.knowledge_store import DEFAULT_DB_PATH, get_or_create_workspace_collection
 from backend.notifications import NotificationState
 
 _DEFAULT_K = 5
 _MAX_K = 25
+
+
+def _resolve_workspace_collection_id(document: SceneDocument) -> int:
+    """ADR-020 stage 20.3: every real ingestion/search call in this module
+    scopes to the CALLING SESSION's current workspace - see backend.
+    knowledge_store.get_or_create_workspace_collection's own docstring for
+    the one-collection-per-workspace, auto-created, invisible scoping
+    decision this implements. `document.current_workspace_id` is None for
+    a session that has not yet loaded/created any chat with a real
+    workspace context (see backend/domain/graph.py's own docstring on that
+    field) - falls back to `0`, the pre-20.3 "no collection assigned"
+    global sentinel (backend.knowledge_store's own module docstring), so a
+    fresh, never-loaded session keeps searching/ingesting into the same
+    undifferentiated pool every pre-20.3 build already used, rather than
+    raising or guessing at some arbitrary workspace.
+
+    Real blocking SQLite I/O (a SELECT, or an INSERT the very first time a
+    given workspace ever ingests/searches anything) - callers run this
+    inside asyncio.to_thread, never inline on the event loop, same posture
+    every other blocking-I/O call in this module already follows (see
+    search()'s own comment on hybrid_search)."""
+    workspace_id = document.current_workspace_id
+    if workspace_id is None:
+        return 0
+    return get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
 
 
 def branch_history_to_text(history: list[dict]) -> str:
@@ -80,12 +105,22 @@ def register_knowledge_intents(
 
     async def search(query, k):
         k = min(max(int(k or _DEFAULT_K), 1), _MAX_K)
+
+        # ADR-020 stage 20.3: scoped to the calling session's current
+        # workspace - see _resolve_workspace_collection_id's own docstring.
+        # Resolution + search both happen inside the SAME to_thread hop
+        # (one thread-pool round trip, not two) since both are real
+        # blocking SQLite I/O against the SAME underlying database file.
+        def _search():
+            collection_id = _resolve_workspace_collection_id(document)
+            return hybrid_search(DEFAULT_DB_PATH, query, k=k, collection_id=collection_id)
+
         # Adversarial-review finding: hybrid_search() does real blocking
         # SQLite I/O (and, when an embedding provider is wired, a network
         # round-trip) - called inline, it would stall the whole event loop
         # for every other connection, unlike every other blocking-I/O
         # intent handler in this codebase (e.g. intents_settings_*.py).
-        results = await asyncio.to_thread(hybrid_search, DEFAULT_DB_PATH, query, k=k)
+        results = await asyncio.to_thread(_search)
         return {"results": _format_search_results(results)}
 
     async def set_chat_index_into_knowledge(node_id, enabled):
@@ -115,13 +150,21 @@ def register_knowledge_intents(
         if enabled:
             history = document.chat_branch_history(node_id)
             text = branch_history_to_text(history)
+
+            # ADR-020 stage 20.3: same workspace-scoping, same single-hop
+            # resolve-then-ingest shape as search() above.
+            def _ingest():
+                collection_id = _resolve_workspace_collection_id(document)
+                return ingest_text(
+                    text,
+                    source_uri=f"branch:{node_id}", title=f"Branch (node {node_id})",
+                    collection_id=collection_id,
+                )
+
             try:
                 # Same blocking-I/O concern as search() above - ingest_text()
                 # does real SQLite writes (chunk + embedding-cache rows).
-                await asyncio.to_thread(
-                    ingest_text, text,
-                    source_uri=f"branch:{node_id}", title=f"Branch (node {node_id})",
-                )
+                await asyncio.to_thread(_ingest)
             except IngestError as exc:
                 if notifications is not None:
                     notifications.show(str(exc), "error")

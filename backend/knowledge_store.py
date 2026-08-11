@@ -35,6 +35,23 @@ would not enforce what it looks like it enforces (SQL NULL is never equal
 to another NULL, so two unscoped documents with identical content would
 NOT collide), and `collections.id` is an AUTOINCREMENT primary key that
 never produces 0, so the sentinel can never collide with a real row.
+
+WORKSPACE-SCOPED KNOWLEDGE (ADR-020 stage 20.3) - SCOPING DECISION, made
+explicit here rather than left to be inferred: this stage gives every
+backend/chat_library.py workspace EXACTLY ONE collection (`collections.
+workspace_id`, migration "4" below), created lazily on first real ingest/
+search via get_or_create_workspace_collection - NOT a general, user-facing
+"create/rename/delete many named collections per workspace" feature. That
+larger surface (a collection browser, assigning documents to specific
+collections, etc.) is deliberately out of scope for this stage - the exit
+criterion this stage is built around is "two workspaces' corpora are
+separate", not "users can manage arbitrarily many collections" - and is
+left for a future stage to build only if it turns out to be needed. The
+pre-20.3 `collection_id=0` global/unscoped pool is untouched by this
+stage: every document ingested before this migration, and every document
+ingested by a caller with no real workspace context of its own (see e.g.
+backend/api/intents_knowledge.py's own None-workspace fallback), keeps
+landing there exactly as it always has.
 """
 
 from __future__ import annotations
@@ -53,6 +70,7 @@ from typing import Any, NamedTuple
 from backend import db_backup
 from backend.notifications import NotificationState
 from graphlink_migrations import run_sqlite_migrations
+from graphlink_token_estimator import TokenEstimator
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +89,7 @@ BACKUP_FILENAME_PREFIX = "knowledge-"
 # a mid-batch crash without re-snapshotting on every single document.
 BACKUP_CADENCE_SECONDS = 600.0
 
-KNOWLEDGE_DB_SCHEMA_VERSION = 3
+KNOWLEDGE_DB_SCHEMA_VERSION = 5
 
 
 def content_hash(text: str) -> str:
@@ -219,10 +237,75 @@ def _migration_003_vector_index(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_model_id ON embeddings (model_id)")
 
 
+def _migration_004_workspace_scoped_collections(conn: sqlite3.Connection) -> None:
+    """3 -> 4 (ADR-020 stage 20.3): `collections.workspace_id` - scopes each
+    collection (and, transitively, every document/chunk ingested into it)
+    to a real backend/chat_library.py `workspaces` row - a DIFFERENT SQLite
+    database file (chats.db, not this module's own knowledge.db), so no
+    declared SQL FOREIGN KEY is possible across the two; this is a
+    conceptual FK enforced by this codebase's own CRUD only, same posture
+    as backend/chat_library.py's own graphs.workspace_id -> workspaces.id
+    link (see that migration's own docstring for the identical empirically-
+    grounded reasoning about undeclared cross-store/ADD-COLUMN FKs).
+
+    NULL (not 0) is "no workspace assigned" here - deliberately NOT the
+    same sentinel as documents.collection_id's own `0` ("no collection
+    assigned" - this module's own docstring), which already means
+    something real and different: every document ingested before this
+    stage (and every one ingested by a caller that still has no workspace
+    context of its own - see backend/api/intents_knowledge.py's own
+    fallback) keeps landing in collection_id 0, the pre-20.3 global/
+    unscoped pool, completely untouched by this migration. A collections
+    row with workspace_id NULL is simply one this stage's own code never
+    produces (get_or_create_workspace_collection below always supplies a
+    real int) - nullable rather than defaulting to some sentinel int so a
+    later migration can tell "predates workspace-scoping" apart from
+    "deliberately global" without overloading one column for both.
+
+    Guarded exactly like every migration in this module and its sibling
+    backend/chat_library.py: a PRAGMA table_info probe before the ALTER
+    TABLE, so a second run against an already-migrated database is a pure
+    no-op."""
+    collections_columns = [info[1] for info in conn.execute("PRAGMA table_info(collections)").fetchall()]
+    if "workspace_id" not in collections_columns:
+        conn.execute("ALTER TABLE collections ADD COLUMN workspace_id INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_collections_workspace_id ON collections (workspace_id)")
+
+
+def _migration_005_graph_node_chunks(conn: sqlite3.Connection) -> None:
+    """4 -> 5 (ADR-020 stage 20.4): `chunks.source_node_id` - the column
+    that lets a search HIT be traced back to which node, inside which
+    graph, produced it. NULL for every chunk that predates this stage (a
+    real ingested document's chunk - backend.knowledge_ingest's own
+    add_document_with_chunks call path never sets it) and for every chunk
+    a real document ingest produces from here on too; populated ONLY by
+    backend/chat_library.py's own graph-reindexing path
+    (knowledge_store.reindex_graph_content, below), one row per node in a
+    saved chat graph.
+
+    `documents.source_uri` already uniquely identifies WHICH graph a chunk
+    came from (the synthetic `f"graph:{graph_id}"` scheme reindex_graph_
+    content writes - see that function's own docstring), so no analogous
+    "source_graph_id" column is needed on either table: the graph id is
+    always one `int(source_uri.removeprefix("graph:"))` away from a
+    document row already joined into every real query here (search_chunks,
+    below).
+
+    Guarded exactly like every migration in this module and its sibling
+    backend/chat_library.py: a PRAGMA table_info probe before the ALTER
+    TABLE, so a second run against an already-migrated database is a pure
+    no-op."""
+    chunks_columns = [info[1] for info in conn.execute("PRAGMA table_info(chunks)").fetchall()]
+    if "source_node_id" not in chunks_columns:
+        conn.execute("ALTER TABLE chunks ADD COLUMN source_node_id TEXT")
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_fts5_lexical_index,
     3: _migration_003_vector_index,
+    4: _migration_004_workspace_scoped_collections,
+    5: _migration_005_graph_node_chunks,
 }
 
 
@@ -506,6 +589,47 @@ def list_chunks_for_document(db_path: Path, document_id: int) -> list[dict[str, 
         conn.close()
 
 
+def get_or_create_workspace_collection(db_path: Path, workspace_id: int) -> int:
+    """ADR-020 stage 20.3: the ONE collection-creation code path this stage
+    builds - per the ADR's own scoping decision, every workspace gets
+    EXACTLY one collection, created lazily on first real use, never
+    surfaced as a separately manageable entity (no create_collection(name,
+    ...) API for users - see this module's own module docstring update for
+    the full reasoning). Idempotent by construction: a SELECT first, an
+    INSERT only on a genuine miss, so every real call site (backend/api/
+    intents_knowledge.py's search()/branch-indexing, graphlink_plugins/
+    web_research/service.py's retention) can simply call this on EVERY
+    real ingest/search for a workspace with no "did I already create this
+    workspace's collection" bookkeeping of its own to carry - and it is
+    self-healing: a workspace whose collection row is missing (never
+    created, or knowledge.db was restored from a backup that predates it)
+    just gets a fresh one on the very next call, rather than erroring.
+
+    `name`/`scope` are cosmetic only - nothing in this codebase's own UI
+    ever displays a collection by name (the ADR's own "invisible, not a
+    general collection-management UI" scoping decision) - `name` is a
+    stable, deterministic f"workspace-{workspace_id}" (useful only for a
+    human inspecting the raw .db file directly), `scope` reuses the
+    pre-20.3 column literally ("workspace") purely for that same manual-
+    inspection value; neither is read back by any real code path in this
+    codebase."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT id FROM collections WHERE workspace_id = ?", (workspace_id,)
+            ).fetchone()
+            if row is not None:
+                return int(row[0])
+            cursor = conn.execute(
+                "INSERT INTO collections (name, scope, created_at, workspace_id) VALUES (?, ?, ?, ?)",
+                (f"workspace-{workspace_id}", "workspace", _now_iso(), workspace_id),
+            )
+            return int(cursor.lastrowid)
+    finally:
+        conn.close()
+
+
 def delete_document(db_path: Path, document_id: int) -> bool:
     """Deletes a document and (via ON DELETE CASCADE) every chunk that
     belonged to it. Returns whether a row was actually deleted - False for
@@ -514,6 +638,155 @@ def delete_document(db_path: Path, document_id: int) -> bool:
     try:
         with conn:
             cursor = conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+            return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+# -- graph node indexing (ADR-020 stage 20.4) --------------------------------
+#
+# One `documents` row per GRAPH (source_uri = f"graph:{graph_id}", a
+# synthetic scheme that can never collide with a real file/branch/web-
+# research source_uri - the CALLING code is what feeds `node_chunks`,
+# already normalized per-node text - see backend/chat_library.py's own
+# node-content normalization), one `chunks` row per NODE inside it. Unlike
+# add_document_with_chunks's content-hash idempotency (built for immutable-
+# once-ingested files), a graph is mutated and re-saved constantly - see
+# reindex_graph_content's own docstring for why this is delete-then-
+# reinsert on every call instead.
+
+
+def _graph_source_uri(graph_id: int) -> str:
+    return f"graph:{graph_id}"
+
+
+def reindex_graph_content(
+    db_path: Path,
+    *,
+    graph_id: int,
+    workspace_id: int,
+    title: str,
+    node_chunks: list[tuple[str, str]],
+    notifications: NotificationState | None = None,
+    last_saved: dict[str, Any] | None = None,
+) -> None:
+    """The graph re-indexing strategy this stage's own design settled on:
+    graphs are MUTABLE (unlike a real ingested file - this module's own
+    content-hash-idempotency docstring explicitly assumes immutable-once-
+    ingested content), so a content-hash idempotent-insert would never hit
+    (a graph's own content_hash changes on every save) and would just
+    accumulate one stale document+chunks row per save, forever. Instead:
+    DELETE every existing documents+chunks row for this graph (looked up by
+    `source_uri = f"graph:{graph_id}"`, never by content_hash), then INSERT
+    a fresh documents row + fresh chunks rows reflecting the graph's CURRENT
+    content - called on EVERY save, insert or resave alike (see backend/
+    chat_library.py's save_chat_atomically_row, this function's one real
+    caller). `chunks_fts`'s own DELETE trigger (migration "2") keeps the
+    FTS index in sync automatically when the old chunks rows are deleted
+    (ON DELETE CASCADE fires the child table's own triggers - see that
+    migration's own docstring, already verified empirically there); this
+    function never touches chunks_fts directly.
+
+    `node_chunks` is `[(node_id, text), ...]`, already normalized and
+    already filtered to non-empty text by the caller - this function trusts
+    what it is given, matching this module's own "the caller resolves
+    content, this function only writes" division of labor (see e.g. how
+    add_document_with_chunks already trusts its own `chunks` param). An
+    empty list (a graph with no indexable node content at all right now)
+    still runs the DELETE below - clearing any STALE prior index for this
+    same graph_id, which matters when a graph's last node with real content
+    was just removed or emptied - but skips the INSERT, since there is
+    nothing left to write a document row for.
+
+    `workspace_id` resolves this graph's real knowledge collection via
+    get_or_create_workspace_collection - called BEFORE this function's own
+    write transaction opens (not nested inside it), specifically so it
+    never has to wait out its own separate connection's write lock against
+    the one this function is about to open on the SAME db file (a nested
+    call here would self-contend under WAL's own single-writer rule until
+    busy_timeout expired).
+
+    `content_hash` is still populated (the schema's own NOT NULL) even
+    though this path deliberately never CONSULTS it for idempotency (unlike
+    add_document_with_chunks) - computed from `source_uri` PLUS the graph's
+    own concatenated node text, not the text alone: `documents` declares
+    `UNIQUE(content_hash, collection_id)`, and two DIFFERENT graphs in the
+    SAME workspace/collection with byte-identical node content (a real,
+    reachable case - e.g. two graphs both created from a duplicated
+    starting template) are deliberately NOT the same document the way two
+    real files with identical extracted text are (add_document_with_chunks'
+    own content-hash-idempotency docstring) - each graph is its own
+    document, tracked by its own unique source_uri, regardless of what its
+    nodes happen to say. Folding source_uri into the hash input keeps this
+    per-graph-unique by construction (empirically verified - see this
+    function's own test_two_different_graphs_do_not_collide test) rather
+    than colliding on the UNIQUE constraint the moment two graphs' content
+    happens to match."""
+    collection_id = get_or_create_workspace_collection(db_path, workspace_id)
+    source_uri = _graph_source_uri(graph_id)
+    estimator = TokenEstimator()
+
+    conn = _connect(db_path, notifications=notifications)
+    try:
+        with conn:
+            if last_saved is not None:
+                maybe_backup_before_write(db_path, last_saved)
+
+            existing_ids = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT id FROM documents WHERE source_uri = ?", (source_uri,)
+                ).fetchall()
+            ]
+            for existing_id in existing_ids:
+                # ON DELETE CASCADE removes this document's own chunks rows,
+                # which fires chunks_fts' own AFTER DELETE trigger for each
+                # one - chunks_fts needs no direct touch here.
+                conn.execute("DELETE FROM documents WHERE id = ?", (existing_id,))
+
+            if not node_chunks:
+                return
+
+            full_text = "\n\n".join(text for _, text in node_chunks)
+            cursor = conn.execute(
+                "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    collection_id, source_uri, title, "text/graph",
+                    content_hash(f"{source_uri}\n{full_text}"), _now_iso(),
+                ),
+            )
+            document_id = cursor.lastrowid
+            conn.executemany(
+                "INSERT INTO chunks "
+                "(document_id, ordinal, text, token_count, offset_start, offset_end, source_node_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (document_id, ordinal, text, estimator.count_tokens(text), 0, len(text), node_id)
+                    for ordinal, (node_id, text) in enumerate(node_chunks)
+                ],
+            )
+    finally:
+        conn.close()
+
+
+def delete_graph_index(db_path: Path, graph_id: int) -> bool:
+    """The deletion-side mirror of reindex_graph_content: removes this
+    graph's own documents+chunks rows (ON DELETE CASCADE + chunks_fts' own
+    DELETE trigger keep chunks/chunks_fts in sync, same as reindex_graph_
+    content's own DELETE above) - called from backend/chat_library.py's
+    delete_chat, so a deleted graph's content stops being a real, jump-to-
+    node-able global-search hit rather than lingering as an orphaned index
+    entry for a graph that no longer exists. Returns whether a row was
+    actually deleted - False for a graph with nothing indexed (never saved
+    with any indexable node content, or already deleted) is a normal
+    outcome, not an error - mirrors delete_document's own return contract."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            cursor = conn.execute(
+                "DELETE FROM documents WHERE source_uri = ?", (_graph_source_uri(graph_id),)
+            )
             return cursor.rowcount > 0
     finally:
         conn.close()
@@ -588,12 +861,19 @@ def list_embeddings_for_search(
     directly - the same fields search_chunks() (FTS5) already returns,
     matching shapes so stage 17.4's fusion can treat both result lists
     uniformly. `vector` is the raw packed BLOB - unpacking is
-    knowledge_embeddings.vector_search's job, not this module's."""
+    knowledge_embeddings.vector_search's job, not this module's.
+
+    ADR-020 stage 20.4: also carries `source_node_id` (migration "5") - a
+    fused hybrid_search() result found ONLY via this vector path still
+    needs to be traceable back to its origin node the same way a
+    search_chunks() (FTS5) hit already is, so a graph-derived chunk that
+    happens to have been embedded is never mistaken for a real ingested-
+    document hit downstream."""
     conn = _connect(db_path)
     try:
         query = (
             "SELECT e.chunk_id, e.dim, e.vector, c.document_id, c.ordinal, c.text, c.token_count, "
-            "c.offset_start, c.offset_end, d.title, d.source_uri "
+            "c.offset_start, c.offset_end, d.title, d.source_uri, c.source_node_id "
             "FROM embeddings e "
             "JOIN chunks c ON c.id = e.chunk_id "
             "JOIN documents d ON d.id = c.document_id "
@@ -609,6 +889,7 @@ def list_embeddings_for_search(
                 "chunk_id": row[0], "dim": row[1], "vector": row[2], "document_id": row[3],
                 "ordinal": row[4], "text": row[5], "token_count": row[6], "offset_start": row[7],
                 "offset_end": row[8], "document_title": row[9], "source_uri": row[10],
+                "source_node_id": row[11],
             }
             for row in rows
         ]
@@ -649,6 +930,16 @@ def search_chunks(
     matching everything (an empty FTS5 MATCH string is itself invalid
     syntax, and "no terms" has no reasonable non-empty answer).
 
+    ADR-020 stage 20.4: also carries `source_node_id` (migration "5",
+    NULL for every real ingested-document chunk, a real node id for a
+    chunk backend.chat_library.reindex_graph_content wrote) - this is what
+    lets a caller (backend/api/intents_global_search.py's own result
+    formatter) tell a "graph/node" hit apart from a real document hit
+    without a second query: `document_id` -> `documents.source_uri` is
+    already joined into every row here, and a graph-sourced document's own
+    `source_uri` is always the synthetic `f"graph:{graph_id}"` scheme
+    reindex_graph_content writes.
+
     `k` bounds the result count outright, not a suggestion - a caller doing
     budget-aware selection still needs a hard upper bound on rows actually
     pulled from SQLite before it starts trimming by token budget."""
@@ -668,7 +959,7 @@ def search_chunks(
         rows = conn.execute(
             f"""
             SELECT c.id, c.document_id, c.ordinal, c.text, c.token_count, c.offset_start, c.offset_end,
-                   d.title, d.source_uri, bm25(chunks_fts) AS score
+                   d.title, d.source_uri, bm25(chunks_fts) AS score, c.source_node_id
             FROM chunks_fts
             JOIN chunks c ON c.id = chunks_fts.rowid
             JOIN documents d ON d.id = c.document_id
@@ -683,6 +974,7 @@ def search_chunks(
                 "chunk_id": row[0], "document_id": row[1], "ordinal": row[2], "text": row[3],
                 "token_count": row[4], "offset_start": row[5], "offset_end": row[6],
                 "document_title": row[7], "source_uri": row[8], "score": row[9],
+                "source_node_id": row[10],
             }
             for row in rows
         ]

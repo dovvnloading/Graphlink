@@ -174,6 +174,11 @@ def vector_search(
             "token_count": rows[i]["token_count"],
             "offset_start": rows[i]["offset_start"], "offset_end": rows[i]["offset_end"],
             "document_title": rows[i]["document_title"], "source_uri": rows[i]["source_uri"],
+            # ADR-020 stage 20.4: propagated straight through from
+            # list_embeddings_for_search's own row shape - see that
+            # function's own docstring for why a fused hybrid_search()
+            # result needs this even when found only via this vector path.
+            "source_node_id": rows[i]["source_node_id"],
             "score": float(similarities[i]),
         }
         for i in order

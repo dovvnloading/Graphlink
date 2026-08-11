@@ -95,6 +95,9 @@ describe("buildCommands", () => {
     expect(overlays.open).toHaveBeenCalledWith("settings", "dialog");
     commands.find((c) => c.id === "open-view")!.run();
     expect(overlays.open).toHaveBeenCalledWith("view", "popover");
+    // ADR-020 stage 20.4: the Global Search palette entry.
+    commands.find((c) => c.id === "open-global-search")!.run();
+    expect(overlays.open).toHaveBeenCalledWith("global-search", "dialog");
   });
 
   it("add-pin computes the viewport center and calls addPin", () => {

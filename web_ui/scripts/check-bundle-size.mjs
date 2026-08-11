@@ -43,7 +43,17 @@ const LARGEST_CHUNK_CEILING_BYTES = 815_000;
 // total, same rationale as the per-chunk ceiling above; still comfortably
 // looser than the per-chunk ceiling so a later stage adding one more small
 // lazy chunk doesn't trip this on its own.
-const TOTAL_JS_CEILING_BYTES = 1_355_000;
+//
+// ADR-020 stage 20.2 (real, deliberate growth, not absorbed silently): the
+// lazy-loaded ChatLibraryDialog chunk grew with the workspace switcher, tag
+// filter chips, favorite/archive icon buttons, and inline tag editing this
+// stage adds - measured total is now 1,356,069 bytes, which already exceeds
+// the prior ceiling on its own. Re-anchored to that new reality with the
+// same ~5% headroom the original ceiling used (1,356,069 * 1.05 ≈
+// 1,423,872, rounded down to a clean number) - this only ever moves the
+// ceiling down again in a later stage that shrinks the total, per this
+// file's own ratchet discipline above.
+const TOTAL_JS_CEILING_BYTES = 1_423_000;
 
 let entries;
 try {

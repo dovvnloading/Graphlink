@@ -204,6 +204,25 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
     # New Chat confirm skips only when the canvas is empty AND there is no
     # current chat - a predicate the frontend cannot evaluate without it.
     current_chat_id: int | None = None
+    # ADR-020 stage 20.2: which workspace the NEXT save of this document
+    # should INSERT a brand-new graph row into, or None to fall back to the
+    # Default workspace (see save_chat_atomically_row's own workspace_id
+    # docstring in backend/chat_library.py for exactly how this is
+    # consumed). Set by the newChat intent's own optional workspaceId
+    # argument (backend/chat_library.py's new_chat closure, ALREADY
+    # validated against a real, current workspace row by that closure before
+    # it ever reaches here - this field trusts whatever it holds), left None
+    # for a session that never called newChat with an explicit workspace
+    # (every pre-20.2 caller, and the zero-arg newChat() every non-library
+    # caller like commands.ts's palette command still uses). Deliberately
+    # NOT consulted for an UPDATE of an EXISTING graph (current_chat_id
+    # truthy) - resaving a chat never moves it to a different workspace, no
+    # matter what this field holds; only a fresh INSERT reads it. Reset to
+    # None by clear_for_load below, same "fresh session default" list
+    # current_chat_id is already in - a freshly loaded OR freshly cleared
+    # scene has no pending workspace assignment of its own until the next
+    # newChat call sets one.
+    current_workspace_id: int | None = None
     # ADR-014 stage 14.2: the live-wire half of the Plugin SDK's generic
     # persistence seam - keyed by a plugin's ALREADY-namespaced node kind
     # (f"{plugin_id}.{kind}", HostContext.register_node_kind's own
@@ -441,6 +460,7 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         self.scroll_y = 0.0
         self.total_session_tokens = 0
         self.current_chat_id = None
+        self.current_workspace_id = None
         # ADR-010 stage 10.1: undo history does NOT survive a session load.
         # Every command in it references node/edge ids from the document
         # being replaced, so inverting one afterward would resurrect a node

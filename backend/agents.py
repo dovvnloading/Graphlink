@@ -100,6 +100,12 @@ from graphlink_plugins.code_sandbox.domain import (
 )
 from graphlink_scratch_dirs import EXECUTION_SANDBOX_ROOT, PYCODER_REPL_ROOT
 from graphlink_scratch_dirs import remove_scratch_dir_for_id
+# ADR-020 stage 20.3: the workspace-default rung of resolve_model_ref's
+# chain, wired into _resolve_model_ref_for_dispatch below - safe as a
+# top-level import (graphlink_model_catalog is dependency-free, see its own
+# ModelRef docstring; several other modules already import it this way,
+# e.g. api_provider.py).
+from graphlink_model_catalog import ModelRef, resolve_model_ref
 from graphlink_plugins.web_research.domain import (
     CancellationToken,
     ProgressEvent,
@@ -904,28 +910,66 @@ class AgentDispatcher:
             return ""
         return BASE_SYSTEM_PROMPT
 
-    def _resolve_model_ref_for_dispatch(self, canvas_document, node_id: str | None):
-        """ADR-018 stage 18.2: the node/branch-override rungs of
-        graphlink_model_catalog.resolve_model_ref, computed here (mirroring
-        _resolve_branch_system_prompt's own "only when canvas_document/
-        node_id are supplied" restriction) and returned already resolved.
-        auto/workspace-default (which need the unified catalog and the
-        session's task-keyed default) stay out of scope here - when neither
-        rung fires, this returns None and the caller passes no model_ref at
-        all, falling through to api_provider's existing task-keyed lookup
-        UNCHANGED (see _provider_for_model_ref's own docstring in
-        api_provider.py). Diagnostics-worthy (the "why this model" rung
-        name) is thrown away at this layer on purpose - stage 18.3's
-        explain-resolution intent recomputes it fresh from the SAME
-        SceneDocument state the UI can already read, rather than this
-        already-in-flight dispatch trying to smuggle it back out."""
+    def _resolve_model_ref_for_dispatch(
+        self, canvas_document, node_id: str | None, bus: "SessionBus | None" = None,
+    ):
+        """ADR-018 stage 18.2 + ADR-020 stage 20.3: the full node -> branch
+        -> workspace-default rungs of graphlink_model_catalog.resolve_
+        model_ref (graphlink_model_catalog.py:381-419), computed here
+        (mirroring _resolve_branch_system_prompt's own "only when
+        canvas_document/node_id are supplied" restriction) and returned
+        already resolved. auto (which needs the unified catalog and the
+        session's task-keyed default) stays OUT of scope here exactly like
+        before 20.3 - `catalog=()` below makes resolve_model_ref's own auto
+        rung come back empty whenever node/branch/workspace are ALL unset,
+        so this still returns None in exactly that case, falling through to
+        api_provider's existing task-keyed lookup UNCHANGED (see
+        _provider_for_model_ref's own docstring in api_provider.py).
+        Diagnostics-worthy (the "why this model" rung name) is thrown away
+        at this layer on purpose - stage 18.3's explain-resolution intent
+        recomputes it fresh from the SAME SceneDocument state the UI can
+        already read, rather than this already-in-flight dispatch trying to
+        smuggle it back out.
+
+        ADR-020 stage 20.3: `bus`, when supplied, is the one extra piece of
+        context needed to find `canvas_document.current_workspace_id`'s own
+        workspace row - via `bus.chat_db_path` (stashed by backend/
+        chat_library.py's register_chat_library; the SAME attribute backend/
+        app.py's own eviction-flush call site already reads via
+        `getattr(bus, "chat_db_path", None)`). Optional and defaulted to
+        None so this method's pre-20.3 test call sites (an AgentDispatcher/
+        SceneDocument pair with no real SessionBus at all) keep passing
+        unchanged - a None bus (or a bare test double with no chat_db_path
+        attribute) simply skips the workspace rung, exactly like the
+        pre-20.3 code path when canvas_document/node_id were absent."""
         if canvas_document is None or node_id is None:
             return None
         resolve_model_for_node = getattr(canvas_document, "resolve_model_for_node", None)
         if resolve_model_for_node is None:
             return None
         node_ref, branch_ref = resolve_model_for_node(node_id)
-        return node_ref or branch_ref
+
+        workspace_ref = None
+        chats_db_path = getattr(bus, "chat_db_path", None) if bus is not None else None
+        workspace_id = getattr(canvas_document, "current_workspace_id", None)
+        if chats_db_path is not None and workspace_id is not None:
+            # Local import - backend.chat_library imports backend.canvas,
+            # which imports THIS module (AgentDispatcher) at module level -
+            # a top-level import here would be circular. Mirrors this
+            # codebase's own established "deferred import to break a real
+            # cycle" precedent (e.g. backend/api/intents_web_research.py's
+            # own `from backend.canvas import _research_result_wire`).
+            from backend.chat_library import get_workspace_default_model
+
+            default = get_workspace_default_model(chats_db_path, workspace_id)
+            if default is not None:
+                provider, model_id = default
+                workspace_ref = ModelRef(provider, model_id)
+
+        resolved = resolve_model_ref(
+            config.TASK_CHAT, node_ref=node_ref, branch_ref=branch_ref, workspace_ref=workspace_ref, catalog=(),
+        )
+        return resolved.ref if resolved is not None else None
 
     def _resolve_branch_system_prompt(self, canvas_document, node_id: str | None) -> str | None:
         """R6.1 port of legacy graphlink_chat_agent.py's
@@ -1184,7 +1228,7 @@ class AgentDispatcher:
                 persona_text = override if override is not None else self.persona()
                 # ADR-018 stage 18.2: computed once, shared by both branches
                 # below, exactly like persona_text/override_kwargs above.
-                model_ref = self._resolve_model_ref_for_dispatch(canvas_document, node_id)
+                model_ref = self._resolve_model_ref_for_dispatch(canvas_document, node_id, bus=bus)
                 model_ref_kwargs = {"model_ref": model_ref} if model_ref is not None else {}
                 # ADR-018 stage 18.4: the auto-policy rung's own catalog/
                 # settings access lives in api_provider, not here (mirrors
@@ -1695,6 +1739,7 @@ class AgentDispatcher:
         on_progress,
         on_success,
         on_failure,
+        knowledge_collection_id: int = 0,
     ) -> None:
         """R5.1: the Web Research independent-slot counterpart to
         start_image_reply above - NOT a variant of _dispatch, since there is
@@ -1717,7 +1762,21 @@ class AgentDispatcher:
         ADR-002 stage 2.4e: migrated onto self._runs, using RunHandle.
         on_cancel (cancel_token.cancel, a plain bound-method callable) -
         the first surface to actually need it, since CancellationToken has
-        no cancel_event-compatible Event to pass instead."""
+        no cancel_event-compatible Event to pass instead.
+
+        ADR-020 stage 20.3: `knowledge_collection_id` (keyword-only,
+        default 0 - the pre-20.3 global/unscoped sentinel, backend/
+        knowledge_store.py's own module docstring) is threaded straight
+        through into WebResearchRequest.knowledge_collection_id, which
+        WebResearchService._retain_documents uses ONLY when the request's
+        own `retain_to_knowledge` is True - see that field's own docstring
+        for why retention is opt-in and off everywhere in production today.
+        The real caller (backend/api/intents_web_research.py's
+        run_web_research) resolves the calling session's current workspace
+        BEFORE calling this method, via backend/knowledge_store.py's own
+        get_or_create_workspace_collection - this method only carries the
+        already-resolved id, it never resolves one itself (same "caller
+        resolves, this method dispatches" split as every other kwarg here)."""
         if self._runs.is_busy("web_research"):
             notifications_state.show("A web research request is already running.", "info")
             await bus.publish("notification")
@@ -1736,6 +1795,7 @@ class AgentDispatcher:
             chat_epoch=0,
             original_query=query,
             branch_history=list(branch_history),
+            knowledge_collection_id=knowledge_collection_id,
         )
 
         async def _invoke(fn, *a):

@@ -126,3 +126,86 @@ class TestSetChatIndexIntoKnowledgeIntent:
         recorder.messages.clear()
         _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_id, True]))
         assert "scene" in recorder.topics_seen()
+
+
+# -- ADR-020 stage 20.3: workspace-scoped knowledge corpus -------------------
+#
+# The exit criterion's own "different corpora" half, proven through the REAL
+# search()/setChatIndexIntoKnowledge intent call paths (backend/api/
+# intents_knowledge.py) - never by calling backend.knowledge_store's
+# get_or_create_workspace_collection or hybrid_search directly - so this
+# actually pins the WIRING (document.current_workspace_id -> collection
+# resolution -> collection_id-scoped store call), not just the underlying
+# pure functions those intents happen to call.
+
+
+class TestWorkspaceScopedKnowledgeCorpus:
+    def test_two_separate_sessions_in_two_workspaces_never_see_each_others_content(self, _isolated_knowledge_db):
+        # Two INDEPENDENT sessions/documents (not one document whose
+        # workspace id is merely mutated mid-test) - the closest analog to
+        # the real world, where two different browser tabs/windows each
+        # have their own chats open in different workspaces at once.
+        bus1, document1, _ = make_bus()
+        document1.current_workspace_id = 10
+        node1 = _run(bus1.dispatch_intent("scene", "addChatNode", [0, 0, "alpha team roadmap notes", True]))
+        _run(bus1.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node1, True]))
+
+        bus2, document2, _ = make_bus()
+        document2.current_workspace_id = 20
+        node2 = _run(bus2.dispatch_intent("scene", "addChatNode", [0, 0, "beta team roadmap notes", True]))
+        _run(bus2.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node2, True]))
+
+        # Each session's own search() call (real intent dispatch, not a
+        # direct hybrid_search() call) sees ONLY its own workspace's content.
+        results1 = _run(bus1.dispatch_intent("knowledge", "search", ["roadmap notes", 10]))
+        assert len(results1["results"]) == 1
+        assert "alpha" in results1["results"][0]["text"]
+
+        results2 = _run(bus2.dispatch_intent("knowledge", "search", ["roadmap notes", 10]))
+        assert len(results2["results"]) == 1
+        assert "beta" in results2["results"][0]["text"]
+
+        # Behind the scenes, two genuinely distinct collections.
+        collection1 = knowledge_store.get_or_create_workspace_collection(_isolated_knowledge_db, 10)
+        collection2 = knowledge_store.get_or_create_workspace_collection(_isolated_knowledge_db, 20)
+        assert collection1 != collection2
+        docs1 = knowledge_store.list_documents(_isolated_knowledge_db, collection_id=collection1)
+        docs2 = knowledge_store.list_documents(_isolated_knowledge_db, collection_id=collection2)
+        assert len(docs1) == 1 and len(docs2) == 1
+        assert docs1[0]["id"] != docs2[0]["id"]
+
+    def test_switching_the_same_sessions_workspace_switches_what_search_can_see(self, _isolated_knowledge_db):
+        bus, document, _ = make_bus()
+
+        document.current_workspace_id = 1
+        node_ws1 = _run(bus.dispatch_intent("scene", "addChatNode", [0, 0, "workspace one exclusive content", True]))
+        _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_ws1, True]))
+
+        # Still in workspace 1: finds it.
+        found_in_ws1 = _run(bus.dispatch_intent("knowledge", "search", ["exclusive content", 5]))
+        assert len(found_in_ws1["results"]) == 1
+
+        # Mirrors what loadChat's own current_workspace_id fix (backend/
+        # chat_library.py) does when a session switches to a different
+        # graph/workspace - search() must immediately stop seeing workspace
+        # 1's content.
+        document.current_workspace_id = 2
+        found_in_ws2 = _run(bus.dispatch_intent("knowledge", "search", ["exclusive content", 5]))
+        assert found_in_ws2["results"] == []
+
+    def test_a_session_with_no_workspace_context_falls_back_to_the_pre_20_3_global_pool(self, _isolated_knowledge_db):
+        # document.current_workspace_id is None (the default - a session
+        # that never loaded/created a chat with a real workspace) - must
+        # resolve to collection_id=0, the pre-20.3 unscoped pool, not raise
+        # or silently pick some arbitrary workspace.
+        bus, document, _ = make_bus()
+        assert document.current_workspace_id is None
+
+        node_id = _run(bus.dispatch_intent("scene", "addChatNode", [0, 0, "unscoped content", True]))
+        _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_id, True]))
+
+        docs = knowledge_store.list_documents(_isolated_knowledge_db, collection_id=0)
+        assert len(docs) == 1
+
+        results = _run(bus.dispatch_intent("knowledge", "search", ["unscoped content", 5]))
+        assert len(results["results"]) == 1

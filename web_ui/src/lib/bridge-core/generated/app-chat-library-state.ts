@@ -11,12 +11,26 @@ export interface AppChatLibraryRow {
   updatedAtIso?: string | null;
   preview: string;
   messageCount: number;
+  workspaceId: number;
+  favorite: boolean;
+  archived: boolean;
+  tags: string[];
+}
+
+export interface AppWorkspaceRow {
+  id: number;
+  name: string;
+  icon: string;
+  archived: boolean;
+  defaultModelProvider: string;
+  defaultModelId: string;
 }
 
 export interface AppChatLibraryState {
   schemaVersion: number;
   revision: number;
   rows: AppChatLibraryRow[];
+  workspaces: AppWorkspaceRow[];
   notice?: string | null;
   minCompatibleSchemaVersion?: number | null;
 }
@@ -76,6 +90,61 @@ function checkAppChatLibraryRow(value: unknown, path: string, errors: string[]):
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.messageCount: missing required field`);
     else { if (typeof fieldValue !== "number") errors.push(`${path}.messageCount` + ": expected number"); }
   }
+  {
+    const fieldValue = value["workspaceId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.workspaceId: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.workspaceId` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["favorite"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.favorite: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.favorite` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["archived"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.archived: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.archived` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["tags"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.tags: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.tags` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.tags` + `[${i}]` + ": expected string"); }); }
+  }
+}
+
+function checkAppWorkspaceRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["id"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.id` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["name"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.name: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.name` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["icon"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.icon: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.icon` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["archived"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.archived: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.archived` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["defaultModelProvider"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.defaultModelProvider: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.defaultModelProvider` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["defaultModelId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.defaultModelId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.defaultModelId` + ": expected string"); }
+  }
 }
 
 function checkAppChatLibraryState(value: unknown, path: string, errors: string[]): void {
@@ -95,6 +164,12 @@ function checkAppChatLibraryState(value: unknown, path: string, errors: string[]
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.rows: missing required field`);
     else { if (!Array.isArray(fieldValue)) errors.push(`${path}.rows` + ": expected array");
     else (fieldValue as unknown[]).forEach((item, i) => { checkAppChatLibraryRow(item, `${path}.rows` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["workspaces"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.workspaces: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.workspaces` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkAppWorkspaceRow(item, `${path}.workspaces` + `[${i}]`, errors); }); }
   }
   {
     const fieldValue = value["notice"];

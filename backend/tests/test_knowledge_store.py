@@ -273,6 +273,122 @@ class TestMigrationBackfill:
         assert results[0]["document_id"] == outcome.document_id
 
 
+class TestMigration004WorkspaceScopedCollections:
+    """ADR-020 stage 20.3, migration "4" (3 -> 4): collections.workspace_id.
+    Mirrors TestMigrationBackfill's own "simulate a real user upgrading in
+    place" shape - ingest against schema version 3 (no workspace_id column
+    yet), then let the module's own real target version (4) take over."""
+
+    def test_a_migration_from_3_to_4_adds_the_column_without_disturbing_existing_collections(
+        self, db_path, monkeypatch,
+    ):
+        monkeypatch.setattr(ks, "KNOWLEDGE_DB_SCHEMA_VERSION", 3)
+        monkeypatch.setattr(ks, "_MIGRATIONS", {
+            1: ks._migration_001_initial_schema,
+            2: ks._migration_002_fts5_lexical_index,
+            3: ks._migration_003_vector_index,
+        })
+        outcome = _ingest(db_path, text="Pre-existing content about giraffes.", collection_id=7)
+
+        monkeypatch.undo()
+        # The real, production connect path - any query function drives it.
+        assert ks.get_document(db_path, outcome.document_id) is not None
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == ks.KNOWLEDGE_DB_SCHEMA_VERSION
+            collections_columns = {info[1] for info in conn.execute("PRAGMA table_info(collections)").fetchall()}
+            assert "workspace_id" in collections_columns
+            # Pre-existing collection_id=7 documents are untouched - this
+            # migration adds a NEW nullable column, it never backfills or
+            # reinterprets the pre-20.3 collection_id=0-style sentinel.
+            row = conn.execute(
+                "SELECT collection_id FROM documents WHERE id = ?", (outcome.document_id,),
+            ).fetchone()
+            assert row[0] == 7
+        finally:
+            conn.close()
+
+    def test_fresh_database_lands_on_version_4_with_the_workspace_id_column(self, db_path):
+        outcome = _ingest(db_path, text="Fresh install content.")
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == ks.KNOWLEDGE_DB_SCHEMA_VERSION
+            collections_columns = {info[1] for info in conn.execute("PRAGMA table_info(collections)").fetchall()}
+            assert "workspace_id" in collections_columns
+        finally:
+            conn.close()
+        assert ks.get_document(db_path, outcome.document_id) is not None
+
+    def test_migration_is_idempotent_when_run_twice_in_a_row(self, db_path):
+        _ingest(db_path, text="First document.")
+        _ingest(db_path, text="A second, different document.")
+        conn = sqlite3.connect(db_path)
+        try:
+            columns = [info[1] for info in conn.execute("PRAGMA table_info(collections)").fetchall()]
+            assert columns.count("workspace_id") == 1
+        finally:
+            conn.close()
+
+
+class TestGetOrCreateWorkspaceCollection:
+    """ADR-020 stage 20.3's own scoping decision (see this module's own
+    module-docstring update): exactly ONE auto-created collection per
+    workspace, resolved idempotently - the mechanism the exit criterion's
+    own "two workspaces' corpora are separate" half rests on."""
+
+    def test_creates_a_new_collection_on_first_call_for_a_workspace(self, db_path):
+        collection_id = ks.get_or_create_workspace_collection(db_path, 42)
+        assert isinstance(collection_id, int)
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT workspace_id FROM collections WHERE id = ?", (collection_id,),
+            ).fetchone()
+            assert row == (42,)
+        finally:
+            conn.close()
+
+    def test_repeated_calls_for_the_same_workspace_return_the_same_id_not_a_new_row(self, db_path):
+        first = ks.get_or_create_workspace_collection(db_path, 5)
+        second = ks.get_or_create_workspace_collection(db_path, 5)
+        third = ks.get_or_create_workspace_collection(db_path, 5)
+        assert first == second == third
+        conn = sqlite3.connect(db_path)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM collections WHERE workspace_id = ?", (5,),
+            ).fetchone()[0]
+            assert count == 1
+        finally:
+            conn.close()
+
+    def test_two_different_workspaces_get_two_genuinely_different_collections(self, db_path):
+        collection_a = ks.get_or_create_workspace_collection(db_path, 1)
+        collection_b = ks.get_or_create_workspace_collection(db_path, 2)
+        assert collection_a != collection_b
+
+    def test_documents_ingested_into_different_workspace_collections_are_isolated(self, db_path):
+        collection_a = ks.get_or_create_workspace_collection(db_path, 100)
+        collection_b = ks.get_or_create_workspace_collection(db_path, 200)
+
+        _ingest(db_path, text="Alpha workspace exclusive content.", collection_id=collection_a)
+        _ingest(db_path, text="Beta workspace exclusive content.", collection_id=collection_b)
+
+        docs_a = ks.list_documents(db_path, collection_id=collection_a)
+        docs_b = ks.list_documents(db_path, collection_id=collection_b)
+        assert len(docs_a) == 1 and len(docs_b) == 1
+        assert docs_a[0]["id"] != docs_b[0]["id"]
+
+        results_a = ks.search_chunks(db_path, "exclusive content", collection_id=collection_a)
+        assert len(results_a) == 1
+        assert "alpha" in results_a[0]["text"].lower()
+
+        results_b = ks.search_chunks(db_path, "exclusive content", collection_id=collection_b)
+        assert len(results_b) == 1
+        assert "beta" in results_b[0]["text"].lower()
+
+
 class TestFts5LexicalSearch:
     def test_search_finds_a_matching_chunk_with_correct_citation_fields(self, db_path):
         text = "The quick brown fox jumps over the lazy dog."
@@ -343,3 +459,179 @@ class TestFts5LexicalSearch:
         results = ks.search_chunks(db_path, "python")
         assert len(results) == 2
         assert results[0]["source_uri"] == "dense.txt"
+
+    def test_source_node_id_is_none_for_a_real_ingested_document_chunk(self, db_path):
+        _ingest(db_path, text="Content with no originating graph node at all.")
+        results = ks.search_chunks(db_path, "originating")
+        assert len(results) == 1
+        assert results[0]["source_node_id"] is None
+
+
+class TestMigration005GraphNodeChunks:
+    """ADR-020 stage 20.4, migration "5" (4 -> 5): chunks.source_node_id.
+    Mirrors TestMigration004WorkspaceScopedCollections's own "simulate a
+    real user upgrading in place" shape exactly - ingest against schema
+    version 4 (no source_node_id column yet), then let the module's own
+    real target version (5) take over on the next connect."""
+
+    def test_a_migration_from_4_to_5_adds_the_column_without_disturbing_existing_chunks(
+        self, db_path, monkeypatch,
+    ):
+        monkeypatch.setattr(ks, "KNOWLEDGE_DB_SCHEMA_VERSION", 4)
+        monkeypatch.setattr(ks, "_MIGRATIONS", {
+            1: ks._migration_001_initial_schema,
+            2: ks._migration_002_fts5_lexical_index,
+            3: ks._migration_003_vector_index,
+            4: ks._migration_004_workspace_scoped_collections,
+        })
+        outcome = _ingest(db_path, text="Pre-existing content about pangolins.")
+
+        monkeypatch.undo()
+        # The real, production connect path - any query function drives it.
+        assert ks.get_document(db_path, outcome.document_id) is not None
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == ks.KNOWLEDGE_DB_SCHEMA_VERSION
+            chunks_columns = {info[1] for info in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+            assert "source_node_id" in chunks_columns
+            # The pre-existing chunk survives byte-for-byte, with the new
+            # column landing NULL (never backfilled to some sentinel) - a
+            # real ingested document's chunk is never a graph-node chunk.
+            row = conn.execute(
+                "SELECT text, source_node_id FROM chunks WHERE document_id = ?", (outcome.document_id,),
+            ).fetchone()
+            assert row[0] == "Pre-existing content about pangolins."
+            assert row[1] is None
+        finally:
+            conn.close()
+        # And it is still findable via search_chunks - the migration never
+        # disturbed chunks_fts either.
+        results = ks.search_chunks(db_path, "pangolins")
+        assert len(results) == 1
+        assert results[0]["source_node_id"] is None
+
+    def test_fresh_database_lands_on_version_5_with_the_source_node_id_column(self, db_path):
+        outcome = _ingest(db_path, text="Fresh install content, take two.")
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == ks.KNOWLEDGE_DB_SCHEMA_VERSION
+            chunks_columns = {info[1] for info in conn.execute("PRAGMA table_info(chunks)").fetchall()}
+            assert "source_node_id" in chunks_columns
+        finally:
+            conn.close()
+        assert ks.get_document(db_path, outcome.document_id) is not None
+
+    def test_migration_is_idempotent_when_run_twice_in_a_row(self, db_path):
+        _ingest(db_path, text="First document, second migration test.")
+        _ingest(db_path, text="A second, different document, same test.")
+        conn = sqlite3.connect(db_path)
+        try:
+            columns = [info[1] for info in conn.execute("PRAGMA table_info(chunks)").fetchall()]
+            assert columns.count("source_node_id") == 1
+        finally:
+            conn.close()
+
+
+class TestReindexGraphContent:
+    """ADR-020 stage 20.4: backend.knowledge_store.reindex_graph_content /
+    delete_graph_index - the FTS-index half of "a graph is saved, its node
+    content becomes searchable; re-saved, the index reflects the CURRENT
+    content; deleted, the index entry is gone too". backend/tests/
+    test_chat_library.py's own TestGlobalSearchAcrossWorkspaces covers the
+    full real save_chat_atomically_row-driven path end to end; these tests
+    exercise this module's own primitive directly and in isolation."""
+
+    def test_indexes_one_chunk_per_node_findable_by_content(self, db_path):
+        workspace_id = 1
+        ks.reindex_graph_content(
+            db_path, graph_id=42, workspace_id=workspace_id, title="My Graph",
+            node_chunks=[("node-a", "Alpha node about kangaroos."), ("node-b", "Beta node about wombats.")],
+        )
+        kangaroo_hits = ks.search_chunks(db_path, "kangaroos")
+        assert len(kangaroo_hits) == 1
+        assert kangaroo_hits[0]["source_node_id"] == "node-a"
+        assert kangaroo_hits[0]["source_uri"] == "graph:42"
+        assert kangaroo_hits[0]["document_title"] == "My Graph"
+
+        wombat_hits = ks.search_chunks(db_path, "wombats")
+        assert len(wombat_hits) == 1
+        assert wombat_hits[0]["source_node_id"] == "node-b"
+
+    def test_resaving_with_changed_content_makes_old_content_unfindable_and_new_content_findable(self, db_path):
+        ks.reindex_graph_content(
+            db_path, graph_id=7, workspace_id=1, title="Graph",
+            node_chunks=[("node-a", "The original phrase about penguins.")],
+        )
+        assert len(ks.search_chunks(db_path, "penguins")) == 1
+
+        ks.reindex_graph_content(
+            db_path, graph_id=7, workspace_id=1, title="Graph",
+            node_chunks=[("node-a", "The replacement phrase about dolphins.")],
+        )
+        assert ks.search_chunks(db_path, "penguins") == []
+        dolphin_hits = ks.search_chunks(db_path, "dolphins")
+        assert len(dolphin_hits) == 1
+        assert dolphin_hits[0]["source_node_id"] == "node-a"
+
+        # Exactly one documents row for this graph, never one per save -
+        # the delete-then-reinsert strategy never accumulates duplicates.
+        conn = sqlite3.connect(db_path)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM documents WHERE source_uri = ?", ("graph:7",),
+            ).fetchone()[0]
+            assert count == 1
+        finally:
+            conn.close()
+
+    def test_resaving_with_empty_node_chunks_clears_the_prior_index(self, db_path):
+        ks.reindex_graph_content(
+            db_path, graph_id=9, workspace_id=1, title="Graph",
+            node_chunks=[("node-a", "Content about octopuses.")],
+        )
+        assert len(ks.search_chunks(db_path, "octopuses")) == 1
+
+        ks.reindex_graph_content(db_path, graph_id=9, workspace_id=1, title="Graph", node_chunks=[])
+        assert ks.search_chunks(db_path, "octopuses") == []
+
+    def test_two_different_graphs_do_not_collide_even_with_identical_content(self, db_path):
+        # Different from add_document_with_chunks' own content-hash
+        # idempotency (this module's own module docstring) - two DIFFERENT
+        # graphs with byte-identical node text must remain two distinct,
+        # independently-searchable documents, never collapsed into one.
+        ks.reindex_graph_content(
+            db_path, graph_id=1, workspace_id=1, title="Graph One",
+            node_chunks=[("node-a", "Identical shared phrase about beavers.")],
+        )
+        ks.reindex_graph_content(
+            db_path, graph_id=2, workspace_id=1, title="Graph Two",
+            node_chunks=[("node-a", "Identical shared phrase about beavers.")],
+        )
+        results = ks.search_chunks(db_path, "beavers")
+        assert len(results) == 2
+        assert {r["source_uri"] for r in results} == {"graph:1", "graph:2"}
+
+    def test_reindexing_resolves_the_real_per_workspace_collection(self, db_path):
+        collection_id = ks.get_or_create_workspace_collection(db_path, 55)
+        ks.reindex_graph_content(
+            db_path, graph_id=3, workspace_id=55, title="Graph",
+            node_chunks=[("node-a", "Scoped content about lemurs.")],
+        )
+        scoped = ks.search_chunks(db_path, "lemurs", collection_id=collection_id)
+        assert len(scoped) == 1
+        other = ks.search_chunks(db_path, "lemurs", collection_id=ks.get_or_create_workspace_collection(db_path, 99))
+        assert other == []
+
+    def test_delete_graph_index_removes_the_chunk_and_returns_true(self, db_path):
+        ks.reindex_graph_content(
+            db_path, graph_id=11, workspace_id=1, title="Graph",
+            node_chunks=[("node-a", "Content about toucans.")],
+        )
+        assert len(ks.search_chunks(db_path, "toucans")) == 1
+
+        assert ks.delete_graph_index(db_path, 11) is True
+        assert ks.search_chunks(db_path, "toucans") == []
+
+    def test_delete_graph_index_on_a_graph_with_nothing_indexed_returns_false(self, db_path):
+        assert ks.delete_graph_index(db_path, 12345) is False

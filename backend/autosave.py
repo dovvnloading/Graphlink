@@ -207,6 +207,14 @@ async def autosave_tick(
         new_chat_id, new_updated_at = await asyncio.to_thread(
             save_chat_atomically_row, db_path, chat_id_for_save, title, chat_data, notes_data, pins_data,
             expected_updated_at=expected_updated_at,
+            # ADR-020 stage 20.2: an autosave tick can be the FIRST write of
+            # a session that started with an explicit New Chat -> pick-a-
+            # workspace, then never got around to a manual Save - see
+            # backend/chat_library.py's own save_chat closure for the
+            # identical reasoning (only consulted on save_chat_atomically_
+            # row's own INSERT branch; a resave of an existing graph ignores
+            # this value entirely).
+            workspace_id=canvas_document.current_workspace_id,
         )
     except ConcurrentSaveConflict:
         # ADR-009 stage 9.2 exit criterion: a lost autosave race must

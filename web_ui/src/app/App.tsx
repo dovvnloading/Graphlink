@@ -30,6 +30,7 @@ import { CommandPalette } from "./chrome/CommandPalette";
 import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
 import { DiagnosticsDialog } from "./chrome/DiagnosticsDialog";
+import { GlobalSearchDialog } from "./chrome/GlobalSearchDialog";
 import { KnowledgeSearchDialog } from "./chrome/KnowledgeSearchDialog";
 import { BuilderLaunchDialog } from "./chrome/BuilderLaunchDialog";
 import { NotificationBanner } from "./chrome/NotificationBanner";
@@ -461,6 +462,7 @@ function App() {
                   </LazySurface>
                   <DiagnosticsDialog transport={transport} />
                   <KnowledgeSearchDialog transport={transport} />
+                  <GlobalSearchDialog transport={transport} />
                   <BuilderLaunchDialog transport={transport} />
                   <LazySurface overlayName="settings">
                     <SettingsDialog transport={transport} />

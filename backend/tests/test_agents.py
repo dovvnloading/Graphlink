@@ -717,6 +717,162 @@ def test_regenerate_response_also_resolves_the_branch_pinned_model_ref(monkeypat
     asyncio.run(run())
 
 
+# -- ADR-020 stage 20.3: the workspace-default model rung ---------------------
+#
+# The exit criterion's own "different default models" half, proven through
+# the REAL sendMessage -> _dispatch -> _resolve_model_ref_for_dispatch ->
+# graphlink_model_catalog.resolve_model_ref chain (never by calling
+# resolve_model_ref directly) - two workspaces, each with its own default
+# model pinned via the real backend/chat_library.py CRUD, a node/graph in
+# each with NO node/branch override, dispatch resolves to the correct
+# DIFFERENT model per workspace.
+
+
+def test_workspace_default_model_flows_through_real_dispatch_and_differs_per_workspace(monkeypatch, tmp_path):
+    import graphlink_model_catalog as mc
+    from backend import chat_library
+
+    _configure_fake_ollama_provider_only(monkeypatch)
+    captured = {}
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
+        captured["model_ref"] = kwargs.get("model_ref")
+        on_chunk("a reply", False)
+        return "a reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    db_path = tmp_path / "chats.db"
+    workspace_alpha = chat_library.create_workspace(db_path, "Alpha")
+    workspace_beta = chat_library.create_workspace(db_path, "Beta")
+    chat_library.set_workspace_default_model(db_path, workspace_alpha["id"], "Anthropic Claude", "claude-opus-5")
+    chat_library.set_workspace_default_model(db_path, workspace_beta["id"], "Ollama", "llama3")
+
+    async def dispatch_in_workspace(workspace_id):
+        bus = SessionBus(f"agents-workspace-model-test-{workspace_id}")
+        # Same attribute backend/chat_library.py's own register_chat_library
+        # stashes on a real session's bus - see _resolve_model_ref_for_
+        # dispatch's own docstring for why this is the one piece of extra
+        # context the workspace rung needs.
+        bus.chat_db_path = db_path
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        document = register_canvas(bus, notifications, dispatcher, composer_document)
+        # Mirrors what loadChat/newChat's own current_workspace_id wiring
+        # sets on a real session (backend/chat_library.py) - deliberately
+        # NOT going through those intents here, so this test proves the
+        # dispatch-side wiring specifically, independent of the load/new-
+        # chat wiring already pinned by backend/tests/test_chat_library.py's
+        # own loadChat current_workspace_id tests.
+        document.current_workspace_id = workspace_id
+
+        root = document.add_chat_node(0, 0, "root message", True)
+        document.last_chat_node_id = root.id
+        # No node/branch override anywhere - this exact node/graph shape is
+        # the exit criterion's own "with no node/branch override" clause.
+
+        await bus.dispatch_intent("scene", "sendMessage", ["continue the conversation"])
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+    asyncio.run(dispatch_in_workspace(workspace_alpha["id"]))
+    assert captured["model_ref"] == mc.ModelRef("Anthropic Claude", "claude-opus-5")
+
+    asyncio.run(dispatch_in_workspace(workspace_beta["id"]))
+    assert captured["model_ref"] == mc.ModelRef("Ollama", "llama3")
+
+
+def test_workspace_default_model_is_overridden_by_a_node_pin(monkeypatch, tmp_path):
+    # The chain's own precedence: node override beats workspace default even
+    # when a workspace default IS set - not a regression of ADR-018 stage
+    # 18.2's own node/branch rungs.
+    import graphlink_model_catalog as mc
+    from backend import chat_library
+
+    _configure_fake_ollama_provider_only(monkeypatch)
+    captured = {}
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
+        captured["model_ref"] = kwargs.get("model_ref")
+        on_chunk("a reply", False)
+        return "a reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    db_path = tmp_path / "chats.db"
+    workspace = chat_library.create_workspace(db_path, "Alpha")
+    chat_library.set_workspace_default_model(db_path, workspace["id"], "Anthropic Claude", "claude-opus-5")
+
+    async def run():
+        bus = SessionBus("agents-workspace-vs-node-override-test")
+        bus.chat_db_path = db_path
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        document = register_canvas(bus, notifications, dispatcher, composer_document)
+        document.current_workspace_id = workspace["id"]
+
+        root = document.add_chat_node(0, 0, "root message", True)
+        document.last_chat_node_id = root.id
+        document.set_model_override(root.id, "Ollama", "llama3")
+
+        await bus.dispatch_intent("scene", "sendMessage", ["continue"])
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+        assert captured["model_ref"] == mc.ModelRef("Ollama", "llama3")
+
+    asyncio.run(run())
+
+
+def test_workspace_default_model_is_absent_when_the_workspace_has_none_set(monkeypatch, tmp_path):
+    # A real workspace with NO default configured must behave exactly like
+    # pre-20.3: no model_ref kwarg at all, falling through to api_provider's
+    # own task-keyed lookup - not a workspace_ref of empty strings smuggled
+    # through as if it were real.
+    from backend import chat_library
+
+    _configure_fake_ollama_provider_only(monkeypatch)
+    captured = {"saw_model_ref_kwarg": "unset"}
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
+        captured["saw_model_ref_kwarg"] = "model_ref" in kwargs
+        on_chunk("a reply", False)
+        return "a reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    db_path = tmp_path / "chats.db"
+    workspace = chat_library.create_workspace(db_path, "NoDefault")
+
+    async def run():
+        bus = SessionBus("agents-workspace-no-default-test")
+        bus.chat_db_path = db_path
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        document = register_canvas(bus, notifications, dispatcher, composer_document)
+        document.current_workspace_id = workspace["id"]
+
+        root = document.add_chat_node(0, 0, "root message", True)
+        document.last_chat_node_id = root.id
+
+        await bus.dispatch_intent("scene", "sendMessage", ["continue"])
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+        assert captured["saw_model_ref_kwarg"] is False
+
+    asyncio.run(run())
+
+
 # -- ADR-006 stage 6.7: system-prompt wire shape at the api_provider seam -----
 #
 # These drive the REAL _call_chat_agent_stream -> ChatAgent -> ChatWorker

@@ -122,6 +122,21 @@ class WebResearchRequest:
     # behavior - ADR-017 doc's own Context section - must stay the default,
     # not silently start persisting fetched pages to disk).
     retain_to_knowledge: bool = False
+    # ADR-020 stage 20.3: which backend/knowledge_store.py collection
+    # retained documents land in, when retain_to_knowledge is True - see
+    # that store's own get_or_create_workspace_collection docstring for the
+    # one-collection-per-workspace scoping this implements. 0 (the default,
+    # and what every pre-20.3 caller/test still passes) is the same "no
+    # collection assigned" global sentinel every other real ingestion call
+    # site in this codebase already falls back to when it has no workspace
+    # context of its own (see backend.knowledge_store's own module
+    # docstring) - a caller that DOES know the calling session's current
+    # workspace (backend/api/intents_web_research.py's run_web_research,
+    # the real production call site) resolves it BEFORE constructing this
+    # request and is expected to have done so already; this class only
+    # carries the already-resolved id, matching every other field here's
+    # own "plain, already-resolved data" shape.
+    knowledge_collection_id: int = 0
 
 
 @dataclass(frozen=True)

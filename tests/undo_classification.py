@@ -83,6 +83,20 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-chat-library", "loadChat", "B", "whole-session: load - clear_for_load already clears command_log/redo_stack"),
     Classified("app-chat-library", "saveChat", "B", "whole-session: persistence, not an in-document edit"),
     Classified("app-chat-library", "newChat", "B", "whole-session: new - clear_for_load already clears command_log/redo_stack"),
+    # ADR-020 stage 20.2: favorite/archived/tags/workspace mutations all
+    # write chats.db rows directly (backend/chat_library.py's own
+    # set_graph_favorite/set_graph_archived/set_graph_tags/create_workspace/
+    # rename_workspace/archive_workspace) - none of the six touch
+    # canvas_document (the live in-document scene) at all, same posture as
+    # renameChat/deleteChat immediately above.
+    Classified("app-chat-library", "setGraphFavorite", "B", "whole-session: favorites a saved session record, not the live document"),
+    Classified("app-chat-library", "setGraphArchived", "B", "whole-session: archives a saved session record, not the live document"),
+    Classified("app-chat-library", "setGraphTags", "B", "whole-session: replaces a saved session's tag set, not the live document"),
+    Classified("app-chat-library", "createWorkspace", "B", "whole-session: creates a new workspace organizing unit, not a document edit"),
+    Classified("app-chat-library", "renameWorkspace", "B", "whole-session: renames a workspace, not a document edit"),
+    Classified("app-chat-library", "archiveWorkspace", "B", "whole-session: archives a workspace (its graphs are untouched), not a document edit"),
+    Classified("app-chat-library", "setWorkspaceDefaultModel", "B", "whole-session: sets a workspace's own default-model pin, not a document edit"),
+    Classified("app-chat-library", "loadGraphAndFocusNode", "B", "whole-session: load - same clear_for_load/command_log-clear shape as loadChat, just also replies with the focused node's coordinates"),
 
     # -- backend/plugins.py (app-plugins) ------------------------------------
     Classified("app-plugins", "executePlugin", "A", "content: creates a new node (Web Research/Gitlink/PyCoder/Sandbox/Artifact/System-Prompt note/Conversation/HTML) - every branch wraps its own pluginX command_type"),
@@ -290,4 +304,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     # -- backend/api/intents_knowledge.py (knowledge, scene) - ADR-017 stage 17.5 --
     Classified("knowledge", "search", "B", "read-only: queries the local knowledge store, no document mutation"),
     Classified("scene", "setChatIndexIntoKnowledge", "A", "content: branch-indexing opt-in is document state, same posture as setGroupColor"),
+
+    # -- backend/api/intents_global_search.py - ADR-020 stage 20.4 --
+    Classified("globalSearch", "search", "B", "read-only: queries the FTS index across graphs/documents/workspaces, no document mutation"),
 )

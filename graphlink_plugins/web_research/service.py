@@ -84,7 +84,7 @@ class WebResearchService:
         return {marker.lower() for marker in re.findall(r"\[(s\d+(?:-[a-f0-9]+)?)\]", answer, flags=re.IGNORECASE)}
 
     @staticmethod
-    def _retain_documents(accepted_documents, source_records) -> None:
+    def _retain_documents(accepted_documents, source_records, collection_id: int = 0) -> None:
         """ADR-017 stage 17.5: opt-in retention of this run's accepted
         source documents into the local knowledge store - the ADR's own
         "Web Research fetches, summarizes, and discards; nothing is
@@ -96,7 +96,17 @@ class WebResearchService:
         real job (the synthesized answer), matching this codebase's own
         established "best-effort side write must never fail the primary
         operation" posture (e.g. backend.knowledge_store.maybe_backup_
-        before_write's identical swallow-and-log)."""
+        before_write's identical swallow-and-log).
+
+        ADR-020 stage 20.3: `collection_id` (default 0, the pre-20.3
+        global/unscoped sentinel) is the real fix for this method's own
+        previously-hardcoded collection_id=0 the ADR-020 audit flagged -
+        run() below forwards WebResearchRequest.knowledge_collection_id,
+        already resolved (via backend/knowledge_store.py's own
+        get_or_create_workspace_collection) by the real caller BEFORE this
+        method ever runs; this is purely already-resolved data passed
+        through to every ingest_text() call in the loop, same shape as
+        every other parameter here."""
         from backend.knowledge_ingest import ingest_text
 
         titles_by_id = {source.source_id: source.title for source in source_records}
@@ -107,6 +117,7 @@ class WebResearchService:
                     source_uri=document.final_url,
                     title=titles_by_id.get(document.source_id, document.final_url),
                     mime="text/html",
+                    collection_id=collection_id,
                 )
             except Exception:
                 logger.exception(
@@ -191,7 +202,7 @@ class WebResearchService:
             raise ResearchFailure("No usable source content could be retrieved.", code="no_usable_sources", retryable=True)
 
         if request.retain_to_knowledge:
-            self._retain_documents(accepted_documents, source_records)
+            self._retain_documents(accepted_documents, source_records, request.knowledge_collection_id)
 
         chunks = self._select_evidence(accepted_documents, request.limits, token)
         if not chunks:

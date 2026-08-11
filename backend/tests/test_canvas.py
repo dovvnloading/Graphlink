@@ -3383,6 +3383,69 @@ def test_run_web_research_intent_publishes_scene_and_calls_start_web_research_wi
         assert callable(call["on_progress"])
         assert callable(call["on_success"])
         assert callable(call["on_failure"])
+        # ADR-020 stage 20.3: no real workspace context on this document
+        # (current_workspace_id is None, the register_canvas-only default) -
+        # resolves to 0, the pre-20.3 global/unscoped sentinel, without
+        # touching knowledge.db at all.
+        assert call["knowledge_collection_id"] == 0
+
+    asyncio.run(run())
+
+
+def test_run_web_research_intent_resolves_the_calling_sessions_workspace_collection(monkeypatch, tmp_path):
+    # ADR-020 stage 20.3: when the document DOES carry a real workspace
+    # context (mirrors what loadChat/newChat's own current_workspace_id
+    # wiring sets on a real session), runWebResearch resolves that
+    # workspace's own knowledge_store.py collection BEFORE dispatching -
+    # proving the real intents_web_research.py wiring, not just the
+    # underlying get_or_create_workspace_collection function in isolation.
+    from backend import knowledge_store
+    from backend.api import intents_web_research as intents_web_research_module
+
+    knowledge_db_path = tmp_path / "knowledge.db"
+    monkeypatch.setattr(intents_web_research_module, "KNOWLEDGE_DEFAULT_DB_PATH", knowledge_db_path)
+
+    class _FakeDispatcher:
+        def __init__(self):
+            self.calls = []
+
+        async def start_web_research(self, **kwargs):
+            self.calls.append(kwargs)
+
+        def cancel_web_research(self, request_id):
+            return False
+
+        def is_web_research_busy(self):
+            return False
+
+    async def run():
+        bus = SessionBus("run-web-research-workspace-collection-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        fake_dispatcher = _FakeDispatcher()
+        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
+        document.current_workspace_id = 99
+
+        root = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "root question", True])
+        wr_node = document.add_web_research_node(0, 0, root)
+
+        await bus.dispatch_intent("scene", "runWebResearch", [wr_node.id, "what is this about?"])
+
+        assert len(fake_dispatcher.calls) == 1
+        expected_collection_id = knowledge_store.get_or_create_workspace_collection(knowledge_db_path, 99)
+        assert fake_dispatcher.calls[0]["knowledge_collection_id"] == expected_collection_id
+        # A real, non-zero row actually landed in knowledge.db, not a
+        # freshly-invented number this test happens to compute the same way.
+        conn = __import__("sqlite3").connect(knowledge_db_path)
+        try:
+            row = conn.execute(
+                "SELECT workspace_id FROM collections WHERE id = ?", (expected_collection_id,),
+            ).fetchone()
+            assert row == (99,)
+        finally:
+            conn.close()
 
     asyncio.run(run())
 

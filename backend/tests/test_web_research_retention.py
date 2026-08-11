@@ -82,10 +82,10 @@ def _service(document_text="Retained page content about widgets."):
     return service
 
 
-def _request(*, retain_to_knowledge=False):
+def _request(*, retain_to_knowledge=False, knowledge_collection_id=0):
     return WebResearchRequest(
         request_id="r1", node_id="n1", chat_epoch=1, original_query="widgets",
-        retain_to_knowledge=retain_to_knowledge,
+        retain_to_knowledge=retain_to_knowledge, knowledge_collection_id=knowledge_collection_id,
     )
 
 
@@ -113,6 +113,23 @@ class TestRetentionGating:
         with patch("backend.knowledge_ingest.ingest_text", side_effect=RuntimeError("disk full")):
             result = service.run(_request(retain_to_knowledge=True))
         assert result.answer_markdown  # the primary operation still succeeded
+
+    def test_the_requests_own_knowledge_collection_id_is_threaded_to_ingest_text(self):
+        # ADR-020 stage 20.3: the real fix for this module's own previously-
+        # hardcoded collection_id=0 - WebResearchRequest.knowledge_
+        # collection_id flows through run() -> _retain_documents() ->
+        # every ingest_text() call, not silently dropped along the way.
+        service = _service(document_text="Retained page content about widgets.")
+        with patch("backend.knowledge_ingest.ingest_text") as mock_ingest:
+            service.run(_request(retain_to_knowledge=True, knowledge_collection_id=77))
+        mock_ingest.assert_called_once()
+        assert mock_ingest.call_args.kwargs["collection_id"] == 77
+
+    def test_default_knowledge_collection_id_is_the_pre_20_3_unscoped_sentinel(self):
+        service = _service(document_text="Retained page content about widgets.")
+        with patch("backend.knowledge_ingest.ingest_text") as mock_ingest:
+            service.run(_request(retain_to_knowledge=True))
+        assert mock_ingest.call_args.kwargs["collection_id"] == 0
 
 
 class TestRetainDocumentsUnit:
@@ -147,3 +164,26 @@ class TestRetainDocumentsUnit:
         ) as mock_ingest:
             WebResearchService._retain_documents(documents, sources)
         assert mock_ingest.call_count == 2  # the second call still happened
+
+    def test_collection_id_defaults_to_the_unscoped_sentinel_when_omitted(self):
+        documents = [
+            FetchedDocument(source_id="a", title="A", final_url="https://a.example/", content_type="text/html", text="content a"),
+        ]
+        sources = [type("S", (), {"source_id": "a", "title": "A"})()]
+        with patch("backend.knowledge_ingest.ingest_text") as mock_ingest:
+            WebResearchService._retain_documents(documents, sources)
+        assert mock_ingest.call_args.kwargs["collection_id"] == 0
+
+    def test_collection_id_is_forwarded_to_every_document_in_the_batch(self):
+        documents = [
+            FetchedDocument(source_id="a", title="A", final_url="https://a.example/", content_type="text/html", text="content a"),
+            FetchedDocument(source_id="b", title="B", final_url="https://b.example/", content_type="text/html", text="content b"),
+        ]
+        sources = [
+            type("S", (), {"source_id": "a", "title": "A"})(),
+            type("S", (), {"source_id": "b", "title": "B"})(),
+        ]
+        with patch("backend.knowledge_ingest.ingest_text") as mock_ingest:
+            WebResearchService._retain_documents(documents, sources, 42)
+        assert mock_ingest.call_count == 2
+        assert all(c.kwargs["collection_id"] == 42 for c in mock_ingest.call_args_list)

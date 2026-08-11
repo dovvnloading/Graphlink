@@ -3120,6 +3120,166 @@ body,
   color: var(--gl-surface-text-primary);
 }
 
+/* -- Global search dialog (ADR-020 stage 20.4) ------------------------------
+   A sibling of .knowledge-search-dialog just above, same rules renamed to
+   this dialog's own class prefix - see GlobalSearchDialog.tsx's own doc for
+   why this mirrors that pattern rather than inventing a new one. The only
+   addition is .global-search-result-kind, a small "Graph"/"Document" tag
+   distinguishing the two hit kinds this dialog (unlike Knowledge) can
+   return. */
+.global-search-dialog {
+  min-width: 480px;
+  max-width: min(640px, calc(100vw - 64px));
+  max-height: min(600px, calc(100vh - 96px));
+  overflow-y: auto;
+}
+
+.global-search-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.global-search-input {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.global-search-button {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.global-search-button:hover:not(:disabled) {
+  background-color: var(--gl-neutral-button-border);
+}
+
+.global-search-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.global-search-empty {
+  margin: 0;
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
+.global-search-section-title {
+  margin: 16px 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--gl-surface-text-muted);
+}
+
+.global-search-result-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.global-search-result-item {
+  border-radius: 6px;
+  background: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+}
+
+.global-search-result-header {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  font-family: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.global-search-result-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.global-search-result-kind {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--gl-surface-text-muted);
+}
+
+.global-search-result-source {
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+  word-break: break-all;
+}
+
+.global-search-result-body {
+  padding: 0 10px 10px;
+}
+
+.global-search-result-excerpt {
+  margin: 0 0 8px;
+  padding: 8px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border-radius: 4px;
+}
+
+.global-search-result-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+
+.global-search-result-open-link {
+  color: var(--gl-surface-text-primary);
+  font-family: inherit;
+  font-size: 11px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.global-search-result-open-link:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.global-search-jump-error {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+}
+
 /* -- Document view panel (R8a follow-up) ------------------------------------
    Docked flush-left, border-right only - restores legacy's
    DocumentViewerPanel chrome (a permanent embedded QWidget, corner_radius=0,
@@ -4483,6 +4643,83 @@ mark.document-view-search-match-current {
 
 .library-new-chat-button:hover {
   opacity: 0.88;
+}
+
+/* -- ADR-020 stage 20.2: workspace switcher + tag filter chips --------
+   Both reuse .view-preset-btn/.view-row VERBATIM by className (that pair
+   is not scoped under .view-popover in this file's selectors - it is
+   already a globally-reusable pair, not a popover-local one) rather than
+   duplicating its padding/radius/font-size/color values under a new name -
+   see ViewPopover.tsx's own FILTER section for the identical multi-select
+   toggle-chip markup this dialog's tag row mirrors, and its grid-size
+   preset row for the single-select tab pattern the workspace row mirrors.
+   Only the ROW WRAPPERS below are new: .view-row/.overlay-popover's own
+   ambient 12px/14px padding is what every OTHER .view-row consumer relies
+   on for its horizontal gutter, and this dialog's .overlay-dialog-body is
+   padding:0 (see that rule above) - so each wrapper supplies its own
+   horizontal padding, matching .library-header's existing 20px gutter,
+   rather than .view-row silently touching the dialog's edges here. */
+
+.library-workspace-tabs {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+
+/* Sizes the inline "new workspace" input to something reasonable for a
+   short name, the same way .view-popover's own `width: 250px` is an
+   arbitrary-but-intentional sizing choice for its content - the input
+   itself is .library-row-rename-input, reused verbatim (same idiom as the
+   per-row rename input this whole interaction is modeled on). */
+.library-workspace-new-input-wrap {
+  flex: 0 0 160px;
+}
+
+/* ADR-020 stage 20.3: pairs a workspace tab with its own gear/settings
+   icon button so the two move together if .library-workspace-tabs's own
+   flex-wrap ever breaks the row - a plain inline-flex wrapper, no border/
+   background of its own (both children keep their existing look). */
+.library-workspace-tab-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Reuses .library-icon-button verbatim for size/hover/focus - this class
+   only exists so the gear button isn't accidentally swept up by a future
+   .library-icon-button-scoped selector that assumes every instance sits
+   inside .library-row-actions (this one doesn't). */
+.library-workspace-settings-button {
+  flex-shrink: 0;
+}
+
+/* The inline-reveal panel itself - a plain block below the tabs strip
+   (same "no popover, no modal" posture as .library-row-confirm above),
+   reusing .settings-field/.settings-field-label/.settings-update-status
+   verbatim from SettingsDialog's own pages rather than duplicating that
+   layout under a new name. */
+.library-workspace-settings-panel {
+  flex-shrink: 0;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--gl-surface-border);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
+/* Prevents the Archived toggle chip (a .view-preset-btn dropped directly
+   into .library-header's flex row, next to the search box) from being
+   squeezed by .library-search-wrap's own `flex: 1` - .library-new-chat-
+   button already sets this for the same reason. */
+.library-archived-toggle {
+  flex-shrink: 0;
+}
+
+.library-tag-filter-row {
+  flex-shrink: 0;
+  padding: 10px 20px 0;
 }
 
 .library-visually-hidden {

@@ -14,7 +14,7 @@ _REAL_DATA_DIR = (Path.home() / ".graphlink").resolve()
 
 
 @pytest.fixture(autouse=True)
-def _never_touch_the_real_user_data_dir(monkeypatch):
+def _never_touch_the_real_user_data_dir(monkeypatch, tmp_path):
     """Hard-fail any test that opens the developer's REAL ~/.graphlink files.
 
     create_app() defaults settings_state_file/chat_db_path to
@@ -34,6 +34,33 @@ def _never_touch_the_real_user_data_dir(monkeypatch):
     test must pass a tmp_path/TemporaryDirectory-derived override - see
     test_assets.py's or test_http_trust_boundary.py's make_client helpers for
     the established shape.
+
+    ADR-020 stage 20.4: extended to cover backend.knowledge_store too (its
+    own `_connect`, the same shape as chat_library's) - backend/chat_library.
+    py's save_chat_atomically_row/delete_chat now write/delete through it
+    (indexing a saved graph's content for global search - see that
+    function's own docstring) on EVERY real call, not just ones a caller
+    opted into. Also REDIRECTS (not just guards) knowledge_store.
+    DEFAULT_DB_PATH to a throwaway tmp_path for the duration of every test:
+    this suite has 40+ pre-existing save_chat_atomically_row/delete_chat
+    call sites (this file, test_session_lifecycle.py, test_autosave.py) that
+    predate that indexing hook and pass no explicit knowledge_db_path
+    override, so without this redirect every one of them would immediately
+    start hard-failing against the guard above the moment it fires - exactly
+    the class of bug this fixture exists to make impossible, just reached
+    through a NEW call path this fixture's own pre-20.4 shape had no way to
+    anticipate. Safe to redirect the constant itself (rather than touching
+    each call site): backend/chat_library.py's own indexing hook reads
+    `knowledge_store.DEFAULT_DB_PATH` as a live module attribute at CALL
+    time (`from backend import knowledge_store` + `knowledge_store.
+    DEFAULT_DB_PATH`, never `from backend.knowledge_store import
+    DEFAULT_DB_PATH`, which would bind the value at IMPORT time instead and
+    never see this patch) - the same pattern backend/tests/
+    test_intents_knowledge.py's own module docstring already documents and
+    relies on for its own, unrelated monkeypatching of this exact constant.
+    A test that explicitly passes its own knowledge_db_path (or its own
+    explicit monkeypatch of this same constant, applied after this fixture
+    via ordinary fixture/setattr ordering) is unaffected either way.
     """
     def _guard(path, what):
         try:
@@ -49,6 +76,7 @@ def _never_touch_the_real_user_data_dir(monkeypatch):
 
     import graphlink_settings_store as settings_store
     from backend import chat_library
+    from backend import knowledge_store
 
     real_settings_init = settings_store.SettingsManager.__init__
 
@@ -65,8 +93,16 @@ def _never_touch_the_real_user_data_dir(monkeypatch):
         _guard(db_path, "chat_library._connect(db_path=...)")
         return real_connect(db_path, *args, **kwargs)
 
+    real_knowledge_connect = knowledge_store._connect
+
+    def guarded_knowledge_connect(db_path, *args, **kwargs):
+        _guard(db_path, "knowledge_store._connect(db_path=...)")
+        return real_knowledge_connect(db_path, *args, **kwargs)
+
     monkeypatch.setattr(settings_store.SettingsManager, "__init__", guarded_settings_init)
     monkeypatch.setattr(chat_library, "_connect", guarded_connect)
+    monkeypatch.setattr(knowledge_store, "_connect", guarded_knowledge_connect)
+    monkeypatch.setattr(knowledge_store, "DEFAULT_DB_PATH", tmp_path / "knowledge-test-default" / "knowledge.db")
     yield
 
 

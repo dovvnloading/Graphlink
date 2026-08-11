@@ -17,6 +17,8 @@ import pytest
 import backend.autosave as autosave_module
 import backend.chat_library as chat_library_module
 import backend.db_backup as db_backup_module
+import backend.knowledge_store as knowledge_store_module
+from backend.api.intents_global_search import register_global_search_intents
 from backend.autosave import autosave_tick, register_autosave
 from backend.canvas import SceneDocument
 from backend.chat_library import (
@@ -33,20 +35,31 @@ from backend.chat_library import (
     _format_timestamp_iso,
     _maybe_backup_before_write,
     _new_save_state,
+    _normalize_tags,
     _resolve_seed_message,
+    archive_workspace,
     chat_library_payload,
+    create_workspace,
     delete_chat,
     flush_dirty_session_before_teardown,
     get_all_chats,
+    get_all_workspaces,
+    get_workspace_default_model,
     load_chat_row,
     load_notes_rows,
     load_pins_rows,
     register_chat_library,
     rename_chat,
+    rename_workspace,
     save_chat_atomically_row,
+    set_graph_archived,
+    set_graph_favorite,
+    set_graph_tags,
+    set_workspace_default_model,
 )
-from backend.events import SessionBus
+from backend.events import IntentValidationError, SessionBus
 from backend.notifications import NotificationState
+from backend.session_save import build_chat_data
 
 
 @pytest.fixture
@@ -460,6 +473,626 @@ class TestMigrationUpgradesAPreExistingRealShapedDatabase:
         assert rows_after_second_connect[0]["id"] == chat_id
 
 
+def _create_migration_1_shaped_db(db_path) -> list[int]:
+    """ADR-020 stage 20.1's own analog of _create_pre_migration_shaped_db
+    above: builds a chats.db in EXACTLY the shape a real, already-upgraded
+    (ADR-009 stage 9.1) install has TODAY, right before this stage's own
+    migration "2" ever runs against it - the full chats/notes/pins schema
+    (raw DDL, not this module's own functions, which already assume the
+    NEW post-migration-2 schema once chat_library.py has been edited),
+    several real chat rows (including notes AND pins on at least one of
+    them), and PRAGMA user_version explicitly left at 1 (not 0 - a real
+    post-9.1 database has already run migration "1" and stamped its
+    version; this migration "2" test's own realistic starting point is "at
+    1, about to go to 2", not "at 0, needs both steps" - that combined case
+    is already covered by TestMigrationUpgradesAPreExistingRealShapedDatabase
+    above, which now also implicitly exercises 0 -> 1 -> 2 -> 3 in one hop
+    since CHATS_DB_SCHEMA_VERSION is 3 (ADR-020 stage 20.2 added step "3" -
+    see _create_migration_2_shaped_db below for THIS migration's own "at 2,
+    about to go to 3" realistic starting point, one step further down the
+    same chain).
+
+    Returns the three inserted chat ids, in insertion order."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE chats (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "data TEXT NOT NULL, preview TEXT DEFAULT '', message_count INTEGER DEFAULT 0)"
+        )
+        conn.execute(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "content TEXT NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, width REAL NOT NULL, "
+            "height REAL NOT NULL, color TEXT NOT NULL, header_color TEXT, "
+            "is_system_prompt INTEGER DEFAULT 0, is_summary_note INTEGER DEFAULT 0, "
+            "FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE)"
+        )
+        conn.execute(
+            "CREATE TABLE pins (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "title TEXT NOT NULL, note TEXT, position_x REAL NOT NULL, position_y REAL NOT NULL, "
+            "pin_id TEXT, sort_order INTEGER DEFAULT 0, anchor_item_id TEXT, created_at TEXT, "
+            "FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE)"
+        )
+        conn.execute("CREATE INDEX idx_notes_chat_id ON notes (chat_id)")
+        conn.execute("CREATE INDEX idx_pins_chat_id ON pins (chat_id)")
+
+        chat_ids = []
+        for title, preview, count, created, updated in (
+            ("First Chat", "hi there", 1, "2026-01-01 09:00:00", "2026-01-01 09:05:00"),
+            ("Second Chat", "another one", 2, "2026-01-02 10:00:00", "2026-01-02 10:10:00"),
+            ("Third Chat", "the last one", 3, "2026-01-03 11:00:00", "2026-01-03 11:15:00"),
+        ):
+            cursor = conn.execute(
+                "INSERT INTO chats (title, data, created_at, updated_at, preview, message_count) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (title, json.dumps({"nodes": [{"node_type": "chat", "raw_content": preview}]}),
+                 created, updated, preview, count),
+            )
+            chat_ids.append(cursor.lastrowid)
+
+        # Notes and pins attached to the first chat only - mirrors
+        # _create_pre_migration_shaped_db's own "at least one" scope; the
+        # other two chats exercise the no-notes/no-pins case.
+        conn.execute(
+            "INSERT INTO notes (chat_id, content, position_x, position_y, width, height, color, "
+            "header_color, is_system_prompt, is_summary_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (chat_ids[0], "A migration-2 note", 1.0, 2.0, 100.0, 50.0, "#222222", None, 0, 0),
+        )
+        conn.execute(
+            "INSERT INTO pins (chat_id, title, note, position_x, position_y, pin_id, sort_order, "
+            "anchor_item_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (chat_ids[0], "A migration-2 pin", "", 5.0, 6.0, "pin-1", 0, None, "2026-01-01 00:00:00"),
+        )
+        conn.commit()
+
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        return chat_ids
+    finally:
+        conn.close()
+
+
+class TestMigration002IntroducesWorkspacesAndGraphs:
+    """ADR-020 stage 20.1's own fidelity proof, mirroring
+    TestMigrationUpgradesAPreExistingRealShapedDatabase above precisely:
+    hand-build a real migration-1-shaped chats.db, drive it through the
+    REAL production connect path (never a hand-called migration function -
+    that would only prove the SQL, not the wiring), and assert every
+    original row survives byte-for-byte under its new home."""
+
+    def test_existing_chats_become_graphs_in_the_default_workspace(self, db_path):
+        chat_ids = _create_migration_1_shaped_db(db_path)
+
+        # The real, production connect path - any query function drives it,
+        # exactly like TestMigrationUpgradesAPreExistingRealShapedDatabase's
+        # own get_all_chats(db_path) call above.
+        rows = get_all_chats(db_path)
+
+        assert len(rows) == 3
+        assert {row["id"] for row in rows} == set(chat_ids)
+        by_id = {row["id"]: row for row in rows}
+        assert by_id[chat_ids[0]]["title"] == "First Chat"
+        assert by_id[chat_ids[0]]["preview"] == "hi there"
+        assert by_id[chat_ids[0]]["messageCount"] == 1
+        assert by_id[chat_ids[1]]["title"] == "Second Chat"
+        assert by_id[chat_ids[2]]["title"] == "Third Chat"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+
+            workspace_rows = conn.execute("SELECT id, name FROM workspaces").fetchall()
+            assert len(workspace_rows) == 1
+            default_workspace_id, default_workspace_name = workspace_rows[0]
+            assert default_workspace_name == "Default"
+
+            graph_workspace_ids = {
+                row[0] for row in conn.execute("SELECT workspace_id FROM graphs").fetchall()
+            }
+            assert graph_workspace_ids == {default_workspace_id}
+
+            graphs_indexes = {row[1] for row in conn.execute("PRAGMA index_list(graphs)").fetchall()}
+            assert "idx_graphs_workspace_id" in graphs_indexes
+
+            # The renamed table's own row identity/content is untouched -
+            # the rename is a pure schema-level operation, not a data copy.
+            graphs_rows = conn.execute(
+                "SELECT id, title, data, created_at, updated_at, preview, message_count FROM graphs "
+                "ORDER BY id"
+            ).fetchall()
+            assert [row[0] for row in graphs_rows] == chat_ids
+            assert graphs_rows[0][1] == "First Chat"
+            assert graphs_rows[0][2] == json.dumps({"nodes": [{"node_type": "chat", "raw_content": "hi there"}]})
+            assert graphs_rows[0][3] == "2026-01-01 09:00:00"
+            assert graphs_rows[0][4] == "2026-01-01 09:05:00"
+        finally:
+            conn.close()
+
+        # load_chat_row/load_notes_rows/load_pins_rows - unchanged Python
+        # behavior, now transparently reading through the renamed table.
+        chat_row = load_chat_row(db_path, chat_ids[0])
+        assert chat_row["title"] == "First Chat"
+        assert chat_row["data"] == {"nodes": [{"node_type": "chat", "raw_content": "hi there"}]}
+
+        notes = load_notes_rows(db_path, chat_ids[0])
+        assert len(notes) == 1 and notes[0]["content"] == "A migration-2 note"
+
+        pins = load_pins_rows(db_path, chat_ids[0])
+        assert len(pins) == 1 and pins[0]["title"] == "A migration-2 pin"
+
+        # The other two chats never had notes/pins - still true post-migration.
+        assert load_notes_rows(db_path, chat_ids[1]) == []
+        assert load_pins_rows(db_path, chat_ids[1]) == []
+
+    def test_fresh_database_lands_on_version_2_with_only_the_default_workspace(self, db_path):
+        # No pre-existing file at all - a fresh install. Must reach version
+        # 2 cleanly with the Default workspace seeded and zero graphs.
+        assert not db_path.exists()
+
+        rows = get_all_chats(db_path)
+
+        assert rows == []
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+            workspace_rows = conn.execute("SELECT id, name FROM workspaces").fetchall()
+            assert len(workspace_rows) == 1
+            assert workspace_rows[0][1] == "Default"
+            assert conn.execute("SELECT COUNT(*) FROM graphs").fetchone()[0] == 0
+        finally:
+            conn.close()
+
+    def test_migration_is_idempotent_when_run_twice_in_a_row(self, db_path):
+        # Matches TestMigrationUpgradesAPreExistingRealShapedDatabase's own
+        # test_upgrade_is_safe_to_run_twice_in_a_row precedent: a second
+        # connect (already at target version 2) is a true no-op - no
+        # duplicate Default workspace, no data disturbance.
+        chat_ids = _create_migration_1_shaped_db(db_path)
+
+        get_all_chats(db_path)
+        rows_after_second_connect = get_all_chats(db_path)
+
+        assert {row["id"] for row in rows_after_second_connect} == set(chat_ids)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            workspace_rows = conn.execute("SELECT id, name FROM workspaces").fetchall()
+            assert len(workspace_rows) == 1, (
+                f"expected exactly one Default workspace after two migration passes, got {workspace_rows}"
+            )
+            assert conn.execute("SELECT COUNT(*) FROM graphs").fetchone()[0] == 3
+        finally:
+            conn.close()
+
+
+def _create_migration_2_shaped_db(db_path) -> list[int]:
+    """ADR-020 stage 20.2's own analog of _create_migration_1_shaped_db
+    above: builds a chats.db in EXACTLY the shape a real, already-upgraded
+    (ADR-020 stage 20.1) install has TODAY, right before this stage's own
+    migration "3" ever runs against it - workspaces + graphs (with
+    workspace_id, but no favorite/archived columns yet) + notes/pins, real
+    rows in more than one workspace, PRAGMA user_version explicitly left at
+    2 (a real post-20.1 database has already run migrations "1" and "2" and
+    stamped its version at 2 - this migration "3" test's own realistic
+    starting point, mirroring _create_migration_1_shaped_db's own "at 1,
+    about to go to 2" precedent one step further down the chain).
+
+    Returns the inserted graph ids, in insertion order (first two in the
+    Default workspace, the third in a second, explicitly-created workspace -
+    proving migration 3 touches every graph regardless of which workspace it
+    is already in)."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, "
+            "icon TEXT NOT NULL DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "archived INTEGER NOT NULL DEFAULT 0)"
+        )
+        default_id = conn.execute("INSERT INTO workspaces (name) VALUES ('Default')").lastrowid
+        other_id = conn.execute("INSERT INTO workspaces (name) VALUES ('Research')").lastrowid
+
+        conn.execute(
+            "CREATE TABLE graphs (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "data TEXT NOT NULL, preview TEXT DEFAULT '', message_count INTEGER DEFAULT 0, "
+            f"workspace_id INTEGER NOT NULL DEFAULT {default_id})"
+        )
+        conn.execute(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "content TEXT NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, width REAL NOT NULL, "
+            "height REAL NOT NULL, color TEXT NOT NULL, header_color TEXT, "
+            "is_system_prompt INTEGER DEFAULT 0, is_summary_note INTEGER DEFAULT 0, "
+            "FOREIGN KEY (chat_id) REFERENCES graphs (id) ON DELETE CASCADE)"
+        )
+        conn.execute(
+            "CREATE TABLE pins (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "title TEXT NOT NULL, note TEXT, position_x REAL NOT NULL, position_y REAL NOT NULL, "
+            "pin_id TEXT, sort_order INTEGER DEFAULT 0, anchor_item_id TEXT, created_at TEXT, "
+            "FOREIGN KEY (chat_id) REFERENCES graphs (id) ON DELETE CASCADE)"
+        )
+        conn.execute("CREATE INDEX idx_notes_chat_id ON notes (chat_id)")
+        conn.execute("CREATE INDEX idx_pins_chat_id ON pins (chat_id)")
+        conn.execute("CREATE INDEX idx_graphs_workspace_id ON graphs (workspace_id)")
+
+        graph_ids = []
+        for title, workspace_id in (
+            ("First Graph", default_id),
+            ("Second Graph", default_id),
+            ("Third Graph", other_id),
+        ):
+            cursor = conn.execute(
+                "INSERT INTO graphs (title, data, workspace_id) VALUES (?, ?, ?)",
+                (title, json.dumps({"nodes": []}), workspace_id),
+            )
+            graph_ids.append(cursor.lastrowid)
+        conn.commit()
+
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        return graph_ids
+    finally:
+        conn.close()
+
+
+class TestMigration003AddsTagsFavoriteArchive:
+    """ADR-020 stage 20.2's own fidelity proof, mirroring
+    TestMigration002IntroducesWorkspacesAndGraphs above precisely: hand-build
+    a real migration-2-shaped chats.db, drive it through the REAL production
+    connect path (never a hand-called migration function), and assert every
+    original row survives byte-for-byte with the new columns/tables landing
+    correctly around it."""
+
+    def test_existing_graphs_get_favorite_archive_defaults_and_no_tags(self, db_path):
+        graph_ids = _create_migration_2_shaped_db(db_path)
+
+        rows = get_all_chats(db_path)
+
+        assert len(rows) == 3
+        by_id = {row["id"]: row for row in rows}
+        for graph_id in graph_ids:
+            assert by_id[graph_id]["favorite"] is False
+            assert by_id[graph_id]["archived"] is False
+            assert by_id[graph_id]["tags"] == []
+        assert by_id[graph_ids[0]]["title"] == "First Graph"
+        assert by_id[graph_ids[2]]["title"] == "Third Graph"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+
+            graphs_columns = {info[1] for info in conn.execute("PRAGMA table_info(graphs)").fetchall()}
+            assert {"favorite", "archived"} <= graphs_columns
+
+            tags_columns = {info[1] for info in conn.execute("PRAGMA table_info(tags)").fetchall()}
+            assert tags_columns == {"id", "name"}
+
+            graph_tags_indexes = {row[1] for row in conn.execute("PRAGMA index_list(graph_tags)").fetchall()}
+            assert "idx_graph_tags_tag_id" in graph_tags_indexes
+
+            # Workspaces (migration 2's own table) are completely untouched -
+            # this migration is deliberately narrow, per its own docstring.
+            workspace_names = {
+                row[0] for row in conn.execute("SELECT name FROM workspaces").fetchall()
+            }
+            assert workspace_names == {"Default", "Research"}
+        finally:
+            conn.close()
+
+    def test_fresh_database_lands_on_version_3_with_favorite_archive_columns(self, db_path):
+        assert not db_path.exists()
+
+        rows = get_all_chats(db_path)
+
+        assert rows == []
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+            graphs_columns = {info[1] for info in conn.execute("PRAGMA table_info(graphs)").fetchall()}
+            assert {"favorite", "archived"} <= graphs_columns
+            assert conn.execute("SELECT COUNT(*) FROM tags").fetchone()[0] == 0
+        finally:
+            conn.close()
+
+    def test_migration_is_idempotent_when_run_twice_in_a_row(self, db_path):
+        graph_ids = _create_migration_2_shaped_db(db_path)
+
+        get_all_chats(db_path)
+        rows_after_second_connect = get_all_chats(db_path)
+
+        assert {row["id"] for row in rows_after_second_connect} == set(graph_ids)
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("SELECT COUNT(*) FROM graphs").fetchone()[0] == 3
+            # A second run must not duplicate favorite/archived columns or
+            # re-create tags/graph_tags in a way that loses data - trivially
+            # true here since nothing has tagged anything yet, but the
+            # PRAGMA table_info probe itself proves no OperationalError
+            # ("duplicate column name") was raised by a naive re-ALTER.
+            graphs_columns = [info[1] for info in conn.execute("PRAGMA table_info(graphs)").fetchall()]
+            assert graphs_columns.count("favorite") == 1
+            assert graphs_columns.count("archived") == 1
+        finally:
+            conn.close()
+
+    def test_graph_tags_cascade_deletes_on_both_sides_real_sqlite_behavior(self, db_path):
+        """Empirically verifies (not assumed from documentation alone) that
+        graph_tags' own declared `ON DELETE CASCADE` FKs actually fire under
+        this project's real bundled SQLite, in BOTH directions: deleting the
+        graph side (delete_chat's own real production path) and deleting the
+        tag side (a raw DELETE, since no intent deletes a tags row directly
+        today - set_graph_tags deliberately leaves orphaned tags in place,
+        see its own docstring - but the declared FK must still cascade if
+        one ever is removed some other way)."""
+        get_all_chats(db_path)  # bootstraps a fresh, fully-migrated db
+        graph_id = save_chat_atomically_row(db_path, None, "Tagged", {"nodes": []}, [], [])[0]
+        set_graph_tags(db_path, graph_id, ["work", "urgent"])
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            assert conn.execute("SELECT COUNT(*) FROM graph_tags").fetchone()[0] == 2
+
+            # Graph-side cascade: delete_chat's own real "DELETE FROM graphs"
+            # (via the production delete_chat function, not raw SQL) must
+            # remove both graph_tags rows.
+            delete_chat(db_path, graph_id)
+            assert conn.execute("SELECT COUNT(*) FROM graph_tags").fetchone()[0] == 0
+            # The tags rows THEMSELVES survive (orphaned, by design).
+            assert conn.execute("SELECT COUNT(*) FROM tags").fetchone()[0] == 2
+        finally:
+            conn.close()
+
+        # Tag-side cascade: re-tag a second graph, then delete the TAG row
+        # directly and confirm the join row disappears too.
+        second_graph_id = save_chat_atomically_row(db_path, None, "Also Tagged", {"nodes": []}, [], [])[0]
+        set_graph_tags(db_path, second_graph_id, ["work"])
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            tag_id = conn.execute("SELECT id FROM tags WHERE name = 'work'").fetchone()[0]
+            assert conn.execute(
+                "SELECT COUNT(*) FROM graph_tags WHERE tag_id = ?", (tag_id,)
+            ).fetchone()[0] == 1
+            conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+            conn.commit()
+            assert conn.execute(
+                "SELECT COUNT(*) FROM graph_tags WHERE tag_id = ?", (tag_id,)
+            ).fetchone()[0] == 0
+        finally:
+            conn.close()
+
+
+def _create_migration_3_shaped_db(db_path) -> list[int]:
+    """ADR-020 stage 20.3's own analog of _create_migration_2_shaped_db
+    above: builds a chats.db in EXACTLY the shape a real, already-upgraded
+    (through ADR-020 stage 20.2) install has TODAY, right before this
+    stage's own migration "4" ever runs against it - workspaces + graphs
+    (favorite/archived, no default-model/knowledge-collection columns yet)
+    + tags/graph_tags + notes/pins, real rows in more than one workspace,
+    PRAGMA user_version explicitly left at 3.
+
+    Returns the inserted graph ids, in insertion order (mirrors
+    _create_migration_2_shaped_db's own two-Default-one-other split)."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, "
+            "icon TEXT NOT NULL DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "archived INTEGER NOT NULL DEFAULT 0)"
+        )
+        default_id = conn.execute("INSERT INTO workspaces (name) VALUES ('Default')").lastrowid
+        other_id = conn.execute("INSERT INTO workspaces (name) VALUES ('Research')").lastrowid
+
+        conn.execute(
+            "CREATE TABLE graphs (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "data TEXT NOT NULL, preview TEXT DEFAULT '', message_count INTEGER DEFAULT 0, "
+            f"workspace_id INTEGER NOT NULL DEFAULT {default_id}, "
+            "favorite INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0)"
+        )
+        conn.execute(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "content TEXT NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, width REAL NOT NULL, "
+            "height REAL NOT NULL, color TEXT NOT NULL, header_color TEXT, "
+            "is_system_prompt INTEGER DEFAULT 0, is_summary_note INTEGER DEFAULT 0, "
+            "FOREIGN KEY (chat_id) REFERENCES graphs (id) ON DELETE CASCADE)"
+        )
+        conn.execute(
+            "CREATE TABLE pins (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "title TEXT NOT NULL, note TEXT, position_x REAL NOT NULL, position_y REAL NOT NULL, "
+            "pin_id TEXT, sort_order INTEGER DEFAULT 0, anchor_item_id TEXT, created_at TEXT, "
+            "FOREIGN KEY (chat_id) REFERENCES graphs (id) ON DELETE CASCADE)"
+        )
+        conn.execute(
+            "CREATE TABLE tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE)"
+        )
+        conn.execute(
+            "CREATE TABLE graph_tags (graph_id INTEGER NOT NULL REFERENCES graphs (id) ON DELETE CASCADE, "
+            "tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE, PRIMARY KEY (graph_id, tag_id))"
+        )
+        conn.execute("CREATE INDEX idx_notes_chat_id ON notes (chat_id)")
+        conn.execute("CREATE INDEX idx_pins_chat_id ON pins (chat_id)")
+        conn.execute("CREATE INDEX idx_graphs_workspace_id ON graphs (workspace_id)")
+        conn.execute("CREATE INDEX idx_graph_tags_tag_id ON graph_tags (tag_id)")
+
+        graph_ids = []
+        for title, workspace_id in (
+            ("First Graph", default_id),
+            ("Second Graph", default_id),
+            ("Third Graph", other_id),
+        ):
+            cursor = conn.execute(
+                "INSERT INTO graphs (title, data, workspace_id) VALUES (?, ?, ?)",
+                (title, json.dumps({"nodes": []}), workspace_id),
+            )
+            graph_ids.append(cursor.lastrowid)
+        conn.commit()
+
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        return graph_ids
+    finally:
+        conn.close()
+
+
+class TestMigration004WorkspaceDefaults:
+    """ADR-020 stage 20.3's own fidelity proof, mirroring
+    TestMigration003AddsTagsFavoriteArchive above precisely: hand-build a
+    real migration-3-shaped chats.db, drive it through the REAL production
+    connect path (never a hand-called migration function), and assert
+    every original row survives byte-for-byte with the new columns landing
+    correctly around it."""
+
+    def test_existing_workspaces_get_empty_default_model_and_null_collection_id(self, db_path):
+        graph_ids = _create_migration_3_shaped_db(db_path)
+
+        rows = get_all_chats(db_path)
+        assert len(rows) == 3
+        assert {row["id"] for row in rows} == set(graph_ids)
+
+        workspaces = get_all_workspaces(db_path)
+        assert len(workspaces) == 2
+        for workspace in workspaces:
+            assert workspace["defaultModelProvider"] == ""
+            assert workspace["defaultModelId"] == ""
+        assert get_workspace_default_model(db_path, workspaces[0]["id"]) is None
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+            workspaces_columns = {info[1] for info in conn.execute("PRAGMA table_info(workspaces)").fetchall()}
+            assert {"default_model_provider", "default_model_id", "knowledge_collection_id"} <= workspaces_columns
+
+            rows = conn.execute(
+                "SELECT default_model_provider, default_model_id, knowledge_collection_id FROM workspaces"
+            ).fetchall()
+            for provider, model_id, collection_id in rows:
+                assert provider == ""
+                assert model_id == ""
+                assert collection_id is None
+
+            # Deliberately narrow, matching this migration's own docstring:
+            # graphs/tags/graph_tags are completely untouched.
+            graph_titles = {row[0] for row in conn.execute("SELECT title FROM graphs").fetchall()}
+            assert graph_titles == {"First Graph", "Second Graph", "Third Graph"}
+        finally:
+            conn.close()
+
+    def test_fresh_database_lands_on_version_4_with_the_new_columns(self, db_path):
+        assert not db_path.exists()
+
+        rows = get_all_chats(db_path)
+
+        assert rows == []
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+            workspaces_columns = {info[1] for info in conn.execute("PRAGMA table_info(workspaces)").fetchall()}
+            assert {"default_model_provider", "default_model_id", "knowledge_collection_id"} <= workspaces_columns
+            default_row = conn.execute(
+                "SELECT default_model_provider, default_model_id, knowledge_collection_id FROM workspaces"
+            ).fetchone()
+            assert default_row == ("", "", None)
+        finally:
+            conn.close()
+
+    def test_migration_is_idempotent_when_run_twice_in_a_row(self, db_path):
+        graph_ids = _create_migration_3_shaped_db(db_path)
+
+        get_all_chats(db_path)
+        rows_after_second_connect = get_all_chats(db_path)
+
+        assert {row["id"] for row in rows_after_second_connect} == set(graph_ids)
+        conn = sqlite3.connect(db_path)
+        try:
+            # A second run must not duplicate the new columns - the PRAGMA
+            # table_info probe itself proves no OperationalError ("duplicate
+            # column name") was raised by a naive re-ALTER.
+            workspaces_columns = [info[1] for info in conn.execute("PRAGMA table_info(workspaces)").fetchall()]
+            assert workspaces_columns.count("default_model_provider") == 1
+            assert workspaces_columns.count("default_model_id") == 1
+            assert workspaces_columns.count("knowledge_collection_id") == 1
+            assert conn.execute("SELECT COUNT(*) FROM workspaces").fetchone()[0] == 2
+        finally:
+            conn.close()
+
+
+class TestWorkspaceDefaultModelCrud:
+    def test_set_then_get_round_trips_the_pinned_model(self, db_path):
+        workspace = create_workspace(db_path, "Research")
+        assert get_workspace_default_model(db_path, workspace["id"]) is None
+
+        set_workspace_default_model(db_path, workspace["id"], "Anthropic Claude", "claude-opus-5")
+
+        assert get_workspace_default_model(db_path, workspace["id"]) == ("Anthropic Claude", "claude-opus-5")
+        rows = get_all_workspaces(db_path)
+        [row] = [r for r in rows if r["id"] == workspace["id"]]
+        assert row["defaultModelProvider"] == "Anthropic Claude"
+        assert row["defaultModelId"] == "claude-opus-5"
+
+    def test_setting_both_empty_clears_a_previously_set_default(self, db_path):
+        workspace = create_workspace(db_path, "Research")
+        set_workspace_default_model(db_path, workspace["id"], "Ollama", "llama3")
+        assert get_workspace_default_model(db_path, workspace["id"]) is not None
+
+        set_workspace_default_model(db_path, workspace["id"], "", "")
+
+        assert get_workspace_default_model(db_path, workspace["id"]) is None
+
+    def test_a_half_set_pair_is_treated_as_fully_unset(self, db_path):
+        workspace = create_workspace(db_path, "Research")
+        set_workspace_default_model(db_path, workspace["id"], "Anthropic Claude", "")
+        assert get_workspace_default_model(db_path, workspace["id"]) is None
+
+    def test_two_different_workspaces_hold_independent_defaults(self, db_path):
+        ws1 = create_workspace(db_path, "Research")
+        ws2 = create_workspace(db_path, "Personal")
+        set_workspace_default_model(db_path, ws1["id"], "Anthropic Claude", "claude-opus-5")
+        set_workspace_default_model(db_path, ws2["id"], "Ollama", "llama3")
+
+        assert get_workspace_default_model(db_path, ws1["id"]) == ("Anthropic Claude", "claude-opus-5")
+        assert get_workspace_default_model(db_path, ws2["id"]) == ("Ollama", "llama3")
+
+    def test_a_never_existed_workspace_id_returns_none(self, db_path):
+        get_all_chats(db_path)  # bootstraps a fresh, fully-migrated db
+        assert get_workspace_default_model(db_path, 999999) is None
+
+    def test_create_workspace_starts_with_no_default_model(self, db_path):
+        created = create_workspace(db_path, "Fresh")
+        assert created["defaultModelProvider"] == ""
+        assert created["defaultModelId"] == ""
+
+
+class TestSetWorkspaceDefaultModelIntent:
+    def test_intent_sets_the_default_and_republishes_the_topic(self, db_path):
+        bus, document, notifications = _bus_with_canvas(db_path)
+        workspace = create_workspace(db_path, "Research")
+
+        asyncio.run(bus.dispatch_intent(
+            "app-chat-library", "setWorkspaceDefaultModel", [workspace["id"], "Anthropic Claude", "claude-opus-5"],
+        ))
+
+        assert get_workspace_default_model(db_path, workspace["id"]) == ("Anthropic Claude", "claude-opus-5")
+        payload = chat_library_payload(db_path)
+        [row] = [w for w in payload["workspaces"] if w["id"] == workspace["id"]]
+        assert row["defaultModelProvider"] == "Anthropic Claude"
+        assert row["defaultModelId"] == "claude-opus-5"
+
+    def test_intent_with_both_empty_clears_it(self, db_path):
+        bus, document, notifications = _bus_with_canvas(db_path)
+        workspace = create_workspace(db_path, "Research")
+        set_workspace_default_model(db_path, workspace["id"], "Ollama", "llama3")
+
+        asyncio.run(bus.dispatch_intent(
+            "app-chat-library", "setWorkspaceDefaultModel", [workspace["id"], "", ""],
+        ))
+
+        assert get_workspace_default_model(db_path, workspace["id"]) is None
+
+
 def test_get_all_chats_reads_real_rows(db_path):
     first_id = _insert_chat(db_path, "First")
     second_id = _insert_chat(db_path, "Second")
@@ -471,6 +1104,7 @@ def test_get_all_chats_reads_real_rows(db_path):
         assert set(row) == {
             "id", "title", "createdLabel", "updatedLabel",
             "createdAtIso", "updatedAtIso", "preview", "messageCount",
+            "workspaceId", "favorite", "archived", "tags",
         }
         assert row["updatedLabel"] == "Jan 02, 2026 11:30 AM"
         assert row["updatedAtIso"] == "2026-01-02T11:30:00"
@@ -478,6 +1112,14 @@ def test_get_all_chats_reads_real_rows(db_path):
         # ALTER TABLE migration must still leave these rows valid.
         assert row["preview"] == ""
         assert row["messageCount"] == 0
+        # ADR-020 stage 20.2: a row that never went through migration 3's
+        # own default column values still lands on the same fresh-graph
+        # defaults - untagged, not favorited, not archived, in whichever
+        # workspace migration 2 backfilled it into (Default, here).
+        assert row["favorite"] is False
+        assert row["archived"] is False
+        assert row["tags"] == []
+        assert isinstance(row["workspaceId"], int)
 
 
 def test_format_timestamp_matches_legacy_display_format():
@@ -553,12 +1195,158 @@ def test_delete_chat_removes_the_row(db_path):
     assert all(row["id"] != chat_id for row in rows)
 
 
+# -- ADR-020 stage 20.2: favorite/archived/tags + workspaces CRUD -----------
+
+
+def test_set_graph_favorite_round_trips(db_path):
+    chat_id = _insert_chat(db_path, "Star Me")
+    assert next(row for row in get_all_chats(db_path) if row["id"] == chat_id)["favorite"] is False
+
+    set_graph_favorite(db_path, chat_id, True)
+    assert next(row for row in get_all_chats(db_path) if row["id"] == chat_id)["favorite"] is True
+
+    set_graph_favorite(db_path, chat_id, False)
+    assert next(row for row in get_all_chats(db_path) if row["id"] == chat_id)["favorite"] is False
+
+
+def test_set_graph_favorite_does_not_bump_updated_at(db_path):
+    # A metadata toggle must never re-sort get_all_chats' own
+    # `ORDER BY updated_at DESC` - see set_graph_favorite's own docstring.
+    chat_id = _insert_chat(db_path, "Stable Order")
+    before = next(row for row in get_all_chats(db_path) if row["id"] == chat_id)["updatedAtIso"]
+    set_graph_favorite(db_path, chat_id, True)
+    after = next(row for row in get_all_chats(db_path) if row["id"] == chat_id)["updatedAtIso"]
+    assert before == after
+
+
+def test_set_graph_archived_round_trips(db_path):
+    chat_id = _insert_chat(db_path, "Archive Me")
+    assert next(row for row in get_all_chats(db_path) if row["id"] == chat_id)["archived"] is False
+
+    set_graph_archived(db_path, chat_id, True)
+    assert next(row for row in get_all_chats(db_path) if row["id"] == chat_id)["archived"] is True
+
+    set_graph_archived(db_path, chat_id, False)
+    assert next(row for row in get_all_chats(db_path) if row["id"] == chat_id)["archived"] is False
+
+
+def test_normalize_tags_trims_drops_empty_and_case_collapses():
+    assert _normalize_tags(["  Work  ", "urgent", "", "   ", "WORK", "work"]) == ["Work", "urgent"]
+    assert _normalize_tags([]) == []
+
+
+def test_set_graph_tags_round_trips_with_trim_dedupe_case_collapse(db_path):
+    chat_id = _insert_chat(db_path, "Tag Me")
+    set_graph_tags(db_path, chat_id, ["  Work  ", "Work", "urgent", "", "URGENT"])
+
+    row = next(row for row in get_all_chats(db_path) if row["id"] == chat_id)
+    assert row["tags"] == ["urgent", "Work"]  # display-sorted (COLLATE NOCASE): u < W
+
+
+def test_set_graph_tags_is_a_bulk_replace_not_a_delta(db_path):
+    chat_id = _insert_chat(db_path, "Retag Me")
+    set_graph_tags(db_path, chat_id, ["one", "two"])
+    set_graph_tags(db_path, chat_id, ["three"])
+
+    row = next(row for row in get_all_chats(db_path) if row["id"] == chat_id)
+    assert row["tags"] == ["three"]
+
+
+def test_set_graph_tags_clearing_to_empty_removes_all_tags(db_path):
+    chat_id = _insert_chat(db_path, "Untag Me")
+    set_graph_tags(db_path, chat_id, ["one"])
+    set_graph_tags(db_path, chat_id, [])
+
+    row = next(row for row in get_all_chats(db_path) if row["id"] == chat_id)
+    assert row["tags"] == []
+
+
+def test_set_graph_tags_shares_one_tags_row_across_graphs_case_insensitively(db_path):
+    first_id = _insert_chat(db_path, "First")
+    second_id = _insert_chat(db_path, "Second")
+    set_graph_tags(db_path, first_id, ["Work"])
+    set_graph_tags(db_path, second_id, ["work"])  # different casing
+
+    conn = sqlite3.connect(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM tags").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_get_all_workspaces_includes_the_seeded_default(db_path):
+    _insert_chat(db_path, "Bootstraps a fresh db")  # triggers migration
+    workspaces = get_all_workspaces(db_path)
+    assert len(workspaces) == 1
+    assert workspaces[0]["name"] == "Default"
+    assert workspaces[0]["archived"] is False
+
+
+def test_create_workspace_returns_the_new_row_and_persists(db_path):
+    _insert_chat(db_path, "Bootstraps a fresh db")
+    created = create_workspace(db_path, "Research")
+    assert created is not None
+    assert created["name"] == "Research"
+    assert created["archived"] is False
+
+    workspaces = get_all_workspaces(db_path)
+    names = {workspace["name"] for workspace in workspaces}
+    assert names == {"Default", "Research"}
+
+
+def test_create_workspace_rejects_empty_or_whitespace_only_name(db_path):
+    _insert_chat(db_path, "Bootstraps a fresh db")
+    assert create_workspace(db_path, "") is None
+    assert create_workspace(db_path, "   ") is None
+    assert len(get_all_workspaces(db_path)) == 1  # still just Default
+
+
+def test_rename_workspace_persists(db_path):
+    _insert_chat(db_path, "Bootstraps a fresh db")
+    created = create_workspace(db_path, "Old Name")
+    rename_workspace(db_path, created["id"], "New Name")
+
+    workspace = next(ws for ws in get_all_workspaces(db_path) if ws["id"] == created["id"])
+    assert workspace["name"] == "New Name"
+
+
+def test_rename_workspace_ignores_empty_name(db_path):
+    _insert_chat(db_path, "Bootstraps a fresh db")
+    created = create_workspace(db_path, "Keep Me")
+    rename_workspace(db_path, created["id"], "   ")
+
+    workspace = next(ws for ws in get_all_workspaces(db_path) if ws["id"] == created["id"])
+    assert workspace["name"] == "Keep Me"
+
+
+def test_archive_workspace_round_trips_and_does_not_touch_its_graphs(db_path):
+    chat_id = _insert_chat(db_path, "Bootstraps a fresh db")
+    default_workspace = get_all_workspaces(db_path)[0]
+
+    archive_workspace(db_path, default_workspace["id"], True)
+    workspace = next(ws for ws in get_all_workspaces(db_path) if ws["id"] == default_workspace["id"])
+    assert workspace["archived"] is True
+    # The graph inside it is completely unaffected.
+    graph_row = next(row for row in get_all_chats(db_path) if row["id"] == chat_id)
+    assert graph_row["archived"] is False
+    assert graph_row["workspaceId"] == default_workspace["id"]
+
+    archive_workspace(db_path, default_workspace["id"], False)
+    workspace = next(ws for ws in get_all_workspaces(db_path) if ws["id"] == default_workspace["id"])
+    assert workspace["archived"] is False
+
+
 def test_chat_library_payload_shape(db_path):
     _insert_chat(db_path, "A Chat")
     payload = chat_library_payload(db_path)
-    assert set(payload) == {"rows", "notice"}
+    assert set(payload) == {"rows", "notice", "workspaces"}
     assert payload["notice"] is None
     assert len(payload["rows"]) == 1
+    # ADR-020 stage 20.2: the Default workspace always exists (migration 2
+    # seeds it unconditionally) - one workspace row even for a db with no
+    # explicit workspace of its own ever created.
+    assert len(payload["workspaces"]) == 1
+    assert payload["workspaces"][0]["name"] == "Default"
 
 
 def test_chat_library_never_imports_qt():
@@ -626,6 +1414,115 @@ def test_delete_chat_intent_removes_and_republishes(db_path):
 
     asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [chat_id]))
     assert recorder.messages[-1]["payload"]["rows"] == []
+
+
+# -- ADR-020 stage 20.2: the 6 new intents -----------------------------------
+
+
+def test_set_graph_favorite_intent_fires_with_the_right_args_and_republishes(db_path):
+    chat_id = _insert_chat(db_path, "Star Via Intent")
+    bus = SessionBus("chat-library-set-favorite-test")
+    register_chat_library(bus, db_path)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "setGraphFavorite", [chat_id, True]))
+    row = next(row for row in recorder.messages[-1]["payload"]["rows"] if row["id"] == chat_id)
+    assert row["favorite"] is True
+
+
+def test_set_graph_favorite_intent_rejects_wrong_typed_args(db_path):
+    _insert_chat(db_path, "Whatever")
+    bus = SessionBus("chat-library-set-favorite-validation-test")
+    register_chat_library(bus, db_path)
+
+    with pytest.raises(IntentValidationError):
+        asyncio.run(bus.dispatch_intent("app-chat-library", "setGraphFavorite", ["not-an-int", True]))
+
+
+def test_set_graph_archived_intent_fires_with_the_right_args_and_republishes(db_path):
+    chat_id = _insert_chat(db_path, "Archive Via Intent")
+    bus = SessionBus("chat-library-set-archived-test")
+    register_chat_library(bus, db_path)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "setGraphArchived", [chat_id, True]))
+    row = next(row for row in recorder.messages[-1]["payload"]["rows"] if row["id"] == chat_id)
+    assert row["archived"] is True
+
+
+def test_set_graph_tags_intent_fires_with_the_right_args_and_republishes(db_path):
+    chat_id = _insert_chat(db_path, "Tag Via Intent")
+    bus = SessionBus("chat-library-set-tags-test")
+    register_chat_library(bus, db_path)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "setGraphTags", [chat_id, ["  Work  ", "work"]]))
+    row = next(row for row in recorder.messages[-1]["payload"]["rows"] if row["id"] == chat_id)
+    assert row["tags"] == ["Work"]
+
+
+def test_create_workspace_intent_publishes_the_new_workspace(db_path):
+    _insert_chat(db_path, "Bootstraps a fresh db")
+    bus = SessionBus("chat-library-create-workspace-test")
+    register_chat_library(bus, db_path)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "createWorkspace", ["Research"]))
+    names = {ws["name"] for ws in recorder.messages[-1]["payload"]["workspaces"]}
+    assert names == {"Default", "Research"}
+
+
+def test_create_workspace_intent_rejects_empty_name_with_a_notification(db_path):
+    _insert_chat(db_path, "Bootstraps a fresh db")
+    bus = SessionBus("chat-library-create-workspace-empty-test")
+    document = SceneDocument()
+    bus.register_topic("scene", document.scene_payload)
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    register_chat_library(bus, db_path, document, notifications, autosave_interval_seconds=None)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "createWorkspace", ["   "]))
+
+    # No new workspace was created, and no "app-chat-library" republish
+    # happened - only a notification.
+    assert len(get_all_workspaces(db_path)) == 1
+    notification_messages = [m for m in recorder.messages if m.get("topic") == "notification"]
+    assert notification_messages, "an empty workspace name must surface a real notification"
+    assert notification_messages[-1]["payload"]["message"] == "Workspace name cannot be empty."
+
+
+def test_rename_workspace_intent_fires_with_the_right_args_and_republishes(db_path):
+    _insert_chat(db_path, "Bootstraps a fresh db")
+    default_workspace_id = get_all_workspaces(db_path)[0]["id"]
+    bus = SessionBus("chat-library-rename-workspace-test")
+    register_chat_library(bus, db_path)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "renameWorkspace", [default_workspace_id, "Renamed"]))
+    names = {ws["name"] for ws in recorder.messages[-1]["payload"]["workspaces"]}
+    assert names == {"Renamed"}
+
+
+def test_archive_workspace_intent_fires_with_the_right_args_and_republishes(db_path):
+    _insert_chat(db_path, "Bootstraps a fresh db")
+    default_workspace_id = get_all_workspaces(db_path)[0]["id"]
+    bus = SessionBus("chat-library-archive-workspace-test")
+    register_chat_library(bus, db_path)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "archiveWorkspace", [default_workspace_id, True]))
+    workspace = next(
+        ws for ws in recorder.messages[-1]["payload"]["workspaces"] if ws["id"] == default_workspace_id
+    )
+    assert workspace["archived"] is True
 
 
 # -- R6.4: load_chat_row / load_notes_rows / load_pins_rows -----------------
@@ -773,6 +1670,39 @@ def test_load_chat_intent_shows_an_error_notification_for_a_missing_chat(db_path
 
     assert document.nodes == {}
     assert notifications.visible and notifications.msg_type == "error"
+
+
+def test_load_chat_intent_sets_current_workspace_id_from_the_loaded_graphs_own_row(db_path):
+    """ADR-020 stage 20.3 adversarial-review fix (see load_chat_row's own
+    docstring): opening an EXISTING chat that belongs to some other, real
+    workspace must set canvas_document.current_workspace_id to THAT
+    workspace's id - not leave it at whatever newChat last set (usually
+    None) - because this stage's own workspace-scoped model/knowledge
+    resolution reads exactly this field on every dispatch/search. This is
+    the single most common real flow (open a saved chat, keep working), not
+    just a corner case of newChat(workspaceId=...)."""
+    get_all_chats(db_path)  # bootstraps a fresh, fully-migrated db (Default workspace seeded)
+    other_workspace = create_workspace(db_path, "Research")
+    chat_id, _ = save_chat_atomically_row(
+        db_path, None, "In Research", {"nodes": []}, [], [], workspace_id=other_workspace["id"],
+    )
+    bus, document, notifications = _bus_with_canvas(db_path)
+    assert document.current_workspace_id is None  # nothing loaded yet
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+
+    assert document.current_workspace_id == other_workspace["id"]
+
+
+def test_load_chat_intent_sets_current_workspace_id_to_default_for_a_default_workspace_chat(db_path):
+    get_all_chats(db_path)  # bootstraps a fresh, fully-migrated db (Default workspace seeded)
+    default_workspace_id = get_all_workspaces(db_path)[0]["id"]
+    chat_id, _ = save_chat_atomically_row(db_path, None, "In Default", {"nodes": []}, [], [])
+    bus, document, notifications = _bus_with_canvas(db_path)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+
+    assert document.current_workspace_id == default_workspace_id
 
 
 def test_load_chat_intent_restores_notes_and_pins_too(db_path):
@@ -924,6 +1854,41 @@ def test_new_chat_intent_clears_canvas_and_resets_current_chat_id(db_path):
 
     assert document.nodes == {}
     assert document.current_chat_id is None
+    # ADR-020 stage 20.2: every OTHER caller of newChat (e.g. commands.ts's
+    # palette command) keeps calling with zero args - byte-identical
+    # pre-20.2 behavior, including current_workspace_id staying unset.
+    assert document.current_workspace_id is None
+
+
+def test_new_chat_intent_honors_an_explicit_valid_workspace_id(db_path):
+    _insert_chat(db_path, "Bootstraps a fresh db")
+    other_workspace = create_workspace(db_path, "Research")
+    bus, document, _ = _bus_with_canvas(db_path)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", [other_workspace["id"]]))
+
+    assert document.current_workspace_id == other_workspace["id"]
+
+    # And the NEXT save actually lands the new graph in that workspace.
+    document.add_chat_node(0, 0, "hello", is_user=True)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+    saved_row = next(row for row in get_all_chats(db_path) if row["id"] == document.current_chat_id)
+    assert saved_row["workspaceId"] == other_workspace["id"]
+
+
+def test_new_chat_intent_defaults_to_default_workspace_when_id_is_invalid(db_path):
+    _insert_chat(db_path, "Bootstraps a fresh db")
+    default_workspace_id = get_all_workspaces(db_path)[0]["id"]
+    bus, document, _ = _bus_with_canvas(db_path)
+
+    # A workspace id that has never existed.
+    asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", [999999]))
+    assert document.current_workspace_id is None
+
+    document.add_chat_node(0, 0, "hello", is_user=True)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+    saved_row = next(row for row in get_all_chats(db_path) if row["id"] == document.current_chat_id)
+    assert saved_row["workspaceId"] == default_workspace_id
 
 
 def test_two_concurrent_save_chat_calls_do_not_race_only_one_row_is_written(db_path):
@@ -1587,7 +2552,10 @@ class TestCorruptDbRescue:
         holder = sqlite3.connect(db_path, timeout=30)
         holder.execute("PRAGMA journal_mode=WAL")
         holder.execute("BEGIN IMMEDIATE")
-        holder.execute("UPDATE chats SET title = 'locked-write'")
+        # ADR-020 stage 20.1: the real save_chat_atomically_row call above
+        # already migrated this db to version 2, which renamed "chats" to
+        # "graphs" - this raw SQL must target the table's CURRENT real name.
+        holder.execute("UPDATE graphs SET title = 'locked-write'")
         try:
             # A short timeout so this test doesn't hang for 30s waiting out
             # the real busy_timeout - a fresh connect() with its own short
@@ -1775,3 +2743,465 @@ def test_concurrent_save_conflict_message_names_the_chat(db_path):
         save_chat_atomically_row(
             db_path, chat_id, "T", {"nodes": []}, [], [], expected_updated_at=updated_at,
         )
+
+
+# -- ADR-020 stage 20.4: global FTS search + cross-workspace jump-to-node ----
+
+
+@pytest.fixture
+def knowledge_db_path(tmp_path):
+    return tmp_path / "knowledge" / "knowledge.db"
+
+
+class TestExtractIndexableNodeChunks:
+    """Unit tests for chat_library.py's own node-content normalization -
+    _extract_node_index_text/_extract_indexable_node_chunks, the piece that
+    turns a saved chat_data["nodes"] list into `[(node_id, text), ...]` for
+    backend.knowledge_store.reindex_graph_content. Ground-truthed against
+    backend/session_save.py's real per-kind _NODE_SERIALIZERS field names
+    (session_save.py:198-527) - see _TEXT_FIELD_BY_NODE_TYPE's own
+    docstring for exactly why each field name below is what it is, not a
+    guess (e.g. "code" nodes use wire key "code", NOT "content")."""
+
+    def test_chat_node_plain_string_raw_content(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "chat", "id": "n1", "raw_content": "Hello there"}]}
+        )
+        assert chunks == [("n1", "Hello there")]
+
+    def test_chat_node_multimodal_list_raw_content_only_text_parts_contribute(self):
+        chunks = chat_library_module._extract_indexable_node_chunks({
+            "nodes": [{
+                "node_type": "chat", "id": "n1",
+                "raw_content": [
+                    {"type": "text", "text": "a real phrase"},
+                    {"type": "image_bytes", "data": "not text"},
+                ],
+            }],
+        })
+        assert chunks == [("n1", "a real phrase")]
+
+    def test_code_node_uses_the_code_field_not_content(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "code", "id": "n1", "code": "print('hi')", "language": "python"}]}
+        )
+        assert chunks == [("n1", "print('hi')")]
+
+    def test_document_node_uses_content_and_title(self):
+        chunks = chat_library_module._extract_indexable_node_chunks({
+            "nodes": [{"node_type": "document", "id": "n1", "title": "Spec", "content": "the body text"}],
+        })
+        assert chunks == [("n1", "Spec the body text")]
+
+    def test_artifact_node_uses_content(self):
+        chunks = chat_library_module._extract_indexable_node_chunks({
+            "nodes": [{
+                "node_type": "artifact", "id": "n1", "instruction": "build it", "content": "the artifact body",
+            }],
+        })
+        assert chunks == [("n1", "the artifact body")]
+
+    def test_thinking_node_uses_thinking_text(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "thinking", "id": "n1", "thinking_text": "reasoning here"}]}
+        )
+        assert chunks == [("n1", "reasoning here")]
+
+    def test_html_node_uses_html_content(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "html", "id": "n1", "html_content": "<p>hi</p>"}]}
+        )
+        assert chunks == [("n1", "<p>hi</p>")]
+
+    def test_conversation_node_flattens_its_own_history(self):
+        # conversation has NO other text-bearing field at all - see
+        # session_save.py's own _serialize_conversation_node - so this is
+        # the only way it is ever findable.
+        chunks = chat_library_module._extract_indexable_node_chunks({
+            "nodes": [{
+                "node_type": "conversation", "id": "n1",
+                "conversation_history": [
+                    {"role": "user", "content": "what is a widget"},
+                    {"role": "assistant", "content": "a small mechanical thing"},
+                ],
+            }],
+        })
+        assert chunks == [("n1", "user: what is a widget\n\nassistant: a small mechanical thing")]
+
+    def test_web_research_node_uses_query(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "web_research", "id": "n1", "query": "best hiking trails"}]}
+        )
+        assert chunks == [("n1", "best hiking trails")]
+
+    def test_gitlink_node_uses_task_prompt(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "gitlink", "id": "n1", "task_prompt": "refactor the widget module"}]}
+        )
+        assert chunks == [("n1", "refactor the widget module")]
+
+    def test_pycoder_node_uses_prompt_not_code(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "pycoder", "id": "n1", "prompt": "sort this list", "code": "x.sort()"}]}
+        )
+        assert chunks == [("n1", "sort this list")]
+
+    def test_code_sandbox_node_uses_prompt(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "code_sandbox", "id": "n1", "prompt": "install numpy and plot"}]}
+        )
+        assert chunks == [("n1", "install numpy and plot")]
+
+    def test_plan_node_uses_goal(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "plan", "id": "n1", "goal": "build a REST API"}]}
+        )
+        assert chunks == [("n1", "build a REST API")]
+
+    def test_image_node_uses_prompt(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "image", "id": "n1", "prompt": "a cat on a skateboard"}]}
+        )
+        assert chunks == [("n1", "a cat on a skateboard")]
+
+    def test_a_plugin_node_falls_back_to_the_universal_content_and_title_fields(self):
+        chunks = chat_library_module._extract_indexable_node_chunks({
+            "nodes": [{"node_type": "my_plugin.widget", "id": "n1", "title": "Widget", "content": "plugin body text"}],
+        })
+        assert chunks == [("n1", "Widget plugin body text")]
+
+    def test_a_node_with_no_id_is_skipped(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "code", "code": "no id on this node"}]}
+        )
+        assert chunks == []
+
+    def test_a_node_with_nothing_indexable_is_skipped_entirely(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": [{"node_type": "thinking", "id": "n1", "thinking_text": ""}]}
+        )
+        assert chunks == []
+
+    def test_non_dict_and_malformed_entries_in_nodes_do_not_crash(self):
+        chunks = chat_library_module._extract_indexable_node_chunks(
+            {"nodes": ["not-a-dict", {"node_type": "code", "id": "n1", "code": "ok"}, None]}
+        )
+        assert chunks == [("n1", "ok")]
+
+
+class TestSaveChatAtomicallyRowIndexesIntoKnowledgeStore:
+    """ADR-020 stage 20.4: save_chat_atomically_row's own knowledge-store
+    re-indexing hook (_reindex_graph_into_knowledge_store) - proven here
+    against the REAL save path, not backend.knowledge_store.
+    reindex_graph_content in isolation (backend/tests/test_knowledge_store.
+    py's own TestReindexGraphContent covers that primitive directly)."""
+
+    def test_a_save_makes_node_content_findable_via_search_chunks(self, db_path, knowledge_db_path):
+        chat_data = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "a phrase about narwhals", "is_user": True},
+        ]}
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "Narwhal Graph", chat_data, [], [], knowledge_db_path=knowledge_db_path,
+        )
+        results = knowledge_store_module.search_chunks(knowledge_db_path, "narwhals")
+        assert len(results) == 1
+        assert results[0]["source_node_id"] == "n1"
+        assert results[0]["source_uri"] == f"graph:{chat_id}"
+        assert results[0]["document_title"] == "Narwhal Graph"
+
+    def test_resaving_with_changed_content_updates_the_index(self, db_path, knowledge_db_path):
+        chat_data_v0 = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "the old phrase", "is_user": True},
+        ]}
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "T", chat_data_v0, [], [], knowledge_db_path=knowledge_db_path,
+        )
+        assert len(knowledge_store_module.search_chunks(knowledge_db_path, "old phrase")) == 1
+
+        chat_data_v1 = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "the new phrase", "is_user": True},
+        ]}
+        save_chat_atomically_row(
+            db_path, chat_id, "T", chat_data_v1, [], [], knowledge_db_path=knowledge_db_path,
+        )
+        assert knowledge_store_module.search_chunks(knowledge_db_path, "old phrase") == []
+        new_results = knowledge_store_module.search_chunks(knowledge_db_path, "new phrase")
+        assert len(new_results) == 1
+        assert new_results[0]["source_node_id"] == "n1"
+
+    def test_the_indexed_workspace_is_the_graphs_real_workspace_on_a_resave(self, db_path, knowledge_db_path):
+        # UPDATE branch: workspace_id is never re-passed on a resave (see
+        # save_chat_atomically_row's own docstring) - the reindex hook must
+        # still resolve the graph's REAL, already-assigned workspace, not
+        # silently fall back to some default/global collection.
+        get_all_chats(db_path)  # bootstraps a fully-migrated db
+        workspace = create_workspace(db_path, "Research")
+        chat_data = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "scoped phrase", "is_user": True},
+        ]}
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "T", chat_data, [], [],
+            workspace_id=workspace["id"], knowledge_db_path=knowledge_db_path,
+        )
+        # Resave with NO workspace_id arg at all (the default, None).
+        save_chat_atomically_row(db_path, chat_id, "T", chat_data, [], [], knowledge_db_path=knowledge_db_path)
+
+        collection_id = knowledge_store_module.get_or_create_workspace_collection(knowledge_db_path, workspace["id"])
+        results = knowledge_store_module.search_chunks(knowledge_db_path, "scoped phrase", collection_id=collection_id)
+        assert len(results) == 1
+
+    def test_a_knowledge_store_failure_never_breaks_the_chats_db_save(self, db_path, knowledge_db_path, monkeypatch):
+        # Best-effort: a broken knowledge.db write must never take down the
+        # correctness-critical chats.db save with it.
+        def _boom(*args, **kwargs):
+            raise sqlite3.OperationalError("simulated knowledge.db failure")
+
+        monkeypatch.setattr(chat_library_module.knowledge_store, "reindex_graph_content", _boom)
+        chat_data = {"nodes": [{"node_type": "chat", "id": "n1", "raw_content": "hi", "is_user": True}]}
+        chat_id, _updated_at = save_chat_atomically_row(
+            db_path, None, "T", chat_data, [], [], knowledge_db_path=knowledge_db_path,
+        )
+        assert chat_id is not None
+        assert load_chat_row(db_path, chat_id)["data"] == chat_data
+
+
+class TestDeleteChatRemovesTheKnowledgeIndexToo:
+    def test_deleting_a_graph_removes_its_indexed_content(self, db_path, knowledge_db_path):
+        chat_data = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "a phrase about octopi", "is_user": True},
+        ]}
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "T", chat_data, [], [], knowledge_db_path=knowledge_db_path,
+        )
+        assert len(knowledge_store_module.search_chunks(knowledge_db_path, "octopi")) == 1
+
+        delete_chat(db_path, chat_id, knowledge_db_path=knowledge_db_path)
+
+        assert knowledge_store_module.search_chunks(knowledge_db_path, "octopi") == []
+        assert get_all_chats(db_path) == []  # the chats.db row is gone too
+
+    def test_a_knowledge_store_failure_never_breaks_the_chats_db_delete(self, db_path, knowledge_db_path, monkeypatch):
+        chat_data = {"nodes": [{"node_type": "chat", "id": "n1", "raw_content": "hi", "is_user": True}]}
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "T", chat_data, [], [], knowledge_db_path=knowledge_db_path,
+        )
+
+        def _boom(*args, **kwargs):
+            raise sqlite3.OperationalError("simulated knowledge.db failure")
+
+        monkeypatch.setattr(chat_library_module.knowledge_store, "delete_graph_index", _boom)
+        delete_chat(db_path, chat_id, knowledge_db_path=knowledge_db_path)  # must not raise
+        assert get_all_chats(db_path) == []
+
+
+class TestLoadGraphAndFocusNodeIntent:
+    """ADR-020 stage 20.4: the request/reply intent - see
+    make_load_graph_and_focus_node's own docstring for the full contract."""
+
+    def test_returns_the_real_node_coordinates_after_loading_a_different_graph(self, db_path):
+        # A REAL saved graph, built via a real live document/save cycle (so
+        # its own persisted "id" is a genuine, counter-minted SceneNode id,
+        # never a hand-typed guess) - then looked up against a COMPLETELY
+        # FRESH document/bus (a different SessionBus, own fresh id counter),
+        # exactly the real "jump into a graph THIS session has never loaded
+        # before" scenario - see make_load_graph_and_focus_node's own
+        # docstring for why the two documents' ids are never expected to
+        # match (RELOAD PATH: resolved by ordinal position, not by id).
+        seed_document = SceneDocument()
+        seed_node = seed_document.add_chat_node(123.5, 456.0, "hi", is_user=True)
+        seed_chat_data = build_chat_data(seed_document)
+        seed_notes = seed_chat_data.pop("notes_data", [])
+        seed_pins = seed_chat_data.pop("pins_data", [])
+        chat_id, _ = save_chat_atomically_row(db_path, None, "Target Graph", seed_chat_data, seed_notes, seed_pins)
+        saved_node_id = seed_node.id
+
+        bus, document, notifications = _bus_with_canvas(db_path)
+
+        result = asyncio.run(
+            bus.dispatch_intent("app-chat-library", "loadGraphAndFocusNode", [chat_id, saved_node_id])
+        )
+
+        assert result == {"x": 123.5, "y": 456.0}
+        assert document.current_chat_id == chat_id
+        assert len(document.nodes) == 1
+        live_node = next(iter(document.nodes.values()))
+        assert live_node.x == 123.5 and live_node.y == 456.0
+
+    def test_the_fast_path_skips_the_reload_when_already_on_the_target_graph(self, db_path):
+        # The SAVED id is deliberately irrelevant here (never compared
+        # against in the fast path) - only the LIVE id (captured after the
+        # real load, below) matters.
+        chat_data = {"nodes": [
+            {"node_type": "chat", "id": "irrelevant-saved-id", "raw_content": "hi", "is_user": True,
+             "position": {"x": 10.0, "y": 20.0}},
+        ]}
+        chat_id = _insert_chat(db_path, "Already Open", data=json.dumps(chat_data))
+        bus, document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+        assert notifications.visible
+        notifications.dismiss()  # reset so we can prove NO second "Loaded ..." notice fires
+        live_node_id = next(iter(document.nodes.values())).id
+
+        result = asyncio.run(
+            bus.dispatch_intent("app-chat-library", "loadGraphAndFocusNode", [chat_id, live_node_id])
+        )
+
+        assert result == {"x": 10.0, "y": 20.0}
+        assert notifications.visible is False, "the fast path must not reload (and re-notify) a graph already open"
+
+    def test_returns_none_for_a_stale_search_result_pointing_at_a_deleted_node(self, db_path):
+        chat_data = {"nodes": [
+            {"node_type": "chat", "id": "n1", "raw_content": "hi", "is_user": True, "position": {"x": 0, "y": 0}},
+        ]}
+        chat_id = _insert_chat(db_path, "Graph", data=json.dumps(chat_data))
+        bus, document, notifications = _bus_with_canvas(db_path)
+
+        result = asyncio.run(bus.dispatch_intent(
+            "app-chat-library", "loadGraphAndFocusNode", [chat_id, "node-that-no-longer-exists"],
+        ))
+
+        assert result is None
+        assert document.current_chat_id == chat_id  # the graph itself DID load successfully
+
+    def test_returns_none_for_a_stale_search_result_pointing_at_a_deleted_graph(self, db_path):
+        bus, document, notifications = _bus_with_canvas(db_path)
+
+        result = asyncio.run(bus.dispatch_intent("app-chat-library", "loadGraphAndFocusNode", [999999, "n1"]))
+
+        assert result is None
+        assert notifications.visible and notifications.msg_type == "error"
+
+
+class TestGlobalSearchAcrossWorkspaces:
+    """ADR-020 stage 20.4's own exit criterion, proven literally end to
+    end: two workspaces, a graph in each with distinct node content, a
+    search from global scope (collection_id=None) finds a phrase that
+    exists ONLY in workspace B's graph while the "current" session context
+    is workspace A, the search result correctly identifies the source
+    graph_id/node_id, and calling loadGraphAndFocusNode with that graph_id/
+    node_id returns the real node's real x/y coordinates - the full
+    backend chain, not just the FTS query in isolation."""
+
+    def test_a_phrase_in_a_closed_graph_in_another_workspace_is_found_and_focused(
+        self, db_path, knowledge_db_path, monkeypatch,
+    ):
+        import backend.api.intents_global_search as igs_module
+        # intents_global_search.py imports DEFAULT_DB_PATH BY NAME (the same
+        # shape backend/api/intents_knowledge.py already uses, and this
+        # exact test's own precedent - test_intents_knowledge.py's own
+        # module docstring on why this monkeypatch, not the module-level
+        # one, is what's needed for a NAME import).
+        monkeypatch.setattr(igs_module, "DEFAULT_DB_PATH", knowledge_db_path)
+
+        get_all_chats(db_path)  # bootstraps a fully-migrated db (Default = workspace A)
+        workspace_a = get_all_workspaces(db_path)[0]
+        workspace_b = create_workspace(db_path, "Workspace B")
+
+        graph_a_data = {"nodes": [
+            {"node_type": "chat", "id": "a1", "raw_content": "notes about apples", "is_user": True,
+             "position": {"x": 1.0, "y": 2.0}},
+        ]}
+        graph_a_id, _ = save_chat_atomically_row(
+            db_path, None, "Graph A", graph_a_data, [], [],
+            workspace_id=workspace_a["id"], knowledge_db_path=knowledge_db_path,
+        )
+
+        graph_b_data = {"nodes": [
+            {"node_type": "chat", "id": "b1", "raw_content": "a very unique phrase about zephyrsaurus",
+             "is_user": True, "position": {"x": 777.0, "y": 888.0}},
+        ]}
+        graph_b_id, _ = save_chat_atomically_row(
+            db_path, None, "Graph B", graph_b_data, [], [],
+            workspace_id=workspace_b["id"], knowledge_db_path=knowledge_db_path,
+        )
+
+        # The "current" session context is workspace A - it loaded Graph A
+        # (the graph the user is CURRENTLY looking at) and never opened
+        # Graph B at all.
+        bus, document, notifications = _bus_with_canvas(db_path)
+        register_global_search_intents(bus)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [graph_a_id]))
+        assert document.current_chat_id == graph_a_id
+        assert document.current_workspace_id == workspace_a["id"]
+
+        # Global scope (no workspaceId filter) must find the phrase that
+        # exists ONLY in workspace B's graph.
+        search_result = asyncio.run(bus.dispatch_intent("globalSearch", "search", ["zephyrsaurus", 10]))
+        results = search_result["results"]
+        assert len(results) == 1
+        hit = results[0]
+        assert hit["graphId"] == graph_b_id
+        assert hit["sourceNodeId"] == "b1"
+        assert "zephyrsaurus" in hit["text"].lower()
+
+        # The SAME global search also finds Graph A's own exclusive phrase -
+        # proving this is a real cross-workspace search, not an accident of
+        # only one workspace's collection being queried.
+        apples_result = asyncio.run(bus.dispatch_intent("globalSearch", "search", ["apples", 10]))
+        assert len(apples_result["results"]) == 1
+        assert apples_result["results"][0]["graphId"] == graph_a_id
+        assert apples_result["results"][0]["sourceNodeId"] == "a1"
+
+        # The full chain: loadGraphAndFocusNode with the search result's OWN
+        # graph_id/node_id returns the real node's real x/y - while the
+        # session is STILL sitting on Graph A (a genuine cross-workspace
+        # jump, not a same-graph lookup).
+        focus_result = asyncio.run(bus.dispatch_intent(
+            "app-chat-library", "loadGraphAndFocusNode", [hit["graphId"], hit["sourceNodeId"]],
+        ))
+        assert focus_result == {"x": 777.0, "y": 888.0}
+        assert document.current_chat_id == graph_b_id  # the session really did switch graphs
+
+    def test_a_workspace_filter_scopes_the_search_to_one_workspace(self, db_path, knowledge_db_path, monkeypatch):
+        import backend.api.intents_global_search as igs_module
+        monkeypatch.setattr(igs_module, "DEFAULT_DB_PATH", knowledge_db_path)
+
+        get_all_chats(db_path)
+        workspace_a = get_all_workspaces(db_path)[0]
+        workspace_b = create_workspace(db_path, "Workspace B")
+
+        save_chat_atomically_row(
+            db_path, None, "Graph A", {"nodes": [
+                {"node_type": "chat", "id": "a1", "raw_content": "shared search term alpha", "is_user": True},
+            ]}, [], [], workspace_id=workspace_a["id"], knowledge_db_path=knowledge_db_path,
+        )
+        save_chat_atomically_row(
+            db_path, None, "Graph B", {"nodes": [
+                {"node_type": "chat", "id": "b1", "raw_content": "shared search term beta", "is_user": True},
+            ]}, [], [], workspace_id=workspace_b["id"], knowledge_db_path=knowledge_db_path,
+        )
+
+        bus, _document, _notifications = _bus_with_canvas(db_path)
+        register_global_search_intents(bus)
+
+        unscoped = asyncio.run(bus.dispatch_intent("globalSearch", "search", ["shared search term", 10]))
+        assert len(unscoped["results"]) == 2
+
+        scoped_to_b = asyncio.run(
+            bus.dispatch_intent("globalSearch", "search", ["shared search term", 10, workspace_b["id"]])
+        )
+        assert len(scoped_to_b["results"]) == 1
+        assert scoped_to_b["results"][0]["sourceNodeId"] == "b1"
+
+    def test_a_document_hit_carries_no_graph_id_or_source_node_id(self, db_path, knowledge_db_path, monkeypatch):
+        # A real ingested document (not a graph) must be distinguishable
+        # from a graph/node hit - sourceNodeId/graphId both None.
+        import backend.api.intents_global_search as igs_module
+        monkeypatch.setattr(igs_module, "DEFAULT_DB_PATH", knowledge_db_path)
+
+        from backend.knowledge_chunking import chunk_text
+
+        text = "A real ingested document about jackalopes."
+        knowledge_store_module.add_document_with_chunks(
+            knowledge_db_path, source_uri="notes.txt", title="Notes", mime="text/plain",
+            text=text, chunks=chunk_text(text, target_tokens=1000),
+        )
+
+        bus, _document, _notifications = _bus_with_canvas(db_path)
+        register_global_search_intents(bus)
+        result = asyncio.run(bus.dispatch_intent("globalSearch", "search", ["jackalopes", 10]))
+
+        assert len(result["results"]) == 1
+        hit = result["results"][0]
+        assert hit["sourceNodeId"] is None
+        assert hit["graphId"] is None
