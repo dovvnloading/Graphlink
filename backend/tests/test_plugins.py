@@ -1,48 +1,122 @@
-"""Plugin picker topic tests (Qt-removal plan R2.5, extended R5.1)."""
+"""Plugin picker topic tests (Qt-removal plan R2.5, extended R5.1;
+migrated onto the ADR-014 Plugin SDK at stage 14.3 - see
+backend/tests/test_plugin_builtin_migration.py for the per-built-in
+name/description/category/command_type/undo pinning tests this migration
+added)."""
 
 import asyncio
+import tempfile
+from pathlib import Path
 
 from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.plugins import _CATEGORY_META, _PLUGINS, get_plugin_categories, plugins_payload, register_plugins
+from backend.plugin_sdk import discover_plugins
+from backend.plugins import get_plugin_categories, plugins_payload, register_plugins
+from graphlink_settings_store import SettingsManager
+
+
+def _fresh_settings_manager() -> SettingsManager:
+    # ADR-014 stage 14.4: register_plugins now requires a real SettingsManager
+    # (the deny-by-default plugin-grant store). A bare stdlib tempfile dir -
+    # explicitly sanctioned by conftest.py's own "tmp_path/TemporaryDirectory-
+    # derived override" guard docstring - avoids threading a pytest tmp_path
+    # fixture through every one of this file's test functions (every real
+    # dispatch below is a BUILT-IN plugin, never grant-gated, so nothing here
+    # actually needs the store to persist across calls).
+    return SettingsManager(Path(tempfile.mkdtemp()) / "session.dat")
+
+
+# ADR-014 stage 14.3: the 4 structural tests below used to call
+# get_plugin_categories()/plugins_payload() with NO plugin_registry
+# argument, relying on the (now-removed) hardcoded `_PLUGINS` list to
+# supply entries even with no real registry. Since the 8 built-ins are now
+# real discovered plugins themselves, there is no picker entry that exists
+# independent of a real registry anymore - these tests now pass the real
+# discovered registry (discover_plugins(), the production plugins/ root),
+# which also picks up plugins/hello_node/ and plugins/counter_node/ (both
+# registered under the HostContext default "More Plugins" category) - a
+# genuine, expected structural difference from the pre-migration synthetic
+# "just the hardcoded 8" listing, not a narrowing of intent.
 
 
 def test_get_plugin_categories_groups_in_category_order_and_skips_empty():
-    grouped = get_plugin_categories()
+    grouped = get_plugin_categories(discover_plugins())
     names = [category["name"] for category in grouped]
 
-    # "Validation & Delivery" has no plugins in _PLUGINS today, so the
-    # empty-category-skip rule drops it from the result entirely.
-    non_empty_meta_names = [
-        meta["name"]
-        for meta in _CATEGORY_META
-        if any(category_name == meta["name"] for _name, _description, category_name in _PLUGINS)
+    # "Validation & Delivery" has no plugins mapped to it in the real
+    # shipped plugin set today, so the empty-category-skip rule drops it
+    # from the result entirely. "More Plugins" is appended last for
+    # plugins/hello_node/'s and plugins/counter_node/'s uncategorized
+    # entries.
+    assert names == [
+        "Branch Foundations", "Reasoning & Research", "Build & Execution",
+        "Workflow & Drafting", "More Plugins",
     ]
-    assert names == non_empty_meta_names
     for category in grouped:
         assert category["plugins"]
 
 
+def test_get_plugin_categories_pins_the_original_curated_within_category_order_for_the_8_builtins():
+    # ADR-014 review-fix (finding 7): discover_plugins()'s sorted(glob(...))
+    # (backend/plugin_sdk.py) walks plugin DIRECTORIES alphabetically - an
+    # axis unrelated to the original hand-ordered _PLUGINS tuple literal
+    # (deleted by the stage 14.3 migration; recovered verbatim via
+    # `git show beb927b:backend/plugins.py`). Without _builtin_picker_
+    # sort_key (backend/plugins.py), Build & Execution silently reflowed to
+    # alphabetical-by-directory-name (Virtual Environment Runner's own dir
+    # is "code_sandbox", so it sorted ahead of Gitlink) instead of this
+    # curated sequence - a real, user-visible regression for a migration
+    # meant to be byte-faithful. Pinned here against the REAL shipped
+    # plugins/ root so a future directory rename/addition can't silently
+    # reintroduce the drift without failing a test.
+    grouped = get_plugin_categories(discover_plugins())
+    by_category = {category["name"]: [p["name"] for p in category["plugins"]] for category in grouped}
+
+    assert by_category["Branch Foundations"] == ["System Prompt", "Conversation Node"]
+    assert by_category["Reasoning & Research"] == ["Web Research"]
+    assert by_category["Build & Execution"] == [
+        "Gitlink", "Py-Coder", "Virtual Environment Runner", "HTML Renderer",
+    ]
+    assert by_category["Workflow & Drafting"] == ["Artifact / Drafter"]
+
+
 def test_get_plugin_categories_appends_more_plugins_only_if_uncategorized():
-    grouped = get_plugin_categories()
-    assert "More Plugins" not in [category["name"] for category in grouped]
+    # Real discovery includes plugins/hello_node/ and plugins/counter_node/,
+    # both registered with the HostContext default category ("More
+    # Plugins") - proves the catch-all activates for genuinely
+    # uncategorized entries.
+    grouped = get_plugin_categories(discover_plugins())
+    more_plugins = next(c for c in grouped if c["name"] == "More Plugins")
+    plugin_names = {p["name"] for p in more_plugins["plugins"]}
+    assert {"Hello Node", "Counter Node"} <= plugin_names
+
+    # When nothing is uncategorized (no registry at all -> zero entries),
+    # the catch-all must not appear.
+    grouped_empty = get_plugin_categories(None)
+    assert "More Plugins" not in [category["name"] for category in grouped_empty]
 
 
 def test_get_plugin_categories_covers_every_plugin_exactly_once():
-    grouped = get_plugin_categories()
+    registry = discover_plugins()
+    grouped = get_plugin_categories(registry)
     seen = [plugin["name"] for category in grouped for plugin in category["plugins"]]
-    assert sorted(seen) == sorted(name for name, _description, _category in _PLUGINS)
+    expected = {entry.name for entry in registry.picker_entries.values()} | {
+        spec.name for spec in registry.builtin_actions.values()
+    }
+    assert set(seen) == expected
     assert len(seen) == len(set(seen))
 
 
 def test_plugins_payload_shape_matches_generated_validator_shape():
-    payload = plugins_payload()
-    assert set(payload) == {"categories"}
+    payload = plugins_payload(discover_plugins(), _fresh_settings_manager())
+    assert set(payload) == {"categories", "grants"}
     for category in payload["categories"]:
         assert set(category) == {"name", "description", "plugins"}
         for plugin in category["plugins"]:
             assert set(plugin) == {"name", "description"}
+    for grant in payload["grants"]:
+        assert set(grant) == {"pluginId", "name", "scopes", "granted"}
 
 
 def test_plugins_never_imports_qt():
@@ -69,7 +143,7 @@ def test_plugins_never_imports_qt():
 def test_register_plugins_publishes_on_the_app_plugins_topic():
     bus = SessionBus("plugins-test")
     notifications = NotificationState()
-    register_plugins(bus, notifications, SceneDocument())
+    register_plugins(bus, notifications, SceneDocument(), _fresh_settings_manager())
 
     class Recorder:
         def __init__(self):
@@ -85,39 +159,24 @@ def test_register_plugins_publishes_on_the_app_plugins_topic():
     assert recorder.messages[0]["payload"]["categories"]
 
 
-def test_execute_plugin_falls_through_to_the_generic_deferred_notice_for_an_unhandled_registered_name(monkeypatch):
-    # R7.5a closed the last 2 gaps (Conversation Node, HTML Renderer) - every
-    # _PLUGINS entry today has its own real branch, so the generic fallback
-    # at the bottom of execute_plugin has no live entry left to exercise
-    # through the real registry. It stays in place as the established growth
-    # path for the NEXT plugin added to _PLUGINS before its own branch lands
-    # (same state every plugin above was once in) - proven still-correct
-    # here by monkeypatching _PLUGINS into exactly that state for one call.
-    import backend.plugins as plugins_module
-
-    monkeypatch.setattr(
-        plugins_module,
-        "_PLUGINS",
-        plugins_module._PLUGINS + [("Future Plugin", "Not yet wired.", "Build & Execution")],
-    )
-    bus = SessionBus("plugins-exec-test")
-    notifications = NotificationState()
-    bus.register_topic("notification", notifications.payload)
-    register_plugins(bus, notifications, SceneDocument())
-
-    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Future Plugin"]))
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "info"
-    assert notifications.message == '"Future Plugin" node creation isn\'t available yet.'
+# ADR-014 stage 14.3: test_execute_plugin_falls_through_to_the_generic_
+# deferred_notice_for_an_unhandled_registered_name (formerly here) is
+# REMOVED, not just updated - it exercised a code path
+# (execute_plugin's `_PLUGINS`-membership-but-no-branch-yet "isn't
+# available yet" info notice) that no longer exists in any form.
+# `_PLUGINS` itself is gone: every name now either resolves to a real
+# `plugin_registry.builtin_actions`/`picker_entries` entry or hits the
+# generic "Unknown plugin" warning in _execute_discovered_plugin -
+# covered immediately below by
+# test_execute_plugin_shows_warning_notification_for_unknown_plugin. There
+# is no longer a third state ("a known name with no branch yet") to test.
 
 
 def test_execute_plugin_shows_warning_notification_for_unknown_plugin():
     bus = SessionBus("plugins-exec-unknown-test")
     notifications = NotificationState()
     bus.register_topic("notification", notifications.payload)
-    register_plugins(bus, notifications, SceneDocument())
+    register_plugins(bus, notifications, SceneDocument(), _fresh_settings_manager())
 
     asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Not A Real Plugin"]))
     assert notifications.visible is True
@@ -134,7 +193,7 @@ def _make_plugins_bus():
     bus.register_topic("notification", notifications.payload)
     canvas_document = SceneDocument()
     bus.register_topic("scene", canvas_document.scene_payload)
-    register_plugins(bus, notifications, canvas_document)
+    register_plugins(bus, notifications, canvas_document, _fresh_settings_manager())
     return bus, notifications, canvas_document
 
 
@@ -698,13 +757,18 @@ def test_execute_plugin_html_renderer_creates_a_real_html_node_with_empty_conten
     assert "scene" in recorder.topics_seen()
 
 
-def test_every_plugin_now_has_a_real_creation_branch():
-    # R7.5a closes the last 2 gaps - confirms explicitly (rather than
-    # letting the old parametrized non-regression test below silently
-    # collect zero cases) that every _PLUGINS entry has moved off the
-    # generic deferred notice.
+def test_every_builtin_now_has_a_real_builtin_action_registration():
+    # ADR-014 stage 14.3: R7.5a's old "every _PLUGINS entry has moved off
+    # the generic deferred notice" claim is now expressed differently -
+    # there is no more `_PLUGINS` list to compare against. Confirms
+    # instead that all 8 migrated built-ins are real
+    # `plugin_registry.builtin_actions` entries (the ADR-014 stage 14.3
+    # escape hatch), not `picker_entries` (the generic PluginNodeSeed
+    # path reserved for third-party plugins and the demo plugins).
     handled = {
         "Web Research", "Artifact / Drafter", "Gitlink", "Py-Coder", "Virtual Environment Runner",
         "System Prompt", "Conversation Node", "HTML Renderer",
     }
-    assert handled == {name for name, _description, _category in _PLUGINS}
+    registry = discover_plugins()
+    assert handled == set(registry.builtin_actions)
+    assert handled.isdisjoint(registry.picker_entries)

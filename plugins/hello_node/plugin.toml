@@ -1,0 +1,39 @@
+# plugins/hello_node/plugin.toml
+#
+# Only [plugin] is required. [frontend] is optional and reserved for stage
+# 14.5's real dynamic frontend loading - omitting it is equivalent to
+# view = "generic". No other tables exist yet.
+
+[plugin]
+id = "hello_node"                  # required. [a-z0-9_]+, MUST equal this
+                                    # file's parent directory name - checked
+                                    # at discovery.
+name = "Hello Node Plugin"         # required. Human-readable; logs/errors only.
+version = "0.1.0"                  # required. The plugin's OWN semver; informational only.
+sdk_api_version = 1                # required, int. Checked against
+                                    # plugin_sdk.SDK_API_VERSION /
+                                    # MIN_COMPATIBLE_SDK_API_VERSION - same
+                                    # schema_version/min_compatible shape
+                                    # SessionBus.register_topic already uses
+                                    # (backend/events.py). Outside range ->
+                                    # this ONE plugin is skipped and logged;
+                                    # every other plugin still loads.
+entry_point = "plugin:register"    # required. "<module>:<callable>", resolved
+                                    # relative to THIS plugin's own directory
+                                    # (never via sys.path), called once as
+                                    # register(host: HostContext) -> None.
+description = "Reference plugin for ADR-014 stage 14.1."   # optional, default "".
+
+[frontend]
+# Reserved for stage 14.5. "generic" is the ONLY legal value before 14.5:
+# renders via the existing generic placeholder-card fallback. Any other
+# value is a discovery-time error, not a silently-ignored no-op.
+view = "generic"
+
+[scopes]
+# ADR-014 stage 14.4: this plugin creates a node (add_plugin_node), so it
+# declares graph.mutate - a subset of backend.tools.KNOWN_SCOPES, validated
+# at discovery. Self-reported, not enforced by itself - the real gate is the
+# user's install-time grant in Settings > Plugins (SettingsManager.
+# get_plugin_grants/set_plugin_grant), deny-by-default until then.
+grants = ["graph.mutate"]

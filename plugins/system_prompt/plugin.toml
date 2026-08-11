@@ -1,0 +1,19 @@
+# plugins/system_prompt/plugin.toml
+#
+# ADR-014 stage 14.3: first-party migration of the pre-SDK "System Prompt"
+# built-in picker action - see plugins/web_research/plugin.toml's own
+# comment for the shared rationale (register_builtin_plugin, not
+# register_node_kind, to keep the already-shipped "note" kind string
+# unchanged - a System Prompt is a "note" node with is_system_prompt=True,
+# not a distinct kind of its own).
+
+[plugin]
+id = "system_prompt"
+name = "System Prompt"
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "Adds a special node to override the default system prompt for a conversation branch."
+
+[frontend]
+view = "generic"

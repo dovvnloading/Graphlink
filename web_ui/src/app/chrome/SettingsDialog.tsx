@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
+import type { AppPluginGrant, AppPluginsState } from "../../lib/bridge-core/generated/app-plugins-state";
 import type { AppSettingsState, McpServerConfig } from "../../lib/bridge-core/generated/app-settings-state";
 import { useExecutionLimits } from "../canvas/ExecutionLimitsContext";
 import { Dialog, useOverlays } from "../overlays/overlays";
@@ -22,6 +23,7 @@ const SECTIONS = [
   "API Endpoint",
   "Integrations",
   "MCP Servers",
+  "Plugins",
   "Resource Limits",
 ] as const;
 type Section = (typeof SECTIONS)[number];
@@ -184,6 +186,19 @@ const initialState: AppSettingsState = {
   llamaCppNotice: "",
   // ADR-012 stage 12.6: mirrors SettingsManager.get_mcp_servers()'s own default.
   mcpServers: [],
+};
+
+const initialPluginsState: AppPluginsState = {
+  schemaVersion: 1,
+  minCompatibleSchemaVersion: 1,
+  revision: 0,
+  categories: [],
+  // ADR-014 stage 14.4: one entry per discovered NON-built-in plugin (see
+  // backend/plugins.py's plugin_registry.picker_entries/node_kinds split vs.
+  // builtin_actions, and AppPluginGrantPayload's own docstring in
+  // contracts/graphlink_app_plugins_payload.py for the "one row per
+  // distinct plugin_id" construction rule) - built-ins never appear here.
+  grants: [],
 };
 
 function sectionKey(section: Section): string {
@@ -1168,6 +1183,68 @@ function McpServersPage({ state, transport }: { state: AppSettingsState; transpo
   );
 }
 
+// ADR-014 stage 14.4: install-time consent for discovered THIRD-PARTY
+// plugins, mirroring McpServersPage's own minimalism immediately above -
+// one row per entry, a single checkbox, no per-scope editing UI (MCP
+// Servers itself has never had one for its own `scopes` field, so this
+// stays exactly that coarse). Built-in plugins (the 8 migrated in stage
+// 14.3) never appear in `grants` - backend/plugins.py only emits an entry
+// per distinct plugin_id reached through the generic, non-builtin_actions
+// discovery path - so this page can never gate anything that ships with
+// the app itself.
+//
+// Honesty note (carried over from the ADR-014 stage 14.4 design): checking
+// "Granted" here answers "did the user consent to this plugin acting at
+// all," not "is this specific mutation confined to some enforced boundary."
+// A plugin's declared scopes are a self-reported checklist the backend
+// records for its own self-documentation, not a sandboxed capability set -
+// real capability sandboxing is ADR-014 stage 14.5's job (out-of-process
+// execution). This page does not claim otherwise.
+function PluginsPage({ grants, transport }: { grants: AppPluginGrant[]; transport: WsTransport }) {
+  return (
+    <div className="settings-general-page">
+      <p className="settings-integrations-intro">
+        Discovered third-party plugins are not granted by default. A plugin listed here cannot create nodes or run
+        its intents until you check "Granted" for it - built-in plugins ship with the app and are never listed or
+        gated here.
+      </p>
+
+      <fieldset className="settings-fieldset">
+        <legend>Discovered Plugins</legend>
+        {grants.length === 0 && (
+          <p className="settings-update-status">No third-party plugins need a grant right now.</p>
+        )}
+        {grants.map((grant) => (
+          <div className="settings-mcp-server-row" key={grant.pluginId}>
+            <label className="settings-checkbox-row settings-mcp-server-toggle">
+              <input
+                type="checkbox"
+                aria-label={`Granted: ${grant.name}`}
+                checked={grant.granted}
+                onChange={(event) =>
+                  transport.fireIntent(
+                    "app-plugins",
+                    "setPluginGrant",
+                    [grant.pluginId, event.target.checked],
+                    undefined,
+                    true,
+                  )
+                }
+              />
+              <span className="settings-mcp-server-info">
+                <span className="settings-mcp-server-name">{grant.name}</span>
+                <span className="settings-mcp-server-command">
+                  {grant.scopes.length > 0 ? grant.scopes.join(", ") : "No declared scopes"}
+                </span>
+              </span>
+            </label>
+          </div>
+        ))}
+      </fieldset>
+    </div>
+  );
+}
+
 // ADR-012 stage 12.6: a read-only disclosure surface, not a settings page in
 // the usual sense - there is nothing here to edit (per ADR-005 §4, these
 // caps are a fixed, backend-computed fact, not a user-tunable preference),
@@ -1216,12 +1293,25 @@ function ResourceLimitsPage() {
 
 export function SettingsDialog({ transport }: { transport: WsTransport }) {
   const [state, setState] = useState<AppSettingsState>(initialState);
+  // ADR-014 stage 14.4: a second, independent subscription to "app-plugins"
+  // (the same topic PluginPicker.tsx already reads) - the grants list isn't
+  // part of "app-settings" (which this dialog otherwise reads exclusively),
+  // so this is a sibling subscription, not a repurposing of `state` above.
+  const [pluginsState, setPluginsState] = useState<AppPluginsState>(initialPluginsState);
 
   useEffect(() => {
     return transport.subscribe("app-settings", (payload) => {
       const validated = TOPIC_VALIDATORS["app-settings"](payload);
       if (validated.ok) setState(validated.value as AppSettingsState);
       else console.error("[app-settings] rejected snapshot:", validated.errors);
+    });
+  }, [transport]);
+
+  useEffect(() => {
+    return transport.subscribe("app-plugins", (payload) => {
+      const validated = TOPIC_VALIDATORS["app-plugins"](payload);
+      if (validated.ok) setPluginsState(validated.value as AppPluginsState);
+      else console.error("[app-plugins] rejected snapshot:", validated.errors);
     });
   }, [transport]);
 
@@ -1275,6 +1365,8 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
             <LlamaCppPage state={state} transport={transport} />
           ) : activeSection === "MCP Servers" ? (
             <McpServersPage state={state} transport={transport} />
+          ) : activeSection === "Plugins" ? (
+            <PluginsPage grants={pluginsState.grants} transport={transport} />
           ) : activeSection === "Resource Limits" ? (
             <ResourceLimitsPage />
           ) : (

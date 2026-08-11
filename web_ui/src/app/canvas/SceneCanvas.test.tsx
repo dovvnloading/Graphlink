@@ -154,6 +154,8 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
   builderApprovalToolName: "",
   builderApprovalSummary: "",
   builderStatusDetail: "",
+  // ADR-014 stage 14.2
+  pluginState: {},
     ...overrides,
   };
 }

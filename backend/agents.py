@@ -445,6 +445,7 @@ class AgentDispatcher:
             register_knowledge_tools(registry)
             register_builder_control_tools(registry)
             self._register_configured_mcp_tools(registry)
+            self._register_plugin_tools(registry, document)
             self._builder_registry = registry
         return self._builder_registry
 
@@ -493,6 +494,32 @@ class AgentDispatcher:
                     client.close()
                 except Exception:
                     pass
+
+    def _register_plugin_tools(self, registry, document) -> None:
+        """ADR-014 stage 14.5: plugin-declared custom intents (HostContext.
+        register_intent, both in-process and out-of-process plugins) become
+        real Builder-loop tools - see backend/plugins.py's
+        register_plugin_tools for the full contract (namespacing, scopes,
+        approval, the install-time-grant re-check). Uses discover_plugins()'s
+        own memoized registry (the SAME one register_plugins() populates for
+        the session's bus-level executePlugin/invokePluginIntent dispatch,
+        by resolved plugins_root path) - discovery itself already ran by the
+        time any session can reach this point (register_plugins() runs at
+        session activation, before the Builder can ever start), so this is
+        just a second consumer of an already-populated registry, not a
+        second discovery pass - matching _register_configured_mcp_tools'
+        own "read the persisted config, tolerate per-item failure" shape
+        directly above."""
+        if self._settings_manager is None:
+            return
+        from backend.plugin_sdk import discover_plugins
+        from backend.plugins import register_plugin_tools
+
+        try:
+            plugin_registry = discover_plugins()
+            register_plugin_tools(registry, plugin_registry, self._settings_manager, document)
+        except Exception:
+            logger.exception("could not register plugin-declared tools")
 
     async def start_builder_run(
         self,

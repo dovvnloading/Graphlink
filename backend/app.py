@@ -271,7 +271,10 @@ def _configure_session(
     # R5.1: register_plugins needs the same session's canvas_document (built
     # just above) so "Web Research" can create a real node - this ordering
     # (canvas_document exists before register_plugins runs) is load-bearing.
-    register_plugins(bus, notifications_state, canvas_document)
+    # ADR-014 stage 14.4: settings_manager threaded through too - it's the
+    # deny-by-default grant store _execute_discovered_plugin/
+    # invokePluginIntent consult before letting a non-built-in plugin act.
+    register_plugins(bus, notifications_state, canvas_document, settings_manager)
     # R7.4a: register_settings now takes notifications_state too, so the
     # API-provider page's save-validation/init-failure paths can surface a
     # real banner (same load-bearing ordering precedent as register_plugins/
@@ -282,7 +285,11 @@ def _configure_session(
     # (built above) so loadChat can actually restore a session into it, and
     # notifications_state so a failed/empty load can surface a real banner -
     # same load-bearing ordering precedent as register_plugins above.
-    register_chat_library(bus, chat_db_path, canvas_document, notifications_state)
+    # ADR-014 review-fix: settings_manager threaded through too, the same
+    # reason register_plugins gets it two lines up - a plugin node's own
+    # serialize/deserialize hook must respect its Settings > Plugins grant
+    # on save/load/autosave, not just live-wire scene publishes.
+    register_chat_library(bus, chat_db_path, canvas_document, notifications_state, settings_manager=settings_manager)
 
 
 def _evict_idle_session(bus: SessionBus) -> bool:

@@ -1,0 +1,18 @@
+# plugins/artifact/plugin.toml
+#
+# ADR-014 stage 14.3: first-party migration of the pre-SDK "Artifact /
+# Drafter" built-in picker action - see plugins/web_research/plugin.toml's
+# own comment for the shared rationale (register_builtin_plugin, not
+# register_node_kind, to keep the already-shipped "artifact" kind string
+# unchanged).
+
+[plugin]
+id = "artifact"
+name = "Artifact / Drafter"
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "A split-pane node for iteratively drafting and refining living documents (Markdown)."
+
+[frontend]
+view = "generic"

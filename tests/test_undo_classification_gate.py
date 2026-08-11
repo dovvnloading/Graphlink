@@ -245,12 +245,14 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # stage 8.3 added the "builder" topic's five run-lifecycle intents
     # plus scene's own setPlanSteps, 151 -> 153 when stage 8.6 added
     # builder's own listRecipes/saveRecipe pair, 153 -> 154 when
-    # ADR-012 stage 12.2 added app-settings' own setTheme, and 154 -> 157 when
+    # ADR-012 stage 12.2 added app-settings' own setTheme, 154 -> 157 when
     # ADR-012 stage 12.6 added scene's own loadSampleWorkspace plus
-    # app-settings' own setHasCompletedOnboarding/setMcpServers.
+    # app-settings' own setHasCompletedOnboarding/setMcpServers, and
+    # 157 -> 159 when ADR-014 stage 14.4 added app-plugins' own
+    # invokePluginIntent/setPluginGrant pair.
     real = _collect_real_registrations()
-    assert len(real) == 157, (
-        f"expected exactly 157 real registered intents, found {len(real)} - "
+    assert len(real) == 159, (
+        f"expected exactly 159 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

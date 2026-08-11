@@ -109,10 +109,14 @@ dedicated recon/design/test cycle, not bolted onto a serializer):
 from __future__ import annotations
 
 import contextvars
+import json
+import logging
 import re
 from typing import Any
 
 from backend.canvas import SceneDocument, SceneNode, _content_codec
+from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
+from graphlink_settings_store import SettingsManager
 
 # ADR-009 stage 9.5: the asset store in effect for the CURRENT save. Same
 # contextvar rationale as session_load.py's own _ACTIVE_ASSET_STORE - the
@@ -423,6 +427,88 @@ def _serialize_plan_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
+def _serialize_plugin_node(
+    node: SceneNode,
+    kind_spec: "NodeKindSpec | None",
+    settings_manager: "SettingsManager | None" = None,
+) -> dict[str, Any]:
+    """ADR-014 stage 14.2: the generic persistence fallback for any node
+    whose kind is not one of the built-ins above (i.e. not a key in
+    _NODE_SERIALIZERS) - a Plugin SDK node kind, always namespaced as
+    f"{plugin_id}.{kind}" (backend/plugin_sdk.py's HostContext.
+    register_node_kind). Always persists the same universal fields
+    SceneDocument.add_plugin_node/_node_wire already guarantee exist for
+    EVERY node regardless of kind - node_type/title/content/is_collapsed -
+    so a plugin with no NodeState subclass at all (like plugins/hello_node/,
+    which fits its one string in `content`) still round-trips through
+    save/reload with zero opt-in.
+
+    `kind_spec` is `None` when this save's PluginRegistry doesn't currently
+    recognize the node's kind at all (a plugin removed/renamed since this
+    node was created) - the universal fields above still get written (a
+    later reload's own registry-membership check decides whether to
+    restore the node at all; see session_load.py's own _restore_node), this
+    function itself never drops a node outright.
+
+    When the plugin DID opt into HostContext.register_node_kind(...,
+    serialize=...), that hook's own dict is nested under 'plugin_state' -
+    deliberately isolated from the universal fields above so a raising or
+    non-JSON-serializable plugin serializer can never corrupt title/content/
+    is_collapsed sitting right next to it, and never abort the WHOLE save
+    (every other node on the canvas) either - it just drops its own extra
+    state for this one node, the same "one bad item never sinks everything"
+    posture every other per-kind serializer/restorer in this file and
+    session_load.py already keeps.
+
+    ADR-014 review-fix: `settings_manager`, when given, gates the actual
+    kind_spec.serialize(node) call on settings_manager.get_plugin_grants()
+    - the SAME install-time consent check node creation/invokePluginIntent/
+    register_plugin_tools already enforce before running a plugin's own
+    code, extended to this save-path call site (this was the one place a
+    revoked plugin's serializer kept running unconditionally, since a save
+    happens outside any one session's live SceneDocument and previously had
+    no access to Settings > Plugins' grant state at all). `None` (every
+    call site this project's own test suite that predates this fix uses)
+    preserves the exact prior ungated behavior - see build_chat_data's own
+    docstring for why that default is safe. A denied/ungranted node still
+    round-trips its universal title/content/is_collapsed fields; it just
+    loses its custom plugin_state for this one save, matching the
+    already-raising-serializer degrade path immediately below rather than
+    inventing a new failure mode."""
+    payload: dict[str, Any] = {
+        "node_type": node.kind,
+        "title": node.title,
+        "content": node.content,
+        "is_collapsed": bool(node.is_collapsed),
+    }
+    if kind_spec is not None and kind_spec.serialize is not None:
+        granted = (
+            settings_manager is None
+            or settings_manager.get_plugin_grants().get(kind_spec.plugin_id, False)
+        )
+        if granted:
+            try:
+                extra = kind_spec.serialize(node)
+            except Exception:
+                # ADR-014 review-fix: logged, matching the wire-path
+                # equivalent's own exact message shape (backend/domain/
+                # graph.py's _plugin_state_wire) - previously this dropped a
+                # raising plugin serializer with zero signal anywhere,
+                # unlike every other place a plugin's own code runs.
+                logging.warning(
+                    "plugin node %s (%s): serialize hook raised", node.id, node.kind, exc_info=True,
+                )
+                extra = None
+            if isinstance(extra, dict):
+                try:
+                    json.dumps(extra)  # validate JSON-safety NOW, isolated to this one node
+                except (TypeError, ValueError):
+                    extra = None
+            if isinstance(extra, dict):
+                payload["plugin_state"] = extra
+    return payload
+
+
 _NODE_SERIALIZERS = {
     "chat": lambda node, document: _serialize_chat_node(node),
     "code": lambda node, document: _serialize_code_node(node),
@@ -662,19 +748,46 @@ def _classify_edges(
     }
 
 
-def build_chat_data(document: SceneDocument, asset_store: Any | None = None) -> dict[str, Any]:
+def build_chat_data(
+    document: SceneDocument,
+    asset_store: Any | None = None,
+    plugin_registry: "PluginRegistry | None" = None,
+    settings_manager: "SettingsManager | None" = None,
+) -> dict[str, Any]:
     """ADR-009 stage 9.5 entry point. Publishes `asset_store` for the
     duration of this save so _serialize_image_node can externalize bytes
     instead of inlining base64, then delegates. Reset in a finally so a
-    failed save cannot leave a stale store visible to the next one."""
+    failed save cannot leave a stale store visible to the next one.
+
+    ADR-014 stage 14.2: `plugin_registry` mirrors backend/plugins.py's own
+    register_plugins(..., plugin_registry=None) precedent exactly - None
+    (every real call site: backend/chat_library.py, backend/autosave.py)
+    triggers a real discover_plugins() call, memoized by resolved path so
+    repeat saves within one process pay no rescan cost; tests inject a
+    specific registry for isolation, the same reason register_plugins
+    itself takes this same parameter.
+
+    ADR-014 review-fix: `settings_manager`, when given, is threaded down to
+    _serialize_plugin_node so a plugin's own serialize hook is gated on its
+    current Settings > Plugins grant, the same install-time consent check
+    node creation already enforces - see that function's own docstring for
+    the exact contract. `None` (this parameter's own default, and every
+    call site in this project's test suite that predates this fix) means
+    "no grant store available" and preserves the exact prior ungated
+    behavior - real production callers (backend/chat_library.py's saveChat,
+    backend/autosave.py's tick) pass a real one."""
     token = _ACTIVE_SAVE_ASSET_STORE.set(asset_store)
     try:
-        return _build_chat_data(document)
+        return _build_chat_data(document, plugin_registry, settings_manager)
     finally:
         _ACTIVE_SAVE_ASSET_STORE.reset(token)
 
 
-def _build_chat_data(document: SceneDocument) -> dict[str, Any]:
+def _build_chat_data(
+    document: SceneDocument,
+    plugin_registry: "PluginRegistry | None" = None,
+    settings_manager: "SettingsManager | None" = None,
+) -> dict[str, Any]:
     """The top-level orchestrator - ports SceneSerializer.serialize_chat_
     data()'s own exact top-level shape. notes_data/pins_data are nested
     INSIDE this single returned dict (matching legacy's own
@@ -682,7 +795,22 @@ def _build_chat_data(document: SceneDocument) -> dict[str, Any]:
     saveChat intent) pops them back out before writing, mirroring
     SaveWorkerThread.run()'s own `self.chat_data.get("notes_data", [])`
     pattern precisely."""
-    all_nodes = [n for n in document.nodes.values() if n.kind in _REGULAR_KINDS]
+    if plugin_registry is None:
+        plugin_registry = discover_plugins()
+    # ADR-014 stage 14.2: a plugin-registered node kind (namespaced
+    # "plugin_id.kind", so it can never collide with _REGULAR_KINDS) is
+    # now ALSO a "regular" node for save purposes - included in the exact
+    # same `all_nodes` list/index/parent-tracking machinery below rather
+    # than a parallel code path, so every one of the invariants this
+    # module's own docstring documents (nodes_index, the edge classifier,
+    # children_indices, ...) already covers it too. Adding a NEW plugin
+    # later needs zero changes here: this membership check is generic
+    # against whatever discover_plugins() finds, not a per-plugin branch.
+    plugin_kinds = plugin_registry.node_kinds
+    all_nodes = [
+        n for n in document.nodes.values()
+        if n.kind in _REGULAR_KINDS or n.kind in plugin_kinds
+    ]
     notes = [n for n in document.nodes.values() if n.kind == "note"]
     charts = [n for n in document.nodes.values() if n.kind == "chart"]
     frames = [n for n in document.nodes.values() if n.kind == "frame"]
@@ -727,9 +855,14 @@ def _build_chat_data(document: SceneDocument) -> dict[str, Any]:
     node_payloads: list[dict[str, Any]] = []
     for node in all_nodes:
         serializer = _NODE_SERIALIZERS.get(node.kind)
-        if serializer is None:
-            continue
-        payload = serializer(node, document)
+        if serializer is not None:
+            payload = serializer(node, document)
+        else:
+            # ADR-014 stage 14.2: not a built-in kind - the `all_nodes`
+            # filter above already guarantees this is a currently-
+            # recognized plugin kind, so the generic fallback below (never
+            # a per-plugin branch) is what persists it.
+            payload = _serialize_plugin_node(node, plugin_kinds.get(node.kind), settings_manager)
         payload["position"] = _position(node)
         payload["id"] = node.id
 

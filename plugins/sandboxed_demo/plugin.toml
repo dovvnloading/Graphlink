@@ -1,0 +1,36 @@
+# plugins/sandboxed_demo/plugin.toml
+#
+# ADR-014 stage 14.5's reference plugin - the FIRST (and, as of this stage,
+# only) real out-of-process plugin package. Proves [runtime] isolation =
+# "out-of-process" end to end: this plugin's own plugin.py NEVER runs
+# inside the host process - only inside the worker subprocess
+# backend/plugin_worker.py spawns. See plugins/hello_node/plugin.toml's own
+# header comment for what every other [plugin]/[frontend]/[scopes] field
+# means - unchanged here.
+
+[plugin]
+id = "sandboxed_demo"
+name = "Sandboxed Demo Plugin"
+version = "0.1.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "ADR-014 stage 14.5 reference plugin - proves out-of-process isolation end to end."
+
+[frontend]
+view = "generic"
+
+[runtime]
+# ADR-014 stage 14.5's new table. "out-of-process" - discover_plugins()
+# never imports plugin.py into the host process at all; instead it spawns a
+# resident worker subprocess (python -m backend.plugin_worker) and talks to
+# it over a JSON-RPC stdio pipe. See backend/plugin_sdk.py's
+# _discover_out_of_process_plugin and backend/plugin_worker.py's own module
+# docstrings for the full mechanism.
+isolation = "out-of-process"
+
+[scopes]
+# This plugin creates a node (add_plugin_node, via the host's own
+# reconstruction of its declarations), so it declares graph.mutate - same
+# self-reported, not-itself-enforced contract as every other plugin's
+# [scopes] table (see plugins/hello_node/plugin.toml's own comment).
+grants = ["graph.mutate"]

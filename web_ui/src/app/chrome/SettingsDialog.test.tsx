@@ -95,6 +95,10 @@ function makeTransport() {
     intents,
     push: (payload: Record<string, unknown>) => listeners.get("app-settings")?.(payload),
     pushExecutionLimits: (payload: Record<string, unknown>) => listeners.get("execution-limits")?.(payload),
+    // ADR-014 stage 14.4: the Plugins page reads a SECOND, independent
+    // subscription ("app-plugins", the same topic PluginPicker.tsx already
+    // reads) - separate from the dialog's own "app-settings" push above.
+    pushPlugins: (payload: Record<string, unknown>) => listeners.get("app-plugins")?.(payload),
   };
 }
 
@@ -180,6 +184,16 @@ async function goToMcpServers(
   await user.click(screen.getByText("open settings"));
   await user.click(screen.getByRole("button", { name: "MCP Servers" }));
   act(() => push({ ...snapshot, ...overrides, activeSection: "mcp servers" }));
+}
+
+async function goToPlugins(
+  user: ReturnType<typeof userEvent.setup>,
+  push: (payload: Record<string, unknown>) => void,
+  overrides: Record<string, unknown> = {},
+) {
+  await user.click(screen.getByText("open settings"));
+  await user.click(screen.getByRole("button", { name: "Plugins" }));
+  act(() => push({ ...snapshot, ...overrides, activeSection: "plugins" }));
 }
 
 // Settings' selects are CustomSelect.tsx (chrome/CustomSelect.tsx), not
@@ -1023,6 +1037,95 @@ describe("SettingsDialog", () => {
       await user.click(screen.getByRole("button", { name: "Remove fs" }));
 
       expect(intents).toContainEqual(["app-settings", "setMcpServers", [[gitServer]]]);
+    });
+  });
+
+  // ADR-014 stage 14.4: install-time consent for discovered third-party
+  // plugins. Reads a SEPARATE topic ("app-plugins", via pushPlugins) than
+  // every other section in this file - each test below pushes both the
+  // "app-settings" snapshot (to select the Plugins section) and, where
+  // needed, a distinct "app-plugins" snapshot carrying the new `grants`
+  // field, mirroring how the Resource Limits tests above push
+  // "execution-limits" independently of "app-settings".
+  describe("Plugins page", () => {
+    const helloGrant = { pluginId: "hello_node", name: "Hello Node", scopes: ["graph.mutate"], granted: false };
+    const counterGrant = {
+      pluginId: "counter_node",
+      name: "Counter Node",
+      scopes: ["graph.mutate", "graph.read"],
+      granted: true,
+    };
+
+    function pushGrants(pushPlugins: (payload: Record<string, unknown>) => void, grants: unknown[]) {
+      act(() =>
+        pushPlugins({ schemaVersion: 1, minCompatibleSchemaVersion: 1, revision: 1, categories: [], grants }),
+      );
+    }
+
+    it("navigating to Plugins fires setActiveSection with its own key", async () => {
+      const { user, push, intents } = setup();
+      await goToPlugins(user, push);
+
+      expect(intents).toContainEqual(["app-settings", "setActiveSection", ["plugins"]]);
+    });
+
+    it("renders sensibly before any app-plugins snapshot has arrived", async () => {
+      const { user, push } = setup();
+      await goToPlugins(user, push);
+
+      expect(screen.getByText("No third-party plugins need a grant right now.")).toBeInTheDocument();
+      expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    });
+
+    it("an empty grants array renders sensibly - no crash, no phantom rows", async () => {
+      const { user, push, pushPlugins } = setup();
+      await goToPlugins(user, push);
+      pushGrants(pushPlugins, []);
+
+      expect(screen.getByText("No third-party plugins need a grant right now.")).toBeInTheDocument();
+      expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    });
+
+    it("renders one row per grants entry with its name, declared scopes, and current granted state", async () => {
+      const { user, push, pushPlugins } = setup();
+      await goToPlugins(user, push);
+      pushGrants(pushPlugins, [helloGrant, counterGrant]);
+
+      expect(screen.getByText("Hello Node")).toBeInTheDocument();
+      expect(screen.getByText("graph.mutate")).toBeInTheDocument();
+      expect(screen.getByText("Counter Node")).toBeInTheDocument();
+      expect(screen.getByText("graph.mutate, graph.read")).toBeInTheDocument();
+
+      expect(screen.getByRole("checkbox", { name: "Granted: Hello Node" })).not.toBeChecked();
+      expect(screen.getByRole("checkbox", { name: "Granted: Counter Node" })).toBeChecked();
+    });
+
+    it("a plugin with no declared scopes shows a 'No declared scopes' placeholder, not an empty string", async () => {
+      const { user, push, pushPlugins } = setup();
+      await goToPlugins(user, push);
+      pushGrants(pushPlugins, [{ pluginId: "bare_plugin", name: "Bare Plugin", scopes: [], granted: false }]);
+
+      expect(screen.getByText("No declared scopes")).toBeInTheDocument();
+    });
+
+    it("checking an ungranted plugin's checkbox fires setPluginGrant with its pluginId and true", async () => {
+      const { user, push, pushPlugins, intents } = setup();
+      await goToPlugins(user, push);
+      pushGrants(pushPlugins, [helloGrant]);
+
+      await user.click(screen.getByRole("checkbox", { name: "Granted: Hello Node" }));
+
+      expect(intents).toContainEqual(["app-plugins", "setPluginGrant", ["hello_node", true]]);
+    });
+
+    it("unchecking an already-granted plugin's checkbox fires setPluginGrant with its pluginId and false", async () => {
+      const { user, push, pushPlugins, intents } = setup();
+      await goToPlugins(user, push);
+      pushGrants(pushPlugins, [counterGrant]);
+
+      await user.click(screen.getByRole("checkbox", { name: "Granted: Counter Node" }));
+
+      expect(intents).toContainEqual(["app-plugins", "setPluginGrant", ["counter_node", false]]);
     });
   });
 });

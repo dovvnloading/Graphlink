@@ -26,6 +26,10 @@ const initialState: AppPluginsState = {
   minCompatibleSchemaVersion: 1,
   revision: 0,
   categories: [],
+  // ADR-014 stage 14.4: required by the "app-plugins" contract now, but
+  // unused here - the grants list only matters to SettingsDialog.tsx's own
+  // Plugins page (Settings > Plugins), not the picker itself.
+  grants: [],
 };
 
 export function PluginPicker({ transport, store }: { transport: WsTransport; store: SceneStore }) {

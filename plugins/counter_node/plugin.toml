@@ -1,0 +1,25 @@
+# plugins/counter_node/plugin.toml
+#
+# ADR-014 stage 14.2's reference plugin for the generic persistence/
+# serialization mechanism - proves a plugin's OWN NodeState subclass (not
+# just title/content) round-trips through save/reload via
+# HostContext.register_node_kind(..., serialize=..., deserialize=...).
+# See plugins/hello_node/ for the "no custom state at all" baseline case
+# this plugin deliberately does NOT repeat.
+
+[plugin]
+id = "counter_node"
+name = "Counter Node Plugin"
+version = "0.1.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "Reference plugin for ADR-014 stage 14.2 - a real NodeState subclass that round-trips through save/reload."
+
+[frontend]
+view = "generic"
+
+[scopes]
+# ADR-014 stage 14.4: this plugin creates a node (add_plugin_node), so it
+# declares graph.mutate - see plugins/hello_node/plugin.toml's own [scopes]
+# comment for the full "self-reported, not itself enforced" contract.
+grants = ["graph.mutate"]

@@ -98,6 +98,7 @@ from backend.chat_library import (
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.session_save import build_chat_data
+from graphlink_settings_store import SettingsManager
 
 logger = logging.getLogger(__name__)
 
@@ -110,12 +111,20 @@ async def autosave_tick(
     canvas_document: SceneDocument,
     notifications: NotificationState | None,
     last_saved: dict[str, Any],
+    settings_manager: "SettingsManager | None" = None,
 ) -> None:
     """One autosave attempt - directly callable (no timer involved), so
     tests can exercise the actual decision/write logic deterministically
     rather than waiting on a real sleep. `last_saved` is the mutable cell
     backend/chat_library.py's _new_save_state() creates and every write path
-    shares (see this module's own docstring, and that function's)."""
+    shares (see this module's own docstring, and that function's).
+
+    ADR-014 review-fix: `settings_manager`, when given, is threaded to
+    build_chat_data so a plugin's own serialize hook is gated on its
+    current Settings > Plugins grant on every autosave tick too, not just
+    a manual Save - see session_save.py's _serialize_plugin_node for the
+    actual check. `None` (this parameter's own default) preserves the
+    exact prior ungated behavior."""
     if not canvas_document.nodes and canvas_document.current_chat_id is None:
         # Mirrors saveChat's own "Nothing was added to the chat canvas yet"
         # guard - an empty, never-saved canvas has nothing worth protecting.
@@ -126,7 +135,9 @@ async def autosave_tick(
         # and only a ref is written into the row. This path is the whole
         # reason that stage exists - without it every 30-second tick
         # rewrote megabytes of base64 for pictures that had not changed.
-        chat_data = build_chat_data(canvas_document, asset_store=store_for(db_path))
+        chat_data = build_chat_data(
+            canvas_document, asset_store=store_for(db_path), settings_manager=settings_manager,
+        )
     except Exception:
         logger.exception("autosave: failed to build chat data for session %r", bus.session_id)
         return
@@ -234,6 +245,7 @@ def register_autosave(
     last_saved: dict[str, Any],
     *,
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS,
+    settings_manager: "SettingsManager | None" = None,
 ) -> None:
     """Starts the one long-lived per-session background task. Stashed on
     `bus.autosave_task` purely so a caller COULD cancel it (e.g. a future
@@ -243,7 +255,10 @@ def register_autosave(
     `last_saved` is owned by the caller (register_chat_library), not created
     here, precisely so the manual save/load/delete paths can seed and
     invalidate the same cell - see this module's own CHANGE-GUARDED
-    paragraph."""
+    paragraph.
+
+    ADR-014 review-fix: `settings_manager` is threaded straight through to
+    autosave_tick - see that function's own docstring."""
 
     async def _guarded_tick() -> None:
         if mutation_guard["active"]:
@@ -262,7 +277,7 @@ def register_autosave(
         mutation_guard["owner"] = AUTOSAVE_OWNER
         mutation_guard["released"].clear()
         try:
-            await autosave_tick(bus, db_path, canvas_document, notifications, last_saved)
+            await autosave_tick(bus, db_path, canvas_document, notifications, last_saved, settings_manager)
         finally:
             mutation_guard["active"] = False
             mutation_guard["owner"] = None

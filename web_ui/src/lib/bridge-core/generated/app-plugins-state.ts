@@ -13,10 +13,18 @@ export interface AppPluginEntry {
   description: string;
 }
 
+export interface AppPluginGrant {
+  pluginId: string;
+  name: string;
+  scopes: string[];
+  granted: boolean;
+}
+
 export interface AppPluginsState {
   schemaVersion: number;
   revision: number;
   categories: AppPluginCategory[];
+  grants: AppPluginGrant[];
   minCompatibleSchemaVersion?: number | null;
 }
 
@@ -69,6 +77,31 @@ function checkAppPluginEntry(value: unknown, path: string, errors: string[]): vo
   }
 }
 
+function checkAppPluginGrant(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["pluginId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pluginId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.pluginId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["name"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.name: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.name` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["scopes"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.scopes: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.scopes` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.scopes` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["granted"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.granted: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.granted` + ": expected boolean"); }
+  }
+}
+
 function checkAppPluginsState(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
   {
@@ -86,6 +119,12 @@ function checkAppPluginsState(value: unknown, path: string, errors: string[]): v
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.categories: missing required field`);
     else { if (!Array.isArray(fieldValue)) errors.push(`${path}.categories` + ": expected array");
     else (fieldValue as unknown[]).forEach((item, i) => { checkAppPluginCategory(item, `${path}.categories` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["grants"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.grants: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.grants` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkAppPluginGrant(item, `${path}.grants` + `[${i}]`, errors); }); }
   }
   {
     const fieldValue = value["minCompatibleSchemaVersion"];

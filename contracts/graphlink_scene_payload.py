@@ -155,6 +155,23 @@ kind=="chat" rows whose turn actually invoked tools, defaulted `[]` for
 every other kind and for tool-less chat turns - same additive rule as
 everything above. See ToolInvocationRow's own docstring for why its
 `arguments` field is a JSON-encoded string, not a nested object.
+
+ADR-014 stage 14.2 adds `pluginState` (dict[str, str]): the Plugin SDK's
+generic live-wire fallback for a THIRD-PARTY plugin's own NodeState
+subclass fields - populated only for a plugin-registered node kind whose
+author opted into HostContext.register_node_kind(..., serialize=...)
+(backend/plugin_sdk.py), defaulted `{}` for every built-in kind and for
+any plugin kind that never opted in, same additive rule as everything
+above. dict[str, str], not a richer nested shape, for the SAME reason
+ResearchResultRow.providerSnapshot above is dict[str, str] rather than a
+bare dict - graphlink_wire_schema.py's generator has no `Any`/free-form-
+object construct, and a third-party plugin's own state shape is
+definitionally unknowable to this schema ahead of time. See backend/
+domain/graph.py's SceneDocument.plugin_node_serializers/_plugin_state_wire
+for the populating side. Not read by the frontend today (same "on the
+wire, not yet a rendered feature" posture `contentParts` above already
+established) - real dynamic frontend plugin rendering is stage 14.5's job,
+per ADR-014's own stage 14.1 scoping decision.
 """
 
 from __future__ import annotations
@@ -549,6 +566,10 @@ class SceneNodeRow:
     builderApprovalToolName: str = ""
     builderApprovalSummary: str = ""
     builderStatusDetail: str = ""
+    # ADR-014 stage 14.2: the Plugin SDK's generic live-wire fallback for a
+    # third-party plugin's own NodeState subclass fields - see this file's
+    # own module docstring for the full rationale.
+    pluginState: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

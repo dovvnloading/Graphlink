@@ -111,6 +111,7 @@ export interface SceneNodeRow {
   builderApprovalToolName: string;
   builderApprovalSummary: string;
   builderStatusDetail: string;
+  pluginState: Record<string, string>;
 }
 
 export interface ConversationMessageRow {
@@ -777,6 +778,12 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["builderStatusDetail"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.builderStatusDetail: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.builderStatusDetail` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["pluginState"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pluginState: missing required field`);
+    else { if (!isRecord(fieldValue)) errors.push(`${path}.pluginState` + ": expected object");
+    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.pluginState` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
   }
 }
 

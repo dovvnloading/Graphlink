@@ -1,0 +1,18 @@
+# plugins/html_renderer/plugin.toml
+#
+# ADR-014 stage 14.3: first-party migration of the pre-SDK "HTML Renderer"
+# built-in picker action - see plugins/web_research/plugin.toml's own
+# comment for the shared rationale (register_builtin_plugin, not
+# register_node_kind, to keep the already-shipped "html" kind string
+# unchanged).
+
+[plugin]
+id = "html_renderer"
+name = "HTML Renderer"
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "Adds a node to render HTML code from a parent node."
+
+[frontend]
+view = "generic"

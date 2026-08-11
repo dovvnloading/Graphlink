@@ -178,6 +178,14 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
         # backend/tests/test_agents.py; failures[i].code there is that
         # object's own .code, e.g. "watchdog_timeout".
         {"root": "failures", "file": "test_agents.py"},
+        # ADR-014 stage 14.3's H3 test-coverage work: RequestCancelled/
+        # ResearchFailure (graphlink_plugins/web_research/domain.py) are
+        # exception classes with their OWN .code error-code string
+        # (e.g. "cancelled", "research_failed") - never a SceneNode -
+        # confined to backend/tests/test_web_research_domain.py, which
+        # exercises exactly these two classes directly.
+        {"root": "RequestCancelled", "file": "test_web_research_domain.py"},
+        {"root": "exc", "file": "test_web_research_domain.py"},
     ),
     "language": (),
     # PR6's "document" kind reuses byte_size/mime_type/duration_seconds,
@@ -191,9 +199,8 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
     ),
     "mime_type": ({"root": "staged", "file": None},),
     "duration_seconds": ({"root": "staged", "file": None},),
-    # PR7's "chat" kind reuses "provider" (never "model" - confirmed no
-    # non-SceneNode ".model" access exists anywhere in SCAN_DIRS), which
-    # collides with two wholly unrelated types: a ResearchSource's own
+    # PR7's "chat" kind reuses "provider", which collides with two wholly
+    # unrelated types: a ResearchSource's own
     # .provider (backend/canvas.py's _research_result_wire, iterating
     # result.sources) and a ModelDescriptor's own .provider (ADR-002 stage
     # 2.7 relocated this from backend/settings.py to
@@ -222,6 +229,12 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
         # model catalogs, so "catalog" never means anything else there.
         {"root": "catalog", "file": "test_model_routing.py"},
     ),
+    # ADR-014 stage 14.3's H3 test-coverage work: WebResearchService's own
+    # .model (its ApiResearchModel/FakeModel dependency, e.g.
+    # `service.model`) is never a SceneNode - confined to
+    # backend/tests/test_web_research_domain.py, which constructs and
+    # asserts against WebResearchService directly.
+    "model": ({"root": "service", "file": "test_web_research_domain.py"},),
 }
 
 
@@ -323,7 +336,7 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "isDocked", "isFinalDeliverable", "isLocked", "isSummaryNote",
     "isSystemPrompt", "isUser", "itemIds", "kind", "language", "mimeType",
     "model", "overrideModelId", "overrideProvider",
-    "pendingRequestId", "previewLabel", "provider", "pycoderAnalysis",
+    "pendingRequestId", "pluginState", "previewLabel", "provider", "pycoderAnalysis",
     "pycoderAwaitingApproval", "pycoderCode", "pycoderError",
     "pycoderLastRunFailed", "pycoderMode", "pycoderOutput", "pycoderPrompt",
     "researchActiveSourceId", "researchCompleted", "researchError",
