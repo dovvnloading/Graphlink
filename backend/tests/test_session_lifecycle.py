@@ -187,7 +187,18 @@ def test_the_background_eviction_loop_survives_a_sweep_that_raises():
         session.idle_since -= 10_000
         assert bus._eviction_task is not None, "session() must have lazily started the real background loop"
 
-        await asyncio.sleep(0.15)
+        # A fixed sleep here (the original approach) bakes in "N intervals
+        # elapse within this exact wall-clock window" - true on an idle
+        # machine, but not under a full-suite run where scheduling delay can
+        # eat into the margin (Windows' own ~15 ms timer granularity doesn't
+        # help at a 20 ms interval - see test_loop_watchdog.py's module
+        # docstring). Polling to a generous deadline instead keeps the happy
+        # path just as fast (~60 ms nominal) while tolerating arbitrary
+        # scheduling delay before it actually fails.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 2.0
+        while calls["n"] < 3 and loop.time() < deadline:
+            await asyncio.sleep(0.01)
 
         assert calls["n"] >= 3, "the loop must keep calling the sweep on every interval, not stop after the first failure"
         assert not bus._eviction_task.done(), "one bad sweep must never end the free-running loop"
