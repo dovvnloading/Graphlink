@@ -11,6 +11,16 @@ human display strings, not meant to be parsed back), preview (a one-line
 snippet of the last message, computed once at save time - see
 backend/chat_library.py's _extract_preview_and_message_count), and
 messageCount.
+
+ADR-020 stage 20.2 adds the real Chat Library UI's own data: each row now
+carries which workspace it belongs to (`workspaceId`) plus its favorite/
+archived flags and tag list, and the state payload gains a full
+`workspaces` list (the switcher's own tab data) alongside `rows` - see
+backend/chat_library.py's get_all_chats/get_all_workspaces for how each is
+built. `tags` is already-sorted (by tag name, case-insensitively),
+deduped, and case-normalized-for-display server-side (backend/
+chat_library.py's set_graph_tags/_normalize_tags) - the frontend renders it
+as-is rather than re-normalizing.
 """
 
 from __future__ import annotations
@@ -28,6 +38,26 @@ class AppChatLibraryRowPayload:
     updatedAtIso: str | None
     preview: str
     messageCount: int
+    # ADR-020 stage 20.2.
+    workspaceId: int
+    favorite: bool
+    archived: bool
+    tags: list[str]
+
+
+@dataclass
+class AppWorkspaceRowPayload:
+    """ADR-020 stage 20.2: one row per workspace, always sent regardless of
+    its own archived state (this whole topic's own "send everything, filter
+    locally" design - see backend/chat_library.py's get_all_workspaces) -
+    the real ChatLibraryDialog switcher hides archived workspaces from its
+    tabs by default, client-side, same as it already does for archived
+    graphs."""
+
+    id: int
+    name: str
+    icon: str
+    archived: bool
 
 
 @dataclass
@@ -35,5 +65,7 @@ class AppChatLibraryStatePayload:
     schemaVersion: int
     revision: int
     rows: list[AppChatLibraryRowPayload]
+    # ADR-020 stage 20.2: the workspace switcher's own data.
+    workspaces: list[AppWorkspaceRowPayload]
     notice: str | None = None
     minCompatibleSchemaVersion: int | None = None

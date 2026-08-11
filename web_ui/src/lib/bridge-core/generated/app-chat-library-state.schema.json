@@ -15,11 +15,17 @@
       "items": {
         "additionalProperties": false,
         "properties": {
+          "archived": {
+            "type": "boolean"
+          },
           "createdAtIso": {
             "type": "string"
           },
           "createdLabel": {
             "type": "string"
+          },
+          "favorite": {
+            "type": "boolean"
           },
           "id": {
             "type": "integer"
@@ -30,6 +36,12 @@
           "preview": {
             "type": "string"
           },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "title": {
             "type": "string"
           },
@@ -38,6 +50,9 @@
           },
           "updatedLabel": {
             "type": "string"
+          },
+          "workspaceId": {
+            "type": "integer"
           }
         },
         "required": [
@@ -46,7 +61,11 @@
           "createdLabel",
           "updatedLabel",
           "preview",
-          "messageCount"
+          "messageCount",
+          "workspaceId",
+          "favorite",
+          "archived",
+          "tags"
         ],
         "type": "object"
       },
@@ -54,12 +73,40 @@
     },
     "schemaVersion": {
       "type": "integer"
+    },
+    "workspaces": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "archived": {
+            "type": "boolean"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "icon",
+          "archived"
+        ],
+        "type": "object"
+      },
+      "type": "array"
     }
   },
   "required": [
     "schemaVersion",
     "revision",
-    "rows"
+    "rows",
+    "workspaces"
   ],
   "title": "AppChatLibraryState",
   "type": "object"

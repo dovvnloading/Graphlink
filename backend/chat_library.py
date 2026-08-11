@@ -43,6 +43,7 @@ import re
 import sqlite3
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -101,8 +102,11 @@ class ConcurrentSaveConflict(RuntimeError):
 # handed. ADR-020 stage 20.1 adds version "2": the "chats" table (still
 # created under that name by migration "1" above, unchanged) is renamed to
 # "graphs" and gains a workspace_id column - see
-# _migration_002_workspaces_and_graphs's own docstring.
-CHATS_DB_SCHEMA_VERSION = 2
+# _migration_002_workspaces_and_graphs's own docstring. ADR-020 stage 20.2
+# adds version "3": graphs gains favorite/archived columns and a tags/
+# graph_tags pair - see _migration_003_tags_favorite_archive's own
+# docstring.
+CHATS_DB_SCHEMA_VERSION = 3
 
 
 # ADR-009 stage 9.2: `created_at`/rename_chat's own `updated_at` are written
@@ -691,18 +695,103 @@ def _migration_002_workspaces_and_graphs(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_graphs_workspace_id ON graphs (workspace_id)")
 
 
+def _migration_003_tags_favorite_archive(conn: sqlite3.Connection) -> None:
+    """ADR-020 stage 20.2, migration "3" (2 -> 3): adds the three pieces of
+    per-graph metadata the real Chat Library UI (workspace switcher, tag
+    chips, favorite/archive icon buttons) needs - `graphs.favorite`,
+    `graphs.archived`, and a `tags`/`graph_tags` join-table pair for a
+    many-to-many graph<->tag relationship. Runs inside run_sqlite_migrations'
+    own managed transaction (manual BEGIN/COMMIT/ROLLBACK around
+    isolation_level=None - see that function's docstring, and
+    _migration_001_initial_schema's own docstring above) - must not BEGIN,
+    COMMIT, or ROLLBACK anything itself.
+
+    Deliberately narrow, matching _migration_002_workspaces_and_graphs's own
+    "one small, narrowly-scoped, independently-testable migration step per
+    stage" precedent (see _MIGRATIONS' own comment below) - this migration
+    does not touch workspaces at all, and does not backfill any tag data
+    (every existing graph simply starts untagged/not-favorited/not-archived,
+    which is exactly what favorite/archived's own `DEFAULT 0` and an empty
+    tags table already give it for free).
+
+    FAVORITE/ARCHIVED COLUMNS: unlike migration "2"'s own `workspace_id`
+    (which needed a non-NULL DEFAULT computed at migration time, and so
+    could NOT also declare a REFERENCES clause - see that migration's own
+    docstring for the empirically-verified reason), `favorite`/`archived`
+    have no FK to declare in the first place - a plain `NOT NULL DEFAULT 0`
+    ALTER TABLE ADD COLUMN, guarded exactly like every other ALTER TABLE in
+    this file (PRAGMA table_info probe first, so a second run against an
+    already-migrated database is a pure no-op).
+
+    TAGS/GRAPH_TAGS AND REAL DECLARED FOREIGN KEYS (verified empirically
+    against this project's actual bundled SQLite - 3.50.4 - via a live
+    cascade-delete test, not assumed from documentation alone): CREATE TABLE
+    has no restriction against a REFERENCES clause combined with a NOT NULL
+    column the way ALTER TABLE ADD COLUMN does (migration "2"'s own
+    constraint above is specific to ADD COLUMN) - so graph_tags declares
+    real `REFERENCES graphs (id) ON DELETE CASCADE` / `REFERENCES tags (id)
+    ON DELETE CASCADE` FKs directly, unlike graphs.workspace_id's
+    intentionally-undeclared conceptual FK. This means delete_chat's own
+    "DELETE FROM graphs WHERE id = ?" (which already cascades into notes/
+    pins - see _migration_001_initial_schema's own docstring) now also
+    cascades into graph_tags for free, with no separate cleanup code needed
+    anywhere in this module - _connect() already issues `PRAGMA foreign_keys
+    = ON` on every connection, before any migration or query ever runs, so
+    this cascade is live the instant a graph row is deleted through this
+    module's normal delete_chat path.
+
+    `tags.name` is `UNIQUE COLLATE NOCASE`: two graphs tagging "Work" and
+    "work" share ONE tags row - the case-insensitive collapse the wire
+    contract's own `tags: list[str]` field docstring promises happens at
+    this constraint (backstopped by set_graph_tags' own server-side
+    normalization, which never trusts the client alone to have already
+    collapsed case) rather than needing a second, redundant application-level
+    uniqueness check.
+
+    Guarded exactly like every migration above: CREATE TABLE IF NOT EXISTS,
+    a PRAGMA table_info probe before each ALTER TABLE, CREATE INDEX IF NOT
+    EXISTS - a second run against an already-migrated database is a pure
+    no-op."""
+    graphs_columns = [info[1] for info in conn.execute("PRAGMA table_info(graphs)").fetchall()]
+    if "favorite" not in graphs_columns:
+        conn.execute("ALTER TABLE graphs ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
+    if "archived" not in graphs_columns:
+        conn.execute("ALTER TABLE graphs ADD COLUMN archived INTEGER NOT NULL DEFAULT 0")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS tags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE COLLATE NOCASE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS graph_tags (
+            graph_id INTEGER NOT NULL REFERENCES graphs (id) ON DELETE CASCADE,
+            tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE,
+            PRIMARY KEY (graph_id, tag_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_tags_tag_id ON graph_tags (tag_id)")
+
+
 # Keyed by the version each function PRODUCES (migration "1" takes a
 # database from 0 -> 1), matching graphlink_migrations' own ordering
 # convention - see run_sqlite_migrations' docstring. ADR-020 stage 20.1
 # added step "2" (bumping CHATS_DB_SCHEMA_VERSION to 2) for the workspaces/
-# graphs schema change - add step "3" here (and bump CHATS_DB_SCHEMA_VERSION
-# to 3) for the next schema change; never renumber or replace step "1" or
-# step "2" now that both have shipped - each must stay exactly what it is
-# today so it keeps correctly upgrading every already-migrated real
-# database.
+# graphs schema change; stage 20.2 added step "3" (bumping
+# CHATS_DB_SCHEMA_VERSION to 3) for the tags/favorite/archive schema change -
+# add step "4" here (and bump CHATS_DB_SCHEMA_VERSION to 4) for the next
+# schema change; never renumber or replace step "1", "2", or "3" now that
+# all three have shipped - each must stay exactly what it is today so it
+# keeps correctly upgrading every already-migrated real database.
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_workspaces_and_graphs,
+    3: _migration_003_tags_favorite_archive,
 }
 
 
@@ -724,11 +813,32 @@ def get_all_chats(db_path: Path, notifications: NotificationState | None = None)
     # closing() + the connection's own transaction context: sqlite3's
     # `with conn:` commits/rolls back but does NOT close the connection -
     # without closing() the handle would linger until garbage collection.
+    # ADR-020 stage 20.2: workspace_id/favorite/archived are plain columns on
+    # graphs, pulled in the same SELECT as everything else. tags is a
+    # separate query (a graph<->tag many-to-many via graph_tags) rather than
+    # a JOIN against the row SELECT above - a JOIN would multiply each
+    # multi-tagged graph's row once per tag, which this function would then
+    # have to de-duplicate back down anyway; one small second query plus an
+    # in-memory group-by is simpler and, for the corpus size this app
+    # targets (hundreds of graphs, a handful of tags each - see this ADR's
+    # own "send everything, filter locally" design note), not meaningfully
+    # more expensive. Ordered by tag name (COLLATE NOCASE, matching tags.name
+    # itself) so each graph's own tag list already arrives display-sorted -
+    # no second Python-side sort needed.
     with contextlib.closing(_connect(db_path, notifications=notifications)) as conn, conn:
         rows = conn.execute(
-            "SELECT id, title, created_at, updated_at, preview, message_count "
+            "SELECT id, title, created_at, updated_at, preview, message_count, "
+            "workspace_id, favorite, archived "
             "FROM graphs ORDER BY updated_at DESC"
         ).fetchall()
+        tag_rows = conn.execute(
+            "SELECT graph_tags.graph_id, tags.name FROM graph_tags "
+            "JOIN tags ON tags.id = graph_tags.tag_id "
+            "ORDER BY tags.name COLLATE NOCASE"
+        ).fetchall()
+    tags_by_graph_id: dict[int, list[str]] = {}
+    for graph_id, tag_name in tag_rows:
+        tags_by_graph_id.setdefault(int(graph_id), []).append(str(tag_name))
     return [
         {
             "id": int(row[0]),
@@ -739,6 +849,10 @@ def get_all_chats(db_path: Path, notifications: NotificationState | None = None)
             "updatedAtIso": _format_timestamp_iso(row[3]),
             "preview": str(row[4] or ""),
             "messageCount": int(row[5] or 0),
+            "workspaceId": int(row[6]),
+            "favorite": bool(row[7]),
+            "archived": bool(row[8]),
+            "tags": tags_by_graph_id.get(int(row[0]), []),
         }
         for row in rows
     ]
@@ -755,6 +869,155 @@ def rename_chat(db_path: Path, chat_id: int, new_title: str) -> None:
 def delete_chat(db_path: Path, chat_id: int) -> None:
     with contextlib.closing(_connect(db_path)) as conn, conn:
         conn.execute("DELETE FROM graphs WHERE id = ?", (chat_id,))
+
+
+# -- ADR-020 stage 20.2: favorite/archived/tags + workspaces CRUD -----------
+#
+# Deliberately mirror rename_chat/delete_chat's own shape immediately above
+# (explicit db_path param, one function per single-field mutation, no
+# updated_at bump) rather than a single generic "patch this graph" function -
+# each is triggered by one row's own dedicated action button/input in the
+# real UI (a star toggle, an archive toggle, a tag-edit commit), exactly like
+# rename/delete already are, not a bulk list editor (see
+# SettingsManager.set_plugin_grant's own docstring for the precedent this
+# follows: a single-item write path, not McpServersPage's whole-collection
+# replace, for a mutation scoped to one row's own control).
+#
+# NONE of favorite/archived/tags bump `updated_at` (unlike rename_chat above,
+# and unlike save_chat_atomically_row's real content writes) - these are
+# metadata toggles, not content edits, and get_all_chats orders by
+# `updated_at DESC`. Bumping it here would silently re-sort (and re-bucket
+# under a date-grouped UI's "Today" section) every chat a user merely starred
+# or archived, which reads as a bug, not a feature - the same "no
+# reason to disturb the list order" instinct chat_library.py's own audit-fix
+# history already established for loadChat/saveChat's own digest bookkeeping
+# (see _new_save_state's own docstring, point 1).
+
+
+def set_graph_favorite(db_path: Path, graph_id: int, favorite: bool) -> None:
+    with contextlib.closing(_connect(db_path)) as conn, conn:
+        conn.execute(
+            "UPDATE graphs SET favorite = ? WHERE id = ?",
+            (1 if favorite else 0, graph_id),
+        )
+
+
+def set_graph_archived(db_path: Path, graph_id: int, archived: bool) -> None:
+    with contextlib.closing(_connect(db_path)) as conn, conn:
+        conn.execute(
+            "UPDATE graphs SET archived = ? WHERE id = ?",
+            (1 if archived else 0, graph_id),
+        )
+
+
+def _normalize_tags(tags: list[str]) -> list[str]:
+    """Trim/drop-empty/case-insensitively-dedupe a raw tag list BEFORE it
+    ever reaches SQL - the server-side half of the wire contract's own
+    "don't trust the client alone" requirement (tags.name's own UNIQUE
+    COLLATE NOCASE constraint is the storage-level backstop; this is the
+    Python-level one, so a caller never even attempts a same-collation
+    INSERT that constraint would reject). First-seen casing wins on a
+    collision (["work", "Work"] -> ["work"]) - an arbitrary but deterministic
+    tie-break; which casing "wins" has no behavioral consequence since every
+    lookup and constraint downstream is already case-insensitive."""
+    seen: dict[str, str] = {}
+    for raw in tags:
+        trimmed = str(raw).strip()
+        if not trimmed:
+            continue
+        key = trimmed.casefold()
+        if key not in seen:
+            seen[key] = trimmed
+    return list(seen.values())
+
+
+def set_graph_tags(db_path: Path, graph_id: int, tags: list[str]) -> None:
+    """BULK REPLACE of graph_id's full tag set - not an add/remove delta, per
+    this stage's own wire contract for setGraphTags. Deletes every existing
+    graph_tags row for graph_id, then (re)creates exactly the normalized set:
+    `INSERT OR IGNORE` into tags is what makes a name collision against an
+    EXISTING tag (any casing, thanks to tags.name's own COLLATE NOCASE
+    constraint) a safe no-op instead of a raised IntegrityError, and the
+    follow-up SELECT resolves to whichever row - new or pre-existing - is now
+    the canonical one for that name.
+
+    Orphaned tags (a tags row no graph_tags row references anymore, after
+    this or a later delete_chat's own cascade) are deliberately left in the
+    tags table rather than swept here - a tag a user is actively mid-typing
+    across two different graphs in quick succession should not have its own
+    row vanish and get regenerated with a new id between those two calls,
+    and an unused tags row is cheap (a handful of bytes, no unbounded growth
+    given this app's own "hundreds of graphs" scale)."""
+    normalized = _normalize_tags(tags)
+    with contextlib.closing(_connect(db_path)) as conn, conn:
+        conn.execute("DELETE FROM graph_tags WHERE graph_id = ?", (graph_id,))
+        for tag_name in normalized:
+            conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag_name,))
+            tag_row = conn.execute("SELECT id FROM tags WHERE name = ?", (tag_name,)).fetchone()
+            conn.execute(
+                "INSERT OR IGNORE INTO graph_tags (graph_id, tag_id) VALUES (?, ?)",
+                (graph_id, int(tag_row[0])),
+            )
+
+
+def get_all_workspaces(db_path: Path) -> list[dict[str, Any]]:
+    """Every workspace row (including archived ones - the same "backend
+    always sends everything, filtering is client-side" design this whole
+    stage's wire contract already uses for graphs/rows - see this module's
+    own get_all_chats). Ordered by id (creation order), matching
+    workspaces.id's own AUTOINCREMENT semantics - stable and predictable for
+    a switcher-tabs UI, unlike ordering by name (which would reshuffle tabs
+    as workspaces are renamed) or updated_at (workspaces have no such
+    column)."""
+    with contextlib.closing(_connect(db_path)) as conn, conn:
+        rows = conn.execute("SELECT id, name, icon, archived FROM workspaces ORDER BY id").fetchall()
+    return [
+        {"id": int(row[0]), "name": str(row[1]), "icon": str(row[2] or ""), "archived": bool(row[3])}
+        for row in rows
+    ]
+
+
+def create_workspace(db_path: Path, name: str) -> dict[str, Any] | None:
+    """Creates a new workspace. Returns the created row's shape (id, name,
+    icon, archived) on success, or None for an empty/whitespace-only name -
+    the caller (createWorkspace's own intent handler) treats a None return as
+    a rejected request: a notification is shown and the topic is NOT
+    republished, matching rename's own `if not title: return` no-mutation
+    convention immediately above rather than silently accepting a blank
+    workspace name."""
+    trimmed = str(name or "").strip()
+    if not trimmed:
+        return None
+    with contextlib.closing(_connect(db_path)) as conn, conn:
+        cursor = conn.execute("INSERT INTO workspaces (name) VALUES (?)", (trimmed,))
+        workspace_id = int(cursor.lastrowid)
+    return {"id": workspace_id, "name": trimmed, "icon": "", "archived": False}
+
+
+def rename_workspace(db_path: Path, workspace_id: int, name: str) -> None:
+    title = str(name or "").strip()
+    if not title:
+        return
+    with contextlib.closing(_connect(db_path)) as conn, conn:
+        conn.execute("UPDATE workspaces SET name = ? WHERE id = ?", (title, workspace_id))
+
+
+def archive_workspace(db_path: Path, workspace_id: int, archived: bool) -> None:
+    """Archiving/unarchiving a workspace touches ONLY the workspaces row -
+    its graphs are untouched (still `archived = 0` unless a graph was
+    separately archived via set_graph_archived above), matching this stage's
+    own design note that archiving a workspace must not archive or delete
+    the graphs inside it. A UI that hides archived workspaces from its
+    switcher tabs by default (this stage's own real ChatLibraryDialog does)
+    is a client-side filtering choice, not something this function needs to
+    know about - get_all_workspaces above always returns every workspace,
+    archived or not, same "send everything, filter locally" posture as
+    get_all_chats."""
+    with contextlib.closing(_connect(db_path)) as conn, conn:
+        conn.execute(
+            "UPDATE workspaces SET archived = ? WHERE id = ?",
+            (1 if archived else 0, workspace_id),
+        )
 
 
 def load_chat_row(db_path: Path, chat_id: int) -> dict[str, Any] | None:
@@ -844,6 +1107,7 @@ def save_chat_atomically_row(
     pins_data: list[dict[str, Any]],
     *,
     expected_updated_at: str | None = None,
+    workspace_id: int | None = None,
 ) -> tuple[int, str]:
     """Mirrors ChatDatabase.save_chat_atomically (database.py:271-315): ONE
     shared connection - UPDATE if `chat_id` is truthy, else INSERT (the
@@ -898,7 +1162,29 @@ def save_chat_atomically_row(
     back after the write. See _TIMESTAMP_DISPLAY_FORMATS' own comment for
     how the display-formatting functions handle both this and the older,
     second-resolution format that pre-9.2 rows and rename_chat's own writes
-    still use."""
+    still use.
+
+    ADR-020 stage 20.2: `workspace_id`, when given (not None), is written
+    ONLY on the INSERT branch below - a resave of an EXISTING graph (the
+    UPDATE branch) never touches which workspace it belongs to, no matter
+    what `workspace_id` a caller happens to pass; the parameter is silently
+    ignored there rather than accepted-but-unused, so a future caller cannot
+    be misled into believing this can move a graph between workspaces.
+    `workspace_id=None` (the default, and what every pre-20.2 caller and
+    test still passes) omits the column from the INSERT entirely, which
+    means the row falls back to `graphs.workspace_id`'s own schema-level
+    `DEFAULT` - the Default workspace's real id, fixed in place by
+    _migration_002_workspaces_and_graphs at the moment it ran - preserving
+    this function's exact pre-20.2 INSERT behavior byte-for-byte. Callers
+    that DO know which workspace a new graph belongs to (backend/
+    chat_library.py's own save_chat closure, reading
+    canvas_document.current_workspace_id - see that field's own docstring in
+    backend/domain/graph.py) are expected to have ALREADY validated the id
+    against a real, current workspace row before calling this - this
+    function trusts the value it is given rather than re-querying
+    workspaces here, matching save_chat_atomically_row's own long-standing
+    "the caller resolves titles/ids, this function only writes" division of
+    labor (see e.g. how `title` itself already arrives fully resolved)."""
     chat_data_json = json.dumps(chat_data)
     preview, message_count = _extract_preview_and_message_count(chat_data)
     with contextlib.closing(_connect(db_path)) as conn:
@@ -924,6 +1210,13 @@ def save_chat_atomically_row(
                         (title, chat_data_json, preview, message_count, now, chat_id),
                     )
                 resolved_chat_id = chat_id
+            elif workspace_id is not None:
+                cursor = conn.execute(
+                    "INSERT INTO graphs (title, data, preview, message_count, updated_at, workspace_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (title, chat_data_json, preview, message_count, now, workspace_id),
+                )
+                resolved_chat_id = cursor.lastrowid
             else:
                 cursor = conn.execute(
                     "INSERT INTO graphs (title, data, preview, message_count, updated_at) "
@@ -1234,6 +1527,12 @@ def make_serialize_mutating_intent(
 def chat_library_payload(db_path: Path, notifications: NotificationState | None = None) -> dict[str, Any]:
     try:
         rows = get_all_chats(db_path, notifications=notifications)
+        # ADR-020 stage 20.2: the workspace switcher's own data - fetched
+        # inside the SAME try/except as rows above (a corrupt/locked
+        # chats.db fails both queries the same way, and this stage's own
+        # wire contract has no separate "workspaces failed to load" notice
+        # distinct from "could not load saved chats").
+        workspaces = get_all_workspaces(db_path)
         notice = None
     except sqlite3.Error as exc:
         # Recoverable inline message, matching ChatLibraryBridge's own
@@ -1244,8 +1543,9 @@ def chat_library_payload(db_path: Path, notifications: NotificationState | None 
         # real lock/IO error) - a plain corruption has already self-healed
         # silently by the time get_all_chats would ever raise.
         rows = []
+        workspaces = []
         notice = f"Could not load saved chats: {exc}"
-    return {"rows": rows, "notice": notice}
+    return {"rows": rows, "notice": notice, "workspaces": workspaces}
 
 
 def make_load_chat(
@@ -1449,6 +1749,12 @@ def make_save_chat(
             new_chat_id, new_updated_at = await asyncio.to_thread(
                 save_chat_atomically_row, resolved_path, chat_id_for_save, title, chat_data, notes_data, pins_data,
                 expected_updated_at=expected_updated_at,
+                # ADR-020 stage 20.2: only meaningful on the INSERT branch
+                # (chat_id_for_save falsy) - see save_chat_atomically_row's
+                # own workspace_id docstring. canvas_document.current_
+                # workspace_id was already validated against a real
+                # workspace by new_chat() before it was ever set.
+                workspace_id=canvas_document.current_workspace_id,
             )
         except ConcurrentSaveConflict:
             # ADR-009 stage 9.2 exit criterion: a lost write race is
@@ -1481,6 +1787,59 @@ def make_save_chat(
             await bus.publish("notification")
 
     return save_chat
+
+
+# ADR-020 stage 20.2: args schemas for the 6 new intents on "app-chat-
+# library", matching the ADR-003 dataclass-args_schema convention already
+# established elsewhere in this codebase (backend/plugins.py's
+# ExecutePluginArgs/InvokePluginIntentArgs/SetPluginGrantArgs, backend/
+# notifications.py's ShowMessageArgs) - dataclass FIELD ORDER is the
+# positional mapping dispatch_intent validates a real request's args
+# against (see backend/events.py's _validate_intent_args). This topic's
+# five PRE-EXISTING intents (renameChat/deleteChat/loadChat/saveChat/
+# newChat, all registered with no args_schema at all - verified directly
+# against this file, not assumed) are deliberately left as-is: retrofitting
+# them is unrelated churn outside this stage's own scope, so only the
+# genuinely NEW intents below opt into ADR-003 validation.
+@dataclass
+class SetGraphFavoriteArgs:
+    graphId: int
+    favorite: bool
+
+
+@dataclass
+class SetGraphArchivedArgs:
+    graphId: int
+    archived: bool
+
+
+@dataclass
+class SetGraphTagsArgs:
+    """`tags` is the graph's FULL replacement tag set - a bulk replace, not
+    an add/remove delta. See set_graph_tags' own docstring."""
+
+    graphId: int
+    tags: list[str]
+
+
+@dataclass
+class CreateWorkspaceArgs:
+    name: str
+
+
+@dataclass
+class RenameWorkspaceArgs:
+    workspaceId: int
+    name: str
+
+
+@dataclass
+class ArchiveWorkspaceArgs:
+    """Archiving (or unarchiving) a workspace never touches its graphs -
+    see archive_workspace's own docstring."""
+
+    workspaceId: int
+    archived: bool
 
 
 def register_chat_library(
@@ -1616,7 +1975,7 @@ def register_chat_library(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
     )
 
-    async def new_chat():
+    async def new_chat(workspace_id: int | None = None):
         # R6.5: the backend counterpart of legacy's "start with an empty
         # scene" - there is no legacy method this ports 1:1 (Qt's
         # ChatSessionManager has no "new chat" concept at all; a fresh scene
@@ -1625,7 +1984,36 @@ def register_chat_library(
         # exactly like clear_for_load already does for a session LOAD.
         if canvas_document is None:
             return
+
+        # ADR-020 stage 20.2: resolve/validate the caller's requested
+        # workspace BEFORE clear_for_load() below (which itself resets
+        # current_workspace_id to None) - an invalid/unknown workspaceId
+        # (never existed, or since deleted - there is no deleteWorkspace
+        # intent yet, but a caller could still send a stale/bogus id) falls
+        # back to None here. None is exactly what save_chat_atomically_row's
+        # own workspace_id=None default already resolves to the Default
+        # workspace for, via graphs.workspace_id's own schema DEFAULT (see
+        # that function's own docstring) - so "omitted or invalid ->
+        # Default" is satisfied by ONE fallback path, not two. Every OTHER
+        # caller of newChat in the codebase (e.g. commands.ts's palette "new
+        # chat" command) keeps calling this with zero args, which is
+        # `workspace_id=None` here - byte-identical pre-20.2 behavior.
+        resolved_workspace_id: int | None = None
+        if workspace_id is not None:
+            try:
+                candidate_workspace_id = int(workspace_id)
+            except (TypeError, ValueError):
+                candidate_workspace_id = None
+            if candidate_workspace_id is not None:
+                existing_workspace_ids = {
+                    workspace["id"]
+                    for workspace in await asyncio.to_thread(get_all_workspaces, resolved_path)
+                }
+                if candidate_workspace_id in existing_workspace_ids:
+                    resolved_workspace_id = candidate_workspace_id
+
         canvas_document.clear_for_load()
+        canvas_document.current_workspace_id = resolved_workspace_id
         # clear_for_load drops current_chat_id, so the save state that
         # described the old document no longer describes anything.
         _last_saved["digest"] = None
@@ -1633,11 +2021,78 @@ def register_chat_library(
         _last_saved["updated_at"] = None
         await bus.publish("scene")
 
+    # -- ADR-020 stage 20.2: the 6 new intents -------------------------------
+    #
+    # Mirror rename/delete's own shape immediately above: a single
+    # asyncio.to_thread call into the matching CRUD function, then republish
+    # "app-chat-library" so every attached window's list/switcher picks up
+    # the change - the same pattern every existing intent on this topic
+    # already uses. None of these six go through _serialize_mutating_intent -
+    # unlike loadChat/saveChat/newChat, they never touch canvas_document
+    # (the live in-memory scene), only chats.db rows, so there is nothing
+    # here for that guard to serialize against; renameChat/deleteChat (the
+    # topic's two other pre-existing chats.db-only intents) are the same way.
+
+    async def set_favorite(graph_id: int, favorite: bool):
+        await asyncio.to_thread(set_graph_favorite, resolved_path, int(graph_id), bool(favorite))
+        await bus.publish("app-chat-library")
+
+    async def set_archived(graph_id: int, archived: bool):
+        await asyncio.to_thread(set_graph_archived, resolved_path, int(graph_id), bool(archived))
+        await bus.publish("app-chat-library")
+
+    async def set_tags(graph_id: int, tags: list[str]):
+        # Server-side trim/dedupe/case-collapse happens inside
+        # set_graph_tags itself (_normalize_tags) - never trusting the
+        # client's own list, matching this stage's own wire-contract
+        # requirement.
+        await asyncio.to_thread(set_graph_tags, resolved_path, int(graph_id), list(tags))
+        await bus.publish("app-chat-library")
+
+    async def create_ws(name: str):
+        # create_workspace's own empty/whitespace-only guard returns None
+        # without mutating anything - branching on that return value (rather
+        # than re-checking `name` here too) keeps the single source of
+        # truth for "what counts as a valid workspace name" in one place.
+        created = await asyncio.to_thread(create_workspace, resolved_path, name)
+        if created is None:
+            if notifications is not None:
+                notifications.show("Workspace name cannot be empty.", "warning")
+                await bus.publish("notification")
+            return
+        await bus.publish("app-chat-library")
+
+    async def rename_ws(workspace_id: int, name: str):
+        # Same non-empty guard as rename (renameChat) immediately above -
+        # an empty/whitespace name is ignored, no mutation, no error, no
+        # republish.
+        title = str(name or "").strip()
+        if not title:
+            return
+        await asyncio.to_thread(rename_workspace, resolved_path, int(workspace_id), title)
+        await bus.publish("app-chat-library")
+
+    async def archive_ws(workspace_id: int, archived: bool):
+        await asyncio.to_thread(archive_workspace, resolved_path, int(workspace_id), bool(archived))
+        await bus.publish("app-chat-library")
+
     bus.register_intent("app-chat-library", "renameChat", rename)
     bus.register_intent("app-chat-library", "deleteChat", delete)
     bus.register_intent("app-chat-library", "loadChat", _serialize_mutating_intent(load_chat))
     bus.register_intent("app-chat-library", "saveChat", _serialize_mutating_intent(save_chat))
     bus.register_intent("app-chat-library", "newChat", _serialize_mutating_intent(new_chat))
+    bus.register_intent(
+        "app-chat-library", "setGraphFavorite", set_favorite, args_schema=SetGraphFavoriteArgs,
+    )
+    bus.register_intent(
+        "app-chat-library", "setGraphArchived", set_archived, args_schema=SetGraphArchivedArgs,
+    )
+    bus.register_intent("app-chat-library", "setGraphTags", set_tags, args_schema=SetGraphTagsArgs)
+    bus.register_intent("app-chat-library", "createWorkspace", create_ws, args_schema=CreateWorkspaceArgs)
+    bus.register_intent("app-chat-library", "renameWorkspace", rename_ws, args_schema=RenameWorkspaceArgs)
+    bus.register_intent(
+        "app-chat-library", "archiveWorkspace", archive_ws, args_schema=ArchiveWorkspaceArgs,
+    )
 
     if canvas_document is not None and autosave_interval_seconds is not None:
         # R6.6: local import - backend/autosave.py itself imports several
@@ -1744,6 +2199,9 @@ def flush_dirty_session_before_teardown(
         new_chat_id, new_updated_at = save_chat_atomically_row(
             db_path, chat_id_for_save, title, chat_data, notes_data, pins_data,
             expected_updated_at=expected_updated_at,
+            # ADR-020 stage 20.2: same reasoning as make_save_chat's own
+            # save_chat closure - only consulted on the INSERT branch.
+            workspace_id=canvas_document.current_workspace_id,
         )
     except ConcurrentSaveConflict:
         logger.warning(

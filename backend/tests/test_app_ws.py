@@ -377,7 +377,7 @@ def test_junk_args_never_crash_or_disconnect_any_registered_intent():
         assert ws.receive_json()["kind"] == "result"
 
 
-def test_args_schema_is_scoped_to_exactly_the_known_5_intents():
+def test_args_schema_is_scoped_to_exactly_the_known_11_intents():
     # ADR-003 stage 3.2 review-fix: the fuzz sweep above proves every intent
     # replies safely, but it only checks message["kind"], not the error TEXT
     # - a schema-validation rejection and an unmigrated handler's own generic
@@ -390,9 +390,12 @@ def test_args_schema_is_scoped_to_exactly_the_known_5_intents():
     # fail the fuzz sweep. Originally the exact 3 intents ADR-003 stage 3.2's
     # own PR description claimed to have migrated (showInfo/showError/
     # executePlugin); ADR-014 stage 14.4 added 2 more
-    # (invokePluginIntent/setPluginGrant), both deliberately, not drift -
-    # a real intentional additions to this set updates it explicitly, the
-    # same discipline this test itself exists to enforce.
+    # (invokePluginIntent/setPluginGrant); ADR-020 stage 20.2 added 6 more on
+    # "app-chat-library" (setGraphFavorite/setGraphArchived/setGraphTags/
+    # createWorkspace/renameWorkspace/archiveWorkspace) - each a real,
+    # deliberate addition, not drift - a real intentional addition to this
+    # set updates it explicitly, the same discipline this test itself exists
+    # to enforce.
     client = make_client()
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"kind": "subscribe", "topics": ["system"]})
@@ -409,6 +412,12 @@ def test_args_schema_is_scoped_to_exactly_the_known_5_intents():
             ("app-plugins", "executePlugin"),
             ("app-plugins", "invokePluginIntent"),
             ("app-plugins", "setPluginGrant"),
+            ("app-chat-library", "setGraphFavorite"),
+            ("app-chat-library", "setGraphArchived"),
+            ("app-chat-library", "setGraphTags"),
+            ("app-chat-library", "createWorkspace"),
+            ("app-chat-library", "renameWorkspace"),
+            ("app-chat-library", "archiveWorkspace"),
         }
 
 
