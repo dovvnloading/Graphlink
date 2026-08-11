@@ -30,7 +30,7 @@ import importlib
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 # ADR-003 stage 3.2: json_schema_for's source (formerly contracts/payload_schema.py)
 # moved to the repo root as graphlink_wire_schema.py, so the runtime backend
@@ -326,8 +326,23 @@ def _validator_for(name: str, fields: dict[str, Any]) -> str:
 # design decision each time (see graphlink_composer_payload.py's own module
 # docstring), not something to infer by scanning the filesystem for anything
 # shaped like one.
+class _ArtifactEntry(TypedDict):
+    # ADR-015 stage 15.5: a TypedDict, not a plain dict, specifically so
+    # entry["ts_path"] etc. narrow to their own declared type (Path) instead
+    # of the union of every value type in the dict (mypy can't narrow a
+    # plain dict's value type from a string-literal key the way it does for
+    # TypedDict) - that union-typed-access was the actual root cause behind
+    # every mypy error this module used to have.
+    dataclass: type | None
+    dataclass_import: tuple[str, str]
+    title: str
+    source: str
+    schema_path: Path
+    ts_path: Path
+
+
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-GENERATED_ARTIFACTS = [
+GENERATED_ARTIFACTS: list[_ArtifactEntry] = [
     {
         "dataclass": None,  # resolved lazily in main() to avoid importing
         "dataclass_import": ("graphlink_token_counter_payload", "TokenCounterStatePayload"),

@@ -3,8 +3,10 @@
 
 _normalize_repo_path / _safe_local_target are the security boundary between an
 LLM-proposed file path and a write to the user's local disk - keeping them Qt-free and
-directly importable is what lets tests/test_gitlink_path_safety.py exercise them without
-any Qt widget or GUI application object.
+directly importable is what lets backend/tests/test_gitlink_domain.py's path-safety
+tests (test_normalize_repo_path_rejects_dotdot_traversal,
+test_read_local_repo_file_blocks_path_traversal) exercise them without any Qt widget
+or GUI application object.
 
 GitlinkNode's build_context_bundle/_resolve_scope_paths/_scan_local_repo_paths
 deliberately did NOT move here even though they were the original target of this
