@@ -95,6 +95,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-chat-library", "createWorkspace", "B", "whole-session: creates a new workspace organizing unit, not a document edit"),
     Classified("app-chat-library", "renameWorkspace", "B", "whole-session: renames a workspace, not a document edit"),
     Classified("app-chat-library", "archiveWorkspace", "B", "whole-session: archives a workspace (its graphs are untouched), not a document edit"),
+    Classified("app-chat-library", "setWorkspaceDefaultModel", "B", "whole-session: sets a workspace's own default-model pin, not a document edit"),
 
     # -- backend/plugins.py (app-plugins) ------------------------------------
     Classified("app-plugins", "executePlugin", "A", "content: creates a new node (Web Research/Gitlink/PyCoder/Sandbox/Artifact/System-Prompt note/Conversation/HTML) - every branch wraps its own pluginX command_type"),

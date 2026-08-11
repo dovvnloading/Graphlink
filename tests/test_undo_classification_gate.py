@@ -252,10 +252,11 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # invokePluginIntent/setPluginGrant pair, and 159 -> 165 when ADR-020
     # stage 20.2 added app-chat-library's own setGraphFavorite/
     # setGraphArchived/setGraphTags/createWorkspace/renameWorkspace/
-    # archiveWorkspace sextet.
+    # archiveWorkspace sextet, and 165 -> 166 when ADR-020 stage 20.3 added
+    # app-chat-library's own setWorkspaceDefaultModel.
     real = _collect_real_registrations()
-    assert len(real) == 165, (
-        f"expected exactly 165 real registered intents, found {len(real)} - "
+    assert len(real) == 166, (
+        f"expected exactly 166 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

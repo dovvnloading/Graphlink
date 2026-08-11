@@ -273,6 +273,122 @@ class TestMigrationBackfill:
         assert results[0]["document_id"] == outcome.document_id
 
 
+class TestMigration004WorkspaceScopedCollections:
+    """ADR-020 stage 20.3, migration "4" (3 -> 4): collections.workspace_id.
+    Mirrors TestMigrationBackfill's own "simulate a real user upgrading in
+    place" shape - ingest against schema version 3 (no workspace_id column
+    yet), then let the module's own real target version (4) take over."""
+
+    def test_a_migration_from_3_to_4_adds_the_column_without_disturbing_existing_collections(
+        self, db_path, monkeypatch,
+    ):
+        monkeypatch.setattr(ks, "KNOWLEDGE_DB_SCHEMA_VERSION", 3)
+        monkeypatch.setattr(ks, "_MIGRATIONS", {
+            1: ks._migration_001_initial_schema,
+            2: ks._migration_002_fts5_lexical_index,
+            3: ks._migration_003_vector_index,
+        })
+        outcome = _ingest(db_path, text="Pre-existing content about giraffes.", collection_id=7)
+
+        monkeypatch.undo()
+        # The real, production connect path - any query function drives it.
+        assert ks.get_document(db_path, outcome.document_id) is not None
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == ks.KNOWLEDGE_DB_SCHEMA_VERSION
+            collections_columns = {info[1] for info in conn.execute("PRAGMA table_info(collections)").fetchall()}
+            assert "workspace_id" in collections_columns
+            # Pre-existing collection_id=7 documents are untouched - this
+            # migration adds a NEW nullable column, it never backfills or
+            # reinterprets the pre-20.3 collection_id=0-style sentinel.
+            row = conn.execute(
+                "SELECT collection_id FROM documents WHERE id = ?", (outcome.document_id,),
+            ).fetchone()
+            assert row[0] == 7
+        finally:
+            conn.close()
+
+    def test_fresh_database_lands_on_version_4_with_the_workspace_id_column(self, db_path):
+        outcome = _ingest(db_path, text="Fresh install content.")
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == ks.KNOWLEDGE_DB_SCHEMA_VERSION
+            collections_columns = {info[1] for info in conn.execute("PRAGMA table_info(collections)").fetchall()}
+            assert "workspace_id" in collections_columns
+        finally:
+            conn.close()
+        assert ks.get_document(db_path, outcome.document_id) is not None
+
+    def test_migration_is_idempotent_when_run_twice_in_a_row(self, db_path):
+        _ingest(db_path, text="First document.")
+        _ingest(db_path, text="A second, different document.")
+        conn = sqlite3.connect(db_path)
+        try:
+            columns = [info[1] for info in conn.execute("PRAGMA table_info(collections)").fetchall()]
+            assert columns.count("workspace_id") == 1
+        finally:
+            conn.close()
+
+
+class TestGetOrCreateWorkspaceCollection:
+    """ADR-020 stage 20.3's own scoping decision (see this module's own
+    module-docstring update): exactly ONE auto-created collection per
+    workspace, resolved idempotently - the mechanism the exit criterion's
+    own "two workspaces' corpora are separate" half rests on."""
+
+    def test_creates_a_new_collection_on_first_call_for_a_workspace(self, db_path):
+        collection_id = ks.get_or_create_workspace_collection(db_path, 42)
+        assert isinstance(collection_id, int)
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT workspace_id FROM collections WHERE id = ?", (collection_id,),
+            ).fetchone()
+            assert row == (42,)
+        finally:
+            conn.close()
+
+    def test_repeated_calls_for_the_same_workspace_return_the_same_id_not_a_new_row(self, db_path):
+        first = ks.get_or_create_workspace_collection(db_path, 5)
+        second = ks.get_or_create_workspace_collection(db_path, 5)
+        third = ks.get_or_create_workspace_collection(db_path, 5)
+        assert first == second == third
+        conn = sqlite3.connect(db_path)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM collections WHERE workspace_id = ?", (5,),
+            ).fetchone()[0]
+            assert count == 1
+        finally:
+            conn.close()
+
+    def test_two_different_workspaces_get_two_genuinely_different_collections(self, db_path):
+        collection_a = ks.get_or_create_workspace_collection(db_path, 1)
+        collection_b = ks.get_or_create_workspace_collection(db_path, 2)
+        assert collection_a != collection_b
+
+    def test_documents_ingested_into_different_workspace_collections_are_isolated(self, db_path):
+        collection_a = ks.get_or_create_workspace_collection(db_path, 100)
+        collection_b = ks.get_or_create_workspace_collection(db_path, 200)
+
+        _ingest(db_path, text="Alpha workspace exclusive content.", collection_id=collection_a)
+        _ingest(db_path, text="Beta workspace exclusive content.", collection_id=collection_b)
+
+        docs_a = ks.list_documents(db_path, collection_id=collection_a)
+        docs_b = ks.list_documents(db_path, collection_id=collection_b)
+        assert len(docs_a) == 1 and len(docs_b) == 1
+        assert docs_a[0]["id"] != docs_b[0]["id"]
+
+        results_a = ks.search_chunks(db_path, "exclusive content", collection_id=collection_a)
+        assert len(results_a) == 1
+        assert "alpha" in results_a[0]["text"].lower()
+
+        results_b = ks.search_chunks(db_path, "exclusive content", collection_id=collection_b)
+        assert len(results_b) == 1
+        assert "beta" in results_b[0]["text"].lower()
+
+
 class TestFts5LexicalSearch:
     def test_search_finds_a_matching_chunk_with_correct_citation_fields(self, db_path):
         text = "The quick brown fox jumps over the lazy dog."

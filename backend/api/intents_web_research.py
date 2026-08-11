@@ -10,11 +10,15 @@ node.
 
 from __future__ import annotations
 
+import asyncio
+
 from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
 from backend.domain.model import SceneError
 from backend.events import SessionBus
+from backend.knowledge_store import DEFAULT_DB_PATH as KNOWLEDGE_DEFAULT_DB_PATH
+from backend.knowledge_store import get_or_create_workspace_collection
 from backend.notifications import NotificationState
 
 
@@ -75,6 +79,27 @@ def register_web_research_intents(
             document.fail_web_research_run(node_id, cancelled=cancelled, message=str(exc))
             await bus.publish("scene")
 
+        # ADR-020 stage 20.3: resolves the calling session's current
+        # workspace's own knowledge collection BEFORE dispatch, exactly
+        # like every other real ingestion call site in this ADR stage -
+        # cheap (a single indexed SELECT, or an INSERT the very first time
+        # this workspace ever retains anything) but still real blocking
+        # SQLite I/O, so it goes through asyncio.to_thread rather than
+        # running inline on the event loop, same posture as backend/api/
+        # intents_knowledge.py's own search()/set_chat_index_into_
+        # knowledge(). document.current_workspace_id is None for a session
+        # that has not yet loaded/created any chat with a real workspace
+        # context - falls back to 0, the pre-20.3 global/unscoped sentinel
+        # (backend/knowledge_store.py's own module docstring), matching
+        # every other real call site's identical fallback.
+        workspace_id = document.current_workspace_id
+        if workspace_id is None:
+            knowledge_collection_id = 0
+        else:
+            knowledge_collection_id = await asyncio.to_thread(
+                get_or_create_workspace_collection, KNOWLEDGE_DEFAULT_DB_PATH, workspace_id,
+            )
+
         await agent_dispatcher.start_web_research(
             bus=bus,
             notifications_state=notifications,
@@ -85,6 +110,7 @@ def register_web_research_intents(
             on_progress=_on_progress,
             on_success=_on_success,
             on_failure=_on_failure,
+            knowledge_collection_id=knowledge_collection_id,
         )
         return node_id
 

@@ -59,15 +59,15 @@ class AppWorkspaceRowPayload:
     graphlink_model_catalog.resolve_model_ref's node->branch->workspace->auto
     chain) - empty string on BOTH means "no workspace default set", matching
     workspaces.default_model_provider/default_model_id's own NOT NULL
-    DEFAULT '' column shape, not a null/omitted-field sentinel. Defaulted
-    to "" here (rather than left required) so this stage's frontend work can
-    land and typecheck against a real generated wire type ahead of the
-    concurrent backend stage 20.3 commit that populates get_all_workspaces
-    with real values and adds the corresponding DB columns + setWorkspaceDefaultModel
-    intent handler - the same "frontend commit lands referencing a topic the
-    backend hasn't wired a handler for yet, backend's own commit completes
-    it" sequencing stage 20.2's own two commits (5999fbf then 4bd1185) already
-    used for createWorkspace/renameWorkspace/archiveWorkspace."""
+    DEFAULT '' column shape (backend/chat_library.py's migration "4"), not
+    a null/omitted-field sentinel. `get_all_workspaces`/`create_workspace`
+    always send both explicitly (never omit them), matching this whole
+    topic's own "send everything" posture - the `= ""` defaults below exist
+    purely so a hand-built payload in a test doesn't need to spell out both
+    fields when it doesn't care about them, not because a real row is ever
+    missing them. Backend CRUD: get_workspace_default_model/
+    set_workspace_default_model; wire intent: setWorkspaceDefaultModel
+    (workspaceId, provider, modelId) on "app-chat-library"."""
 
     id: int
     name: str

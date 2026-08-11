@@ -35,6 +35,23 @@ would not enforce what it looks like it enforces (SQL NULL is never equal
 to another NULL, so two unscoped documents with identical content would
 NOT collide), and `collections.id` is an AUTOINCREMENT primary key that
 never produces 0, so the sentinel can never collide with a real row.
+
+WORKSPACE-SCOPED KNOWLEDGE (ADR-020 stage 20.3) - SCOPING DECISION, made
+explicit here rather than left to be inferred: this stage gives every
+backend/chat_library.py workspace EXACTLY ONE collection (`collections.
+workspace_id`, migration "4" below), created lazily on first real ingest/
+search via get_or_create_workspace_collection - NOT a general, user-facing
+"create/rename/delete many named collections per workspace" feature. That
+larger surface (a collection browser, assigning documents to specific
+collections, etc.) is deliberately out of scope for this stage - the exit
+criterion this stage is built around is "two workspaces' corpora are
+separate", not "users can manage arbitrarily many collections" - and is
+left for a future stage to build only if it turns out to be needed. The
+pre-20.3 `collection_id=0` global/unscoped pool is untouched by this
+stage: every document ingested before this migration, and every document
+ingested by a caller with no real workspace context of its own (see e.g.
+backend/api/intents_knowledge.py's own None-workspace fallback), keeps
+landing there exactly as it always has.
 """
 
 from __future__ import annotations
@@ -71,7 +88,7 @@ BACKUP_FILENAME_PREFIX = "knowledge-"
 # a mid-batch crash without re-snapshotting on every single document.
 BACKUP_CADENCE_SECONDS = 600.0
 
-KNOWLEDGE_DB_SCHEMA_VERSION = 3
+KNOWLEDGE_DB_SCHEMA_VERSION = 4
 
 
 def content_hash(text: str) -> str:
@@ -219,10 +236,46 @@ def _migration_003_vector_index(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_embeddings_model_id ON embeddings (model_id)")
 
 
+def _migration_004_workspace_scoped_collections(conn: sqlite3.Connection) -> None:
+    """3 -> 4 (ADR-020 stage 20.3): `collections.workspace_id` - scopes each
+    collection (and, transitively, every document/chunk ingested into it)
+    to a real backend/chat_library.py `workspaces` row - a DIFFERENT SQLite
+    database file (chats.db, not this module's own knowledge.db), so no
+    declared SQL FOREIGN KEY is possible across the two; this is a
+    conceptual FK enforced by this codebase's own CRUD only, same posture
+    as backend/chat_library.py's own graphs.workspace_id -> workspaces.id
+    link (see that migration's own docstring for the identical empirically-
+    grounded reasoning about undeclared cross-store/ADD-COLUMN FKs).
+
+    NULL (not 0) is "no workspace assigned" here - deliberately NOT the
+    same sentinel as documents.collection_id's own `0` ("no collection
+    assigned" - this module's own docstring), which already means
+    something real and different: every document ingested before this
+    stage (and every one ingested by a caller that still has no workspace
+    context of its own - see backend/api/intents_knowledge.py's own
+    fallback) keeps landing in collection_id 0, the pre-20.3 global/
+    unscoped pool, completely untouched by this migration. A collections
+    row with workspace_id NULL is simply one this stage's own code never
+    produces (get_or_create_workspace_collection below always supplies a
+    real int) - nullable rather than defaulting to some sentinel int so a
+    later migration can tell "predates workspace-scoping" apart from
+    "deliberately global" without overloading one column for both.
+
+    Guarded exactly like every migration in this module and its sibling
+    backend/chat_library.py: a PRAGMA table_info probe before the ALTER
+    TABLE, so a second run against an already-migrated database is a pure
+    no-op."""
+    collections_columns = [info[1] for info in conn.execute("PRAGMA table_info(collections)").fetchall()]
+    if "workspace_id" not in collections_columns:
+        conn.execute("ALTER TABLE collections ADD COLUMN workspace_id INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_collections_workspace_id ON collections (workspace_id)")
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_fts5_lexical_index,
     3: _migration_003_vector_index,
+    4: _migration_004_workspace_scoped_collections,
 }
 
 
@@ -502,6 +555,47 @@ def list_chunks_for_document(db_path: Path, document_id: int) -> list[dict[str, 
             }
             for row in rows
         ]
+    finally:
+        conn.close()
+
+
+def get_or_create_workspace_collection(db_path: Path, workspace_id: int) -> int:
+    """ADR-020 stage 20.3: the ONE collection-creation code path this stage
+    builds - per the ADR's own scoping decision, every workspace gets
+    EXACTLY one collection, created lazily on first real use, never
+    surfaced as a separately manageable entity (no create_collection(name,
+    ...) API for users - see this module's own module docstring update for
+    the full reasoning). Idempotent by construction: a SELECT first, an
+    INSERT only on a genuine miss, so every real call site (backend/api/
+    intents_knowledge.py's search()/branch-indexing, graphlink_plugins/
+    web_research/service.py's retention) can simply call this on EVERY
+    real ingest/search for a workspace with no "did I already create this
+    workspace's collection" bookkeeping of its own to carry - and it is
+    self-healing: a workspace whose collection row is missing (never
+    created, or knowledge.db was restored from a backup that predates it)
+    just gets a fresh one on the very next call, rather than erroring.
+
+    `name`/`scope` are cosmetic only - nothing in this codebase's own UI
+    ever displays a collection by name (the ADR's own "invisible, not a
+    general collection-management UI" scoping decision) - `name` is a
+    stable, deterministic f"workspace-{workspace_id}" (useful only for a
+    human inspecting the raw .db file directly), `scope` reuses the
+    pre-20.3 column literally ("workspace") purely for that same manual-
+    inspection value; neither is read back by any real code path in this
+    codebase."""
+    conn = _connect(db_path)
+    try:
+        with conn:
+            row = conn.execute(
+                "SELECT id FROM collections WHERE workspace_id = ?", (workspace_id,)
+            ).fetchone()
+            if row is not None:
+                return int(row[0])
+            cursor = conn.execute(
+                "INSERT INTO collections (name, scope, created_at, workspace_id) VALUES (?, ?, ?, ?)",
+                (f"workspace-{workspace_id}", "workspace", _now_iso(), workspace_id),
+            )
+            return int(cursor.lastrowid)
     finally:
         conn.close()
 

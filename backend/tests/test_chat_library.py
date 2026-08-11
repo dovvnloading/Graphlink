@@ -42,6 +42,7 @@ from backend.chat_library import (
     flush_dirty_session_before_teardown,
     get_all_chats,
     get_all_workspaces,
+    get_workspace_default_model,
     load_chat_row,
     load_notes_rows,
     load_pins_rows,
@@ -52,6 +53,7 @@ from backend.chat_library import (
     set_graph_archived,
     set_graph_favorite,
     set_graph_tags,
+    set_workspace_default_model,
 )
 from backend.events import IntentValidationError, SessionBus
 from backend.notifications import NotificationState
@@ -859,6 +861,235 @@ class TestMigration003AddsTagsFavoriteArchive:
             conn.close()
 
 
+def _create_migration_3_shaped_db(db_path) -> list[int]:
+    """ADR-020 stage 20.3's own analog of _create_migration_2_shaped_db
+    above: builds a chats.db in EXACTLY the shape a real, already-upgraded
+    (through ADR-020 stage 20.2) install has TODAY, right before this
+    stage's own migration "4" ever runs against it - workspaces + graphs
+    (favorite/archived, no default-model/knowledge-collection columns yet)
+    + tags/graph_tags + notes/pins, real rows in more than one workspace,
+    PRAGMA user_version explicitly left at 3.
+
+    Returns the inserted graph ids, in insertion order (mirrors
+    _create_migration_2_shaped_db's own two-Default-one-other split)."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE workspaces (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, "
+            "icon TEXT NOT NULL DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "archived INTEGER NOT NULL DEFAULT 0)"
+        )
+        default_id = conn.execute("INSERT INTO workspaces (name) VALUES ('Default')").lastrowid
+        other_id = conn.execute("INSERT INTO workspaces (name) VALUES ('Research')").lastrowid
+
+        conn.execute(
+            "CREATE TABLE graphs (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "data TEXT NOT NULL, preview TEXT DEFAULT '', message_count INTEGER DEFAULT 0, "
+            f"workspace_id INTEGER NOT NULL DEFAULT {default_id}, "
+            "favorite INTEGER NOT NULL DEFAULT 0, archived INTEGER NOT NULL DEFAULT 0)"
+        )
+        conn.execute(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "content TEXT NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, width REAL NOT NULL, "
+            "height REAL NOT NULL, color TEXT NOT NULL, header_color TEXT, "
+            "is_system_prompt INTEGER DEFAULT 0, is_summary_note INTEGER DEFAULT 0, "
+            "FOREIGN KEY (chat_id) REFERENCES graphs (id) ON DELETE CASCADE)"
+        )
+        conn.execute(
+            "CREATE TABLE pins (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "title TEXT NOT NULL, note TEXT, position_x REAL NOT NULL, position_y REAL NOT NULL, "
+            "pin_id TEXT, sort_order INTEGER DEFAULT 0, anchor_item_id TEXT, created_at TEXT, "
+            "FOREIGN KEY (chat_id) REFERENCES graphs (id) ON DELETE CASCADE)"
+        )
+        conn.execute(
+            "CREATE TABLE tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE COLLATE NOCASE)"
+        )
+        conn.execute(
+            "CREATE TABLE graph_tags (graph_id INTEGER NOT NULL REFERENCES graphs (id) ON DELETE CASCADE, "
+            "tag_id INTEGER NOT NULL REFERENCES tags (id) ON DELETE CASCADE, PRIMARY KEY (graph_id, tag_id))"
+        )
+        conn.execute("CREATE INDEX idx_notes_chat_id ON notes (chat_id)")
+        conn.execute("CREATE INDEX idx_pins_chat_id ON pins (chat_id)")
+        conn.execute("CREATE INDEX idx_graphs_workspace_id ON graphs (workspace_id)")
+        conn.execute("CREATE INDEX idx_graph_tags_tag_id ON graph_tags (tag_id)")
+
+        graph_ids = []
+        for title, workspace_id in (
+            ("First Graph", default_id),
+            ("Second Graph", default_id),
+            ("Third Graph", other_id),
+        ):
+            cursor = conn.execute(
+                "INSERT INTO graphs (title, data, workspace_id) VALUES (?, ?, ?)",
+                (title, json.dumps({"nodes": []}), workspace_id),
+            )
+            graph_ids.append(cursor.lastrowid)
+        conn.commit()
+
+        conn.execute("PRAGMA user_version = 3")
+        conn.commit()
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        return graph_ids
+    finally:
+        conn.close()
+
+
+class TestMigration004WorkspaceDefaults:
+    """ADR-020 stage 20.3's own fidelity proof, mirroring
+    TestMigration003AddsTagsFavoriteArchive above precisely: hand-build a
+    real migration-3-shaped chats.db, drive it through the REAL production
+    connect path (never a hand-called migration function), and assert
+    every original row survives byte-for-byte with the new columns landing
+    correctly around it."""
+
+    def test_existing_workspaces_get_empty_default_model_and_null_collection_id(self, db_path):
+        graph_ids = _create_migration_3_shaped_db(db_path)
+
+        rows = get_all_chats(db_path)
+        assert len(rows) == 3
+        assert {row["id"] for row in rows} == set(graph_ids)
+
+        workspaces = get_all_workspaces(db_path)
+        assert len(workspaces) == 2
+        for workspace in workspaces:
+            assert workspace["defaultModelProvider"] == ""
+            assert workspace["defaultModelId"] == ""
+        assert get_workspace_default_model(db_path, workspaces[0]["id"]) is None
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+            workspaces_columns = {info[1] for info in conn.execute("PRAGMA table_info(workspaces)").fetchall()}
+            assert {"default_model_provider", "default_model_id", "knowledge_collection_id"} <= workspaces_columns
+
+            rows = conn.execute(
+                "SELECT default_model_provider, default_model_id, knowledge_collection_id FROM workspaces"
+            ).fetchall()
+            for provider, model_id, collection_id in rows:
+                assert provider == ""
+                assert model_id == ""
+                assert collection_id is None
+
+            # Deliberately narrow, matching this migration's own docstring:
+            # graphs/tags/graph_tags are completely untouched.
+            graph_titles = {row[0] for row in conn.execute("SELECT title FROM graphs").fetchall()}
+            assert graph_titles == {"First Graph", "Second Graph", "Third Graph"}
+        finally:
+            conn.close()
+
+    def test_fresh_database_lands_on_version_4_with_the_new_columns(self, db_path):
+        assert not db_path.exists()
+
+        rows = get_all_chats(db_path)
+
+        assert rows == []
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+            workspaces_columns = {info[1] for info in conn.execute("PRAGMA table_info(workspaces)").fetchall()}
+            assert {"default_model_provider", "default_model_id", "knowledge_collection_id"} <= workspaces_columns
+            default_row = conn.execute(
+                "SELECT default_model_provider, default_model_id, knowledge_collection_id FROM workspaces"
+            ).fetchone()
+            assert default_row == ("", "", None)
+        finally:
+            conn.close()
+
+    def test_migration_is_idempotent_when_run_twice_in_a_row(self, db_path):
+        graph_ids = _create_migration_3_shaped_db(db_path)
+
+        get_all_chats(db_path)
+        rows_after_second_connect = get_all_chats(db_path)
+
+        assert {row["id"] for row in rows_after_second_connect} == set(graph_ids)
+        conn = sqlite3.connect(db_path)
+        try:
+            # A second run must not duplicate the new columns - the PRAGMA
+            # table_info probe itself proves no OperationalError ("duplicate
+            # column name") was raised by a naive re-ALTER.
+            workspaces_columns = [info[1] for info in conn.execute("PRAGMA table_info(workspaces)").fetchall()]
+            assert workspaces_columns.count("default_model_provider") == 1
+            assert workspaces_columns.count("default_model_id") == 1
+            assert workspaces_columns.count("knowledge_collection_id") == 1
+            assert conn.execute("SELECT COUNT(*) FROM workspaces").fetchone()[0] == 2
+        finally:
+            conn.close()
+
+
+class TestWorkspaceDefaultModelCrud:
+    def test_set_then_get_round_trips_the_pinned_model(self, db_path):
+        workspace = create_workspace(db_path, "Research")
+        assert get_workspace_default_model(db_path, workspace["id"]) is None
+
+        set_workspace_default_model(db_path, workspace["id"], "Anthropic Claude", "claude-opus-5")
+
+        assert get_workspace_default_model(db_path, workspace["id"]) == ("Anthropic Claude", "claude-opus-5")
+        rows = get_all_workspaces(db_path)
+        [row] = [r for r in rows if r["id"] == workspace["id"]]
+        assert row["defaultModelProvider"] == "Anthropic Claude"
+        assert row["defaultModelId"] == "claude-opus-5"
+
+    def test_setting_both_empty_clears_a_previously_set_default(self, db_path):
+        workspace = create_workspace(db_path, "Research")
+        set_workspace_default_model(db_path, workspace["id"], "Ollama", "llama3")
+        assert get_workspace_default_model(db_path, workspace["id"]) is not None
+
+        set_workspace_default_model(db_path, workspace["id"], "", "")
+
+        assert get_workspace_default_model(db_path, workspace["id"]) is None
+
+    def test_a_half_set_pair_is_treated_as_fully_unset(self, db_path):
+        workspace = create_workspace(db_path, "Research")
+        set_workspace_default_model(db_path, workspace["id"], "Anthropic Claude", "")
+        assert get_workspace_default_model(db_path, workspace["id"]) is None
+
+    def test_two_different_workspaces_hold_independent_defaults(self, db_path):
+        ws1 = create_workspace(db_path, "Research")
+        ws2 = create_workspace(db_path, "Personal")
+        set_workspace_default_model(db_path, ws1["id"], "Anthropic Claude", "claude-opus-5")
+        set_workspace_default_model(db_path, ws2["id"], "Ollama", "llama3")
+
+        assert get_workspace_default_model(db_path, ws1["id"]) == ("Anthropic Claude", "claude-opus-5")
+        assert get_workspace_default_model(db_path, ws2["id"]) == ("Ollama", "llama3")
+
+    def test_a_never_existed_workspace_id_returns_none(self, db_path):
+        get_all_chats(db_path)  # bootstraps a fresh, fully-migrated db
+        assert get_workspace_default_model(db_path, 999999) is None
+
+    def test_create_workspace_starts_with_no_default_model(self, db_path):
+        created = create_workspace(db_path, "Fresh")
+        assert created["defaultModelProvider"] == ""
+        assert created["defaultModelId"] == ""
+
+
+class TestSetWorkspaceDefaultModelIntent:
+    def test_intent_sets_the_default_and_republishes_the_topic(self, db_path):
+        bus, document, notifications = _bus_with_canvas(db_path)
+        workspace = create_workspace(db_path, "Research")
+
+        asyncio.run(bus.dispatch_intent(
+            "app-chat-library", "setWorkspaceDefaultModel", [workspace["id"], "Anthropic Claude", "claude-opus-5"],
+        ))
+
+        assert get_workspace_default_model(db_path, workspace["id"]) == ("Anthropic Claude", "claude-opus-5")
+        payload = chat_library_payload(db_path)
+        [row] = [w for w in payload["workspaces"] if w["id"] == workspace["id"]]
+        assert row["defaultModelProvider"] == "Anthropic Claude"
+        assert row["defaultModelId"] == "claude-opus-5"
+
+    def test_intent_with_both_empty_clears_it(self, db_path):
+        bus, document, notifications = _bus_with_canvas(db_path)
+        workspace = create_workspace(db_path, "Research")
+        set_workspace_default_model(db_path, workspace["id"], "Ollama", "llama3")
+
+        asyncio.run(bus.dispatch_intent(
+            "app-chat-library", "setWorkspaceDefaultModel", [workspace["id"], "", ""],
+        ))
+
+        assert get_workspace_default_model(db_path, workspace["id"]) is None
+
+
 def test_get_all_chats_reads_real_rows(db_path):
     first_id = _insert_chat(db_path, "First")
     second_id = _insert_chat(db_path, "Second")
@@ -1436,6 +1667,39 @@ def test_load_chat_intent_shows_an_error_notification_for_a_missing_chat(db_path
 
     assert document.nodes == {}
     assert notifications.visible and notifications.msg_type == "error"
+
+
+def test_load_chat_intent_sets_current_workspace_id_from_the_loaded_graphs_own_row(db_path):
+    """ADR-020 stage 20.3 adversarial-review fix (see load_chat_row's own
+    docstring): opening an EXISTING chat that belongs to some other, real
+    workspace must set canvas_document.current_workspace_id to THAT
+    workspace's id - not leave it at whatever newChat last set (usually
+    None) - because this stage's own workspace-scoped model/knowledge
+    resolution reads exactly this field on every dispatch/search. This is
+    the single most common real flow (open a saved chat, keep working), not
+    just a corner case of newChat(workspaceId=...)."""
+    get_all_chats(db_path)  # bootstraps a fresh, fully-migrated db (Default workspace seeded)
+    other_workspace = create_workspace(db_path, "Research")
+    chat_id, _ = save_chat_atomically_row(
+        db_path, None, "In Research", {"nodes": []}, [], [], workspace_id=other_workspace["id"],
+    )
+    bus, document, notifications = _bus_with_canvas(db_path)
+    assert document.current_workspace_id is None  # nothing loaded yet
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+
+    assert document.current_workspace_id == other_workspace["id"]
+
+
+def test_load_chat_intent_sets_current_workspace_id_to_default_for_a_default_workspace_chat(db_path):
+    get_all_chats(db_path)  # bootstraps a fresh, fully-migrated db (Default workspace seeded)
+    default_workspace_id = get_all_workspaces(db_path)[0]["id"]
+    chat_id, _ = save_chat_atomically_row(db_path, None, "In Default", {"nodes": []}, [], [])
+    bus, document, notifications = _bus_with_canvas(db_path)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+
+    assert document.current_workspace_id == default_workspace_id
 
 
 def test_load_chat_intent_restores_notes_and_pins_too(db_path):

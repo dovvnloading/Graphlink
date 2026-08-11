@@ -105,8 +105,11 @@ class ConcurrentSaveConflict(RuntimeError):
 # _migration_002_workspaces_and_graphs's own docstring. ADR-020 stage 20.2
 # adds version "3": graphs gains favorite/archived columns and a tags/
 # graph_tags pair - see _migration_003_tags_favorite_archive's own
-# docstring.
-CHATS_DB_SCHEMA_VERSION = 3
+# docstring. ADR-020 stage 20.3 adds version "4": workspaces gains a
+# per-workspace default model pin and a (this stage deliberately leaves
+# unpopulated - see that migration's own docstring) knowledge-collection
+# mirror column - see _migration_004_workspace_defaults's own docstring.
+CHATS_DB_SCHEMA_VERSION = 4
 
 
 # ADR-009 stage 9.2: `created_at`/rename_chat's own `updated_at` are written
@@ -778,20 +781,84 @@ def _migration_003_tags_favorite_archive(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_graph_tags_tag_id ON graph_tags (tag_id)")
 
 
+def _migration_004_workspace_defaults(conn: sqlite3.Connection) -> None:
+    """ADR-020 stage 20.3, migration "4" (3 -> 4): gives each workspace its
+    own default model pin (the genuinely new "workspace default" rung of
+    graphlink_model_catalog.resolve_model_ref's chain - see backend/
+    agents.py's _resolve_model_ref_for_dispatch for the real caller this
+    stage finally wires up) plus a knowledge-collection mirror column. Runs
+    inside run_sqlite_migrations' own managed transaction (manual BEGIN/
+    COMMIT/ROLLBACK around isolation_level=None - see that function's
+    docstring, and _migration_001_initial_schema's own docstring above) -
+    must not BEGIN, COMMIT, or ROLLBACK anything itself.
+
+    DEFAULT_MODEL_PROVIDER/DEFAULT_MODEL_ID: `NOT NULL DEFAULT ''` (not
+    NULL-able) - EMPTY STRING is this pair's own "unset" sentinel, checked
+    by get_workspace_default_model below (`if not provider or not
+    model_id: return None`), never SQL NULL. This mirrors graphs.
+    workspace_id's own migration-2 precedent of a plain, undeclared-FK
+    column with a concrete default rather than a nullable one - the
+    resolver that reads these two columns (backend/agents.py's
+    _resolve_model_ref_for_dispatch) needs a value it can compare with a
+    cheap truthiness check on every dispatch, not a three-way NULL/empty/
+    set distinction it would have to special-case.
+
+    KNOWLEDGE_COLLECTION_ID: genuinely nullable (no DEFAULT at all) -
+    unlike the two columns above, NULL here is a real, meaningful "not yet
+    resolved" state, not conflated with any other value. SCOPING DECISION,
+    made explicit here per this stage's own design note (the ADR's own
+    "document this as deliberate, not incomplete"): this column is added
+    to the schema exactly as designed, but THIS STAGE never writes or
+    reads it from any real code path. The single source of truth for
+    "which knowledge_store.py collection belongs to this workspace" is
+    knowledge.db's own `collections.workspace_id` column, resolved via
+    backend/knowledge_store.py's get_or_create_workspace_collection - a
+    plain, cheap, idempotent SELECT-or-INSERT called fresh by every real
+    ingest/search call site (backend/api/intents_knowledge.py, graphlink_
+    plugins/web_research/service.py) on every use, self-healing by
+    construction (a workspace whose collection row is missing, was never
+    created, or was restored from an older knowledge.db backup simply gets
+    a fresh one - see that function's own docstring). A denormalized
+    mirror of that id living in THIS database (chats.db, a separate SQLite
+    file - no declared cross-database FK is possible) would only ever be
+    as fresh as whichever caller last bothered to write it back, and could
+    silently point at a since-restored-away collection id after a
+    knowledge.db corruption rescue; trusting it for real resolution would
+    be strictly WORSE than just asking knowledge.db directly, which is
+    already cheap enough to do unconditionally. The column exists so a
+    future stage that wants to expose/display "this workspace's own
+    knowledge collection" without opening a second database file has
+    somewhere to put that value - reserved, not (yet) wired to anything.
+
+    Guarded exactly like every migration above: a PRAGMA table_info probe
+    before each ALTER TABLE, so a second run against an already-migrated
+    database is a pure no-op."""
+    workspaces_columns = [info[1] for info in conn.execute("PRAGMA table_info(workspaces)").fetchall()]
+    if "default_model_provider" not in workspaces_columns:
+        conn.execute("ALTER TABLE workspaces ADD COLUMN default_model_provider TEXT NOT NULL DEFAULT ''")
+    if "default_model_id" not in workspaces_columns:
+        conn.execute("ALTER TABLE workspaces ADD COLUMN default_model_id TEXT NOT NULL DEFAULT ''")
+    if "knowledge_collection_id" not in workspaces_columns:
+        conn.execute("ALTER TABLE workspaces ADD COLUMN knowledge_collection_id INTEGER")
+
+
 # Keyed by the version each function PRODUCES (migration "1" takes a
 # database from 0 -> 1), matching graphlink_migrations' own ordering
 # convention - see run_sqlite_migrations' docstring. ADR-020 stage 20.1
 # added step "2" (bumping CHATS_DB_SCHEMA_VERSION to 2) for the workspaces/
 # graphs schema change; stage 20.2 added step "3" (bumping
-# CHATS_DB_SCHEMA_VERSION to 3) for the tags/favorite/archive schema change -
-# add step "4" here (and bump CHATS_DB_SCHEMA_VERSION to 4) for the next
-# schema change; never renumber or replace step "1", "2", or "3" now that
-# all three have shipped - each must stay exactly what it is today so it
-# keeps correctly upgrading every already-migrated real database.
+# CHATS_DB_SCHEMA_VERSION to 3) for the tags/favorite/archive schema change;
+# stage 20.3 added step "4" (bumping CHATS_DB_SCHEMA_VERSION to 4) for the
+# workspace-default-model/knowledge-collection-mirror schema change - add
+# step "5" here (and bump CHATS_DB_SCHEMA_VERSION to 5) for the next schema
+# change; never renumber or replace step "1" through "4" now that all four
+# have shipped - each must stay exactly what it is today so it keeps
+# correctly upgrading every already-migrated real database.
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_workspaces_and_graphs,
     3: _migration_003_tags_favorite_archive,
+    4: _migration_004_workspace_defaults,
 }
 
 
@@ -968,30 +1035,106 @@ def get_all_workspaces(db_path: Path) -> list[dict[str, Any]]:
     workspaces.id's own AUTOINCREMENT semantics - stable and predictable for
     a switcher-tabs UI, unlike ordering by name (which would reshuffle tabs
     as workspaces are renamed) or updated_at (workspaces have no such
-    column)."""
+    column).
+
+    ADR-020 stage 20.3: `defaultModelProvider`/`defaultModelId` (both ''
+    when unset - see migration "4"'s own docstring) ride along on every row,
+    same "send everything, filter/render locally" posture as favorite/
+    archived/tags already have on get_all_chats' own rows."""
     with contextlib.closing(_connect(db_path)) as conn, conn:
-        rows = conn.execute("SELECT id, name, icon, archived FROM workspaces ORDER BY id").fetchall()
+        rows = conn.execute(
+            "SELECT id, name, icon, archived, default_model_provider, default_model_id "
+            "FROM workspaces ORDER BY id"
+        ).fetchall()
     return [
-        {"id": int(row[0]), "name": str(row[1]), "icon": str(row[2] or ""), "archived": bool(row[3])}
+        {
+            "id": int(row[0]),
+            "name": str(row[1]),
+            "icon": str(row[2] or ""),
+            "archived": bool(row[3]),
+            "defaultModelProvider": str(row[4] or ""),
+            "defaultModelId": str(row[5] or ""),
+        }
         for row in rows
     ]
 
 
 def create_workspace(db_path: Path, name: str) -> dict[str, Any] | None:
     """Creates a new workspace. Returns the created row's shape (id, name,
-    icon, archived) on success, or None for an empty/whitespace-only name -
-    the caller (createWorkspace's own intent handler) treats a None return as
-    a rejected request: a notification is shown and the topic is NOT
-    republished, matching rename's own `if not title: return` no-mutation
-    convention immediately above rather than silently accepting a blank
-    workspace name."""
+    icon, archived, defaultModelProvider, defaultModelId) on success, or
+    None for an empty/whitespace-only name - the caller (createWorkspace's
+    own intent handler) treats a None return as a rejected request: a
+    notification is shown and the topic is NOT republished, matching
+    rename's own `if not title: return` no-mutation convention immediately
+    above rather than silently accepting a blank workspace name.
+
+    ADR-020 stage 20.3: a brand-new workspace always starts with no default
+    model pinned (empty strings, matching migration "4"'s own DEFAULT '' for
+    every pre-existing row) - a caller sets one afterward via
+    set_workspace_default_model, same "create first, configure after" shape
+    as rename_workspace/archive_workspace already establish for their own
+    fields."""
     trimmed = str(name or "").strip()
     if not trimmed:
         return None
     with contextlib.closing(_connect(db_path)) as conn, conn:
         cursor = conn.execute("INSERT INTO workspaces (name) VALUES (?)", (trimmed,))
         workspace_id = int(cursor.lastrowid)
-    return {"id": workspace_id, "name": trimmed, "icon": "", "archived": False}
+    return {
+        "id": workspace_id, "name": trimmed, "icon": "", "archived": False,
+        "defaultModelProvider": "", "defaultModelId": "",
+    }
+
+
+def get_workspace_default_model(db_path: Path, workspace_id: int) -> tuple[str, str] | None:
+    """ADR-020 stage 20.3: the workspace-default rung's own read path - the
+    real caller is backend/agents.py's _resolve_model_ref_for_dispatch,
+    which builds the actual graphlink_model_catalog.ModelRef itself (this
+    module deliberately does not import that root module just to construct
+    one - matching every other "this module returns plain data, the caller
+    builds domain types" split already established here, e.g. get_all_chats
+    returning plain dicts rather than SceneNode instances).
+
+    Returns (provider, model_id), or None when workspace_id does not exist
+    OR has no default set - EITHER column empty counts as "no default" (a
+    half-set pair, only reachable via a UI bug or a hand-edited row, is
+    treated exactly like a fully-unset one, never a confusing partial
+    resolution - see set_workspace_default_model's own docstring for the
+    write-side half of this same posture)."""
+    with contextlib.closing(_connect(db_path)) as conn, conn:
+        row = conn.execute(
+            "SELECT default_model_provider, default_model_id FROM workspaces WHERE id = ?",
+            (workspace_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    provider = str(row[0] or "").strip()
+    model_id = str(row[1] or "").strip()
+    if not provider or not model_id:
+        return None
+    return provider, model_id
+
+
+def set_workspace_default_model(db_path: Path, workspace_id: int, provider: str, model_id: str) -> None:
+    """ADR-020 stage 20.3: sets (or, given ("", "") for both, CLEARS - see
+    migration "4"'s own docstring on empty-string being this pair's "unset"
+    sentinel) the workspace's own default model pin. Both fields write
+    together, mirroring backend/domain/branches.py's own set_model_override
+    "no partial value" posture for the node/branch-level pin this rung sits
+    directly below in graphlink_model_catalog.resolve_model_ref's chain -
+    trimmed independently rather than validated-as-a-pair, so a genuinely
+    partial write (one empty, one not - a UI bug, never something the real
+    ChatLibraryDialog picker can produce) resolves to "no default set"
+    (get_workspace_default_model's own either-empty-counts-as-unset check)
+    rather than a confusing half-set state, matching create_workspace's own
+    trim-not-reject posture for `name`."""
+    provider = str(provider or "").strip()
+    model_id = str(model_id or "").strip()
+    with contextlib.closing(_connect(db_path)) as conn, conn:
+        conn.execute(
+            "UPDATE workspaces SET default_model_provider = ?, default_model_id = ? WHERE id = ?",
+            (provider, model_id, workspace_id),
+        )
 
 
 def rename_workspace(db_path: Path, workspace_id: int, name: str) -> None:
@@ -1022,10 +1165,10 @@ def archive_workspace(db_path: Path, workspace_id: int, archived: bool) -> None:
 
 def load_chat_row(db_path: Path, chat_id: int) -> dict[str, Any] | None:
     """Mirrors ChatDatabase.load_chat, extended for ADR-009 stage 9.2:
-    {"title", "data", "updated_at"} with `data` already json.loads()'d, or
-    None if the id doesn't exist (a chat deleted from another window/
-    process between the library listing and this call - the caller shows a
-    real notice, not a crash).
+    {"title", "data", "updated_at", "workspace_id"} with `data` already
+    json.loads()'d, or None if the id doesn't exist (a chat deleted from
+    another window/process between the library listing and this call - the
+    caller shows a real notice, not a crash).
 
     `updated_at` (new in stage 9.2) is the value optimistic concurrency is
     built on: the caller that loads a chat is expected to carry THIS exact
@@ -1034,14 +1177,31 @@ def load_chat_row(db_path: Path, chat_id: int) -> dict[str, Any] | None:
     hand it back as save_chat_atomically_row's expected_updated_at when it
     later saves - never re-read moments before that save, which would
     trivially always match and defeat the whole point of detecting a race
-    against some OTHER writer that saved in between."""
+    against some OTHER writer that saved in between.
+
+    `workspace_id` (new in ADR-020 stage 20.3): every graphs row always
+    carries a real, non-NULL one (graphs.workspace_id's own schema DEFAULT,
+    set at INSERT time by save_chat_atomically_row/migration "2" - see
+    those functions' own docstrings), so this is never None for an
+    existing row. ADVERSARIAL-REVIEW FIX: pre-20.3, loadChat's own closure
+    (below) never read this column at all, so
+    canvas_document.current_workspace_id stayed at whatever newChat last
+    left it (usually None) even after loading a chat that plainly belongs
+    to some OTHER, real workspace - meaning THIS stage's own workspace-
+    default model rung (backend/agents.py's _resolve_model_ref_for_dispatch)
+    and workspace-scoped knowledge corpus (backend/api/intents_knowledge.py)
+    would have silently resolved against the WRONG workspace (or none at
+    all) for the single most common real flow, opening an existing chat and
+    continuing the conversation - not just a brand-new chat started via
+    newChat(workspaceId=...). Fixed here, at the one place every load
+    already reads this row, rather than only in the callers that needed it."""
     with contextlib.closing(_connect(db_path)) as conn, conn:
         row = conn.execute(
-            "SELECT title, data, updated_at FROM graphs WHERE id = ?", (chat_id,)
+            "SELECT title, data, updated_at, workspace_id FROM graphs WHERE id = ?", (chat_id,)
         ).fetchone()
     if row is None:
         return None
-    return {"title": row[0], "data": json.loads(row[1]), "updated_at": row[2]}
+    return {"title": row[0], "data": json.loads(row[1]), "updated_at": row[2], "workspace_id": row[3]}
 
 
 def load_notes_rows(db_path: Path, chat_id: int) -> list[dict[str, Any]]:
@@ -1597,6 +1757,17 @@ def make_load_chat(
             # one - the backend analog of ChatSessionManager.current_chat_id
             # being set from the load path, not just the save path.
             canvas_document.current_chat_id = int(chat_id)
+            # ADR-020 stage 20.3 adversarial-review fix: mirror the SAME
+            # "set from the load path, not just newChat" treatment onto
+            # current_workspace_id - see load_chat_row's own docstring for
+            # the real gap this closes (pre-fix, opening an existing chat
+            # left current_workspace_id wherever newChat last set it,
+            # usually None, so this stage's own workspace-scoped model/
+            # knowledge resolution would silently miss the workspace the
+            # loaded chat actually belongs to). row["workspace_id"] is
+            # always a real int for an existing row (graphs.workspace_id's
+            # own NOT NULL DEFAULT), never None.
+            canvas_document.current_workspace_id = row.get("workspace_id")
             # Audit fix: the document now matches this row exactly, so record
             # that. Without it the first tick after a load rewrote a
             # byte-identical row and bumped updated_at, re-sorting the Chat
@@ -1842,6 +2013,19 @@ class ArchiveWorkspaceArgs:
     archived: bool
 
 
+@dataclass
+class SetWorkspaceDefaultModelArgs:
+    """ADR-020 stage 20.3. `provider`/`modelId` both "" clears the
+    workspace's default (set_workspace_default_model's own "both empty ->
+    unset" contract) - the frontend's own picker sends both fields
+    together on every real change, same "no partial value" shape
+    set_model_override's own wire-side callers already follow."""
+
+    workspaceId: int
+    provider: str
+    modelId: str
+
+
 def register_chat_library(
     bus: SessionBus,
     db_path: Path | None = None,
@@ -2076,6 +2260,19 @@ def register_chat_library(
         await asyncio.to_thread(archive_workspace, resolved_path, int(workspace_id), bool(archived))
         await bus.publish("app-chat-library")
 
+    async def set_workspace_default_model_intent(workspace_id: int, provider: str, model_id: str):
+        # ADR-020 stage 20.3: same shape as every other single-field
+        # workspace mutation above - one asyncio.to_thread call into the
+        # matching CRUD function, then republish so the switcher's own
+        # settings affordance picks up the new value. Never touches
+        # canvas_document (only a chats.db row), so - like createWorkspace/
+        # renameWorkspace/archiveWorkspace above - it does not go through
+        # _serialize_mutating_intent.
+        await asyncio.to_thread(
+            set_workspace_default_model, resolved_path, int(workspace_id), str(provider), str(model_id),
+        )
+        await bus.publish("app-chat-library")
+
     bus.register_intent("app-chat-library", "renameChat", rename)
     bus.register_intent("app-chat-library", "deleteChat", delete)
     bus.register_intent("app-chat-library", "loadChat", _serialize_mutating_intent(load_chat))
@@ -2092,6 +2289,10 @@ def register_chat_library(
     bus.register_intent("app-chat-library", "renameWorkspace", rename_ws, args_schema=RenameWorkspaceArgs)
     bus.register_intent(
         "app-chat-library", "archiveWorkspace", archive_ws, args_schema=ArchiveWorkspaceArgs,
+    )
+    bus.register_intent(
+        "app-chat-library", "setWorkspaceDefaultModel", set_workspace_default_model_intent,
+        args_schema=SetWorkspaceDefaultModelArgs,
     )
 
     if canvas_document is not None and autosave_interval_seconds is not None:
