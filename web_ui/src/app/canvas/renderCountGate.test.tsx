@@ -162,6 +162,8 @@ function chatRow(id: string, x: number): SceneNodeRow {
         builderApprovalToolName: "",
         builderApprovalSummary: "",
         builderStatusDetail: "",
+        // ADR-014 stage 14.2
+        pluginState: {},
       }),
     ) as unknown as SceneNodeRow),
   };

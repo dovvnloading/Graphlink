@@ -199,6 +199,8 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         builderApprovalToolName: "",
         builderApprovalSummary: "",
         builderStatusDetail: "",
+        // ADR-014 stage 14.2
+        pluginState: {},
       },
     ],
     edges: [],
