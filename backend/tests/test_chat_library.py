@@ -1468,8 +1468,22 @@ class TestBackupRotationThroughRealSaves:
         # survive via the daily rule) plus a SECOND, older-still snapshot on
         # THAT SAME older day (must be pruned - not the newest for its day).
         recent_timestamps = [now - timedelta(minutes=i) for i in range(db_backup_module.KEEP_MOST_RECENT)]
-        older_day_keep = now - timedelta(days=2, hours=1)
-        older_day_prune = now - timedelta(days=2, hours=5)
+        # Anchored at a fixed noon-UTC time-of-day, 2 days back, rather than
+        # naive `now - timedelta(hours=N)` offsets: a real CI failure showed
+        # that when the real wall-clock `now` a test runs at happens to fall
+        # within a few hours of UTC midnight, `now - timedelta(days=2,
+        # hours=1)` and `now - timedelta(days=2, hours=5)` can land on TWO
+        # DIFFERENT UTC calendar days (the 4-hour gap between them straddles
+        # the boundary) - at which point prune_backups (correctly) keeps
+        # BOTH as "the newest for its own day," and this test's own
+        # assertion that the older one gets pruned fails - a test bug, not a
+        # prune_backups bug (its day-bucketing logic, backend/db_backup.py,
+        # is correct). Anchoring at noon and offsetting by only ±a few hours
+        # keeps both timestamps on the SAME calendar day regardless of what
+        # real time this test happens to run at.
+        anchor_day = (now - timedelta(days=2)).replace(hour=12, minute=0, second=0, microsecond=0)
+        older_day_keep = anchor_day + timedelta(hours=1)
+        older_day_prune = anchor_day - timedelta(hours=3)
         for ts in recent_timestamps + [older_day_keep, older_day_prune]:
             path = backups_dir / db_backup_module.backup_filename(ts.strftime("%Y%m%dT%H%M%SZ"))
             sqlite3.connect(path).close()
