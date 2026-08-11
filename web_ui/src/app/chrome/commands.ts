@@ -202,6 +202,17 @@ export function buildCommands(
       enabled: () => true,
     },
     {
+      // ADR-020 stage 20.4: search every workspace's graphs and knowledge
+      // documents at once - see GlobalSearchDialog.tsx. Same registration
+      // shape as "open-library"/"open-plugins" above (ADR-012's own
+      // "register every new surface in the palette" rule).
+      id: "open-global-search",
+      name: "Open Global Search",
+      aliases: ["search everywhere", "search all workspaces", "find in graph"],
+      run: () => overlays.open("global-search", "dialog"),
+      enabled: () => true,
+    },
+    {
       // R6.1: plain, ungated - creates a blank note near the current
       // viewport center. Same center-of-viewport formula "add-pin" above
       // already uses; "Add System Prompt Note" is a DIFFERENT, existing
