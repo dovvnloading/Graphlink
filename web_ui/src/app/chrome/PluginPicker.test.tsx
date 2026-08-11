@@ -25,6 +25,12 @@ const snapshot = {
       plugins: [{ name: "Py-Coder", description: "Python workspace." }],
     },
   ],
+  // ADR-014 stage 14.4: now a required field on the "app-plugins" contract
+  // (one row per distinct non-built-in plugin_id) - PluginPicker.tsx itself
+  // doesn't read it, but a snapshot missing it fails TOPIC_VALIDATORS
+  // validation and silently never updates state, matching every other
+  // required field already listed here.
+  grants: [],
 };
 
 function makeTransport() {
