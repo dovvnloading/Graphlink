@@ -460,6 +460,196 @@ class TestMigrationUpgradesAPreExistingRealShapedDatabase:
         assert rows_after_second_connect[0]["id"] == chat_id
 
 
+def _create_migration_1_shaped_db(db_path) -> list[int]:
+    """ADR-020 stage 20.1's own analog of _create_pre_migration_shaped_db
+    above: builds a chats.db in EXACTLY the shape a real, already-upgraded
+    (ADR-009 stage 9.1) install has TODAY, right before this stage's own
+    migration "2" ever runs against it - the full chats/notes/pins schema
+    (raw DDL, not this module's own functions, which already assume the
+    NEW post-migration-2 schema once chat_library.py has been edited),
+    several real chat rows (including notes AND pins on at least one of
+    them), and PRAGMA user_version explicitly left at 1 (not 0 - a real
+    post-9.1 database has already run migration "1" and stamped its
+    version; this migration "2" test's own realistic starting point is "at
+    1, about to go to 2", not "at 0, needs both steps" - that combined case
+    is already covered by TestMigrationUpgradesAPreExistingRealShapedDatabase
+    above, which now also implicitly exercises 0 -> 1 -> 2 in one hop since
+    CHATS_DB_SCHEMA_VERSION is 2).
+
+    Returns the three inserted chat ids, in insertion order."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "CREATE TABLE chats (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, "
+            "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, "
+            "data TEXT NOT NULL, preview TEXT DEFAULT '', message_count INTEGER DEFAULT 0)"
+        )
+        conn.execute(
+            "CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "content TEXT NOT NULL, position_x REAL NOT NULL, position_y REAL NOT NULL, width REAL NOT NULL, "
+            "height REAL NOT NULL, color TEXT NOT NULL, header_color TEXT, "
+            "is_system_prompt INTEGER DEFAULT 0, is_summary_note INTEGER DEFAULT 0, "
+            "FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE)"
+        )
+        conn.execute(
+            "CREATE TABLE pins (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, "
+            "title TEXT NOT NULL, note TEXT, position_x REAL NOT NULL, position_y REAL NOT NULL, "
+            "pin_id TEXT, sort_order INTEGER DEFAULT 0, anchor_item_id TEXT, created_at TEXT, "
+            "FOREIGN KEY (chat_id) REFERENCES chats (id) ON DELETE CASCADE)"
+        )
+        conn.execute("CREATE INDEX idx_notes_chat_id ON notes (chat_id)")
+        conn.execute("CREATE INDEX idx_pins_chat_id ON pins (chat_id)")
+
+        chat_ids = []
+        for title, preview, count, created, updated in (
+            ("First Chat", "hi there", 1, "2026-01-01 09:00:00", "2026-01-01 09:05:00"),
+            ("Second Chat", "another one", 2, "2026-01-02 10:00:00", "2026-01-02 10:10:00"),
+            ("Third Chat", "the last one", 3, "2026-01-03 11:00:00", "2026-01-03 11:15:00"),
+        ):
+            cursor = conn.execute(
+                "INSERT INTO chats (title, data, created_at, updated_at, preview, message_count) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (title, json.dumps({"nodes": [{"node_type": "chat", "raw_content": preview}]}),
+                 created, updated, preview, count),
+            )
+            chat_ids.append(cursor.lastrowid)
+
+        # Notes and pins attached to the first chat only - mirrors
+        # _create_pre_migration_shaped_db's own "at least one" scope; the
+        # other two chats exercise the no-notes/no-pins case.
+        conn.execute(
+            "INSERT INTO notes (chat_id, content, position_x, position_y, width, height, color, "
+            "header_color, is_system_prompt, is_summary_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (chat_ids[0], "A migration-2 note", 1.0, 2.0, 100.0, 50.0, "#222222", None, 0, 0),
+        )
+        conn.execute(
+            "INSERT INTO pins (chat_id, title, note, position_x, position_y, pin_id, sort_order, "
+            "anchor_item_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (chat_ids[0], "A migration-2 pin", "", 5.0, 6.0, "pin-1", 0, None, "2026-01-01 00:00:00"),
+        )
+        conn.commit()
+
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        return chat_ids
+    finally:
+        conn.close()
+
+
+class TestMigration002IntroducesWorkspacesAndGraphs:
+    """ADR-020 stage 20.1's own fidelity proof, mirroring
+    TestMigrationUpgradesAPreExistingRealShapedDatabase above precisely:
+    hand-build a real migration-1-shaped chats.db, drive it through the
+    REAL production connect path (never a hand-called migration function -
+    that would only prove the SQL, not the wiring), and assert every
+    original row survives byte-for-byte under its new home."""
+
+    def test_existing_chats_become_graphs_in_the_default_workspace(self, db_path):
+        chat_ids = _create_migration_1_shaped_db(db_path)
+
+        # The real, production connect path - any query function drives it,
+        # exactly like TestMigrationUpgradesAPreExistingRealShapedDatabase's
+        # own get_all_chats(db_path) call above.
+        rows = get_all_chats(db_path)
+
+        assert len(rows) == 3
+        assert {row["id"] for row in rows} == set(chat_ids)
+        by_id = {row["id"]: row for row in rows}
+        assert by_id[chat_ids[0]]["title"] == "First Chat"
+        assert by_id[chat_ids[0]]["preview"] == "hi there"
+        assert by_id[chat_ids[0]]["messageCount"] == 1
+        assert by_id[chat_ids[1]]["title"] == "Second Chat"
+        assert by_id[chat_ids[2]]["title"] == "Third Chat"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+
+            workspace_rows = conn.execute("SELECT id, name FROM workspaces").fetchall()
+            assert len(workspace_rows) == 1
+            default_workspace_id, default_workspace_name = workspace_rows[0]
+            assert default_workspace_name == "Default"
+
+            graph_workspace_ids = {
+                row[0] for row in conn.execute("SELECT workspace_id FROM graphs").fetchall()
+            }
+            assert graph_workspace_ids == {default_workspace_id}
+
+            graphs_indexes = {row[1] for row in conn.execute("PRAGMA index_list(graphs)").fetchall()}
+            assert "idx_graphs_workspace_id" in graphs_indexes
+
+            # The renamed table's own row identity/content is untouched -
+            # the rename is a pure schema-level operation, not a data copy.
+            graphs_rows = conn.execute(
+                "SELECT id, title, data, created_at, updated_at, preview, message_count FROM graphs "
+                "ORDER BY id"
+            ).fetchall()
+            assert [row[0] for row in graphs_rows] == chat_ids
+            assert graphs_rows[0][1] == "First Chat"
+            assert graphs_rows[0][2] == json.dumps({"nodes": [{"node_type": "chat", "raw_content": "hi there"}]})
+            assert graphs_rows[0][3] == "2026-01-01 09:00:00"
+            assert graphs_rows[0][4] == "2026-01-01 09:05:00"
+        finally:
+            conn.close()
+
+        # load_chat_row/load_notes_rows/load_pins_rows - unchanged Python
+        # behavior, now transparently reading through the renamed table.
+        chat_row = load_chat_row(db_path, chat_ids[0])
+        assert chat_row["title"] == "First Chat"
+        assert chat_row["data"] == {"nodes": [{"node_type": "chat", "raw_content": "hi there"}]}
+
+        notes = load_notes_rows(db_path, chat_ids[0])
+        assert len(notes) == 1 and notes[0]["content"] == "A migration-2 note"
+
+        pins = load_pins_rows(db_path, chat_ids[0])
+        assert len(pins) == 1 and pins[0]["title"] == "A migration-2 pin"
+
+        # The other two chats never had notes/pins - still true post-migration.
+        assert load_notes_rows(db_path, chat_ids[1]) == []
+        assert load_pins_rows(db_path, chat_ids[1]) == []
+
+    def test_fresh_database_lands_on_version_2_with_only_the_default_workspace(self, db_path):
+        # No pre-existing file at all - a fresh install. Must reach version
+        # 2 cleanly with the Default workspace seeded and zero graphs.
+        assert not db_path.exists()
+
+        rows = get_all_chats(db_path)
+
+        assert rows == []
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == CHATS_DB_SCHEMA_VERSION
+            workspace_rows = conn.execute("SELECT id, name FROM workspaces").fetchall()
+            assert len(workspace_rows) == 1
+            assert workspace_rows[0][1] == "Default"
+            assert conn.execute("SELECT COUNT(*) FROM graphs").fetchone()[0] == 0
+        finally:
+            conn.close()
+
+    def test_migration_is_idempotent_when_run_twice_in_a_row(self, db_path):
+        # Matches TestMigrationUpgradesAPreExistingRealShapedDatabase's own
+        # test_upgrade_is_safe_to_run_twice_in_a_row precedent: a second
+        # connect (already at target version 2) is a true no-op - no
+        # duplicate Default workspace, no data disturbance.
+        chat_ids = _create_migration_1_shaped_db(db_path)
+
+        get_all_chats(db_path)
+        rows_after_second_connect = get_all_chats(db_path)
+
+        assert {row["id"] for row in rows_after_second_connect} == set(chat_ids)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            workspace_rows = conn.execute("SELECT id, name FROM workspaces").fetchall()
+            assert len(workspace_rows) == 1, (
+                f"expected exactly one Default workspace after two migration passes, got {workspace_rows}"
+            )
+            assert conn.execute("SELECT COUNT(*) FROM graphs").fetchone()[0] == 3
+        finally:
+            conn.close()
+
+
 def test_get_all_chats_reads_real_rows(db_path):
     first_id = _insert_chat(db_path, "First")
     second_id = _insert_chat(db_path, "Second")
@@ -1587,7 +1777,10 @@ class TestCorruptDbRescue:
         holder = sqlite3.connect(db_path, timeout=30)
         holder.execute("PRAGMA journal_mode=WAL")
         holder.execute("BEGIN IMMEDIATE")
-        holder.execute("UPDATE chats SET title = 'locked-write'")
+        # ADR-020 stage 20.1: the real save_chat_atomically_row call above
+        # already migrated this db to version 2, which renamed "chats" to
+        # "graphs" - this raw SQL must target the table's CURRENT real name.
+        holder.execute("UPDATE graphs SET title = 'locked-write'")
         try:
             # A short timeout so this test doesn't hang for 30s waiting out
             # the real busy_timeout - a fresh connect() with its own short

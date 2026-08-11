@@ -17,7 +17,10 @@ Reads/writes the SAME real ~/.graphlink/chats.db file the legacy app uses
 (same "chats"/"notes"/"pins" table schemas, same queries, same migration
 ALTER TABLEs for older databases, same _format_timestamp display format moved
 verbatim from graphlink_chat_library_bridge.py) - list, rename, delete,
-load, save, and new are ALL genuinely real here as of R6.5.
+load, save, and new are ALL genuinely real here as of R6.5. ADR-020 stage
+20.1 renamed the "chats" table itself to "graphs" (see
+_migration_002_workspaces_and_graphs) - the .db FILENAME and every other
+table/query/function/topic/intent name below are unaffected.
 
 R6.5's save_chat_atomically_row mirrors ChatDatabase.save_chat_atomically
 exactly: ONE shared connection for the chats-row write (UPDATE if a
@@ -95,8 +98,11 @@ class ConcurrentSaveConflict(RuntimeError):
 # the full schema every _ensure_* probe used to (re)create piecemeal on
 # every connection - see _migration_001_initial_schema's own docstring for
 # exactly what that migration does and does not assume about the DB it's
-# handed.
-CHATS_DB_SCHEMA_VERSION = 1
+# handed. ADR-020 stage 20.1 adds version "2": the "chats" table (still
+# created under that name by migration "1" above, unchanged) is renamed to
+# "graphs" and gains a workspace_id column - see
+# _migration_002_workspaces_and_graphs's own docstring.
+CHATS_DB_SCHEMA_VERSION = 2
 
 
 # ADR-009 stage 9.2: `created_at`/rename_chat's own `updated_at` are written
@@ -587,15 +593,116 @@ def _migration_001_initial_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pins_chat_id ON pins (chat_id)")
 
 
+def _migration_002_workspaces_and_graphs(conn: sqlite3.Connection) -> None:
+    """ADR-020 stage 20.1, migration "2" (1 -> 2): introduces the workspace
+    organizing unit. Every existing chat becomes a graph in one backfilled
+    "Default" workspace - no data loss, no user action required. Runs
+    inside run_sqlite_migrations' own managed transaction (manual BEGIN/
+    COMMIT/ROLLBACK around isolation_level=None - see that function's
+    docstring, and _migration_001_initial_schema's own docstring above) -
+    must not BEGIN, COMMIT, or ROLLBACK anything itself.
+
+    Deliberately narrow, matching ADR-020 stage 20.1's own exit criterion
+    ("pre-migration chats.db loads identically; all chats in Default
+    workspace"): adds ONLY `workspaces` + `graphs.workspace_id`. Tags/
+    favorite/archive are stage 20.2's own migration, landing alongside the
+    UI that actually uses them - not bundled in here, matching this
+    module's own "one small, narrowly-scoped, independently-testable
+    migration step per stage, never one big migration for the whole ADR"
+    precedent (see _MIGRATIONS' own comment below).
+
+    Deliberately does NOT rename the on-disk .db FILE (stays chats.db) or
+    any Python function/WS-topic/intent name in this module - only the SQL
+    TABLE "chats" renames to "graphs". Every query below this point in the
+    module was updated to match (get_all_chats/rename_chat/delete_chat/
+    load_chat_row/save_chat_atomically_row's own SQL strings) - so this
+    module now reads a little oddly for one stage (Python functions named
+    "chat" querying a table named "graphs"). That is an intentional,
+    temporary, honest incremental-migration tradeoff: renaming the user-
+    facing API/UI surface to "graph"/"workspace" terminology belongs to
+    stage 20.2, which is doing the real UI rework anyway and can rename
+    topic/intents/dialog title as part of that same, already-UI-touching
+    change - not an oversight here.
+
+    TABLE RENAME AND FOREIGN KEYS (verified empirically against this
+    project's actual bundled SQLite - 3.50.4, `PRAGMA legacy_alter_table`
+    reads 0/off by default - not assumed from documentation alone): `ALTER
+    TABLE chats RENAME TO graphs` correctly rewrites notes/pins' own
+    `FOREIGN KEY (chat_id) REFERENCES chats (id)` declarations to point at
+    "graphs" automatically (confirmed via `PRAGMA foreign_key_list` on
+    notes/pins after the rename, and a live cascade-delete-through-the-
+    renamed-table check) - no separate fix-up of notes/pins is needed or
+    done here.
+
+    `workspace_id` deliberately carries a plain `NOT NULL DEFAULT
+    <default_workspace_id>` with NO `REFERENCES workspaces (id)` clause -
+    verified empirically that SQLite's `ALTER TABLE ... ADD COLUMN` rejects
+    a REFERENCES clause combined with a non-NULL DEFAULT ("Cannot add a
+    REFERENCES column with non-NULL default value" - raised as
+    sqlite3.OperationalError), which every pre-existing graph row here
+    needs (the column is NOT NULL, so there is no NULL-then-backfill
+    option once it's added). Same no-declared-FK shape as this module's own
+    sibling store, backend/knowledge_store.py's `documents.collection_id` -
+    a conceptual foreign key enforced by this codebase's own CRUD, not a
+    declared SQLite constraint.
+
+    Guarded exactly like _migration_001_initial_schema: CREATE TABLE IF NOT
+    EXISTS, a PRAGMA table_info probe before each ALTER TABLE, CREATE INDEX
+    IF NOT EXISTS - a second run against an already-migrated database (or a
+    database that reaches this migration having already been renamed to
+    "graphs" by some earlier run of this same function) is a pure no-op,
+    matching that function's own idempotency discipline."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS workspaces (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            icon TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            archived INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    existing_default = conn.execute("SELECT id FROM workspaces WHERE name = 'Default'").fetchone()
+    if existing_default is not None:
+        # A second run of this migration (already-migrated db reconnecting,
+        # or this exact function somehow invoked twice) - reuse the SAME
+        # Default workspace row rather than creating a duplicate.
+        default_workspace_id = int(existing_default[0])
+    else:
+        cursor = conn.execute("INSERT INTO workspaces (name) VALUES ('Default')")
+        default_workspace_id = int(cursor.lastrowid)
+
+    # "chats" still exists under its old name - a database at version 0/1
+    # that hasn't seen this migration yet (real user data, or the fresh-db
+    # case where migration "1" just created it moments ago in this SAME
+    # transaction). On an already-migrated database PRAGMA table_info
+    # returns [] here (nothing named "chats" anymore) and the rename is
+    # skipped, matching migration "1"'s own guarded-ALTER-TABLE idiom.
+    chats_columns = [info[1] for info in conn.execute("PRAGMA table_info(chats)").fetchall()]
+    if chats_columns:
+        conn.execute("ALTER TABLE chats RENAME TO graphs")
+
+    graphs_columns = [info[1] for info in conn.execute("PRAGMA table_info(graphs)").fetchall()]
+    if "workspace_id" not in graphs_columns:
+        conn.execute(
+            f"ALTER TABLE graphs ADD COLUMN workspace_id INTEGER NOT NULL DEFAULT {default_workspace_id}"
+        )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_graphs_workspace_id ON graphs (workspace_id)")
+
+
 # Keyed by the version each function PRODUCES (migration "1" takes a
 # database from 0 -> 1), matching graphlink_migrations' own ordering
-# convention - see run_sqlite_migrations' docstring. The stage 9.2 agent
-# building backups/corrupt-rescue on top of this: add step "2" here (and
-# bump CHATS_DB_SCHEMA_VERSION to 2) for any further schema change, never
-# renumber or replace step "1" - it must stay exactly what it is today so it
-# keeps correctly upgrading every already-migrated real database.
+# convention - see run_sqlite_migrations' docstring. ADR-020 stage 20.1
+# added step "2" (bumping CHATS_DB_SCHEMA_VERSION to 2) for the workspaces/
+# graphs schema change - add step "3" here (and bump CHATS_DB_SCHEMA_VERSION
+# to 3) for the next schema change; never renumber or replace step "1" or
+# step "2" now that both have shipped - each must stay exactly what it is
+# today so it keeps correctly upgrading every already-migrated real
+# database.
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
+    2: _migration_002_workspaces_and_graphs,
 }
 
 
@@ -620,7 +727,7 @@ def get_all_chats(db_path: Path, notifications: NotificationState | None = None)
     with contextlib.closing(_connect(db_path, notifications=notifications)) as conn, conn:
         rows = conn.execute(
             "SELECT id, title, created_at, updated_at, preview, message_count "
-            "FROM chats ORDER BY updated_at DESC"
+            "FROM graphs ORDER BY updated_at DESC"
         ).fetchall()
     return [
         {
@@ -640,14 +747,14 @@ def get_all_chats(db_path: Path, notifications: NotificationState | None = None)
 def rename_chat(db_path: Path, chat_id: int, new_title: str) -> None:
     with contextlib.closing(_connect(db_path)) as conn, conn:
         conn.execute(
-            "UPDATE chats SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE graphs SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (new_title, chat_id),
         )
 
 
 def delete_chat(db_path: Path, chat_id: int) -> None:
     with contextlib.closing(_connect(db_path)) as conn, conn:
-        conn.execute("DELETE FROM chats WHERE id = ?", (chat_id,))
+        conn.execute("DELETE FROM graphs WHERE id = ?", (chat_id,))
 
 
 def load_chat_row(db_path: Path, chat_id: int) -> dict[str, Any] | None:
@@ -667,7 +774,7 @@ def load_chat_row(db_path: Path, chat_id: int) -> dict[str, Any] | None:
     against some OTHER writer that saved in between."""
     with contextlib.closing(_connect(db_path)) as conn, conn:
         row = conn.execute(
-            "SELECT title, data, updated_at FROM chats WHERE id = ?", (chat_id,)
+            "SELECT title, data, updated_at FROM graphs WHERE id = ?", (chat_id,)
         ).fetchone()
     if row is None:
         return None
@@ -800,7 +907,7 @@ def save_chat_atomically_row(
             if chat_id:
                 if expected_updated_at is not None:
                     cursor = conn.execute(
-                        "UPDATE chats SET title = ?, data = ?, preview = ?, message_count = ?, "
+                        "UPDATE graphs SET title = ?, data = ?, preview = ?, message_count = ?, "
                         "updated_at = ? WHERE id = ? AND updated_at = ?",
                         (title, chat_data_json, preview, message_count, now, chat_id, expected_updated_at),
                     )
@@ -812,14 +919,14 @@ def save_chat_atomically_row(
                         )
                 else:
                     conn.execute(
-                        "UPDATE chats SET title = ?, data = ?, preview = ?, message_count = ?, "
+                        "UPDATE graphs SET title = ?, data = ?, preview = ?, message_count = ?, "
                         "updated_at = ? WHERE id = ?",
                         (title, chat_data_json, preview, message_count, now, chat_id),
                     )
                 resolved_chat_id = chat_id
             else:
                 cursor = conn.execute(
-                    "INSERT INTO chats (title, data, preview, message_count, updated_at) "
+                    "INSERT INTO graphs (title, data, preview, message_count, updated_at) "
                     "VALUES (?, ?, ?, ?, ?)",
                     (title, chat_data_json, preview, message_count, now),
                 )
