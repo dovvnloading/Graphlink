@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from backend.canvas import SceneDocument, SceneNode
+from backend.canvas import SceneDocument
 
 _LOREM = (
     "The quick brown fox jumps over the lazy dog while considering the "

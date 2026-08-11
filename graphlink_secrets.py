@@ -22,7 +22,6 @@ Design tradeoffs, chosen deliberately:
 """
 
 import base64
-import ctypes
 import sys
 
 _DPAPI_PREFIX = "dpapi:"

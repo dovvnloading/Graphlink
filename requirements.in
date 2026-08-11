@@ -18,7 +18,6 @@ Pillow
 pygments
 pypdf
 pytest
-pytest-env
 pyspellchecker
 python-docx
 reportlab

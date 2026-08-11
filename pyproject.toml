@@ -48,15 +48,33 @@ dependencies = [
 # for newer Python versions, so requiring it would break installs for most users.
 [project.optional-dependencies]
 llamacpp = ["llama-cpp-python"]
-dev = ["pytest", "pytest-env"]
+dev = ["pytest"]
 
-# The suite constructs real QGraphicsObject/QWidget-based nodes and must run
-# without a display server (CI runners, this pytest-env setting). QApplication
-# picks its platform plugin at construction time from this env var, so it must
-# be set before conftest.py's QApplication([]) - pytest-env applies env changes
-# before test collection/session start, which is early enough.
 [tool.pytest.ini_options]
-env = ["QT_QPA_PLATFORM=offscreen"]
+# ADR-015 stage 15.3: --strict-markers rejects a typo'd/unregistered
+# @pytest.mark.X outright rather than silently no-op'ing it; --strict-config
+# does the same for an unrecognized ini option. filterwarnings promotes the
+# three "an API is going away" classes to hard failures - the actual signal
+# a pytest warnings policy exists to catch (a dependency bump silently
+# breaking at the next major version) - rather than a blanket "error" on
+# every warning category. A blanket policy also promotes ResourceWarning,
+# and this codebase has a real, PRE-EXISTING, wide surface of those
+# (subprocess Popen pipes across pycoder REPLs and out-of-process plugin
+# workers, tempdirs, sockets - closed by GC rather than explicitly, each a
+# distinct message shape pytest's unraisable-exception hook wraps
+# differently). Chasing that surface to zero is a real, separate body of
+# work, not "add a filterwarnings policy" - see ADR-015 §2's own "no
+# big-bang cleanup" instruction for ruff, which applies equally here.
+addopts = "--strict-markers --strict-config"
+filterwarnings = [
+    "error::DeprecationWarning",
+    "error::PendingDeprecationWarning",
+    "error::FutureWarning",
+    # stdlib's own asyncio.get_event_loop_policy() deprecation (3.14 slates
+    # removal) - backend/tests/test_builder.py's one call is a documented
+    # no-op probe (see that test's own comment), not a real usage to migrate.
+    "ignore:'asyncio.get_event_loop_policy' is deprecated.*:DeprecationWarning",
+]
 # Hang diagnosis. pytest's built-in faulthandler dumps a full traceback of
 # every thread if any single test runs longer than this, naming the exact
 # test and line it is stuck on. Zero new dependencies (stdlib faulthandler,
@@ -139,3 +157,29 @@ include = [
 
 [tool.setuptools.dynamic]
 version = { attr = "graphlink_version.APP_VERSION" }
+
+# ADR-015 stage 15.3: a scoped starting rule set, not a big-bang cleanup (the
+# ADR's own explicit instruction) - F (pyflakes: undefined names, unused
+# imports, bad call arity) and E9 (pycodestyle syntax errors) are the class
+# compileall cannot catch and this stage exists to close; E/W (the rest of
+# pycodestyle - line length, whitespace style) are deliberately deferred to a
+# later ratchet rather than reformatting this entire codebase's existing
+# comment-heavy style in one pass. Ratchet up (more rule categories, fewer
+# ignores) in a later stage, never down.
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+exclude = ["graphlink_app", "web_ui"]
+
+[tool.ruff.lint]
+select = ["E9", "F"]
+
+[tool.ruff.lint.per-file-ignores]
+# backend/canvas.py's own docstring: it deliberately re-imports every
+# backend.domain name "back for its own use, so every existing `from
+# backend.canvas import X` consumer... keeps working unchanged" - a
+# compatibility facade from the ADR-002 stage 2.2 domain-package split, not
+# dead code. F401 (unused import) can't distinguish a re-export facade from
+# an actual leftover, so it's ignored for exactly this one file rather than
+# scattering 43 individual noqa comments across the import block.
+"backend/canvas.py" = ["F401"]

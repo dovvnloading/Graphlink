@@ -55,7 +55,6 @@ from backend.domain.commands import CommandOps
 from backend.domain.content_codec import _content_codec
 from backend.domain.groups import GroupOps
 from backend.domain.model import (
-    BRANCH_HORIZONTAL_SPACING,
     CHART_MAX_HEIGHT,
     CHART_MAX_WIDTH,
     CHART_MIN_HEIGHT,
@@ -68,20 +67,12 @@ from backend.domain.model import (
     FONT_SIZE_MAX,
     FONT_SIZE_MIN,
     GRID_COLOR_PRESETS,
-    GROUP_COLLAPSED_HEIGHT,
-    GROUP_COLLAPSED_WIDTH,
-    GROUP_INELIGIBLE_FRAME_MEMBER_KINDS,
-    GROUP_MEMBER_DEFAULT_HEIGHT,
-    GROUP_MEMBER_DEFAULT_WIDTH,
-    GROUP_PADDING,
-    GROUP_PADDING_TOP,
     HTML_TITLE_PREVIEW_LENGTH,
     IMAGE_TITLE_PREVIEW_LENGTH,
     MESSAGE_VERTICAL_SPACING,
     ORGANIZE_SPACING_X,
     ORGANIZE_SPACING_Y,
     SceneEdge,
-    SceneEmptyPromptError,
     SceneError,
     SceneNode,
     THINKING_TITLE_PREVIEW_LENGTH,

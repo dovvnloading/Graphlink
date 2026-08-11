@@ -58,7 +58,12 @@ concurrency:
 
 jobs:
   python-tests:
-    name: Python tests (offscreen)
+    # ADR-015 stage 15.3: was "Python tests (offscreen)" - a Qt-removal-era
+    # name for a job that no longer runs anything Qt-related (the offscreen
+    # QT_QPA_PLATFORM setting it referred to is gone, see pyproject.toml's
+    # own [tool.pytest.ini_options]). Windows-pinned for DPAPI, not Qt - see
+    # this file's own module comment above.
+    name: Python checks (Windows, DPAPI)
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -74,6 +79,9 @@ jobs:
 
       - name: Compile check
         run: python -m compileall -q .
+
+      - name: ruff (scoped rule set - see pyproject.toml's own [tool.ruff])
+        run: pip install --quiet ruff && python -m ruff check .
 
       - name: Run pytest
         run: python -m pytest -q

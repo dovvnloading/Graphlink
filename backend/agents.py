@@ -61,7 +61,6 @@ from __future__ import annotations
 import asyncio
 import difflib
 import inspect
-import json
 import logging
 import re
 import threading
@@ -108,7 +107,6 @@ from graphlink_scratch_dirs import remove_scratch_dir_for_id
 from graphlink_model_catalog import ModelRef, resolve_model_ref
 from graphlink_plugins.web_research.domain import (
     CancellationToken,
-    ProgressEvent,
     RequestCancelled,
     ResearchFailure,
     WebResearchRequest,

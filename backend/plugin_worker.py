@@ -159,7 +159,10 @@ def _state_to_plain_dict(state) -> "dict | None":
 
 
 def main() -> None:
-    plugin_id = sys.argv[1]
+    # argv[1] (plugin_id) is part of this module's own CLI contract (see the
+    # module docstring's `<plugin_id> <source_dir>`, matching plugin_sdk.py's
+    # own subprocess.Popen call) but never consulted here - manifest.id below
+    # is the authoritative identity HostContext uses, not whatever argv claims.
     source_dir = Path(sys.argv[2])
     manifest_path = source_dir / MANIFEST_FILENAME
     manifest = _load_manifest(manifest_path, source_dir)

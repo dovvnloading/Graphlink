@@ -17,7 +17,7 @@ import pytest
 
 from backend.domain.commands import Command
 from backend.domain.graph import SceneDocument
-from backend.domain.model import SceneEdge, SceneNode
+from backend.domain.model import SceneNode
 
 
 # -- layer 1: Command.apply()/invert() against synthetic state --------------
@@ -633,7 +633,7 @@ def test_undo_run_stops_at_the_users_own_later_edits(document):
 
 def test_session_load_clears_both_stacks(wired):
     bus, document = wired
-    node_id = _dispatch(bus, "addNode", 0, 0, "old session")
+    _dispatch(bus, "addNode", 0, 0, "old session")
     _dispatch(bus, "undo")
     assert len(document.redo_stack) == 1
 

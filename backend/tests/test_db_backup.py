@@ -156,7 +156,6 @@ def test_take_backup_is_wal_safe_against_a_live_writer_holding_a_transaction(db_
 
 
 def test_take_backup_chmods_the_backup_to_0600(db_path):
-    import os
     import stat
     import sys
 

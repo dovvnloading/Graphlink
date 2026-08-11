@@ -5241,7 +5241,7 @@ def test_remove_nodes_disposes_the_repl_for_every_deleted_pycoder_node():
         other_node = document.add_gitlink_node(0, 0, parent.id)
         # Populate a REPL for this node id, so there is something real to
         # tear down.
-        repl = dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
+        dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
         assert pycoder_node.id in dispatcher._pycoder_repls
 
         await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id, other_node.id]])

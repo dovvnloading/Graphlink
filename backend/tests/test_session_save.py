@@ -175,7 +175,7 @@ def test_gitlink_node_packs_repo_state_and_proposal_data():
 def test_image_node_encodes_bytes_from_image_assets_store():
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "p", is_user=False)
-    node = doc.add_image_node(10, 10, b"fake-png-bytes", "a prompt", parent.id)
+    doc.add_image_node(10, 10, b"fake-png-bytes", "a prompt", parent.id)
     chat_data = build_chat_data(doc)
     payload = next(n for n in chat_data["nodes"] if n["node_type"] == "image")
     import base64
@@ -287,7 +287,7 @@ def test_chat_to_note_edge_becomes_group_summary_connection():
 def test_chart_parent_edge_is_captured_on_the_charts_own_payload():
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "p", is_user=False)
-    chart = doc.add_chart_node(10, 10, parent.id, "bar", {"type": "bar", "title": "t", "labels": ["a"], "values": [1.0]})
+    doc.add_chart_node(10, 10, parent.id, "bar", {"type": "bar", "title": "t", "labels": ["a"], "values": [1.0]})
     chat_data = build_chat_data(doc)
     assert len(chat_data["charts"]) == 1
     assert chat_data["charts"][0]["parent_node_id"] == parent.id
@@ -487,7 +487,7 @@ def test_chat_node_serializes_a_model_override_pin():
 
 def test_chat_node_with_no_model_override_serializes_empty_strings():
     doc = SceneDocument()
-    root = doc.add_chat_node(0, 0, "root", True)
+    doc.add_chat_node(0, 0, "root", True)
 
     payload = next(p for p in build_chat_data(doc)["nodes"] if p.get("raw_content") == "root")
     assert payload["override_provider"] == ""

@@ -35,6 +35,15 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    # ADR-015 stage 15.3: _start_backend/_shutdown_backend's own annotations
+    # reference uvicorn, but both import it LOCALLY (deferred, function-scope)
+    # to keep this module importable without uvicorn eagerly loaded - this
+    # TYPE_CHECKING-only import satisfies static analysis (ruff's F821,
+    # mypy) without changing that runtime behavior at all.
+    import uvicorn
 
 REPO_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(REPO_ROOT))

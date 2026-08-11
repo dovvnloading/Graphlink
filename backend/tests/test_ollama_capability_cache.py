@@ -90,7 +90,7 @@ def test_a_transient_probe_failure_is_not_cached_so_the_next_call_retries(monkey
     as crawl_etiquette's robots.txt fix."""
     monkeypatch.setattr(api_provider, "_OLLAMA_CAPABILITY_CACHE", {})
 
-    with patch("api_provider.ollama.show", side_effect=ConnectionError("daemon unreachable")) as mock_show:
+    with patch("api_provider.ollama.show", side_effect=ConnectionError("daemon unreachable")):
         first = api_provider._get_ollama_capabilities("model-a")
 
     assert first is None

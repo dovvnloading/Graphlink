@@ -5,9 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import socket
 import time
-from datetime import datetime, timezone
 from typing import Sequence
 from urllib.parse import urljoin, urlsplit
 
@@ -489,7 +487,7 @@ class ApiResearchModel:
             quality = str(parsed.get("quality", "low")).lower()
             accepted = policy == "allow" and relevance == "high" and quality != "low"
             return SourceAssessment(accepted, policy, relevance, quality, str(parsed.get("reason", ""))[:200])
-        except Exception as exc:
+        except Exception:
             return SourceAssessment(False, "unknown", "unknown", "low", "validation_unavailable")
 
     def summarize(self, query: str, history: Sequence[dict], evidence: Sequence[str], *, limits: ResearchLimits, token: CancellationToken) -> str:

@@ -117,9 +117,9 @@ def _representative_operations(doc):
 
 def test_no_representative_operation_blocks_the_loop_beyond_the_ci_ceiling():
     # asyncio.run() in a sync test, not @pytest.mark.asyncio - pytest-asyncio
-    # is not one of this repo's dependencies (dev deps are pytest+pytest-env
-    # only, see pyproject.toml), and every other async-touching test here
-    # already uses this same convention (test_event_bus.py et al.).
+    # is not one of this repo's dependencies (see pyproject.toml's own `dev`
+    # extra), and every other async-touching test here already uses this
+    # same convention (test_event_bus.py et al.).
     async def _run() -> float:
         doc = build_graph(node_count=500, content_bytes=1200, chart_count=10, image_count=0, extra_edges=200)
         runs = []

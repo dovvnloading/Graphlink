@@ -42,7 +42,6 @@ import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-import requests
 
 from graphlink_plugins.web_research import providers as providers_module
 from graphlink_plugins.web_research.crawl_etiquette import CrawlEtiquette

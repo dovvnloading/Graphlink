@@ -38,7 +38,6 @@ from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.plugin_sdk import (
-    HostContext,
     PluginRegistrationError,
     discover_plugins,
 )
@@ -719,7 +718,7 @@ def test_set_plugin_grant_intent_persists_and_republishes_the_app_plugins_topic(
     recorder = Recorder()
     bus.attach(recorder)
 
-    result = asyncio.run(
+    asyncio.run(
         bus.dispatch_intent("app-plugins", "setPluginGrant", ["livegrant", True])
     )
 

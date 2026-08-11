@@ -15,7 +15,6 @@ import asyncio
 import threading
 import time
 
-import pytest
 
 import api_provider
 from backend import builder as builder_module
@@ -435,8 +434,6 @@ class TestStop:
     def test_cancel_frees_the_slot_immediately_and_finalize_lands_stopped(self, monkeypatch):
         document, dispatcher, registry, bus = make_harness()
         node = seed_plan(document, ["one step"])
-        started = asyncio.Event()
-        release = asyncio.Event()
 
         def slow_turn(task, messages, tools=(), **kwargs):
             asyncio.get_event_loop_policy()  # no-op; runs in a worker thread

@@ -394,7 +394,6 @@ def test_a_worker_that_crashes_during_register_produces_a_discovery_time_load_er
     _write_out_of_process_plugin(
         tmp_path / "plugins", "oop_crash_register", py_body=_CRASH_ON_REGISTER_PY_BODY,
     )
-    good_dir = tmp_path / "plugins" / "oop_good_sibling"
     _write_out_of_process_plugin(
         tmp_path / "plugins", "oop_good_sibling", py_body=_SIMPLE_NODE_PY_BODY,
     )
