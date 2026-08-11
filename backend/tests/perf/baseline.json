@@ -1,0 +1,51 @@
+{
+  "_comment": "ADR-019 stage 19.3: the committed wall-clock baseline check_baseline.py compares fresh measure_baselines.py output against. Regenerate deliberately with `python -m backend.tests.perf.measure_baselines`, review the diff, and commit - never auto-overwritten by the nightly job itself (that would let a real regression quietly become the new normal).",
+  "measured_at": "2026-08-11",
+  "measured_on": "windows, Python 3.12.6, coverage-uninstrumented (see backend/tests/perf/test_loop_watchdog.py's own note on why coverage tracing corrupts these numbers)",
+  "workloads": [
+    {
+      "name": "small",
+      "node_count": 25,
+      "edge_count": 27,
+      "fixture_build_ms": 0.15,
+      "payload_build_ms": 0.37,
+      "serialize_ms": 0.44,
+      "publish_total_ms": 0.81,
+      "full_snapshot_kib": 76.2,
+      "single_node_payload_kib": 2.984
+    },
+    {
+      "name": "typical",
+      "node_count": 100,
+      "edge_count": 137,
+      "fixture_build_ms": 0.7,
+      "payload_build_ms": 1.41,
+      "serialize_ms": 1.72,
+      "publish_total_ms": 3.14,
+      "full_snapshot_kib": 380.2,
+      "single_node_payload_kib": 2.604
+    },
+    {
+      "name": "large",
+      "node_count": 500,
+      "edge_count": 697,
+      "fixture_build_ms": 8.75,
+      "payload_build_ms": 7.07,
+      "serialize_ms": 8.88,
+      "publish_total_ms": 15.95,
+      "full_snapshot_kib": 1902.3,
+      "single_node_payload_kib": 2.604
+    },
+    {
+      "name": "stress",
+      "node_count": 2000,
+      "edge_count": 1999,
+      "fixture_build_ms": 61.85,
+      "payload_build_ms": 28.3,
+      "serialize_ms": 34.59,
+      "publish_total_ms": 62.89,
+      "full_snapshot_kib": 7645.0,
+      "single_node_payload_kib": 3.769
+    }
+  ]
+}

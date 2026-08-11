@@ -2602,7 +2602,17 @@ function CanvasInner({
   );
 
   return (
-    <div className="scene-canvas" ref={canvasWrapperRef} onDoubleClick={onDoubleClick}>
+    <div
+      className="scene-canvas"
+      ref={canvasWrapperRef}
+      onDoubleClick={onDoubleClick}
+      // ADR-015 stage 15.6: the one stable, content-independent hook the
+      // Playwright boot-smoke suite (web_ui/e2e/boot.spec.ts) needs to
+      // assert the real canvas surface rendered - every other candidate
+      // here (text content, node count) is either empty on a fresh
+      // session or churns as node types gain feature work.
+      data-testid="scene-canvas"
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}
