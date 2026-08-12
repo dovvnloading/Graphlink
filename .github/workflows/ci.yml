@@ -10,22 +10,31 @@ name: CI
 # This used to also be pinned for PySide6/QtWebEngine's offscreen mode, but
 # Qt was fully removed at the R7.6b cutover.
 #
-# ADR-015 stage 15.6: the OTHER 3 matrix cells (windows+3.10, ubuntu+3.12,
-# ubuntu+3.11) exist to catch a genuinely different class of bug - a
-# 3.10-only syntax/stdlib issue, or a Windows-path-assumption that breaks
-# on Linux - that the single windows+3.12 cell structurally cannot catch.
-# Deliberately NOT the full 2(os) x 3(py) = 6-cell cross product (an
-# `include:` list, not `os:`/`python-version:` as separate matrix axes) -
-# see the Actions-minutes economy note below; every one of {3.10, 3.11,
-# 3.12} and both OSes appears at least once, which is what "3.10/3.11 +
-# ubuntu in matrix" asks for, without doubling total runtime for
-# marginal additional confidence. Every non-Windows-only test already
-# self-skips on non-Windows platforms (see WINDOWS_ONLY markers in
-# backend/tests/test_execution_guard.py and the one skipif this stage
-# added to test_backend_secrets_at_rest.py) - `pip install -r
-# requirements.txt` (incl. pywebview) already runs clean on ubuntu-latest
-# today via the build-check job below, which is what de-risked adding it
-# here too.
+# ADR-015 stage 15.6's OS/Python MATRIX IS NOT DONE, and this job is
+# deliberately still a single windows-latest/3.12 cell. It was attempted
+# (4 cells: windows 3.10/3.12 + ubuntu 3.11/3.12) and reverted after CI
+# proved two hard blockers, both of which are real work rather than a
+# config tweak:
+#
+#   1. requirements.txt cannot install on 3.10/3.11 at all. It is a
+#      hash-locked pip-compile output resolved against 3.12 - numpy==2.5.1
+#      requires >=3.12, contourpy==1.3.3 requires >=3.11 - so those cells
+#      die at `pip install -r requirements.txt` before running a thing.
+#      (This file's build-check note below already said the lock is
+#      3.12-specific; that warning was correct.) Fixing it means either
+#      per-version lockfiles or an unpinned install path for non-primary
+#      cells - a real dependency-management decision.
+#   2. ~18 tests genuinely assume Windows and have no platform guard: the
+#      DPAPI secrets-at-rest suite (which asserts encryption actually
+#      happened, only true on Windows), subprocess.CREATE_NO_WINDOW in
+#      test_code_sandbox_domain.py, and os.startfile in
+#      test_diagnostic_bundle.py. They fail on ubuntu even at 3.12 where
+#      the lock installs fine. Guarding them touches a security-boundary
+#      test file and deserves its own reviewed change.
+#
+# The one skipif this stage DID land (the unguarded real-DPAPI probe in
+# test_backend_secrets_at_rest.py) is kept - it is correct on its own
+# merits regardless of when the matrix returns.
 #
 # The pytest/compileall steps run from the repo root, never a subdirectory:
 # pinning working-directory scopes collection to that directory's tests and
@@ -96,30 +105,17 @@ jobs:
     # ADR-015 stage 15.3: was "Python tests (offscreen)" - a Qt-removal-era
     # name for a job that no longer runs anything Qt-related (the offscreen
     # QT_QPA_PLATFORM setting it referred to is gone, see pyproject.toml's
-    # own [tool.pytest.ini_options]). ADR-015 stage 15.6: now a 4-cell
-    # matrix, not Windows-pinned alone - see this file's own module comment
-    # above for why exactly these 4 cells and not the full 6-cell product.
-    name: Python checks (${{ matrix.os }}, py${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
+    # own [tool.pytest.ini_options]). Windows-pinned for DPAPI, not Qt - see
+    # this file's own module comment above.
+    name: Python checks (Windows, DPAPI)
+    runs-on: windows-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            python-version: "3.12"
-          - os: windows-latest
-            python-version: "3.10"
-          - os: ubuntu-latest
-            python-version: "3.12"
-          - os: ubuntu-latest
-            python-version: "3.11"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
           cache: pip
 
       - name: Install dependencies

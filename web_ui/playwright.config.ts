@@ -37,15 +37,37 @@ export default defineConfig({
   // despite sharing that one session.
   fullyParallel: false,
   workers: 1,
+  // Timeouts sized for a COLD shared CI runner, not a warm dev machine.
+  // The first CI run of this suite failed all 5 specs on the very first
+  // assertion (the `.app-conn-open` WS badge) against Playwright's 5s
+  // default, while the identical suite passed repeatedly on a local
+  // machine - the gap is a 2-core runner doing a cold uvicorn boot (which
+  // imports matplotlib/anthropic/openai), a cold browser launch, and a
+  // first parse of the ~800 KiB SPA bundle before the WS handshake even
+  // starts. These are ceilings for a hang, not expected durations: a
+  // healthy run still finishes in ~30s total.
+  timeout: 90_000,
+  expect: { timeout: 30_000 },
+  // CI only. Locally a retry would mask a spec that is genuinely racy and
+  // wants fixing; in CI it absorbs one-off runner stalls without turning
+  // the whole PR red.
+  retries: process.env.CI ? 2 : 0,
   use: {
     baseURL: "http://127.0.0.1:8799",
     trace: "on-first-retry",
+    actionTimeout: 30_000,
+    navigationTimeout: 60_000,
   },
   webServer: {
     command: "python ../tests_e2e/run_backend.py",
     url: "http://127.0.0.1:8799/api/health",
-    timeout: 30000,
+    // Generous for the same cold-start reason: this backend's import graph
+    // (matplotlib, the provider SDKs) is genuinely slow to load the first
+    // time on a runner with a cold filesystem cache.
+    timeout: 180_000,
     reuseExistingServer: !process.env.CI,
+    stdout: "pipe",
+    stderr: "pipe",
   },
   projects: [
     {
