@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WsRequestError, WsTimeoutError, WsTopicBlockedError, WsTransport, WsUnavailableError } from "./transport";
+import {
+  COMPOSER_DRAFT_OFFLINE_COALESCE_KEY,
+  WsRequestError,
+  WsTimeoutError,
+  WsTopicBlockedError,
+  WsTransport,
+  WsUnavailableError,
+} from "./transport";
 import { READER_SCHEMA_VERSION } from "../bridge-core/schemaVersion";
 
 // ADR-003 stage 3.5: every real `kind:"state"`/`kind:"patch"` frame carries
@@ -102,6 +109,56 @@ describe("WsTransport", () => {
     socket.receive({ kind: "state", topic: "a", payload: { schemaVersion: READER_SCHEMA_VERSION, x: 1 } });
     expect(a).toHaveLength(1);
     expect(b).toHaveLength(0);
+  });
+
+  it("replays the last compatible full snapshot to a late topic subscriber without another wire subscribe", () => {
+    const t = makeTransport();
+    const first: unknown[] = [];
+    const late: unknown[] = [];
+    t.subscribe("app-settings", (payload) => first.push(payload));
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    const snapshot = { schemaVersion: READER_SCHEMA_VERSION, revision: 7, theme: "dark" };
+    socket.receive({ kind: "state", topic: "app-settings", payload: snapshot });
+    const sentBeforeLateSubscribe = socket.sent.length;
+
+    t.subscribe("app-settings", (payload) => late.push(payload));
+
+    expect(first).toEqual([snapshot]);
+    expect(late).toEqual([snapshot]);
+    expect(socket.sent).toHaveLength(sentBeforeLateSubscribe);
+  });
+
+  it("never replays a patch as state and requests a fresh snapshot after a patch invalidates the cache", () => {
+    const t = makeTransport();
+    const patches: unknown[] = [];
+    const lateStates: unknown[] = [];
+    t.subscribe("scene", () => {});
+    t.subscribePatch("scene", (patch) => patches.push(patch));
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    socket.receive({
+      kind: "state",
+      topic: "scene",
+      payload: { schemaVersion: READER_SCHEMA_VERSION, revision: 1, nodes: [] },
+    });
+    socket.receive({
+      kind: "patch",
+      topic: "scene",
+      schemaVersion: READER_SCHEMA_VERSION,
+      minCompatibleSchemaVersion: READER_SCHEMA_VERSION,
+      revision: 2,
+      baseRevision: 1,
+      ops: [{ op: "removeNode", id: "n1" }],
+    });
+
+    t.subscribe("scene", (payload) => lateStates.push(payload));
+
+    expect(patches).toEqual([{ revision: 2, baseRevision: 1, ops: [{ op: "removeNode", id: "n1" }] }]);
+    expect(lateStates).toEqual([]);
+    expect(socket.lastSent()).toEqual({ kind: "subscribe", topics: ["scene"] });
   });
 
   it("intent() is a silent no-op before the socket opens (bridge parity)", () => {
@@ -532,6 +589,64 @@ describe("WsTransport", () => {
     t.resubscribe("scene");
 
     expect(socket.lastSent()).toEqual({ kind: "subscribe", topics: ["scene"] });
+  });
+
+  it("matches an explicit snapshot fence by id and runs it before ordinary listeners", () => {
+    const t = makeTransport();
+    const order: string[] = [];
+    t.subscribe("app-composer", () => order.push("ordinary"));
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+
+    expect(t.resubscribe("app-composer", () => order.push("fence"))).toBe(true);
+    const request = socket.lastSent();
+    expect(request).toMatchObject({ kind: "subscribe", topics: ["app-composer"], id: expect.any(Number) });
+
+    // A buffered broadcast from before the request is still an ordinary
+    // snapshot even if it arrives first; it must not release the fence.
+    socket.receive({
+      kind: "state",
+      topic: "app-composer",
+      payload: { schemaVersion: READER_SCHEMA_VERSION, revision: 1 },
+    });
+    socket.receive({
+      kind: "state",
+      topic: "app-composer",
+      id: request.id,
+      payload: { schemaVersion: READER_SCHEMA_VERSION, revision: 2 },
+    });
+
+    expect(order).toEqual(["ordinary", "fence", "ordinary"]);
+  });
+
+  it("reissues a pending correlated snapshot fence after reconnect", () => {
+    const t = makeTransport();
+    t.subscribe("app-composer", () => {});
+    t.connect();
+    const first = FakeSocket.instances[0];
+    first.open();
+    const fence = vi.fn();
+    t.resubscribe("app-composer", fence);
+    const request = first.lastSent();
+
+    first.onclose?.();
+    vi.advanceTimersByTime(10_000);
+    const reconnected = FakeSocket.instances[1];
+    reconnected.open();
+    expect(reconnected.sent.map((raw) => JSON.parse(raw))).toContainEqual({
+      kind: "subscribe",
+      topics: ["app-composer"],
+      id: request.id,
+    });
+
+    reconnected.receive({
+      kind: "state",
+      topic: "app-composer",
+      id: request.id,
+      payload: { schemaVersion: READER_SCHEMA_VERSION, revision: 3 },
+    });
+    expect(fence).toHaveBeenCalledOnce();
   });
 
   it("resubscribe() is a no-op while the socket is not open", () => {
@@ -1195,6 +1310,67 @@ describe("offline intent queue (ADR-003 stage 3.6)", () => {
       intent: "showError",
       args: ["1 change could not be sent while disconnected."],
     });
+  });
+
+  it("keeps the latest offline draft in a reserved coalesced slot after 50 ordinary writes", async () => {
+    const t = makeTransport();
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    const firstSettled = vi.fn();
+    const firstCoalesced = vi.fn();
+    const secondSettled = vi.fn();
+    const secondCoalesced = vi.fn();
+    const latestSettled = vi.fn();
+
+    t.fireIntent(
+      "app-composer",
+      "updateDraft",
+      ["first"],
+      undefined,
+      true,
+      COMPOSER_DRAFT_OFFLINE_COALESCE_KEY,
+      firstSettled,
+      firstCoalesced,
+    );
+    for (let i = 0; i < 50; i++) {
+      t.fireIntent("scene", "moveNodes", [[{ id: `n${i}`, x: i, y: i }]], undefined, true);
+    }
+    t.fireIntent(
+      "app-composer",
+      "updateDraft",
+      ["second"],
+      undefined,
+      true,
+      COMPOSER_DRAFT_OFFLINE_COALESCE_KEY,
+      secondSettled,
+      secondCoalesced,
+    );
+    t.fireIntent(
+      "app-composer",
+      "updateDraft",
+      ["latest"],
+      undefined,
+      true,
+      COMPOSER_DRAFT_OFFLINE_COALESCE_KEY,
+      latestSettled,
+    );
+
+    expect(firstCoalesced).toHaveBeenCalledOnce();
+    expect(secondCoalesced).toHaveBeenCalledOnce();
+    expect(firstSettled).not.toHaveBeenCalled();
+    expect(secondSettled).not.toHaveBeenCalled();
+
+    socket.open();
+    const sent = socket.sent.map((raw) => JSON.parse(raw));
+    expect(sent.filter((message) => message.intent === "moveNodes")).toHaveLength(50);
+    const drafts = sent.filter((message) => message.intent === "updateDraft");
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0].args).toEqual(["latest"]);
+    expect(sent).not.toContainEqual(expect.objectContaining({ intent: "showError" }));
+
+    socket.receive({ kind: "result", id: drafts[0].id, value: null });
+    await Promise.resolve();
+    expect(latestSettled).toHaveBeenCalledOnce();
   });
 
   it("status is 'reconnecting', not 'connecting', on every attempt after a real connection was lost", () => {

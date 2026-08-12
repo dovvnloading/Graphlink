@@ -41,24 +41,14 @@ get_all_serializable_items/CHILD_LINK_NODE_TYPES/NODE_LIST_NAMES), plus
 5 plugin kinds (pycoder/code_sandbox/web/artifact/gitlink) R5-closeout later
 deleted the branches for.
 
-KNOWN, ALREADY-EXISTING GAP THIS FILE DELIBERATELY DOES NOT "FIX" (present
-in legacy itself, not introduced here): scene_index.py's own
-get_all_serializable_items positions containers LAST in the combined item-
-index space (nodes+notes+charts+frames+containers), and create_container's
-own docstring confirms a container CAN legitimately hold another container
-as a member - but legacy's OWN restore_chat builds all_items_map from only
-nodes+notes+charts+frames BEFORE its containers-deserialization loop runs,
-and never adds containers to that map afterward either. A session containing
-a container nested inside another container would therefore fail to
-resolve that one reference on load in BOTH the legacy Qt app AND this
-project's own backend/session_load.py (which faithfully ported this exact
-restore_chat behavior in R6.4, offsets included). This file's own
-_serialize_container mirrors get_all_serializable_items's item-index
-scheme exactly (containers ARE included, at the tail) for save-side
-fidelity with legacy's OWN serializer - the corresponding load-side gap is
-a pre-existing, shared limitation, not a regression this increment
-introduces, and is out of scope to fix here (it would be a session_load.py
-change, not a session_save.py one).
+NESTED CONTAINERS: scene_index.py's get_all_serializable_items positions
+containers LAST in the combined item-index space
+(nodes+notes+charts+frames+containers), and create_container legitimately
+allows a container to hold another container. _serialize_container mirrors
+that index scheme exactly. backend/session_load.py resolves the matching
+tail indices incrementally while restoring containers, including a deferred
+pass for payloads that are not dependency-ordered, so nested membership now
+round-trips instead of losing the outer group.
 
 DELIBERATE SIMPLIFICATION (documented, not silent): legacy's own title
 generation for a brand-new chat tries an LLM call first (title_generator.
@@ -832,10 +822,10 @@ def _build_chat_data(
     for i, n in enumerate(charts):
         frame_source_index[n.id] = node_slot_count + i
 
-    # "all items index" = nodes + notes + charts + frames (+ containers,
-    # tail - see this module's own docstring on the known, shared,
-    # already-existing nested-container load-side gap) - mirrors
-    # get_all_serializable_items exactly.
+    # "all items index" = nodes + notes + charts + frames + containers at
+    # the tail - mirrors get_all_serializable_items exactly. The loader adds
+    # restored container ids back at these same tail indices so nesting can
+    # resolve on the way in as well.
     all_items_index = dict(nodes_index)
     for i, n in enumerate(notes):
         all_items_index[n.id] = node_slot_count + i

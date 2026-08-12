@@ -1833,6 +1833,47 @@ def test_save_chat_intent_resave_updates_same_row_and_keeps_existing_title(db_pa
     assert len(row["data"]["nodes"]) == 2
 
 
+def test_rename_of_open_chat_refreshes_save_token_and_next_edit_persists(db_path, monkeypatch):
+    """A session's own rename must not look like an external edit later.
+
+    Before the regression fix, rename_chat bumped the row's ``updated_at``
+    while the session kept its pre-rename token. The next Save therefore
+    raised ConcurrentSaveConflict and silently left the new canvas edit only
+    in memory. The spy also proves rename now runs under the same user-owned
+    mutation guard as save/load/autosave, which makes updating the shared
+    token race-free within this session.
+    """
+    bus, document, notifications = _bus_with_canvas(db_path)
+    document.add_chat_node(0, 0, "hello world", is_user=True)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+    chat_id = document.current_chat_id
+    old_token = bus.chat_save_state["updated_at"]
+
+    real_rename = chat_library_module.rename_chat
+    observed_guard_owners = []
+
+    def rename_while_observing_guard(*args, **kwargs):
+        observed_guard_owners.append(bus.chat_mutation_guard["owner"])
+        return real_rename(*args, **kwargs)
+
+    monkeypatch.setattr(chat_library_module, "rename_chat", rename_while_observing_guard)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "renameChat", [chat_id, "Renamed"]))
+
+    renamed_row = load_chat_row(db_path, chat_id)
+    assert observed_guard_owners == [USER_OWNER]
+    assert renamed_row["title"] == "Renamed"
+    assert renamed_row["updated_at"] != old_token
+    assert bus.chat_save_state["updated_at"] == renamed_row["updated_at"]
+
+    added_note = document.add_note(20, 20)
+    document.set_note_content(added_note.id, "saved after rename")
+    asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
+
+    assert notifications.visible and notifications.msg_type == "success"
+    assert load_chat_row(db_path, chat_id)["title"] == "Renamed"
+    assert [row["content"] for row in load_notes_rows(db_path, chat_id)] == ["saved after rename"]
+
+
 def test_save_chat_intent_falls_back_to_insert_when_current_row_was_deleted_elsewhere(db_path):
     bus, document, notifications = _bus_with_canvas(db_path)
     document.current_chat_id = 999  # a row that never existed / was deleted
@@ -2622,6 +2663,32 @@ class TestOptimisticConcurrency:
         row = load_chat_row(db_path, chat_id)
         assert row["data"] == {"nodes": ["v1-from-A"]}
         assert row["updated_at"] == second_updated_at
+
+    def test_rename_with_a_stale_token_does_not_adopt_the_newer_rows_version(self, db_path):
+        chat_id, original_updated_at = save_chat_atomically_row(
+            db_path, None, "Original title", {"nodes": ["v0"]}, [], [],
+        )
+        save_chat_atomically_row(
+            db_path,
+            chat_id,
+            "Original title",
+            {"nodes": ["newer content from another session"]},
+            [],
+            [],
+            expected_updated_at=original_updated_at,
+        )
+
+        with pytest.raises(ConcurrentSaveConflict):
+            rename_chat(
+                db_path,
+                chat_id,
+                "Stale session's rename",
+                expected_updated_at=original_updated_at,
+            )
+
+        row = load_chat_row(db_path, chat_id)
+        assert row["title"] == "Original title"
+        assert row["data"] == {"nodes": ["newer content from another session"]}
 
     def test_a_lost_race_does_not_touch_notes_or_pins_either(self, db_path):
         # The whole write must roll back atomically - not just the chats

@@ -512,6 +512,26 @@ def test_container_can_reference_a_frame_via_the_full_offset_chain():
     assert container.item_ids == [frame.id]
 
 
+def test_nested_containers_restore_when_outer_payload_precedes_inner_dependency():
+    document = _restore(
+        nodes=[_chat("leaf")],
+        containers=[
+            # Container slots start after the one regular-node slot. The
+            # outer payload is deliberately first but references slot 2,
+            # occupied by the inner payload below, so restoration requires
+            # the loader's deferred dependency pass rather than list order.
+            {"items": [2], "title": "Outer"},
+            {"items": [0], "title": "Inner"},
+        ],
+    )
+
+    leaf = next(node for node in document.nodes.values() if node.kind == "chat")
+    inner = next(node for node in document.nodes.values() if node.content == "Inner")
+    outer = next(node for node in document.nodes.values() if node.content == "Outer")
+    assert inner.item_ids == [leaf.id]
+    assert outer.item_ids == [inner.id]
+
+
 # -- basic connections (12 keys), system-prompt / group-summary -------------
 
 

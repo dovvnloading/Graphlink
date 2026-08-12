@@ -9,6 +9,11 @@ type StreamListener = (delta: string, done: boolean, reset: boolean, seq: number
 function makeFakeTransport() {
   const listeners = new Map<string, StateListener>();
   const intents: Array<{ topic: string; intent: string; args: unknown[] }> = [];
+  const intentCallbacks: Array<{
+    onSettled?: () => void;
+    onOfflineCoalesced?: () => void;
+  }> = [];
+  const resubscribeListeners: StateListener[] = [];
   const streamListeners = new Map<string, StreamListener>();
   const streamUnsubFns = new Map<string, ReturnType<typeof vi.fn>>();
   const subscribeStream = vi.fn((requestId: string, listener: StreamListener) => {
@@ -33,12 +38,35 @@ function makeFakeTransport() {
     // path is exercised by transport.test.ts, not re-tested at every call
     // site) so this file's existing assertions don't need to distinguish
     // the two.
-    fireIntent: vi.fn((topic: string, intent: string, args: unknown[] = []) => {
+    fireIntent: vi.fn((
+      topic: string,
+      intent: string,
+      args: unknown[] = [],
+      _timeoutMs?: number,
+      _queueable?: boolean,
+      _offlineCoalesceKey?: string,
+      onSettled?: () => void,
+      onOfflineCoalesced?: () => void,
+    ) => {
       intents.push({ topic, intent, args });
+      intentCallbacks.push({ onSettled, onOfflineCoalesced });
+    }),
+    resubscribe: vi.fn((_topic: string, listener?: StateListener) => {
+      if (listener) resubscribeListeners.push(listener);
+      return true;
     }),
     subscribeStream,
   } as unknown as WsTransport;
-  return { transport, listeners, intents, subscribeStream, streamListeners, streamUnsubFns };
+  return {
+    transport,
+    listeners,
+    intents,
+    intentCallbacks,
+    resubscribeListeners,
+    subscribeStream,
+    streamListeners,
+    streamUnsubFns,
+  };
 }
 
 function validComposerPayload(overrides: Record<string, unknown> = {}) {
@@ -83,6 +111,117 @@ describe("ComposerStore", () => {
     listeners.get("app-composer")!(validComposerPayload());
     expect(seen).toHaveBeenCalledTimes(1);
     expect(store.getComposer().draft.text).toBe("hi");
+  });
+
+  it("keeps controlled typing optimistic and ignores stale draft echoes until the newest value is acknowledged", () => {
+    const { transport, listeners, intents, intentCallbacks, resubscribeListeners } =
+      makeFakeTransport();
+    const store = new ComposerStore(transport);
+    store.connect();
+    listeners.get("app-composer")!(validComposerPayload());
+    const seen = vi.fn();
+    store.subscribe(seen);
+
+    store.updateDraft("hia");
+    expect(store.getComposer().draft.text).toBe("hia");
+    expect(seen).toHaveBeenCalledTimes(1);
+
+    // Model a controlled input computing its next value from the immediately
+    // rendered store snapshot, before either WebSocket echo has arrived.
+    store.updateDraft(`${store.getComposer().draft.text}b`);
+    expect(store.getComposer().draft.text).toBe("hiab");
+    expect(intents.slice(-2)).toEqual([
+      { topic: "app-composer", intent: "updateDraft", args: ["hia"] },
+      { topic: "app-composer", intent: "updateDraft", args: ["hiab"] },
+    ]);
+
+    // The first intent's stale echo may still carry useful server-owned
+    // fields; merge those without rolling the newer local text backward.
+    listeners.get("app-composer")!(
+      validComposerPayload({
+        revision: 2,
+        draft: { id: "d1", text: "hia", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+        request: { id: null, state: "idle", message: "updated", canSend: true, canCancel: false, canRetry: false },
+      }),
+    );
+    expect(store.getComposer().draft.text).toBe("hiab");
+    expect(store.getComposer().request.message).toBe("updated");
+    expect(store.getComposer().revision).toBe(2);
+
+    // Passive value equality is ambiguous, so authority returns only after
+    // both requests settle and their explicit follow-up snapshot arrives.
+    intentCallbacks[0].onSettled?.();
+    expect(resubscribeListeners).toHaveLength(0);
+    intentCallbacks[1].onSettled?.();
+    expect(resubscribeListeners).toHaveLength(1);
+    const authoritative = validComposerPayload({
+      revision: 3,
+      draft: { id: "d1", text: "hiab", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+    });
+    resubscribeListeners.shift()!(authoritative);
+    listeners.get("app-composer")!(authoritative);
+
+    // Later server snapshots are authoritative again (for example, a
+    // successful send clearing the draft).
+    listeners.get("app-composer")!(
+      validComposerPayload({
+        revision: 4,
+        draft: { id: "d1", text: "", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+      }),
+    );
+    expect(store.getComposer().draft.text).toBe("");
+  });
+
+  it("does not mistake an older equal-value echo for acknowledgement in an A-B-A edit", () => {
+    const { transport, listeners, intentCallbacks, resubscribeListeners } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    store.connect();
+    listeners.get("app-composer")!(validComposerPayload());
+
+    store.updateDraft("hia");
+    store.updateDraft("hiab");
+    store.updateDraft("hia");
+
+    for (const [revision, text] of [[2, "hia"], [3, "hiab"], [4, "hia"]] as const) {
+      listeners.get("app-composer")!(
+        validComposerPayload({
+          revision,
+          draft: { id: "d1", text, contextMode: "branch", sendMode: "enter_to_send", restored: false },
+        }),
+      );
+      expect(store.getComposer().draft.text).toBe("hia");
+    }
+
+    for (const callbacks of intentCallbacks.slice(-3)) callbacks.onSettled?.();
+    expect(resubscribeListeners).toHaveLength(1);
+    const authoritative = validComposerPayload({
+      revision: 5,
+      draft: { id: "d1", text: "hia", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+    });
+    resubscribeListeners.shift()!(authoritative);
+    listeners.get("app-composer")!(authoritative);
+    listeners.get("app-composer")!(
+      validComposerPayload({
+        revision: 6,
+        draft: { id: "d1", text: "server value", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+      }),
+    );
+    expect(store.getComposer().draft.text).toBe("server value");
+  });
+
+  it("retains optimistic text without looping when a correlated snapshot is malformed", () => {
+    const { transport, listeners, intentCallbacks, resubscribeListeners } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    store.connect();
+    listeners.get("app-composer")!(validComposerPayload());
+    store.updateDraft("local");
+    intentCallbacks.at(-1)!.onSettled?.();
+    expect(resubscribeListeners).toHaveLength(1);
+
+    resubscribeListeners.shift()!({ schemaVersion: 1 });
+
+    expect(resubscribeListeners).toHaveLength(0);
+    expect(store.getComposer().draft.text).toBe("local");
   });
 
   it("rejects a malformed snapshot and keeps the previous state", () => {
