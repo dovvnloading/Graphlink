@@ -248,10 +248,17 @@ export function DocumentViewPanel({
   const [copied, setCopied] = useState(false);
   const onCopy = useCallback(() => {
     if (!content) return;
-    navigator.clipboard?.writeText(content).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard
+      ?.writeText(content)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      // See NodeMarkdown.tsx's identical handler for why this .catch exists
+      // (ADR-011 stage 11.6's clipboard sweep missed four sites; this is one).
+      .catch((error: unknown) => {
+        console.error("Failed to copy document to clipboard", error);
+      });
   }, [content]);
 
   // Stage 2: table of contents + reading progress. Extracted from the raw

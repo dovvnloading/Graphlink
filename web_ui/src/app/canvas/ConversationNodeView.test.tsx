@@ -532,21 +532,77 @@ function makeSubscribeStreamMock() {
 
 describe("ConversationNodeView live reply streaming (ADR-006 stage 6.4)", () => {
   it("renders a live assistant bubble accumulating deltas after the persisted messages while a reply is in flight", () => {
-    const { subscribeStream, listeners } = makeSubscribeStreamMock();
-    renderConversationNode({ pendingRequestId: "req-1", subscribeStream });
-    expect(subscribeStream).toHaveBeenCalledWith("req-1", expect.any(Function));
-    // Pre-first-delta placeholder, inside its own streaming bubble.
-    expect(screen.getByText("Waiting for response…")).toBeInTheDocument();
+    // ADR-011 stage 11.4 (extended to this view 2026-08-12): non-reset/
+    // non-done deltas are throttled to a rAF-scheduled flush rather than
+    // applied synchronously, so advance past one frame to let the
+    // fake-timer-backed requestAnimationFrame fire. Same idiom as
+    // ChatNodeView.test.tsx's equivalent streaming test.
+    vi.useFakeTimers();
+    try {
+      const { subscribeStream, listeners } = makeSubscribeStreamMock();
+      renderConversationNode({ pendingRequestId: "req-1", subscribeStream });
+      expect(subscribeStream).toHaveBeenCalledWith("req-1", expect.any(Function));
+      // Pre-first-delta placeholder, inside its own streaming bubble.
+      expect(screen.getByText("Waiting for response…")).toBeInTheDocument();
 
-    const listener = listeners.get("req-1")!;
-    act(() => listener("Hello ", false, false, 1));
-    act(() => listener("World", false, false, 2));
-    const streamingBubble = screen
-      .getByText("Hello World")
-      .closest(".conversation-node-bubble") as HTMLElement;
-    expect(streamingBubble).toHaveClass("conversation-node-bubble-streaming", "assistant");
-    // Persisted messages still render before it.
-    expect(screen.getByText("Hi there")).toBeInTheDocument();
+      const listener = listeners.get("req-1")!;
+      act(() => listener("Hello ", false, false, 1));
+      act(() => listener("World", false, false, 2));
+      act(() => {
+        vi.advanceTimersByTime(20);
+      });
+      const streamingBubble = screen
+        .getByText("Hello World")
+        .closest(".conversation-node-bubble") as HTMLElement;
+      expect(streamingBubble).toHaveClass("conversation-node-bubble-streaming", "assistant");
+      // Persisted messages still render before it.
+      expect(screen.getByText("Hi there")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("coalesces a burst of deltas into a single markdown re-parse (ADR-011 stage 11.4)", () => {
+    // The point of the throttle: many deltas inside one frame must produce
+    // ONE state commit, not one per delta. Without it this view re-ran the
+    // full unified/remark/rehype/KaTeX/highlight pipeline on every token.
+    vi.useFakeTimers();
+    try {
+      const { subscribeStream, listeners } = makeSubscribeStreamMock();
+      renderConversationNode({ pendingRequestId: "req-1", subscribeStream });
+      const listener = listeners.get("req-1")!;
+
+      act(() => {
+        for (const token of ["a", "b", "c", "d", "e"]) listener(token, false, false, 1);
+      });
+      // Nothing committed yet - all five are still buffered in the ref.
+      expect(screen.queryByText("abcde")).toBeNull();
+      expect(screen.getByText("Waiting for response…")).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(20);
+      });
+      // One flush, all five bytes, in order.
+      expect(screen.getByText("abcde")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("flushes the final chunk synchronously on done, so no trailing text is stranded", () => {
+    vi.useFakeTimers();
+    try {
+      const { subscribeStream, listeners } = makeSubscribeStreamMock();
+      renderConversationNode({ pendingRequestId: "req-1", subscribeStream });
+      const listener = listeners.get("req-1")!;
+
+      act(() => listener("partial", false, false, 1));
+      // done=true must not wait for the next frame - assert with timers held.
+      act(() => listener(" and the rest", true, false, 2));
+      expect(screen.getByText("partial and the rest")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a reset frame clears prior accumulated text before appending", () => {

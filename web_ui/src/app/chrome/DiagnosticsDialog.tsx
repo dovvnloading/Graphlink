@@ -98,10 +98,20 @@ export function DiagnosticsDialog({ transport }: { transport: WsTransport }) {
   // transient "Copied" flash rather than a persistent state change.
   function copyBundleToClipboard() {
     if (!exportResult) return;
-    navigator.clipboard.writeText(JSON.stringify(exportResult.bundle, null, 2)).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard
+      .writeText(JSON.stringify(exportResult.bundle, null, 2))
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      // See NodeMarkdown.tsx's identical handler for why this .catch exists
+      // (ADR-011 stage 11.6's clipboard sweep missed four sites; this is one).
+      // Worth noting here specifically: this is the diagnostic-bundle copy, so
+      // a silent failure would strand a user who is already trying to report a
+      // problem.
+      .catch((error: unknown) => {
+        console.error("Failed to copy the diagnostic bundle to clipboard", error);
+      });
   }
 
   return (

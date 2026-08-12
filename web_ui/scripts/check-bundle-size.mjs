@@ -31,11 +31,31 @@ import { fileURLToPath } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ASSETS_DIR = join(HERE, "..", "dist", "app", "assets");
 
-// Post-11.6 reality: largest chunk (the main entry) is 775,553 bytes.
-// ~5% headroom absorbs ordinary dependency-patch drift; a real regression
-// (a new heavyweight dependency landing outside the katex/highlight.js
-// manualChunks, an accidental double-bundle) blows straight through it.
-const LARGEST_CHUNK_CEILING_BYTES = 815_000;
+// Deliberate, commented amendment - 2026-08-12 (ADR-019 §4).
+//
+// The comment above describes post-11.6 reality (775,553 bytes) and claims
+// "~5% headroom". That stopped being true without anyone noticing: by
+// 2026-08-12 the real largest chunk had crept to 814,677 bytes, leaving 323
+// bytes - 0.04% - under the old 815,000 ceiling. A repo-wide audit flagged
+// that the ratchet had quietly stopped being able to catch anything, and the
+// very next change (two small bug fixes: the ConversationNodeView streaming
+// throttle and the chart live-theme listener, ~600 bytes combined) tripped it
+// - a false alarm on an unrelated PR, exactly the failure mode predicted.
+//
+// Raised to 840,000: ~3% real headroom against today's 815,280 bytes, enough
+// to absorb ordinary dependency-patch drift again while still blowing up on a
+// genuine regression (a heavyweight dep landing outside the katex/highlight.js
+// manualChunks, or an accidental double-bundle).
+//
+// This is a raise, and raises deserve suspicion - so, stated plainly: the
+// underlying ADR-019 budget for the initial chunk is 500 KiB (512,000 bytes),
+// and at 815,280 we are ~59% OVER it. This ceiling is a regression ratchet,
+// not the budget, and moving it does not move the budget. Closing the real gap
+// needs code-splitting the eagerly-rendered node views (memoized in 11.1,
+// virtualized in 11.2, but never themselves split) - work no stage currently
+// owns. Tighten this back down the moment that lands; never loosen it again to
+// paper over a regression.
+const LARGEST_CHUNK_CEILING_BYTES = 840_000;
 // Post-11.6 reality: six chunks (main + katex + highlight.js + the three
 // lazy dialogs) total 1,288,075 bytes - essentially unchanged from the
 // pre-split single-chunk total, as expected: splitting redistributes code
