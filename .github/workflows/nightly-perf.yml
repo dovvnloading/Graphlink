@@ -1,0 +1,63 @@
+name: Nightly perf baseline
+
+# ADR-019 stage 19.3: the "Nightly (local/self-hosted): wall-clock
+# benchmarks with a ±20% regression threshold... a 2x regression fails
+# loudly" half of the ADR's own §4 split - the OTHER half (stage 19.2's
+# counting assertions: re-renders/update, bundle size, wire bytes/op,
+# loop-blocking watchdog) already runs per-PR in ci.yml, deliberately NOT
+# wall-clock, for exactly the noisy-shared-runner reason this file's own
+# schedule exists to sidestep for the PR-blocking path.
+#
+# Honest scoping note: ADR-019 §4 says "local/self-hosted" specifically
+# because a SHARED runner is noisy for wall-clock timing - no self-hosted
+# runner exists for this repo, and standing one up is real infrastructure
+# work (a persistent machine, registration, its own security review) well
+# outside a quality-gates cleanup stage. This runs on windows-latest (a
+# shared runner) instead - noisier than ideal, but: (1) windows-latest
+# matches the platform the app actually ships on, unlike a hypothetical
+# Linux self-hosted box; (2) the ±20% soft / 2x hard thresholds in
+# check_baseline.py were deliberately chosen generous enough to absorb
+# normal shared-runner jitter (confirmed empirically: a real run showed
+# +2% to +11% swings on tiny "small"-workload timings, comfortably under
+# the 20% soft floor); (3) nightly cadence means a single noisy run
+# doesn't block anyone's PR - a maintainer reviews the failure, not a
+# contributor blocked mid-merge. Revisit if self-hosted infra ever exists.
+#
+# "Trend visible" (this stage's other exit-criterion clause): each run's
+# own job log prints every workload/metric as a baseline-vs-current table
+# (see check_baseline.py's own output) - GitHub Actions keeps run history,
+# so reading the last N nightly runs' logs IS the trend view. No separate
+# dashboard/chart infrastructure was built - that would need either a bot
+# commit back to the repo (conflicts with this workflow's own read-only
+# permissions below, deliberately) or external storage, both real,
+# separate scope beyond "add a nightly regression check."
+
+on:
+  schedule:
+    # 09:00 UTC daily - an arbitrary fixed off-peak time, not tied to any
+    # release cadence. workflow_dispatch below is what you actually want
+    # for on-demand runs (e.g. right after landing a perf-sensitive change).
+    - cron: "0 9 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  nightly-perf:
+    name: Nightly wall-clock baseline check
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check wall-clock perf against the committed baseline
+        run: python -m backend.tests.perf.check_baseline

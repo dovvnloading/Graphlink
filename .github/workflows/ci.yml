@@ -1,13 +1,40 @@
 name: CI
 
 # Minimal CI: re-verifies on every PR exactly what has been run manually
-# before every merge - pytest, npm run check. Runs on windows-latest
-# because backend/tests/test_backend_secrets_at_rest.py exercises real
-# Windows DPAPI (CryptProtectData/CryptUnprotectData) - the secrets-at-rest
-# encryption this app actually ships - which only exists on Windows. This
-# used to also be pinned for PySide6/QtWebEngine's offscreen mode, but Qt
-# was fully removed at the R7.6b cutover; DPAPI is the sole remaining
-# reason this can't move to a cheaper Linux runner.
+# before every merge - pytest, npm run check. python-tests' PRIMARY cell
+# (windows-latest, Python 3.12) exists because backend/tests/
+# test_backend_secrets_at_rest.py exercises real Windows DPAPI
+# (CryptProtectData/CryptUnprotectData) - the secrets-at-rest encryption
+# this app actually ships - which only exists on Windows; that's still the
+# one cell every other job effectively depends on for real DPAPI coverage.
+# This used to also be pinned for PySide6/QtWebEngine's offscreen mode, but
+# Qt was fully removed at the R7.6b cutover.
+#
+# ADR-015 stage 15.6's OS/Python MATRIX IS NOT DONE, and this job is
+# deliberately still a single windows-latest/3.12 cell. It was attempted
+# (4 cells: windows 3.10/3.12 + ubuntu 3.11/3.12) and reverted after CI
+# proved two hard blockers, both of which are real work rather than a
+# config tweak:
+#
+#   1. requirements.txt cannot install on 3.10/3.11 at all. It is a
+#      hash-locked pip-compile output resolved against 3.12 - numpy==2.5.1
+#      requires >=3.12, contourpy==1.3.3 requires >=3.11 - so those cells
+#      die at `pip install -r requirements.txt` before running a thing.
+#      (This file's build-check note below already said the lock is
+#      3.12-specific; that warning was correct.) Fixing it means either
+#      per-version lockfiles or an unpinned install path for non-primary
+#      cells - a real dependency-management decision.
+#   2. ~18 tests genuinely assume Windows and have no platform guard: the
+#      DPAPI secrets-at-rest suite (which asserts encryption actually
+#      happened, only true on Windows), subprocess.CREATE_NO_WINDOW in
+#      test_code_sandbox_domain.py, and os.startfile in
+#      test_diagnostic_bundle.py. They fail on ubuntu even at 3.12 where
+#      the lock installs fine. Guarding them touches a security-boundary
+#      test file and deserves its own reviewed change.
+#
+# The one skipif this stage DID land (the unguarded real-DPAPI probe in
+# test_backend_secrets_at_rest.py) is kept - it is correct on its own
+# merits regardless of when the matrix returns.
 #
 # The pytest/compileall steps run from the repo root, never a subdirectory:
 # pinning working-directory scopes collection to that directory's tests and
@@ -34,6 +61,23 @@ name: CI
 # dependency, and requirements.txt's hash-lock is compiled against the
 # project's pinned Python 3.12 - regenerating it from a different interpreter
 # risks a lock that resolves differently than what 3.12 actually needs.
+
+# ADR-015 stage 15.6: e2e-playwright is a fourth, independent job. Every
+# job above exercises the backend or the frontend in isolation (unit/
+# integration tests, a mock DOM for React, a wheel import) - none of them
+# ever boots the real backend/app.py factory under uvicorn AND drives the
+# real BUILT SPA against it with a real browser, the one gap those layers
+# structurally cannot close (a wiring break between the two - a renamed
+# WS message shape, a selector that silently stopped matching real DOM -
+# can pass every unit suite and still leave the shipped app broken).
+# tests_e2e/run_backend.py's own module docstring has the full "why
+# Chromium is a faithful proxy for pywebview's WebView2, why no auth
+# token, why a fresh temp dir every run" reasoning; web_ui/playwright.
+# config.ts's own comment has the "why Chromium-only, why single-worker"
+# half. ubuntu-latest, not windows: this suite never touches DPAPI/Job
+# Objects/ACLs (python-tests' own windows-latest cells already cover
+# those), so there is no reason to pay the 2x Windows-runner bill here -
+# same economy note build-check/frontend-checks already follow.
 
 # Actions-minutes economy (2026-08-07, ~90% of the month's quota burned by
 # 189 runs in one week): the push->main trigger is REMOVED - every merge is a
@@ -195,3 +239,56 @@ jobs:
       - name: Run checks (schema drift, typecheck, lint, vitest, build)
         working-directory: web_ui
         run: npm run check
+
+  e2e-playwright:
+    name: E2E (Playwright boot-smoke)
+    # ubuntu, not windows - see this file's own module comment above for
+    # why this suite specifically doesn't need a Windows runner.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: web_ui/.nvmrc
+          cache: npm
+          cache-dependency-path: web_ui/package-lock.json
+
+      # The prod lockfile, not the dev extras python-tests installs - this
+      # job never runs pytest/ruff/mypy, it only needs a real Python
+      # environment for tests_e2e/run_backend.py's own `from backend.app
+      # import create_app`, exactly what a real `pip install -r
+      # requirements.txt` gives a contributor.
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install npm dependencies
+        working-directory: web_ui
+        run: npm ci
+
+      # Playwright's own webServer (playwright.config.ts) serves the SPA
+      # from web_ui/dist/app - the real production build, the same
+      # directory graphlink_desktop.py's own real launch serves from - not
+      # a vite dev server, so this build has to exist before the suite runs
+      # at all.
+      - name: Build the SPA
+        working-directory: web_ui
+        run: npm run build
+
+      # Chromium only (see playwright.config.ts's own comment for why) -
+      # `--with-deps` also apt-installs the handful of shared libraries a
+      # headless Chromium needs on a bare ubuntu-latest runner, which this
+      # job otherwise doesn't have.
+      - name: Install Playwright's Chromium browser
+        working-directory: web_ui
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright E2E suite
+        working-directory: web_ui
+        run: npm run test:e2e

@@ -17,6 +17,12 @@ dependencies = [
     # test_no_qt_anywhere.py fails the build if any manifest declares one.
     "fastapi",
     "uvicorn",
+    # uvicorn has no built-in WebSocket implementation; without one every
+    # ws:// upgrade is rejected and this app - whose entire client/server
+    # contract is backend/app.py's /ws endpoint - simply does not work.
+    # See requirements.in's own comment for how this shipped unnoticed and
+    # which gate finally caught it.
+    "websockets",
     "pywebview",
     "ddgs",
     "matplotlib",

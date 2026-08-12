@@ -268,9 +268,14 @@ class TestDpapiAvailableProbe:
     must verify a REAL round-trip, not just that the encrypt call returned
     something non-None."""
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is Windows-only - see this file's own module docstring")
     def test_reflects_real_dpapi_state_with_no_monkeypatching(self):
         # Matches this file's own module docstring: these tests run on real
         # DPAPI (Windows dev machines and the windows-latest CI runner).
+        # ADR-015 stage 15.6: the one test in this file with no platform
+        # guard at all - every other DPAPI-availability test here already
+        # monkeypatches around the real OS call, so only this one needed
+        # a skip to run cleanly on the OS/Py matrix's new ubuntu leg.
         assert graphlink_secrets.dpapi_available() is True
 
     def test_true_when_the_probe_round_trips(self, monkeypatch):

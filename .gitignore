@@ -49,5 +49,12 @@ Desktop.ini
 session.dat
 chats.db
 
+# Playwright E2E (ADR-015 stage 15.6) - generated per-run output, never
+# source: failure traces/screenshots (test-results/), the HTML report
+# (playwright-report/), and CI's own merged-shard artifact (blob-report/).
+test-results/
+playwright-report/
+blob-report/
+
 # Internal planning and QA documents; keep local, never publish to GitHub.
 /doc/

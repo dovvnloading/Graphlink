@@ -6,6 +6,24 @@ beautifulsoup4
 # own dependencies list, which this file was already out of sync with.
 fastapi
 uvicorn
+# uvicorn ships NO WebSocket implementation of its own - without one it
+# answers every ws:// upgrade with "Unsupported upgrade request" and the
+# handshake fails. This app is ENTIRELY WS-driven (backend/app.py's /ws
+# endpoint is the whole client/server contract), so a clean install
+# without this is a non-functional app, not a degraded one.
+#
+# This was a real shipped bug, not a test-only gap: it went unnoticed
+# because the pytest suite drives /ws through FastAPI's TestClient (an
+# in-process ASGI transport that never performs a real HTTP upgrade), and
+# every dev machine happened to have `websockets` pulled in by some
+# unrelated package. ADR-015 stage 15.6's E2E job - the first thing here
+# to ever run a REAL browser against a REAL uvicorn from a clean install -
+# is what surfaced it.
+#
+# `websockets` rather than the `uvicorn[standard]` extra: standard also
+# drags in httptools/uvloop/watchfiles/PyYAML/python-dotenv, none of which
+# this app uses. uvicorn auto-detects whichever implementation is present.
+websockets
 pywebview
 ddgs
 matplotlib
