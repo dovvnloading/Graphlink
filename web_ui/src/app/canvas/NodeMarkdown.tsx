@@ -124,10 +124,21 @@ function CodeBlock({ node: _node, children, ...props }: JSX.IntrinsicElements["p
   function onCopy() {
     const text = preRef.current?.textContent ?? "";
     if (!text) return;
-    navigator.clipboard?.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard
+      ?.writeText(text)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      // ADR-011 stage 11.6 promised a .catch() on every clipboard write; a
+      // 2026-08-12 audit found four sites (this one included) still missing
+      // it. A rejected write - denied permission, or any non-secure context -
+      // otherwise became an unhandled promise rejection with the "Copied"
+      // state silently never arriving, leaving the user staring at a button
+      // that looks like it did nothing.
+      .catch((error: unknown) => {
+        console.error("Failed to copy code block to clipboard", error);
+      });
   }
 
   return (

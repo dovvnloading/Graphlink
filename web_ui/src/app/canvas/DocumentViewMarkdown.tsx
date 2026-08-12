@@ -87,10 +87,17 @@ function CodeBlock({ node: _node, children, ...props }: JSX.IntrinsicElements["p
     // .textContent flattens through any depth of those for free.
     const text = preRef.current?.textContent ?? "";
     if (!text) return;
-    navigator.clipboard?.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
+    navigator.clipboard
+      ?.writeText(text)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      // See NodeMarkdown.tsx's identical handler for why this .catch exists
+      // (ADR-011 stage 11.6's clipboard sweep missed four sites; this is one).
+      .catch((error: unknown) => {
+        console.error("Failed to copy code block to clipboard", error);
+      });
   }
 
   return (

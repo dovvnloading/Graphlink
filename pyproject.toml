@@ -202,7 +202,18 @@ target-version = "py310"
 exclude = ["graphlink_app", "web_ui"]
 
 [tool.ruff.lint]
-select = ["E9", "F"]
+# T201 (no `print`) added 2026-08-12. ADR-016 stage 16.1's own text claimed
+# "ruff's T201 enforces the ban" from the day it shipped, but T201 was never
+# actually in this select list - so CI's `ruff check .` would have waved
+# through a new print() in any shipped module. An audit caught the claim and
+# the config disagreeing; this closes the gap rather than softening the claim.
+#
+# Enabling it required no code changes: all 28 existing print() calls live in
+# five deliberate command-line entry points (see per-file-ignores below),
+# none in shipped runtime code. That is exactly the state the ban is meant to
+# preserve - structured logging (backend/observability.py) everywhere that
+# actually runs inside the app.
+select = ["E9", "F", "T201"]
 
 [tool.mypy]
 # ADR-015 stage 15.5: scoped to the modules already fully annotated
@@ -229,3 +240,19 @@ ignore_missing_imports = true
 # an actual leftover, so it's ignored for exactly this one file rather than
 # scattering 43 individual noqa comments across the import block.
 "backend/canvas.py" = ["F401"]
+
+# T201 exemptions: these five are command-line tools, not shipped runtime
+# code. printing IS their output contract - a developer runs them in a
+# terminal and reads the result, so routing them through the structured JSON
+# logger would make them strictly worse. Everything the app itself executes
+# stays covered by the ban.
+#   - contracts/codegen.py .............. build-time codegen CLI (npm run check:schema shells out to it)
+#   - backend/evals/__main__.py ......... `python -m backend.evals` harness entry point (ADR-016 stage 16.5)
+#   - backend/tests/perf/measure_baselines.py ... `python -m ...` perf measurement CLI (ADR-019 stage 19.1)
+#   - backend/tests/perf/check_baseline.py ..... nightly regression checker, its stdout IS the CI job log (ADR-019 stage 19.3)
+#   - tools/build_app_icon.py ........... one-off dev icon builder
+"contracts/codegen.py" = ["T201"]
+"backend/evals/__main__.py" = ["T201"]
+"backend/tests/perf/measure_baselines.py" = ["T201"]
+"backend/tests/perf/check_baseline.py" = ["T201"]
+"tools/build_app_icon.py" = ["T201"]

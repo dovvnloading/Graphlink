@@ -3,8 +3,16 @@
  * `--gl-*` custom properties graphlink_web_island_host.py injects into the
  * page <head> at construction time (see gl-theme.css/gl-vars-dev.css) rather
  * than hardcoding hex - so this renderer is automatically correct for
- * whichever theme is actually active, with zero dependency on ADR-012's
- * (still-proposed) theme toggle ever shipping.
+ * whichever theme is actually active.
+ *
+ * This module used to claim "zero dependency on ADR-012's (still-proposed)
+ * theme toggle ever shipping". That premise expired: ADR-012 stage 12.2
+ * shipped a real live toggle the same day this file landed. Reading the
+ * tokens is still the right approach, but it is no longer sufficient on its
+ * own - a chart mounted before a theme switch would keep the old palette
+ * forever, since nothing re-read these values. chartHooks.ts's useChartTheme
+ * now carries the MutationObserver + matchMedia listeners that keep an open
+ * chart in sync; see its own comment for why both are required.
  *
  * The categorical series palette deliberately does NOT reuse `--gl-frame-*`:
  * those tokens are near-identical grays by design in the current theme (see
