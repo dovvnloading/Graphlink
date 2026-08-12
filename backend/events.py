@@ -318,8 +318,8 @@ class _BufferedConnection:
             return False
 
     def offer_superseding(self, message: dict[str, Any], topic: str) -> None:
-        """Enqueue a full snapshot, first PURGING every queued state/patch
-        frame for the same topic - and, unlike offer(), guaranteed to succeed.
+        """Enqueue a full snapshot, first purging disposable queued state for
+        the same topic - and, unlike offer(), guaranteed to succeed.
 
         CODE-REVIEW FIX. send_snapshot used to send directly on the socket,
         bypassing this queue, which caused two real problems for a buffered
@@ -332,39 +332,49 @@ class _BufferedConnection:
         snapshot arriving, so it never asks again: wedged until reconnect.
 
         Purging is correct because a snapshot strictly supersedes every
-        queued frame of its own topic: the snapshot carries the topic's
-        current revision R, every queued state/patch was enqueued at some
-        revision <= R, and a patch published AFTER this call lands behind the
-        snapshot with baseRevision R - chaining perfectly. Stream frames and
-        other topics' frames are NOT superseded and are kept, order
-        preserved. Everything here is synchronous (no awaits), so the
+        *uncorrelated* queued frame of its own topic: the snapshot carries the
+        topic's current revision R, every queued state/patch was enqueued at
+        some revision <= R, and a patch published AFTER this call lands behind
+        the snapshot with baseRevision R - chaining perfectly. A state frame
+        carrying an ``id`` is different: it resolves one explicit subscribe
+        request, so dropping it would strand that request's client callback.
+        Correlated states, stream frames, and other topics' frames are kept in
+        order. Everything here is synchronous (no awaits), so the
         purge-and-requeue cannot interleave with the writer task's get() in a
         way that reorders the kept frames.
 
-        The final drop-oldest loop covers the pathological remainder (a queue
-        still full of stream/other-topic frames): the snapshot's delivery
-        guarantee outranks a stale stream delta's."""
+        If the remainder still fills the bounded queue, an uncorrelated frame
+        is discarded before a correlated state. Only the pathological case
+        where every queued entry is itself correlated falls back to dropping
+        the oldest request; bounded memory remains a hard invariant."""
         kept: list[dict[str, Any]] = []
         while True:
             try:
                 queued = self.queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            if queued.get("topic") == topic and queued.get("kind") in ("state", "patch"):
+            is_correlated_state = queued.get("kind") == "state" and queued.get("id") is not None
+            if (
+                queued.get("topic") == topic
+                and queued.get("kind") in ("state", "patch")
+                and not is_correlated_state
+            ):
                 continue  # strictly older state for this topic - superseded
             kept.append(queued)
+        if self.queue.maxsize > 0 and len(kept) >= self.queue.maxsize:
+            drop_index = next(
+                (
+                    index
+                    for index, item in enumerate(kept)
+                    if not (item.get("kind") == "state" and item.get("id") is not None)
+                ),
+                0,
+            )
+            kept.pop(drop_index)
+            self.dropped += 1
         for item in kept:
             self.queue.put_nowait(item)  # capacity is guaranteed: only removals so far
-        while True:
-            try:
-                self.queue.put_nowait(message)
-                return
-            except asyncio.QueueFull:
-                try:
-                    self.queue.get_nowait()
-                    self.dropped += 1
-                except asyncio.QueueEmpty:  # pragma: no cover - unreachable
-                    return
+        self.queue.put_nowait(message)
 
 
 class SessionBus:
@@ -721,7 +731,13 @@ class SessionBus:
                 logger.warning("dropping dead connection on session %s", self.session_id)
                 self.detach(conn)
 
-    async def send_snapshot(self, topic: str, conn: Connection) -> None:
+    async def send_snapshot(
+        self,
+        topic: str,
+        conn: Connection,
+        *,
+        request_id: Any | None = None,
+    ) -> None:
         """Send the current state of one topic to one connection (the
         subscribe handshake - the successor of loadFinished -> publish()).
 
@@ -739,12 +755,19 @@ class SessionBus:
         SceneDocument.published_scene_payload for the full mechanism and a
         reproduction. Falling back to the live builder is correct for a
         topic with no baseline (every non-scene topic, all full-snapshot)
-        and for one that has not published yet (nothing can be behind)."""
+        and for one that has not published yet (nothing can be behind).
+
+        `request_id`, when supplied by an explicit client resubscribe, is
+        echoed on that one state envelope. It lets the client distinguish the
+        requested authority fence from an older broadcast already in the
+        buffered writer when the request was sent."""
         t = self._topics.get(topic)
         if t is None:
             raise UnknownTopicError(topic)
         payload = t.baseline_snapshot() or t.snapshot()
         message = {"kind": "state", "topic": topic, "payload": payload}
+        if request_id is not None:
+            message["id"] = request_id
         # CODE-REVIEW FIX: a BUFFERED connection's snapshot must go through
         # its queue, not directly onto the socket - a direct send OVERTAKES
         # any queued older frames, which then arrive after it with

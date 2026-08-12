@@ -353,6 +353,23 @@ def test_container_default_title_round_trips_through_content_field():
     assert chat_data["containers"][0]["title"] == "My Container"
 
 
+def test_nested_containers_preserve_both_groups_and_membership_on_round_trip():
+    doc = SceneDocument()
+    note = doc.add_note(10, 20)
+    inner = doc.create_container([note.id])
+    outer = doc.create_container([inner.id])
+    doc.set_group_label(inner.id, "Inner")
+    doc.set_group_label(outer.id, "Outer")
+
+    restored = _round_trip(doc)
+
+    restored_note = next(node for node in restored.nodes.values() if node.kind == "note")
+    restored_inner = next(node for node in restored.nodes.values() if node.content == "Inner")
+    restored_outer = next(node for node in restored.nodes.values() if node.content == "Outer")
+    assert restored_inner.item_ids == [restored_note.id]
+    assert restored_outer.item_ids == [restored_inner.id]
+
+
 # -- notes / pins / view state / tokens ------------------------------------
 
 

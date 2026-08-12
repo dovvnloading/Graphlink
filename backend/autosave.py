@@ -42,10 +42,10 @@ surface a real notification, since silently failing to protect the user's
 work would defeat the entire point of this feature.
 
 CONCURRENCY: shares the SAME mutation_guard dict backend/chat_library.py's
-own loadChat/saveChat/newChat intents already use (see that module's own
+own loadChat/saveChat/newChat/renameChat intents use (see that module's own
 docstring on _serialize_mutating_intent) - an autosave tick that fires while
-a manual load/save/new-chat is already in flight skips itself for this
-interval rather than racing it (there will be another tick along in
+a manual load/save/new-chat/rename is already in flight skips itself for
+this interval rather than racing it (there will be another tick along in
 `interval_seconds`, so skipping one is free; racing a manual operation is
 not).
 
@@ -66,13 +66,12 @@ a record of the prior reasoning, not silently deleted - see this session's
 own "no room for error, document mistakes rather than quietly editing"
 discipline.
 
-This task's own eventual cancellation (via task.cancel(), a cooperative
-request the same as everywhere else in this codebase) is safe here
-specifically because _guarded_tick's own try/finally already always
-leaves mutation_guard in a clean state on any exit path, cancellation
-included (asyncio.CancelledError propagates through a `finally`, same as
-any other exception) - there is no partial-claim state a cancelled tick
-could strand the guard in.
+Eviction cancels this task only after the mutation guard is inactive. That
+ordering is data-safety-critical: cancellation during autosave_tick's
+pre-write load/backup awaits could otherwise stop the only dirty copy before
+the database write begins. _guarded_tick's try/finally still guarantees the
+guard itself is released on cancellation or any other exit, but guard cleanup
+alone is not evidence that the user's pending write completed.
 """
 
 from __future__ import annotations

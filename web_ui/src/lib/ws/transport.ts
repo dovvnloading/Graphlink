@@ -153,6 +153,15 @@ export type PatchListener = (patch: ScenePatch) => void;
  * with the current value on subscribe" contract - see onVersionRejection. */
 export type VersionRejectionListener = (rejection: BridgeRejection | null) => void;
 
+/** The one offline intent whose intermediate values are deliberately
+ * replaceable. This is exported rather than inferred from `queueable`: most
+ * queueable intents (node positions, settings, etc.) still preserve every
+ * accepted write in order, while a text draft is explicitly last-write-wins. */
+export const COMPOSER_DRAFT_OFFLINE_COALESCE_KEY = "app-composer/updateDraft";
+export type OfflineIntentCoalesceKey = typeof COMPOSER_DRAFT_OFFLINE_COALESCE_KEY;
+export type IntentSettledListener = () => void;
+export type OfflineIntentCoalescedListener = () => void;
+
 interface WsLike {
   send(data: string): void;
   close(): void;
@@ -196,6 +205,23 @@ export class WsTransport {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly stateListeners = new Map<string, Set<StateListener>>();
+  /** Last compatible full snapshot for each still-observed topic. Several
+   * dialogs subscribe lazily after an app-level store has already caused
+   * the server's one subscribe snapshot to arrive; replaying it gives those
+   * listeners the same current-state-on-subscribe contract as onStatus(). */
+  private readonly stateSnapshots = new Map<string, Record<string, unknown>>();
+  /** Deduplicates snapshot requests when multiple listeners mount before
+   * the first response. A patch invalidates stateSnapshots, after which a
+   * late state listener uses this set to request one fresh full snapshot. */
+  private readonly snapshotRequestsPending = new Set<string>();
+  /** Correlated one-shot callbacks for explicit resubscribe() requests.
+   * Topic-only "next state" matching is insufficient because a buffered
+   * broadcast can arrive after an intent result but before the requested
+   * snapshot; the echoed request id identifies the actual authority fence. */
+  private readonly resubscribeListeners = new Map<
+    number,
+    { topic: string; listener: StateListener }
+  >();
   private readonly statusListeners = new Set<StatusListener>();
   /** Keyed by requestId - stream deltas are addressed to a specific in-flight
    * request, not a topic. See handleMessage()'s "stream" branch. */
@@ -264,6 +290,9 @@ export class WsTransport {
     intent: string;
     args: unknown[];
     timeoutMs?: number;
+    coalesceKey?: OfflineIntentCoalesceKey;
+    onSettled?: IntentSettledListener;
+    onOfflineCoalesced?: OfflineIntentCoalescedListener;
   }> = [];
   private static readonly OFFLINE_QUEUE_MAX = 50;
 
@@ -308,11 +337,19 @@ export class WsTransport {
       const topics = [...new Set([...this.stateListeners.keys(), ...this.patchListeners.keys()])];
       if (topics.length > 0) {
         socket.send(JSON.stringify({ kind: "subscribe", topics }));
+        for (const topic of topics) this.snapshotRequestsPending.add(topic);
       }
       // ADR-003 stage 3.6: AFTER re-subscribing, so a replayed intent
       // (e.g. moveNodes) applies against fresh server state rather than
       // racing the subscribe message.
       this.flushOfflineQueue();
+      // A connection can close after an explicit snapshot request is sent
+      // but before its correlated response arrives. Reissue those fences
+      // after ordinary subscriptions and queued writes on the new socket.
+      for (const [id, request] of this.resubscribeListeners) {
+        socket.send(JSON.stringify({ kind: "subscribe", topics: [request.topic], id }));
+        this.snapshotRequestsPending.add(request.topic);
+      }
     };
     socket.onmessage = (event) => {
       if (this.socket !== socket) return;
@@ -324,6 +361,7 @@ export class WsTransport {
     socket.onclose = () => {
       if (this.socket !== socket) return;
       this.socket = null;
+      this.snapshotRequestsPending.clear();
       // ADR-003 stage 3.6 review-fix: the paused state has to cover the WHOLE
       // outage, not just an in-flight connect attempt. This used to publish
       // "closed" here and leave connect() - which only runs after a 500ms-4s
@@ -349,24 +387,34 @@ export class WsTransport {
     this.failAllPending(new WsUnavailableError("transport disposed"));
     this.socket?.close();
     this.socket = null;
+    this.snapshotRequestsPending.clear();
+    this.resubscribeListeners.clear();
   }
 
   getStatus(): ConnectionStatus {
     return this.status;
   }
 
-  /** Listen for a topic's snapshots. Subscribing while open sends the
-   * subscribe immediately so the current snapshot arrives. */
+  /** Listen for a topic's snapshots. A compatible full snapshot already
+   * received for another listener is replayed synchronously; otherwise an
+   * open socket requests one (deduplicated while that request is pending). */
   subscribe(topic: string, listener: StateListener): () => void {
     let set = this.stateListeners.get(topic);
-    const isNewTopic = !set;
     if (!set) {
       set = new Set();
       this.stateListeners.set(topic, set);
     }
     set.add(listener);
-    if (isNewTopic && this.status === "open" && this.socket) {
+    const snapshot = this.stateSnapshots.get(topic);
+    if (snapshot) {
+      listener(snapshot);
+    } else if (
+      this.status === "open" &&
+      this.socket &&
+      !this.snapshotRequestsPending.has(topic)
+    ) {
       this.socket.send(JSON.stringify({ kind: "subscribe", topics: [topic] }));
+      this.snapshotRequestsPending.add(topic);
     }
     return () => {
       set.delete(listener);
@@ -377,16 +425,27 @@ export class WsTransport {
 
   /** ADR-003 stage 3.4: re-request a topic's current full snapshot.
    *
-   * `subscribe()` above sends its subscribe message only for a topic's FIRST
-   * listener (the isNewTopic guard), so an already-subscribed topic has no
-   * way to ask for fresh state through it - this is that missing half, used
-   * by the scene store to self-heal after a detected patch gap. Silently
-   * no-ops while the socket is not open, matching intent()'s own
-   * pre-connect behavior: reconnecting re-subscribes every topic from
-   * scratch anyway, which resolves the gap by itself. */
-  resubscribe(topic: string): void {
-    if (this.status !== "open" || !this.socket) return;
-    this.socket.send(JSON.stringify({ kind: "subscribe", topics: [topic] }));
+   * `subscribe()` above replays a valid cached snapshot when one exists, so
+   * an already-subscribed consumer that knows its state is stale needs an
+   * explicit way to bypass that cache - this is that path, used by the scene
+   * store to self-heal after a detected patch gap. Silently no-ops while the
+   * socket is not open, matching intent()'s own pre-connect behavior:
+   * reconnecting re-subscribes every topic from scratch anyway, which
+   * resolves the gap by itself. */
+  resubscribe(topic: string, onSnapshot?: StateListener): boolean {
+    if (this.status !== "open" || !this.socket) return false;
+    let id: number | undefined;
+    if (onSnapshot) {
+      id = this.nextId++;
+      this.resubscribeListeners.set(id, { topic, listener: onSnapshot });
+    }
+    this.socket.send(JSON.stringify({
+      kind: "subscribe",
+      topics: [topic],
+      ...(id === undefined ? {} : { id }),
+    }));
+    this.snapshotRequestsPending.add(topic);
+    return true;
   }
 
   /** ADR-003 stage 3.4: listen for a topic's `kind:"patch"` deltas. Sends no
@@ -466,8 +525,8 @@ export class WsTransport {
     };
   }
 
-  /** ADR-003 stage 3.5 review-fix: drops `versionRejections`' cached entry
-   * for `topic` once nothing is listening to it via ANY of the three
+  /** Drops a topic's per-topic caches once nothing is listening to it via
+   * ANY of the three
    * per-topic registries - state, patch, or rejection. Keyed off all three
    * (not just versionRejectionListeners alone) deliberately: a topic can
    * still have live state/patch listeners with no rejection listener
@@ -486,6 +545,11 @@ export class WsTransport {
     if (this.patchListeners.has(topic)) return;
     if (this.versionRejectionListeners.has(topic)) return;
     this.versionRejections.delete(topic);
+    this.stateSnapshots.delete(topic);
+    this.snapshotRequestsPending.delete(topic);
+    for (const [id, request] of this.resubscribeListeners) {
+      if (request.topic === topic) this.resubscribeListeners.delete(id);
+    }
   }
 
   /** ADR-003 stage 3.5 review-fix: blocks intent()/request() (and so
@@ -605,7 +669,16 @@ export class WsTransport {
    * WsTopicBlockedError banner; while not open - where no banner can be
    * delivered at all - by being counted into the reconnect summary like any
    * other loss. */
-  fireIntent(topic: string, intent: string, args: unknown[] = [], timeoutMs?: number, queueable = false): void {
+  fireIntent(
+    topic: string,
+    intent: string,
+    args: unknown[] = [],
+    timeoutMs?: number,
+    queueable = false,
+    offlineCoalesceKey?: OfflineIntentCoalesceKey,
+    onSettled?: IntentSettledListener,
+    onOfflineCoalesced?: OfflineIntentCoalescedListener,
+  ): void {
     // ADR-003 stage 3.6 x stage 3.5 interaction: a blocked topic must NEVER
     // enter the offline queue. Blocking exists precisely because this client
     // cannot trust the state these args were computed against, so holding
@@ -624,28 +697,56 @@ export class WsTransport {
     // topics are refused, and being refused is reported like any other loss.
     if (this.status !== "open") {
       if (queueable && !this.blockedTopics.has(topic)) {
-        this.enqueueOffline(topic, intent, args, timeoutMs);
+        this.enqueueOffline(
+          topic,
+          intent,
+          args,
+          timeoutMs,
+          offlineCoalesceKey,
+          onSettled,
+          onOfflineCoalesced,
+        );
       } else {
         this.droppedWhileOffline += 1;
+        onSettled?.();
       }
       return;
     }
-    this.request(topic, intent, args, timeoutMs).catch((err) => {
-      // A disposed transport is real teardown (unmount, or StrictMode's
-      // dev-only dispose-then-remount check) - there is nothing left to
-      // recover into.
-      if (this.disposed) return;
-      if (err instanceof WsUnavailableError) {
-        // Was genuinely in flight (status was "open" when sent) and got cut
-        // off mid-request rather than refused up front - same fate as the
-        // not-open case above either way: recoverable data is queued,
-        // everything else is counted for the next reconnect's summary.
-        if (queueable) this.enqueueOffline(topic, intent, args, timeoutMs);
-        else this.droppedWhileOffline += 1;
-        return;
-      }
-      this.showErrorDeduped(String(err.message));
-    });
+    this.request(topic, intent, args, timeoutMs).then(
+      () => onSettled?.(),
+      (err) => {
+        // A disposed transport is real teardown (unmount, or StrictMode's
+        // dev-only dispose-then-remount check) - there is nothing left to
+        // recover into.
+        if (this.disposed) {
+          onSettled?.();
+          return;
+        }
+        if (err instanceof WsUnavailableError) {
+          // Was genuinely in flight (status was "open" when sent) and got cut
+          // off mid-request rather than refused up front - same fate as the
+          // not-open case above either way: recoverable data is queued,
+          // everything else is counted for the next reconnect's summary.
+          if (queueable) {
+            this.enqueueOffline(
+              topic,
+              intent,
+              args,
+              timeoutMs,
+              offlineCoalesceKey,
+              onSettled,
+              onOfflineCoalesced,
+            );
+          } else {
+            this.droppedWhileOffline += 1;
+            onSettled?.();
+          }
+          return;
+        }
+        this.showErrorDeduped(String(err.message));
+        onSettled?.();
+      },
+    );
   }
 
   /** ADR-003 stage 3.6: how many non-queueable intents were refused while
@@ -672,13 +773,56 @@ export class WsTransport {
    * droppedWhileOffline) rather than silently evicting an older,
    * already-accepted one: evicting silently would just move the
    * "vanishes with no signal" failure from the un-queued case onto the
-   * queued one. */
-  private enqueueOffline(topic: string, intent: string, args: unknown[], timeoutMs?: number): void {
-    if (this.offlineQueue.length >= WsTransport.OFFLINE_QUEUE_MAX) {
-      this.droppedWhileOffline += 1;
+   * queued one.
+   *
+   * The composer draft is the narrow exception: its call site supplies the
+   * explicit coalesce key above, so a newer queued value replaces the older
+   * value in place. One reserved entry lets that key survive even when all
+   * 50 ordinary slots are occupied; this keeps the queue bounded at 51 while
+   * never evicting an already-accepted non-draft operation. */
+  private enqueueOffline(
+    topic: string,
+    intent: string,
+    args: unknown[],
+    timeoutMs?: number,
+    offlineCoalesceKey?: OfflineIntentCoalesceKey,
+    onSettled?: IntentSettledListener,
+    onOfflineCoalesced?: OfflineIntentCoalescedListener,
+  ): void {
+    // Runtime-check the key's target as well as typing it narrowly. A future
+    // JavaScript caller must not gain replacement/reserved-slot semantics for
+    // an unrelated operation merely by copying this string.
+    const coalesceKey =
+      offlineCoalesceKey === COMPOSER_DRAFT_OFFLINE_COALESCE_KEY &&
+      topic === "app-composer" &&
+      intent === "updateDraft"
+        ? offlineCoalesceKey
+        : undefined;
+    const item = { topic, intent, args, timeoutMs, coalesceKey, onSettled, onOfflineCoalesced };
+    if (coalesceKey) {
+      const existing = this.offlineQueue.findIndex((queued) => queued.coalesceKey === coalesceKey);
+      if (existing >= 0) {
+        // Replace in place: latest draft wins without perturbing the replay
+        // order of any independent queueable intents around it.
+        this.offlineQueue[existing].onOfflineCoalesced?.();
+        this.offlineQueue[existing] = item;
+        return;
+      }
+      // This key owns one dedicated slot beyond the 50 ordinary entries, so
+      // a draft first edited after saturation is still recoverable.
+      this.offlineQueue.push(item);
       return;
     }
-    this.offlineQueue.push({ topic, intent, args, timeoutMs });
+    const ordinaryCount = this.offlineQueue.reduce(
+      (count, queued) => count + (queued.coalesceKey ? 0 : 1),
+      0,
+    );
+    if (ordinaryCount >= WsTransport.OFFLINE_QUEUE_MAX) {
+      this.droppedWhileOffline += 1;
+      onSettled?.();
+      return;
+    }
+    this.offlineQueue.push(item);
   }
 
   /** ADR-003 stage 3.6: replays every queued intent, in the order they were
@@ -698,7 +842,16 @@ export class WsTransport {
     if (this.offlineQueue.length > 0) {
       const queued = this.offlineQueue.splice(0, this.offlineQueue.length);
       for (const item of queued) {
-        this.fireIntent(item.topic, item.intent, item.args, item.timeoutMs, true);
+        this.fireIntent(
+          item.topic,
+          item.intent,
+          item.args,
+          item.timeoutMs,
+          true,
+          item.coalesceKey,
+          item.onSettled,
+          item.onOfflineCoalesced,
+        );
       }
     }
     if (this.droppedWhileOffline > 0) {
@@ -759,6 +912,7 @@ export class WsTransport {
     if (kind === "state") {
       const topic = message.topic as string;
       const payload = message.payload as Record<string, unknown>;
+      this.snapshotRequestsPending.delete(topic);
       // ADR-003 stage 3.5: the version envelope lives INSIDE payload for a
       // state frame (see _Topic._stamp on the backend) - checked and, on
       // rejection, dispatched to NOTHING below. A rejected payload is stale
@@ -767,7 +921,19 @@ export class WsTransport {
       // this stage exists to replace: at least the old frozen-UI failure
       // mode didn't also risk running shape validation against fields a
       // breaking version change may have renamed or removed.
-      if (!this.checkVersionAndMaybeReject(topic, payload)) return;
+      if (!this.checkVersionAndMaybeReject(topic, payload)) {
+        this.stateSnapshots.delete(topic);
+        return;
+      }
+      this.stateSnapshots.set(topic, payload);
+      const snapshotRequestId = message.id;
+      if (typeof snapshotRequestId === "number") {
+        const resubscribeRequest = this.resubscribeListeners.get(snapshotRequestId);
+        if (resubscribeRequest?.topic === topic) {
+          this.resubscribeListeners.delete(snapshotRequestId);
+          resubscribeRequest.listener(payload);
+        }
+      }
       const listeners = this.stateListeners.get(topic);
       if (listeners) {
         for (const listener of [...listeners]) listener(payload);
@@ -782,6 +948,11 @@ export class WsTransport {
       // configuration, not an anomaly - same posture as the stream branch
       // below, and deliberately unlike the unknown-kind fallback at the end.
       const topic = message.topic as string;
+      // A generic transport cannot safely apply arbitrary topic patches to
+      // a cached payload. Drop the now-stale full snapshot; a state listener
+      // that mounts later will request a fresh one, while this patch keeps
+      // routing only through subscribePatch as before.
+      this.stateSnapshots.delete(topic);
       // ADR-003 stage 3.5: unlike a state frame, the version envelope is at
       // the TOP LEVEL of a patch frame, a sibling of ops/revision (see
       // _publish_now's broadcast dict on the backend) - `message` itself is

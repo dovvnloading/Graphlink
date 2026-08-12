@@ -1077,32 +1077,77 @@ def _restore_frames(
     return frames_map
 
 
-def _restore_containers(document: SceneDocument, containers_data: list, all_items_map: dict[int, str]) -> None:
+def _restore_containers(
+    document: SceneDocument,
+    containers_data: list,
+    all_items_map: dict[int, str],
+    container_base_index: int,
+) -> dict[int, str]:
     if not isinstance(containers_data, list):
-        return
-    for container_payload in containers_data:
-        if not isinstance(container_payload, dict):
-            continue
-        try:
-            # Pure positional membership, same posture as frames - "items"
-            # is required in legacy (KeyError if absent); tolerated-missing
-            # here instead of aborting the whole load.
+        return {}
+
+    # Containers occupy the tail of the serialized all-items index and may
+    # themselves be container members. Restore dependency-ready payloads
+    # first and add each new id to the same map immediately, so an outer
+    # container can resolve the inner container created earlier in this pass.
+    # The deferred loop also tolerates hand-edited/legacy payloads whose
+    # container order is not dependency-first. A cycle cannot be represented
+    # by the live model; if no pass makes progress, the unresolved payloads
+    # are left out instead of creating silently incomplete groups.
+    container_slots = set(range(container_base_index, container_base_index + len(containers_data)))
+    pending = [
+        (index, payload)
+        for index, payload in enumerate(containers_data)
+        if isinstance(payload, dict)
+    ]
+    containers_map: dict[int, str] = {}
+
+    while pending:
+        deferred: list[tuple[int, dict[str, Any]]] = []
+        made_progress = False
+        for index, container_payload in pending:
             item_indices = container_payload.get("items", [])
             item_indices = item_indices if isinstance(item_indices, list) else []
-            member_ids = [all_items_map[i] for i in item_indices if i in all_items_map]
-            if not member_ids:
+            try:
+                if any(i in container_slots and i not in all_items_map for i in item_indices):
+                    deferred.append((index, container_payload))
+                    continue
+            except (TypeError, ValueError):
+                # Preserve the loader's tolerant posture for malformed item
+                # lists: the creation block below will skip this payload.
+                pass
+
+            container = None
+            try:
+                member_ids = [all_items_map[i] for i in item_indices if i in all_items_map]
+                if not member_ids:
+                    continue
+                container = document.create_container(member_ids)
+                # "Container" matches deserialize_container's own restore-time
+                # default (data.get("title", "Container")) - NOT
+                # create_container's own fresh-creation default ("New
+                # Container"), a different code path with a different default.
+                document.set_group_label(container.id, str(container_payload.get("title", "") or "Container"))
+                document.set_group_color(
+                    container.id,
+                    container_payload.get("color"),
+                    container_payload.get("header_color"),
+                )
+                if bool(container_payload.get("is_collapsed", False)):
+                    document.toggle_group_collapsed(container.id)
+            except Exception:
                 continue
-            container = document.create_container(member_ids)
-            # "Container" matches deserialize_container's own restore-time
-            # default (data.get("title", "Container")) - NOT
-            # create_container's own fresh-creation default ("New
-            # Container"), a different code path with a different default.
-            document.set_group_label(container.id, str(container_payload.get("title", "") or "Container"))
-            document.set_group_color(container.id, container_payload.get("color"), container_payload.get("header_color"))
-            if bool(container_payload.get("is_collapsed", False)):
-                document.toggle_group_collapsed(container.id)
-        except Exception:
-            continue
+
+            serialized_index = container_base_index + index
+            containers_map[index] = container.id
+            all_items_map[serialized_index] = container.id
+            made_progress = True
+
+        if not made_progress:
+            break
+        pending = deferred
+
+    return containers_map
 
 
 # The 7 kinds every era has always had, plus 5 that only existed before
@@ -1417,6 +1462,7 @@ def _restore_chat_into_document(
     node_slot_count = len(node_payloads)
     note_slot_count = len(notes_data) if isinstance(notes_data, list) else 0
     chart_slot_count = len(chat_data.get("charts", [])) if isinstance(chat_data.get("charts"), list) else 0
+    frame_slot_count = len(chat_data.get("frames", [])) if isinstance(chat_data.get("frames"), list) else 0
 
     frame_source_map = dict(all_nodes_map)
     for chart_index, chart_new_id in charts_map.items():
@@ -1430,7 +1476,13 @@ def _restore_chat_into_document(
         all_items_map[node_slot_count + note_slot_count + chart_index] = chart_new_id
     for frame_index, frame_new_id in frames_map.items():
         all_items_map[node_slot_count + note_slot_count + chart_slot_count + frame_index] = frame_new_id
-    _restore_containers(document, chat_data.get("containers", []), all_items_map)
+    container_base_index = node_slot_count + note_slot_count + chart_slot_count + frame_slot_count
+    _restore_containers(
+        document,
+        chat_data.get("containers", []),
+        all_items_map,
+        container_base_index,
+    )
 
     # ADR-009 stage 9.6. A file written by this build carries a flat
     # `edges` list and it is authoritative; the legacy buckets are only

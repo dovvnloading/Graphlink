@@ -21,6 +21,8 @@ itself respects (see backend/events.py's own docstring for why):
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import threading
 import time
 
 import pytest
@@ -397,80 +399,66 @@ def test_evict_idle_session_proceeds_and_cancels_the_autosave_task_when_idle():
     asyncio.run(_run())
 
 
-def test_evict_idle_session_releases_the_mutation_guard_when_cancelling_mid_write():
-    """Adversarial-review finding: the test above only ever cancels a
-    stand-in coroutine that never touches backend/chat_library.py's shared
-    mutation_guard - it cannot detect a regression in _guarded_tick's own
-    try/finally guarantee. Before ADR-004 stage 4.3, register_autosave's
-    task was "deliberately never explicitly cancelled" (see
-    backend/autosave.py's own updated docstring), so cancelling a REAL
-    _guarded_tick while it holds the guard mid-write was purely
-    theoretical dead code; this stage makes it a genuine, reachable
-    production path (_evict_idle_session cancels a live session's
-    autosave_task any time eviction proceeds while a write happens to be
-    in flight) for the first time. This test drives that real path: a
-    real register_autosave-installed task, actually suspended mid-write
-    (inside asyncio.to_thread, not idling in the inter-tick sleep), then
-    cancelled via the real _evict_idle_session call.
+def test_evict_idle_session_vetoes_while_autosave_is_preparing_to_write(tmp_path, monkeypatch):
+    """Eviction must not cancel an autosave before its DB write starts.
+
+    The old implementation noticed the active mutation guard, skipped its
+    own final flush, and then cancelled the autosave task anyway. Cancelling
+    during the awaited backup below prevents autosave_tick from ever reaching
+    save_chat_atomically_row, so the dirty document disappeared with the
+    evicted session. Pausing immediately before the write reproduces that
+    exact data-loss window rather than the safer case where a worker thread
+    has already entered SQLite and continues after task cancellation.
     """
     import backend.autosave as autosave_mod
-    from backend.chat_library import _new_mutation_guard, _new_save_state
-    from backend.autosave import register_autosave
-    import tempfile
-    from pathlib import Path
+    from backend.chat_library import get_all_chats, load_chat_row, register_chat_library
 
     async def _run():
         bus = SessionBus("s1")
         context, _tmp = _real_session_context()
         attach_session_context(bus, context)
-        context.canvas_document.add_node(0, 0, "hello")
-        mutation_guard = _new_mutation_guard()
-        last_saved = _new_save_state()
-        write_entered = asyncio.Event()
-        loop = asyncio.get_running_loop()
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        backup_entered = threading.Event()
+        release_backup = threading.Event()
 
-        real_write = autosave_mod.save_chat_atomically_row
+        def paused_backup(*args, **kwargs):
+            backup_entered.set()
+            assert release_backup.wait(timeout=30), "test never released the pre-write backup"
 
-        def slow_write(*args, **kwargs):
-            loop.call_soon_threadsafe(write_entered.set)
-            time.sleep(0.3)
-            # ADR-009 stage 9.2: (chat_id, updated_at) - any truthy chat_id
-            # and a well-formed timestamp string; DB unused for this
-            # assertion, but the shape must match the real function's
-            # contract so autosave_tick's own unpacking doesn't itself
-            # raise (masking this test's actual assertion behind a
-            # swallowed TypeError in autosave_tick's own except Exception).
-            return 1, "2026-01-01 00:00:00"
-
-        state_dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
-        db_path = Path(state_dir.name) / "chats.db"
-        autosave_mod.save_chat_atomically_row = slow_write
+        monkeypatch.setattr(autosave_mod, "_maybe_backup_before_write", paused_backup)
+        register_chat_library(
+            bus,
+            tmp_path / "chats.db",
+            context.canvas_document,
+            notifications,
+            autosave_interval_seconds=0.01,
+        )
+        context.canvas_document.add_chat_node(0, 0, "dirty unsaved content", is_user=True)
         try:
-            register_autosave(bus, db_path, context.canvas_document, None, mutation_guard, last_saved, interval_seconds=0.01)
-            await asyncio.wait_for(write_entered.wait(), timeout=2.0)
-            # The tick is now genuinely suspended mid-write, holding the guard.
-            assert mutation_guard["active"] is True
-            assert mutation_guard["owner"] == "autosave"
+            assert await asyncio.to_thread(backup_entered.wait, 2.0), "autosave never reached the pre-write await"
+            assert bus.chat_mutation_guard["active"] is True
+            assert bus.chat_mutation_guard["owner"] == "autosave"
+            assert get_all_chats(tmp_path / "chats.db") == []
 
             result = _evict_idle_session(bus)
-            assert result is True
+            assert result is False
+            assert not bus.autosave_task.done(), "a vetoed eviction must leave autosave running"
 
-            for _ in range(20):
-                if bus.autosave_task.done():
+            release_backup.set()
+            for _ in range(200):
+                if bus.chat_save_state["chat_id"] is not None:
                     break
-                await asyncio.sleep(0.05)
-            assert bus.autosave_task.done()
-
-            # The whole point: cancellation mid-write must still release
-            # the guard via _guarded_tick's finally block, or a future
-            # manual save/load/new-chat intent on some OTHER session
-            # reusing this same guard shape would hang or wrongly report
-            # "busy" forever.
-            assert mutation_guard["active"] is False
-            assert mutation_guard["owner"] is None
-            assert mutation_guard["released"].is_set() is True
+                await asyncio.sleep(0.01)
+            saved_chat_id = bus.chat_save_state["chat_id"]
+            assert saved_chat_id is not None, "autosave did not finish after eviction was deferred"
+            row = load_chat_row(tmp_path / "chats.db", saved_chat_id)
+            assert row["data"]["nodes"][0]["raw_content"] == "dirty unsaved content"
         finally:
-            autosave_mod.save_chat_atomically_row = real_write
+            release_backup.set()
+            bus.autosave_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await bus.autosave_task
 
     asyncio.run(_run())
 
@@ -607,14 +595,12 @@ def test_evict_idle_session_does_not_write_a_redundant_row_for_a_clean_session(t
     assert load_chat_row(db_path, rows[0]["id"])["updated_at"] == saved_updated_at
 
 
-def test_evict_idle_session_does_not_flush_while_a_write_is_genuinely_in_flight(tmp_path):
-    # If the mutation guard is already held (a tick or manual op mid-write),
-    # the flush must not race a SECOND write against it - autosave_task.
-    # cancel() below still lets any genuinely in-flight tick finish and
-    # record its own result correctly (see
-    # test_evict_idle_session_releases_the_mutation_guard_when_cancelling_
-    # mid_write above), so attempting a flush here would only risk an
-    # avoidable spurious lost-race warning for no real benefit.
+def test_evict_idle_session_vetoes_without_flushing_while_a_chat_mutation_is_active(tmp_path):
+    # If the mutation guard is already held (an autosave or manual operation
+    # mid-await), eviction must neither race a second flush nor cancel the
+    # operation holding the only dirty in-memory state. Returning False lets
+    # EventBus reconsider the session on its next sweep after the guard is
+    # released.
     from backend.chat_library import register_chat_library
 
     db_path = tmp_path / "chats.db"
@@ -639,5 +625,5 @@ def test_evict_idle_session_does_not_flush_while_a_write_is_genuinely_in_flight(
     finally:
         app_module.flush_dirty_session_before_teardown = real_flush
 
-    assert result is True
+    assert result is False
     assert flush_calls == [], "a flush must not be attempted while a write is already in flight"

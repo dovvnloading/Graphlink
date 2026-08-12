@@ -103,6 +103,7 @@ def test_subscribe_delivers_system_snapshot_with_envelope():
         message = ws.receive_json()
         assert message["kind"] == "state"
         assert message["topic"] == "system"
+        assert "id" not in message
         payload = message["payload"]
         assert payload["app"] == "graphlink"
         assert payload["sessionId"] == "default"
@@ -118,6 +119,17 @@ def test_subscribe_delivers_system_snapshot_with_envelope():
         # A freshly-subscribed session that has published nothing is
         # therefore correctly at 0.
         assert payload["revision"] == 0
+
+
+def test_explicit_subscribe_id_is_echoed_only_on_its_snapshot():
+    client = make_client()
+    with client.websocket_connect("/ws?session=default") as ws:
+        ws.send_json({"kind": "subscribe", "topics": ["system"], "id": 91})
+        message = ws.receive_json()
+
+        assert message["kind"] == "state"
+        assert message["topic"] == "system"
+        assert message["id"] == 91
 
 
 def test_scene_subscribe_snapshot_is_pinned_at_schema_version_2():

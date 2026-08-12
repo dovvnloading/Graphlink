@@ -115,17 +115,13 @@ class ConcurrentSaveConflict(RuntimeError):
 CHATS_DB_SCHEMA_VERSION = 4
 
 
-# ADR-009 stage 9.2: `created_at`/rename_chat's own `updated_at` are written
-# via SQLite's inline `CURRENT_TIMESTAMP` (second resolution, no fractional
-# part) - the format every pre-9.2 row's timestamps are still in.
-# save_chat_atomically_row's own `now` (see that function's own docstring)
-# is now generated in PYTHON at microsecond resolution instead, specifically
-# so two writes issued in close succession (the exact optimistic-concurrency
-# scenario this stage exists for - two sessions racing a save) are NEVER
-# indistinguishable the way two same-second CURRENT_TIMESTAMP values would
-# be. Both formats are real, both must parse - _TIMESTAMP_DISPLAY_FORMATS is
-# tried in order (second-resolution first, since it's still the more common
-# case across created_at + every non-chat-save write).
+# ADR-009 stage 9.2: `created_at` and historical `updated_at` values use
+# SQLite's inline `CURRENT_TIMESTAMP` (second resolution, no fractional
+# part). Optimistic-concurrency writes from save_chat_atomically_row and
+# rename_chat generate `updated_at` in Python at microsecond resolution so
+# two back-to-back writes cannot share a token. Both formats are real and
+# must parse; try second-resolution first because every created_at and every
+# row last touched before this transition still uses it.
 _TIMESTAMP_DISPLAY_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f")
 
 
@@ -1109,12 +1105,47 @@ def get_all_chats(db_path: Path, notifications: NotificationState | None = None)
     ]
 
 
-def rename_chat(db_path: Path, chat_id: int, new_title: str) -> None:
+def rename_chat(
+    db_path: Path,
+    chat_id: int,
+    new_title: str,
+    *,
+    expected_updated_at: str | None = None,
+) -> str | None:
+    """Rename one graph and return the exact new optimistic-save token.
+
+    A rename of the graph currently open in a session participates in the
+    same optimistic-concurrency contract as a content save.  Without
+    returning the new ``updated_at`` value, the session keeps holding the
+    token from before its own rename and its next Save is rejected as though
+    some other window changed the graph.  ``expected_updated_at`` also keeps
+    token synchronization from weakening the existing lost-update guard: a
+    stale session may not rename a newer row and then adopt that row's fresh
+    token before overwriting its content.
+
+    ``None`` is returned for the existing blind-update call shape when the
+    graph no longer exists.  With an expected token, a missing row and a
+    stale row are intentionally the same concurrency conflict.
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
     with contextlib.closing(_connect(db_path)) as conn, conn:
-        conn.execute(
-            "UPDATE graphs SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (new_title, chat_id),
-        )
+        if expected_updated_at is not None:
+            cursor = conn.execute(
+                "UPDATE graphs SET title = ?, updated_at = ? WHERE id = ? AND updated_at = ?",
+                (new_title, now, chat_id, expected_updated_at),
+            )
+            if cursor.rowcount == 0:
+                raise ConcurrentSaveConflict(
+                    f"chat {chat_id} was modified elsewhere since it was last loaded/saved "
+                    "in this session (expected updated_at "
+                    f"{expected_updated_at!r} did not match)"
+                )
+        else:
+            cursor = conn.execute(
+                "UPDATE graphs SET title = ?, updated_at = ? WHERE id = ?",
+                (new_title, now, chat_id),
+            )
+    return now if cursor.rowcount else None
 
 
 def delete_chat(db_path: Path, chat_id: int, *, knowledge_db_path: Path | None = None) -> None:
@@ -1511,8 +1542,8 @@ def save_chat_atomically_row(
 
     `now` is generated in PYTHON (datetime.now(timezone.utc), microsecond
     resolution) rather than via SQLite's own inline `CURRENT_TIMESTAMP`
-    function (this function's pre-9.2 behavior, and what rename_chat still
-    uses) - SECOND resolution alone is not fine-grained enough for a real
+    function (this function's pre-9.2 behavior) - SECOND resolution alone
+    is not fine-grained enough for a real
     optimistic-concurrency token: two writes issued within the same wall-
     clock second (verified directly - this is not a theoretical concern;
     it is exactly what a fast two-session race, including this stage's own
@@ -1525,8 +1556,7 @@ def save_chat_atomically_row(
     in the row, with no possibility of drift from a second, separate read-
     back after the write. See _TIMESTAMP_DISPLAY_FORMATS' own comment for
     how the display-formatting functions handle both this and the older,
-    second-resolution format that pre-9.2 rows and rename_chat's own writes
-    still use.
+    second-resolution format historical rows still use.
 
     ADR-020 stage 20.2: `workspace_id`, when given (not None), is written
     ONLY on the INSERT branch below - a resave of an EXISTING graph (the
@@ -1866,7 +1896,7 @@ def make_serialize_mutating_intent(
     notifications: NotificationState | None,
 ):
     """Factory for the reentrancy-guard decorator register_chat_library's
-    own loadChat/saveChat/newChat intents are registered through - see
+    own loadChat/saveChat/newChat/renameChat intents use - see
     register_chat_library's own docstring (right below its call site) for
     the full OWNERSHIP audit-fix story this implements. Lifted out to a
     top-level factory - matching _new_mutation_guard/_new_save_state/
@@ -1882,7 +1912,8 @@ def make_serialize_mutating_intent(
     it - every pre-20.4 intent this wraps (loadChat/saveChat/newChat) is
     fire-and-forget from the frontend (transport.fireIntent never inspects
     the resolved value), so this was a silent no-op difference for all
-    three, never previously worth fixing on its own. ADR-020 stage 20.4's
+    three, never previously worth fixing on its own. renameChat later joined
+    the same wrapper to protect its optimistic-token refresh. ADR-020 stage 20.4's
     own loadGraphAndFocusNode is the first REQUEST/REPLY intent wrapped
     through this same guard (it needs the SAME reentrancy protection
     loadChat/saveChat/newChat already get, since it also mutates
@@ -2537,6 +2568,68 @@ def make_export_workspace(bus: SessionBus, resolved_path: Path, notifications: N
     return export_workspace
 
 
+def make_rename_chat_intent(
+    bus: SessionBus,
+    resolved_path: Path,
+    canvas_document: SceneDocument | None,
+    notifications: NotificationState | None,
+    last_saved: dict[str, Any],
+):
+    """Build the rename intent without inflating the registration function.
+
+    Renaming the graph currently open in this session is part of the same
+    optimistic-concurrency contract as saving its content: the metadata write
+    must validate the token this session loaded and then replace it with the
+    exact timestamp written by the rename. The caller wraps this handler in
+    the shared chat-mutation guard, making the token update race-free against
+    this session's save/load/autosave operations.
+    """
+
+    async def rename(chat_id: int, new_title: str):
+        # Non-empty guard matches the legacy `if ok and new_title:` - an
+        # empty/whitespace title is ignored, no mutation, no error (the SPA
+        # disables Save for an empty draft anyway).
+        title = str(new_title or "").strip()
+        if not title:
+            return
+        resolved_chat_id = int(chat_id)
+        expected_updated_at: str | None = None
+        if (
+            canvas_document is not None
+            and canvas_document.current_chat_id == resolved_chat_id
+            and last_saved.get("chat_id") == resolved_chat_id
+        ):
+            expected_updated_at = last_saved.get("updated_at")
+        try:
+            new_updated_at = await asyncio.to_thread(
+                rename_chat,
+                resolved_path,
+                resolved_chat_id,
+                title,
+                expected_updated_at=expected_updated_at,
+            )
+        except ConcurrentSaveConflict:
+            logger.warning(
+                "renameChat: lost a save race for chat %r (session=%r) - not overwriting the newer title",
+                resolved_chat_id,
+                bus.session_id,
+            )
+            if notifications is not None:
+                notifications.show(LOST_RACE_MESSAGE_MANUAL, "warning")
+                await bus.publish("notification")
+            return
+        if (
+            new_updated_at is not None
+            and canvas_document is not None
+            and canvas_document.current_chat_id == resolved_chat_id
+            and last_saved.get("chat_id") == resolved_chat_id
+        ):
+            last_saved["updated_at"] = new_updated_at
+        await bus.publish("app-chat-library")
+
+    return rename
+
+
 def register_chat_library(
     bus: SessionBus,
     db_path: Path | None = None,
@@ -2567,9 +2660,10 @@ def register_chat_library(
 
     bus.register_topic("app-chat-library", lambda: chat_library_payload(resolved_path, notifications))
 
-    # Adversarial review finding: loadChat/saveChat/newChat all mutate the
-    # SAME canvas_document and each awaits at least one asyncio.to_thread DB
-    # call - an await point that yields control back to the event loop. A
+    # Adversarial review finding: loadChat/saveChat/newChat mutate the SAME
+    # canvas_document, while renameChat advances that document's optimistic
+    # save token; each awaits at least one asyncio.to_thread DB call - an
+    # await point that yields control back to the event loop. A
     # session can have MULTIPLE attached WS connections at once (every tab/
     # window that doesn't pass its own ?session= query param shares
     # session="default" - see backend/app.py's ws_endpoint), so two tabs
@@ -2577,8 +2671,8 @@ def register_chat_library(
     # silently overwrite or corrupt one another's work - there is no
     # per-window isolation here the way Qt's single-threaded-per-window
     # model gave legacy for free. This mutable flag - checked and set at
-    # entry, cleared in a finally - serializes all three against each
-    # other, the generalized (load/new included, not just save)
+    # entry, cleared in a finally - serializes all four against each other,
+    # the generalized (load/new/rename included, not just save)
     # counterpart of ChatSessionManager's own _is_saving reentrancy guard.
     #
     # OWNERSHIP (audit fix). The flag above was written when only a
@@ -2587,8 +2681,10 @@ def register_chat_library(
     # operations. R6.6 then had a BACKGROUND task claim the same flag, and the
     # asymmetry went unnoticed - an autosave tick that happened to be mid-write
     # made the user's own Save/Load/New Chat vanish, with a warning naming an
-    # operation they never started. A background convenience feature must never
-    # be able to beat the user to their own data.
+    # operation they never started. Rename now shares this guard as well: its
+    # metadata write advances the open graph's optimistic-save token, which
+    # must not race those operations. A background convenience feature must
+    # never be able to beat the user to their own data.
     #
     # So the guard now records WHO holds it, and the two directions differ:
     #   user arrives, autosave holds  -> wait briefly for the tick to finish,
@@ -2634,15 +2730,9 @@ def register_chat_library(
     # in _connect) serializes concurrent writers. The topic builder's read
     # stays on the loop - a few-row SELECT, negligible.
 
-    async def rename(chat_id: int, new_title: str):
-        # Non-empty guard matches the legacy `if ok and new_title:` - an
-        # empty/whitespace title is ignored, no mutation, no error (the SPA
-        # disables Save for an empty draft anyway).
-        title = str(new_title or "").strip()
-        if not title:
-            return
-        await asyncio.to_thread(rename_chat, resolved_path, int(chat_id), title)
-        await bus.publish("app-chat-library")
+    rename = make_rename_chat_intent(
+        bus, resolved_path, canvas_document, notifications, _last_saved,
+    )
 
     async def delete(chat_id: int):
         # The SPA only calls this after its own two-step confirm, so no
@@ -2726,11 +2816,10 @@ def register_chat_library(
     # asyncio.to_thread call into the matching CRUD function, then republish
     # "app-chat-library" so every attached window's list/switcher picks up
     # the change - the same pattern every existing intent on this topic
-    # already uses. None of these six go through _serialize_mutating_intent -
-    # unlike loadChat/saveChat/newChat, they never touch canvas_document
-    # (the live in-memory scene), only chats.db rows, so there is nothing
-    # here for that guard to serialize against; renameChat/deleteChat (the
-    # topic's two other pre-existing chats.db-only intents) are the same way.
+    # already uses. None of these six go through _serialize_mutating_intent:
+    # they mutate workspace/list metadata only. renameChat is deliberately
+    # different from these metadata helpers because renaming the open graph
+    # advances and refreshes its shared optimistic-save token.
 
     async def set_favorite(graph_id: int, favorite: bool):
         await asyncio.to_thread(set_graph_favorite, resolved_path, int(graph_id), bool(favorite))
@@ -2790,7 +2879,7 @@ def register_chat_library(
 
     export_workspace = make_export_workspace(bus, resolved_path, notifications)
 
-    bus.register_intent("app-chat-library", "renameChat", rename)
+    bus.register_intent("app-chat-library", "renameChat", _serialize_mutating_intent(rename))
     bus.register_intent("app-chat-library", "deleteChat", delete)
     bus.register_intent("app-chat-library", "loadChat", _serialize_mutating_intent(load_chat))
     bus.register_intent("app-chat-library", "saveChat", _serialize_mutating_intent(save_chat))

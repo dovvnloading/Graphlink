@@ -10,6 +10,7 @@ import type { AppComposerState } from "../../lib/bridge-core/generated/app-compo
 import type { TokenCounterState } from "../../lib/bridge-core/generated/token-counter-state";
 import type { NotificationState } from "../../lib/bridge-core/generated/notification-state";
 import type { WsTransport } from "../../lib/ws/transport";
+import { COMPOSER_DRAFT_OFFLINE_COALESCE_KEY } from "../../lib/ws/transport";
 import { announce } from "../announcer";
 
 // ADR-003 stage 3.1 review-fix: a native OS file dialog waits on the user,
@@ -82,6 +83,15 @@ export class ComposerStore {
   private composer: AppComposerState = initialComposerState;
   private tokenCounter: TokenCounterState = initialTokenCounterState;
   private notification: NotificationState = initialNotificationState;
+  /** Local draft writes whose request has not reached a terminal result.
+   * Draft text stays optimistic until all writes settle and an explicitly
+   * requested snapshot confirms current server authority. Generations, not
+   * text equality, disambiguate valid A -> B -> A edit sequences. */
+  private readonly pendingDraftGenerations = new Set<number>();
+  private latestOptimisticDraft: { generation: number; text: string } | null = null;
+  private nextDraftGeneration = 1;
+  /** Generation fenced by the one explicit snapshot request in flight. */
+  private draftResyncGeneration: number | null = null;
   private streamText = "";
   private streamUnsub: (() => void) | null = null;
   private readonly listeners = new Set<Listener>();
@@ -106,13 +116,61 @@ export class ComposerStore {
       this.bind<AppComposerState>("app-composer", (v) => {
         const prevId = this.composer.request.id;
         const prevState = this.composer.request.state;
-        this.composer = v;
-        this.syncStream(prevId, v.request.id);
-        this.announceRequestStateChange(prevState, v.request.state);
+        let next = v;
+        const optimistic = this.latestOptimisticDraft?.text;
+        if (optimistic !== undefined) {
+          // Accept unrelated server-owned fields while holding the newest
+          // local text over stale/intermediate broadcasts. A value match is
+          // not an acknowledgement: the user may legitimately type A-B-A.
+          next = { ...v, draft: { ...v.draft, text: optimistic } };
+        }
+        this.composer = next;
+        this.syncStream(prevId, next.request.id);
+        this.announceRequestStateChange(prevState, next.request.state);
+        this.requestDraftResync();
       }),
       this.bind<TokenCounterState>("token-counter", (v) => (this.tokenCounter = v)),
       this.bind<NotificationState>("notification", (v) => (this.notification = v)),
     );
+  }
+
+  private onDraftSettled(generation: number): void {
+    this.pendingDraftGenerations.delete(generation);
+    this.requestDraftResync();
+  }
+
+  private requestDraftResync(): void {
+    if (
+      this.draftResyncGeneration !== null ||
+      this.pendingDraftGenerations.size > 0 ||
+      !this.latestOptimisticDraft
+    ) {
+      return;
+    }
+
+    const fenceGeneration = this.latestOptimisticDraft.generation;
+    this.draftResyncGeneration = fenceGeneration;
+    const sent = this.transport.resubscribe("app-composer", (payload) => {
+      const validated = TOPIC_VALIDATORS["app-composer"](payload);
+      this.draftResyncGeneration = null;
+      if (!validated.ok) return;
+      if (
+        this.pendingDraftGenerations.size > 0 ||
+        this.latestOptimisticDraft?.generation !== fenceGeneration
+      ) {
+        this.requestDraftResync();
+        return;
+      }
+      // WsTransport invokes this one-shot callback before ordinary topic
+      // listeners, so the same requested snapshot becomes authoritative.
+      this.latestOptimisticDraft = null;
+    });
+    if (!sent) this.draftResyncGeneration = null;
+  }
+
+  private onDraftCoalesced(generation: number): void {
+    this.pendingDraftGenerations.delete(generation);
+    this.requestDraftResync();
   }
 
   dispose(): void {
@@ -179,11 +237,27 @@ export class ComposerStore {
   // -- intents (backend/composer.py + notifications.py, 1:1) --------------
 
   updateDraft(text: string): void {
+    const generation = this.nextDraftGeneration++;
+    this.pendingDraftGenerations.add(generation);
+    this.latestOptimisticDraft = { generation, text };
+    if (this.composer.draft.text !== text) {
+      this.composer = { ...this.composer, draft: { ...this.composer.draft, text } };
+      this.emit();
+    }
     // ADR-003 stage 3.6: queueable - the single most textbook idempotent
     // last-write-wins case in the app; a keystroke autosave lost to a
     // dropped connection is the exact "vanishes silently" gap this stage
     // exists to close.
-    this.transport.fireIntent("app-composer", "updateDraft", [text], undefined, true);
+    this.transport.fireIntent(
+      "app-composer",
+      "updateDraft",
+      [text],
+      undefined,
+      true,
+      COMPOSER_DRAFT_OFFLINE_COALESCE_KEY,
+      () => this.onDraftSettled(generation),
+      () => this.onDraftCoalesced(generation),
+    );
   }
 
   selectModel(modelId: string): void {

@@ -341,6 +341,37 @@ def test_the_purge_keeps_stream_frames_and_other_topics_untouched():
     asyncio.run(run())
 
 
+def test_correlated_snapshots_survive_same_topic_superseding_and_queue_pressure():
+    async def run():
+        document = SceneDocument()
+        bus = make_bus(document, send_queue_maxsize=3)
+        gated = GatedRecorder()
+        bus.attach(gated, buffered=True)
+        document.add_node(0, 0, "a")
+
+        await bus.publish("scene")  # writer owns this frame and blocks
+        await asyncio.sleep(0.01)
+        await bus.send_snapshot("scene", gated, request_id=101)
+        await bus.publish_stream(
+            topic="scene", request_id="stream-1", seq=0, delta="a", done=False
+        )
+        await bus.publish_stream(
+            topic="scene", request_id="stream-1", seq=1, delta="b", done=False
+        )
+        # The queue is full. This later snapshot may supersede ordinary scene
+        # state and preferentially discard a stream frame, but request 101
+        # still needs its own correlated response before request 102.
+        await bus.send_snapshot("scene", gated, request_id=102)
+
+        gated.gate.set()
+        await asyncio.sleep(0.05)
+
+        correlated_ids = [message.get("id") for message in gated.messages if "id" in message]
+        assert correlated_ids == [101, 102]
+
+    asyncio.run(run())
+
+
 def test_send_snapshot_to_an_unbuffered_connection_is_still_synchronous():
     async def run():
         document = SceneDocument()

@@ -7,11 +7,13 @@ Serves three things:
 - / - the built SPA (static files), when a build directory exists
 
 Client -> server message kinds over /ws:
-  {"kind": "subscribe", "topics": ["system", ...]}      -> current snapshots
+  {"kind": "subscribe", "topics": ["system", ...],
+   "id": optional}                                        -> current snapshots
   {"kind": "intent", "topic": t, "intent": name,
    "args": [...], "id": optional}                        -> optional result
 Server -> client:
-  {"kind": "state", "topic": t, "payload": {...envelope...}}
+  {"kind": "state", "topic": t, "payload": {...envelope...},
+   "id": echoed when subscribe supplied one}
   {"kind": "result", "id": ..., "value": ...}            (only when id sent)
   {"kind": "error", "id": ..., "error": "..."}           (bad topic/intent)
 
@@ -299,15 +301,19 @@ def _evict_idle_session(bus: SessionBus) -> bool:
     this module, not the domain-agnostic event bus).
 
     Returns False (veto the eviction, try again next sweep) if a real
-    in-flight run is still active - a monotonic-time TTL is not a
-    substitute for actually knowing cancellation has finished. Otherwise
-    performs the same disconnect-time teardown ws_endpoint's own finally
-    block already does on a normal last-connection-drops path (cancel_all
-    + cancel_all_pending_approvals), plus the one thing that path never
-    had to do because it never applied to an ABANDONED session before this
-    stage: cancel the autosave task, so its closure stops holding the
-    whole SceneDocument alive via a strong reference nothing can ever
-    reach again once this session is gone from EventBus._sessions.
+    in-flight run or chat mutation is still active - a monotonic-time TTL is
+    not a substitute for actually knowing cancellation has finished. A chat
+    mutation includes autosave's pre-write read/backup awaits: cancelling its
+    task there would prevent the database write from ever starting, while the
+    old "guard active, so skip the final flush" branch discarded the only
+    remaining copy of the dirty document. Otherwise performs the same
+    disconnect-time teardown ws_endpoint's own finally block already does on
+    a normal last-connection-drops path (cancel_all +
+    cancel_all_pending_approvals), plus the one thing that path never had to
+    do because it never applied to an ABANDONED session before this stage:
+    cancel the autosave task, so its closure stops holding the whole
+    SceneDocument alive via a strong reference nothing can ever reach again
+    once this session is gone from EventBus._sessions.
     """
     try:
         context = get_session_context(bus)
@@ -317,6 +323,12 @@ def _evict_idle_session(bus: SessionBus) -> bool:
         # evict outright rather than getting stuck vetoing forever.
         return True
     if context.agent_dispatcher.has_in_flight_runs():
+        return False
+    mutation_guard = getattr(bus, "chat_mutation_guard", None)
+    if mutation_guard is not None and mutation_guard.get("active"):
+        # Do not cancel an autosave/user save/load/rename halfway through an
+        # await. The next sweep retries after the guard's finally block has
+        # released, at which point the normal dirty flush + teardown is safe.
         return False
     context.agent_dispatcher.cancel_all()
     context.agent_dispatcher.cancel_all_pending_approvals()
@@ -340,22 +352,12 @@ def _evict_idle_session(bus: SessionBus) -> bool:
     # register_chat_library actually ran for this bus (bus.chat_db_path
     # unset - e.g. several tests in this suite build a bare SessionBus/
     # SessionContext directly, without ever registering the chat library -
-    # means there is nothing to flush) and when no write is already in
-    # flight (mutation_guard active): a tick genuinely mid-write will
-    # still complete and record its own result correctly once
-    # autosave_task.cancel() below lets it finish (see
-    # test_evict_idle_session_releases_the_mutation_guard_when_cancelling_
-    # mid_write in backend/tests/test_session_lifecycle.py) - racing a
-    # SECOND write against it here would only risk an avoidable lost-race
-    # warning for no benefit.
+    # means there is nothing to flush). An active mutation already vetoed
+    # eviction above, so reaching this point guarantees this synchronous
+    # final flush cannot race an autosave/manual chat operation.
     chat_db_path = getattr(bus, "chat_db_path", None)
     last_saved = getattr(bus, "chat_save_state", None)
-    mutation_guard = getattr(bus, "chat_mutation_guard", None)
-    if (
-        chat_db_path is not None
-        and last_saved is not None
-        and not (mutation_guard is not None and mutation_guard.get("active"))
-    ):
+    if chat_db_path is not None and last_saved is not None:
         try:
             flush_dirty_session_before_teardown(chat_db_path, context.canvas_document, last_saved)
         except Exception:
@@ -729,7 +731,7 @@ async def _handle_message(session: SessionBus, websocket: WebSocket, message: di
         topics = message.get("topics") or session.topic_names()
         for topic in topics:
             try:
-                await session.send_snapshot(topic, websocket)
+                await session.send_snapshot(topic, websocket, request_id=msg_id)
             except UnknownTopicError:
                 await websocket.send_json(
                     {"kind": "error", "id": msg_id, "error": f"unknown topic: {topic}"}
