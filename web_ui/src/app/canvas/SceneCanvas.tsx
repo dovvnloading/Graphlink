@@ -2294,6 +2294,22 @@ function CanvasInner({
   const [smartGuideLines, setSmartGuideLines] = useState<GuideLine[]>([]);
   const visibleGuideLines = scene.smartGuides ? smartGuideLines : [];
 
+  // True for exactly the duration of an active node-drag gesture, mirrored
+  // from onNodesChange's own dragging/drag-end changes (state, unlike
+  // draggingRef, because it must re-render <ReactFlow> with a different
+  // onlyRenderVisibleElements value below). Why it exists: with
+  // off-viewport culling active, React Flow removes any node whose rect
+  // leaves the viewport - INCLUDING the node currently being dragged.
+  // Measured on a real scene: dragging a connected node across the
+  // viewport boundary unmounted it mid-gesture for 49 straight frames (the
+  // node simply vanished under the cursor) while its edge stayed rendered,
+  // pointing at nothing. Auto-pan during a drag makes this worse: every
+  // node the pan pushes across the boundary pops in or out mid-gesture.
+  // Suspending culling for the duration of the drag (same suspension
+  // mechanism exportInProgress already uses) keeps everything mounted while
+  // anything is moving; culling resumes the moment the drag ends.
+  const [dragActive, setDragActive] = useState(false);
+
   // R8a (UI/UX issue list finding #11): the View popover's FONT section
   // (family/size/color) already round-trips real intents into scene state -
   // nothing ever consumed them. Written as CSS custom properties on the
@@ -2598,6 +2614,11 @@ function CanvasInner({
       } else if (sawDragEnd) {
         setSmartGuideLines((current) => (current.length === 0 ? current : []));
       }
+      // Suspend off-viewport culling while a drag is in flight - see
+      // dragActive's own doc comment above. Same-value setState calls
+      // (every frame after the first) bail out without a re-render.
+      if (sawDragging) setDragActive(true);
+      else if (sawDragEnd) setDragActive(false);
       setNodes((current) => applyNodeChanges([...scaled, ...memberChanges], current));
     },
     [nodes, scene.dragFactor, scene.smartGuides, reactFlow, store],
@@ -2735,7 +2756,7 @@ function CanvasInner({
          *   via exportInProgress above, which that module now sets for the
          *   capture's duration.
          */
-        onlyRenderVisibleElements={!exportInProgress}
+        onlyRenderVisibleElements={!exportInProgress && !dragActive}
       >
         <Background
           variant={GRID_VARIANTS[grid.gridStyle] ?? BackgroundVariant.Dots}
