@@ -8,6 +8,7 @@ import {
   ViewportPortal,
   experimental_useOnNodesChangeMiddleware,
   useReactFlow,
+  useStoreApi,
   type Connection,
   type Edge,
   type Node,
@@ -143,6 +144,9 @@ const EDGE_TYPES = {
 // fresh literal every time - React Flow reads these by reference in its
 // own internal effects, so a fresh literal every render meant those
 // effects re-ran on every unrelated re-render for no behavioral reason.
+// defaultNodes is read once when React Flow initialises its store; a stable
+// module constant keeps that unambiguous and allocation-free.
+const EMPTY_NODES: SceneFlowNode[] = [];
 const DELETE_KEY_CODES = ["Delete", "Backspace"];
 const PRO_OPTIONS = { hideAttribution: true };
 const DEFAULT_EDGE_OPTIONS = { type: "default" as const };
@@ -2259,7 +2263,12 @@ function CanvasInner({
   // Local node state exists so dragging is fluid; backend snapshots are the
   // truth and reconcile in whenever nothing is being dragged. dragStartRef
   // powers the drag-speed scaling contract (see scaleDragPosition).
-  const [nodes, setNodes] = useState<SceneFlowNode[]>([]);
+  // React Flow owns the rendered node collection (see the <ReactFlow>
+  // element's own defaultNodes comment). This component keeps only a mirror
+  // ref for its own logic - drag corrections, delete routing, scene merge -
+  // so a drag frame never has to travel through React state to reach the
+  // renderer.
+  const storeApi = useStoreApi();
   const dragStartRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   const draggingRef = useRef(false);
   // ADR-011 stage 11.3: the smart-guide size cache - populated ONCE per drag
@@ -2421,7 +2430,10 @@ function CanvasInner({
     );
     // Mirror advances with the state it describes - see nodesRef's comment.
     nodesRef.current = next;
-    setNodes(next);
+    // Straight into React Flow's own store rather than through React state:
+    // this is the same setter React Flow's internal prop-sync would call, so
+    // the renderer is updated in this effect instead of one commit later.
+    storeApi.getState().setNodes(next);
   }, [
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
     getComposerRoute, filterKinds, filterStatuses,
@@ -2691,15 +2703,14 @@ function CanvasInner({
       // advances in this same event: a drag can deliver several frames
       // before React commits, and each must build on the previous frame's
       // result - see nodesRef's own comment above.
-      const next = applyNodeChanges(changes, currentNodes);
-      // react-hooks/immutability flags this because the same mirror is also
-      // assigned in the scene-sync effect above. Both writers are correct and
-      // both are required: the effect publishes backend snapshots, this
-      // handler publishes drag frames, and a drag can deliver several frames
-      // between commits - which is the entire reason the mirror exists.
+      // React Flow has ALREADY applied this batch to its own store by the
+      // time this handler runs (that is what uncontrolled node state buys:
+      // the renderer is updated synchronously inside the pointer event, the
+      // way working node editors do it, instead of waiting for React state
+      // and a post-paint sync). All that remains here is keeping this
+      // component's mirror in step for its own logic.
       // eslint-disable-next-line react-hooks/immutability
-      nodesRef.current = next;
-      setNodes(next);
+      nodesRef.current = applyNodeChanges(changes, currentNodes);
     },
     [store],
   );
@@ -2723,7 +2734,7 @@ function CanvasInner({
       const chatNodeIds: string[] = [];
       const otherNodeIds: string[] = [];
       for (const deleted of deletedNodes) {
-        const flowNode = nodes.find((n) => n.id === deleted.id);
+        const flowNode = nodesRef.current.find((n) => n.id === deleted.id);
         (flowNode?.type === "chat" ? chatNodeIds : otherNodeIds).push(deleted.id);
       }
       for (const id of chatNodeIds) store.deleteChatNode(id);
@@ -2735,7 +2746,7 @@ function CanvasInner({
         deletedEdges.filter((e) => !dying.has(e.source) && !dying.has(e.target)).map((e) => e.id),
       );
     },
-    [store, nodes],
+    [store],
   );
 
   const onSelectionChange = useCallback(
@@ -2773,7 +2784,19 @@ function CanvasInner({
       data-testid="scene-canvas"
     >
       <ReactFlow
-        nodes={nodes}
+        /* Uncontrolled node state, deliberately. With a controlled `nodes`
+           prop, every drag frame travels app state -> re-render -> React
+           Flow's prop-sync effect (a PASSIVE effect, so it lands after the
+           browser has already had a chance to paint) before the renderer
+           learns the new position. Working node editors do the opposite:
+           Drawflow, for one, writes the node's position and its connection
+           paths synchronously inside the same mousemove handler. Handing
+           node state to React Flow reproduces that shape here - a drag
+           frame is applied to its store inside the pointer event, and the
+           node card and its connections re-render together from that one
+           store write. Scene snapshots from the backend are pushed in
+           explicitly via the store (see the scene-sync effect above). */
+        defaultNodes={EMPTY_NODES}
         edges={edges}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
