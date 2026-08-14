@@ -43,13 +43,6 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  /* Theme-matched page background (dark drag-parity audit): with no
-     explicit background the page root stays transparent, so any region the
-     renderer clears or presents before content paint resolves to the
-     embedding window's own backdrop rather than the theme's canvas color.
-     Painting the root opaquely in the theme's window color makes both
-     themes behave identically at that boundary. */
-  background-color: var(--gl-surface-window);
 }
 
 .app-shell {
@@ -410,28 +403,13 @@ body,
   font-size: var(--gl-node-font-size, 11px);
 }
 
-/* Dark-theme drag-parity fix (full audit, 2026-08-14): the connection line
-   used to be painted at stroke-width 1.5 in --gl-surface-border-strong -
-   #505050 on dark's #1E1E1E canvas (a BRIGHT light-on-dark hairline,
-   ~2.07:1) vs #AFAFAF on light's #E1E1E1 (a soft dark-on-light line,
-   ~1.68:1). A sub-2px stroke drops into the renderer's hairline
-   anti-aliasing regime below ~67% zoom, whose stepping is visibly harsher
-   for light-on-dark than dark-on-light - so the identical drag produced a
-   line that visibly crawled/stepped against the node in dark while reading
-   as smooth in light. Three equalizers: a dedicated per-theme stroke token
-   (--gl-graph-edge-stroke: dark #444444 reproduces light's contrast RATIO
-   on the dark canvas; light keeps #AFAFAF unchanged), stroke-width 2 to
-   stay out of hairline mode at working zooms, and geometricPrecision to
-   pin high-quality anti-aliasing rather than pixel snapping. */
 .scene-canvas .react-flow__edge-path {
-  stroke: var(--gl-graph-edge-stroke, var(--gl-surface-border-strong, var(--gl-surface-text-muted)));
-  stroke-width: 2;
-  shape-rendering: geometricPrecision;
+  stroke: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
+  stroke-width: 1.5;
 }
 
 .scene-canvas .react-flow__edge.selected .react-flow__edge-path {
   stroke: var(--gl-surface-text-primary);
-  shape-rendering: geometricPrecision;
 }
 
 .scene-minimap {

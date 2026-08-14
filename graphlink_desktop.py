@@ -207,27 +207,6 @@ def main() -> int:
         return 1
     logger.info("backend healthy at %s", base_url)
 
-    # Canvas drag fix, corrected delivery (full audit, 2026-08-14): recent
-    # WebView2 builds hand independently-composited page layers to Windows'
-    # compositor to assemble on screen; a dragged node card and the redrawn
-    # connection lines can land one display frame apart. The first attempt
-    # at disabling that (#323) passed --disable-features=DelegatedCompositing
-    # through this environment variable - and the audit found it NEVER took
-    # effect: pywebview's own Windows backend passes
-    # --disable-features=ElasticOverscroll in the browser arguments it
-    # builds (site-packages/webview/platforms/edgechromium.py), duplicate
-    # --disable-features switches resolve last-one-wins, so one of the two
-    # lists was silently discarded. The reliable delivery is to put BOTH
-    # feature names in ONE merged list here: whichever --disable-features
-    # value wins, it now carries DelegatedCompositing (and keeps pywebview's
-    # ElasticOverscroll intent). Unknown feature names are ignored by
-    # runtimes that predate them, so this stays inert where not applicable.
-    _composition_flags = "--disable-features=ElasticOverscroll,DelegatedCompositing"
-    _existing_args = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "")
-    os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (
-        f"{_existing_args} {_composition_flags}".strip()
-    )
-
     import webview  # pywebview - the native (non-Qt, non-browser) window
 
     # The token reaches the SPA as a URL FRAGMENT, which the browser never

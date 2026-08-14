@@ -118,7 +118,6 @@
   --gl-frame-purple: #7c7c7c;
   --gl-frame-red: #7c7c7c;
   --gl-frame-yellow: #8e8e8e;
-  --gl-graph-edge-stroke: #444444;
   --gl-graph-node-badge-fill: #484848;
   --gl-graph-node-body-end: #292929;
   --gl-graph-node-body-start: #303030;
@@ -150,9 +149,9 @@
   --gl-semantic-status-info: #828282;
   --gl-semantic-status-success: #838383;
   --gl-semantic-status-warning: #919191;
-  --gl-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.18);
-  --gl-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.203);
-  --gl-shadow-3: 0 8px 28px rgba(0, 0, 0, 0.248);
+  --gl-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.40);
+  --gl-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --gl-shadow-3: 0 8px 28px rgba(0, 0, 0, 0.55);
   --gl-space-1: 4px;
   --gl-space-2: 8px;
   --gl-space-3: 12px;
@@ -253,7 +252,6 @@
     --gl-frame-purple: #838383;
     --gl-frame-red: #838383;
     --gl-frame-yellow: #717171;
-    --gl-graph-edge-stroke: #AFAFAF;
     --gl-graph-node-badge-fill: #B7B7B7;
     --gl-graph-node-body-end: #D6D6D6;
     --gl-graph-node-body-start: #CFCFCF;
@@ -384,7 +382,6 @@
   --gl-frame-purple: #838383;
   --gl-frame-red: #838383;
   --gl-frame-yellow: #717171;
-  --gl-graph-edge-stroke: #AFAFAF;
   --gl-graph-node-badge-fill: #B7B7B7;
   --gl-graph-node-body-end: #D6D6D6;
   --gl-graph-node-body-start: #CFCFCF;
