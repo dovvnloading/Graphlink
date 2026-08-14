@@ -360,6 +360,16 @@ body,
   box-shadow: 0 0 0 1px var(--gl-surface-border-strong), var(--gl-shadow-3);
 }
 
+/* UI-perf fix: while a node is actively being dragged, React Flow's
+   controlled-node round-trip lag can put the cursor outside the card's
+   true rendered rect for a frame, toggling hover on/off and replaying
+   the border-color/box-shadow transition above as visible flicker. Pin
+   hover back to the resting appearance for the drag's duration. */
+.react-flow__node.dragging .scene-node:hover {
+  border-color: var(--gl-surface-border);
+  box-shadow: var(--gl-shadow-1);
+}
+
 /* ADR-012 stage 12.3: the actually-tabbable element for a node is React
    Flow's OWN wrapper div (.react-flow__node, one level up from .scene-node -
    see NodeMenu.tsx's own stage-12.3 doc for why), not .scene-node itself, so

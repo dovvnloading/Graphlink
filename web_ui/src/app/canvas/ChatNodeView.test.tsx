@@ -1,3 +1,4 @@
+import { createElement } from "react";
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -22,7 +23,19 @@ import { WsTransport } from "../../lib/ws/transport";
 // delta count" without touching what gets rendered.
 vi.mock("./NodeMarkdown", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./NodeMarkdown")>();
-  return { ...actual, NodeMarkdown: vi.fn(actual.NodeMarkdown) };
+  // NodeMarkdown is React.memo(...) - a memo descriptor object, not a plain
+  // callable function - so it can no longer be handed to vi.fn() directly as
+  // the implementation (vi.fn calls implementation.apply(...) internally, and
+  // a memo object has no .apply). Spy on a plain wrapper function instead
+  // that renders an element of the REAL memoized component: call-count
+  // instrumentation keeps working exactly as before (every ChatNodeView
+  // re-render that reaches this JSX position still increments the spy,
+  // same as when NodeMarkdown was an unmemoized plain function), while the
+  // actual markdown parse still runs through the genuine memoized component.
+  return {
+    ...actual,
+    NodeMarkdown: vi.fn((props: { content: string }) => createElement(actual.NodeMarkdown, props)),
+  };
 });
 
 // R7.5a: jsdom implements neither URL.createObjectURL nor

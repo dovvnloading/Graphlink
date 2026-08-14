@@ -137,6 +137,15 @@ const EDGE_TYPES = {
   orthogonal: OrthogonalEdge,
 };
 
+// UI-perf fix: fully static <ReactFlow> props, hoisted so these are the
+// SAME array/object reference on every CanvasInner render instead of a
+// fresh literal every time - React Flow reads these by reference in its
+// own internal effects, so a fresh literal every render meant those
+// effects re-ran on every unrelated re-render for no behavioral reason.
+const DELETE_KEY_CODES = ["Delete", "Backspace"];
+const PRO_OPTIONS = { hideAttribution: true };
+const DEFAULT_EDGE_OPTIONS = { type: "default" as const };
+
 // R8a follow-up: legacy's graphlink_window.py show_document_view() showed
 // this exact message (via notification_banner.show_message(..., "info"))
 // when a node had nothing to show, rather than silently doing nothing - the
@@ -2546,8 +2555,11 @@ function CanvasInner({
       if (settledMoveIntents.length > 0) store.moveNodes(settledMoveIntents);
       // Guides re-derive every drag frame (legacy cleared + re-added its
       // QGraphicsLineItems per recompute); drag end always clears.
-      if (sawDragging) setSmartGuideLines(frameGuides);
-      else if (sawDragEnd) setSmartGuideLines([]);
+      if (sawDragging) {
+        setSmartGuideLines((current) => (current.length === 0 && frameGuides.length === 0 ? current : frameGuides));
+      } else if (sawDragEnd) {
+        setSmartGuideLines((current) => (current.length === 0 ? current : []));
+      }
       setNodes((current) => applyNodeChanges([...scaled, ...memberChanges], current));
     },
     [nodes, scene.dragFactor, scene.smartGuides, reactFlow, store],
@@ -2587,6 +2599,14 @@ function CanvasInner({
     [store, nodes],
   );
 
+  const onSelectionChange = useCallback(
+    ({ nodes: sel }: { nodes: { id: string }[] }) => handleSelectionChange(store, sel),
+    [store],
+  );
+  const onEdgeMouseEnter = useCallback((_event: React.MouseEvent, edge: Edge) => setHoveredEdgeId(edge.id), []);
+  const onEdgeMouseLeave = useCallback(() => setHoveredEdgeId(null), []);
+  const snapGrid = useMemo<[number, number]>(() => [grid.gridSize, grid.gridSize], [grid.gridSize]);
+
   const { screenToFlowPosition } = reactFlow;
   const onDoubleClick = useCallback(
     (event: React.MouseEvent) => {
@@ -2625,20 +2645,20 @@ function CanvasInner({
         // R5.1: mirrors React Flow's own selection state into the store so
         // PluginPicker can attach "which node was selected" to executePlugin
         // without either component reaching into the other's internals.
-        onSelectionChange={({ nodes: sel }) => handleSelectionChange(store, sel)}
-        onEdgeMouseEnter={(_event, edge) => setHoveredEdgeId(edge.id)}
-        onEdgeMouseLeave={() => setHoveredEdgeId(null)}
+        onSelectionChange={onSelectionChange}
+        onEdgeMouseEnter={onEdgeMouseEnter}
+        onEdgeMouseLeave={onEdgeMouseLeave}
         snapToGrid={scene.snapToGrid}
-        snapGrid={[grid.gridSize, grid.gridSize]}
+        snapGrid={snapGrid}
         // Double-click is the R1 create-node gesture (wrapper onDoubleClick);
         // RF's default dblclick-zoom would consume it before it ever bubbles.
         zoomOnDoubleClick={false}
         fitView
         minZoom={0.1}
         maxZoom={2.5}
-        deleteKeyCode={["Delete", "Backspace"]}
-        proOptions={{ hideAttribution: true }}
-        defaultEdgeOptions={{ type: "default" }}
+        deleteKeyCode={DELETE_KEY_CODES}
+        proOptions={PRO_OPTIONS}
+        defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
         /*
          * ADR-011 stage 11.2: off-viewport nodes no longer mount at all (nor
          * re-render, nor pay their markdown/highlight/KaTeX parse cost) -

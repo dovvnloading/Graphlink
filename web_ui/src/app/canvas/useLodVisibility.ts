@@ -13,6 +13,5 @@ import { LOD_ZOOM_THRESHOLD } from "./canvasConstants";
  * since this only replaces the two lines that produced the boolean, not what
  * callers do with it afterward). */
 export function useLodVisibility(): boolean {
-  const zoom = useStore((s) => s.transform[2]);
-  return zoom < LOD_ZOOM_THRESHOLD;
+  return useStore((s) => s.transform[2] < LOD_ZOOM_THRESHOLD);
 }

@@ -1,5 +1,6 @@
-import { useRef, useState, type JSX } from "react";
+import { memo, useMemo, useRef, useState, type JSX } from "react";
 import ReactMarkdown, { type ExtraProps } from "react-markdown";
+import type { PluggableList } from "unified";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { remarkAlert } from "remark-github-blockquote-alert";
@@ -105,6 +106,8 @@ import { rehypeHighlightSearchMatches } from "./documentViewSearchHighlight";
  * both whether the link renders at all AND how hardened it is.
  */
 
+const REMARK_PLUGINS = [remarkGfm, remarkAlert, remarkMath];
+
 function CodeBlock({ node: _node, children, ...props }: JSX.IntrinsicElements["pre"] & ExtraProps) {
   const preRef = useRef<HTMLPreElement>(null);
   const [copied, setCopied] = useState(false);
@@ -208,15 +211,17 @@ function SafeAnchor({ node: _node, href, children, ...props }: JSX.IntrinsicElem
   );
 }
 
-export function NodeMarkdown({ content }: { content: string }) {
+const MARKDOWN_COMPONENTS = { pre: CodeBlock, table: TableWrapper, img: ZoomImage, a: SafeAnchor };
+
+export const NodeMarkdown = memo(function NodeMarkdown({ content }: { content: string }) {
   const searchQuery = useCanvasSearchQuery();
+  const rehypePlugins = useMemo<PluggableList>(
+    () => [rehypeHighlight, rehypeKatex, [rehypeHighlightSearchMatches, searchQuery]],
+    [searchQuery],
+  );
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkAlert, remarkMath]}
-      rehypePlugins={[rehypeHighlight, rehypeKatex, [rehypeHighlightSearchMatches, searchQuery]]}
-      components={{ pre: CodeBlock, table: TableWrapper, img: ZoomImage, a: SafeAnchor }}
-    >
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={rehypePlugins} components={MARKDOWN_COMPONENTS}>
       {content}
     </ReactMarkdown>
   );
-}
+});
