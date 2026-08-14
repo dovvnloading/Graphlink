@@ -403,6 +403,26 @@ body,
   font-size: var(--gl-node-font-size, 11px);
 }
 
+/* Dark-theme drag-lag fix: node cards move as GPU-composited layers (the
+   browser promotes them on its own once their transform changes every
+   frame of a drag), while the connection lines live in an SVG that gets
+   re-rasterized on the main thread. Those are two different routes to the
+   screen, and when they fall a frame out of step the connection visibly
+   trails or stutters against the node it is attached to. The 1.5px stroke
+   on a near-black background makes every misstep stark in dark mode; the
+   identical misstep is nearly invisible against the light theme, which is
+   why the artifact reads as dark-only. Declaring will-change on BOTH the
+   node wrappers and the connection layer makes the browser put them on the
+   same compositing path from the first frame, instead of flipping the
+   nodes onto a separate one mid-gesture. */
+.scene-canvas .react-flow__node {
+  will-change: transform;
+}
+
+.scene-canvas .react-flow__edges {
+  will-change: transform;
+}
+
 .scene-canvas .react-flow__edge-path {
   stroke: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
   stroke-width: 1.5;
