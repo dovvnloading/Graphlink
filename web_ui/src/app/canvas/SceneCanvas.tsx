@@ -2074,31 +2074,69 @@ export function computeSmartGuideFrame(
 }
 
 /**
- * R7.5c: carry the current selection across a snapshot rebuild.
+ * R7.5c (extended): carry React Flow's own per-node runtime state - the
+ * selection flag AND the measured node size - across a snapshot rebuild.
  *
  * toFlowNodes mints brand-new node objects from every scene snapshot, so
- * anything React Flow keeps on the node object rather than in the scene -
- * selection above all - is dropped unless copied over explicitly.
+ * anything React Flow keeps on the node object rather than in the scene is
+ * dropped unless copied over explicitly. Two fields matter:
  *
- * Found live, not by a test: Ctrl+Arrow calls setCenter, setCenter fires
- * onMove, onMove reports the viewport to the backend, the backend echoes a
- * fresh scene, and the selection the keystroke had just made vanished about
- * 300ms later. That left the NEXT Ctrl+Arrow with no single selected node,
- * so branch-walking died after exactly one hop. The same wipe hits any
- * selection that merely overlaps a snapshot - an autosave tick, a streaming
- * token - which is why it is fixed here at the rebuild rather than inside
- * the shortcut handler.
+ * SELECTION (the original R7.5c fix): found live, not by a test - Ctrl+Arrow
+ * calls setCenter, setCenter fires onMove, onMove reports the viewport to
+ * the backend, the backend echoes a fresh scene, and the selection the
+ * keystroke had just made vanished about 300ms later. That left the NEXT
+ * Ctrl+Arrow with no single selected node, so branch-walking died after
+ * exactly one hop.
  *
- * A node the backend actually removed is simply absent from `rebuilt`, so a
- * stale id can never resurrect one.
+ * MEASURED SIZE (the node/edge blink fix): React Flow writes each node's
+ * measured dimensions back onto OUR node objects through ordinary
+ * `dimensions` changes (applyNodeChanges' own 'dimensions' case sets
+ * `node.measured`), and its adoptUserNodes preserves a node's internal
+ * measurement/handle geometry across a nodes-prop change ONLY IF the
+ * incoming node object either is reference-identical to the last one or
+ * still carries that `measured` field (verified against the installed
+ * @xyflow/system source: adoptUserNodes rebuilds internals for any
+ * new-reference node, taking `measured` from the user object - undefined
+ * for a fresh toFlowNodes product - and parseHandles keeps the previous
+ * handleBounds only when `userNode.measured` is set). A node whose
+ * measurement gets wiped this way is re-rendered with `visibility: hidden`
+ * (NodeWrapper's own `hasDimensions` gate) and every edge touching it
+ * unmounts entirely (getEdgePosition returns null for an uninitialized
+ * node) until the resize-observer cycle re-measures it a frame or more
+ * later. Since every scene publish rebuilds the changed rows' node objects
+ * (and this function's own selection clone used to mint a fresh object for
+ * every SELECTED node on every publish), the user-visible result was nodes
+ * and their connections blinking for a frame after every drag drop,
+ * viewport echo, and streaming patch. Carrying `measured` over closes the
+ * whole chain: dimensions survive, handleBounds survive, nothing unmounts.
+ *
+ * Reference-identical nodes (a toFlowNodes cache hit that is literally the
+ * same object React Flow already adopted) pass through untouched - cloning
+ * them would defeat adoptUserNodes' reference-equality fast path for no
+ * benefit. A node the backend actually removed is simply absent from
+ * `rebuilt`, so a stale id can never resurrect one; a genuinely NEW node
+ * has no prior state to carry and measures normally on first mount.
  */
-export function withPreservedSelection(
+export function withPreservedFlowState(
   rebuilt: SceneFlowNode[],
   current: SceneFlowNode[],
 ): SceneFlowNode[] {
-  const selectedIds = new Set(current.filter((n) => n.selected).map((n) => n.id));
-  if (selectedIds.size === 0) return rebuilt;
-  return rebuilt.map((n) => (selectedIds.has(n.id) ? { ...n, selected: true } : n));
+  if (current.length === 0) return rebuilt;
+  const currentById = new Map(current.map((n) => [n.id, n]));
+  let changed = false;
+  const merged = rebuilt.map((n) => {
+    const prev = currentById.get(n.id);
+    if (!prev || prev === n) return n;
+    const selected = prev.selected === true;
+    const measured = n.measured === undefined ? prev.measured : undefined;
+    if (!selected && measured === undefined) return n;
+    changed = true;
+    const clone: SceneFlowNode = { ...n };
+    if (selected) clone.selected = true;
+    if (measured !== undefined) clone.measured = measured;
+    return clone;
+  });
+  return changed ? merged : rebuilt;
 }
 
 // Exported standalone for direct unit testing, same posture as toFlowNodes
@@ -2346,7 +2384,7 @@ function CanvasInner({
   useEffect(() => {
     if (draggingRef.current) return;
     setNodes((current) =>
-      withPreservedSelection(
+      withPreservedFlowState(
         toFlowNodes(
           scene,
           store,

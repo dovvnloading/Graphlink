@@ -19,7 +19,7 @@ import {
   SceneCanvas,
   toFlowEdges,
   toFlowNodes,
-  withPreservedSelection,
+  withPreservedFlowState,
   type MeasuredSizeSource,
   type SceneFlowNode,
 } from "./SceneCanvas";
@@ -2671,15 +2671,18 @@ describe("toFlowEdges (R7.5b-2 orthogonal routing)", () => {
 // R7.5c: found live, not by a test - Ctrl+Arrow's setCenter round-trips a
 // viewport report through the backend, the echoed snapshot rebuilt every
 // node, and the selection the keystroke had just made disappeared. Without
-// this, branch navigation worked for exactly one hop.
-describe("withPreservedSelection (R7.5c snapshot-rebuild selection wipe)", () => {
-  const node = (id: string, selected?: boolean) =>
-    ({ id, selected, position: { x: 0, y: 0 }, data: {} }) as unknown as SceneFlowNode;
+// this, branch navigation worked for exactly one hop. Extended later to
+// also carry React Flow's measured node size across the same rebuild - see
+// withPreservedFlowState's own doc comment for the node/edge blink that
+// losing it caused.
+describe("withPreservedFlowState (snapshot-rebuild selection + measurement wipe)", () => {
+  const node = (id: string, selected?: boolean, measured?: { width: number; height: number }) =>
+    ({ id, selected, measured, position: { x: 0, y: 0 }, data: {} }) as unknown as SceneFlowNode;
 
   it("re-applies the selection onto the freshly rebuilt nodes", () => {
     const rebuilt = [node("a"), node("b"), node("c")];
     const current = [node("a"), node("b", true), node("c")];
-    const merged = withPreservedSelection(rebuilt, current);
+    const merged = withPreservedFlowState(rebuilt, current);
     expect(merged.map((n) => [n.id, !!n.selected])).toEqual([
       ["a", false],
       ["b", true],
@@ -2688,20 +2691,20 @@ describe("withPreservedSelection (R7.5c snapshot-rebuild selection wipe)", () =>
   });
 
   it("preserves a multi-node selection, not just a single id", () => {
-    const merged = withPreservedSelection(
+    const merged = withPreservedFlowState(
       [node("a"), node("b"), node("c")],
       [node("a", true), node("b"), node("c", true)],
     );
     expect(merged.filter((n) => n.selected).map((n) => n.id)).toEqual(["a", "c"]);
   });
 
-  it("returns the rebuilt array untouched when nothing was selected", () => {
+  it("returns the rebuilt array untouched when nothing needs carrying over", () => {
     const rebuilt = [node("a"), node("b")];
-    expect(withPreservedSelection(rebuilt, [node("a"), node("b")])).toBe(rebuilt);
+    expect(withPreservedFlowState(rebuilt, [node("a"), node("b")])).toBe(rebuilt);
   });
 
   it("cannot resurrect a node the backend deleted - it is simply absent from the rebuild", () => {
-    const merged = withPreservedSelection([node("a")], [node("a"), node("gone", true)]);
+    const merged = withPreservedFlowState([node("a")], [node("a"), node("gone", true)]);
     expect(merged.map((n) => n.id)).toEqual(["a"]);
     expect(merged.some((n) => n.selected)).toBe(false);
   });
@@ -2709,8 +2712,45 @@ describe("withPreservedSelection (R7.5c snapshot-rebuild selection wipe)", () =>
   it("does not mutate the node objects it was handed", () => {
     const current = [node("a", true)];
     const rebuilt = [node("a")];
-    withPreservedSelection(rebuilt, current);
+    withPreservedFlowState(rebuilt, current);
     expect(rebuilt[0].selected).toBeUndefined();
+  });
+
+  it("carries the measured size from the current node onto a rebuilt replacement", () => {
+    const measured = { width: 420, height: 180 };
+    const merged = withPreservedFlowState([node("a")], [node("a", false, measured)]);
+    expect(merged[0].measured).toEqual(measured);
+  });
+
+  it("carries selection and measured size together in one clone", () => {
+    const measured = { width: 300, height: 120 };
+    const merged = withPreservedFlowState([node("a")], [node("a", true, measured)]);
+    expect(merged[0].selected).toBe(true);
+    expect(merged[0].measured).toEqual(measured);
+  });
+
+  it("keeps a reference-identical node untouched instead of cloning it", () => {
+    // A toFlowNodes cache hit hands back the exact object React Flow already
+    // adopted - cloning it would defeat adoptUserNodes' reference-equality
+    // fast path, so it must pass through by reference even when it carries
+    // state worth preserving.
+    const same = node("a", true, { width: 100, height: 50 });
+    const merged = withPreservedFlowState([same], [same]);
+    expect(merged[0]).toBe(same);
+  });
+
+  it("does not invent a measured size the current node never had", () => {
+    const merged = withPreservedFlowState([node("a")], [node("a", true)]);
+    expect(merged[0].measured).toBeUndefined();
+  });
+
+  it("prefers the rebuilt node's own measured size when it already has one", () => {
+    const rebuiltMeasured = { width: 999, height: 999 };
+    const merged = withPreservedFlowState(
+      [node("a", false, rebuiltMeasured)],
+      [node("a", true, { width: 1, height: 1 })],
+    );
+    expect(merged[0].measured).toEqual(rebuiltMeasured);
   });
 });
 
