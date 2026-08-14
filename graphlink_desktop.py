@@ -207,6 +207,27 @@ def main() -> int:
         return 1
     logger.info("backend healthy at %s", base_url)
 
+    # Canvas drag-lag fix (dark-theme "connection detaches from the node"
+    # report): recent WebView2 builds hand independently-composited page
+    # layers to Windows' compositor to assemble on screen. A node card being
+    # dragged lives on its own such layer (Chromium promotes it once its
+    # position changes every frame), while the connection lines are redrawn
+    # into a different one - and Windows can apply the card's movement one
+    # display frame before the freshly drawn connection arrives, so the line
+    # visibly steps out of sync with the node it is attached to. Everything
+    # the renderer itself reports (layout geometry, its own frame captures)
+    # looks perfectly attached, because the divergence happens below the
+    # renderer, at window composition. Disabling delegated composition makes
+    # the renderer assemble the complete frame itself before handing one
+    # finished image to Windows. Appended in front of any flags the user
+    # already set in this variable; unknown feature names are ignored by
+    # WebView2, so this is inert on runtimes that predate the feature.
+    _composition_flags = "--disable-features=DelegatedCompositing"
+    _existing_args = os.environ.get("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "")
+    os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (
+        f"{_composition_flags} {_existing_args}".strip()
+    )
+
     import webview  # pywebview - the native (non-Qt, non-browser) window
 
     # The token reaches the SPA as a URL FRAGMENT, which the browser never
