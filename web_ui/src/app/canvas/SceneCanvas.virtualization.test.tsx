@@ -48,11 +48,23 @@ type CapturedProps = {
 };
 
 let capturedProps: CapturedProps[] = [];
+// Drag-sync rebuild: the drag-position corrections (drag factor, smart-guide
+// snap, group cascade) now run as a React Flow CHANGE MIDDLEWARE, inside the
+// library's own update, rather than downstream in onNodesChange - see
+// SceneCanvas.tsx's dragCorrectionMiddleware doc. The registration hook is
+// stubbed here to capture that function, so a test can drive production's
+// real sequence (middleware first, then onNodesChange with its output)
+// without a working xyflow measurement pipeline underneath, exactly as this
+// file already drives the captured props directly.
+let capturedMiddleware: ((changes: NodeChange[]) => NodeChange[]) | null = null;
 
 vi.mock("@xyflow/react", async (importOriginal) => {
   const original = await importOriginal<typeof import("@xyflow/react")>();
   return {
     ...original,
+    experimental_useOnNodesChangeMiddleware: (fn: (changes: NodeChange[]) => NodeChange[]) => {
+      capturedMiddleware = fn;
+    },
     // ADR-011 stages 11.2/11.3: a thin capture stub, not the real renderer -
     // see this file's own module doc for why. Every prop SceneCanvas passes
     // is recorded verbatim on each render so tests can invoke its handlers
@@ -255,8 +267,15 @@ describe("SceneCanvas <ReactFlow> wiring (ADR-011 stages 11.2/11.3)", () => {
       // own `nodes` dependency changes every setNodes call inside it), and
       // production React Flow always invokes whatever the LATEST prop
       // reference is, exactly like this.
+      // Production's real sequence: React Flow runs the registered middleware
+      // inside its own update first, then hands the CORRECTED changes to
+      // onNodesChange. Driving both in that order keeps this test pinned to
+      // the shipping path rather than to a handler in isolation.
       const drag = (change: Partial<NodeChange> & { id: string }) =>
-        act(() => lastProps().onNodesChange([{ type: "position", ...change } as NodeChange]));
+        act(() => {
+          const raw = [{ type: "position", ...change } as NodeChange];
+          lastProps().onNodesChange(capturedMiddleware ? capturedMiddleware(raw) : raw);
+        });
 
       // Frame 1 of a drag gesture on n0 - this is where the batch cache
       // read happens.
@@ -290,8 +309,15 @@ describe("SceneCanvas <ReactFlow> wiring (ADR-011 stages 11.2/11.3)", () => {
       publish(stateListeners, { nodes, edges: [], smartGuides: false });
 
       querySelectorSpy.mockClear();
+      // Production's real sequence: React Flow runs the registered middleware
+      // inside its own update first, then hands the CORRECTED changes to
+      // onNodesChange. Driving both in that order keeps this test pinned to
+      // the shipping path rather than to a handler in isolation.
       const drag = (change: Partial<NodeChange> & { id: string }) =>
-        act(() => lastProps().onNodesChange([{ type: "position", ...change } as NodeChange]));
+        act(() => {
+          const raw = [{ type: "position", ...change } as NodeChange];
+          lastProps().onNodesChange(capturedMiddleware ? capturedMiddleware(raw) : raw);
+        });
       drag({ id: "n0", dragging: true, position: { x: 10, y: 0 } });
       drag({ id: "n0", dragging: true, position: { x: 20, y: 0 } });
       drag({ id: "n0", dragging: false, position: { x: 20, y: 0 } });

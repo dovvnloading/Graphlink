@@ -6,6 +6,7 @@ import {
   Position,
   ReactFlow,
   ViewportPortal,
+  experimental_useOnNodesChangeMiddleware,
   useReactFlow,
   type Connection,
   type Edge,
@@ -2399,27 +2400,28 @@ function CanvasInner({
 
   useEffect(() => {
     if (draggingRef.current) return;
-    setNodes((current) =>
-      withPreservedFlowState(
-        toFlowNodes(
-          scene,
-          store,
-          onOpenDocumentView,
-          effectiveBranchFocusOriginId,
-          onToggleBranchFocus,
-          focusAcceptedPaths,
-          // Non-null: the guarded-null lazy-init above runs synchronously on
-          // every render before this effect can fire, so `.current` is
-          // always populated by the time this closure executes - TS just
-          // can't prove that across the mutable ref indirection.
-          toFlowNodesCacheRef.current!,
-          getComposerRoute,
-          filterKinds,
-          filterStatuses,
-        ),
-        current,
+    const next = withPreservedFlowState(
+      toFlowNodes(
+        scene,
+        store,
+        onOpenDocumentView,
+        effectiveBranchFocusOriginId,
+        onToggleBranchFocus,
+        focusAcceptedPaths,
+        // Non-null: the guarded-null lazy-init above runs synchronously on
+        // every render before this effect can fire, so `.current` is
+        // always populated by the time this closure executes - TS just
+        // can't prove that across the mutable ref indirection.
+        toFlowNodesCacheRef.current!,
+        getComposerRoute,
+        filterKinds,
+        filterStatuses,
       ),
+      nodesRef.current,
     );
+    // Mirror advances with the state it describes - see nodesRef's comment.
+    nodesRef.current = next;
+    setNodes(next);
   }, [
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
     getComposerRoute, filterKinds, filterStatuses,
@@ -2478,150 +2480,228 @@ function CanvasInner({
     [minimapNodeColor, minimapSelectedColor],
   );
 
+  // ADR-011 follow-up / drag-sync rebuild: the CURRENT local flow nodes,
+  // readable from the change middleware below without making it a
+  // dependency (a middleware that re-registers on every node change would
+  // thrash the store's middleware map every frame of a drag).
+  // Kept in step with `nodes` by the two places that ever produce a new
+  // array (the scene-sync effect and onNodesChange below), never by a
+  // write during render: a drag can deliver several frames before React
+  // commits, and each frame must build on the previous frame's result
+  // rather than on whatever the last commit happened to hold.
+  const nodesRef = useRef<SceneFlowNode[]>([]);
+  // Guides produced by the middleware's most recent drag frame, handed to
+  // onNodesChange below to publish as state. The middleware itself must
+  // stay side-effect-free with respect to React state: it executes INSIDE
+  // React Flow's own store update, where a setState call would be a
+  // render-phase update.
+  const pendingGuidesRef = useRef<GuideLine[]>([]);
+
+  /**
+   * DRAG-SYNC REBUILD: the drag-position corrections this canvas applies -
+   * the drag-speed factor (scaleDragPosition), smart-guide snapping, and
+   * the group-member cascade - now run as a React Flow CHANGE MIDDLEWARE
+   * (experimental_useOnNodesChangeMiddleware), i.e. INSIDE React Flow's own
+   * updateNodePositions, before it commits anything.
+   *
+   * Why this is an architecture change and not a tweak: these corrections
+   * used to run in onNodesChange, which is downstream of React Flow's own
+   * bookkeeping. The consequence was documented in this file's own drag-end
+   * comment - "the drag-factor/smart-guide corrections applied per frame
+   * never feed back into RF's drag state" - so on every frame of every
+   * drag, React Flow's internal position for a node and the position this
+   * app actually rendered it at were two different numbers. Node cards are
+   * positioned from the app's corrected value while EDGE geometry is
+   * computed by React Flow itself (getEdgePosition, off its own node
+   * records), so the two ends of that disagreement are exactly the node and
+   * the line attached to it. That is the connection-not-tracking-the-node
+   * artifact, and no amount of downstream re-render tuning can close it,
+   * because the two values are computed from different inputs.
+   *
+   * Running the corrections here makes the corrected position the ONLY
+   * position: React Flow's own change pipeline carries it, so the node
+   * transform and the edge endpoints are derived from one number in one
+   * commit. Group-member changes are appended to the same batch for the
+   * same reason they always were - a member must move in lockstep with its
+   * group, and now that lockstep is inside React Flow's update rather than
+   * bolted onto the side of it.
+   */
+  const dragCorrectionMiddleware = useCallback(
+    (changes: NodeChange<SceneFlowNode>[]): NodeChange<SceneFlowNode>[] => {
+      const currentNodes = nodesRef.current;
+      // Rebuild the smart-guide size cache exactly ONCE per gesture, on its
+      // first frame - draggingRef still holds the PREVIOUS call's value here
+      // (onNodesChange below is what advances it), so this is true only when
+      // nothing was already dragging coming into this batch. A multi-select
+      // drag's first frame reports several dragging changes in ONE batch and
+      // still rebuilds once, not once per change.
+      if (scene.smartGuides && !draggingRef.current && changes.some((c) => c.type === "position" && c.dragging)) {
+        dragSizeCacheRef.current = buildDragSizeCache(reactFlow, currentNodes);
+      }
+      const memberChanges: NodeChange<SceneFlowNode>[] = [];
+      // R7.5b-3: guides re-derive every drag frame. DELIBERATE deviation for
+      // multi-select drags (review-confirmed): legacy cleared guides
+      // per-item, so only the LAST-processed item's guides survived each
+      // frame - an artifact of Qt's per-item itemChange ordering, not a
+      // design choice. Accumulating every co-mover's guides shows all live
+      // alignments instead of an arbitrary one.
+      const frameGuides: GuideLine[] = [];
+      let sawGestureFrame = false;
+
+      const corrected = changes.map((change) => {
+        if (change.type !== "position" || !change.position) return change;
+        // A gesture frame is any position change that is either flagged
+        // dragging, or belongs to a node whose drag start this gesture has
+        // already recorded - the latter catches React Flow's own drag-STOP
+        // change, which must receive the identical correction so the value
+        // React Flow settles on is the value the user actually saw. Passing
+        // that one through raw is what used to make a released node jump off
+        // its corrected position and then reconcile after the backend echo.
+        if (!change.dragging && !dragStartRef.current.has(change.id)) return change;
+        sawGestureFrame = true;
+        let start = dragStartRef.current.get(change.id);
+        if (!start) {
+          const node = currentNodes.find((n) => n.id === change.id);
+          start = node ? { ...node.position } : { ...change.position };
+          dragStartRef.current.set(change.id, start);
+        }
+        let finalPosition = scaleDragPosition(start, change.position, scene.dragFactor);
+        // R7.5b-3: smart-guide snap, as a LAYERED PASS on top of React
+        // Flow's native grid-snap (which, when enabled, already ran inside
+        // RF before this change was emitted) - the recorded design
+        // decision, chosen over re-implementing grid-snap manually. Smart
+        // guides win per-axis when both would apply, reproducing legacy
+        // snap_position's own per-axis priority. Runs BEFORE
+        // applyGroupDragDelta below so carried group members ride the
+        // corrected delta. Legacy's !isSelected() candidate exclusion is
+        // translated as !n.selected (every co-mover in a multi-select drag
+        // reports its own dragging change with selected=true); a dragged
+        // group's own members are additionally excluded - they move in
+        // lockstep with the group, so "aligning" against them is always
+        // trivially true and would freeze the drag (a gap legacy never had
+        // to answer: this canvas carries members via synthetic deltas, not
+        // Qt child-item parenting - per the recorded design decision, only
+        // the group's own rect snaps and members ride the delta).
+        // ADR-011 stage 11.3: reads dragSizeCacheRef (populated ONCE at
+        // this gesture's own drag-start, above) instead of calling
+        // measuredNodeSize directly here - see computeSmartGuideFrame's
+        // own doc for why this is now a pure, cache-only lookup with zero
+        // DOM access per frame.
+        if (scene.smartGuides) {
+          const frame = computeSmartGuideFrame(currentNodes, change.id, finalPosition, dragSizeCacheRef.current);
+          finalPosition = frame.position;
+          frameGuides.push(...frame.guides);
+        }
+        memberChanges.push(...applyGroupDragDelta(currentNodes, change.id, finalPosition));
+        return { ...change, position: finalPosition };
+      });
+
+      if (!sawGestureFrame) return changes;
+      pendingGuidesRef.current = frameGuides;
+      // Group members ride in the SAME batch as the node that carries them,
+      // so React Flow commits the group and its members together.
+      return memberChanges.length > 0 ? [...corrected, ...memberChanges] : corrected;
+    },
+    [scene.dragFactor, scene.smartGuides, reactFlow],
+  );
+
+  // Registers the correction above inside React Flow's own change pipeline.
+  // The hook is experimental in @xyflow/react 12.11 - it is nonetheless the
+  // library's only sanctioned point for transforming changes BEFORE they are
+  // committed, which is precisely what this canvas needs (see the
+  // middleware's own doc comment). If a future version renames it, the
+  // fallback is to move the same function back into onNodesChange and
+  // accept the position divergence it exists to remove.
+  // react-hooks/refs cannot see through this hook: it only STORES the
+  // function (in React Flow's middleware map) and the stored function is
+  // invoked later from inside a pointer-driven store update, never during
+  // render - so the ref reads inside it are ordinary event-time reads, which
+  // is exactly what that rule exists to require.
+  // eslint-disable-next-line react-hooks/refs
+  experimental_useOnNodesChangeMiddleware<SceneFlowNode>(dragCorrectionMiddleware);
+
   const onNodesChange = useCallback(
     (changes: NodeChange<SceneFlowNode>[]) => {
-      // Synthetic member-position changes generated below (via
-      // applyGroupDragDelta), alongside the real changes React Flow
-      // reported - both go through the SAME applyNodeChanges call so a
-      // member's local position updates in lockstep with its group, every
-      // drag frame.
-      const memberChanges: NodeChange<SceneFlowNode>[] = [];
-      // Every drag-end position this change batch produces - the dragged
-      // node(s) own settled position AND every cascaded group member -
-      // collected here and committed as ONE atomic store.moveNodes call
-      // below, never as individual moveNode calls (see that call site's
-      // own comment for why).
+      // Every change reaching this point has already been corrected by the
+      // middleware above, so this handler no longer computes positions at
+      // all - it applies the batch to local state and runs the side effects
+      // a settled gesture owes the rest of the app.
+      const currentNodes = nodesRef.current;
       const settledMoveIntents: Array<{ id: string; x: number; y: number }> = [];
-      // R7.5b-3: guides produced by this frame's drag changes - applied via
-      // one setSmartGuideLines call after the map, cleared on drag end.
-      // DELIBERATE deviation for multi-select drags (review-confirmed):
-      // legacy cleared guides per-item, so only the LAST-processed item's
-      // guides survived each frame - an artifact of Qt's per-item itemChange
-      // ordering, not a design choice. Accumulating every co-mover's guides
-      // shows all live alignments instead of an arbitrary one.
-      const frameGuides: GuideLine[] = [];
       let sawDragging = false;
       let sawDragEnd = false;
 
-      // ADR-011 stage 11.3: rebuild the smart-guide size cache exactly ONCE,
-      // at the first frame of a NEW drag gesture - `draggingRef.current` here
-      // still holds whatever the PREVIOUS onNodesChange call left it as (the
-      // mutations below happen further down, inside this same call), so
-      // `!draggingRef.current` is true only when nothing was already
-      // dragging coming INTO this call. A multi-select drag's first frame
-      // reports several `dragging:true` changes in the SAME batch - this
-      // still only rebuilds once for the whole batch, not once per change.
-      // Guarded on scene.smartGuides so the feature being off costs nothing
-      // (matches the per-frame gate below, which already skipped all of
-      // this work in that case).
-      if (scene.smartGuides && !draggingRef.current && changes.some((c) => c.type === "position" && c.dragging)) {
-        dragSizeCacheRef.current = buildDragSizeCache(reactFlow, nodes);
-      }
-
-      const scaled = changes.map((change) => {
-        if (change.type !== "position" || !change.position) return change;
+      for (const change of changes) {
+        if (change.type !== "position") continue;
         if (change.dragging) {
           draggingRef.current = true;
           sawDragging = true;
-          let start = dragStartRef.current.get(change.id);
-          if (!start) {
-            const node = nodes.find((n) => n.id === change.id);
-            start = node ? { ...node.position } : { ...change.position };
-            dragStartRef.current.set(change.id, start);
-          }
-          let finalPosition = scaleDragPosition(start, change.position, scene.dragFactor);
-          // R7.5b-3: smart-guide snap, as a LAYERED PASS on top of React
-          // Flow's native grid-snap (which, when enabled, already ran inside
-          // RF before this change was emitted) - the recorded design
-          // decision, chosen over re-implementing grid-snap manually. Smart
-          // guides win per-axis when both would apply, reproducing legacy
-          // snap_position's own per-axis priority. Runs BEFORE
-          // applyGroupDragDelta below so carried group members ride the
-          // corrected delta. Legacy's !isSelected() candidate exclusion is
-          // translated as !n.selected (every co-mover in a multi-select drag
-          // reports its own dragging change with selected=true); a dragged
-          // group's own members are additionally excluded - they move in
-          // lockstep with the group, so "aligning" against them is always
-          // trivially true and would freeze the drag (a gap legacy never had
-          // to answer: this canvas carries members via synthetic deltas, not
-          // Qt child-item parenting - per the recorded design decision, only
-          // the group's own rect snaps and members ride the delta).
-          // ADR-011 stage 11.3: reads dragSizeCacheRef (populated ONCE at
-          // this gesture's own drag-start, above) instead of calling
-          // measuredNodeSize directly here - see computeSmartGuideFrame's
-          // own doc for why this is now a pure, cache-only lookup with zero
-          // DOM access per frame.
-          if (scene.smartGuides) {
-            const frame = computeSmartGuideFrame(nodes, change.id, finalPosition, dragSizeCacheRef.current);
-            finalPosition = frame.position;
-            frameGuides.push(...frame.guides);
-          }
-          memberChanges.push(...applyGroupDragDelta(nodes, change.id, finalPosition));
-          return {
-            ...change,
-            position: finalPosition,
-          };
+          continue;
         }
-        // Drag end: commit the node's final (already-scaled) position.
+        if (!dragStartRef.current.has(change.id)) continue;
+        // Drag end for a node this gesture actually carried.
         draggingRef.current = false;
         sawDragEnd = true;
-        const settled = nodes.find((n) => n.id === change.id);
         dragStartRef.current.delete(change.id);
-        if (settled) {
-          // R6.1 follow-up: collected, not committed here directly - see
-          // the single store.moveNodes call below for why a group drag's
-          // whole commit (the group's own node plus every cascaded member)
-          // must land as ONE atomic batch, not N individual moveNode
-          // calls.
-          settledMoveIntents.push({ id: change.id, x: settled.position.x, y: settled.position.y });
-          if (groupDragKindOf(settled)) {
-            for (const memberId of collectTransitiveMemberIds(nodes, settled)) {
-              const member = nodes.find((n) => n.id === memberId);
-              if (member) settledMoveIntents.push({ id: memberId, x: member.position.x, y: member.position.y });
-            }
+        const settled = currentNodes.find((n) => n.id === change.id);
+        if (!settled) continue;
+        // R6.1 follow-up: collected, not committed here directly - see the
+        // single store.moveNodes call below for why a group drag's whole
+        // commit (the group's own node plus every cascaded member) must land
+        // as ONE atomic batch, not N individual moveNode calls.
+        settledMoveIntents.push({ id: change.id, x: settled.position.x, y: settled.position.y });
+        if (groupDragKindOf(settled)) {
+          for (const memberId of collectTransitiveMemberIds(currentNodes, settled)) {
+            const member = currentNodes.find((n) => n.id === memberId);
+            if (member) settledMoveIntents.push({ id: memberId, x: member.position.x, y: member.position.y });
           }
-          // R7.5b-3 review fix: RF's drag-stop change carries its own
-          // internal RAW pointer-derived position - the drag-factor/smart-
-          // guide corrections applied per frame above never feed back into
-          // RF's drag state. Passing the raw change through here made the
-          // node visibly bounce off its corrected position on release, then
-          // reconcile after the backend echo. Return the settled (last
-          // corrected frame's) position instead, which is also exactly what
-          // the batch below commits - local state and the wire now agree at
-          // the instant of release.
-          return { ...change, position: { ...settled.position } };
         }
-        return change;
-      });
-      // R6.1 follow-up: ONE atomic batch for the WHOLE drag-end (the
-      // dragged node's own settled position plus every cascaded member),
-      // not the group's own moveNode call followed by N separate member
-      // moveNode calls. Each individual moveNode intent publishes its own
-      // scene snapshot the instant it lands - calling it once per node in
-      // a group drag meant the frontend rendered N genuinely inconsistent
+      }
+
+      // R6.1 follow-up: ONE atomic batch for the WHOLE drag-end (the dragged
+      // node's own settled position plus every cascaded member), not the
+      // group's own moveNode call followed by N separate member moveNode
+      // calls. Each individual moveNode intent publishes its own scene
+      // snapshot the instant it lands - calling it once per node in a group
+      // drag meant the frontend rendered N genuinely inconsistent
       // intermediate states (some members caught up, some not) in rapid
-      // succession right after release, and since a frame/container's
-      // bounds correctly grow to enclose whatever the CURRENT member bbox
-      // is, those intermediate states visibly stretched and resettled
-      // instead of just being briefly stale - a real glitch on every group
-      // drag, not a cosmetic footnote. moveNodes commits every position in
-      // one pass server-side and publishes exactly once.
+      // succession right after release, and since a frame/container's bounds
+      // correctly grow to enclose whatever the CURRENT member bbox is, those
+      // intermediate states visibly stretched and resettled instead of just
+      // being briefly stale - a real glitch on every group drag, not a
+      // cosmetic footnote. moveNodes commits every position in one pass
+      // server-side and publishes exactly once.
       if (settledMoveIntents.length > 0) store.moveNodes(settledMoveIntents);
       // Guides re-derive every drag frame (legacy cleared + re-added its
-      // QGraphicsLineItems per recompute); drag end always clears.
+      // QGraphicsLineItems per recompute); drag end always clears. The
+      // values come from the middleware's own most recent frame.
       if (sawDragging) {
+        const frameGuides = pendingGuidesRef.current;
         setSmartGuideLines((current) => (current.length === 0 && frameGuides.length === 0 ? current : frameGuides));
       } else if (sawDragEnd) {
+        pendingGuidesRef.current = [];
         setSmartGuideLines((current) => (current.length === 0 ? current : []));
       }
       // Suspend off-viewport culling while a drag is in flight - see
-      // dragActive's own doc comment above. Same-value setState calls
-      // (every frame after the first) bail out without a re-render.
+      // dragActive's own doc comment above. Same-value setState calls (every
+      // frame after the first) bail out without a re-render.
       if (sawDragging) setDragActive(true);
       else if (sawDragEnd) setDragActive(false);
-      setNodes((current) => applyNodeChanges([...scaled, ...memberChanges], current));
+      // Built off nodesRef (not the setNodes updater form) so the mirror
+      // advances in this same event: a drag can deliver several frames
+      // before React commits, and each must build on the previous frame's
+      // result - see nodesRef's own comment above.
+      const next = applyNodeChanges(changes, currentNodes);
+      // react-hooks/immutability flags this because the same mirror is also
+      // assigned in the scene-sync effect above. Both writers are correct and
+      // both are required: the effect publishes backend snapshots, this
+      // handler publishes drag frames, and a drag can deliver several frames
+      // between commits - which is the entire reason the mirror exists.
+      // eslint-disable-next-line react-hooks/immutability
+      nodesRef.current = next;
+      setNodes(next);
     },
-    [nodes, scene.dragFactor, scene.smartGuides, reactFlow, store],
+    [store],
   );
 
   const onConnect = useCallback(
