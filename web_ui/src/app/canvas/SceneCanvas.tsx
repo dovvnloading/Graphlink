@@ -47,6 +47,7 @@ import {
 import { handleKeyboardContextMenu } from "./keyboardContextMenu";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
 import { computeSmartGuideSnap, type GuideLine, type Rect } from "./smartGuides";
+import { buildEdgeSyncPlan, syncEdgePaths, type EdgeSyncEntry } from "./drag/edgeSync";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -2279,6 +2280,9 @@ function CanvasInner({
   // plain ref (not state) since a rebuild must never itself trigger a
   // re-render - it only matters to onNodesChange's own closure.
   const dragSizeCacheRef = useRef<Map<string, { width: number; height: number }>>(new Map());
+  // The connections this gesture must keep in step, resolved once when it
+  // starts - see drag/edgeSync.ts for why they are written synchronously.
+  const edgeSyncPlanRef = useRef<EdgeSyncEntry[]>([]);
   // ADR-011 stage 11.1: ONE ToFlowNodesCache for this canvas's whole
   // lifetime, threaded into every toFlowNodes call below - this is what
   // actually makes the per-node dispatcher/whole-flow-node memoization in
@@ -2466,6 +2470,13 @@ function CanvasInner({
   // off, hoveredEdgeId whenever it's on.
   const edgeHoverKey = scene.fadeConnectionsEnabled ? hoveredEdgeId : null;
   const edges = useMemo(() => toFlowEdges(scene, edgeHoverKey), [scene, edgeHoverKey]);
+  // Mirror of the rendered edges, read by the drag pipeline when it resolves
+  // which connections a gesture must keep in step. A ref rather than a
+  // dependency so the middleware is not re-registered whenever edges change.
+  const edgesRef = useRef(edges);
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
 
   // R8a: the minimap used to render every node as React Flow's own default
   // plain rectangle (no nodeColor/nodeStrokeColor was ever passed), which
@@ -2547,8 +2558,26 @@ function CanvasInner({
       // nothing was already dragging coming into this batch. A multi-select
       // drag's first frame reports several dragging changes in ONE batch and
       // still rebuilds once, not once per change.
-      if (scene.smartGuides && !draggingRef.current && changes.some((c) => c.type === "position" && c.dragging)) {
+      const startingGesture = !draggingRef.current && changes.some((c) => c.type === "position" && c.dragging);
+      if (startingGesture && scene.smartGuides) {
         dragSizeCacheRef.current = buildDragSizeCache(reactFlow, currentNodes);
+      }
+      if (startingGesture) {
+        // Every node this gesture will move: the dragged nodes plus, for a
+        // group, everything it carries - so an edge attached to a carried
+        // member is redrawn too, not just the ones touching the group node.
+        const movingIds = new Set<string>();
+        for (const c of changes) {
+          if (c.type !== "position" || !c.dragging) continue;
+          movingIds.add(c.id);
+          const node = currentNodes.find((n) => n.id === c.id);
+          if (node && groupDragKindOf(node)) {
+            for (const memberId of collectTransitiveMemberIds(currentNodes, node)) movingIds.add(memberId);
+          }
+        }
+        edgeSyncPlanRef.current = buildEdgeSyncPlan(edgesRef.current, movingIds, (id) =>
+          storeApi.getState().nodeLookup.get(id),
+        );
       }
       const memberChanges: NodeChange<SceneFlowNode>[] = [];
       // R7.5b-3: guides re-derive every drag frame. DELIBERATE deviation for
@@ -2610,6 +2639,21 @@ function CanvasInner({
 
       if (!sawGestureFrame) return changes;
       pendingGuidesRef.current = frameGuides;
+
+      // Write the affected connection paths NOW, inside the pointer event
+      // that produced these positions, so the line and the card it is
+      // attached to reach the screen in the same frame. React Flow renders
+      // the same edges from its own state immediately afterwards and
+      // computes the identical shape; this write only ensures the correct
+      // shape is already in the DOM for the frame being painted. See
+      // drag/edgeSync.ts for the full reasoning.
+      if (edgeSyncPlanRef.current.length > 0) {
+        const movedPositions = new Map<string, { x: number; y: number }>();
+        for (const c of [...corrected, ...memberChanges]) {
+          if (c.type === "position" && c.position) movedPositions.set(c.id, c.position);
+        }
+        syncEdgePaths(edgeSyncPlanRef.current, movedPositions, (id) => storeApi.getState().nodeLookup.get(id));
+      }
       // Group members ride in the SAME batch as the node that carries them,
       // so React Flow commits the group and its members together.
       return memberChanges.length > 0 ? [...corrected, ...memberChanges] : corrected;
@@ -2692,6 +2736,8 @@ function CanvasInner({
         setSmartGuideLines((current) => (current.length === 0 && frameGuides.length === 0 ? current : frameGuides));
       } else if (sawDragEnd) {
         pendingGuidesRef.current = [];
+        // Gesture over: React Flow owns the edges again until the next one.
+        edgeSyncPlanRef.current = [];
         setSmartGuideLines((current) => (current.length === 0 ? current : []));
       }
       // Suspend off-viewport culling while a drag is in flight - see
