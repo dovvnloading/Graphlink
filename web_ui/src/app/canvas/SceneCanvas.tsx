@@ -2283,6 +2283,20 @@ function CanvasInner({
   // The connections this gesture must keep in step, resolved once when it
   // starts - see drag/edgeSync.ts for why they are written synchronously.
   const edgeSyncPlanRef = useRef<EdgeSyncEntry[]>([]);
+  // The latest corrected position of every node this gesture is moving, and
+  // the animation-frame loop that keeps their connections drawn from it.
+  //
+  // Writing the paths once per pointer event is not sufficient on its own:
+  // React Flow re-renders the same edges from its own node records a moment
+  // later, and if those records are even one frame behind the gesture, that
+  // render overwrites the correct path with a stale one - which is exactly
+  // the reported symptom, a line drawn where the node used to be, with the
+  // gap growing the faster the node moves and closing when it stops. A
+  // frame loop makes the correct geometry the LAST write before every
+  // paint, so whatever React renders in between cannot be what the user
+  // ends up seeing. The loop exists only for the duration of a gesture.
+  const dragPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const edgeSyncFrameRef = useRef<number | null>(null);
   // ADR-011 stage 11.1: ONE ToFlowNodesCache for this canvas's whole
   // lifetime, threaded into every toFlowNodes call below - this is what
   // actually makes the per-node dispatcher/whole-flow-node memoization in
@@ -2451,6 +2465,14 @@ function CanvasInner({
     document.addEventListener("keydown", handleKeyboardContextMenu);
     return () => document.removeEventListener("keydown", handleKeyboardContextMenu);
   }, []);
+
+  // A canvas unmounted mid-gesture must not leave its frame loop running.
+  useEffect(
+    () => () => {
+      if (edgeSyncFrameRef.current !== null) cancelAnimationFrame(edgeSyncFrameRef.current);
+    },
+    [],
+  );
 
   // ADR-011 stage 11.3 (P4): toFlowEdges rebuilds the WHOLE edges array (an
   // O(E) map over every edge) - hoveredEdgeId is only EVER read inside that
@@ -2648,11 +2670,27 @@ function CanvasInner({
       // shape is already in the DOM for the frame being painted. See
       // drag/edgeSync.ts for the full reasoning.
       if (edgeSyncPlanRef.current.length > 0) {
-        const movedPositions = new Map<string, { x: number; y: number }>();
+        const movedPositions = dragPositionsRef.current;
         for (const c of [...corrected, ...memberChanges]) {
           if (c.type === "position" && c.position) movedPositions.set(c.id, c.position);
         }
-        syncEdgePaths(edgeSyncPlanRef.current, movedPositions, (id) => storeApi.getState().nodeLookup.get(id));
+        const getInternal = (id: string) => storeApi.getState().nodeLookup.get(id);
+        // Immediately, for this event's own frame...
+        syncEdgePaths(edgeSyncPlanRef.current, movedPositions, getInternal);
+        // ...and again before every subsequent paint until the gesture ends,
+        // so a later render from stale records cannot leave a stale path on
+        // screen. See dragPositionsRef's comment above.
+        if (edgeSyncFrameRef.current === null) {
+          const tick = () => {
+            if (edgeSyncPlanRef.current.length === 0) {
+              edgeSyncFrameRef.current = null;
+              return;
+            }
+            syncEdgePaths(edgeSyncPlanRef.current, dragPositionsRef.current, getInternal);
+            edgeSyncFrameRef.current = requestAnimationFrame(tick);
+          };
+          edgeSyncFrameRef.current = requestAnimationFrame(tick);
+        }
       }
       // Group members ride in the SAME batch as the node that carries them,
       // so React Flow commits the group and its members together.
@@ -2738,6 +2776,11 @@ function CanvasInner({
         pendingGuidesRef.current = [];
         // Gesture over: React Flow owns the edges again until the next one.
         edgeSyncPlanRef.current = [];
+        dragPositionsRef.current = new Map();
+        if (edgeSyncFrameRef.current !== null) {
+          cancelAnimationFrame(edgeSyncFrameRef.current);
+          edgeSyncFrameRef.current = null;
+        }
         setSmartGuideLines((current) => (current.length === 0 ? current : []));
       }
       // Suspend off-viewport culling while a drag is in flight - see
