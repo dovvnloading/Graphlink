@@ -47,7 +47,9 @@ import {
 import { handleKeyboardContextMenu } from "./keyboardContextMenu";
 import { SceneStore, scaleDragPosition } from "./sceneStore";
 import { computeSmartGuideSnap, type GuideLine, type Rect } from "./smartGuides";
-import { buildEdgeSyncPlan, syncEdgePaths, type EdgeSyncEntry } from "./drag/edgeSync";
+import { ConnectionCanvas, type ConnectionSpec } from "./connections/ConnectionCanvas";
+import type { ConnectionPath } from "./connections/connectionGeometry";
+import { isPointOnConnection } from "./connections/connectionGeometry";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -148,6 +150,10 @@ const EDGE_TYPES = {
 // defaultNodes is read once when React Flow initialises its store; a stable
 // module constant keeps that unambiguous and allocation-free.
 const EMPTY_NODES: SceneFlowNode[] = [];
+// React Flow renders no connections at all now - ConnectionCanvas draws
+// every one of them. Handing it a stable empty array keeps its own edge
+// machinery inert rather than merely invisible.
+const EMPTY_EDGES: Edge[] = [];
 const DELETE_KEY_CODES = ["Delete", "Backspace"];
 const PRO_OPTIONS = { hideAttribution: true };
 const DEFAULT_EDGE_OPTIONS = { type: "default" as const };
@@ -2280,23 +2286,7 @@ function CanvasInner({
   // plain ref (not state) since a rebuild must never itself trigger a
   // re-render - it only matters to onNodesChange's own closure.
   const dragSizeCacheRef = useRef<Map<string, { width: number; height: number }>>(new Map());
-  // The connections this gesture must keep in step, resolved once when it
-  // starts - see drag/edgeSync.ts for why they are written synchronously.
-  const edgeSyncPlanRef = useRef<EdgeSyncEntry[]>([]);
-  // The latest corrected position of every node this gesture is moving, and
-  // the animation-frame loop that keeps their connections drawn from it.
-  //
-  // Writing the paths once per pointer event is not sufficient on its own:
-  // React Flow re-renders the same edges from its own node records a moment
-  // later, and if those records are even one frame behind the gesture, that
-  // render overwrites the correct path with a stale one - which is exactly
-  // the reported symptom, a line drawn where the node used to be, with the
-  // gap growing the faster the node moves and closing when it stops. A
-  // frame loop makes the correct geometry the LAST write before every
-  // paint, so whatever React renders in between cannot be what the user
-  // ends up seeing. The loop exists only for the duration of a gesture.
-  const dragPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
-  const edgeSyncFrameRef = useRef<number | null>(null);
+
   // ADR-011 stage 11.1: ONE ToFlowNodesCache for this canvas's whole
   // lifetime, threaded into every toFlowNodes call below - this is what
   // actually makes the per-node dispatcher/whole-flow-node memoization in
@@ -2466,39 +2456,49 @@ function CanvasInner({
     return () => document.removeEventListener("keydown", handleKeyboardContextMenu);
   }, []);
 
-  // A canvas unmounted mid-gesture must not leave its frame loop running.
-  useEffect(
-    () => () => {
-      if (edgeSyncFrameRef.current !== null) cancelAnimationFrame(edgeSyncFrameRef.current);
-    },
-    [],
-  );
-
-  // ADR-011 stage 11.3 (P4): toFlowEdges rebuilds the WHOLE edges array (an
-  // O(E) map over every edge) - hoveredEdgeId is only EVER read inside that
-  // rebuild when scene.fadeConnectionsEnabled is on (see toFlowEdges' own
-  // body), so unconditionally listing it as a dependency meant hovering an
-  // edge rebuilt this array on every enter/leave EVEN WHEN the fade feature
-  // is off and nothing in the output could possibly change. Passing `null`
-  // in place of hoveredEdgeId whenever fade is off collapses the dependency
-  // to a constant for that case - a hover-only state change no longer
-  // differs from the previous render's dependency, so useMemo correctly
-  // skips the recompute (and keeps returning the SAME array reference)
-  // instead of only skipping the WORK toFlowEdges would have done with it.
-  // Hoisted into its own variable (not an inline ternary in the deps array
-  // below) so the memo's dependency is a single, staticly-checkable
-  // reference - satisfies react-hooks/exhaustive-deps outright rather than
-  // suppressing it, and reads the same either way: null whenever fade is
-  // off, hoveredEdgeId whenever it's on.
-  const edgeHoverKey = scene.fadeConnectionsEnabled ? hoveredEdgeId : null;
-  const edges = useMemo(() => toFlowEdges(scene, edgeHoverKey), [scene, edgeHoverKey]);
+  // Hover no longer feeds the edge model at all: ConnectionCanvas applies
+  // the faded-connections lens while drawing, from its own hoveredId prop.
+  // That leaves this derivation dependent only on the scene, so hovering a
+  // connection cannot rebuild it.
+  const edges = useMemo(() => toFlowEdges(scene, null), [scene]);
   // Mirror of the rendered edges, read by the drag pipeline when it resolves
   // which connections a gesture must keep in step. A ref rather than a
   // dependency so the middleware is not re-registered whenever edges change.
-  const edgesRef = useRef(edges);
-  useEffect(() => {
-    edgesRef.current = edges;
-  }, [edges]);
+  // What ConnectionCanvas draws. Derived from the same edge model as before,
+  // reduced to what drawing needs; positions are read live from the flow
+  // store each frame rather than carried on these objects, which is the
+  // whole point of the canvas approach.
+  const connections = useMemo<ConnectionSpec[]>(
+    () => edges.map((e) => ({ id: e.id, source: e.source, target: e.target, orthogonal: e.type === "orthogonal" })),
+    [edges],
+  );
+  // The geometry the canvas last drew, reported back so hit-testing runs
+  // against exactly what is on screen instead of a second computation that
+  // could disagree with it.
+  const connectionGeometryRef = useRef<Map<string, ConnectionPath>>(new Map());
+  const onConnectionGeometry = useCallback((paths: Map<string, ConnectionPath>) => {
+    connectionGeometryRef.current = paths;
+  }, []);
+  const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
+  const connectionStroke = useCssVar("--gl-surface-border-strong", "#505050");
+  const connectionSelectedStroke = useCssVar("--gl-surface-text-primary", "#E0E0E0");
+
+  // Pointer interaction for connections. The canvas is presentational and
+  // never receives events itself, so hover and selection are resolved here
+  // by testing the pointer against the geometry the canvas reported.
+  const connectionAt = useCallback(
+    (clientX: number, clientY: number): string | null => {
+      const point = reactFlow.screenToFlowPosition({ x: clientX, y: clientY });
+      const zoom = storeApi.getState().transform[2] || 1;
+      // A constant on-screen grab distance, expressed in flow units.
+      const tolerance = 8 / zoom;
+      for (const [id, path] of connectionGeometryRef.current) {
+        if (isPointOnConnection(path, point, tolerance)) return id;
+      }
+      return null;
+    },
+    [reactFlow, storeApi],
+  );
 
   // R8a: the minimap used to render every node as React Flow's own default
   // plain rectangle (no nodeColor/nodeStrokeColor was ever passed), which
@@ -2584,23 +2584,6 @@ function CanvasInner({
       if (startingGesture && scene.smartGuides) {
         dragSizeCacheRef.current = buildDragSizeCache(reactFlow, currentNodes);
       }
-      if (startingGesture) {
-        // Every node this gesture will move: the dragged nodes plus, for a
-        // group, everything it carries - so an edge attached to a carried
-        // member is redrawn too, not just the ones touching the group node.
-        const movingIds = new Set<string>();
-        for (const c of changes) {
-          if (c.type !== "position" || !c.dragging) continue;
-          movingIds.add(c.id);
-          const node = currentNodes.find((n) => n.id === c.id);
-          if (node && groupDragKindOf(node)) {
-            for (const memberId of collectTransitiveMemberIds(currentNodes, node)) movingIds.add(memberId);
-          }
-        }
-        edgeSyncPlanRef.current = buildEdgeSyncPlan(edgesRef.current, movingIds, (id) =>
-          storeApi.getState().nodeLookup.get(id),
-        );
-      }
       const memberChanges: NodeChange<SceneFlowNode>[] = [];
       // R7.5b-3: guides re-derive every drag frame. DELIBERATE deviation for
       // multi-select drags (review-confirmed): legacy cleared guides
@@ -2662,36 +2645,6 @@ function CanvasInner({
       if (!sawGestureFrame) return changes;
       pendingGuidesRef.current = frameGuides;
 
-      // Write the affected connection paths NOW, inside the pointer event
-      // that produced these positions, so the line and the card it is
-      // attached to reach the screen in the same frame. React Flow renders
-      // the same edges from its own state immediately afterwards and
-      // computes the identical shape; this write only ensures the correct
-      // shape is already in the DOM for the frame being painted. See
-      // drag/edgeSync.ts for the full reasoning.
-      if (edgeSyncPlanRef.current.length > 0) {
-        const movedPositions = dragPositionsRef.current;
-        for (const c of [...corrected, ...memberChanges]) {
-          if (c.type === "position" && c.position) movedPositions.set(c.id, c.position);
-        }
-        const getInternal = (id: string) => storeApi.getState().nodeLookup.get(id);
-        // Immediately, for this event's own frame...
-        syncEdgePaths(edgeSyncPlanRef.current, movedPositions, getInternal);
-        // ...and again before every subsequent paint until the gesture ends,
-        // so a later render from stale records cannot leave a stale path on
-        // screen. See dragPositionsRef's comment above.
-        if (edgeSyncFrameRef.current === null) {
-          const tick = () => {
-            if (edgeSyncPlanRef.current.length === 0) {
-              edgeSyncFrameRef.current = null;
-              return;
-            }
-            syncEdgePaths(edgeSyncPlanRef.current, dragPositionsRef.current, getInternal);
-            edgeSyncFrameRef.current = requestAnimationFrame(tick);
-          };
-          edgeSyncFrameRef.current = requestAnimationFrame(tick);
-        }
-      }
       // Group members ride in the SAME batch as the node that carries them,
       // so React Flow commits the group and its members together.
       return memberChanges.length > 0 ? [...corrected, ...memberChanges] : corrected;
@@ -2774,13 +2727,6 @@ function CanvasInner({
         setSmartGuideLines((current) => (current.length === 0 && frameGuides.length === 0 ? current : frameGuides));
       } else if (sawDragEnd) {
         pendingGuidesRef.current = [];
-        // Gesture over: React Flow owns the edges again until the next one.
-        edgeSyncPlanRef.current = [];
-        dragPositionsRef.current = new Map();
-        if (edgeSyncFrameRef.current !== null) {
-          cancelAnimationFrame(edgeSyncFrameRef.current);
-          edgeSyncFrameRef.current = null;
-        }
         setSmartGuideLines((current) => (current.length === 0 ? current : []));
       }
       // Suspend off-viewport culling while a drag is in flight - see
@@ -2842,11 +2788,66 @@ function CanvasInner({
     ({ nodes: sel }: { nodes: { id: string }[] }) => handleSelectionChange(store, sel),
     [store],
   );
-  const onEdgeMouseEnter = useCallback((_event: React.MouseEvent, edge: Edge) => setHoveredEdgeId(edge.id), []);
-  const onEdgeMouseLeave = useCallback(() => setHoveredEdgeId(null), []);
   const snapGrid = useMemo<[number, number]>(() => [grid.gridSize, grid.gridSize], [grid.gridSize]);
 
   const { screenToFlowPosition } = reactFlow;
+  // Hover is only meaningful while the fade-connections lens is on; testing
+  // otherwise would cost a pointer-move hit test for no visible effect.
+  const onCanvasMouseMove = useCallback(
+    (event: MouseEvent) => {
+      if (!scene.fadeConnectionsEnabled) return;
+      if (draggingRef.current) return;
+      const id = connectionAt(event.clientX, event.clientY);
+      setHoveredEdgeId((current) => (current === id ? current : id));
+    },
+    [connectionAt, scene.fadeConnectionsEnabled],
+  );
+
+  // Selecting a connection: only when the press did not land on a node card,
+  // so this can never steal a drag from a node.
+  const onCanvasMouseDown = useCallback(
+    (event: MouseEvent) => {
+      if ((event.target as HTMLElement).closest(".react-flow__node")) return;
+      const id = connectionAt(event.clientX, event.clientY);
+      setSelectedConnectionId(id);
+    },
+    [connectionAt],
+  );
+
+  // Delete removes the selected connection. React Flow used to report edge
+  // deletions through onDelete; it no longer renders connections, so this
+  // owns that gesture now.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      if (selectedConnectionId === null) return;
+      const target = event.target as HTMLElement | null;
+      // Never while typing.
+      if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
+      store.removeEdges([selectedConnectionId]);
+      setSelectedConnectionId(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [selectedConnectionId, store]);
+
+  // Attached to the wrapper element directly rather than through JSX props:
+  // these are pointer affordances on a drawing surface, not interactions on
+  // a semantic control, and binding them here keeps the element free of
+  // handler props that would misrepresent it to assistive technology.
+  useEffect(() => {
+    const el = canvasWrapperRef.current;
+    if (!el) return;
+    const move = (event: MouseEvent) => onCanvasMouseMove(event);
+    const down = (event: MouseEvent) => onCanvasMouseDown(event);
+    el.addEventListener("mousemove", move);
+    el.addEventListener("mousedown", down);
+    return () => {
+      el.removeEventListener("mousemove", move);
+      el.removeEventListener("mousedown", down);
+    };
+  }, [onCanvasMouseMove, onCanvasMouseDown]);
+
   const onDoubleClick = useCallback(
     (event: React.MouseEvent) => {
       // Double-click on empty canvas creates a node there - the R1 stand-in
@@ -2886,7 +2887,7 @@ function CanvasInner({
            store write. Scene snapshots from the backend are pushed in
            explicitly via the store (see the scene-sync effect above). */
         defaultNodes={EMPTY_NODES}
-        edges={edges}
+        edges={EMPTY_EDGES}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
         onNodesChange={onNodesChange}
@@ -2897,8 +2898,6 @@ function CanvasInner({
         // PluginPicker can attach "which node was selected" to executePlugin
         // without either component reaching into the other's internals.
         onSelectionChange={onSelectionChange}
-        onEdgeMouseEnter={onEdgeMouseEnter}
-        onEdgeMouseLeave={onEdgeMouseLeave}
         snapToGrid={scene.snapToGrid}
         snapGrid={snapGrid}
         // Double-click is the R1 create-node gesture (wrapper onDoubleClick);
@@ -2950,6 +2949,18 @@ function CanvasInner({
          */
         onlyRenderVisibleElements={!exportInProgress && !dragActive}
       >
+        {/* Every connection on the scene is drawn here, redrawn each frame
+            from live node positions - see ConnectionCanvas's module doc. */}
+        <ConnectionCanvas
+          connections={connections}
+          hoveredId={hoveredEdgeId}
+          selectedId={selectedConnectionId}
+          fadeEnabled={scene.fadeConnectionsEnabled}
+          stroke={connectionStroke}
+          selectedStroke={connectionSelectedStroke}
+          fadedOpacity={FADED_CONNECTION_OPACITY}
+          onGeometry={onConnectionGeometry}
+        />
         <Background
           variant={GRID_VARIANTS[grid.gridStyle] ?? BackgroundVariant.Dots}
           gap={grid.gridSize}

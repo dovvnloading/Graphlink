@@ -213,39 +213,32 @@ describe("SceneCanvas <ReactFlow> wiring (ADR-011 stages 11.2/11.3)", () => {
   });
 
   describe("edge-hover memo gate (stage 11.3, P4)", () => {
-    it("hovering an edge does NOT change the edges array reference when fadeConnectionsEnabled is false", () => {
+    it("hands React Flow no edges at all - connections are drawn by ConnectionCanvas", () => {
+      // The canvas owns connection rendering now (see ConnectionCanvas's own
+      // module doc). React Flow's edge machinery is left inert rather than
+      // merely invisible, which is what removes it from the drag path.
       const { stateListeners } = mount();
       publish(stateListeners, {
         nodes: [chatRow("a", 0), chatRow("b", 200)],
         edges: [{ id: "e1", source: "a", target: "b" }],
-        fadeConnectionsEnabled: false,
       });
-      const before = lastProps().edges;
-
-      act(() => lastProps().onEdgeMouseEnter(undefined, { id: "e1" } as Edge));
-      expect(lastProps().edges).toBe(before);
-
-      act(() => lastProps().onEdgeMouseLeave());
-      expect(lastProps().edges).toBe(before);
+      expect(lastProps().edges).toEqual([]);
     });
 
-    it("hovering an edge DOES rebuild the edges array (and applies fade styling) when fadeConnectionsEnabled is true", () => {
+    it("keeps the edge model stable across a hover, since fading is applied while drawing", () => {
+      // Hover used to rebuild the whole edge array to restyle one edge. The
+      // canvas applies the faded-connections lens itself, so the model is a
+      // function of the scene alone and a hover cannot churn it.
       const { stateListeners } = mount();
-      publish(stateListeners, {
-        nodes: [chatRow("a", 0), chatRow("b", 200), chatRow("c", 400)],
-        edges: [
-          { id: "e1", source: "a", target: "b" },
-          { id: "e2", source: "a", target: "c" },
-        ],
+      const scene = {
+        nodes: [chatRow("a", 0), chatRow("b", 200)],
+        edges: [{ id: "e1", source: "a", target: "b" }],
         fadeConnectionsEnabled: true,
-      });
+      };
+      publish(stateListeners, scene);
       const before = lastProps().edges;
-
-      act(() => lastProps().onEdgeMouseEnter(undefined, { id: "e1" } as Edge));
-      const hovered = lastProps().edges;
-      expect(hovered).not.toBe(before);
-      expect(hovered.find((e) => e.id === "e1")?.style).toBeUndefined();
-      expect(hovered.find((e) => e.id === "e2")?.style).toEqual({ opacity: 0.08 });
+      publish(stateListeners, scene);
+      expect(lastProps().edges).toBe(before);
     });
   });
 
