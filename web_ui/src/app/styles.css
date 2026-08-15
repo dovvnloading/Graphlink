@@ -274,6 +274,10 @@ body,
    otherwise apply. */
 .scene-canvas .react-flow__pane {
   cursor: grab;
+  /* The wrapper owns the pan gesture (React Flow's own pan is disabled so
+     the speed factor can apply), so the browser must not claim touch
+     drags for scrolling before the handler sees them. */
+  touch-action: none;
 }
 
 .scene-canvas.panning .react-flow__pane {
@@ -1906,8 +1910,14 @@ body,
   flex-wrap: wrap;
 }
 
-/* Filter chips: pill-shaped so multi-select membership reads differently
-   from the segmented single-choice controls above. */
+/* Toggle chips: pill-shaped, for selections drawn from an open-ended,
+   data-driven set - the node-kind/status filters here, and the Chat
+   Library's workspace tabs and tag filters. Distinct from .view-segment
+   above, which is for a short fixed set of mutually exclusive choices
+   (grid style, preset values) and is drawn as one connected control.
+   Chips carry no single/multi-select meaning of their own: the filters
+   are multi-select, the workspace tabs single-select, and both read
+   correctly because an active chip simply means "this one is on". */
 .view-chip {
   font-size: 10px;
   font-weight: 600;

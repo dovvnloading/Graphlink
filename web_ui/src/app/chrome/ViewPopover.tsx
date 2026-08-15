@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { FILTERABLE_NODE_KINDS } from "../canvas/SceneCanvas";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover } from "../overlays/overlays";
@@ -65,6 +65,51 @@ const DEFAULTS = {
 // server-side.
 const GRID_SIZE_MIN = 4;
 const GRID_SIZE_MAX = 120;
+
+/**
+ * Keeps a continuous control responsive while sending far fewer intents.
+ *
+ * A range input or a native colour picker fires change events for every
+ * pixel of pointer movement, and each intent here triggers a full state
+ * republish - so dragging one slider used to put ~100 round trips on the
+ * wire. This shows the in-flight value immediately and commits the last
+ * one after a short pause, the same debounce posture the canvas already
+ * uses for viewport reporting.
+ *
+ * Pending state clears whenever a fresh value arrives with nothing in
+ * flight, so a server-side clamp (grid spacing, drag factor and font size
+ * are all clamped) is always what ends up displayed - never a local value
+ * the backend rejected.
+ */
+function useDebouncedSetting<T>(remote: T, commit: (value: T) => void, delayMs = 120) {
+  const [pending, setPending] = useState<T | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const commitRef = useRef(commit);
+  useEffect(() => {
+    commitRef.current = commit;
+  }, [commit]);
+  useEffect(() => {
+    if (timerRef.current === null) setPending(null);
+  }, [remote]);
+  useEffect(
+    () => () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    },
+    [],
+  );
+  const set = useCallback(
+    (value: T) => {
+      setPending(value);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        commitRef.current(value);
+      }, delayMs);
+    },
+    [delayMs],
+  );
+  return [pending === null ? remote : pending, set] as const;
+}
 
 /** A slider header: what the value is, and what it currently reads. */
 function FieldRow({ label, value }: { label: string; value: string }) {
@@ -183,7 +228,23 @@ export function ViewPopover({ store }: { store: SceneStore }) {
   const filterKinds = useSyncExternalStore(store.subscribe, store.getFilterKinds);
   const filterStatuses = useSyncExternalStore(store.subscribe, store.getFilterStatuses);
 
-  const dragPercent = Math.round(scene.dragFactor * 100);
+  // Continuous controls commit through the debounce above; discrete ones
+  // (presets, style, toggles) stay immediate - one event, one intent.
+  const commitDragPercent = useCallback((percent: number) => store.setDragFactor(percent / 100), [store]);
+  const [dragPercent, setDragPercent] = useDebouncedSetting(
+    Math.round(scene.dragFactor * 100),
+    commitDragPercent,
+  );
+  const commitGridSize = useCallback((size: number) => store.setGridSize(size), [store]);
+  const [gridSize, setGridSize] = useDebouncedSetting(grid.gridSize, commitGridSize);
+  const commitGridOpacity = useCallback((percent: number) => store.setGridOpacityPercent(percent), [store]);
+  const [gridOpacity, setGridOpacity] = useDebouncedSetting(grid.gridOpacityPercent, commitGridOpacity);
+  const commitGridColor = useCallback((color: string) => store.setGridColor(color), [store]);
+  const [gridColor, setGridColor] = useDebouncedSetting(grid.gridColor, commitGridColor);
+  const commitFontSize = useCallback((size: number) => store.setFontSize(size), [store]);
+  const [fontSizePt, setFontSizePt] = useDebouncedSetting(scene.fontSizePt, commitFontSize);
+  const commitFontColor = useCallback((color: string) => store.setFontColor(color), [store]);
+  const [fontColor, setFontColor] = useDebouncedSetting(scene.fontColor, commitFontColor);
   const filterCount = filterKinds.size + filterStatuses.size;
 
   const resetAll = () => {
@@ -215,7 +276,7 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           max={dragConfig.percentMax}
           value={dragPercent}
           aria-label="Canvas pan speed"
-          onChange={(e) => store.setDragFactor(Number(e.target.value) / 100)}
+          onChange={(e) => setDragPercent(Number(e.target.value))}
         />
         <div className="view-segment" role="group" aria-label="Drag speed presets">
           {dragConfig.percentPresets.map((percent) => (
@@ -234,38 +295,38 @@ export function ViewPopover({ store }: { store: SceneStore }) {
 
       <section className="view-section" aria-label="Grid">
         <p className="view-section-title">Grid</p>
-        <FieldRow label="Spacing" value={`${grid.gridSize}px`} />
+        <FieldRow label="Spacing" value={`${gridSize}px`} />
         <input
           type="range"
           className="view-slider"
           min={GRID_SIZE_MIN}
           max={GRID_SIZE_MAX}
-          value={grid.gridSize}
+          value={gridSize}
           aria-label="Grid spacing"
-          onChange={(e) => store.setGridSize(Number(e.target.value))}
+          onChange={(e) => setGridSize(Number(e.target.value))}
         />
         <div className="view-segment" role="group" aria-label="Grid spacing presets">
           {grid.sizePresets.map((size) => (
             <button
               key={size}
               type="button"
-              className={"view-segment-btn" + (size === grid.gridSize ? " active" : "")}
-              aria-pressed={size === grid.gridSize}
+              className={"view-segment-btn" + (size === gridSize ? " active" : "")}
+              aria-pressed={size === gridSize}
               onClick={() => store.setGridSize(size)}
             >
               {size}px
             </button>
           ))}
         </div>
-        <FieldRow label="Opacity" value={`${grid.gridOpacityPercent}%`} />
+        <FieldRow label="Opacity" value={`${gridOpacity}%`} />
         <input
           type="range"
           className="view-slider"
           min={0}
           max={100}
-          value={grid.gridOpacityPercent}
+          value={gridOpacity}
           aria-label="Grid opacity"
-          onChange={(e) => store.setGridOpacityPercent(Number(e.target.value))}
+          onChange={(e) => setGridOpacity(Number(e.target.value))}
         />
         <FieldRow label="Style" value={grid.gridStyle} />
         <div className="view-segment" role="group" aria-label="Grid style">
@@ -281,12 +342,12 @@ export function ViewPopover({ store }: { store: SceneStore }) {
             </button>
           ))}
         </div>
-        <FieldRow label="Color" value={grid.gridColor.toUpperCase()} />
+        <FieldRow label="Color" value={gridColor.toUpperCase()} />
         <SwatchRow
           presets={grid.colorPresets}
-          current={grid.gridColor}
+          current={gridColor}
           ariaPrefix="Grid color"
-          onPick={(color) => store.setGridColor(color)}
+          onPick={setGridColor}
         />
         <ToggleRow
           label="Snap to Grid"
@@ -329,22 +390,22 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           onChange={(family) => store.setFontFamily(family)}
           ariaLabel="Font family"
         />
-        <FieldRow label="Size" value={`${scene.fontSizePt}pt`} />
+        <FieldRow label="Size" value={`${fontSizePt}pt`} />
         <input
           type="range"
           className="view-slider"
           min={fontConfig.sizeMin}
           max={fontConfig.sizeMax}
-          value={scene.fontSizePt}
+          value={fontSizePt}
           aria-label="Font size"
-          onChange={(e) => store.setFontSize(Number(e.target.value))}
+          onChange={(e) => setFontSizePt(Number(e.target.value))}
         />
-        <FieldRow label="Color" value={scene.fontColor.toUpperCase()} />
+        <FieldRow label="Color" value={fontColor.toUpperCase()} />
         <SwatchRow
           presets={fontConfig.colorPresets}
-          current={scene.fontColor}
+          current={fontColor}
           ariaPrefix="Font color"
-          onPick={(color) => store.setFontColor(color)}
+          onPick={setFontColor}
         />
         {/* What the settings above actually produce on a node card - the
             readout the three separate controls never had. */}
@@ -353,8 +414,8 @@ export function ViewPopover({ store }: { store: SceneStore }) {
           aria-hidden="true"
           style={{
             fontFamily: scene.fontFamily,
-            fontSize: `${scene.fontSizePt}pt`,
-            color: scene.fontColor,
+            fontSize: `${fontSizePt}pt`,
+            color: fontColor,
           }}
         >
           The quick brown fox jumps over the lazy dog

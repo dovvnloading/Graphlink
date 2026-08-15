@@ -147,7 +147,8 @@ export function ConnectionCanvas({
     // than by scaling the canvas itself, which keeps strokes a constant
     // width on screen and free of scaling artefacts at any zoom.
     ctx.setTransform(ratio * zoom, 0, 0, ratio * zoom, ratio * panX, ratio * panY);
-    ctx.lineWidth = 1.5 / zoom;
+    // Stroke width is set per connection below (selected links are drawn
+    // heavier), so none is set here.
     ctx.lineCap = "round";
 
     const {

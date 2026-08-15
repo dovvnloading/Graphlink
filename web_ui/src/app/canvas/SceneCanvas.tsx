@@ -2282,7 +2282,13 @@ function CanvasInner({
   // so a drag frame never has to travel through React state to reach the
   // renderer.
   const storeApi = useStoreApi();
-  const dragStartRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+  // Which nodes the current gesture is carrying. Membership is all this
+  // needs to record: it exists so the drag-STOP change (which arrives
+  // without the dragging flag) can still be recognised as part of the
+  // gesture. It held start POSITIONS while the drag-speed factor scaled
+  // node motion from its origin; that factor now applies to canvas panning
+  // instead, so the positions were dead weight.
+  const dragStartRef = useRef<Set<string>>(new Set());
   const draggingRef = useRef(false);
   // ADR-011 stage 11.3: the smart-guide size cache - populated ONCE per drag
   // gesture (see the `startingNewDrag` check inside onNodesChange below,
@@ -2611,19 +2617,14 @@ function CanvasInner({
         // its corrected position and then reconcile after the backend echo.
         if (!change.dragging && !dragStartRef.current.has(change.id)) return change;
         sawGestureFrame = true;
-        // Gesture membership bookkeeping only: recording the start is what
-        // lets the drag-STOP change (which arrives without the dragging
-        // flag) be recognised above. The drag-speed factor deliberately
-        // does NOT touch node motion any more - the legacy feature it
-        // ports scaled canvas PANNING, never item movement
-        // (graphlink_view.py:72 "For controlling pan speed"; its pan
-        // handler multiplied each mouse delta by the factor). The straight
-        // port mis-wired it to node dragging; the factor now applies in
-        // the wrapper's own pan handler below.
-        if (!dragStartRef.current.has(change.id)) {
-          const node = currentNodes.find((n) => n.id === change.id);
-          dragStartRef.current.set(change.id, node ? { ...node.position } : { ...change.position });
-        }
+        // Gesture membership only - see dragStartRef's own comment. The
+        // drag-speed factor deliberately does NOT touch node motion: the
+        // legacy feature it ports scaled canvas PANNING, never item
+        // movement (graphlink_view.py: "For controlling pan speed", whose
+        // pan handler multiplied each mouse delta by the factor). The
+        // straight port mis-wired it to node dragging; the factor now
+        // applies in the wrapper's own pan handler below.
+        dragStartRef.current.add(change.id);
         let finalPosition = { ...change.position };
         // R7.5b-3: smart-guide snap, as a LAYERED PASS on top of React
         // Flow's native grid-snap (which, when enabled, already ran inside
@@ -2807,7 +2808,7 @@ function CanvasInner({
   // Hover is only meaningful while the fade-connections lens is on; testing
   // otherwise would cost a pointer-move hit test for no visible effect.
   const onCanvasMouseMove = useCallback(
-    (event: MouseEvent) => {
+    (event: PointerEvent) => {
       if (!scene.fadeConnectionsEnabled) return;
       if (draggingRef.current) return;
       const id = connectionAt(event.clientX, event.clientY);
@@ -2827,7 +2828,7 @@ function CanvasInner({
   // pointer-delta times factor, incrementally per event.
   const panStateRef = useRef<{ lastX: number; lastY: number } | null>(null);
   const onCanvasMouseDown = useCallback(
-    (event: MouseEvent) => {
+    (event: PointerEvent) => {
       if ((event.target as HTMLElement).closest(".react-flow__node")) return;
       const id = connectionAt(event.clientX, event.clientY);
       setSelectedConnectionId(id);
@@ -2842,7 +2843,7 @@ function CanvasInner({
     [connectionAt],
   );
   useEffect(() => {
-    const onWindowMouseMove = (event: MouseEvent) => {
+    const onWindowMouseMove = (event: PointerEvent) => {
       const pan = panStateRef.current;
       if (!pan) return;
       const factor = sceneRef.current.dragFactor;
@@ -2864,11 +2865,16 @@ function CanvasInner({
         store.setViewState(zoomFactor, scrollX, scrollY),
       )(zoom, x, y);
     };
-    window.addEventListener("mousemove", onWindowMouseMove);
-    window.addEventListener("mouseup", onWindowMouseUp);
+    // Pointer events, not mouse events: React Flow's own pan (disabled
+    // here so the speed factor can apply) was pointer-based, so handling
+    // only mouse would have left touch and pen unable to pan at all.
+    window.addEventListener("pointermove", onWindowMouseMove);
+    window.addEventListener("pointerup", onWindowMouseUp);
+    window.addEventListener("pointercancel", onWindowMouseUp);
     return () => {
-      window.removeEventListener("mousemove", onWindowMouseMove);
-      window.removeEventListener("mouseup", onWindowMouseUp);
+      window.removeEventListener("pointermove", onWindowMouseMove);
+      window.removeEventListener("pointerup", onWindowMouseUp);
+      window.removeEventListener("pointercancel", onWindowMouseUp);
     };
   }, [reactFlow, store, storeApi]);
 
@@ -2896,13 +2902,13 @@ function CanvasInner({
   useEffect(() => {
     const el = canvasWrapperRef.current;
     if (!el) return;
-    const move = (event: MouseEvent) => onCanvasMouseMove(event);
-    const down = (event: MouseEvent) => onCanvasMouseDown(event);
-    el.addEventListener("mousemove", move);
-    el.addEventListener("mousedown", down);
+    const move = (event: PointerEvent) => onCanvasMouseMove(event);
+    const down = (event: PointerEvent) => onCanvasMouseDown(event);
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerdown", down);
     return () => {
-      el.removeEventListener("mousemove", move);
-      el.removeEventListener("mousedown", down);
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerdown", down);
     };
   }, [onCanvasMouseMove, onCanvasMouseDown]);
 
