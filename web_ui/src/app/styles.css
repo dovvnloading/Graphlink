@@ -269,6 +269,17 @@ body,
   inset: 0;
 }
 
+/* Factor-scaled panning is handled by the wrapper (React Flow's own pan is
+   disabled), so the wrapper also owns the grab cursors the library would
+   otherwise apply. */
+.scene-canvas .react-flow__pane {
+  cursor: grab;
+}
+
+.scene-canvas.panning .react-flow__pane {
+  cursor: grabbing;
+}
+
 .scene-canvas .react-flow {
   background-color: var(--gl-surface-window);
 }
@@ -1747,25 +1758,145 @@ body,
 /* -- View popover -------------------------------------------------------- */
 
 .view-popover {
-  width: 250px;
+  width: 300px;
+  max-height: min(72vh, 720px);
+  overflow-y: auto;
 }
 
 .view-section + .view-section {
-  margin-top: 12px;
-  padding-top: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
   border-top: 1px solid var(--gl-surface-border);
 }
 
 .view-section-title {
-  margin: 0 0 6px;
+  margin: 0 0 8px;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.14em;
+  text-transform: uppercase;
   color: var(--gl-surface-text-muted);
 }
 
+/* Section header that also carries an action (the filter Clear button). */
+.view-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.view-subsection-title {
+  margin: 10px 0 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--gl-surface-text-label);
+}
+
+/* Label + live value readout above every slider - the redesign's core
+   idiom: no control without a name and a current value. */
+.view-field-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+.view-field-row:first-of-type {
+  margin-top: 0;
+}
+
+.view-field-label {
+  font-size: 11px;
+  color: var(--gl-surface-text-secondary);
+}
+
+.view-field-value {
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 6px;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 999px;
+}
+
+/* Sliders: styled track/thumb rather than the engine default, which reads
+   as unfinished against the dark chrome. WebView2 is Chromium, so the
+   -webkit pseudo-elements are the ones that apply. */
 .view-slider {
+  -webkit-appearance: none;
+  appearance: none;
   width: 100%;
+  height: 18px;
+  margin: 4px 0 2px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.view-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background-color: var(--gl-neutral-button-border);
+}
+
+.view-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 50%;
+  background-color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border-strong);
+  transition: transform var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.view-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.view-slider:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Segmented control: one connected group for mutually-exclusive choices
+   (grid style, spacing presets, drag presets), replacing loose buttons. */
+.view-segment {
+  display: flex;
+  margin-top: 6px;
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.view-segment-btn {
+  flex: 1;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 0;
+  color: var(--gl-surface-text-secondary);
+  background-color: var(--gl-neutral-button-background);
+  border: none;
+  border-left: 1px solid var(--gl-neutral-button-border);
+  cursor: pointer;
+}
+
+.view-segment-btn:first-child {
+  border-left: none;
+}
+
+.view-segment-btn:hover {
+  background-color: var(--gl-neutral-button-hover);
+  color: var(--gl-surface-text-primary);
+}
+
+.view-segment-btn.active {
+  background-color: var(--gl-neutral-button-pressed, var(--gl-neutral-button-hover));
+  color: var(--gl-surface-text-bright);
 }
 
 .view-row {
@@ -1775,25 +1906,46 @@ body,
   flex-wrap: wrap;
 }
 
-.view-preset-btn {
+/* Filter chips: pill-shaped so multi-select membership reads differently
+   from the segmented single-choice controls above. */
+.view-chip {
   font-size: 10px;
   font-weight: 600;
   font-family: inherit;
-  padding: 4px 8px;
-  color: var(--gl-surface-text-primary);
+  padding: 3px 9px;
+  color: var(--gl-surface-text-secondary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
-  border-radius: 6px;
+  border-radius: 999px;
   cursor: pointer;
 }
 
-.view-preset-btn:hover {
+.view-chip:hover {
   background-color: var(--gl-neutral-button-hover);
+  color: var(--gl-surface-text-primary);
 }
 
-.view-preset-btn.active {
+.view-chip.active {
   background-color: var(--gl-neutral-button-pressed, var(--gl-neutral-button-hover));
   border-color: var(--gl-surface-text-muted);
+  color: var(--gl-surface-text-bright);
+}
+
+.view-clear-btn {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 1px 8px;
+  color: var(--gl-surface-text-secondary);
+  background: none;
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.view-clear-btn:hover {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
 }
 
 .view-color-swatch {
@@ -1815,27 +1967,118 @@ body,
 
 .view-color-swatch.active {
   border-color: var(--gl-surface-text-primary);
+  box-shadow: 0 0 0 1px var(--gl-surface-text-primary);
 }
 
-.view-check-row {
-  display: flex;
+/* The free-choice picker at the end of each swatch row: a native color
+   input hidden inside a swatch-shaped label, so picking a custom value
+   looks and feels like picking a preset. The dashed border marks it as
+   "any color" until a custom value is active, at which point it carries
+   that value like any other swatch. */
+.view-color-custom {
+  position: relative;
+  display: inline-flex;
   align-items: center;
-  gap: 7px;
-  margin-top: 8px;
+  justify-content: center;
+  border-style: dashed;
+  background-color: var(--gl-surface-inset);
+}
+
+.view-color-custom::after {
+  content: "+";
+  font-size: 13px;
+  line-height: 1;
+  color: var(--gl-surface-text-muted);
+  pointer-events: none;
+}
+
+.view-color-custom.active {
+  border-style: solid;
+}
+
+.view-color-custom.active::after {
+  content: "";
+}
+
+.view-color-custom input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+/* Toggle rows: label plus a one-line hint, mirroring Settings'
+   checkbox-row idiom rather than a bare label+checkbox. */
+.view-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  cursor: pointer;
+}
+
+.view-toggle-row input[type="checkbox"] {
+  margin: 1px 0 0;
+  accent-color: var(--gl-surface-text-primary);
+  cursor: pointer;
+}
+
+.view-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.view-toggle-label {
   font-size: 11px;
   color: var(--gl-surface-text-primary);
 }
 
-.view-select {
+.view-toggle-hint {
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+/* Live sample of the node typography the FONT controls produce. Colors are
+   the node card's own tokens so the sample sits on the same background the
+   text will actually be read against. */
+.view-font-preview {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background-color: var(--gl-surface-node-body);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-footer {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--gl-surface-border);
+}
+
+.view-reset-btn {
   width: 100%;
   font-size: 11px;
+  font-weight: 600;
   font-family: inherit;
-  padding: 5px 8px;
-  margin-bottom: 6px;
-  color: var(--gl-surface-text-primary);
+  padding: 6px 0;
+  color: var(--gl-surface-text-secondary);
   background-color: var(--gl-neutral-button-background);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 6px;
+  cursor: pointer;
+}
+
+.view-reset-btn:hover {
+  background-color: var(--gl-neutral-button-hover);
+  color: var(--gl-surface-text-primary);
 }
 
 /* -- R2.3 composer + token counter + notification ------------------------ */
@@ -4671,13 +4914,12 @@ mark.document-view-search-match-current {
 }
 
 /* -- ADR-020 stage 20.2: workspace switcher + tag filter chips --------
-   Both reuse .view-preset-btn/.view-row VERBATIM by className (that pair
-   is not scoped under .view-popover in this file's selectors - it is
-   already a globally-reusable pair, not a popover-local one) rather than
-   duplicating its padding/radius/font-size/color values under a new name -
-   see ViewPopover.tsx's own FILTER section for the identical multi-select
-   toggle-chip markup this dialog's tag row mirrors, and its grid-size
-   preset row for the single-select tab pattern the workspace row mirrors.
+   Both reuse .view-chip/.view-row VERBATIM by className (that pair is not
+   scoped under .view-popover in this file's selectors - it is already a
+   globally-reusable pair, not a popover-local one) rather than duplicating
+   its padding/radius/font-size/color values under a new name - see
+   ViewPopover.tsx's own FILTER section for the identical multi-select
+   toggle-chip markup this dialog's tag row mirrors.
    Only the ROW WRAPPERS below are new: .view-row/.overlay-popover's own
    ambient 12px/14px padding is what every OTHER .view-row consumer relies
    on for its horizontal gutter, and this dialog's .overlay-dialog-body is
@@ -4734,7 +4976,7 @@ mark.document-view-search-match-current {
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
 }
 
-/* Prevents the Archived toggle chip (a .view-preset-btn dropped directly
+/* Prevents the Archived toggle chip (a .view-chip dropped directly
    into .library-header's flex row, next to the search box) from being
    squeezed by .library-search-wrap's own `flex: 1` - .library-new-chat-
    button already sets this for the same reason. */

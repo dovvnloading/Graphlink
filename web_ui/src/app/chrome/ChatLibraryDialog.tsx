@@ -608,7 +608,7 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
           <div className="library-workspace-tabs" role="group" aria-label="Workspaces">
             <button
               type="button"
-              className={"view-preset-btn" + (selectedWorkspaceId === null ? " active" : "")}
+              className={"view-chip" + (selectedWorkspaceId === null ? " active" : "")}
               onClick={() => selectWorkspace(null)}
             >
               All
@@ -620,7 +620,7 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
               <div key={workspace.id} className="library-workspace-tab-group">
                 <button
                   type="button"
-                  className={"view-preset-btn" + (selectedWorkspaceId === workspace.id ? " active" : "")}
+                  className={"view-chip" + (selectedWorkspaceId === workspace.id ? " active" : "")}
                   onClick={() => selectWorkspace(workspace.id)}
                 >
                   {workspace.name}
@@ -726,7 +726,7 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
           {total > 0 && (
             <button
               type="button"
-              className={"view-preset-btn library-archived-toggle" + (showArchived ? " active" : "")}
+              className={"view-chip library-archived-toggle" + (showArchived ? " active" : "")}
               aria-pressed={showArchived}
               onClick={() => setShowArchived((prev) => !prev)}
             >
@@ -745,7 +745,7 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
                 <button
                   key={tag}
                   type="button"
-                  className={"view-preset-btn" + (selectedTags.has(tag) ? " active" : "")}
+                  className={"view-chip" + (selectedTags.has(tag) ? " active" : "")}
                   aria-pressed={selectedTags.has(tag)}
                   onClick={() => toggleTag(tag)}
                 >

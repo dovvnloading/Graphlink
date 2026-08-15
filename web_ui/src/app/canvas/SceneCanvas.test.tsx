@@ -31,7 +31,7 @@ import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/s
 
 // toFlowNodes is exported standalone specifically so this doesn't need a
 // full <ReactFlow> mount (same reasoning as sceneStore.test.ts's direct
-// scaleDragPosition coverage) - see SceneCanvas.tsx's own comment on the
+// drag coverage) - see SceneCanvas.tsx's own comment on the
 // export.
 
 function makeStore(): SceneStore {

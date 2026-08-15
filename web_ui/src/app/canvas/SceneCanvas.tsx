@@ -45,7 +45,7 @@ import {
   VIEWPORT_REPORT_DEBOUNCE_MS,
 } from "./canvasConstants";
 import { handleKeyboardContextMenu } from "./keyboardContextMenu";
-import { SceneStore, scaleDragPosition } from "./sceneStore";
+import { SceneStore } from "./sceneStore";
 import { computeSmartGuideSnap, type GuideLine, type Rect } from "./smartGuides";
 import { ConnectionCanvas, type ConnectionSpec } from "./connections/ConnectionCanvas";
 import type { ConnectionPath } from "./connections/connectionGeometry";
@@ -958,7 +958,7 @@ function makeChartFns(id: string, liveRef: { current: DispatcherLive }) {
 }
 
 // Exported standalone for direct unit testing (same posture as
-// scaleDragPosition in sceneStore.ts) - covers the parentChatNodeId
+// toFlowEdges below) - covers the parentChatNodeId
 // derivation below without needing a full <ReactFlow> mount.
 export function toFlowNodes(
   scene: SceneState,
@@ -1821,7 +1821,7 @@ export function toFlowNodes(
 }
 
 // R5.1: the onSelectionChange callback's actual logic, pulled out standalone
-// for direct unit testing (same posture as toFlowNodes/scaleDragPosition
+// for direct unit testing (same posture as toFlowNodes
 // above) - a full <ReactFlow> mount's own drag-select interaction isn't
 // something this codebase drives in tests anywhere else, so this is what
 // gets covered instead of the mount.
@@ -1834,7 +1834,7 @@ export function handleSelectionChange(store: SceneStore, nodes: { id: string }[]
 // LOCKED frame; false for everything else (including an unlocked frame,
 // which is non-draggable anyway - see toFlowNodes' draggable: setting
 // above). Exported standalone, same testability convention as
-// scaleDragPosition/toFlowNodes/handleSelectionChange above.
+// toFlowNodes/handleSelectionChange above.
 export function groupDragKindOf(node: SceneFlowNode | undefined): "frame" | "container" | null {
   if (!node) return null;
   if (node.type === "container") return "container";
@@ -2186,7 +2186,7 @@ export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Ed
 // survives across repeated calls without this function owning any React
 // state itself), exported standalone for direct unit testing without
 // mounting a real <ReactFlow> pan/zoom gesture - the same testability
-// posture as scaleDragPosition/toFlowNodes/handleSelectionChange above.
+// posture as toFlowNodes/handleSelectionChange above.
 export function makeDebouncedViewportReport(
   timerRef: { current: ReturnType<typeof setTimeout> | null },
   onReport: (zoomFactor: number, scrollX: number, scrollY: number) => void,
@@ -2230,6 +2230,12 @@ function CanvasInner({
   getComposerRoute: () => { provider: string; modelId: string };
 }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
+  // Live mirror for event handlers that must read current scene values
+  // (the pan handler's drag factor) without re-registering per publish.
+  const sceneRef = useRef(scene);
+  useEffect(() => {
+    sceneRef.current = scene;
+  }, [scene]);
   const grid = useSyncExternalStore(store.subscribe, store.getGrid);
   // ADR-002 Workstream 1 ("Branch status and lifecycle") - "Focus Accepted
   // Paths", toggled from ViewPopover.tsx's own checkbox (a sibling
@@ -2269,7 +2275,7 @@ function CanvasInner({
 
   // Local node state exists so dragging is fluid; backend snapshots are the
   // truth and reconcile in whenever nothing is being dragged. dragStartRef
-  // powers the drag-speed scaling contract (see scaleDragPosition).
+  // records where each gesture began (see the middleware's bookkeeping).
   // React Flow owns the rendered node collection (see the <ReactFlow>
   // element's own defaultNodes comment). This component keeps only a mirror
   // ref for its own logic - drag corrections, delete routing, scene merge -
@@ -2544,7 +2550,7 @@ function CanvasInner({
 
   /**
    * DRAG-SYNC REBUILD: the drag-position corrections this canvas applies -
-   * the drag-speed factor (scaleDragPosition), smart-guide snapping, and
+   * smart-guide snapping and
    * the group-member cascade - now run as a React Flow CHANGE MIDDLEWARE
    * (experimental_useOnNodesChangeMiddleware), i.e. INSIDE React Flow's own
    * updateNodePositions, before it commits anything.
@@ -2605,13 +2611,20 @@ function CanvasInner({
         // its corrected position and then reconcile after the backend echo.
         if (!change.dragging && !dragStartRef.current.has(change.id)) return change;
         sawGestureFrame = true;
-        let start = dragStartRef.current.get(change.id);
-        if (!start) {
+        // Gesture membership bookkeeping only: recording the start is what
+        // lets the drag-STOP change (which arrives without the dragging
+        // flag) be recognised above. The drag-speed factor deliberately
+        // does NOT touch node motion any more - the legacy feature it
+        // ports scaled canvas PANNING, never item movement
+        // (graphlink_view.py:72 "For controlling pan speed"; its pan
+        // handler multiplied each mouse delta by the factor). The straight
+        // port mis-wired it to node dragging; the factor now applies in
+        // the wrapper's own pan handler below.
+        if (!dragStartRef.current.has(change.id)) {
           const node = currentNodes.find((n) => n.id === change.id);
-          start = node ? { ...node.position } : { ...change.position };
-          dragStartRef.current.set(change.id, start);
+          dragStartRef.current.set(change.id, node ? { ...node.position } : { ...change.position });
         }
-        let finalPosition = scaleDragPosition(start, change.position, scene.dragFactor);
+        let finalPosition = { ...change.position };
         // R7.5b-3: smart-guide snap, as a LAYERED PASS on top of React
         // Flow's native grid-snap (which, when enabled, already ran inside
         // RF before this change was emitted) - the recorded design
@@ -2803,16 +2816,61 @@ function CanvasInner({
     [connectionAt, scene.fadeConnectionsEnabled],
   );
 
-  // Selecting a connection: only when the press did not land on a node card,
-  // so this can never steal a drag from a node.
+  // Factor-scaled canvas panning - the drag-speed setting's REAL job. The
+  // legacy view multiplied each pan delta by the factor
+  // (graphlink_view.py: "self._drag_factor = 1.0  # For controlling pan
+  // speed." and `delta *= self._drag_factor` in its pan handler); the
+  // straight port mis-wired the factor to node motion instead, which read
+  // as the setting doing nothing. React Flow's own panOnDrag has no speed
+  // input, so it is disabled on the element below and the gesture is owned
+  // here, applying the exact legacy contract: viewport moves by
+  // pointer-delta times factor, incrementally per event.
+  const panStateRef = useRef<{ lastX: number; lastY: number } | null>(null);
   const onCanvasMouseDown = useCallback(
     (event: MouseEvent) => {
       if ((event.target as HTMLElement).closest(".react-flow__node")) return;
       const id = connectionAt(event.clientX, event.clientY);
       setSelectedConnectionId(id);
+      // Begin a pan on a background press (left or middle button), unless
+      // Shift is held - that remains React Flow's selection-box gesture.
+      const onPane = (event.target as HTMLElement).closest(".react-flow__pane");
+      if (onPane && !event.shiftKey && (event.button === 0 || event.button === 1) && id === null) {
+        panStateRef.current = { lastX: event.clientX, lastY: event.clientY };
+        canvasWrapperRef.current?.classList.add("panning");
+      }
     },
     [connectionAt],
   );
+  useEffect(() => {
+    const onWindowMouseMove = (event: MouseEvent) => {
+      const pan = panStateRef.current;
+      if (!pan) return;
+      const factor = sceneRef.current.dragFactor;
+      const dx = (event.clientX - pan.lastX) * factor;
+      const dy = (event.clientY - pan.lastY) * factor;
+      pan.lastX = event.clientX;
+      pan.lastY = event.clientY;
+      const { transform } = storeApi.getState();
+      reactFlow.setViewport({ x: transform[0] + dx, y: transform[1] + dy, zoom: transform[2] });
+    };
+    const onWindowMouseUp = () => {
+      if (!panStateRef.current) return;
+      panStateRef.current = null;
+      canvasWrapperRef.current?.classList.remove("panning");
+      // Persist the settled viewport the same way onMove does for zooming -
+      // programmatic setViewport does not raise React Flow's own onMove.
+      const [x, y, zoom] = storeApi.getState().transform;
+      makeDebouncedViewportReport(viewportTimerRef, (zoomFactor, scrollX, scrollY) =>
+        store.setViewState(zoomFactor, scrollX, scrollY),
+      )(zoom, x, y);
+    };
+    window.addEventListener("mousemove", onWindowMouseMove);
+    window.addEventListener("mouseup", onWindowMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", onWindowMouseMove);
+      window.removeEventListener("mouseup", onWindowMouseUp);
+    };
+  }, [reactFlow, store, storeApi]);
 
   // Delete removes the selected connection. React Flow used to report edge
   // deletions through onDelete; it no longer renders connections, so this
@@ -2898,6 +2956,11 @@ function CanvasInner({
         // PluginPicker can attach "which node was selected" to executePlugin
         // without either component reaching into the other's internals.
         onSelectionChange={onSelectionChange}
+        /* Pan is owned by the wrapper's factor-scaled handler (see
+           onCanvasMouseDown) - React Flow's own panOnDrag has no speed
+           input, which is how the drag-speed setting lost its meaning in
+           the straight port. */
+        panOnDrag={false}
         snapToGrid={scene.snapToGrid}
         snapGrid={snapGrid}
         // Double-click is the R1 create-node gesture (wrapper onDoubleClick);
