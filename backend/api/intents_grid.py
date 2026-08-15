@@ -23,7 +23,10 @@ def register_grid_intents(bus: SessionBus, document: SceneDocument) -> None:
     publish_grid = make_publish_grid(bus)
 
     async def set_grid_size(size):
-        document.grid.grid_size = int(size)
+        # Clamped: 0/negative would blank or invert the background pattern,
+        # and the View popover's spacing slider (4-120) relies on the same
+        # floor being enforced where the value actually lands.
+        document.grid.grid_size = max(4, min(400, int(size)))
         await publish_grid()
 
     async def set_grid_opacity_percent(percent):

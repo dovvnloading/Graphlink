@@ -2080,7 +2080,12 @@ def test_grid_payload_matches_generated_validator_shape():
         "colorPresets",
     }
     assert isinstance(payload["gridOpacityPercent"], int)
-    assert len(payload["colorPresets"]) == 5
+    # Pinned to "a non-empty list of hex strings" rather than an exact
+    # count: the palette is a curated data set that legitimately grows
+    # (it did, when the Qt-frozen 5-swatch set was upgraded), while the
+    # SHAPE - what the generated validator checks - is the contract.
+    assert payload["colorPresets"]
+    assert all(c.startswith("#") and len(c) == 7 for c in payload["colorPresets"])
 
 
 # -- intent surface over the bus --------------------------------------------

@@ -608,6 +608,16 @@ export class SceneStore {
     this.emit();
   }
 
+  // Drops both filter axes at once - the View popover's Clear affordance.
+  // No-op (no emit) when nothing is filtered, matching every other
+  // guard-before-emit setter on this store.
+  clearFilters(): void {
+    if (this.filterKinds.size === 0 && this.filterStatuses.size === 0) return;
+    this.filterKinds = new Set();
+    this.filterStatuses = new Set();
+    this.emit();
+  }
+
   setExportInProgress(value: boolean): void {
     if (value === this.exportInProgress) return;
     this.exportInProgress = value;
@@ -1411,16 +1421,4 @@ export class SceneStore {
   }
 }
 
-/** start + (proposed - start) * factor: the drag-speed contract carried over
- * from the Qt canvas (ChatView's drag factor scaled item motion the same
- * way). Exported standalone for direct unit testing. */
-export function scaleDragPosition(
-  start: { x: number; y: number },
-  proposed: { x: number; y: number },
-  factor: number,
-): { x: number; y: number } {
-  return {
-    x: start.x + (proposed.x - start.x) * factor,
-    y: start.y + (proposed.y - start.y) * factor,
-  };
-}
+

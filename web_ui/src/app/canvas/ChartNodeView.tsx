@@ -106,7 +106,7 @@ function chartTypeBadgeLabel(chartType: string): string {
 
 /** The debounce wrapper described in this file's own module doc, exported
  * standalone for direct unit testing without mounting <NodeResizer/> at all -
- * same posture as SceneCanvas.tsx's scaleDragPosition/applyGroupDragDelta.
+ * same posture as SceneCanvas.tsx's applyGroupDragDelta.
  * `timerRef` is the caller's own mutable box (a component instance's
  * useRef), so this stays a plain function rather than owning any React state
  * itself; calling the returned function again before `debounceMs` elapses

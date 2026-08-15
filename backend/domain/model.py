@@ -14,11 +14,17 @@ from dataclasses import dataclass, field
 
 from backend.domain.node_states import NodeState
 
-# Dark-theme grid swatches. The Qt bridge derived 3 of 5 from the live
-# QPalette; the backend is Qt-free by law (test_no_qt_anywhere.py), so until
-# the R2 theme service exists these are the dark theme's actual values,
-# frozen here as data, not styling.
-GRID_COLOR_PRESETS = ["#404040", "#555555", "#4a90d9", "#2f5b3c", "#5b2f4f"]
+# Grid swatches. The first three neutrals cover the subtle-texture case at
+# increasing prominence; the five hues are tuned to read on the dark canvas
+# without shouting, and to survive the light theme. The old set was frozen
+# verbatim from the deleted Qt bridge's live-palette derivation (2 neutrals
+# + 3 dark muddy hues that were nearly invisible against the canvas) - kept
+# values #404040/#555555/#4a90d9 remain so an existing session's saved
+# color still matches a swatch.
+GRID_COLOR_PRESETS = [
+    "#404040", "#555555", "#6E6E6E",
+    "#4a90d9", "#3FA37E", "#C9A227", "#C96A6A", "#8A63C9",
+]
 
 DRAG_FACTOR_MIN = 0.05
 DRAG_FACTOR_MAX = 1.0
@@ -35,7 +41,14 @@ FONT_FAMILIES = [
     "Courier New", "Times New Roman", "Georgia", "System UI",
     "DejaVu Sans", "Segoe UI Variable", "Arial Rounded MT Bold",
 ]
-FONT_COLOR_PRESETS = ["#F0F0F0", "#C7C7C7", "#949494", "#818181"]
+# Node-text swatches: three neutral steps plus four soft tints that stay
+# readable on the node-card surfaces in both themes. The old set was four
+# barely-distinguishable grays (two of them 19 units apart) carried over
+# verbatim from the deleted Qt bridge.
+FONT_COLOR_PRESETS = [
+    "#F0F0F0", "#C7C7C7", "#949494",
+    "#9EC1E8", "#9FD0B5", "#E3C577", "#E0A3A3",
+]
 FONT_SIZE_MIN = 8
 FONT_SIZE_MAX = 16
 

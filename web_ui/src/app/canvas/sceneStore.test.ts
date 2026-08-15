@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SceneStore, initialSceneState, scaleDragPosition } from "./sceneStore";
+import { SceneStore, initialSceneState } from "./sceneStore";
 import type { ScenePatch, WsTransport } from "../../lib/ws/transport";
 import type { BridgeRejection } from "../../lib/bridge-core/islandState";
 
@@ -1642,16 +1642,3 @@ describe("SceneStore", () => {
   });
 });
 
-describe("scaleDragPosition (the drag-speed contract)", () => {
-  it("factor 1 leaves motion unscaled", () => {
-    expect(scaleDragPosition({ x: 0, y: 0 }, { x: 100, y: 40 }, 1)).toEqual({ x: 100, y: 40 });
-  });
-
-  it("factor 0.5 halves the delta from the drag start", () => {
-    expect(scaleDragPosition({ x: 10, y: 10 }, { x: 110, y: 50 }, 0.5)).toEqual({ x: 60, y: 30 });
-  });
-
-  it("scales relative to the start, not the origin", () => {
-    expect(scaleDragPosition({ x: -20, y: 8 }, { x: -20, y: 8 }, 0.25)).toEqual({ x: -20, y: 8 });
-  });
-});
