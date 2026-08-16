@@ -1016,11 +1016,11 @@ class TestActivityLog:
         long_tool_name = "graph." + "x" * 200
         long_content = "y" * 500
 
+        from backend.providers.base import ToolSpec
+        from backend.tools import GRAPH_READ, ToolResult
+
         async def oversized_handler(call, ctx):
             return ToolResult(content="ok")
-
-        from backend.providers.base import ToolSpec
-        from backend.tools import GRAPH_READ
 
         registry.register(
             ToolSpec(name=long_tool_name, description="d", input_schema={"type": "object"}),
@@ -1034,6 +1034,11 @@ class TestActivityLog:
         asyncio.run(drive_build(document, dispatcher, registry, bus, node))
 
         row = node.state.builder_activity[0]
+        # Pinned explicitly: an error result would ALSO produce a long,
+        # truncated summary (the error text embeds the oversized tool
+        # name), so without this the assertions below could pass for the
+        # wrong reason - the success path never actually being exercised.
+        assert row["outcome"] == "ok"
         # _truncate appends a trailing ellipsis character on top of the cap,
         # so the truncated length is cap + 1, not cap itself.
         assert len(row["tool"]) == builder_module._ACTIVITY_TOOL_NAME_CAP + 1
