@@ -7351,6 +7351,25 @@ mark.document-view-search-match-current {
   color: var(--gl-surface-text-muted);
   flex-wrap: wrap;
 }
+
+/* stage 8.7: the activity log. .chat-node-tool-invocations already supplies
+   the disclosure surface's border/padding/summary styling and its per-row
+   .chat-node-tool-invocation(.error)/-name/-arguments treatment - this adds
+   only what a build's log needs beyond one turn's handful of calls: a
+   bounded, independently-scrollable list (up to 100 rows) and an elapsed-
+   time readout per row. */
+.plan-node-activity-list {
+  max-height: 160px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.plan-node-activity-elapsed {
+  float: right;
+  font-weight: 400;
+  color: var(--gl-surface-text-muted);
+}
 .plan-node-approval {
   border: 1px solid var(--gl-semantic-status-warning);
   border-radius: 6px;

@@ -15,6 +15,7 @@ function makeData(overrides: Partial<PlanNodeData> = {}): PlanNodeData {
       { id: "s2", title: "Write summary", status: "running", detail: "" },
       { id: "s3", title: "Chart it", status: "pending", detail: "" },
     ],
+    builderActivity: [],
     builderStatus: "running",
     builderMode: "copilot",
     builderRunId: "run-1",
@@ -182,5 +183,56 @@ describe("PlanNodeView", () => {
 
     expect(screen.getByRole("alert")).toHaveTextContent("the model aborted");
     expect(screen.getByText("autopilot")).toBeInTheDocument();
+  });
+
+  describe("activity log", () => {
+    it("stays hidden entirely when the build has no activity yet", () => {
+      renderPlan(makeData({ builderActivity: [] }));
+      expect(screen.queryByText(/activity entr/)).not.toBeInTheDocument();
+    });
+
+    it("shows the count, error count, and every row's tool/summary/elapsed - collapsed by default", () => {
+      const data = makeData({
+        builderActivity: [
+          { tool: "graph.create_node", summary: '{"kind":"note"}', outcome: "ok", stepId: "s1", elapsedMs: 12 },
+          {
+            tool: "graph.create_node",
+            summary: "Tool call 'graph.create_node' was denied approval.",
+            outcome: "error", stepId: "s1", elapsedMs: 0,
+          },
+        ],
+      });
+      renderPlan(data);
+
+      const summary = screen.getByText("2 activity entries · 1 error");
+      const details = summary.closest("details");
+      expect(details).not.toHaveAttribute("open");
+      expect(screen.getAllByText("graph.create_node")).toHaveLength(2);
+      expect(screen.getByText('{"kind":"note"}')).toBeInTheDocument();
+      expect(screen.getByText(/was denied approval/)).toBeInTheDocument();
+      expect(screen.getByText("12ms")).toBeInTheDocument();
+    });
+
+    it("tints an error row distinctly from an ok row", () => {
+      renderPlan(makeData({
+        builderActivity: [
+          { tool: "graph.create_node", summary: "ok call", outcome: "ok", stepId: "s1", elapsedMs: 5 },
+          { tool: "run_node", summary: "boom", outcome: "error", stepId: "s1", elapsedMs: 3 },
+        ],
+      }));
+
+      expect(screen.getByText("ok call").closest(".chat-node-tool-invocation")).not.toHaveClass("error");
+      expect(screen.getByText("boom").closest(".chat-node-tool-invocation")).toHaveClass("error");
+    });
+
+    it("singular-cases one entry and omits the error count when nothing failed", () => {
+      renderPlan(makeData({
+        builderActivity: [
+          { tool: "builder.complete_step", summary: "{}", outcome: "ok", stepId: "s1", elapsedMs: 1 },
+        ],
+      }));
+      expect(screen.getByText("1 activity entry")).toBeInTheDocument();
+      expect(screen.queryByText(/error/)).not.toBeInTheDocument();
+    });
   });
 });
