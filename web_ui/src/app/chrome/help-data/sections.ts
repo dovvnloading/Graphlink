@@ -330,6 +330,54 @@ export const HELP_SECTIONS: HelpSection[] = [
     ]
   },
   {
+    "name": "Builder",
+    "description": "An agent that plans a checklist for a goal, then constructs it on the canvas one supervised step at a time - the same tools you could use by hand, run for you.",
+    "subsections": [
+      {
+        "title": "How a Build Works",
+        "items": [
+          {
+            "action": "Goal, Plan, Build",
+            "description": "Give the Builder a goal, or pick a saved recipe, and it drafts a short checklist first. The plan is a real node on the canvas - review it, edit it if you want, and only then start the build."
+          },
+          {
+            "action": "What It Can Build",
+            "description": "Create and edit chat, note, code, document, and web research nodes; execute Python; generate charts and assistant replies from a node's content; run web research and search your knowledge base - the same actions available to you, driven for you."
+          },
+          {
+            "action": "Oversight: Co-pilot vs. Autopilot",
+            "description": "Co-pilot asks you to approve every mutating step. Autopilot runs to completion within its budgets, creating and editing nodes and executing code without asking - network access still asks every time, in either mode."
+          },
+          {
+            "action": "Budgets Are Hard Limits",
+            "description": "Steps, tokens, and time are capped before a build starts. A budget breach pauses the build with its state intact rather than losing progress - raise the limit and resume to pick up exactly where it stopped."
+          }
+        ]
+      },
+      {
+        "title": "The Plan Node",
+        "items": [
+          {
+            "action": "Watch It Build",
+            "description": "The plan node shows each step's status live, plus an expandable activity log of every tool call the build made and whether it succeeded."
+          },
+          {
+            "action": "Pause, Stop, and Resume",
+            "description": "A build can be stopped at any time. A paused, stopped, or failed build resumes from exactly where it left off - even after restarting the app, since the plan node itself is the resume point."
+          },
+          {
+            "action": "Undo a Build",
+            "description": "Once a build finishes or stops, Undo Build reverts everything it did in one action, the same as undoing any other change."
+          },
+          {
+            "action": "Save and Reuse Recipes",
+            "description": "Turn a finished build's plan into a reusable recipe from its own node's Save as Recipe action. A saved recipe can be deleted from the launcher when you no longer need it - built-in recipes cannot be removed."
+          }
+        ]
+      }
+    ]
+  },
+  {
     "name": "Settings & Models",
     "description": "How runtime modes, providers, model routing, and quality-of-life settings shape the behavior of the application.",
     "subsections": [
