@@ -197,19 +197,29 @@ describe("AppBar", () => {
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
       const menu = screen.getByRole("dialog");
 
+      // Tiers live on the GROUP wrapper, not the individual button: the
+      // bar collapses whole clusters so related actions stay together at
+      // every width instead of leaving fragments behind (see AppBar.tsx).
+      // The contract this pins is unchanged though - an inline action and
+      // its overflow duplicate must always collapse at the same tier.
       const pairs: [string, string][] = [
-        ["Export PNG", "1"],
-        ["Pins", "2"],
+        ["Undo", "1"],
+        ["Redo", "1"],
+        ["Zoom In", "1"],
+        ["Zoom Out", "1"],
+        ["Reset", "1"],
+        ["Fit All", "1"],
         ["Organize", "2"],
-        ["View", "2"],
-        ["Plugins", "2"],
-        ["Zoom In", "3"],
-        ["Zoom Out", "3"],
-        ["Reset", "3"],
-        ["Fit All", "3"],
-        ["About", "1"],
-        ["Help", "1"],
-        ["Diagnostics", "1"],
+        ["Pins", "2"],
+        ["Export PNG", "2"],
+        ["View", "3"],
+        ["Plugins", "3"],
+        ["Global Search", "4"],
+        ["Knowledge", "4"],
+        ["Builder", "4"],
+        ["Diagnostics", "4"],
+        ["Help", "4"],
+        ["About", "4"],
       ];
       for (const [label, tier] of pairs) {
         // Every duplicated pair shares its exact label except Plugins (the
@@ -222,7 +232,7 @@ describe("AppBar", () => {
         const matches = screen.getAllByRole("button", { name: new RegExp(label) });
         const inline = matches.find((el) => !menu.contains(el));
         const overflowItem = matches.find((el) => menu.contains(el));
-        expect(inline).toHaveAttribute("data-tier", tier);
+        expect(inline?.closest(".appbar-group")).toHaveAttribute("data-tier", tier);
         expect(overflowItem).toHaveAttribute("data-tier", tier);
       }
 

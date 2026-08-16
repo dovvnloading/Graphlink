@@ -400,12 +400,39 @@ function App() {
           <div aria-live="polite" role="status" className="visually-hidden">
             {announcement}
           </div>
+          {/* Three declared grid tracks - brand, toolbar, status - so the
+              regions of a permanently-visible bar have fixed homes and
+              cannot encroach on one another. See .app-topbar in styles.css
+              and AppBar.tsx's own layout contract. */}
           <header className="app-topbar">
-            <span className="app-title">Graphlink</span>
+            <div className="app-topbar-brand">
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="app-brand-mark">
+                <circle cx="6" cy="7" r="2.6" />
+                <circle cx="18" cy="6" r="2.6" />
+                <circle cx="12" cy="17.5" r="2.6" />
+                <path d="M7.6 8.9 10.8 15M16.6 8.2 13.3 15M8.5 6.6h6.9" />
+              </svg>
+              <span className="app-title">Graphlink</span>
+            </div>
             <AppBar store={sceneStore} />
-            <span className={`app-conn app-conn-${status}`} title={`backend ${system.backendVersion ?? ""}`}>
-              {connectionBadgeLabel(status)}
-            </span>
+            {/* Exception-only: a healthy connection shows nothing at all.
+                A permanent "connected" badge reports the expected state on
+                every frame and carries no information. The degraded states
+                do carry information - "reconnecting" is the app's own
+                answer to "why did my click do nothing", since intents are
+                queued or refused while it shows (see connectionBadge.ts) -
+                so those still surface, and only those. */}
+            <div className="app-topbar-status">
+              {status !== "open" && (
+                <span
+                  className={`app-conn app-conn-${status}`}
+                  title={`backend ${system.backendVersion ?? ""}`}
+                >
+                  <span className="app-conn-dot" aria-hidden="true" />
+                  {connectionBadgeLabel(status)}
+                </span>
+              )}
+            </div>
           </header>
 
           <main className="app-canvas-region">

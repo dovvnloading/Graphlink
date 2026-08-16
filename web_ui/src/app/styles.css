@@ -54,43 +54,6 @@ body,
   font-family: var(--gl-font-family);
 }
 
-.app-topbar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
-  background-color: var(--gl-surface-node-body);
-  border-bottom: 1px solid var(--gl-surface-border);
-}
-
-.app-title {
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.app-topbar-note {
-  font-size: 11px;
-  color: var(--gl-surface-text-muted);
-}
-
-.app-conn {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--gl-surface-text-muted);
-}
-
-.app-conn-open {
-  color: var(--gl-surface-text-primary);
-}
-
-/* ADR-003 stage 3.6: a real session existed and is currently paused, not
-   the muted/understated styling app-conn's base rule gives "connecting"
-   (first load, nothing was ever working) - warrants standing out the same
-   way .notification-error already does for "something needs attention". */
-.app-conn-reconnecting {
-  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
-}
-
 /* ADR-003 stage 3.5: BridgeErrorState.tsx, first live wiring. Fills the
    canvas region it replaces (SceneCanvas.tsx renders this INSTEAD of
    CanvasInner, never alongside it) rather than floating as a small toast -
@@ -1445,125 +1408,256 @@ body,
   border-radius: 8px;
 }
 
-/* -- R2 app bar + overlay system ----------------------------------------- */
+/* -- R2 app bar + overlay system -----------------------------------------
+
+   LAYOUT CONTRACT. This bar is on screen at all times, so nothing about its
+   geometry is left to emerge from content. Three DECLARED grid tracks -
+   brand, toolbar, status - give each region a fixed home that the others
+   cannot encroach on. The previous layout was a single flex row in which
+   the status badge sat outside the toolbar and leaned on `margin-left:auto`
+   against a `flex: 1` sibling that had already consumed the free space, so
+   it ended up pressed against the last button rather than anchored to the
+   window edge.
+
+   The middle track is `minmax(0, 1fr)`: it is the only one allowed to
+   absorb or surrender space, and the `0` floor is what lets it shrink below
+   its content's intrinsic width so the toolbar's own container queries -
+   not the window - decide what collapses. Both outer tracks are `auto`,
+   i.e. exactly as wide as they need and never wider. */
 
 .app-topbar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  /* Spacing lives on the regions, not as a column-gap: the status track is
+     empty whenever the connection is healthy, and a gap would still reserve
+     its gutter and push the toolbar off the right edge asymmetrically. */
+  column-gap: 0;
+  /* Fixed row height: the bar must not resize with its contents. */
+  height: 46px;
+  padding: 0 14px;
+  background-color: var(--gl-surface-node-body);
+  border-bottom: 1px solid var(--gl-surface-border);
+  /* Deliberately NO overflow-x here, despite that being the obvious
+     "stop the document spilling sideways" backstop. Per the overflow spec,
+     an overflow-x other than visible force-coerces overflow-y to auto on
+     the same element - and .appbar-overflow-menu is a descendant that
+     extends BELOW this row by design every time it opens, so it would be
+     clipped. The real backstop is the grid above (the middle track cannot
+     overrun its siblings) plus the tier breakpoints below. */
+}
+
+.app-topbar-brand {
+  display: flex;
+  align-items: center;
   gap: 8px;
-  /* R8a (UI/UX issue list finding #5): deliberately NO overflow-x: hidden
-     here, despite that being the obvious "stop the whole document from
-     spilling sideways" backstop. It was tried and reverted after review
-     caught it silently breaking the fix it was meant to protect: per the
-     CSS overflow spec, when overflow-x computes to anything other than
-     visible, a overflow-y of visible on the SAME element is force-coerced
-     to auto instead - it cannot stay visible, regardless of which value
-     was explicitly authored. .appbar-overflow-menu is a descendant of this
-     element (position: absolute, top: 100%, extending below this row by
-     design every time it opens) - an auto-coerced overflow-y here clips it
-     completely, confirmed live via getComputedStyle/elementFromPoint. There
-     is no ancestor position for a horizontal-only backstop that does not
-     have this exact problem, since the popover must stay inside .appbar's
-     @container subtree (see .appbar's own comment) and therefore inside
-     ANY ancestor between it and the document too. The real backstop is
-     therefore the tier breakpoints below being correctly margined instead
-     of a defensive CSS property: measured live, the four buttons that never
-     collapse (Library/Save/the overflow trigger/Settings) need ~207px, well
-     under the narrowest breakpoint's 420px floor. */
+  margin-right: 16px;
+  /* The brand never shrinks or wraps - it is the anchor the rest of the bar
+     is measured from. */
+  flex-shrink: 0;
+}
+
+.app-brand-mark {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  color: var(--gl-surface-text-secondary);
+}
+
+.app-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.app-topbar-note {
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+
+/* The status region: its own grid track, so it is anchored to the window's
+   right edge no matter how many buttons the toolbar is showing. */
+/* Empty whenever the connection is healthy - see App.tsx. :empty keeps it
+   from contributing any width or margin in that (normal) case, so the
+   toolbar's right edge lines up with the window padding exactly as the
+   brand does on the left. */
+.app-topbar-status {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-left: 16px;
+}
+
+.app-topbar-status:empty {
+  margin-left: 0;
+}
+
+/* Only ever rendered for a DEGRADED connection (App.tsx), so this is a
+   warning indicator rather than ambient status - it earns its space by
+   appearing exactly when something needs attention. */
+.app-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--gl-surface-text-muted);
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 999px;
+}
+
+.app-conn-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+  flex-shrink: 0;
+}
+
+/* ADR-003 stage 3.6: a real session existed and is currently paused, not
+   the muted/understated styling app-conn's base rule gives "connecting"
+   (first load, nothing was ever working) - warrants standing out the same
+   way .notification-error already does for "something needs attention". */
+.app-conn-reconnecting {
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+  border-color: var(--gl-semantic-status-error, var(--gl-surface-border));
 }
 
 .appbar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex: 1;
-  /* flex: 1 alone gives a flex item min-width: auto, i.e. it can never
-     shrink below the summed min-content width of its 12 buttons - that is
-     what forced .app-topbar wider than the window in the first place.
-     min-width: 0 lets it actually shrink. position: relative anchors
-     .appbar-overflow-menu (a Popover - overlays.tsx - which supplies no
-     positioning of its own; every other Popover consumer gets one from a
-     dedicated App.tsx wrapper div, which does not exist here). The
-     container-type/name pair is what the @container queries below key off -
-     deliberately NOT `overflow: hidden` here despite that being the more
-     obvious pairing: an overflow:hidden ancestor clips ANY descendant that
-     paints past its box regardless of the descendant's own position scheme,
-     and the overflow menu is exactly such a descendant every time it opens.
-     (NodeMenu.tsx - a portal - was tried here first specifically to dodge
-     that; it introduced a worse bug instead, see AppBar.tsx's own comment.) */
+  /* Space BETWEEN groups. Within a group the spacing is tighter (see
+     .appbar-group) - that difference is what makes the grouping legible
+     without needing a rule between every pair of buttons. */
+  gap: 10px;
+  /* Lets the middle grid track actually shrink; container-type/name is what
+     the @container queries at the bottom of this block key off. Deliberately
+     NOT `overflow: hidden` - an overflow:hidden ancestor clips ANY
+     descendant painting outside its box, and the overflow menu is exactly
+     such a descendant every time it opens. */
   min-width: 0;
   position: relative;
   container-type: inline-size;
   container-name: appbar;
 }
 
+/* A cluster of related actions on one shared surface. Uniform inner
+   spacing and a single rounded container is what carries this bar's visual
+   organisation; the run of twenty text buttons this replaced used ad-hoc
+   1px rules and identical spacing everywhere, so nothing read as related
+   to anything else. */
+.appbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
 .appbar-btn {
+  /* Fixed height on every control, so the row's own height is a constant
+     and never a function of which buttons happen to be showing. */
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
   font-size: 11px;
   font-weight: 600;
   font-family: inherit;
-  padding: 5px 10px;
-  color: var(--gl-surface-text-primary);
+  color: var(--gl-surface-text-secondary);
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
   cursor: pointer;
   white-space: nowrap;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+/* Square footprint for icon-only controls, so a row of them is evenly
+   rhythmic rather than varying with glyph width. */
+.appbar-btn-icon {
+  width: 28px;
+  padding: 0;
+  justify-content: center;
+}
+
+.appbar-btn .icon {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .appbar-btn:hover:enabled {
   background-color: var(--gl-neutral-button-hover);
+  color: var(--gl-surface-text-primary);
+}
+
+.appbar-btn:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: -1px;
 }
 
 .appbar-btn:disabled {
-  opacity: 0.45;
+  opacity: 0.35;
   cursor: default;
 }
 
+/* Open-surface state. The filled treatment is reserved for this one meaning
+   across the whole bar, so "this panel is open" is never confusable with
+   hover or focus. */
 .appbar-btn-checkable.checked {
   background-color: var(--gl-neutral-button-background);
   border-color: var(--gl-neutral-button-border);
-}
-
-.appbar-separator {
-  width: 1px;
-  height: 18px;
-  margin: 0 4px;
-  background-color: var(--gl-surface-border);
+  color: var(--gl-surface-text-bright);
 }
 
 .appbar-spacer {
   flex: 1;
+  /* A real minimum, so the two clusters can never meet even at the
+     narrowest width the tiers allow. */
+  min-width: 12px;
 }
 
 .appbar-chevron {
   font-size: 9px;
+  opacity: 0.75;
 }
 
-/* R8a (finding #5): the overflow trigger + its menu. Hidden by default;
-   the container-query block below reveals the trigger once ANY tier has
-   collapsed, and reveals each overflow-menu item once ITS OWN tier has
-   collapsed - the item's data-tier is the same value used inline, so the
-   two stay in lockstep without any JS wiring them together. */
+/* The overflow trigger. Hidden by default; the container-query block below
+   reveals it once ANY tier has collapsed, and reveals each menu item once
+   ITS OWN tier has collapsed - the item's data-tier is the same value used
+   on the inline group, so the two stay in lockstep with no JS. */
 .appbar-overflow-trigger {
   display: none;
-  padding: 5px 8px;
-  font-size: 14px;
-  line-height: 1;
+  flex-shrink: 0;
 }
 
 /* .overlay-popover (the base class Popover always applies alongside this
-   one) already supplies background-color/border/box-shadow and a default
-   position/sizing - only what's genuinely DIFFERENT for a button-list menu
-   is overridden here (tighter padding/min-width/radius, matching node
-   context menus' own convention, plus a height cap this list can actually
-   need and the base class doesn't have). Position is the one property
-   .overlay-popover never sets for ANY consumer - View/Plugins/Pins get
-   theirs from a dedicated wrapper div in App.tsx; this one has no such
-   wrapper, so it's set directly here, anchored to .appbar's own right edge
-   (position: relative on .appbar above) rather than precisely under the
-   trigger button a few buttons to its left - the same "close, not
-   pixel-precise" anchoring posture every other toolbar popover in this app
-   already has (finding BAD-UX #27, a separate, pre-existing issue this does
-   not attempt to fix). z-index matches node context menus - the highest
-   ordinary-content tier below the modal/approval tiers. */
+   one) already supplies background/border/shadow and default sizing - only
+   what is genuinely different for a button-list menu is overridden here.
+   Position is the one property .overlay-popover never sets for any
+   consumer: View/Plugins/Pins get theirs from a dedicated wrapper div in
+   App.tsx, and this one has none, so it is anchored here to .appbar's own
+   right edge (position: relative on .appbar above). */
 .appbar-overflow-menu {
   position: absolute;
   top: 100%;
@@ -1573,7 +1667,7 @@ body,
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-width: 170px;
+  min-width: 180px;
   padding: 6px;
   border-radius: 8px;
   max-height: calc(100vh - 16px);
@@ -1595,33 +1689,34 @@ body,
   cursor: pointer;
 }
 
-.appbar-overflow-item:hover {
+.appbar-overflow-item:hover:enabled {
   background-color: var(--gl-neutral-button-hover);
 }
 
-/* Mirrors .appbar-btn-checkable.checked (the inline chips' own real-open-
-   state styling) - a separate rule rather than sharing that class, since
-   .appbar-overflow-item already needs its own base rule (full-width,
-   left-aligned, tier-gated display) incompatible with .appbar-btn's. Note
-   this can never actually render true in practice: OverlayProvider is
-   single-open, so by the time any of Pins/View/Plugins/About/Help becomes
-   the open surface, "toolbar-overflow" has already stopped being it, and
-   this whole menu has unmounted. Kept anyway for the same reason the inline
-   copy has it - matching what the component's own contract (real state, not
-   latched clicks) promises, not for an effect anyone will currently see. */
+.appbar-overflow-item:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Mirrors .appbar-btn-checkable.checked for the menu copies. Note this can
+   never actually render true in practice: OverlayProvider is single-open,
+   so by the time any of Pins/View/Plugins/About/Help becomes the open
+   surface, "toolbar-overflow" has stopped being it and this menu has
+   unmounted. Kept anyway so both copies of a control state the same
+   contract. */
 .appbar-overflow-item.checked {
   background-color: var(--gl-neutral-button-background);
   border-color: var(--gl-neutral-button-border);
 }
 
-/* Breakpoints are tuned against this toolbar's own real button widths -
-   verified live by resizing the running app, not guessed. Tier 1 (About/
-   Help/Export PNG - least-frequently-used) collapses first; tier 3 (the
-   four zoom/fit controls, which have keyboard/wheel equivalents elsewhere)
-   collapses last, right before the floor of Library/Save/Settings, which
-   never collapse - those three are exactly what finding #5 flagged as
-   becoming unreachable, so they are the one tier that does not exist. */
-@container appbar (max-width: 820px) {
+/* Tiers collapse whole GROUPS, not individual buttons, so a cluster is
+   never left as a fragment of itself. Order is by how recoverable the
+   actions are elsewhere: history and viewport first (both have keyboard
+   and wheel equivalents), then arrange, then the panels, then the
+   workspace-tools cluster. Session (Library/Save) and Settings have no
+   tier at all - those are exactly what finding #5 flagged as becoming
+   unreachable, so they never collapse. */
+@container appbar (max-width: 900px) {
   .appbar-overflow-trigger {
     display: inline-flex;
     align-items: center;
@@ -1635,7 +1730,7 @@ body,
   }
 }
 
-@container appbar (max-width: 620px) {
+@container appbar (max-width: 720px) {
   .appbar-tier[data-tier="2"] {
     display: none;
   }
@@ -1644,11 +1739,20 @@ body,
   }
 }
 
-@container appbar (max-width: 420px) {
+@container appbar (max-width: 560px) {
   .appbar-tier[data-tier="3"] {
     display: none;
   }
   .appbar-overflow-item[data-tier="3"] {
+    display: block;
+  }
+}
+
+@container appbar (max-width: 400px) {
+  .appbar-tier[data-tier="4"] {
+    display: none;
+  }
+  .appbar-overflow-item[data-tier="4"] {
     display: block;
   }
 }
