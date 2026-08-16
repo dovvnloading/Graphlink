@@ -379,7 +379,18 @@ function App() {
     <OverlayProvider>
       <ReactFlowProvider>
         <GlobalShortcuts store={sceneStore} />
-        <div className="app-shell">
+        {/* data-connection-status: the real WS connection state, always
+            present regardless of whether the topbar renders any visual
+            indicator for it (see .app-topbar-status below - a healthy
+            connection now renders nothing there by design). The E2E suite's
+            shared boot helper (e2e/helpers.ts) waits on this attribute to
+            know the real backend round-trip has completed before touching
+            anything, which it can no longer do by waiting for a badge that
+            is often absent on purpose. Not a UI affordance - never styled,
+            never meant to be seen - so this stays a plain attribute rather
+            than a class, the same "invisible hook, not a rendered element"
+            posture as aria-live regions elsewhere in this file. */}
+        <div className="app-shell" data-connection-status={status}>
           {/* ADR-012 stage 12.3: the very first focusable element in the
               page, per the standard skip-link convention - invisible until
               it itself receives focus (Tab from anywhere before the canvas
