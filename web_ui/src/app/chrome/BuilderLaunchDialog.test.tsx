@@ -208,6 +208,70 @@ describe("BuilderLaunchDialog", () => {
     expect(screen.queryByRole("button", { name: "Delete this recipe" })).not.toBeInTheDocument();
   });
 
+  it("review-fix: shows a disabled 'Deleting…' state while the delete request is in flight", async () => {
+    const { user, request } = await setup("n9", [
+      { name: "My recipe", description: "d", steps: ["one"], mode: "copilot", builtIn: false },
+    ]);
+    await pickRecipe(user, "My recipe");
+
+    let resolveDelete: (value: unknown) => void = () => {};
+    request.mockImplementation((topic: string, intent: string) => {
+      if (intent === "deleteRecipe") return new Promise((resolve) => { resolveDelete = resolve; });
+      return Promise.resolve({ recipes: [] });
+    });
+
+    await user.click(screen.getByRole("button", { name: "Delete this recipe" }));
+
+    const deletingButton = await screen.findByRole("button", { name: "Deleting…" });
+    expect(deletingButton).toBeDisabled();
+
+    resolveDelete(true);
+    await screen.findByText("Describe a build yourself, or pick a saved recipe.");
+  });
+
+  it("review-fix: deleteRecipe resolving false leaves the selection and recipe list untouched", async () => {
+    const { user, intents, request } = await setup("n9", [
+      { name: "My recipe", description: "d", steps: ["one"], mode: "copilot", builtIn: false },
+    ]);
+    await pickRecipe(user, "My recipe");
+
+    request.mockImplementation((topic: string, intent: string) =>
+      intent === "deleteRecipe" ? Promise.resolve(false) : Promise.resolve({ recipes: [] }),
+    );
+    await user.click(screen.getByRole("button", { name: "Delete this recipe" }));
+
+    // Give the (rejected-by-backend) promise chain a tick to settle.
+    await screen.findByRole("button", { name: "Delete this recipe" });
+    expect(screen.queryByText("Describe a build yourself, or pick a saved recipe.")).not.toBeInTheDocument();
+    expect(intents.filter(([, intent]) => intent === "listRecipes")).toHaveLength(1); // only the on-open fetch
+  });
+
+  it("review-fix: a rejected deleteRecipe call surfaces an error instead of silently clearing the selection", async () => {
+    const { user, request } = await setup("n9", [
+      { name: "My recipe", description: "d", steps: ["one"], mode: "copilot", builtIn: false },
+    ]);
+    await pickRecipe(user, "My recipe");
+
+    request.mockImplementation((topic: string, intent: string) =>
+      intent === "deleteRecipe" ? Promise.reject(new Error("network down")) : Promise.resolve({ recipes: [] }),
+    );
+    await user.click(screen.getByRole("button", { name: "Delete this recipe" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not be deleted/i);
+    expect(screen.getByRole("button", { name: "Delete this recipe" })).toBeInTheDocument();
+  });
+
+  it("a recipe with an empty step list shows its description but no step list", async () => {
+    const { user } = await setup("n9", [
+      { name: "Bare recipe", description: "just a goal, no steps", steps: [], mode: "copilot", builtIn: true },
+    ]);
+
+    await pickRecipe(user, "Bare recipe");
+
+    expect(await screen.findByText("just a goal, no steps")).toBeInTheDocument();
+    expect(screen.queryByRole("list")).not.toBeInTheDocument();
+  });
+
   it("defaults to the Standard budget preset, and a preset click updates the submitted budgets", async () => {
     const { user, intents } = await setup();
 
@@ -223,6 +287,28 @@ describe("BuilderLaunchDialog", () => {
     await user.click(screen.getByRole("button", { name: "Plan the build" }));
 
     expect(intents).toContainEqual(["builder", "start", ["goal", "copilot", 6, 50_000, 300, null]]);
+  });
+
+  it("review-fix: a hand-dirtied Advanced field clears every preset's highlight, and a later preset click overwrites all three fields", async () => {
+    const { user } = await setup();
+
+    await user.click(screen.getByText("Advanced"));
+    const stepsInput = screen.getByLabelText("Max steps");
+    await user.clear(stepsInput);
+    await user.type(stepsInput, "30");
+    await user.tab(); // blur - 30 is within [1,50], commits unclamped
+
+    // 30/150000/900 matches no preset combination - none should read active.
+    for (const label of ["Quick", "Standard", "Extended"]) {
+      expect(screen.getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "false");
+    }
+
+    await user.click(screen.getByRole("button", { name: "Extended" }));
+
+    expect(screen.getByRole("button", { name: "Extended" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("Max steps")).toHaveValue(25);
+    expect(screen.getByLabelText("Max tokens")).toHaveValue(400_000);
+    expect(screen.getByLabelText("Max seconds")).toHaveValue(1_800);
   });
 
   it("clamps an out-of-range Advanced max-steps value on blur rather than silently reverting a typed 0", async () => {

@@ -716,12 +716,21 @@ def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
     activity = []
     for raw in payload.get("activity") or []:
         if isinstance(raw, dict) and raw.get("tool"):
+            # review-fix: elapsedMs is untrusted input from a saved file
+            # (hand-edited, or written by an older/different format) - a
+            # non-numeric value must degrade to 0, the same tolerance every
+            # other field on this row already gets via str(), not crash the
+            # whole session load the way a bare int() would.
+            try:
+                elapsed_ms = int(raw.get("elapsedMs", 0) or 0)
+            except (TypeError, ValueError):
+                elapsed_ms = 0
             activity.append({
                 "tool": str(raw.get("tool", "")),
                 "summary": str(raw.get("summary", "")),
                 "outcome": str(raw.get("outcome", "ok")),
                 "stepId": str(raw.get("stepId", "")),
-                "elapsedMs": int(raw.get("elapsedMs", 0) or 0),
+                "elapsedMs": elapsed_ms,
             })
     return SceneNode(
         id="", x=x, y=y,

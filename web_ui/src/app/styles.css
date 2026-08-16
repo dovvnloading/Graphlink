@@ -7365,8 +7365,19 @@ mark.document-view-search-match-current {
   flex-direction: column;
 }
 
+/* review-fix: flexbox rather than float, matching the "label + trailing
+   value" idiom used everywhere else in the app (ViewPopover's own
+   .view-field-row and 20+ others) - the only float in this stylesheet
+   otherwise. Scoped to this activity section specifically (not a bare
+   .chat-node-tool-invocation-name override) so ChatNodeView's own use of
+   that class, which has no trailing value to align, is unaffected. */
+.plan-node-activity .chat-node-tool-invocation-name {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .plan-node-activity-elapsed {
-  float: right;
   font-weight: 400;
   color: var(--gl-surface-text-muted);
 }

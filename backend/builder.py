@@ -82,6 +82,14 @@ _APPROVAL_SUMMARY_CAP = 400
 # summaries are shown one at a time, activity rows are shown many at once.
 _ACTIVITY_CAP = 100
 _ACTIVITY_SUMMARY_CAP = 200
+# review-fix: a tool CALL's name has no upstream length validation - it is
+# whatever a provider's tool-call parsing extracted from the model's own
+# output verbatim (e.g. providers/ollama_provider.py's _extract_tool_calls),
+# so a malformed/hallucinating turn (most reachable with a local model) can
+# emit an arbitrarily large one. Every OTHER field this row stores is
+# capped; leaving `tool` uncapped would let exactly that turn defeat the
+# same wire/session-size bound the ring buffer and summary cap exist for.
+_ACTIVITY_TOOL_NAME_CAP = 80
 
 # stage 8.7: which terminal/pause statuses notify, and with what severity -
 # keyed by the exact status string _land() writes to builder_status.
@@ -409,7 +417,7 @@ def _log_activity(node, *, tool: str, summary: str, outcome: str, step_id: str, 
     from the front (oldest first) once the ring buffer's cap is exceeded."""
     activity = node.state.builder_activity
     activity.append({
-        "tool": tool,
+        "tool": _truncate(tool, _ACTIVITY_TOOL_NAME_CAP),
         "summary": summary,
         "outcome": outcome,
         "stepId": step_id,

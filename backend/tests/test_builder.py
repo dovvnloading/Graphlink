@@ -924,6 +924,123 @@ class TestActivityLog:
 
         assert restored.state.builder_activity == node.state.builder_activity
 
+    def test_session_load_drops_malformed_activity_entries_instead_of_crashing(self):
+        from backend.session_load import _restore_plan_payload
+
+        payload = {
+            "goal": "g",
+            "activity": [
+                {"tool": "graph.create_node", "summary": "ok row", "outcome": "ok", "stepId": "s1", "elapsedMs": 5},
+                "not a dict",
+                {"summary": "missing the tool key entirely"},
+                {"tool": "run_node", "summary": "s", "outcome": "ok", "stepId": "s1", "elapsedMs": "not a number"},
+            ],
+        }
+
+        restored = _restore_plan_payload(payload)
+
+        assert len(restored.state.builder_activity) == 2, (
+            "the non-dict entry and the entry missing 'tool' are dropped, "
+            "matching plan_steps' own malformed-entry tolerance"
+        )
+        assert restored.state.builder_activity[0]["tool"] == "graph.create_node"
+        assert restored.state.builder_activity[1]["elapsedMs"] == 0, (
+            "a non-numeric elapsedMs coerces to 0 rather than crashing session load"
+        )
+
+    def test_review_fix_undo_run_does_not_revert_activity_logged_after_a_mid_run_replan(self, monkeypatch):
+        """A command recorded mid-run (builderReplan fires on every
+        builder.replan call, not just once) snapshots the plan node with
+        whatever activity existed at that instant. Reverting that command -
+        via undo_run, which walks the whole run's commands - must not
+        silently erase rows logged afterward; see commands.py's own
+        review-fix in _restore for the mechanism."""
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["s1", "s2", "s3"])
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "builder.complete_step", summary="s1 done")]},
+            # The replan's own command snapshots the node right after this
+            # call's own activity row is appended.
+            {"tool_calls": [call("c2", "builder.replan", steps=["new s3"], reason="r")]},
+            # Everything below is logged AFTER that snapshot.
+            {"tool_calls": [call("c3", "graph.create_node", kind="note", content="after replan")]},
+            {"tool_calls": [call("c4", "builder.complete_step", summary="s2 done")]},
+            {"tool_calls": [call("c5", "builder.complete_step", summary="new s3 done")]},
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert node.state.builder_status == "done"
+        activity_before_undo = list(node.state.builder_activity)
+        assert len(activity_before_undo) == 5, "one row per invoked call"
+
+        document.undo_run(node.state.builder_run_id)
+
+        assert node.state.builder_activity == activity_before_undo, (
+            "undo_run inverts the builderReplan command among the run's "
+            "others - its mid-run snapshot must not erase rows logged after it"
+        )
+
+    def test_activity_is_a_capped_ring_buffer_at_the_exact_boundary(self, monkeypatch):
+        """review-fix: the existing ring-buffer test only checks aggregate
+        length and the newest row after a large overshoot; this pins the
+        exact trim at the boundary - one run under the cap, one exactly at
+        it, one one-over - and which specific rows survive."""
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["one step"], mode="autopilot", max_tokens=10_000_000, max_wall_seconds=10_000)
+        # _ACTIVITY_CAP + 1 create_node calls, then complete_step - the cap
+        # is breached by exactly one row.
+        calls = [
+            call(f"c{i}", "graph.create_node", kind="note", content=str(i))
+            for i in range(builder_module._ACTIVITY_CAP + 1)
+        ]
+        calls.append(call("cfinal", "builder.complete_step", summary="done"))
+        scripted_turns(monkeypatch, [{"tool_calls": calls}], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        activity = node.state.builder_activity
+        assert len(activity) == builder_module._ACTIVITY_CAP
+        # The trim runs after EVERY append that exceeds the cap, not once
+        # at the end: 101 create_node calls (content "0".."100") first push
+        # the log to 101 rows, dropping content "0"; the trailing
+        # complete_step then pushes it to 101 again, dropping content "1"
+        # too - "2" is the oldest of the two content rows to survive both
+        # trims.
+        assert activity[0]["summary"] == '{"content": "2", "kind": "note"}'
+        assert activity[-1]["tool"] == "builder.complete_step"
+
+    def test_activity_tool_name_and_summary_are_both_truncated_when_over_cap(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["one step"])
+        long_tool_name = "graph." + "x" * 200
+        long_content = "y" * 500
+
+        async def oversized_handler(call, ctx):
+            return ToolResult(content="ok")
+
+        from backend.providers.base import ToolSpec
+        from backend.tools import GRAPH_READ
+
+        registry.register(
+            ToolSpec(name=long_tool_name, description="d", input_schema={"type": "object"}),
+            oversized_handler, scopes={GRAPH_READ}, approval="auto",
+        )
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", long_tool_name, content=long_content)]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        row = node.state.builder_activity[0]
+        # _truncate appends a trailing ellipsis character on top of the cap,
+        # so the truncated length is cap + 1, not cap itself.
+        assert len(row["tool"]) == builder_module._ACTIVITY_TOOL_NAME_CAP + 1
+        assert row["tool"].endswith("…")
+        assert len(row["summary"]) == builder_module._ACTIVITY_SUMMARY_CAP + 1
+        assert row["summary"].endswith("…")
+
 
 class TestLandNotifications:
     """stage 8.7: a build that lands while the user is elsewhere must not
@@ -1041,6 +1158,35 @@ class TestAnchoredPlacement:
     def test_no_anchor_falls_back_to_the_origin_drop(self):
         document = SceneDocument()
         assert _place_child(document, None, None) == (80.0, 80.0)
+
+    def test_review_fix_an_explicit_parent_id_equal_to_the_anchor_does_not_overlap_an_anchor_placed_sibling(self):
+        """The executor prompt tells the model the plan node's own id
+        (builder.py: "The plan node's id is {plan_node_id}."), and nothing
+        stops it passing that back as parent_id for a chat/code node -
+        which used to count siblings by EDGE (invisible to a note the
+        anchor branch placed with no edge at all), landing the two nodes on
+        top of each other. Both branches must now agree on the same row."""
+        document = SceneDocument()
+        plan = document.add_plan_node(200.0, 200.0, "goal")
+
+        x1, y1 = _place_child(document, None, plan.id)  # parentless -> anchor branch
+        document.add_note(x1, y1)
+        x2, y2 = _place_child(document, plan.id, plan.id)  # parent_id IS the anchor
+
+        assert (x2, y2) != (x1, y1), "must not collide with the anchor-placed sibling"
+        assert (x2, y2) == (x1 + tools_graph_module._SIBLING_HORIZONTAL_SPACING, y1)
+
+    def test_review_fix_a_real_parent_distinct_from_the_anchor_keeps_its_own_edge_based_counting(self):
+        """The unification fix must be scoped to parent_id == anchor_id
+        only - a normal parent (anything else) keeps exactly its prior,
+        unrelated-to-the-builder edge-based placement."""
+        document = SceneDocument()
+        plan = document.add_plan_node(0.0, 0.0, "goal")
+        parent = document.add_chat_node(500.0, 500.0, "p", True)
+
+        x, y = _place_child(document, parent.id, plan.id)
+
+        assert (x, y) == (parent.x, parent.y + MESSAGE_VERTICAL_SPACING)
 
 
 class TestDeleteRecipe:

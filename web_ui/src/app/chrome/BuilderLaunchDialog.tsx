@@ -155,11 +155,21 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
     setDeletingRecipe(true);
     transport
       .request("builder", "deleteRecipe", [recipe])
-      .then(() => transport.request("builder", "listRecipes", []))
-      .then((value) => {
-        const payload = value as { recipes: RecipeRow[] };
-        setRecipes(payload.recipes ?? []);
-        setRecipe("");
+      .then((deleted) => {
+        // A resolved `false` (unknown name, or a refused built-in) is NOT a
+        // rejected promise - deleteRecipe's own backend already surfaced
+        // why via its own notification (backend/api/intents_builder.py).
+        // Refreshing the list and clearing the selection here regardless
+        // would silently claim success on a call that changed nothing.
+        if (!deleted) return;
+        return transport.request("builder", "listRecipes", []).then((value) => {
+          const payload = value as { recipes: RecipeRow[] };
+          setRecipes(payload.recipes ?? []);
+          setRecipe("");
+        });
+      })
+      .catch(() => {
+        setError("The recipe could not be deleted - see graphlink.log for details.");
       })
       .finally(() => setDeletingRecipe(false));
   }

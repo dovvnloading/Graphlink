@@ -197,28 +197,43 @@ def _place_child(
 ) -> tuple[float, float]:
     """Parent-relative placement, model-free: directly below the parent,
     fanning right one slot per existing child so parallel children of the
-    same parent land side by side instead of stacked."""
-    if parent_id is not None and parent_id in document.nodes:
+    same parent land side by side instead of stacked.
+
+    review-fix (stage 8.7): the plan node can be reached by EITHER path -
+    as an explicit parent_id (the executor prompt tells the model the plan
+    node's own id, and nothing stops it passing that id back as parent_id
+    for a chat/code node) or as the implicit anchor for a parentless create.
+    The two branches below used to count siblings differently (edges vs.
+    position), so a parentless create landing via the anchor branch was
+    invisible to the parent branch's edge count and vice versa - two nodes
+    from the two different paths could land on the exact same coordinates.
+    `parent_id != anchor_id` routes that one specific case (parent_id IS the
+    anchor) into the position-based branch below, which sees every node in
+    the row regardless of which path placed it. A normal parent - anything
+    other than the anchor - is completely unaffected."""
+    if parent_id is not None and parent_id in document.nodes and parent_id != anchor_id:
         parent = document.nodes[parent_id]
         existing_children = sum(1 for e in document.edges.values() if e.source == parent_id)
         return (
             parent.x + existing_children * _SIBLING_HORIZONTAL_SPACING,
             parent.y + MESSAGE_VERTICAL_SPACING,
         )
-    if anchor_id is not None and anchor_id in document.nodes:
-        # stage 8.7: same fan-out shape as the parented branch above, but
-        # the anchor (a plan node) never gains an EDGE to what it builds -
+    reference_id = parent_id or anchor_id
+    if reference_id is not None and reference_id in document.nodes:
+        # The anchor (a plan node) never gains an EDGE to what it builds -
         # it is a placement reference only - so there is no edge count to
-        # read a sibling index off. A node already sitting on the anchor's
-        # own placement row is this same anchor's own earlier creation
-        # (nothing else places there), so counting THOSE stands in for
-        # "existing children" without needing a persisted counter.
-        anchor = document.nodes[anchor_id]
-        row_y = anchor.y + MESSAGE_VERTICAL_SPACING
+        # read a sibling index off. A node already sitting on the
+        # reference's own placement row is this same reference's own
+        # earlier creation (nothing else places there), so counting THOSE
+        # stands in for "existing children" without needing a persisted
+        # counter - and, per the docstring above, catches siblings placed
+        # via EITHER path.
+        reference = document.nodes[reference_id]
+        row_y = reference.y + MESSAGE_VERTICAL_SPACING
         row_siblings = sum(
-            1 for n in document.nodes.values() if n.x >= anchor.x and abs(n.y - row_y) < 1.0
+            1 for n in document.nodes.values() if n.x >= reference.x and abs(n.y - row_y) < 1.0
         )
-        return anchor.x + row_siblings * _SIBLING_HORIZONTAL_SPACING, row_y
+        return reference.x + row_siblings * _SIBLING_HORIZONTAL_SPACING, row_y
     # Free-floating with no anchor either (a bare RunContext, e.g. a future
     # non-builder caller): drop near the origin offset by node count so
     # repeated creations don't perfectly overlap.

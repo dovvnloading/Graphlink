@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ReactFlowProvider } from "@xyflow/react";
@@ -43,8 +44,8 @@ function makeData(overrides: Partial<PlanNodeData> = {}): PlanNodeData {
   };
 }
 
-function renderPlan(data: PlanNodeData) {
-  return render(
+function planElement(data: PlanNodeData) {
+  return (
     <ReactFlowProvider>
       <PlanNodeView
         id="n1"
@@ -61,8 +62,19 @@ function renderPlan(data: PlanNodeData) {
         draggable
         parentId={undefined}
       />
-    </ReactFlowProvider>,
+    </ReactFlowProvider>
   );
+}
+
+function renderPlan(data: PlanNodeData) {
+  return render(planElement(data));
+}
+
+// ReactFlowProvider remounting on every rerender would reset internal state
+// unrelated to this test - reusing the exact same element shape as
+// renderPlan keeps rerender() a like-for-like prop update instead.
+function rerenderPlan(rerender: (ui: ReactElement) => void, data: PlanNodeData) {
+  rerender(planElement(data));
 }
 
 describe("PlanNodeView", () => {
@@ -233,6 +245,35 @@ describe("PlanNodeView", () => {
       }));
       expect(screen.getByText("1 activity entry")).toBeInTheDocument();
       expect(screen.queryByText(/error/)).not.toBeInTheDocument();
+    });
+
+    it("review-fix: only auto-scrolls while running AND the disclosure is open - not collapsed, not landed", () => {
+      const scrollToSpy = vi.fn();
+      const originalScrollTo = Element.prototype.scrollTo;
+      Element.prototype.scrollTo = scrollToSpy;
+      const row = (n: number) => ({ tool: `tool-${n}`, summary: "{}", outcome: "ok", stepId: "s1", elapsedMs: n });
+
+      try {
+        const { rerender } = renderPlan(makeData({ builderStatus: "running", builderActivity: [row(1)] }));
+        const details = document.querySelector(".plan-node-activity") as HTMLDetailsElement;
+        expect(details.open).toBe(false); // collapsed by default
+
+        rerenderPlan(rerender, makeData({ builderStatus: "running", builderActivity: [row(1), row(2)] }));
+        expect(scrollToSpy).not.toHaveBeenCalled(); // still collapsed - must not scroll a hidden panel
+
+        details.open = true; // the same native toggle a real click on <summary> performs
+        rerenderPlan(rerender, makeData({ builderStatus: "running", builderActivity: [row(1), row(2), row(3)] }));
+        expect(scrollToSpy).toHaveBeenCalledTimes(1); // running + open - follows the newest row
+
+        scrollToSpy.mockClear();
+        rerenderPlan(rerender, makeData({
+          builderStatus: "done", pendingRequestId: null,
+          builderActivity: [row(1), row(2), row(3), row(4)],
+        }));
+        expect(scrollToSpy).not.toHaveBeenCalled(); // landed - stops following, doesn't yank a spot the user scrolled to
+      } finally {
+        Element.prototype.scrollTo = originalScrollTo;
+      }
     });
   });
 });

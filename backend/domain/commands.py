@@ -236,6 +236,31 @@ def _restore(live: dict, snapshot: dict) -> None:
                 restored.state.builder_awaiting_tool_approval = False
                 restored.state.builder_approval_tool_name = ""
                 restored.state.builder_approval_summary = ""
+            # review-fix (stage 8.7): builder_activity is documented as run
+            # TELEMETRY, not reversible document content (PlanState's own
+            # docstring: "deliberately left untouched by an undo, so the
+            # record of what happened survives reverting what happened") -
+            # unlike plan_steps, which genuinely IS reversible content
+            # (scene/setPlanSteps is A-classified for exactly that reason).
+            # A command recorded MID-RUN (builderReplan fires on every
+            # builder.replan call, not just once at the run's start)
+            # snapshots the node with whatever activity existed at THAT
+            # instant; restoring that snapshot verbatim would silently erase
+            # every row logged afterward the moment the command is inverted
+            # - the same phantom-state class of hazard pending_request_id's
+            # unconditional reset above already guards against, just for a
+            # different field. Carries the CURRENT node's activity log
+            # forward instead of trusting the snapshot's stale copy - `live`
+            # still holds the pre-restore node at this point, one line
+            # before it is replaced. A node that does not currently exist
+            # (this restore is recreating a deleted one) has no "current" to
+            # preserve, so the snapshot's own activity is used as-is - the
+            # only case where trusting the snapshot is correct.
+            current = live.get(key)
+            if isinstance(getattr(restored, "state", None), PlanState) and isinstance(
+                getattr(current, "state", None), PlanState,
+            ):
+                restored.state.builder_activity = current.state.builder_activity
             live[key] = restored
 
 
