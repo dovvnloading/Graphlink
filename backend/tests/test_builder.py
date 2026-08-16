@@ -18,13 +18,16 @@ import time
 
 import api_provider
 from backend import builder as builder_module
+from backend import tools_graph as tools_graph_module
 from backend.builder import run_build
 from backend.domain.graph import SceneDocument
+from backend.domain.model import MESSAGE_VERTICAL_SPACING
+from backend.notifications import NotificationState
 from backend.providers.base import ToolCall
 from backend.run_lifecycle import RunRegistry
 from backend.tests.test_canvas import make_bus_with_dispatcher
 from backend.tools import ToolRegistry
-from backend.tools_graph import register_graph_tools, register_run_node_tool
+from backend.tools_graph import _place_child, register_graph_tools, register_run_node_tool
 from backend.builder import register_builder_control_tools
 
 
@@ -99,7 +102,7 @@ def seed_plan(document, steps, *, mode="copilot", **budgets):
     return node
 
 
-async def drive_build(document, dispatcher, registry, bus, node, *, approve=True, deny_first=False):
+async def drive_build(document, dispatcher, registry, bus, node, *, approve=True, deny_first=False, notifications=None):
     """Runs run_build while a driver coroutine plays the approving human.
     Returns (approvals_seen, denials_issued)."""
     cancel_event = threading.Event()
@@ -111,7 +114,7 @@ async def drive_build(document, dispatcher, registry, bus, node, *, approve=True
         try:
             await run_build(
                 document=document, dispatcher=dispatcher, registry=registry,
-                bus=bus, notifications=None, plan_node_id=node.id,
+                bus=bus, notifications=notifications, plan_node_id=node.id,
                 request_id=handle.request_id, handle=handle, cancel_event=cancel_event,
             )
         finally:
@@ -829,3 +832,251 @@ class TestReviewFixRegressions:
             "a transient provider fault must not permanently kill a build "
             "whose goal/checklist/spent budgets are still on the canvas"
         )
+
+
+class TestActivityLog:
+    """stage 8.7: the build's own visible record of what it did."""
+
+    def test_activity_rows_are_written_for_ok_and_error_calls_including_control_tools(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["one step"])
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [
+                call("c1", "graph.create_node", kind="note", content="x"),
+                # pycoder requires parent_id - this call errors.
+                call("c2", "graph.create_node", kind="pycoder"),
+            ]},
+            {"tool_calls": [call("c3", "builder.complete_step", summary="done")]},
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        rows = node.state.builder_activity
+        tools = [r["tool"] for r in rows]
+        assert tools == ["graph.create_node", "graph.create_node", "builder.complete_step"], (
+            "every invoked call is logged in order, including the control tool"
+        )
+        assert rows[0]["outcome"] == "ok"
+        assert rows[1]["outcome"] == "error"
+        assert rows[2]["outcome"] == "ok"
+        assert all(r["stepId"] == "s1" for r in rows)
+        assert all(isinstance(r["elapsedMs"], int) and r["elapsedMs"] >= 0 for r in rows)
+
+    def test_a_denied_call_logs_as_error_with_the_denial_text(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["one step"])
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "graph.create_node", kind="note", content="first try")]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="ok, done without it")]},
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node, deny_first=True))
+
+        rows = node.state.builder_activity
+        assert rows[0]["tool"] == "graph.create_node"
+        assert rows[0]["outcome"] == "error"
+        assert "denied" in rows[0]["summary"]
+
+    def test_activity_is_a_capped_ring_buffer(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        # autopilot: 120 graph.mutate calls with no approval round-trip each.
+        node = seed_plan(document, ["one step"], mode="autopilot", max_tokens=10_000_000, max_wall_seconds=10_000)
+        calls = [call(f"c{i}", "graph.create_node", kind="note", content=str(i)) for i in range(120)]
+        calls.append(call("cfinal", "builder.complete_step", summary="done"))
+        scripted_turns(monkeypatch, [{"tool_calls": calls}], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert node.state.builder_status == "done"
+        assert len(node.state.builder_activity) == builder_module._ACTIVITY_CAP
+        # Oldest dropped first: the newest row logged is always last.
+        assert node.state.builder_activity[-1]["tool"] == "builder.complete_step"
+
+    def test_undo_run_leaves_the_activity_log_intact(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["one step"])
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "graph.create_node", kind="note", content="x")]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+        logged = len(node.state.builder_activity)
+        assert logged > 0
+
+        document.undo_run(node.state.builder_run_id)
+
+        assert len(node.state.builder_activity) == logged, (
+            "activity is run telemetry, not document content - undo_run must not touch it"
+        )
+
+    def test_activity_round_trips_through_session_save_and_load(self):
+        from backend.session_load import _restore_plan_payload
+        from backend.session_save import _serialize_plan_node
+
+        document = SceneDocument()
+        node = document.add_plan_node(0, 0, "the goal")
+        node.state.builder_activity = [
+            {"tool": "graph.create_node", "summary": "{}", "outcome": "ok", "stepId": "s1", "elapsedMs": 42},
+        ]
+
+        restored = _restore_plan_payload(_serialize_plan_node(node))
+
+        assert restored.state.builder_activity == node.state.builder_activity
+
+
+class TestLandNotifications:
+    """stage 8.7: a build that lands while the user is elsewhere must not
+    announce nothing."""
+
+    def test_done_notifies_success(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["one step"])
+        notifications = NotificationState()
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "builder.finish_build", summary="all done")]},
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node, notifications=notifications))
+
+        assert notifications.msg_type == "success"
+        assert notifications.message == "all done"
+
+    def test_paused_notifies_warning(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["one step"], max_tokens=1)
+        notifications = NotificationState()
+        scripted_turns(monkeypatch, [
+            {
+                "tool_calls": [call("c1", "graph.create_node", kind="note", content="x")],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 5},
+            },
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node, notifications=notifications))
+
+        assert notifications.msg_type == "warning"
+        assert "budget" in notifications.message.lower()
+
+    def test_failed_notifies_error(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["a step"])
+        notifications = NotificationState()
+
+        def boom_turn(task, messages, tools=(), **kwargs):
+            raise RuntimeError("rate limited")
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", boom_turn)
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node, notifications=notifications))
+
+        assert notifications.msg_type == "error"
+        assert "rate limited" in notifications.message
+
+    def test_stopped_does_not_notify(self):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["one step"])
+        notifications = NotificationState()
+        cancel_event = threading.Event()
+        cancel_event.set()  # pre-cancelled: the loop's own top-of-loop check fires first
+        handle = dispatcher._runs.claim("builder", node_id=node.id, cancel_event=cancel_event)
+
+        async def run():
+            try:
+                await run_build(
+                    document=document, dispatcher=dispatcher, registry=registry,
+                    bus=bus, notifications=notifications, plan_node_id=node.id,
+                    request_id=handle.request_id, handle=handle, cancel_event=cancel_event,
+                )
+            finally:
+                dispatcher._runs.release(handle.request_id)
+
+        asyncio.run(run())
+
+        assert node.state.builder_status == "stopped"
+        assert notifications.message == "", (
+            "Stop is user-initiated - a notification for an action the user just took is noise"
+        )
+
+
+class TestAnchoredPlacement:
+    """stage 8.7: a build's parentless creates land near its plan node
+    instead of scattering at the canvas origin."""
+
+    def test_a_parentless_create_anchors_near_the_plan_node(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["one step"])
+        node.x, node.y = 500.0, 300.0
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "graph.create_node", kind="note", content="x")]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        created = next(n for n in document.nodes.values() if n.kind == "note")
+        assert created.x == node.x
+        assert created.y == node.y + MESSAGE_VERTICAL_SPACING
+
+    def test_multiple_parentless_creates_fan_out_along_the_anchor_row(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["one step"])
+        node.x, node.y = 100.0, 100.0
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [
+                call("c1", "graph.create_node", kind="note", content="a"),
+                call("c2", "graph.create_node", kind="note", content="b"),
+            ]},
+            {"tool_calls": [call("c3", "builder.complete_step", summary="done")]},
+        ], [])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        notes = sorted((n for n in document.nodes.values() if n.kind == "note"), key=lambda n: n.x)
+        assert len(notes) == 2
+        assert notes[0].x == node.x
+        assert notes[1].x == node.x + tools_graph_module._SIBLING_HORIZONTAL_SPACING
+        assert notes[0].y == notes[1].y == node.y + MESSAGE_VERTICAL_SPACING
+
+    def test_no_anchor_falls_back_to_the_origin_drop(self):
+        document = SceneDocument()
+        assert _place_child(document, None, None) == (80.0, 80.0)
+
+
+class TestDeleteRecipe:
+    def test_deletes_a_saved_recipe(self):
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            source = document.add_plan_node(0, 0, "goal")
+            source.state.plan_steps = [{"id": "s1", "title": "step", "status": "done", "detail": ""}]
+            await bus.dispatch_intent("builder", "saveRecipe", [source.id, "My recipe"])
+
+            result = await bus.dispatch_intent("builder", "deleteRecipe", ["My recipe"])
+            assert result is True
+
+            listing = await bus.dispatch_intent("builder", "listRecipes", [])
+            names = [r["name"] for r in listing["recipes"]]
+            assert "My recipe" not in names
+            assert "Research and summarize" in names, "built-ins are untouched"
+
+        asyncio.run(run())
+
+    def test_refuses_to_delete_a_built_in(self):
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            result = await bus.dispatch_intent("builder", "deleteRecipe", ["Research and summarize"])
+            assert result is False
+
+            listing = await bus.dispatch_intent("builder", "listRecipes", [])
+            names = [r["name"] for r in listing["recipes"]]
+            assert "Research and summarize" in names
+
+        asyncio.run(run())
+
+    def test_deleting_an_unknown_name_is_a_no_op_not_an_error(self):
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            result = await bus.dispatch_intent("builder", "deleteRecipe", ["Nonexistent"])
+            assert result is False
+
+        asyncio.run(run())

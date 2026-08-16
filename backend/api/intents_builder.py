@@ -152,6 +152,31 @@ def register_builder_intents(
         await bus.publish("notification")
         return clean_name
 
+    async def delete_recipe(name):
+        """stage 8.7: rounds out the recipe lifecycle - saveRecipe already
+        creates one from a finished build, but nothing could ever remove
+        one. Mirrors save_recipe's own name-guard against built-ins and its
+        own settings.get_recipes()/set_recipes() replace-the-whole-list
+        posture."""
+        from backend.builder import BUILT_IN_RECIPES
+
+        clean_name = str(name or "").strip()
+        if any(r["name"] == clean_name for r in BUILT_IN_RECIPES):
+            notifications.show(f'"{clean_name}" is a built-in recipe - it cannot be deleted.', "warning")
+            await bus.publish("notification")
+            return False
+        settings = agent_dispatcher._settings_manager
+        existing = settings.get_recipes()
+        remaining = [r for r in existing if r["name"] != clean_name]
+        if len(remaining) == len(existing):
+            notifications.show(f'No saved recipe named "{clean_name}".', "info")
+            await bus.publish("notification")
+            return False
+        settings.set_recipes(remaining)
+        notifications.show(f'Deleted recipe "{clean_name}".', "info")
+        await bus.publish("notification")
+        return True
+
     async def start_execution(node_id):
         node = document.nodes.get(node_id)
         if node is None or not isinstance(node.state, PlanState):
@@ -202,4 +227,5 @@ def register_builder_intents(
     bus.register_intent("builder", "denyTool", deny_tool)
     bus.register_intent("builder", "listRecipes", list_recipes)
     bus.register_intent("builder", "saveRecipe", save_recipe)
+    bus.register_intent("builder", "deleteRecipe", delete_recipe)
     bus.register_intent("scene", "setPlanSteps", set_plan_steps)

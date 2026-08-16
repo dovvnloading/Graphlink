@@ -2346,6 +2346,19 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
                 ]
                 if isinstance(n.state, PlanState) else []
             ),
+            # ADR-008 stage 8.7: the run's own activity log - see PlanState's
+            # docstring for why this is untouched by undo.
+            "builderActivity": (
+                [
+                    {
+                        "tool": a["tool"], "summary": a["summary"],
+                        "outcome": a["outcome"], "stepId": a["stepId"],
+                        "elapsedMs": a["elapsedMs"],
+                    }
+                    for a in n.state.builder_activity
+                ]
+                if isinstance(n.state, PlanState) else []
+            ),
             "builderStatus": n.state.builder_status if isinstance(n.state, PlanState) else "",
             "builderMode": n.state.builder_mode if isinstance(n.state, PlanState) else "",
             "builderRunId": n.state.builder_run_id if isinstance(n.state, PlanState) else "",
