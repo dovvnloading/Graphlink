@@ -6,11 +6,16 @@ import { expect, type Page } from "@playwright/test";
  *
  * Two things every spec would otherwise have to repeat:
  *
- * 1. Wait for the REAL WS round-trip to complete (App.tsx's connection
- *    badge, `.app-conn-<status>`) before touching anything - a fresh
- *    `page.goto("/")` returns as soon as the SPA shell's static HTML/JS
- *    loads, well before the WsTransport handshake against the real backend
- *    (tests_e2e/run_backend.py) has actually completed.
+ * 1. Wait for the REAL WS round-trip to complete (App.tsx's
+ *    `data-connection-status` attribute on `.app-shell`) before touching
+ *    anything - a fresh `page.goto("/")` returns as soon as the SPA shell's
+ *    static HTML/JS loads, well before the WsTransport handshake against the
+ *    real backend (tests_e2e/run_backend.py) has actually completed. This
+ *    used to wait on the visible connection badge (`.app-conn-open`), which
+ *    stopped being a reliable signal once that badge became exception-only
+ *    (App.tsx renders nothing there for a healthy connection by design) -
+ *    the attribute is the same underlying signal without depending on
+ *    whatever the topbar currently chooses to show for it.
  * 2. Dismiss the first-run onboarding wizard (chrome/OnboardingDialog.tsx).
  *    Every E2E run boots against a BRAND NEW settings_state_file (see that
  *    script's own docstring on why - full isolation from a real user's
@@ -38,13 +43,13 @@ import { expect, type Page } from "@playwright/test";
  */
 export async function gotoApp(page: Page): Promise<void> {
   await page.goto("/");
-  await expect(page.locator(".app-conn-open")).toBeVisible();
+  await expect(page.locator('.app-shell[data-connection-status="open"]')).toBeAttached();
 
   // waitFor (not isVisible(), which resolves immediately either way) is
   // deliberate: the app-settings snapshot that decides whether onboarding
-  // auto-opens arrives asynchronously over the SAME WS connection
-  // app-conn-open just confirmed, so it can genuinely still be in flight at
-  // this exact line. A bare isVisible() check here would race it - "not
+  // auto-opens arrives asynchronously over the SAME WS connection the
+  // attribute above just confirmed, so it can genuinely still be in flight
+  // at this exact line. A bare isVisible() check here would race it - "not
   // visible yet" and "never opening" look identical at a single instant,
   // and picking the wrong one would leave the dialog to pop up mid-test
   // instead of being dismissed up front.

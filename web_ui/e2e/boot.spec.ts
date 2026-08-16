@@ -22,9 +22,16 @@ test("boots against the real backend and renders the canvas shell", async ({ pag
   await expect(page.getByTestId("scene-canvas")).toBeVisible();
   await expect(page.locator(".react-flow__viewport")).toBeVisible();
 
-  // The connection badge (connectionBadge.ts) reporting the real WS
-  // handshake's outcome, not just "the page loaded".
-  await expect(page.locator(".app-conn-open")).toHaveText("connected");
+  // The real WS handshake's outcome (App.tsx's data-connection-status),
+  // not just "the page loaded". gotoApp already waited on this exact
+  // attribute to reach "open" before returning, so this is a direct
+  // re-assertion of that same state rather than a race - the app bar and
+  // canvas checks above ran after that wait, and a WS drop between then and
+  // now is exactly the kind of regression this line exists to catch.
+  // connectionBadge.ts's own label text is NOT asserted here any more: it
+  // now renders only for a degraded connection (App.tsx), so "connected"
+  // has no visible text to check on the happy path this test exercises.
+  await expect(page.locator('.app-shell[data-connection-status="open"]')).toBeAttached();
 
   // A fresh session has zero nodes - SceneCanvas.tsx's own empty-state hint
   // is the honest "nothing broken, genuinely nothing here yet" signal for

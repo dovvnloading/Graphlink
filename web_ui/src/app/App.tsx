@@ -379,7 +379,18 @@ function App() {
     <OverlayProvider>
       <ReactFlowProvider>
         <GlobalShortcuts store={sceneStore} />
-        <div className="app-shell">
+        {/* data-connection-status: the real WS connection state, always
+            present regardless of whether the topbar renders any visual
+            indicator for it (see .app-topbar-status below - a healthy
+            connection now renders nothing there by design). The E2E suite's
+            shared boot helper (e2e/helpers.ts) waits on this attribute to
+            know the real backend round-trip has completed before touching
+            anything, which it can no longer do by waiting for a badge that
+            is often absent on purpose. Not a UI affordance - never styled,
+            never meant to be seen - so this stays a plain attribute rather
+            than a class, the same "invisible hook, not a rendered element"
+            posture as aria-live regions elsewhere in this file. */}
+        <div className="app-shell" data-connection-status={status}>
           {/* ADR-012 stage 12.3: the very first focusable element in the
               page, per the standard skip-link convention - invisible until
               it itself receives focus (Tab from anywhere before the canvas
@@ -400,12 +411,39 @@ function App() {
           <div aria-live="polite" role="status" className="visually-hidden">
             {announcement}
           </div>
+          {/* Three declared grid tracks - brand, toolbar, status - so the
+              regions of a permanently-visible bar have fixed homes and
+              cannot encroach on one another. See .app-topbar in styles.css
+              and AppBar.tsx's own layout contract. */}
           <header className="app-topbar">
-            <span className="app-title">Graphlink</span>
+            <div className="app-topbar-brand">
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="app-brand-mark">
+                <circle cx="6" cy="7" r="2.6" />
+                <circle cx="18" cy="6" r="2.6" />
+                <circle cx="12" cy="17.5" r="2.6" />
+                <path d="M7.6 8.9 10.8 15M16.6 8.2 13.3 15M8.5 6.6h6.9" />
+              </svg>
+              <span className="app-title">Graphlink</span>
+            </div>
             <AppBar store={sceneStore} />
-            <span className={`app-conn app-conn-${status}`} title={`backend ${system.backendVersion ?? ""}`}>
-              {connectionBadgeLabel(status)}
-            </span>
+            {/* Exception-only: a healthy connection shows nothing at all.
+                A permanent "connected" badge reports the expected state on
+                every frame and carries no information. The degraded states
+                do carry information - "reconnecting" is the app's own
+                answer to "why did my click do nothing", since intents are
+                queued or refused while it shows (see connectionBadge.ts) -
+                so those still surface, and only those. */}
+            <div className="app-topbar-status">
+              {status !== "open" && (
+                <span
+                  className={`app-conn app-conn-${status}`}
+                  title={`backend ${system.backendVersion ?? ""}`}
+                >
+                  <span className="app-conn-dot" aria-hidden="true" />
+                  {connectionBadgeLabel(status)}
+                </span>
+              )}
+            </div>
           </header>
 
           <main className="app-canvas-region">
