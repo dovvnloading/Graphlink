@@ -186,6 +186,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         indexIntoKnowledge: false,
         planGoal: "",
         planSteps: [],
+        builderActivity: [],
         builderStatus: "",
         builderMode: "",
         builderRunId: "",

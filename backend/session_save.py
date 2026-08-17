@@ -403,6 +403,12 @@ def _serialize_plan_node(node: SceneNode) -> dict[str, Any]:
         "node_type": "plan",
         "goal": node.state.plan_goal,
         "steps": [dict(s) for s in node.state.plan_steps],
+        # stage 8.7: the run's activity log - persisted like every other
+        # PlanState field so it survives restart alongside the resume
+        # point, and (unlike the LIVE-run fields below) it describes past
+        # calls rather than an in-flight RunHandle, so nothing here needs
+        # load-time normalization.
+        "activity": [dict(a) for a in node.state.builder_activity],
         "builder_status": node.state.builder_status,
         "builder_mode": node.state.builder_mode,
         "builder_run_id": node.state.builder_run_id,

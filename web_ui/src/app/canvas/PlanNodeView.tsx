@@ -27,9 +27,18 @@ export interface PlanStepData {
   detail: string;
 }
 
+export interface BuilderActivityRowData {
+  tool: string;
+  summary: string;
+  outcome: string;
+  stepId: string;
+  elapsedMs: number;
+}
+
 export interface PlanNodeData extends Record<string, unknown> {
   planGoal: string;
   planSteps: PlanStepData[];
+  builderActivity: BuilderActivityRowData[];
   builderStatus: string;
   builderMode: string;
   builderRunId: string;
@@ -96,6 +105,21 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   const resumable = RESUMABLE.has(data.builderStatus);
   const startLabel = data.builderStatus === "awaiting_start" ? "Start build" : "Resume";
   const denyButtonRef = useRef<HTMLButtonElement>(null);
+  const activityDetailsRef = useRef<HTMLDetailsElement>(null);
+  const activityListRef = useRef<HTMLDivElement>(null);
+  const activityErrorCount = data.builderActivity.filter((row) => row.outcome !== "ok").length;
+
+  // Keeps the log pinned to its newest row while the build is actively
+  // producing more of them - only while the disclosure is actually open
+  // (a native <details>'s own `open` attribute IS the expand/collapse
+  // state here, so no separate React state exists to gate this on) and
+  // only while running, so a landed build's log stops moving under the
+  // user once there is nothing left to follow.
+  useEffect(() => {
+    if (running && activityDetailsRef.current?.open) {
+      activityListRef.current?.scrollTo({ top: activityListRef.current.scrollHeight });
+    }
+  }, [data.builderActivity, running]);
 
   // The tool-approval panel mounts fresh each time the Builder pauses for
   // approval (see the block-level comment above); Deny is the safe default,
@@ -165,6 +189,40 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
           Time {data.builderSpentWallSeconds}s/{data.builderMaxWallSeconds}s
         </span>
       </div>
+
+      {/* stage 8.7: the build's own visible record of what it did - real
+          backend state (PlanState.builder_activity), not a debug aid.
+          Reuses ChatNodeView's own "an assistant turn's tool calls,
+          disclosed" pattern (.chat-node-tool-invocations) rather than a
+          parallel widget, since the content is the same shape (a tool
+          name, an outcome, one block of detail text) - just scoped to a
+          whole BUILD instead of one turn, and potentially many more rows,
+          which is the one thing that needs its own scrollable container. */}
+      {data.builderActivity.length > 0 && (
+        <details className="chat-node-tool-invocations plan-node-activity" ref={activityDetailsRef}>
+          <summary>
+            {data.builderActivity.length === 1
+              ? "1 activity entry"
+              : `${data.builderActivity.length} activity entries`}
+            {activityErrorCount > 0 &&
+              ` · ${activityErrorCount} error${activityErrorCount === 1 ? "" : "s"}`}
+          </summary>
+          <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef}>
+            {data.builderActivity.map((row, index) => (
+              <div
+                key={index}
+                className={`chat-node-tool-invocation${row.outcome !== "ok" ? " error" : ""}`}
+              >
+                <div className="chat-node-tool-invocation-name">
+                  {row.tool}
+                  <span className="plan-node-activity-elapsed">{row.elapsedMs}ms</span>
+                </div>
+                <pre className="chat-node-tool-invocation-arguments">{row.summary}</pre>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
 
       {data.builderAwaitingToolApproval && (
         <div className="plan-node-approval" role="group" aria-label="Builder tool approval">

@@ -774,6 +774,20 @@ class PlanState(NodeState):
     own precedent directly above: the wire layer owns the typed row
     (PlanStepRow in contracts/), the domain keeps the flexible shape.
 
+    `activity` (stage 8.7) items are plain dicts {"tool": str, "summary":
+    str, "outcome": "ok"|"error", "stepId": str, "elapsedMs": int} - one
+    row per tool the loop invoked, in call order, written by builder.py's
+    _log_activity at its single registry.invoke() choke point. This is the
+    build's own visible record of WHAT IT DID - distinct from undo (undo_run
+    reverts document MUTATIONS; a build's activity log is run telemetry and
+    is deliberately left untouched by an undo, so the record of what
+    happened survives reverting what happened) and distinct from a chat
+    node's tool_invocations (that field holds one TURN's calls for a
+    completed reply; this holds a whole BUILD's calls across every turn and
+    every step). A capped ring buffer (see builder.py's _ACTIVITY_CAP) -
+    a build is bounded at 50 steps x 8 turns, so nothing else bounds this
+    list's growth.
+
     `builder_status` is the loop's own state machine:
       draft -> planning -> awaiting_start -> running <-> awaiting_approval
       running -> paused (budget breach; resumable)
@@ -797,6 +811,7 @@ class PlanState(NodeState):
 
     plan_goal: str = ""
     plan_steps: list[dict[str, Any]] = field(default_factory=list)
+    builder_activity: list[dict[str, Any]] = field(default_factory=list)
     builder_status: str = "draft"
     builder_mode: str = "copilot"  # "copilot" | "autopilot"
     builder_run_id: str = ""

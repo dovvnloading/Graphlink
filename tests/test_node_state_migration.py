@@ -110,7 +110,7 @@ MIGRATED_KIND_FIELDS = {
     # candidates - goal/steps/mode/run_id - collide with Command.run_id
     # and friends all over the command layer).
     "plan": [
-        "plan_goal", "plan_steps", "builder_status", "builder_mode",
+        "plan_goal", "plan_steps", "builder_activity", "builder_status", "builder_mode",
         "builder_run_id", "builder_max_steps", "builder_max_tokens",
         "builder_max_wall_seconds", "builder_spent_steps",
         "builder_spent_tokens", "builder_spent_wall_seconds",
@@ -343,9 +343,10 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "completionTokens", "promptTokens",
     "researchResult", "researchStage", "researchTotal", "responseIncomplete",
     "synthesisInstructions", "title", "toolCalls", "x", "y",
-    # ADR-008 stage 8.3: the Builder plan node's 15 fields.
-    "planGoal", "planSteps", "builderStatus", "builderMode", "builderRunId",
-    "builderMaxSteps", "builderMaxTokens", "builderMaxWallSeconds",
+    # ADR-008 stage 8.3: the Builder plan node's 15 fields, +1 (builderActivity)
+    # when stage 8.7 added the run's own activity log.
+    "planGoal", "planSteps", "builderActivity", "builderStatus", "builderMode",
+    "builderRunId", "builderMaxSteps", "builderMaxTokens", "builderMaxWallSeconds",
     "builderSpentSteps", "builderSpentTokens", "builderSpentWallSeconds",
     "builderAwaitingToolApproval", "builderApprovalToolName",
     "builderApprovalSummary", "builderStatusDetail",

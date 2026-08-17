@@ -149,6 +149,7 @@ function chatRow(id: string, x: number): SceneNodeRow {
         indexIntoKnowledge: false, // ADR-017 stage 17.5
         planGoal: "",
         planSteps: [],
+  builderActivity: [],
         builderStatus: "",
         builderMode: "",
         builderRunId: "",

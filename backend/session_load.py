@@ -713,6 +713,25 @@ def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
                 "detail": str(raw.get("detail", "")),
             })
     mode = str(payload.get("builder_mode", "copilot") or "copilot")
+    activity = []
+    for raw in payload.get("activity") or []:
+        if isinstance(raw, dict) and raw.get("tool"):
+            # review-fix: elapsedMs is untrusted input from a saved file
+            # (hand-edited, or written by an older/different format) - a
+            # non-numeric value must degrade to 0, the same tolerance every
+            # other field on this row already gets via str(), not crash the
+            # whole session load the way a bare int() would.
+            try:
+                elapsed_ms = int(raw.get("elapsedMs", 0) or 0)
+            except (TypeError, ValueError):
+                elapsed_ms = 0
+            activity.append({
+                "tool": str(raw.get("tool", "")),
+                "summary": str(raw.get("summary", "")),
+                "outcome": str(raw.get("outcome", "ok")),
+                "stepId": str(raw.get("stepId", "")),
+                "elapsedMs": elapsed_ms,
+            })
     return SceneNode(
         id="", x=x, y=y,
         title=f"Build: {goal[:40]}" if goal else "Build",
@@ -721,6 +740,7 @@ def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
         state=PlanState(
             plan_goal=goal,
             plan_steps=steps,
+            builder_activity=activity,
             builder_status=status,
             builder_mode=mode if mode in ("copilot", "autopilot") else "copilot",
             builder_run_id=str(payload.get("builder_run_id", "")),

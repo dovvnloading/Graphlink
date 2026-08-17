@@ -1439,6 +1439,7 @@ export function toFlowNodes(
         data: {
           planGoal: n.planGoal,
           planSteps: n.planSteps,
+          builderActivity: n.builderActivity,
           builderStatus: n.builderStatus,
           builderMode: n.builderMode,
           builderRunId: n.builderRunId,

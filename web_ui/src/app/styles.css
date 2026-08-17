@@ -7351,6 +7351,36 @@ mark.document-view-search-match-current {
   color: var(--gl-surface-text-muted);
   flex-wrap: wrap;
 }
+
+/* stage 8.7: the activity log. .chat-node-tool-invocations already supplies
+   the disclosure surface's border/padding/summary styling and its per-row
+   .chat-node-tool-invocation(.error)/-name/-arguments treatment - this adds
+   only what a build's log needs beyond one turn's handful of calls: a
+   bounded, independently-scrollable list (up to 100 rows) and an elapsed-
+   time readout per row. */
+.plan-node-activity-list {
+  max-height: 160px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* review-fix: flexbox rather than float, matching the "label + trailing
+   value" idiom used everywhere else in the app (ViewPopover's own
+   .view-field-row and 20+ others) - the only float in this stylesheet
+   otherwise. Scoped to this activity section specifically (not a bare
+   .chat-node-tool-invocation-name override) so ChatNodeView's own use of
+   that class, which has no trailing value to align, is unaffected. */
+.plan-node-activity .chat-node-tool-invocation-name {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plan-node-activity-elapsed {
+  font-weight: 400;
+  color: var(--gl-surface-text-muted);
+}
 .plan-node-approval {
   border: 1px solid var(--gl-semantic-status-warning);
   border-radius: 6px;
@@ -7406,10 +7436,10 @@ mark.document-view-search-match-current {
 .builder-launch-label { font-size: 13px; font-weight: 600; }
 .builder-launch-hint { margin: 0; font-size: 11px; color: var(--gl-surface-text-muted); }
 
-/* One shared control box for all three input kinds - the number inputs
-   previously had no styling at all beyond a width, so they rendered as
-   stark default-white browser fields inside a dark dialog. */
-.builder-launch-select,
+/* stage 8.7: the recipe picker is CustomSelect now (its own component owns
+   its styling) - this shared control box is what remains for the goal
+   textarea and the Advanced number fields. Previously also styled the bare
+   <select> this replaced. */
 .builder-launch-goal,
 .builder-launch-number {
   box-sizing: border-box;
@@ -7424,12 +7454,58 @@ mark.document-view-search-match-current {
 }
 .builder-launch-goal { resize: vertical; min-height: 72px; line-height: 1.45; }
 
-.builder-launch-select:focus-visible,
 .builder-launch-goal:focus-visible,
 .builder-launch-number:focus-visible {
   outline: 2px solid var(--gl-focus-ring);
   outline-offset: 1px;
 }
+
+/* stage 8.7: a selected recipe's own steps, previewed before launch - the
+   payload always carried them (listRecipes), nothing ever rendered them.
+   A plain ordered list rather than .plan-node-steps: that list's per-step
+   status markers/classes describe a LIVE run, and nothing here has run
+   yet - this is a preview of what WILL happen, not a status board. */
+.builder-launch-recipe-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.builder-launch-recipe-steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.builder-launch-delete-recipe {
+  align-self: flex-start;
+  font-size: 11px;
+  font-family: inherit;
+  padding: 4px 8px;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.builder-launch-delete-recipe:hover:not(:disabled) {
+  color: var(--gl-semantic-status-error);
+  border-color: var(--gl-semantic-status-error);
+}
+.builder-launch-delete-recipe:disabled { opacity: 0.5; cursor: default; }
+
+/* Same disclosure posture as .plan-node-activity/.chat-node-tool-invocations
+   - a native <details>, cursor-pointer bold summary - here hiding the exact
+   numeric fields behind the named presets above, for whoever wants them. */
+.builder-launch-advanced summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gl-surface-text-secondary);
+}
+.builder-launch-advanced[open] summary { margin-bottom: 8px; }
 
 .builder-launch-fieldset {
   display: flex;

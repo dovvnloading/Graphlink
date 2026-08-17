@@ -28,7 +28,10 @@ loop - so per-call stamping has no such window.
 Placement: the model never picks coordinates. New nodes land relative to
 their parent using the same MESSAGE_VERTICAL_SPACING convention
 send_message's own reply placement uses (backend/domain/model.py), with a
-horizontal fan-out for siblings so parallel children don't stack.
+horizontal fan-out for siblings so parallel children don't stack. A
+parentless create (stage 8.7) instead anchors near the run's plan node, if
+one exists, so a build's output lands where the user just looked rather
+than at the canvas origin - see _place_child's own doc.
 """
 
 from __future__ import annotations
@@ -178,21 +181,64 @@ def _run_id_of(ctx: RunContext) -> str | None:
     return getattr(ctx, "run_id", None)
 
 
-def _place_child(document: SceneDocument, parent_id: str | None) -> tuple[float, float]:
+def _anchor_id_of(ctx: RunContext) -> str | None:
+    """stage 8.7: BuilderRunContext already carries plan_node_id (builder.py)
+    for run attribution - reused here as a PLACEMENT reference, not graph
+    parentage, so a build's parentless creates (a note, a from-scratch
+    chat/code node) land near the plan node the user just launched instead
+    of scattered near the canvas origin. Same duck-typed degradation as
+    _run_id_of: a bare RunContext has none, and placement falls through to
+    the origin-drop fallback exactly as before this existed."""
+    return getattr(ctx, "plan_node_id", None)
+
+
+def _place_child(
+    document: SceneDocument, parent_id: str | None, anchor_id: str | None = None,
+) -> tuple[float, float]:
     """Parent-relative placement, model-free: directly below the parent,
     fanning right one slot per existing child so parallel children of the
-    same parent land side by side instead of stacked."""
-    if parent_id is None or parent_id not in document.nodes:
-        # Free-floating (note, parentless chat/code): drop near the origin
-        # offset by node count so repeated creations don't perfectly overlap.
-        n = len(document.nodes)
-        return 80.0 + (n % 5) * 40.0, 80.0 + (n % 7) * 40.0
-    parent = document.nodes[parent_id]
-    existing_children = sum(1 for e in document.edges.values() if e.source == parent_id)
-    return (
-        parent.x + existing_children * _SIBLING_HORIZONTAL_SPACING,
-        parent.y + MESSAGE_VERTICAL_SPACING,
-    )
+    same parent land side by side instead of stacked.
+
+    review-fix (stage 8.7): the plan node can be reached by EITHER path -
+    as an explicit parent_id (the executor prompt tells the model the plan
+    node's own id, and nothing stops it passing that id back as parent_id
+    for a chat/code node) or as the implicit anchor for a parentless create.
+    The two branches below used to count siblings differently (edges vs.
+    position), so a parentless create landing via the anchor branch was
+    invisible to the parent branch's edge count and vice versa - two nodes
+    from the two different paths could land on the exact same coordinates.
+    `parent_id != anchor_id` routes that one specific case (parent_id IS the
+    anchor) into the position-based branch below, which sees every node in
+    the row regardless of which path placed it. A normal parent - anything
+    other than the anchor - is completely unaffected."""
+    if parent_id is not None and parent_id in document.nodes and parent_id != anchor_id:
+        parent = document.nodes[parent_id]
+        existing_children = sum(1 for e in document.edges.values() if e.source == parent_id)
+        return (
+            parent.x + existing_children * _SIBLING_HORIZONTAL_SPACING,
+            parent.y + MESSAGE_VERTICAL_SPACING,
+        )
+    reference_id = parent_id or anchor_id
+    if reference_id is not None and reference_id in document.nodes:
+        # The anchor (a plan node) never gains an EDGE to what it builds -
+        # it is a placement reference only - so there is no edge count to
+        # read a sibling index off. A node already sitting on the
+        # reference's own placement row is this same reference's own
+        # earlier creation (nothing else places there), so counting THOSE
+        # stands in for "existing children" without needing a persisted
+        # counter - and, per the docstring above, catches siblings placed
+        # via EITHER path.
+        reference = document.nodes[reference_id]
+        row_y = reference.y + MESSAGE_VERTICAL_SPACING
+        row_siblings = sum(
+            1 for n in document.nodes.values() if n.x >= reference.x and abs(n.y - row_y) < 1.0
+        )
+        return reference.x + row_siblings * _SIBLING_HORIZONTAL_SPACING, row_y
+    # Free-floating with no anchor either (a bare RunContext, e.g. a future
+    # non-builder caller): drop near the origin offset by node count so
+    # repeated creations don't perfectly overlap.
+    n = len(document.nodes)
+    return 80.0 + (n % 5) * 40.0, 80.0 + (n % 7) * 40.0
 
 
 def _error(message: str) -> ToolResult:
@@ -215,7 +261,7 @@ def make_create_node_handler(document: SceneDocument):
         if kind == "document" and not title:
             return _error("kind 'document' requires a title.")
 
-        x, y = _place_child(document, parent_id)
+        x, y = _place_child(document, parent_id, _anchor_id_of(ctx))
         run_id = _run_id_of(ctx)
 
         def mutator():

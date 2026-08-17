@@ -74,6 +74,27 @@ _AUTOPILOT_AUTO_SCOPES = frozenset({
 
 _APPROVAL_SUMMARY_CAP = 400
 
+# stage 8.7: the activity log's own caps. A build is bounded at 50 steps x
+# _STEP_TURN_CAP turns, so nothing else bounds how many rows a pathological
+# replan loop could otherwise append to a plan node's wire dict (a whole-
+# node diff per graph.py's take_dirty_patch_ops) - the ring buffer is the
+# backstop. The summary cap is tighter than approval's own 400: approval
+# summaries are shown one at a time, activity rows are shown many at once.
+_ACTIVITY_CAP = 100
+_ACTIVITY_SUMMARY_CAP = 200
+# review-fix: a tool CALL's name has no upstream length validation - it is
+# whatever a provider's tool-call parsing extracted from the model's own
+# output verbatim (e.g. providers/ollama_provider.py's _extract_tool_calls),
+# so a malformed/hallucinating turn (most reachable with a local model) can
+# emit an arbitrarily large one. Every OTHER field this row stores is
+# capped; leaving `tool` uncapped would let exactly that turn defeat the
+# same wire/session-size bound the ring buffer and summary cap exist for.
+_ACTIVITY_TOOL_NAME_CAP = 80
+
+# stage 8.7: which terminal/pause statuses notify, and with what severity -
+# keyed by the exact status string _land() writes to builder_status.
+_LAND_NOTIFICATION_KINDS = {"done": "success", "failed": "error", "paused": "warning"}
+
 PLAN_SCHEMA = {
     "type": "object",
     "properties": {
@@ -368,11 +389,42 @@ def plan_steps_for_goal(goal: str, *, runtime=None, settings_manager=None) -> li
 
 # -- the executor loop -------------------------------------------------------
 
+def _truncate(text: str, cap: int) -> str:
+    return text if len(text) <= cap else text[:cap] + "…"
+
+
 def _approval_summary(call: ToolCall) -> str:
     args = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
-    if len(args) > _APPROVAL_SUMMARY_CAP:
-        args = args[:_APPROVAL_SUMMARY_CAP] + "…"
-    return f"{call.name} {args}"
+    return f"{call.name} {_truncate(args, _APPROVAL_SUMMARY_CAP)}"
+
+
+def _activity_summary(call: ToolCall, result: ToolResult) -> str:
+    """What a build's activity row shows for one invoked call. An error
+    (a real failure OR an approval denial - invoke() returns denial as
+    ToolResult(is_error=True, content="...was denied approval.") and the
+    two are not otherwise distinguishable here) shows the tool's own
+    result text, since that already says exactly what happened. A success
+    shows the call's arguments instead - the result of, say,
+    graph.read_subgraph is the interesting part to the MODEL, not to a
+    human scanning what the build did."""
+    text = result.content if result.is_error else json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
+    return _truncate(text, _ACTIVITY_SUMMARY_CAP)
+
+
+def _log_activity(node, *, tool: str, summary: str, outcome: str, step_id: str, elapsed_ms: int) -> None:
+    """Appends one row to the plan node's activity log - see PlanState's
+    own docstring for why this is deliberately untouched by undo. Trims
+    from the front (oldest first) once the ring buffer's cap is exceeded."""
+    activity = node.state.builder_activity
+    activity.append({
+        "tool": _truncate(tool, _ACTIVITY_TOOL_NAME_CAP),
+        "summary": summary,
+        "outcome": outcome,
+        "stepId": step_id,
+        "elapsedMs": elapsed_ms,
+    })
+    if len(activity) > _ACTIVITY_CAP:
+        del activity[: len(activity) - _ACTIVITY_CAP]
 
 
 def _rough_token_count(text: str) -> int:
@@ -532,6 +584,16 @@ async def run_build(
         if node.pending_request_id == request_id:
             node.pending_request_id = None
         await bus.publish("scene")
+        # stage 8.7: a build that lands while the user is elsewhere on the
+        # canvas (or the app is unfocused) must not announce nothing.
+        # "stopped" is excluded - the user just clicked Stop and is
+        # necessarily present, so a notification for an action they took
+        # themselves is noise. "interrupted" never reaches this function
+        # (it is a session_load-time normalization, not a run outcome).
+        kind = _LAND_NOTIFICATION_KINDS.get(status)
+        if kind is not None and notifications is not None and detail:
+            notifications.show(detail, kind)
+            await bus.publish("notification")
 
     node.state.builder_status = "running"
     node.state.builder_status_detail = ""
@@ -657,7 +719,16 @@ async def run_build(
                         else:
                             await _land("paused", breach + " Raise the budget and resume to continue.")
                         return
+                    call_started = time.monotonic()
                     result = await registry.invoke(call, ctx)
+                    # stage 8.7: every invoked call, including the four
+                    # in-band control tools - hiding those would make the
+                    # log lie about how many turns the build actually took.
+                    _log_activity(
+                        node, tool=call.name, summary=_activity_summary(call, result),
+                        outcome="error" if result.is_error else "ok",
+                        step_id=step["id"], elapsed_ms=max(0, round((time.monotonic() - call_started) * 1000)),
+                    )
                     messages.append({
                         "role": "tool", "tool_call_id": call.id,
                         "name": call.name, "content": result.content,
@@ -715,10 +786,10 @@ async def run_build(
         # the timeout path above so resume doesn't skip the in-flight step.
         if step is not None and step.get("status") == "running":
             step["status"] = "pending"
+        # _land("failed", ...) now sends this failure's own notification
+        # (see _LAND_NOTIFICATION_KINDS) - a second one here would be a
+        # duplicate banner for the same event.
         await _land("failed", f"Build failed: {exc} — resume to retry.")
-        if notifications is not None:
-            notifications.show(f"Build failed: {exc}", "error")
-            await bus.publish("notification")
 
 
 def _apply_replan(document, node, controls: BuilderControls, run_id: str) -> None:

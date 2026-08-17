@@ -293,6 +293,21 @@ class PlanStepRow:
 
 
 @dataclass
+class BuilderActivityRow:
+    """ADR-008 stage 8.7: one row of a Builder run's activity log - the
+    typed wire shape of PlanState.builder_activity's own {"tool","summary",
+    "outcome","stepId","elapsedMs"} dicts (backend/domain/node_states.py).
+    outcome is "ok"|"error" - pinned as a plain string for the same
+    additive-evolution reason PlanStepRow's own status is."""
+
+    tool: str
+    summary: str
+    outcome: str = "ok"
+    stepId: str = ""
+    elapsedMs: int = 0
+
+
+@dataclass
 class ChartFlowRow:
     """One Sankey flow - the shape canonicalize_chart_data() (graphlink_
     chart_data.py) always builds every item of its "flows" list from, for
@@ -553,6 +568,7 @@ class SceneNodeRow:
     # contract these fields serialize.
     planGoal: str = ""
     planSteps: list["PlanStepRow"] = field(default_factory=list)
+    builderActivity: list["BuilderActivityRow"] = field(default_factory=list)
     builderStatus: str = ""
     builderMode: str = ""
     builderRunId: str = ""

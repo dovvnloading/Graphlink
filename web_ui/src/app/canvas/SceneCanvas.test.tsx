@@ -141,6 +141,7 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     indexIntoKnowledge: false,
   planGoal: "",
   planSteps: [],
+  builderActivity: [],
   builderStatus: "",
   builderMode: "",
   builderRunId: "",

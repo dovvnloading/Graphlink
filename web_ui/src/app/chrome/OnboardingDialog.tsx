@@ -122,7 +122,9 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
         <div className="onboarding-step">
           <p>
             Graphlink is a visual AI workspace: every message becomes a node on a canvas, and you can branch a
-            conversation from any earlier node instead of only ever continuing the last one.
+            conversation from any earlier node instead of only ever continuing the last one. When a task needs more
+            than one step, the Builder can plan and construct a whole branch for you, supervised at whatever level
+            you choose.
           </p>
           <p>This short wizard checks your provider and offers a small sample workspace, then gets out of the way.</p>
         </div>

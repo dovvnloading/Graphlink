@@ -150,6 +150,7 @@ function chatRow(id: string, x: number, y = 0): SceneNodeRow {
         indexIntoKnowledge: false,
   planGoal: "",
   planSteps: [],
+  builderActivity: [],
   builderStatus: "",
   builderMode: "",
   builderRunId: "",

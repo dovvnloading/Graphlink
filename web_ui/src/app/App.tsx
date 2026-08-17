@@ -505,7 +505,7 @@ function App() {
                   <DiagnosticsDialog transport={transport} />
                   <KnowledgeSearchDialog transport={transport} />
                   <GlobalSearchDialog transport={transport} />
-                  <BuilderLaunchDialog transport={transport} />
+                  <BuilderLaunchDialog transport={transport} store={sceneStore} />
                   <LazySurface overlayName="settings">
                     <SettingsDialog transport={transport} />
                   </LazySurface>

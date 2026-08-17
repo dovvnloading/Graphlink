@@ -255,11 +255,12 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # archiveWorkspace sextet, 165 -> 166 when ADR-020 stage 20.3 added
     # app-chat-library's own setWorkspaceDefaultModel, 166 -> 168 when
     # ADR-020 stage 20.4 added app-chat-library's own loadGraphAndFocusNode
-    # plus the new "globalSearch" topic's own search intent, and 168 -> 169
-    # when ADR-020 stage 20.5 added app-chat-library's own exportWorkspace.
+    # plus the new "globalSearch" topic's own search intent, 168 -> 169
+    # when ADR-020 stage 20.5 added app-chat-library's own exportWorkspace,
+    # and 169 -> 170 when ADR-008 stage 8.7 added builder's own deleteRecipe.
     real = _collect_real_registrations()
-    assert len(real) == 169, (
-        f"expected exactly 169 real registered intents, found {len(real)} - "
+    assert len(real) == 170, (
+        f"expected exactly 170 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

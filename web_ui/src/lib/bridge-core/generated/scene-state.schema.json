@@ -65,6 +65,37 @@
           "branchStatus": {
             "type": "string"
           },
+          "builderActivity": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "elapsedMs": {
+                  "type": "integer"
+                },
+                "outcome": {
+                  "type": "string"
+                },
+                "stepId": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tool",
+                "summary",
+                "outcome",
+                "stepId",
+                "elapsedMs"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "builderApprovalSummary": {
             "type": "string"
           },
@@ -769,6 +800,7 @@
           "indexIntoKnowledge",
           "planGoal",
           "planSteps",
+          "builderActivity",
           "builderStatus",
           "builderMode",
           "builderRunId",
