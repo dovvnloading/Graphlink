@@ -8,7 +8,7 @@
 ![Local First](https://img.shields.io/badge/Local--First-AI%20Workspace-orange)
 ![GitHub stars](https://img.shields.io/github/stars/dovvnloading/Graphlink?style=social)
 
-<img width="1920" height="1080" alt="Graphlink canvas" src="https://github.com/user-attachments/assets/3fda5311-1d05-49c9-8654-04649f902b8a" />
+<img alt="Graphlink canvas - one question branched into two parallel lines of inquiry, each with its own web research node" src="assets/screenshots/canvas-branching.png" />
 
 **A local-first, graph-based AI workspace for branching reasoning, tool use, and multi-provider workflows.**
 
@@ -26,6 +26,7 @@ It is built with a Python (FastAPI) backend and a Vite/React/TypeScript single-p
 
 - [Features](#features)
 - [Screenshots](#screenshots)
+- [The Builder](#the-builder)
 - [Plugins](#plugins)
 - [Getting Started](#getting-started)
 - [Configuration](#configuration)
@@ -39,21 +40,49 @@ It is built with a Python (FastAPI) backend and a Vite/React/TypeScript single-p
 ## Features
 
 - **Visual branching canvas** — build parallel thought paths, experiments, and delivery tracks in one view instead of one scrolling thread.
-- **Multiple model backends** — run locally with Ollama or direct GGUF loading via `llama-cpp-python`, or switch to API Endpoint mode for OpenAI-compatible, Anthropic Claude, or Google Gemini.
-- **Plugin nodes** — attach specialist nodes for web research, code execution, drafting, and repository-aware changes (see [Plugins](#plugins)).
+- **The Builder** — give it a goal and it plans a checklist, then constructs it on your canvas one supervised step at a time, under hard step/token/time budgets (see [The Builder](#the-builder)).
+- **Multiple model backends** — run locally with Ollama or direct GGUF loading via `llama-cpp-python`, or switch to API Endpoint mode for OpenAI-compatible, Anthropic Claude, or Google Gemini. The active mode is switchable in Settings.
+- **Per-branch model routing** — pin a specific model to a node or a whole branch, on top of the per-task model defaults.
+- **Plugin nodes** — attach specialist nodes for web research, code execution, drafting, and repository-aware changes (see [Plugins](#plugins)), plus a plugin SDK with per-plugin capability grants and optional MCP server integration.
 - **Repository-aware editing** — Gitlink loads a GitHub repo into structured context, previews file-level changes, and only writes after explicit approval.
-- **Local-first persistence** — conversations, notes, navigation pins, and graph layout are stored locally in SQLite.
+- **Knowledge base and search** — ingest documents into a local knowledge store, search it from a node, and search across every workspace at once.
+- **Workspaces and library** — organize graphs into workspaces with favorites, tags, and archiving; reopen any of them from the Library.
+- **Undo that understands agents** — full undo/redo over canvas history, including "undo this build", which reverts everything one agent run did as a single action.
+- **Charts** — generate a chart from any node's content and export it as PNG or SVG.
+- **Attachments** — stage images, audio, or documents onto a message; the backend classifies and extracts them.
+- **Themes and canvas controls** — light and dark themes, plus grid, connection routing, node font, and pan-sensitivity controls.
+- **Local-first persistence** — conversations, notes, navigation pins, and graph layout are stored locally in SQLite, with crash recovery.
+- **Diagnostics** — a token and cost counter, a command palette, and an exportable diagnostic bundle for troubleshooting.
 - **Export** — save the whole canvas as a PNG, or export individual nodes: Chat as Markdown, Code as a source file (extension inferred from language), Image as PNG.
 
-Built-in node types (the graph surface itself): **Chat**, **Code**, **Document**, **Image**, and **Thinking**, plus Notes, Frames, Containers, Navigation Pins, and Charts.
+Built-in node kinds on the graph surface: **Chat**, **Code**, **Document**, **Thinking**, **HTML**, **Image**, **Conversation**, **Web Research**, **Plan** (the Builder's checklist), **Artifact**, **Gitlink**, **Py-Coder**, **Code Sandbox**, **Note**, and **Chart** — plus Frames, Containers, and Navigation Pins for organizing them.
 
 ## Screenshots
 
-<div align="center">
-  <img width="1920" height="1080" alt="Graphlink workspace" src="https://github.com/user-attachments/assets/dc477feb-a8bf-4f0d-8914-42371329e725" style="margin-bottom: 20px;" />
-  <img width="1920" height="1080" alt="Graphlink branching" src="https://github.com/user-attachments/assets/9bfe2cde-70e5-433a-b86d-5bb99105d91f" />
-  <img width="1920" height="1080" alt="Graphlink plugins" src="https://github.com/user-attachments/assets/93cb0452-18c3-4419-9857-b816a90b7350" />
-</div>
+**A build, on the canvas.** The plan node holds the checklist, the live budget counters, and an activity log of every tool call the run made — next to the nodes it actually created.
+
+<img alt="A finished Builder run: plan node with checklist, budgets and activity log, beside the Py-Coder node and chart it produced" src="assets/screenshots/builder-run.png" />
+
+**Launching a build.** Pick a recipe (its steps are previewed before you commit), choose how much oversight you want, and set the budgets.
+
+<img alt="The Builder launch dialog showing a recipe with its steps previewed, co-pilot/autopilot oversight modes, and budget presets" src="assets/screenshots/builder-launcher.png" />
+
+**Code and charts inline.** Py-Coder runs Python in a persistent REPL; any node's content can become a chart.
+
+<img alt="A chat question feeding a Py-Coder node with code and output, feeding a bar chart" src="assets/screenshots/code-and-charts.png" />
+
+## The Builder
+
+The Builder takes a goal and builds it on your canvas, rather than describing how you could.
+
+1. **It plans first.** The goal becomes a short checklist that lands as a real node — review it, edit it, and only then start the run.
+2. **It works one step at a time,** using the same tools available to you: creating and editing nodes, running Python, generating replies and charts, running web research, and searching your knowledge base.
+3. **You choose the oversight.** *Co-pilot* asks you to approve every mutating step. *Autopilot* runs to completion within its budgets. Network access asks every time, in either mode.
+4. **Budgets are hard limits.** Steps, tokens, and wall time are capped before the run starts; a breach pauses the build with its state intact instead of losing progress.
+5. **Everything is reversible and resumable.** The plan node *is* the resume point, so a paused, stopped, or failed build picks up where it left off — even after restarting the app. "Undo build" reverts everything the run did in one action.
+6. **Finished builds become recipes.** Save a build's plan and reuse it; two recipes ship built in.
+
+Every tool call a run makes is recorded on the plan node with its outcome and timing, so a build is auditable after the fact rather than opaque.
 
 ## Plugins
 
@@ -63,19 +92,19 @@ Attach these specialist nodes to a branch from the plugin picker:
 | --- | --- | --- |
 | System Prompt | Branch Foundations | Attaches a branch-scoped system prompt that shapes model behavior for that path only. |
 | Conversation Node | Branch Foundations | A self-contained linear chat inside a single node. |
-| Web Research | Reasoning and Research | Web retrieval, summarization, and source capture for real-time information. |
-| Gitlink | Build and Execution | Loads a GitHub repo into structured context, previews file-level changes, and writes only after approval. |
-| Py-Coder | Build and Execution | Runs Python with AI-assisted generation, execution, and analysis. |
-| Virtual Environment Runner | Build and Execution | Runs Python in a per-node virtualenv with declared dependencies (isolates installed packages, not the OS or filesystem/network access). |
-| HTML Renderer | Build and Execution | Renders HTML from a parent branch directly inside the app. |
-| Artifact / Drafter | Workflow and Drafting | A split-pane surface for drafting and refining long-form Markdown. |
+| Web Research | Reasoning & Research | Web retrieval, summarization, and source capture for real-time information. |
+| Gitlink | Build & Execution | Loads a GitHub repo into structured context, previews file-level changes, and writes only after approval. |
+| Py-Coder | Build & Execution | Runs Python with AI-assisted generation, execution, and analysis. |
+| Virtual Environment Runner | Build & Execution | Runs Python in a per-node virtualenv with declared dependencies (isolates installed packages, not the OS or filesystem/network access). |
+| HTML Renderer | Build & Execution | Renders HTML from a parent branch directly inside the app. |
+| Artifact / Drafter | Workflow & Drafting | A split-pane surface for drafting and refining long-form Markdown. |
 
 ## Getting Started
 
 ### Requirements
 
 - Python 3.10 or newer. Windows is the primary development target today.
-- Node.js 22 or newer, needed only to build the frontend once (`web_ui/.nvmrc` pins the exact version this project is developed against).
+- Node.js 24 or newer, needed only to build the frontend once (`web_ui/.nvmrc` pins the exact version this project is developed against).
 - Internet access is optional, and only needed for API Endpoint mode, GitHub-backed plugins, and web research.
 
 ### Install and run
@@ -105,7 +134,7 @@ On first launch, Graphlink creates `~/.graphlink/` to hold your sessions and set
 
 ### Choose a model backend
 
-Ollama (Local) is the mode Graphlink runs in today. Llama.cpp and API Endpoint credentials and models are fully configurable in **Settings**, but switching the *active* running mode away from Ollama isn't wired up in the UI yet.
+Ollama (Local) is the default. All three modes are configurable *and* switchable in **Settings**.
 
 - **Ollama (Local)** — the default. Best for local-first use with Ollama-managed models.
 - **Llama.cpp (Local)** — direct GGUF loading through `llama-cpp-python`, with runtime controls.
@@ -152,24 +181,28 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 
 - **Start** with a chat node or a starter prompt.
 - **Branch** by selecting a node and adding a plugin from the picker or controls; each new node begins a more specialized path (research, code, drafting, execution).
+- **Delegate** a multi-step task to the Builder — it plans a checklist, then constructs it on the canvas under your chosen level of oversight (see [The Builder](#the-builder)).
 - **Deliver** with build-oriented nodes — Gitlink for repo-aware change proposals, Py-Coder and Virtual Environment Runner for running code, Artifact / Drafter for documents.
+- **Attach** images, audio, or documents to a message from the composer; staged attachments are classified and extracted on the backend, and can be reviewed before sending.
+- **Ingest** documents into the local knowledge base, then search it from a node — or search across every workspace at once with Global Search.
+- **Undo** anything, including a whole agent run in one action.
 - **Export** the whole canvas as a PNG, or export individual nodes — Chat as `.md`, Code as a source file (extension inferred from language, falling back to `.txt`), Image as `.png`.
-- **Ingest**: file attachments are modeled on the backend (a Document node kind exists) but aren't yet wired to any UI action — there is currently no way to attach or ingest a file from the interface.
 
 ## Architecture
 
 Graphlink is a Python (FastAPI) backend paired with a Vite/React/TypeScript single-page app, launched as one native desktop window via `pywebview` — not a browser tab, not Qt.
 
 - **`graphlink_desktop.py`** (repo root) is the native window shell: it starts the backend in a background thread, waits for it to report healthy, then opens a single OS webview window (WebView2 on Windows) pointed at the backend's own URL. The backend serves the built frontend, the REST API, and the WebSocket on that one origin.
-- **`backend/`** holds all real application and domain logic: the FastAPI app factory and a WebSocket pub/sub event bus, the node-graph/canvas model (chat, code, document, image, thinking, and other node kinds; connections; autosave; crash recovery), LLM dispatch, settings, chat-library management, and session load/save.
+- **`backend/`** holds all real application and domain logic: the FastAPI app factory and a WebSocket pub/sub event bus, the node-graph/canvas model (every node kind, connections, autosave, crash recovery), an undoable command layer, LLM dispatch, the agent tool-use loop behind the Builder, the knowledge store and search, settings, chat-library/workspace management, and session load/save.
 - **`web_ui/`** is the React SPA (built with Vite) — the entire UI: the canvas surface, the app bar and composer chrome, and dialogs/overlays. It talks to the backend over the REST API and the WebSocket.
 - **`contracts/`** is build-time-only codegen that generates the TypeScript types and JSON Schemas for WebSocket payloads from the backend's Python dataclasses, keeping the two sides in sync.
 - **`graphlink_plugins/`** holds the domain logic behind the plugin nodes (web research, Gitlink, Py-Coder, Virtual Environment Runner) — no UI code, no Qt.
+- **`plugins/`** holds the plugin *packages* themselves — one directory per plugin with a `plugin.py` and a `plugin.toml`, discovered at startup. This is the extension point: the built-ins live here alongside the SDK's example plugins.
 
 Your data lives entirely on your machine:
 
 ```text
-~/.graphlink/chats.db      graph sessions, notes, and pins
+~/.graphlink/chats.db      graph sessions, workspaces, notes, pins, and the knowledge store
 ~/.graphlink/session.dat   local settings and saved credentials
 ~/.graphlink/running.lock  crash-detection sentinel, written on launch and removed on clean exit
 ~/.graphlink/graphlink.log rotating application log (2 MB cap)
@@ -179,7 +212,7 @@ For a detailed, current map of where behavior lives in the codebase, see [GRAPHL
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development conventions, branch/PR workflow, and pull-request expectations. The `pytest` suite spans the whole repo now (`backend/tests/`, `contracts/tests/`, and the root-level `tests/`); run it with `python -m pytest -q` from the repo root. CI (`.github/workflows/ci.yml`) runs on every PR: a Python job (`pip install -r requirements.txt`, then `python -m compileall -q .`, then `python -m pytest -q`) and a frontend job (`npm run check` inside `web_ui/` — schema-drift check, typecheck, lint, Vitest, and build), both on `windows-latest`.
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, development conventions, branch/PR workflow, and pull-request expectations. The `pytest` suite spans the whole repo now (`backend/tests/`, `contracts/tests/`, and the root-level `tests/`); run it with `python -m pytest -q` from the repo root. CI (`.github/workflows/ci.yml`) runs four jobs on every PR, all on `windows-latest`: **Python checks** (compile, `ruff`, `mypy`, `pytest` with a coverage floor, plus `pip-audit`), **Frontend checks** (`npm run check` inside `web_ui/` — schema-drift check, typecheck, lint, Vitest, and build), **E2E** (a Playwright boot-smoke suite against the real backend serving the real built SPA), and a **Build check** (the wheel builds, installs into a clean venv, and imports).
 
 ## Troubleshooting
 
@@ -196,7 +229,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, dev
 
 - Windows is the primary target today, though much of the Python is portable; CI is pinned to `windows-latest` specifically because secrets-at-rest testing exercises real Windows DPAPI.
 - API keys and GitHub tokens are encrypted at rest with Windows DPAPI, scoped to your Windows user account; on non-Windows platforms, or if DPAPI is unavailable, they fall back to plain application state (see [Security](#license-and-security)).
-- Automated coverage is unit- and component-level (`pytest` for backend/contracts domain logic, Vitest for React components) rather than end-to-end, browser-driven UI testing.
+- Automated coverage is strongest at the unit and component level (`pytest` for backend/contracts domain logic, Vitest for React components). Browser-driven coverage exists but is deliberately narrow: a Playwright boot-smoke suite that drives the real built SPA against a real backend, not a full UI regression suite.
 
 ## License and Security
 
