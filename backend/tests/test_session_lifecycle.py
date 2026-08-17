@@ -446,7 +446,15 @@ def test_evict_idle_session_vetoes_while_autosave_is_preparing_to_write(tmp_path
             assert not bus.autosave_task.done(), "a vetoed eviction must leave autosave running"
 
             release_backup.set()
-            for _ in range(200):
+            # Waits for a REAL SQLite write on a background task, so the budget
+            # has to cover the slowest environment this runs in, not the
+            # fastest. The original 2s (200 x 10ms) was enough locally but
+            # flaked on CI, where this same suite runs under coverage tracing
+            # on a shared Windows runner - a false failure that says nothing
+            # about the behaviour under test. 10s only changes how long the
+            # poll is willing to wait; the assertion below is unchanged, and a
+            # genuinely broken autosave still fails it.
+            for _ in range(1000):
                 if bus.chat_save_state["chat_id"] is not None:
                     break
                 await asyncio.sleep(0.01)
