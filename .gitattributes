@@ -19,26 +19,14 @@
 # opts them out of line-ending normalization entirely, so they stay exactly
 # as their generator wrote them.
 #
-# assets/*/** (a wildcard, not one line per island) so a future island's
-# Vite build output is covered automatically - the first version of this
-# rule only covered assets/composer/**, and every island added since had to
-# rediscover and re-fix the exact same spurious-modification symptom before
-# this was generalized. Does not match assets/'s own loose top-level static
-# files (icons/images/audio, already handled by the `binary` rules above) -
-# assets/*/** requires at least one subdirectory level.
+# assets/*/** originally existed for the Qt-era island bundles' Vite output
+# (19 per-island builds under assets/<island>/), all of which were deleted
+# once the SPA replaced them. It is kept because it still covers the
+# surviving assets/ subdirectories - assets/branding/ and assets/screenshots/
+# - keeping their committed bytes stable rather than subject to checkout-time
+# renormalization. Does not match assets/'s own loose top-level static files
+# (the icon, already handled by the `binary` rules above): assets/*/**
+# requires at least one subdirectory level.
 assets/*/** -text
 web_ui/src/lib/bridge-core/generated/** -text
 web_ui/src/lib/tokens/gl-theme.css -text
-
-# Found 2026-07-20 (Phase 3, settings island increment 2): the assets/*/**
-# rule above only stops GIT from renormalizing the BUILT output - it does not
-# stop Vite from carrying forward whatever line endings the SOURCE
-# web_ui/src/islands/*/index.html happens to have on disk. That source file
-# is plain text, so `* text=auto` + a local core.autocrlf=true keep
-# re-materializing it as CRLF on checkout; Vite's HTML build step then bakes
-# those CRLFs into assets/<island>/index.html, which immediately "modifies"
-# against the LF-committed built file assets/*/** was meant to keep stable.
-# Same root cause as the assets/ rule, one file class further upstream -
-# opting the source index.html out of normalization too closes it for good
-# instead of needing a manual sed fix every time an island is rebuilt.
-web_ui/src/islands/*/index.html -text
