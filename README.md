@@ -22,8 +22,13 @@ It is built with a Python (FastAPI) backend and a Vite/React/TypeScript single-p
 
 > Graphlink is the second generation of the **Graphite** project, renamed to avoid collision with unrelated software. The rename is complete: modules, folders, and the UI all use the `graphlink` name.
 
+## Demo
+
+[![Watch the Graphlink demo](assets/screenshots/canvas-branching.png)](https://www.youtube.com/watch?v=16v0our6ZoI)
+
 ## Table of Contents
 
+- [Demo](#demo)
 - [Features](#features)
 - [Screenshots](#screenshots)
 - [The Builder](#the-builder)
