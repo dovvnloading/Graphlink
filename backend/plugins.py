@@ -45,7 +45,13 @@ from typing import Any
 from backend.canvas import MESSAGE_VERTICAL_SPACING, SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.plugin_sdk import PluginRegistry, PluginRunContext, discover_plugins
+from backend.plugin_sdk import (
+    PluginRegistry,
+    PluginRunContext,
+    discover_plugins,
+    intent_input_schema,
+    resolve_intent_call_args,
+)
 # ADR-014 stage 14.5: register_plugin_tools' own ToolRegistry-facing
 # dependencies - ToolSpec is the SAME provider-neutral shape every other
 # tool family (backend/tools_graph.py, backend/mcp_client.py) builds its
@@ -72,17 +78,17 @@ class InvokePluginIntentArgs:
     """ADR-014 stage 14.4: args schema for invokePluginIntent - mirrors
     invoke_plugin_intent's own signature below exactly (dataclass field
     order is the positional mapping dispatch_intent validates against).
-    v1 supports zero-argument custom intents only: the two demo plugins
-    (hello_node/counter_node) don't call HostContext.register_intent at
-    all, and no production caller needs a richer variadic payload yet -
-    extending this to forward real positional arguments to a plugin's own
-    handler is a natural follow-up once a real third-party plugin needs
-    it, not a gap this addition's own purpose (closing stage 14.1's
-    deferred custom-intent-wiring gap, see backend/plugin_sdk.py's module
-    docstring) requires closing now."""
+    ADR-021 stage 21.4 closed the v1 zero-argument limitation this
+    docstring used to describe: `args` carries the caller's argument
+    object, validated against the intent's own declared args_schema by
+    plugin_sdk.build_intent_arguments before the handler ever sees it. It
+    stays optional, so an intent that declares no schema is invoked exactly
+    as it was before - and passing arguments to such an intent is rejected
+    rather than silently dropped."""
 
     plugin_id: str
     name: str
+    args: "dict | None" = None
 
 
 @dataclass
@@ -362,6 +368,7 @@ async def _invoke_discovered_plugin_intent(
     settings_manager: SettingsManager,
     plugin_id: str,
     name: str,
+    args: "dict | None" = None,
 ):
     """The single invokePluginIntent dispatch path - ADR-014 stage 14.4's
     resolution of stage 14.1's own deferred gap (see backend/plugin_sdk.py's
@@ -418,10 +425,19 @@ async def _invoke_discovered_plugin_intent(
         await bus.publish("notification")
         return None
 
+    extra_args, arg_errors = resolve_intent_call_args(spec, dict(args or {}))
+    if arg_errors:
+        notifications.show(
+            f'"{plugin_id}:{name}" was called with invalid arguments: ' + "; ".join(arg_errors),
+            "warning",
+        )
+        await bus.publish("notification")
+        return None
+
     run_ctx = PluginRunContext(plugin_id=plugin_id, notifications=notifications)
     if inspect.iscoroutinefunction(spec.handler):
-        return await spec.handler(canvas_document, run_ctx)
-    return spec.handler(canvas_document, run_ctx)
+        return await spec.handler(canvas_document, run_ctx, *extra_args)
+    return spec.handler(canvas_document, run_ctx, *extra_args)
 
 
 def register_plugin_tools(
@@ -482,7 +498,14 @@ def register_plugin_tools(
             tool_spec = ToolSpec(
                 name=namespaced_name,
                 description=f'Invokes plugin "{spec.plugin_id}"\'s "{spec.name}" action.',
-                input_schema={"type": "object", "properties": {}},
+                # ADR-021 stage 21.4: was hardcoded to the empty object,
+                # which made every plugin tool unparameterizable and so
+                # close to useless as a tool - a model could fire it but
+                # never tell it anything. intent_input_schema derives this
+                # from the plugin's own declared args_schema (or from the
+                # schema an out-of-process worker sent up), falling back to
+                # the same empty object for an intent that declares none.
+                input_schema=intent_input_schema(spec),
             )
             tool_registry.register(
                 tool_spec,
@@ -536,11 +559,25 @@ def _make_plugin_tool_handler(
         )
         if spec is None:
             return ToolResult(content=f'Unknown plugin intent: "{plugin_id}:{name}".', is_error=True)
+        # ADR-021 stage 21.4: the model's arguments, validated against the
+        # plugin's own declared schema. A validation failure comes back as
+        # an error ToolResult rather than an exception, so the loop feeds it
+        # to the model as ordinary tool feedback to correct and retry - the
+        # posture ToolRegistry.invoke() takes for every expected denial.
+        # For an out-of-process plugin args_schema is None here (the host
+        # holds only the JSON schema), so this adds nothing and the raw dict
+        # is forwarded to the worker, which validates against the real type.
+        extra_args, arg_errors = resolve_intent_call_args(spec, dict(call.arguments or {}))
+        if arg_errors:
+            return ToolResult(
+                content=f'Invalid arguments for "{plugin_id}:{name}": ' + "; ".join(arg_errors),
+                is_error=True,
+            )
         run_ctx = PluginRunContext(plugin_id=plugin_id, notifications=NotificationState())
         result = (
-            await spec.handler(canvas_document, run_ctx)
+            await spec.handler(canvas_document, run_ctx, *extra_args)
             if inspect.iscoroutinefunction(spec.handler)
-            else spec.handler(canvas_document, run_ctx)
+            else spec.handler(canvas_document, run_ctx, *extra_args)
         )
         return ToolResult(content="" if result is None else str(result), is_error=False)
 
@@ -667,9 +704,10 @@ def register_plugins(
     # name gate-compliant by construction, regardless of how many plugins/
     # intents exist at runtime - see _invoke_discovered_plugin_intent's own
     # docstring for the full mechanism.
-    async def invoke_plugin_intent(plugin_id: str, name: str):
+    async def invoke_plugin_intent(plugin_id: str, name: str, args: dict | None = None):
         return await _invoke_discovered_plugin_intent(
-            bus, notifications, canvas_document, plugin_registry, settings_manager, plugin_id, name,
+            bus, notifications, canvas_document, plugin_registry, settings_manager,
+            plugin_id, name, args,
         )
 
     bus.register_intent(

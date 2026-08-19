@@ -802,6 +802,19 @@ def test_register_plugin_tools_isolates_a_registration_failure_so_a_later_plugin
     assert tool_registry.scopes_for("plugin:good_plugin:run") is not None
 
 
+def _approving_ctx() -> RunContext:
+    """ADR-021 stage 21.4: plugin tools register approval="always", so an
+    invoke needs a router that says yes; scopes match the sandboxed_demo
+    manifest's own declared grants."""
+
+    async def request_approval(call):
+        return True
+
+    return RunContext(
+        granted_scopes=frozenset({"graph.mutate"}), request_approval=request_approval,
+    )
+
+
 # -- G: backend/agents.py's builder_tool_registry() really wires it in ------
 
 
@@ -989,3 +1002,149 @@ def test_out_of_process_plugin_node_state_round_trips_through_save_and_reload(tm
         assert reloaded.state.data == {"clicks": 3, "label": "initial"}
     finally:
         _close_workers(registry)
+
+
+# -- ADR-021 stage 21.4: plugin intent arguments, end to end ----------------
+
+
+def test_the_real_sandboxed_plugin_tool_advertises_its_declared_arguments(tmp_path):
+    """The host never imports plugins/sandboxed_demo/plugin.py, so it cannot
+    see PingArgs at all - the worker generates the schema on its own side and
+    sends it up at registration time. Before stage 21.4 this spec's
+    input_schema was hardcoded to an empty object, so the model could fire a
+    plugin action but never tell it anything."""
+    from backend.agents import AgentDispatcher
+
+    settings_manager = SettingsManager(tmp_path / "session.dat")
+    dispatcher = AgentDispatcher(settings_manager)
+    document = SceneDocument()
+
+    registry = dispatcher.builder_tool_registry(document)
+    spec = next(s for s in registry.specs() if s.name == "plugin:sandboxed_demo:ping")
+
+    assert spec.input_schema["properties"]["message"]["type"] == "string"
+    assert spec.input_schema["properties"]["times"]["type"] == "integer"
+    # `times` is Optional-annotated, so it is genuinely optional in the
+    # generated schema - graphlink_wire_schema keys required-ness on the
+    # annotation, not on whether a Python default exists.
+    assert spec.input_schema["required"] == ["message"]
+
+
+def test_arguments_reach_an_out_of_process_intent_and_come_back(tmp_path):
+    """The full stage-21.4 round trip across the isolation boundary: the host
+    forwards a raw dict (it has no access to the plugin's dataclass), the
+    worker validates and constructs PingArgs against the real type, and the
+    handler's use of those values shows up in the result."""
+    from backend.agents import AgentDispatcher
+
+    settings_manager = SettingsManager(tmp_path / "session.dat")
+    settings_manager.set_plugin_grant("sandboxed_demo", True)
+    dispatcher = AgentDispatcher(settings_manager)
+    document = SceneDocument()
+    registry = dispatcher.builder_tool_registry(document)
+
+    result = asyncio.run(
+        registry.invoke(
+            ToolCall(
+                id="c1",
+                name="plugin:sandboxed_demo:ping",
+                arguments={"message": "hi", "times": 3},
+            ),
+            _approving_ctx(),
+        )
+    )
+
+    assert not result.is_error, result.content
+    assert result.content == "pong from sandboxed_demo: hi hi hi"
+
+
+def test_invalid_arguments_come_back_as_tool_feedback_not_a_crash(tmp_path):
+    """A wrong-typed argument is ordinary tool feedback the loop hands back
+    to the model to correct - the posture ToolRegistry.invoke() takes for
+    every expected denial - not an exception out of the turn."""
+    from backend.agents import AgentDispatcher
+
+    settings_manager = SettingsManager(tmp_path / "session.dat")
+    settings_manager.set_plugin_grant("sandboxed_demo", True)
+    dispatcher = AgentDispatcher(settings_manager)
+    registry = dispatcher.builder_tool_registry(SceneDocument())
+
+    result = asyncio.run(
+        registry.invoke(
+            ToolCall(
+                id="c1",
+                name="plugin:sandboxed_demo:ping",
+                arguments={"message": "hi", "times": "lots"},
+            ),
+            _approving_ctx(),
+        )
+    )
+
+    assert result.is_error
+    assert "times" in result.content
+
+
+def test_an_in_process_intent_receives_its_own_constructed_dataclass():
+    """In-process, the host DOES hold the plugin's type, so it validates and
+    constructs there - the handler works with its own typed object rather
+    than a bare dict, the same contract the worker path gives."""
+    from dataclasses import dataclass
+
+    from backend.plugin_sdk import HostContext, build_intent_arguments
+
+    @dataclass
+    class Args:
+        query: str
+        limit: int = 10
+
+    seen = {}
+
+    def handler(document, run_ctx, args: Args):
+        seen["args"] = args
+        return "ok"
+
+    host = HostContext("some_plugin")
+    host.register_intent("search", handler, args_schema=Args)
+    spec = host._intents[0]
+
+    extra, errors = build_intent_arguments(spec, {"query": "auth", "limit": 3})
+
+    assert errors == []
+    assert handler(None, None, *extra) == "ok"
+    assert seen["args"] == Args(query="auth", limit=3)
+
+
+def test_an_intent_declaring_no_schema_is_called_exactly_as_before():
+    """The pre-21.4 shape must be untouched: no declared schema means the
+    handler is still called (document, run_ctx) with no tail at all."""
+    from backend.plugin_sdk import HostContext, build_intent_arguments, intent_input_schema
+
+    def handler(document, run_ctx):
+        return "ok"
+
+    host = HostContext("some_plugin")
+    host.register_intent("run", handler)
+    spec = host._intents[0]
+
+    extra, errors = build_intent_arguments(spec, {})
+
+    assert extra == ()
+    assert errors == []
+    assert intent_input_schema(spec) == {"type": "object", "properties": {}}
+
+
+def test_arguments_to_an_intent_that_declares_none_are_rejected():
+    """Silently dropping them would teach the model that a call it got wrong
+    had worked."""
+    from backend.plugin_sdk import HostContext, build_intent_arguments
+
+    def handler(document, run_ctx):
+        return "ok"
+
+    host = HostContext("some_plugin")
+    host.register_intent("run", handler)
+
+    extra, errors = build_intent_arguments(host._intents[0], {"unexpected": 1})
+
+    assert extra == ()
+    assert errors and "no arguments" in errors[0]

@@ -144,6 +144,10 @@ from backend.tools import KNOWN_SCOPES
 # See PluginWorkerClient.connect's own docstring for the full call-order
 # contract these two enforce together.
 from graphlink_execution_guard import create_execution_guard
+# ADR-021 stage 21.4: a plugin intent's declared args_schema is a
+# dataclass, described and validated with the SAME ADR-003 machinery
+# every wire payload already uses - not a second, plugin-only scheme.
+from graphlink_wire_schema import json_schema_for, validate_payload
 from graphlink_process_env import safe_subprocess_env
 
 logger = logging.getLogger(__name__)
@@ -357,6 +361,15 @@ class PluginIntentSpec:
     # f"plugin:{plugin_id}:{name}"
     handler: PluginIntentHandler
     args_schema: "type | None" = None
+    # ADR-021 stage 21.4: the JSON Schema for args_schema, when the dataclass
+    # TYPE itself is not available in this process. That is exactly the
+    # out-of-process case: the host never imports a sandboxed plugin's
+    # module, so it cannot hold its dataclass - but it still needs the schema
+    # to describe the tool to the model. The worker sends the schema up at
+    # get_registrations time and validates/constructs on its own side, where
+    # the real type does live. In-process specs leave this None and derive
+    # the schema from args_schema directly (see intent_input_schema).
+    args_json_schema: "dict | None" = None
 
 
 # ADR-014 stage 14.3: the first-party migration escape hatch. 'document' is
@@ -547,7 +560,9 @@ class HostContext:
         )
 
     def register_intent(
-        self, name: str, handler: PluginIntentHandler, *, args_schema: "type | None" = None,
+        self, name: str, handler: PluginIntentHandler, *,
+        args_schema: "type | None" = None,
+        args_json_schema: "dict | None" = None,
     ) -> None:
         """Declares one custom action beyond node creation. NOT used by the
         trivial demo plugin (node creation alone proves the loop) - included
@@ -587,8 +602,81 @@ class HostContext:
                 f"this plugin"
             )
         self._intents.append(PluginIntentSpec(
-            plugin_id=self.plugin_id, name=name, handler=handler, args_schema=args_schema,
+            plugin_id=self.plugin_id, name=name, handler=handler,
+            args_schema=args_schema, args_json_schema=args_json_schema,
         ))
+
+
+_NO_ARGS_SCHEMA = {"type": "object", "properties": {}}
+
+
+def intent_input_schema(spec: PluginIntentSpec) -> dict:
+    """ADR-021 stage 21.4: the JSON Schema describing one intent's arguments,
+    for the Builder tool spec that exposes it.
+
+    Before 21.4 this was hardcoded to the empty object at the one call site
+    (backend/plugins.py's register_plugin_tools) and `args_schema` was stored
+    but read by nothing at all - so a plugin's action was invocable by the
+    model but never parameterizable, which made a plugin tool close to
+    useless as a tool.
+
+    Three cases, in priority order: a pre-generated schema (out-of-process,
+    where this process has no access to the plugin's own dataclass), a
+    dataclass type (in-process, generated with the SAME ADR-003 machinery
+    every wire payload uses), or no declared arguments at all - which stays
+    exactly the empty object it always was, so an intent that never declared
+    a schema behaves identically to before this stage."""
+    if spec.args_json_schema is not None:
+        return spec.args_json_schema
+    if spec.args_schema is not None:
+        return json_schema_for(spec.args_schema)
+    return dict(_NO_ARGS_SCHEMA)
+
+
+def build_intent_arguments(spec: PluginIntentSpec, arguments: dict) -> "tuple[tuple, list[str]]":
+    """Validate a caller's raw argument dict against `spec` and turn it into
+    the positional tail its handler is called with.
+
+    Returns (args_tuple, errors). On success with a declared schema the tail
+    is a single constructed dataclass instance, so a plugin author works with
+    their own typed object rather than a bare dict. An intent with NO
+    declared schema gets an empty tail - handler(document, run_ctx), byte-
+    identical to the pre-21.4 call - and any arguments a model invented for
+    it are rejected rather than silently dropped, since accepting them would
+    teach the model that a call it got wrong had worked.
+
+    Validation is only ever performed where the real dataclass lives: this
+    function is called host-side for in-process specs and worker-side for
+    out-of-process ones. It deliberately does NOT try to validate against a
+    bare args_json_schema - a host holding only the schema forwards the raw
+    dict to the worker, which owns the type and validates there."""
+    if spec.args_schema is None:
+        if arguments:
+            return (), [
+                f'intent "{spec.name}" takes no arguments, got '
+                f"{sorted(arguments)}"
+            ]
+        return (), []
+    errors = validate_payload(arguments, spec.args_schema)
+    if errors:
+        return (), errors
+    return (spec.args_schema(**arguments),), []
+
+
+def resolve_intent_call_args(
+    spec: PluginIntentSpec, arguments: dict,
+) -> "tuple[tuple, list[str]]":
+    """The one place the in-process/out-of-process split is decided, so no
+    caller has to re-derive it (and get the ORDER wrong: an out-of-process
+    spec has args_schema=None, which build_intent_arguments would otherwise
+    read as "declares no arguments" and reject every real call).
+
+    Out-of-process: the host holds only the JSON schema, so the caller's raw
+    dict is forwarded and the worker validates it against the real dataclass
+    on its own side. In-process: validated and constructed here."""
+    if spec.args_schema is None and spec.args_json_schema is not None:
+        return (dict(arguments),), []
+    return build_intent_arguments(spec, arguments)
 
 
 @dataclass
@@ -931,16 +1019,23 @@ def _make_worker_factory(worker_client: PluginWorkerClient, local_kind: str) -> 
 
 def _make_worker_intent_handler(worker_client: PluginWorkerClient, name: str) -> PluginIntentHandler:
     """One RPC-backed wrapper closure per out-of-process custom intent - a
-    plain sync callable (document, run_ctx) -> Any, the same shape
-    HostContext.register_intent already accepts for an in-process handler.
-    `document`/`run_ctx` are accepted (matching PluginIntentHandler's own
-    signature) but not forwarded across the RPC boundary - v1 out-of-process
-    intents are zero-argument, same limitation InvokePluginIntentArgs
-    already documents for the in-process bus-level path (backend/
-    plugins.py)."""
+    plain sync callable, the same shape HostContext.register_intent already
+    accepts for an in-process handler. `document`/`run_ctx` are accepted
+    (matching PluginIntentHandler's own signature) but deliberately not
+    forwarded across the RPC boundary - handing a sandboxed plugin the live
+    document would defeat the isolation the worker exists for.
 
-    def _handler(document: SceneDocument, run_ctx: "PluginRunContext"):
-        result = worker_client.call("invoke_intent", {"name": name, "args": {}})
+    ADR-021 stage 21.4: arguments ARE now forwarded, as a plain JSON dict.
+    The host cannot construct the plugin's own dataclass (it never imports
+    the plugin's module - that is the whole point of out-of-process), so the
+    raw dict crosses the boundary and the WORKER validates and constructs it
+    against the real type on its own side. `arguments` is the caller's dict
+    rather than a built dataclass instance for exactly that reason."""
+
+    def _handler(document: SceneDocument, run_ctx: "PluginRunContext", arguments: dict | None = None):
+        result = worker_client.call(
+            "invoke_intent", {"name": name, "args": dict(arguments or {})},
+        )
         return result.get("result")
 
     return _handler
@@ -1005,7 +1100,12 @@ def _discover_out_of_process_plugin(
             )
         for entry in response.get("intents", []):
             name = str(entry["name"])
-            host.register_intent(name, _make_worker_intent_handler(worker_client, name))
+            host.register_intent(
+                name, _make_worker_intent_handler(worker_client, name),
+                # stage 21.4: the worker generated this from its own
+                # dataclass; the host stores it purely to describe the tool.
+                args_json_schema=entry.get("args_schema"),
+            )
     except Exception:
         worker_client.close()
         raise
