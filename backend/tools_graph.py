@@ -42,7 +42,13 @@ from typing import Any
 
 from backend.domain.graph import SceneDocument, SceneError
 from backend.domain.model import MESSAGE_VERTICAL_SPACING
-from backend.domain.node_states import ChatState, NoteState, PycoderState
+from backend.domain.node_states import (
+    ArtifactState,
+    ChatState,
+    CodeState,
+    NoteState,
+    PycoderState,
+)
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import GRAPH_MUTATE, GRAPH_READ, RunContext, ToolRegistry, ToolResult
 
@@ -81,7 +87,21 @@ _READ_DIRECTIONS = ("down", "up", "both")
 _LIST_EXCERPT_CHARS = 160
 _LIST_MAX_NODES = 40
 
-_CREATABLE_KINDS = ("chat", "note", "code", "document", "pycoder", "web_research")
+# ADR-021 stage 21.2 widened this from the 6 first-party kinds stage 8.1
+# shipped. `chart` stays out deliberately: chart creation is
+# generation-coupled (there is no meaningful empty chart node - see
+# add_chart_node's own contract), so run_node(action="chart") is its one
+# creation path. Group/plan kinds stay out for the same reason
+# graph.delete_node refuses them.
+_CREATABLE_KINDS = (
+    "chat", "note", "code", "document", "pycoder", "web_research",
+    "html", "artifact", "conversation",
+)
+# Kinds whose domain factory requires a parent - the handler rejects a
+# parentless create for these before touching the document.
+_PARENT_REQUIRED_KINDS = (
+    "document", "pycoder", "web_research", "html", "artifact", "conversation",
+)
 
 
 GRAPH_CREATE_NODE_SPEC = ToolSpec(
@@ -93,9 +113,13 @@ GRAPH_CREATE_NODE_SPEC = ToolSpec(
         "document (a text attachment; parent required), pycoder (an "
         "executable Python node; parent required; set its code via "
         "graph.set_node_content, run it via run_node), web_research (a "
-        "research node; parent required; run it via run_node). Returns the "
-        "new node's id. Nodes are placed automatically relative to their "
-        "parent - do not invent coordinates."
+        "research node; parent required; run it via run_node), html (a "
+        "rendered HTML page; parent required; content is the raw source), "
+        "artifact (a long-form Markdown drafting node; parent required; "
+        "starts empty), conversation (a self-contained linear chat; parent "
+        "required). Returns the new node's id. Nodes are placed "
+        "automatically relative to their parent - do not invent "
+        "coordinates."
     ),
     input_schema={
         "type": "object",
@@ -103,7 +127,7 @@ GRAPH_CREATE_NODE_SPEC = ToolSpec(
             "kind": {"type": "string", "enum": list(_CREATABLE_KINDS)},
             "parent_id": {
                 "type": "string",
-                "description": "Existing node to attach under. Required for document/pycoder/web_research; optional for chat/code; ignored for note.",
+                "description": "Existing node to attach under. Required for document/pycoder/web_research/html/artifact/conversation; optional for chat/code; ignored for note.",
             },
             "title": {"type": "string", "description": "Optional title (document kind requires one)."},
             "content": {"type": "string", "description": "Initial content/text/code for the node."},
@@ -135,8 +159,11 @@ GRAPH_SET_NODE_CONTENT_SPEC = ToolSpec(
     description=(
         "Replace an existing node's content. Supported kinds: chat (the "
         "message text), note (the note text), pycoder (the Python code that "
-        "run_node will execute). Other kinds are read-only through this "
-        "tool."
+        "run_node will execute), code (the source text), document (the "
+        "document body), html (the raw HTML source), artifact (the whole "
+        "Markdown document). Kinds whose content IS a run's output - chart, "
+        "image, thinking, web_research - are read-only through this tool: "
+        "re-run them instead. A node's title is not changed."
     ),
     input_schema={
         "type": "object",
@@ -295,7 +322,7 @@ def make_create_node_handler(document: SceneDocument):
         parent_id = args.get("parent_id") or None
         if parent_id is not None and parent_id not in document.nodes:
             return _error(f"Unknown parent node: {parent_id!r}.")
-        if kind in ("document", "pycoder", "web_research") and parent_id is None:
+        if kind in _PARENT_REQUIRED_KINDS and parent_id is None:
             return _error(f"kind {kind!r} requires parent_id.")
         content = str(args.get("content") or "")
         title = str(args.get("title") or "")
@@ -322,6 +349,19 @@ def make_create_node_handler(document: SceneDocument):
                 if content and isinstance(node.state, PycoderState):
                     node.state.pycoder_code = content
                 return node
+            if kind == "html":
+                # add_html_node takes the raw source positionally and derives
+                # its own title from it; the backend never parses or
+                # sanitizes that string (the preview render is entirely
+                # client-side - see the factory's own docstring).
+                return document.add_html_node(x, y, content, parent_id)
+            if kind == "artifact":
+                # Fixed title, empty document by design: artifact_content
+                # only lands once a generation completes, so `content` has
+                # nowhere honest to go here and is deliberately ignored.
+                return document.add_artifact_node(x, y, parent_id)
+            if kind == "conversation":
+                return document.add_conversation_node(x, y, parent_id)
             node = document.add_web_research_node(x, y, parent_id)
             if content:
                 # WebResearchState's own contract: SceneNode.content holds
@@ -376,11 +416,35 @@ def make_set_node_content_handler(document: SceneDocument):
             def mutator():
                 node.state.pycoder_code = content
                 return node
+        elif node.kind == "code" and isinstance(node.state, CodeState):
+            # CodeState.code is what the wire actually publishes for a code
+            # node (graph.py's _node_wire), not SceneNode.content.
+            def mutator():
+                node.state.code = content
+                return node
+        elif node.kind == "artifact" and isinstance(node.state, ArtifactState):
+            def mutator():
+                node.state.artifact_content = content
+                return node
+        elif node.kind in ("document", "html"):
+            # Both keep their body on SceneNode.content itself (the document
+            # attachment's text; the html node's raw source), so this is the
+            # same one-line in-place write set_note_content does.
+            def mutator():
+                node.content = content
+                return node
         else:
             return _error(
                 f"Node {node_id!r} is kind {node.kind!r} - not writable via "
-                "graph.set_node_content (supported: chat, note, pycoder)."
+                "graph.set_node_content (supported: chat, note, pycoder, "
+                "code, document, html, artifact). A kind whose content is a "
+                "run's own output is changed by re-running it, not by "
+                "writing to it."
             )
+
+        # Title is deliberately NOT recomputed, matching
+        # update_chat_node_content's own documented posture: every in-place
+        # mutator in the domain leaves title untouched post-creation.
 
         document.record_command(
             "builderSetContent", "agent", mutator, node_ids=[node_id], run_id=run_id,
@@ -518,6 +582,107 @@ def make_list_nodes_handler(document: SceneDocument):
             "returned": len(nodes_out),
             "more": offset + len(nodes_out) < len(matches),
         }))
+
+    return handler
+
+
+GRAPH_DELETE_NODE_SPEC = ToolSpec(
+    name="graph.delete_node",
+    description=(
+        "Delete one node from the canvas, with its edges. Use this to "
+        "remove something you created that turned out wrong - not to tidy "
+        "up the user's own work. Refused for: a node that still has "
+        "children (delete those first, so a subtree is never orphaned by "
+        "one call), the build's own plan node, frames/containers, and any "
+        "node with a run in flight. Deleting is undoable, and reverts with "
+        "the rest of the build."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"node_id": {"type": "string"}},
+        "required": ["node_id"],
+    },
+)
+
+# Kinds graph.delete_node refuses outright, with the reason the model is
+# told. The plan node is the build's OWN resume point (backend/builder.py
+# rebuilds a run's context from it), so deleting it mid-run would strand the
+# very run making the call. Frames/containers carry membership and geometry
+# semantics whose only real editor is the canvas UI - ADR-021 keeps group
+# manipulation out of the Builder's surface deliberately.
+_UNDELETABLE_KINDS = {
+    "plan": "the plan node is this build's own resume point",
+    "frame": "frames are organized on the canvas, not by the Builder",
+    "container": "containers are organized on the canvas, not by the Builder",
+}
+
+
+def make_delete_node_handler(document: SceneDocument, dispatcher):
+    """ADR-021 stage 21.2: the Builder's first destructive tool.
+
+    Blast radius is bounded to ONE leaf node by construction: a node with
+    children is refused rather than cascading, so no single call can take
+    out a subtree the model only half-understood, and a partially-wrong
+    branch has to be dismantled deliberately, leaf-first. That is also why
+    it registers approval="always" rather than "once" - create/connect are
+    additive and obvious in hindsight, but a delete destroys content the
+    user may not have read yet, so every one prompts (the fingerprint means
+    a genuinely repeated identical call in one run still only asks once).
+
+    Live-resource teardown reuses backend/api/intents_nodes.py's own
+    _capture_live_run_teardown + disposal sequence rather than reimplementing
+    it: a deleted Py-Coder node's REPL subprocess and a deleted sandbox
+    node's venv must not outlive the node whichever surface deleted it. The
+    refusals above mean plan_cancels is always empty on this path, but the
+    loop is kept so this stays a faithful mirror of the intent rather than a
+    subset that silently drifts from it."""
+
+    async def handler(call: ToolCall, ctx: RunContext) -> ToolResult:
+        from backend.api.intents_nodes import _capture_live_run_teardown
+
+        node_id = str(call.arguments.get("node_id") or "")
+        node = document.nodes.get(node_id)
+        if node is None:
+            return _error(f"Unknown node: {node_id!r}.")
+
+        refusal = _UNDELETABLE_KINDS.get(node.kind)
+        if refusal is not None:
+            return _error(f"Node {node_id!r} cannot be deleted: {refusal}.")
+        if getattr(node, "pending_request_id", None):
+            return _error(
+                f"Node {node_id!r} has a run in flight - wait for it to "
+                "finish or stop it before deleting."
+            )
+        child_ids = [e.target for e in document.edges.values() if e.source == node_id]
+        if child_ids:
+            return _error(
+                f"Node {node_id!r} still has {len(child_ids)} child node(s) "
+                f"({', '.join(child_ids[:5])}) - delete those first so no "
+                "subtree is orphaned."
+            )
+
+        ids = [node_id]
+        pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels = _capture_live_run_teardown(
+            document, ids,
+        )
+        document.record_command(
+            "builderDeleteNode", "agent", lambda: document.remove_nodes(ids),
+            node_ids=ids, run_id=_run_id_of(ctx),
+        )
+        for kind, request_id in code_exec_cancels:
+            if kind == "pycoder":
+                dispatcher.cancel_pycoder(request_id)
+            else:
+                dispatcher.cancel_code_sandbox(request_id)
+        for request_id in plan_cancels:
+            dispatcher.cancel_builder(request_id)
+        for disposed_id, repl_id in pycoder_ids:
+            await dispatcher.dispose_pycoder_repl(
+                disposed_id, repl_id=repl_id, remove_scratch_dir=True,
+            )
+        for sandbox_id in sandbox_ids:
+            await dispatcher.remove_code_sandbox_scratch_dir(sandbox_id)
+        return ToolResult(content=json.dumps({"deleted": node_id, "kind": node.kind}))
 
     return handler
 
@@ -858,6 +1023,15 @@ def register_run_node_tool(registry: ToolRegistry, document: SceneDocument, disp
     registry.register(
         RUN_NODE_SPEC, make_run_node_handler(document, dispatcher),
         scopes={GRAPH_READ}, approval="once",
+    )
+    # ADR-021 stage 21.2: delete registers HERE rather than in
+    # register_graph_tools for the same reason run_node does - it needs the
+    # dispatcher, to tear down a deleted node's REPL/venv and cancel any
+    # run it owned. approval="always": a delete destroys content the user
+    # may not have read yet, unlike the additive create/connect pair.
+    registry.register(
+        GRAPH_DELETE_NODE_SPEC, make_delete_node_handler(document, dispatcher),
+        scopes={GRAPH_MUTATE}, approval="always",
     )
 
 

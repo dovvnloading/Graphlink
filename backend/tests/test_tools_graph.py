@@ -210,16 +210,56 @@ class TestSetNodeContent:
         assert document.nodes[pycoder.id].state.pycoder_code == "x = 1"
 
     def test_unsupported_kind_is_a_clear_error(self):
+        """ADR-021 stage 21.2 widened this tool to code/document/html/
+        artifact, so the read-only set is now exactly the kinds whose
+        content IS a run's own output - a thinking node among them."""
         document = SceneDocument()
-        code = document.add_code_node(0, 0, "print(1)", "python")
+        parent = document.add_chat_node(0, 0, "parent", True)
+        thinking = document.add_thinking_node(0, 200, "reasoning text", parent.id)
         registry = make_registry(document)
         ctx, _ = make_ctx()
 
         result = invoke(registry, ctx, "graph.set_node_content", {
-            "node_id": code.id, "content": "print(2)",
+            "node_id": thinking.id, "content": "rewritten",
         })
         assert result.is_error
-        assert "code" in result.content
+        assert "thinking" in result.content
+        assert document.nodes[thinking.id].content == "reasoning text"
+
+    def test_widened_kinds_are_writable_in_place(self):
+        """ADR-021 stage 21.2: code/document/html/artifact became writable.
+        Each writes the field its own wire row publishes, and none of them
+        touch the title - the same posture update_chat_node_content
+        documents for every in-place domain mutator."""
+        document = SceneDocument()
+        parent = document.add_chat_node(0, 0, "parent", True)
+        code = document.add_code_node(0, 200, "print(1)", "python", parent.id)
+        doc = document.add_document_node(0, 400, "Report", "old body", "document", parent.id)
+        html = document.add_html_node(0, 600, "<p>old</p>", parent.id)
+        artifact = document.add_artifact_node(0, 800, parent.id)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        titles_before = {n.id: n.title for n in (code, doc, html, artifact)}
+
+        for node, new_content in (
+            (code, "print(2)"),
+            (doc, "new body"),
+            (html, "<p>new</p>"),
+            (artifact, "# A draft"),
+        ):
+            assert not invoke(registry, ctx, "graph.set_node_content", {
+                "node_id": node.id, "content": new_content,
+            }).is_error, f"{node.kind} must be writable"
+
+        assert document.nodes[code.id].state.code == "print(2)"
+        assert document.nodes[doc.id].content == "new body"
+        assert document.nodes[html.id].content == "<p>new</p>"
+        assert document.nodes[artifact.id].state.artifact_content == "# A draft"
+        for node_id, title in titles_before.items():
+            assert document.nodes[node_id].title == title, (
+                "in-place content writes never recompute a title"
+            )
 
 
 class TestReadSubgraph:
@@ -294,6 +334,248 @@ class TestReadSubgraph:
         }).content)
 
         assert payload["nodes_truncated"] is False
+
+
+class RecordingDispatcher:
+    """Just enough dispatcher for graph.delete_node's teardown seam - it
+    records what it was asked to tear down so tests can assert a deleted
+    node's live resources are actually released, not silently leaked."""
+
+    def __init__(self):
+        self.disposed_repls: list[tuple] = []
+        self.removed_sandboxes: list[str] = []
+        self.cancelled: list[tuple] = []
+
+    async def dispose_pycoder_repl(self, node_id, *, repl_id=None, remove_scratch_dir=False):
+        self.disposed_repls.append((node_id, repl_id, remove_scratch_dir))
+
+    async def remove_code_sandbox_scratch_dir(self, sandbox_id):
+        self.removed_sandboxes.append(sandbox_id)
+
+    def cancel_pycoder(self, request_id):
+        self.cancelled.append(("pycoder", request_id))
+
+    def cancel_code_sandbox(self, request_id):
+        self.cancelled.append(("code_sandbox", request_id))
+
+    def cancel_builder(self, request_id):
+        self.cancelled.append(("builder", request_id))
+
+
+def make_registry_with_delete(document: SceneDocument):
+    """graph.delete_node registers alongside run_node (both need the
+    dispatcher), so it is absent from make_registry's pure-graph set."""
+    from backend.tools_graph import GRAPH_DELETE_NODE_SPEC, make_delete_node_handler
+
+    registry = make_registry(document)
+    dispatcher = RecordingDispatcher()
+    registry.register(
+        GRAPH_DELETE_NODE_SPEC, make_delete_node_handler(document, dispatcher),
+        scopes={GRAPH_MUTATE}, approval="always",
+    )
+    return registry, dispatcher
+
+
+class TestDeleteNode:
+    """ADR-021 stage 21.2: the Builder's first destructive tool. Blast
+    radius is one leaf node by construction."""
+
+    def test_deletes_a_leaf_node_and_its_edge(self):
+        document = SceneDocument()
+        parent = seed_parent(document)
+        leaf = document.add_chat_node(0, 200, "wrong answer", False, parent.id)
+        registry, _ = make_registry_with_delete(document)
+        ctx, prompts = make_ctx()
+
+        result = invoke(registry, ctx, "graph.delete_node", {"node_id": leaf.id})
+
+        assert not result.is_error
+        assert leaf.id not in document.nodes
+        assert parent.id in document.nodes, "only the named node is deleted"
+        assert not any(
+            e.source == leaf.id or e.target == leaf.id for e in document.edges.values()
+        ), "edges die with either endpoint"
+        assert [c.name for c in prompts] == ["graph.delete_node"], (
+            "a delete always prompts - it destroys content the user may not "
+            "have read yet"
+        )
+
+    def test_a_node_with_children_is_refused(self):
+        document = SceneDocument()
+        parent = seed_parent(document)
+        middle = document.add_chat_node(0, 200, "middle", False, parent.id)
+        document.add_chat_node(0, 400, "leaf", True, middle.id)
+        registry, _ = make_registry_with_delete(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.delete_node", {"node_id": middle.id})
+
+        assert result.is_error
+        assert "child" in result.content
+        assert middle.id in document.nodes, "no subtree is orphaned by one call"
+
+    def test_the_plan_node_cannot_be_deleted(self):
+        document = SceneDocument()
+        plan = document.add_plan_node(0, 0, "build something")
+        registry, _ = make_registry_with_delete(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.delete_node", {"node_id": plan.id})
+
+        assert result.is_error
+        assert "resume point" in result.content
+        assert plan.id in document.nodes
+
+    def test_groups_cannot_be_deleted(self):
+        document = SceneDocument()
+        a = document.add_chat_node(0, 0, "a", True)
+        b = document.add_chat_node(0, 200, "b", False, a.id)
+        frame = document.create_frame([a.id, b.id])
+        registry, _ = make_registry_with_delete(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.delete_node", {"node_id": frame.id})
+
+        assert result.is_error
+        assert frame.id in document.nodes
+
+    def test_a_node_with_a_run_in_flight_is_refused(self):
+        document = SceneDocument()
+        parent = seed_parent(document)
+        pycoder = document.add_pycoder_node(0, 200, parent.id)
+        pycoder.pending_request_id = "req-live"
+        registry, _ = make_registry_with_delete(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.delete_node", {"node_id": pycoder.id})
+
+        assert result.is_error
+        assert "in flight" in result.content
+        assert pycoder.id in document.nodes
+
+    def test_deleting_a_pycoder_node_tears_down_its_repl(self):
+        """A deleted Py-Coder node's REPL subprocess must not outlive it,
+        whichever surface deleted it - so this reuses the same teardown
+        capture the removeNodes intent uses rather than a subset."""
+        document = SceneDocument()
+        parent = seed_parent(document)
+        pycoder = document.add_pycoder_node(0, 200, parent.id)
+        registry, dispatcher = make_registry_with_delete(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.delete_node", {"node_id": pycoder.id})
+
+        assert not result.is_error
+        assert pycoder.id not in document.nodes
+        assert [d[0] for d in dispatcher.disposed_repls] == [pycoder.id]
+        assert dispatcher.disposed_repls[0][2] is True, "real deletion removes the scratch dir"
+
+    def test_delete_is_undoable_and_run_stamped(self):
+        document = SceneDocument()
+        parent = seed_parent(document)
+        leaf = document.add_chat_node(0, 200, "oops", False, parent.id)
+        registry, _ = make_registry_with_delete(document)
+        ctx, _ = make_ctx(run_id="run-42")
+
+        assert not invoke(registry, ctx, "graph.delete_node", {"node_id": leaf.id}).is_error
+        assert leaf.id not in document.nodes
+
+        document.undo()
+        assert leaf.id in document.nodes, "a deleted node comes back on undo"
+
+    def test_unknown_node_is_a_clear_error(self):
+        document = SceneDocument()
+        registry, _ = make_registry_with_delete(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.delete_node", {"node_id": "nope"})
+
+        assert result.is_error
+        assert "Unknown node" in result.content
+
+    def test_requires_the_mutate_scope(self):
+        document = SceneDocument()
+        parent = seed_parent(document)
+        leaf = document.add_chat_node(0, 200, "x", False, parent.id)
+        registry, _ = make_registry_with_delete(document)
+        ctx, prompts = make_ctx(scopes=frozenset({GRAPH_READ}))
+
+        result = invoke(registry, ctx, "graph.delete_node", {"node_id": leaf.id})
+
+        assert result.is_error
+        assert prompts == [], "a scope denial must never cost an approval prompt"
+        assert leaf.id in document.nodes
+
+
+class TestCreateNodeWidenedKinds:
+    """ADR-021 stage 21.2: html/artifact/conversation joined the creatable
+    set, so a build can end in a rendered page or a long-form draft."""
+
+    def test_creates_an_html_node_from_raw_source(self):
+        document = SceneDocument()
+        parent = seed_parent(document)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.create_node", {
+            "kind": "html", "parent_id": parent.id, "content": "<h1>Report</h1>",
+        })
+
+        assert not result.is_error
+        node = document.nodes[json.loads(result.content)["node_id"]]
+        assert node.kind == "html"
+        assert node.content == "<h1>Report</h1>"
+
+    def test_creates_an_artifact_node(self):
+        document = SceneDocument()
+        parent = seed_parent(document)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.create_node", {
+            "kind": "artifact", "parent_id": parent.id,
+        })
+
+        assert not result.is_error
+        node = document.nodes[json.loads(result.content)["node_id"]]
+        assert node.kind == "artifact"
+
+    def test_creates_a_conversation_node(self):
+        document = SceneDocument()
+        parent = seed_parent(document)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.create_node", {
+            "kind": "conversation", "parent_id": parent.id,
+        })
+
+        assert not result.is_error
+        assert document.nodes[json.loads(result.content)["node_id"]].kind == "conversation"
+
+    def test_the_new_kinds_all_require_a_parent(self):
+        document = SceneDocument()
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        for kind in ("html", "artifact", "conversation"):
+            result = invoke(registry, ctx, "graph.create_node", {"kind": kind})
+            assert result.is_error, f"{kind} must require a parent"
+            assert "parent_id" in result.content
+
+    def test_chart_is_still_not_directly_creatable(self):
+        """Chart creation is generation-coupled - run_node(action="chart")
+        is its one path, since an empty chart node has no honest meaning."""
+        document = SceneDocument()
+        parent = seed_parent(document)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.create_node", {
+            "kind": "chart", "parent_id": parent.id,
+        })
+
+        assert result.is_error
 
 
 class TestReadSubgraphDirection:
