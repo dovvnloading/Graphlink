@@ -319,6 +319,10 @@ def _serialize_web_node(node: SceneNode) -> dict[str, Any]:
         "node_type": "web",
         "query": node.content,
         "research_result": research_result,
+        # ADR-021 stage 21.5: a net-new field with no legacy counterpart -
+        # additive, so a legacy reader simply ignores it and an older saved
+        # row restores it as its False default.
+        "retain_to_knowledge": bool(node.state.research_retain_to_knowledge),
         "conversation_history": _serialize_history(node.history),
         "is_collapsed": bool(node.is_collapsed),
     }

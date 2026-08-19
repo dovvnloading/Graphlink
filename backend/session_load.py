@@ -535,7 +535,11 @@ def _restore_web_payload(payload: dict[str, Any]) -> SceneNode:
         content=str(payload.get("query", "")),
         history=_restore_history(payload.get("conversation_history")),
         is_collapsed=bool(payload.get("is_collapsed", False)),
-        state=WebResearchState(),
+        state=WebResearchState(
+            # ADR-021 stage 21.5: absent in every pre-21.5 row, which is
+            # exactly the False default Web Research has always behaved as.
+            research_retain_to_knowledge=bool(payload.get("retain_to_knowledge", False)),
+        ),
     )
     research_result = payload.get("research_result")
     if isinstance(research_result, dict) and research_result:

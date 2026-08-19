@@ -845,6 +845,14 @@ export class SceneStore {
     this.transport.fireIntent("scene", "runWebResearch", [nodeId, query]);
   }
 
+  // ADR-021 stage 21.5: the per-node "keep these sources" preference. Its
+  // whole retention pipeline (WebResearchRequest.retain_to_knowledge ->
+  // _retain_documents -> the knowledge store) shipped at ADR-017 with no
+  // caller ever setting the flag; this is that caller.
+  setWebResearchRetainToKnowledge(nodeId: string, retain: boolean): void {
+    this.transport.fireIntent("scene", "setWebResearchRetainToKnowledge", [nodeId, retain]);
+  }
+
   cancelWebResearchRequest(requestId: string): void {
     this.transport.fireIntent("scene", "cancelWebResearchRequest", [requestId]);
   }

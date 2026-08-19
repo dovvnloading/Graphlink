@@ -787,6 +787,9 @@ function makeWebResearchFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.cancelWebResearchRequest(n.pendingRequestId);
     },
+    // ADR-021 stage 21.5: the per-node knowledge-retention opt-in.
+    onSetRetainToKnowledge: (retain: boolean) =>
+      liveRef.current.store.setWebResearchRetainToKnowledge(id, retain),
   };
 }
 
@@ -1413,6 +1416,7 @@ export function toFlowNodes(
           researchActiveSourceId: n.researchActiveSourceId ?? null,
           researchError: n.researchError,
           researchResult: n.researchResult ?? null,
+          researchRetainToKnowledge: n.researchRetainToKnowledge,
           ...fns,
         },
       };

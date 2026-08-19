@@ -5618,6 +5618,24 @@ mark.document-view-search-match-current {
   gap: 6px;
 }
 
+/* ADR-021 stage 21.5: the knowledge-retention opt-in, sitting with the
+   query controls it applies to rather than in the card menu - it changes
+   what the next Run does, so it belongs beside Run. */
+.web-research-node-retain {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+  cursor: pointer;
+}
+.web-research-node-retain input { cursor: pointer; }
+.web-research-node-retain input:disabled,
+.web-research-node-retain:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
 /* Reuses conversation-node's send/cancel button chrome verbatim (same
    shared-token convention .chat-node-content's markdown rules already
    establish across sibling node views) rather than duplicating the two

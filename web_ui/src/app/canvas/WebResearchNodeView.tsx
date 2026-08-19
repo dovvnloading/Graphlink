@@ -82,10 +82,12 @@ export interface WebResearchNodeData extends Record<string, unknown> {
   researchActiveSourceId: string | null;
   researchError: string;
   researchResult: WebResearchResultRow | null;
+  researchRetainToKnowledge: boolean;
   onToggleCollapse: () => void;
   onDelete: () => void;
   onRun: (query: string) => void;
   onCancel: () => void;
+  onSetRetainToKnowledge: (retain: boolean) => void;
 }
 
 export type WebResearchFlowNode = Node<WebResearchNodeData, "web_research">;
@@ -265,6 +267,21 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
             </button>
           )}
         </div>
+        {/* ADR-021 stage 21.5: the opt-in that finally reaches ADR-017's
+            retention path. WebResearchRequest.retain_to_knowledge and
+            _retain_documents shipped complete and tested, but no production
+            caller ever set the flag - so Web Research always discarded what
+            it fetched, and no user could choose otherwise. Off by default,
+            preserving that long-standing behavior for every existing node. */}
+        <label className="web-research-node-retain nodrag">
+          <input
+            type="checkbox"
+            checked={data.researchRetainToKnowledge}
+            disabled={!!data.pendingRequestId}
+            onChange={(event) => data.onSetRetainToKnowledge(event.target.checked)}
+          />
+          <span>Save sources to knowledge base</span>
+        </label>
       </div>
 
       {showStepper && (
@@ -408,10 +425,12 @@ function webResearchNodeDataAreEqual(prev: WebResearchNodeData, next: WebResearc
     prev.researchTotal === next.researchTotal &&
     prev.researchError === next.researchError &&
     researchResultsEqual(prev.researchResult, next.researchResult) &&
+    prev.researchRetainToKnowledge === next.researchRetainToKnowledge &&
     prev.onToggleCollapse === next.onToggleCollapse &&
     prev.onDelete === next.onDelete &&
     prev.onRun === next.onRun &&
-    prev.onCancel === next.onCancel
+    prev.onCancel === next.onCancel &&
+    prev.onSetRetainToKnowledge === next.onSetRetainToKnowledge
   );
 }
 

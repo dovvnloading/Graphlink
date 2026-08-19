@@ -43,10 +43,12 @@ function baseData(overrides: Partial<WebResearchFlowNode["data"]> = {}): WebRese
     researchActiveSourceId: null,
     researchError: "",
     researchResult: null,
+    researchRetainToKnowledge: false,
     onToggleCollapse: vi.fn(),
     onDelete: vi.fn(),
     onRun: vi.fn(),
     onCancel: vi.fn(),
+    onSetRetainToKnowledge: vi.fn(),
     ...overrides,
   };
 }
@@ -542,5 +544,41 @@ describe("WebResearchNodeView React.memo comparator (ADR-011 stage 11.1)", () =>
     );
     expect(lodVisibilityCalls.count).toBe(2);
     expect(screen.getByText("accepted")).toBeInTheDocument();
+  });
+});
+
+describe("WebResearchNodeView knowledge retention (ADR-021 stage 21.5)", () => {
+  // WebResearchRequest.retain_to_knowledge and the whole retention pipeline
+  // shipped at ADR-017 with no production caller ever setting the flag -
+  // this checkbox is that caller.
+
+  it("is off by default, preserving fetch-summarize-discard", () => {
+    renderWebResearchNode();
+    const box = screen.getByRole("checkbox", { name: /save sources to knowledge/i });
+    expect((box as HTMLInputElement).checked).toBe(false);
+  });
+
+  it("reports a toggle to the store", async () => {
+    const onSetRetainToKnowledge = vi.fn();
+    const user = userEvent.setup();
+    renderWebResearchNode({ onSetRetainToKnowledge });
+
+    await user.click(screen.getByRole("checkbox", { name: /save sources to knowledge/i }));
+
+    expect(onSetRetainToKnowledge).toHaveBeenCalledWith(true);
+  });
+
+  it("reflects the persisted preference", () => {
+    renderWebResearchNode({ researchRetainToKnowledge: true });
+    const box = screen.getByRole("checkbox", { name: /save sources to knowledge/i });
+    expect((box as HTMLInputElement).checked).toBe(true);
+  });
+
+  it("cannot be changed mid-run", () => {
+    // The flag is read at dispatch, so letting it move under an in-flight
+    // run would show a state that run is not actually using.
+    renderWebResearchNode({ pendingRequestId: "req-1" });
+    const box = screen.getByRole("checkbox", { name: /save sources to knowledge/i });
+    expect((box as HTMLInputElement).disabled).toBe(true);
   });
 });

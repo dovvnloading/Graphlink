@@ -404,6 +404,10 @@ class SceneNodeRow:
     researchActiveSourceId: str | None = None
     researchError: str = ""
     researchResult: ResearchResultRow | None = None
+    # ADR-021 stage 21.5: the node's own "keep these sources in the local
+    # knowledge store" opt-in. Populated for kind=="web_research" rows,
+    # defaulted False for every other kind.
+    researchRetainToKnowledge: bool = False
     # R5.2: the Artifact/Drafter node's real persisted shape - the latest
     # full document text (whole-document replace every turn, never a
     # diff/patch). Populated for kind=="artifact" rows, defaulted (empty
