@@ -7344,6 +7344,57 @@ mark.document-view-search-match-current {
   font-size: 11px;
   color: var(--gl-surface-text-muted);
 }
+/* ADR-021 stage 21.3: the plan-step editor. Reuses .plan-node-steps and
+   .plan-node-step for layout so an editable row sits exactly where its
+   read-only twin did - only the title cell swaps a span for an input, and
+   the per-row actions are added on the end. */
+.plan-node-step-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.plan-node-step-input {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 3px 6px;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 4px;
+}
+.plan-node-step-input:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
+.plan-node-step-action {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--gl-surface-text-muted);
+  background: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.plan-node-step-action:hover:not(:disabled) {
+  background: var(--gl-neutral-button-hover);
+  color: var(--gl-surface-text-primary);
+}
+.plan-node-step-action:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.plan-node-step-editor-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .plan-node-budgets {
   display: flex;
   gap: 10px;

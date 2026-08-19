@@ -38,7 +38,7 @@ import { OrthogonalEdge } from "./OrthogonalEdge";
 import { PyCoderNodeView, type PyCoderFlowNode } from "./PyCoderNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNodeView";
-import { PlanNodeView, type PlanFlowNode } from "./PlanNodeView";
+import { PlanNodeView, type PlanFlowNode, type PlanStepData } from "./PlanNodeView";
 import {
   GROUP_FALLBACK_HEIGHT,
   GROUP_FALLBACK_WIDTH,
@@ -825,6 +825,11 @@ function makePlanFns(id: string, liveRef: { current: DispatcherLive }) {
     // ADR-008 stage 8.6: save-your-build - the backend derives the name
     // from the goal when none is given.
     onSaveRecipe: () => liveRef.current.store.saveBuilderRecipe(id),
+    // ADR-021 stage 21.3: the checklist edit ADR-008 decided on. The whole
+    // replacement list rides in one intent (setPlanSteps is a replace, not
+    // a patch), so PlanNodeView commits a finished draft rather than
+    // streaming keystrokes.
+    onSetPlanSteps: (steps: PlanStepData[]) => liveRef.current.store.setPlanSteps(id, steps),
   };
 }
 
