@@ -296,6 +296,215 @@ class TestReadSubgraph:
         assert payload["nodes_truncated"] is False
 
 
+class TestReadSubgraphDirection:
+    """ADR-021 stage 21.1: read_subgraph gained a direction. "down" is the
+    pre-21.1 behavior and stays the default; "up" is the ancestor walk that
+    lets a build see the branch a node hangs off, not just what hangs off
+    it."""
+
+    def build_chain(self):
+        document = SceneDocument()
+        a = document.add_chat_node(0, 0, "a", True)
+        b = document.add_chat_node(0, 200, "b", False, a.id)
+        c = document.add_chat_node(0, 400, "c", True, b.id)
+        return document, a, b, c
+
+    def test_default_direction_is_down_and_unchanged(self):
+        document, a, b, c = self.build_chain()
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        payload = json.loads(invoke(registry, ctx, "graph.read_subgraph", {
+            "root_id": a.id,
+        }).content)
+
+        assert {n["id"] for n in payload["nodes"]} == {a.id, b.id, c.id}
+
+    def test_up_walks_ancestors_not_descendants(self):
+        document, a, b, c = self.build_chain()
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        payload = json.loads(invoke(registry, ctx, "graph.read_subgraph", {
+            "root_id": c.id, "direction": "up",
+        }).content)
+        assert {n["id"] for n in payload["nodes"]} == {a.id, b.id, c.id}, (
+            "the branch c hangs off must be visible"
+        )
+
+        # The same root read downward sees only itself - exactly the
+        # blindness "up" exists to fix.
+        down = json.loads(invoke(registry, ctx, "graph.read_subgraph", {
+            "root_id": c.id, "direction": "down",
+        }).content)
+        assert {n["id"] for n in down["nodes"]} == {c.id}
+
+    def test_both_sees_the_neighbourhood_without_duplicating_edges(self):
+        document, a, b, c = self.build_chain()
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        payload = json.loads(invoke(registry, ctx, "graph.read_subgraph", {
+            "root_id": b.id, "direction": "both",
+        }).content)
+
+        assert {n["id"] for n in payload["nodes"]} == {a.id, b.id, c.id}
+        edge_pairs = [(e["source"], e["target"]) for e in payload["edges"]]
+        assert sorted(edge_pairs) == sorted(set(edge_pairs)), (
+            "both-direction walking reaches an edge from either endpoint - "
+            "it must still be emitted exactly once"
+        )
+
+    def test_unknown_direction_is_a_tool_error_not_a_crash(self):
+        document, a, _b, _c = self.build_chain()
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.read_subgraph", {
+            "root_id": a.id, "direction": "sideways",
+        })
+
+        assert result.is_error
+        assert "direction" in result.content
+
+    def test_direction_respects_the_node_cap(self):
+        from backend.tools_graph import _READ_MAX_NODES
+
+        document = SceneDocument()
+        hub = document.add_chat_node(0, 0, "hub", True)
+        for i in range(_READ_MAX_NODES + 10):
+            document.add_chat_node(0, 200 + i, "child " + str(i), False, hub.id)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        payload = json.loads(invoke(registry, ctx, "graph.read_subgraph", {
+            "root_id": hub.id, "direction": "both",
+        }).content)
+
+        assert len(payload["nodes"]) == _READ_MAX_NODES
+        assert payload["nodes_truncated"] is True
+
+
+class TestListNodes:
+    """ADR-021 stage 21.1: the canvas enumeration read_subgraph cannot do -
+    it needs a root_id, and the only id a build is ever handed is its own
+    plan node's."""
+
+    def seed(self):
+        document = SceneDocument()
+        chat = document.add_chat_node(0, 0, "the auth flow question", True)
+        code = document.add_code_node(0, 200, "print(1)", "python", chat.id)
+        note = document.add_note(500, 0)
+        document.set_note_content(note.id, "a stray thought about caching")
+        return document, chat, code, note
+
+    def test_lists_every_node_without_being_given_a_root(self):
+        document, chat, code, note = self.seed()
+        registry = make_registry(document)
+        ctx, prompts = make_ctx()
+
+        result = invoke(registry, ctx, "graph.list_nodes", {})
+
+        assert not result.is_error
+        assert prompts == [], "list_nodes is read-only - it must never prompt"
+        payload = json.loads(result.content)
+        assert {n["id"] for n in payload["nodes"]} == {chat.id, code.id, note.id}
+        assert payload["total"] == 3
+        assert payload["more"] is False
+
+    def test_filters_by_kind(self):
+        document, _chat, code, _note = self.seed()
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        payload = json.loads(invoke(registry, ctx, "graph.list_nodes", {
+            "kind": "code",
+        }).content)
+
+        assert [n["id"] for n in payload["nodes"]] == [code.id]
+        assert payload["total"] == 1
+
+    def test_query_matches_content_case_insensitively(self):
+        document, _chat, _code, note = self.seed()
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        payload = json.loads(invoke(registry, ctx, "graph.list_nodes", {
+            "query": "CACHING",
+        }).content)
+
+        assert [n["id"] for n in payload["nodes"]] == [note.id]
+
+    def test_query_matches_title_too(self):
+        document = SceneDocument()
+        parent = document.add_chat_node(0, 0, "parent", True)
+        document.add_document_node(0, 200, "Quarterly Report", "body text", "document", parent.id)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        payload = json.loads(invoke(registry, ctx, "graph.list_nodes", {
+            "query": "quarterly",
+        }).content)
+
+        assert [n["title"] for n in payload["nodes"]] == ["Quarterly Report"]
+
+    def test_excerpts_are_capped_and_flagged(self):
+        from backend.tools_graph import _LIST_EXCERPT_CHARS
+
+        document = SceneDocument()
+        document.add_chat_node(0, 0, "y" * (_LIST_EXCERPT_CHARS + 50), True)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        payload = json.loads(invoke(registry, ctx, "graph.list_nodes", {}).content)
+
+        row = payload["nodes"][0]
+        assert len(row["excerpt"]) == _LIST_EXCERPT_CHARS
+        assert row["truncated"] is True
+
+    def test_pages_with_offset_and_reports_more(self):
+        from backend.tools_graph import _LIST_MAX_NODES
+
+        document = SceneDocument()
+        for i in range(_LIST_MAX_NODES + 5):
+            document.add_chat_node(0, i, "message " + str(i), True)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        first = json.loads(invoke(registry, ctx, "graph.list_nodes", {}).content)
+        assert first["returned"] == _LIST_MAX_NODES
+        assert first["total"] == _LIST_MAX_NODES + 5
+        assert first["more"] is True
+
+        second = json.loads(invoke(registry, ctx, "graph.list_nodes", {
+            "offset": _LIST_MAX_NODES,
+        }).content)
+        assert second["returned"] == 5
+        assert second["more"] is False
+        first_ids = {n["id"] for n in first["nodes"]}
+        second_ids = {n["id"] for n in second["nodes"]}
+        assert not (first_ids & second_ids), "pages must not overlap"
+
+    def test_negative_offset_is_a_tool_error(self):
+        document, _chat, _code, _note = self.seed()
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.list_nodes", {"offset": -1})
+
+        assert result.is_error
+        assert "offset" in result.content
+
+    def test_requires_only_the_read_scope(self):
+        document, _chat, _code, _note = self.seed()
+        registry = make_registry(document)
+        ctx, _ = make_ctx(scopes=frozenset({GRAPH_READ}))
+
+        result = invoke(registry, ctx, "graph.list_nodes", {})
+
+        assert not result.is_error
+
+
 class TestApprovalAndScopeGating:
     def test_denied_approval_leaves_the_document_untouched(self):
         document = SceneDocument()

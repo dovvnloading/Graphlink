@@ -128,8 +128,10 @@ BUILDER_EXECUTOR_PROMPT = (
     "You are the Builder: you construct a working branch of nodes on the "
     "user's canvas by calling tools, one plan step at a time.\n\n"
     "Rules:\n"
-    "- Work ONLY the current step. Use graph.read_subgraph before assuming "
-    "what exists; use the node ids tools return, never invented ids.\n"
+    "- Work ONLY the current step. Never assume what exists: "
+    "graph.list_nodes finds nodes you were not told about; "
+    "graph.read_subgraph reads around a node you already have an id for. "
+    "Use the ids tools return, never invented ids.\n"
     "- Every artifact goes ON the canvas (create nodes, set content, run "
     "them). Your text replies are working notes, not deliverables.\n"
     "- When the step's work is verifiably done, call builder.complete_step "
@@ -601,7 +603,18 @@ async def run_build(
     node.pending_request_id = request_id
     await bus.publish("scene")
 
-    specs = tuple(registry.specs())
+    # ADR-021 stage 21.1: offer the model only tools this run could actually
+    # run. registry.specs() is deliberately unfiltered ("what exists" and
+    # "what this run may use" are independent questions - tools.py), but the
+    # Builder's grant set is FIXED (BUILDER_GRANTED_SCOPES), so any tool
+    # needing a scope outside it - an fs.read MCP server, say - can only ever
+    # be denied at invoke(). Offering it spends context on every turn to buy
+    # a guaranteed-failing call and a confused model. Filtered here rather
+    # than in the registry so the registry keeps its neutral contract.
+    specs = tuple(
+        spec for spec in registry.specs()
+        if (registry.scopes_for(spec.name) or frozenset()) <= BUILDER_GRANTED_SCOPES
+    )
     system_prompt = resolve_prompt_text("builder-executor")
     messages: list = [
         {"role": "system", "content": system_prompt},

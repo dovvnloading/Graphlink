@@ -265,7 +265,9 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         # owns the text). Terse by design - in a multi-step loop every
         # system-prompt token recurs per turn.
         ("builder-planner", 1, "4350943bb0b668dcf02c9714ddb139a5d8d874f804f9f71ba40c531fda0a05fc"),
-        ("builder-executor", 1, "c8741101ff52bc8e72bdbe61d8962620e58c40aab80571abc7d537c987f14bf6"),
+        # v2 (ADR-021 stage 21.1): teaches graph.list_nodes as the way to
+        # find nodes the build was never told about.
+        ("builder-executor", 2, "4d2866f7c342355ba693cc779e386f6947f079ca3a00a8dda9b872d865c844b2"),
         ("reasoning-hint-low", 1, "87d4a1d2e09416005d656faaca77fa2fb2305f0c4b52940f0dbaf0d234669552"),
         ("reasoning-hint-high", 1, "7a004877f0362c73208a61bdd81103d22d5b1eaafe998e82138d970273919d9b"),
     ]

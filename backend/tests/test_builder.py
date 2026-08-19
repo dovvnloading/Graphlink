@@ -647,6 +647,96 @@ class TestBuilderIntents:
             assert node.state.plan_steps[0]["title"] == "already ran"
 
 
+class TestOfferedToolSpecs:
+    """ADR-021 stage 21.1: the loop offers the model only tools this run
+    could actually run. registry.specs() stays deliberately unfiltered (its
+    own contract: "what exists" and "what this run may use" are independent
+    questions) - the filtering belongs to the caller that knows its grant
+    set."""
+
+    def capture_specs(self, monkeypatch, turns):
+        """Drives one build, returning the tool-spec names the loop offered
+        on its first turn."""
+        seen_tools: list[tuple] = []
+
+        def fake_turn(task, messages, tools=(), **kwargs):
+            seen_tools.append(tuple(spec.name for spec in tools))
+            if not turns:
+                raise AssertionError("script exhausted")
+            entry = turns.pop(0)
+            return {
+                "message": {"content": entry.get("content", ""), "role": "assistant"},
+                "tool_calls": entry.get("tool_calls", []),
+                "usage": entry.get("usage"),
+            }
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", fake_turn)
+        return seen_tools
+
+    def test_a_tool_needing_an_ungranted_scope_is_never_offered(self, monkeypatch):
+        """fs.read is a KNOWN scope the Builder is deliberately NOT granted
+        (BUILDER_GRANTED_SCOPES). Before 21.1 such a tool was still handed
+        to the model on every turn, buying a guaranteed invoke()-time denial
+        with real context spend."""
+        from backend.providers.base import ToolSpec
+        from backend.tools import FS_READ, ToolResult
+
+        document, dispatcher, registry, bus = make_harness()
+
+        async def fs_handler(call, ctx):
+            return ToolResult(content="never reached")
+
+        registry.register(
+            ToolSpec(name="mcp.read_file", description="d", input_schema={"type": "object"}),
+            fs_handler, scopes={FS_READ}, approval="always",
+        )
+        node = seed_plan(document, ["one step"])
+        seen_tools = self.capture_specs(monkeypatch, [
+            {"tool_calls": [call("c1", "builder.complete_step", summary="done")]},
+        ])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert seen_tools, "the loop must have taken at least one turn"
+        offered = seen_tools[0]
+        assert "mcp.read_file" not in offered, (
+            "a tool whose scope the Builder was never granted can only ever "
+            "be denied at invoke() - offering it spends context to buy a "
+            "guaranteed-failing call"
+        )
+        assert "graph.list_nodes" in offered, "granted tools are still offered"
+        assert registry.scopes_for("mcp.read_file") == frozenset({FS_READ}), (
+            "the registry itself must keep its neutral, unfiltered contract"
+        )
+
+    def test_an_unscoped_tool_is_still_offered(self, monkeypatch):
+        """An empty scope set is a subset of every set, so it survives the
+        filter - correctly: an unscoped MCP tool is not out of capability,
+        it is merely undeclared, and its approval gate (always) is what
+        actually governs it. Mirrors the autopilot rule from the 8.6
+        review-fix, which is a separate decision on the same shape."""
+        from backend.providers.base import ToolSpec
+        from backend.tools import ToolResult
+
+        document, dispatcher, registry, bus = make_harness()
+
+        async def unscoped_handler(call, ctx):
+            return ToolResult(content="ok")
+
+        registry.register(
+            ToolSpec(name="mcp.unscoped", description="d", input_schema={"type": "object"}),
+            unscoped_handler, scopes=frozenset(), approval="always",
+        )
+        node = seed_plan(document, ["one step"])
+        seen_tools = self.capture_specs(monkeypatch, [
+            {"tool_calls": [call("c1", "builder.complete_step", summary="done")]},
+        ])
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert "mcp.unscoped" in seen_tools[0]
+
+
 class TestReviewFixRegressions:
     """Pinning coverage for the adversarial-review fix pass (2026-08-10)."""
 

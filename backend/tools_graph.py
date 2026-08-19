@@ -67,6 +67,20 @@ _READ_MAX_DEPTH = 3
 # context budget for one tool result.
 _READ_MAX_NODES = 40
 
+# ADR-021 stage 21.1: read_subgraph walks descendants by default ("down",
+# the pre-21.1 behavior). "up" is the ancestor walk chat_branch_history
+# itself does (incoming edges); "both" is the neighbourhood around a node.
+# The caps above apply per call regardless of direction.
+_READ_DIRECTIONS = ("down", "up", "both")
+
+# ADR-021 stage 21.1: list_nodes is an INDEX, not a read - it answers "what
+# exists" so the model can then read_subgraph the part it wants. Its excerpt
+# is therefore much tighter than _READ_EXCERPT_CHARS: 40 nodes x 1000 chars
+# would spend a read's whole budget on an enumeration the model asked for
+# precisely because it did not know what it was looking for yet.
+_LIST_EXCERPT_CHARS = 160
+_LIST_MAX_NODES = 40
+
 _CREATABLE_KINDS = ("chat", "note", "code", "document", "pycoder", "web_research")
 
 
@@ -137,20 +151,47 @@ GRAPH_SET_NODE_CONTENT_SPEC = ToolSpec(
 GRAPH_READ_SUBGRAPH_SPEC = ToolSpec(
     name="graph.read_subgraph",
     description=(
-        "Read the subgraph under a node: the node itself plus descendants "
-        "(depth-limited). Returns JSON nodes [{id, kind, title, content "
-        "(excerpt), truncated}], edges [{source, target}], and "
-        "nodes_truncated (true if the branch has more nodes than fit in one "
-        "read - narrow the root or depth to see the rest). Use this to see "
-        "what exists before creating or connecting."
+        "Read the subgraph around a node: the node itself plus its "
+        "neighbours in `direction` (depth-limited). Returns JSON nodes "
+        "[{id, kind, title, content (excerpt), truncated}], edges [{source, "
+        "target}], and nodes_truncated (true if the branch has more nodes "
+        "than fit in one read - narrow the root, depth, or direction to see "
+        "the rest). Use graph.list_nodes first if you do not know which "
+        "node to root at."
     ),
     input_schema={
         "type": "object",
         "properties": {
             "root_id": {"type": "string"},
             "depth": {"type": "integer", "minimum": 1, "maximum": _READ_MAX_DEPTH},
+            "direction": {
+                "type": "string",
+                "enum": list(_READ_DIRECTIONS),
+                "description": "down (default): descendants. up: ancestors - the branch this node hangs off. both: the surrounding neighbourhood.",
+            },
         },
         "required": ["root_id"],
+    },
+)
+
+GRAPH_LIST_NODES_SPEC = ToolSpec(
+    name="graph.list_nodes",
+    description=(
+        "List what is on the canvas, newest-last, optionally filtered. "
+        "Returns JSON nodes [{id, kind, title, excerpt, truncated}] plus "
+        "total/offset/returned/more. This is the way to find nodes you were "
+        "not told about - graph.read_subgraph needs a root_id you already "
+        "know, this does not. Filter with `kind` (exact node kind) and/or "
+        "`query` (case-insensitive substring of title or content); page with "
+        "`offset` when `more` is true."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string", "description": "Only nodes of this exact kind (e.g. chat, code, pycoder, note)."},
+            "query": {"type": "string", "description": "Case-insensitive substring match against title and content."},
+            "offset": {"type": "integer", "minimum": 0, "description": "Skip this many matches (for paging; default 0)."},
+        },
     },
 )
 
@@ -361,28 +402,48 @@ def make_read_subgraph_handler(document: SceneDocument):
             return _error(f"depth must be an integer, got {depth_arg!r}.")
         if depth < 1:
             return _error(f"depth must be >= 1, got {depth}.")
+        direction = str(call.arguments.get("direction") or "down")
+        if direction not in _READ_DIRECTIONS:
+            return _error(
+                f"direction must be one of {', '.join(_READ_DIRECTIONS)}, got {direction!r}."
+            )
 
-        # BFS over outgoing edges only - "the subgraph under a node" is the
-        # branch it roots, matching how every branch-walk in this codebase
-        # reads direction (chat_branch_history walks parents via incoming;
-        # this is the mirror image for descendants).
+        # BFS in the requested direction. "down" (the default, and the only
+        # behavior before ADR-021 stage 21.1) walks outgoing edges - "the
+        # subgraph under a node" is the branch it roots. "up" walks incoming
+        # edges, the same ancestor direction chat_branch_history itself
+        # walks, which is what lets a build see the branch a node hangs off
+        # rather than only what hangs off it.
+        walk_down = direction in ("down", "both")
+        walk_up = direction in ("up", "both")
         seen = {root_id}
         frontier = [root_id]
         edges_out: list[dict[str, str]] = []
+        # "both" can reach the SAME edge twice (once from each endpoint, on
+        # different BFS levels), which one-directional walking never could -
+        # so edge emission is deduped explicitly rather than relying on each
+        # node being enqueued exactly once.
+        seen_edges: set[tuple[str, str]] = set()
         nodes_truncated = False
         for _ in range(depth):
             next_frontier = []
             for node_id in frontier:
                 for edge in document.edges.values():
-                    if edge.source != node_id:
+                    if walk_down and edge.source == node_id:
+                        neighbour = edge.target
+                    elif walk_up and edge.target == node_id:
+                        neighbour = edge.source
+                    else:
                         continue
-                    if edge.target not in seen:
+                    if neighbour not in seen:
                         if len(seen) >= _READ_MAX_NODES:
                             nodes_truncated = True
                             continue  # neither node nor edge included past the cap
-                        seen.add(edge.target)
-                        next_frontier.append(edge.target)
-                    edges_out.append({"source": edge.source, "target": edge.target})
+                        seen.add(neighbour)
+                        next_frontier.append(neighbour)
+                    if (edge.source, edge.target) not in seen_edges:
+                        seen_edges.add((edge.source, edge.target))
+                        edges_out.append({"source": edge.source, "target": edge.target})
             frontier = next_frontier
             if not frontier:
                 break
@@ -400,6 +461,62 @@ def make_read_subgraph_handler(document: SceneDocument):
             })
         return ToolResult(content=json.dumps({
             "nodes": nodes_out, "edges": edges_out, "nodes_truncated": nodes_truncated,
+        }))
+
+    return handler
+
+
+def make_list_nodes_handler(document: SceneDocument):
+    """ADR-021 stage 21.1: the canvas enumeration read_subgraph cannot do.
+    read_subgraph requires a root_id the caller already knows, and the only
+    id a build is ever handed is its own plan node's - so before this tool a
+    build structurally could not act on anything the user made before
+    launching it. Paged and excerpted under the same discipline as
+    read_subgraph (an unbounded enumeration re-enters the messages list on
+    every subsequent turn), and read-only, so it registers `auto` and never
+    costs a human an approval prompt."""
+
+    async def handler(call: ToolCall, ctx: RunContext) -> ToolResult:
+        kind_filter = str(call.arguments.get("kind") or "").strip()
+        query = str(call.arguments.get("query") or "").strip().lower()
+        offset_arg = call.arguments.get("offset")
+        try:
+            offset = int(offset_arg) if offset_arg is not None else 0
+        except (TypeError, ValueError):
+            return _error(f"offset must be an integer, got {offset_arg!r}.")
+        if offset < 0:
+            return _error(f"offset must be >= 0, got {offset}.")
+
+        # document.nodes is insertion-ordered (creation order), so paging is
+        # stable across calls: a node created mid-enumeration appends at the
+        # end rather than shifting an already-returned page.
+        matches = []
+        for node in document.nodes.values():
+            if kind_filter and node.kind != kind_filter:
+                continue
+            if query:
+                haystack = ((node.title or "") + " " + (node.content or "")).lower()
+                if query not in haystack:
+                    continue
+            matches.append(node)
+
+        page = matches[offset : offset + _LIST_MAX_NODES]
+        nodes_out = []
+        for node in page:
+            content = node.content or ""
+            nodes_out.append({
+                "id": node.id,
+                "kind": node.kind,
+                "title": node.title,
+                "excerpt": content[:_LIST_EXCERPT_CHARS],
+                "truncated": len(content) > _LIST_EXCERPT_CHARS,
+            })
+        return ToolResult(content=json.dumps({
+            "nodes": nodes_out,
+            "total": len(matches),
+            "offset": offset,
+            "returned": len(nodes_out),
+            "more": offset + len(nodes_out) < len(matches),
         }))
 
     return handler
@@ -764,5 +881,9 @@ def register_graph_tools(registry: ToolRegistry, document: SceneDocument) -> Non
     )
     registry.register(
         GRAPH_READ_SUBGRAPH_SPEC, make_read_subgraph_handler(document),
+        scopes={GRAPH_READ}, approval="auto",
+    )
+    registry.register(
+        GRAPH_LIST_NODES_SPEC, make_list_nodes_handler(document),
         scopes={GRAPH_READ}, approval="auto",
     )
