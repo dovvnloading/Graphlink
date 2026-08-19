@@ -38,7 +38,7 @@ function makeStore(
   };
 }
 
-function makeRf(nodes: Array<{ id: string; selected?: boolean }> = []) {
+function makeRf(nodes: Array<{ id: string; selected?: boolean; type?: string }> = []) {
   return {
     zoomIn: vi.fn(),
     zoomOut: vi.fn(),
