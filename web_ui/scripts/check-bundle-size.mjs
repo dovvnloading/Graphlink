@@ -55,7 +55,33 @@ const ASSETS_DIR = join(HERE, "..", "dist", "app", "assets");
 // virtualized in 11.2, but never themselves split) - work no stage currently
 // owns. Tighten this back down the moment that lands; never loosen it again to
 // paper over a regression.
-const LARGEST_CHUNK_CEILING_BYTES = 840_000;
+//
+// Deliberate, commented amendment - 2026-08-19 (ADR-019 section 4), ADR-021
+// stage 21.3.
+//
+// Two separate things are recorded here, because conflating them is how a
+// ratchet dies quietly:
+//
+// 1. Drift, again, unattributed. The amendment above measured 815,280 bytes
+//    on 2026-08-12. The pre-21.3 main chunk measures 838,707 - ~23 KB of
+//    growth landed across the intervening week without anyone re-anchoring
+//    this ceiling, leaving 1,293 bytes (0.15%) of headroom. That is the same
+//    erosion the 08-12 amendment was itself written about, recurring within
+//    a week, and it is the reason the very next feature tripped the gate.
+// 2. Real, intended growth. ADR-021 stage 21.3 adds the plan-step editor to
+//    PlanNodeView (the checklist edit ADR-008 decided on and shipped
+//    without): a draft-then-commit editing mode with per-step title inputs,
+//    reorder/remove controls, and its validation. Measured cost: +2,640
+//    bytes, taking the main chunk to 841,347.
+//
+// Raised to 866,000: ~2.9% real headroom against today's 841,347, the same
+// posture the 08-12 amendment chose. The underlying ADR-019 budget for the
+// initial chunk is still 500 KiB (512,000 bytes) and we are now ~64% over
+// it; this ceiling remains a regression ratchet, not the budget, and moving
+// it still does not move the budget. Closing the real gap still needs the
+// eagerly-rendered node views code-split - work no stage owns, and which
+// this stage does not pretend to do.
+const LARGEST_CHUNK_CEILING_BYTES = 866_000;
 // Post-11.6 reality: six chunks (main + katex + highlight.js + the three
 // lazy dialogs) total 1,288,075 bytes - essentially unchanged from the
 // pre-split single-chunk total, as expected: splitting redistributes code

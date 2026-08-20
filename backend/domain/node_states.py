@@ -176,6 +176,19 @@ class WebResearchState(NodeState):
     research_active_source_id: str | None = None
     research_error: str = ""
     research_result: dict | None = None
+    # ADR-021 stage 21.5: opt in to keeping this node's fetched sources in
+    # the local knowledge store instead of discarding them after the run.
+    # WebResearchRequest.retain_to_knowledge and the whole retention path
+    # under graphlink_plugins/web_research/service.py shipped complete and
+    # tested at ADR-017, but NO production caller ever set the flag - the
+    # capability was unreachable from the app. This per-node preference is
+    # what finally sets it, and it persists (unlike code_sandbox's own
+    # allow_source_builds, which is a single run's approval and deliberately
+    # ephemeral): a node the user has told to remember its sources should
+    # still do so after a reload. Default False keeps Web Research's
+    # long-standing "fetches, summarizes, and discards" behavior for every
+    # node that has not opted in.
+    research_retain_to_knowledge: bool = False
 
 
 @dataclass

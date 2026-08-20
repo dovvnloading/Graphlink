@@ -1738,6 +1738,7 @@ class AgentDispatcher:
         on_success,
         on_failure,
         knowledge_collection_id: int = 0,
+        retain_to_knowledge: bool = False,
     ) -> None:
         """R5.1: the Web Research independent-slot counterpart to
         start_image_reply above - NOT a variant of _dispatch, since there is
@@ -1794,6 +1795,11 @@ class AgentDispatcher:
             original_query=query,
             branch_history=list(branch_history),
             knowledge_collection_id=knowledge_collection_id,
+            # ADR-021 stage 21.5: was never set by any caller, so
+            # _retain_documents (graphlink_plugins/web_research/service.py)
+            # was unreachable in production despite being complete and
+            # tested since ADR-017.
+            retain_to_knowledge=bool(retain_to_knowledge),
         )
 
         async def _invoke(fn, *a):

@@ -1,4 +1,5 @@
 import type { ReactFlowInstance } from "@xyflow/react";
+import { applyCompareBranches, applySynthesizeBranches } from "../canvas/branchActions";
 import { exportCanvasAsPng } from "../canvas/exportCanvasPng";
 import type { SceneStore } from "../canvas/sceneStore";
 import type { OverlayContextValue } from "../overlays/overlays";
@@ -139,6 +140,28 @@ export function buildCommands(
         store.removeEdges(edgeIds);
       },
       enabled: hasSelection,
+    },
+    // ADR-021 stage 21.5: ADR-002 Workstream 1's two branch agents were
+    // reachable ONLY by keyboard shortcut - absent from this palette and
+    // every menu, so two real capabilities were effectively undiscoverable.
+    // Both delegate to canvas/branchActions.ts, the SAME implementation the
+    // shortcut handler calls: synthesize in particular carries non-obvious
+    // client-side validation (it stages a selection the user then types
+    // instructions against), and a guard that drifted between the two
+    // surfaces would be worse than having no palette entry at all.
+    {
+      id: "compare-branches",
+      name: "Compare Branches",
+      aliases: ["compare", "diff branches", "contrast branches"],
+      run: () => applyCompareBranches(store, rf),
+      enabled: hasMultiSelection,
+    },
+    {
+      id: "synthesize-branches",
+      name: "Synthesize Branches",
+      aliases: ["synthesize", "merge branches", "combine branches"],
+      run: () => applySynthesizeBranches(store, rf),
+      enabled: hasMultiSelection,
     },
     {
       id: "add-pin",

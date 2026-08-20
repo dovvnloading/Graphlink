@@ -667,6 +667,9 @@
             ],
             "type": "object"
           },
+          "researchRetainToKnowledge": {
+            "type": "boolean"
+          },
           "researchStage": {
             "type": "string"
           },
@@ -742,6 +745,7 @@
           "researchCompleted",
           "researchTotal",
           "researchError",
+          "researchRetainToKnowledge",
           "artifactContent",
           "gitlinkRepo",
           "gitlinkBranch",

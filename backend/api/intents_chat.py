@@ -35,6 +35,90 @@ from backend.api._shared import make_publish_scene, make_publish_token_counter
 from backend.composer import ComposerDocument
 from backend.domain.graph import SceneDocument
 from backend.domain.model import MESSAGE_VERTICAL_SPACING, SceneError
+
+# ADR-021 stage 21.5: two document attachments on one message fan out
+# sideways instead of stacking, the same convention tools_graph.py's own
+# sibling placement uses for a builder's parallel children.
+DOCUMENT_ATTACHMENT_HORIZONTAL_SPACING = 360
+
+
+def _merge_staged_attachments(text: str, staged: list) -> "tuple[str, list | None]":
+    """R8a's attachment merge: a document attachment's extracted text is
+    appended to the message's own plain text, while image/audio attachments
+    become multimodal content parts.
+
+    Pure - it reads the staged list and returns (full_text, content_parts),
+    touching no document state. content_parts stays None when nothing
+    multimodal is staged, which is what keeps a plain send byte-identical to
+    the pre-R8a shape (a plain string content, not a one-element list).
+
+    Split out of register_chat_intents at ADR-021 stage 21.5, alongside
+    _promote_document_attachments below, to keep that function under the
+    ADR-002 stage 2.6/2.7 300-line cap.
+    """
+    full_text = text
+    for item in staged:
+        if item.extracted_text is not None:
+            full_text += (
+                f"\n\n--- Attached: {item.name} ({item.context_label}) ---\n"
+                f"{item.extracted_text}\n--- end attachment ---"
+            )
+    media_parts = [item.content_part for item in staged if item.content_part is not None]
+    content_parts = [{"type": "text", "text": full_text}, *media_parts] if media_parts else None
+    return full_text, content_parts
+
+
+def _promote_document_attachments(document: SceneDocument, node, staged: list) -> None:
+    """ADR-021 stage 21.5: a document attachment also lands as a real
+    document node under the message it was attached to.
+
+    Until now its extracted text was inlined into the message and then
+    thrown away: nothing on the canvas recorded that a file had been
+    attached at all, DocumentNodeView had no user-facing creation path
+    whatsoever (sceneStore.addDocumentNode has never had a caller outside
+    its own test), and the file could not be exported, searched, or ingested
+    afterwards.
+
+    Deliberately ADDITIVE: send_message's inline attachment text is
+    untouched, so the reply's context and every token count stay
+    byte-identical to before this existed. The node hangs off the user's
+    chat node as a CHILD, which keeps it off that node's own ancestor chain
+    - chat_branch_history walks parents, so the document node is never
+    visited by the reply's history walk and its text cannot be counted
+    twice.
+
+    Image/audio attachments are deliberately out of scope: they already
+    render inside the message itself as real content parts, so a second copy
+    on the canvas would be duplication, not recovery.
+
+    Split out of register_chat_intents rather than inlined at its one call
+    site to keep that function under the ADR-002 stage 2.6/2.7 300-line cap.
+    """
+    promotable = [
+        attachment for attachment in staged
+        if attachment.kind == "document" and attachment.extracted_text is not None
+    ]
+    for index, attachment in enumerate(promotable):
+        document.record_command(
+            "addDocumentNode", "user",
+            lambda attachment=attachment, index=index: document.add_document_node(
+                node.x + index * DOCUMENT_ATTACHMENT_HORIZONTAL_SPACING,
+                node.y + MESSAGE_VERTICAL_SPACING,
+                attachment.name,
+                attachment.extracted_text or "",
+                "document",
+                node.id,
+                file_path=attachment.path,
+                # `attachment` is a backend/attachments.py StagedAttachment,
+                # never a SceneNode - see the matching, file-scoped carve-out
+                # in tests/test_node_state_migration.py's own
+                # _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES.
+                mime_type=attachment.mime_type,
+                byte_size=attachment.byte_size,
+                preview_label=attachment.context_label,
+            ),
+            node_ids=[node.id],
+        )
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.response_parsing import (
@@ -328,15 +412,7 @@ def register_chat_intents(
         # and clears in one step, so a mid-flight staging change can never
         # land on the send that follows it, and never leaks into the next.
         staged = composer_document.take_staged_attachments()
-        full_text = text
-        for item in staged:
-            if item.extracted_text is not None:
-                full_text += (
-                    f"\n\n--- Attached: {item.name} ({item.context_label}) ---\n"
-                    f"{item.extracted_text}\n--- end attachment ---"
-                )
-        media_parts = [item.content_part for item in staged if item.content_part is not None]
-        content_parts = [{"type": "text", "text": full_text}, *media_parts] if media_parts else None
+        full_text, content_parts = _merge_staged_attachments(text, staged)
 
         # ADR-010 stage 10.1: a hidden create - send_message internally calls
         # add_chat_node and updates last_chat_node_id, so it is a real node
@@ -349,6 +425,8 @@ def register_chat_intents(
             ),
             node_ids=[branch_from_node_id] if branch_from_node_id else (),
         )
+        _promote_document_attachments(document, node, staged)
+
         if staged:
             # The staged list is now empty (popped above) - republish so the
             # composer's attachment chips clear the instant Send fires,

@@ -69,7 +69,9 @@ from backend.plugin_sdk import (
     _check_sdk_api_version,
     _import_entry_module,
     _load_manifest,
+    build_intent_arguments,
 )
+from graphlink_wire_schema import json_schema_for
 
 
 class _WorkerParentSnapshot:
@@ -131,7 +133,22 @@ def _picker_entries_payload(host: HostContext) -> list:
 
 
 def _intents_payload(host: HostContext) -> list:
-    return [{"name": spec.name} for spec in host._intents]
+    """ADR-021 stage 21.4: each intent now reports its argument schema too.
+
+    The HOST can never generate this itself for an out-of-process plugin -
+    it deliberately never imports the plugin's module, so the dataclass
+    behind args_schema does not exist in that process. Generating it HERE,
+    where the real type does live, is what lets the host describe a
+    sandboxed plugin's tool to the model with real parameters instead of an
+    empty object, without weakening the isolation boundary by a single
+    import. The dict crosses as plain JSON; the type itself never does."""
+    payload = []
+    for spec in host._intents:
+        entry = {"name": spec.name}
+        if spec.args_schema is not None:
+            entry["args_schema"] = json_schema_for(spec.args_schema)
+        payload.append(entry)
+    return payload
 
 
 def _state_to_plain_dict(state) -> "dict | None":
@@ -222,7 +239,19 @@ def main() -> None:
                     raise ValueError(f"unknown intent: {name!r}")
                 document = _WorkerDocumentStandin({})
                 run_ctx = PluginRunContext(plugin_id=host.plugin_id, notifications=notifications)
-                value = spec.handler(document, run_ctx)
+                # stage 21.4: the host forwarded the caller's raw argument
+                # dict because it has no access to this plugin's dataclass.
+                # This process does, so validation and construction happen
+                # here - the handler still receives its own typed object,
+                # exactly like the in-process path. A validation failure
+                # raises, and the except below turns it into a JSON-RPC
+                # error the host surfaces as a tool error.
+                extra_args, arg_errors = build_intent_arguments(
+                    spec, dict(params.get("args") or {}),
+                )
+                if arg_errors:
+                    raise ValueError("; ".join(arg_errors))
+                value = spec.handler(document, run_ctx, *extra_args)
                 result = {"result": value}
             else:
                 _send({

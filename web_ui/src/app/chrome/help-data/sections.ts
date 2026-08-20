@@ -114,7 +114,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           },
           {
             "action": "Compare Alternatives",
-            "description": "When two branch tips represent different approaches, Branch Lens can inspect both branches and explain where their logic, code direction, and intent diverge."
+            "description": "Select two or more branch tips and run Compare Branches (Ctrl+Shift+C, or the command palette) to get a note explaining where their logic, direction, and intent diverge. Synthesize Branches (Ctrl+Shift+S) instead merges them into one reply, using instructions you type next in the composer."
           }
         ]
       }

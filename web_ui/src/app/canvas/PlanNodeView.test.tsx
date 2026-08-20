@@ -40,6 +40,7 @@ function makeData(overrides: Partial<PlanNodeData> = {}): PlanNodeData {
     onDenyTool: vi.fn(),
     onUndoBuild: vi.fn(),
     onSaveRecipe: vi.fn(),
+    onSetPlanSteps: vi.fn(),
     ...overrides,
   };
 }
@@ -275,5 +276,178 @@ describe("PlanNodeView", () => {
         Element.prototype.scrollTo = originalScrollTo;
       }
     });
+  });
+});
+
+describe("PlanNodeView plan editing (ADR-021 stage 21.3)", () => {
+  // ADR-008 decided on "a checklist the user sees and can edit before
+  // execution proceeds"; scene/setPlanSteps and the store method shipped in
+  // 8.3 with no caller at all. These cover the affordance that closes it.
+
+  function editable(overrides: Partial<PlanNodeData> = {}): PlanNodeData {
+    return makeData({
+      builderStatus: "awaiting_start",
+      pendingRequestId: null,
+      planSteps: [
+        { id: "s1", title: "Gather research", status: "pending", detail: "" },
+        { id: "s2", title: "Write summary", status: "pending", detail: "" },
+      ],
+      ...overrides,
+    });
+  }
+
+  it("offers Edit plan only when the build is startable or resumable", () => {
+    const { unmount } = render(planElement(editable()));
+    expect(screen.getByRole("button", { name: "Edit plan" })).toBeTruthy();
+    unmount();
+
+    render(planElement(editable({ builderStatus: "running", pendingRequestId: "run-1" })));
+    expect(screen.queryByRole("button", { name: "Edit plan" })).toBeNull();
+  });
+
+  it("retitles a pending step and commits the whole list once", async () => {
+    const onSetPlanSteps = vi.fn();
+    const user = userEvent.setup();
+    render(planElement(editable({ onSetPlanSteps })));
+
+    await user.click(screen.getByRole("button", { name: "Edit plan" }));
+    const first = screen.getByRole("textbox", { name: "Step 1 title" });
+    await user.clear(first);
+    await user.type(first, "Gather sources");
+
+    expect(onSetPlanSteps).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Save plan" }));
+
+    expect(onSetPlanSteps).toHaveBeenCalledTimes(1);
+    expect(onSetPlanSteps.mock.calls[0][0]).toEqual([
+      { id: "s1", title: "Gather sources", status: "pending", detail: "" },
+      { id: "s2", title: "Write summary", status: "pending", detail: "" },
+    ]);
+  });
+
+  it("adds a step with a blank id so the backend mints one", async () => {
+    const onSetPlanSteps = vi.fn();
+    const user = userEvent.setup();
+    render(planElement(editable({ onSetPlanSteps })));
+
+    await user.click(screen.getByRole("button", { name: "Edit plan" }));
+    await user.click(screen.getByRole("button", { name: "Add step" }));
+    await user.type(screen.getByRole("textbox", { name: "Step 3 title" }), "Chart it");
+    await user.click(screen.getByRole("button", { name: "Save plan" }));
+
+    const steps = onSetPlanSteps.mock.calls[0][0];
+    expect(steps).toHaveLength(3);
+    expect(steps[2]).toEqual({ id: "", title: "Chart it", status: "pending", detail: "" });
+  });
+
+  it("removes a pending step", async () => {
+    const onSetPlanSteps = vi.fn();
+    const user = userEvent.setup();
+    render(planElement(editable({ onSetPlanSteps })));
+
+    await user.click(screen.getByRole("button", { name: "Edit plan" }));
+    await user.click(screen.getByRole("button", { name: "Remove step 1" }));
+    await user.click(screen.getByRole("button", { name: "Save plan" }));
+
+    expect(onSetPlanSteps.mock.calls[0][0]).toEqual([
+      { id: "s2", title: "Write summary", status: "pending", detail: "" },
+    ]);
+  });
+
+  it("reorders pending steps", async () => {
+    const onSetPlanSteps = vi.fn();
+    const user = userEvent.setup();
+    render(planElement(editable({ onSetPlanSteps })));
+
+    await user.click(screen.getByRole("button", { name: "Edit plan" }));
+    await user.click(screen.getByRole("button", { name: "Move step 2 up" }));
+    await user.click(screen.getByRole("button", { name: "Save plan" }));
+
+    expect(onSetPlanSteps.mock.calls[0][0].map((s: { id: string }) => s.id)).toEqual(["s2", "s1"]);
+  });
+
+  it("renders an already-run step read-only, with no way to edit or reorder past it", async () => {
+    const user = userEvent.setup();
+    render(
+      planElement(
+        editable({
+          builderStatus: "paused",
+          planSteps: [
+            { id: "s1", title: "Gather research", status: "done", detail: "found 3" },
+            { id: "s2", title: "Write summary", status: "pending", detail: "" },
+          ],
+        }),
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Edit plan" }));
+
+    // The done step has no title input, no remove, and no move control -
+    // it is immutable history, which set_plan_steps also enforces server-side.
+    expect(screen.queryByRole("textbox", { name: "Step 1 title" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Remove step 1" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Step 2 title" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Move step 2 up" }).hasAttribute("disabled"),
+    ).toBe(true);
+  });
+
+  it("refuses to save a blank title", async () => {
+    const onSetPlanSteps = vi.fn();
+    const user = userEvent.setup();
+    render(planElement(editable({ onSetPlanSteps })));
+
+    await user.click(screen.getByRole("button", { name: "Edit plan" }));
+    await user.clear(screen.getByRole("textbox", { name: "Step 1 title" }));
+
+    expect(screen.getByRole("button", { name: "Save plan" }).hasAttribute("disabled")).toBe(true);
+    expect(screen.getByRole("alert").textContent).toContain("Every step needs a title");
+    expect(onSetPlanSteps).not.toHaveBeenCalled();
+  });
+
+  it("discards the draft on cancel", async () => {
+    const onSetPlanSteps = vi.fn();
+    const user = userEvent.setup();
+    render(planElement(editable({ onSetPlanSteps })));
+
+    await user.click(screen.getByRole("button", { name: "Edit plan" }));
+    await user.type(screen.getByRole("textbox", { name: "Step 1 title" }), " extra");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onSetPlanSteps).not.toHaveBeenCalled();
+    // Back to the read-only list, showing the untouched original.
+    expect(screen.queryByRole("textbox", { name: "Step 1 title" })).toBeNull();
+    expect(screen.getByText("Gather research")).toBeTruthy();
+  });
+
+  it("closes an open editor when the underlying plan moves under it", async () => {
+    // The draft is keyed to the step list it was seeded from, so a build
+    // that runs a step (or replans) while the editor is open drops the
+    // draft rather than letting the user save an edit against a plan that
+    // has since moved - which set_plan_steps would reject anyway, since it
+    // refuses to rewrite a step that has already run.
+    const onSetPlanSteps = vi.fn();
+    const user = userEvent.setup();
+    const data = editable({ onSetPlanSteps, builderStatus: "paused" });
+    const { rerender } = render(planElement(data));
+
+    await user.click(screen.getByRole("button", { name: "Edit plan" }));
+    expect(screen.getByRole("textbox", { name: "Step 1 title" })).toBeTruthy();
+
+    // The same node, one step later: s1 has run.
+    rerender(
+      planElement({
+        ...data,
+        planSteps: [
+          { id: "s1", title: "Gather research", status: "done", detail: "found 3" },
+          { id: "s2", title: "Write summary", status: "pending", detail: "" },
+        ],
+      }),
+    );
+
+    expect(screen.queryByRole("textbox", { name: "Step 1 title" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit plan" })).toBeTruthy();
+    expect(onSetPlanSteps).not.toHaveBeenCalled();
   });
 });

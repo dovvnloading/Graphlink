@@ -129,6 +129,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_web_research.py (scene) -------------------------
     Classified("scene", "runWebResearch", "B", "run-lifecycle: starts an agent run; node creation itself is executePlugin's job"),
+    Classified("scene", "setWebResearchRetainToKnowledge", "B", "run option for the next research run, not document content - same class as setCodeSandboxAllowSourceBuilds"),
     Classified("scene", "cancelWebResearchRequest", "B", "run-lifecycle: cancel"),
 
     # -- backend/api/intents_nodes.py (scene) --------------------------------

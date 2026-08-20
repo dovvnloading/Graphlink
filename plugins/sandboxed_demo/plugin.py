@@ -23,6 +23,7 @@ exit criterion, not an assertion about code structure alone."""
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 
 from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginRunContext
 
@@ -39,8 +40,25 @@ def _make_env_probe(document, run_ctx: PluginRunContext, parent_id: str) -> Plug
     )
 
 
-def _ping(document, run_ctx: PluginRunContext):
-    return f"pong from {run_ctx.plugin_id}"
+@dataclass
+class PingArgs:
+    """ADR-021 stage 21.4's reference argument schema - a plain dataclass,
+    described and validated by the same graphlink_wire_schema machinery every
+    wire payload uses. Declared HERE, inside the sandboxed plugin, and never
+    imported by the host: the worker generates its JSON Schema and sends that
+    up at registration time, so the host can describe this action's real
+    parameters to a model without ever importing this module."""
+
+    message: str
+    # Optional in the generated schema too, not merely defaulted:
+    # graphlink_wire_schema marks a field required unless its annotation is
+    # Optional, independent of whether it has a Python default.
+    times: int | None = None
+
+
+def _ping(document, run_ctx: PluginRunContext, args: PingArgs):
+    echoed = " ".join([args.message] * max(1, args.times or 1))
+    return f"pong from {run_ctx.plugin_id}: {echoed}"
 
 
 def register(host: HostContext) -> None:
@@ -55,4 +73,4 @@ def register(host: HostContext) -> None:
         ),
         category="More Plugins",
     )
-    host.register_intent("ping", _ping)
+    host.register_intent("ping", _ping, args_schema=PingArgs)

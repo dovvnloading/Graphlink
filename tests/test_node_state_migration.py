@@ -193,11 +193,21 @@ _KNOWN_NON_NODE_FIELD_ACCESS_SHAPES = {
     # unrelated StagedAttachment dataclass (a composer-staging concept,
     # never a SceneNode) - confirmed via grep that every "staged = ..."
     # binding repo-wide holds a StagedAttachment, never a SceneNode.
+    #
+    # ADR-021 stage 21.5 adds one more shape of the SAME collision: the
+    # attachment-promotion helper iterates the staged list into a local
+    # named `attachment`, which is a StagedAttachment for exactly the same
+    # reason `staged` itself is. File-scoped to intents_chat.py so the
+    # generic name cannot quietly excuse a real SceneNode access elsewhere.
     "byte_size": (
         {"root": "staged", "file": None},
         {"root": "self", "file": "attachments.py"},
+        {"root": "attachment", "file": "intents_chat.py"},
     ),
-    "mime_type": ({"root": "staged", "file": None},),
+    "mime_type": (
+        {"root": "staged", "file": None},
+        {"root": "attachment", "file": "intents_chat.py"},
+    ),
     "duration_seconds": ({"root": "staged", "file": None},),
     # PR7's "chat" kind reuses "provider", which collides with two wholly
     # unrelated types: a ResearchSource's own
@@ -341,7 +351,8 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "pycoderLastRunFailed", "pycoderMode", "pycoderOutput", "pycoderPrompt",
     "researchActiveSourceId", "researchCompleted", "researchError",
     "completionTokens", "promptTokens",
-    "researchResult", "researchStage", "researchTotal", "responseIncomplete",
+    "researchResult", "researchRetainToKnowledge", "researchStage", "researchTotal",
+    "responseIncomplete",
     "synthesisInstructions", "title", "toolCalls", "x", "y",
     # ADR-008 stage 8.3: the Builder plan node's 15 fields, +1 (builderActivity)
     # when stage 8.7 added the run's own activity log.

@@ -111,8 +111,25 @@ def register_web_research_intents(
             on_success=_on_success,
             on_failure=_on_failure,
             knowledge_collection_id=knowledge_collection_id,
+            # ADR-021 stage 21.5: the node's own opt-in. Read AFTER
+            # start_web_research_run above (which never touches it), so a
+            # toggle flipped between runs takes effect on the next one.
+            retain_to_knowledge=bool(node.state.research_retain_to_knowledge),
         )
         return node_id
+
+    async def set_web_research_retain_to_knowledge(node_id, retain):
+        # ADR-021 stage 21.5: not record_command-wrapped - this is a run
+        # OPTION for the next research run, not document content, the same
+        # posture setCodeSandboxAllowSourceBuilds takes for its own
+        # per-node run flag.
+        try:
+            document.set_web_research_retain_to_knowledge(node_id, retain)
+        except SceneError:
+            notifications.show("This node no longer exists.", "warning")
+            await bus.publish("notification")
+            return
+        await publish_scene()
 
     async def cancel_web_research_request(request_id):
         agent_dispatcher.cancel_web_research(request_id)
@@ -121,4 +138,7 @@ def register_web_research_intents(
     # backend/plugins.py's executePlugin (the "Web Research" branch), not
     # here; these two intents drive an EXISTING web_research-kind node.
     bus.register_intent("scene", "runWebResearch", run_web_research)
+    bus.register_intent(
+        "scene", "setWebResearchRetainToKnowledge", set_web_research_retain_to_knowledge,
+    )
     bus.register_intent("scene", "cancelWebResearchRequest", cancel_web_research_request)

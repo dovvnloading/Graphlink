@@ -70,6 +70,7 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     researchActiveSourceId: null,
     researchError: "",
     researchResult: null,
+    researchRetainToKnowledge: false,
     artifactContent: "",
     gitlinkRepo: "",
     gitlinkBranch: "",
@@ -579,6 +580,7 @@ describe("toFlowNodes (R5.1 web_research node)", () => {
       pendingRequestId: null,
       researchActiveSourceId: null,
       researchResult: null,
+    researchRetainToKnowledge: false,
     });
   });
 

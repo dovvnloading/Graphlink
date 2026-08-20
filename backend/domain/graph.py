@@ -1426,6 +1426,18 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         self.connect(parent_id, node_id)
         return node
 
+    def set_web_research_retain_to_knowledge(self, node_id: str, retain: bool) -> SceneNode:
+        """ADR-021 stage 21.5: the per-node "keep these sources" preference.
+        Same shape as set_code_sandbox_requirements below - validate the
+        node exists and is the right kind, then write one state field."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "web_research":
+            raise SceneError(f"node is not a web_research node: {node_id}")
+        node.state.research_retain_to_knowledge = bool(retain)
+        return node
+
     def set_code_sandbox_requirements(self, node_id: str, requirements_text: str) -> SceneNode:
         node = self.nodes.get(node_id)
         if node is None:
@@ -2190,6 +2202,9 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             ),
             "researchError": n.state.research_error if isinstance(n.state, WebResearchState) else "",
             "researchResult": n.state.research_result if isinstance(n.state, WebResearchState) else None,
+            "researchRetainToKnowledge": (
+                n.state.research_retain_to_knowledge if isinstance(n.state, WebResearchState) else False
+            ),
             "artifactContent": n.state.artifact_content if isinstance(n.state, ArtifactState) else "",
             "gitlinkRepo": n.state.gitlink_repo if isinstance(n.state, GitlinkState) else "",
             "gitlinkBranch": n.state.gitlink_branch if isinstance(n.state, GitlinkState) else "",

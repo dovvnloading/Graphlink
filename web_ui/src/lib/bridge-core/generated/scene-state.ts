@@ -29,6 +29,7 @@ export interface SceneNodeRow {
   researchActiveSourceId?: string | null;
   researchError: string;
   researchResult?: ResearchResultRow | null;
+  researchRetainToKnowledge: boolean;
   artifactContent: string;
   gitlinkRepo: string;
   gitlinkBranch: string;
@@ -381,6 +382,11 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
   {
     const fieldValue = value["researchResult"];
     if (fieldValue !== undefined && fieldValue !== null) { checkResearchResultRow(fieldValue, `${path}.researchResult`, errors); }
+  }
+  {
+    const fieldValue = value["researchRetainToKnowledge"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.researchRetainToKnowledge: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.researchRetainToKnowledge` + ": expected boolean"); }
   }
   {
     const fieldValue = value["artifactContent"];

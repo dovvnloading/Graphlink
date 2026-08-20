@@ -31,10 +31,14 @@ function makeStore(
     saveChat: vi.fn(),
     collapseAllNodes: vi.fn(),
     expandAllNodes: vi.fn(),
+    // ADR-021 stage 21.5: the two branch agents' store entry points.
+    compareBranches: vi.fn(),
+    setSynthesizeTargetNodeIds: vi.fn(),
+    showInfoNotification: vi.fn(),
   };
 }
 
-function makeRf(nodes: Array<{ id: string; selected?: boolean }> = []) {
+function makeRf(nodes: Array<{ id: string; selected?: boolean; type?: string }> = []) {
   return {
     zoomIn: vi.fn(),
     zoomOut: vi.fn(),
@@ -271,6 +275,83 @@ describe("buildCommands", () => {
     // "any function" rather than a specific reference since it's a fresh
     // arrow closure over `store` on every run(), not a stable callback.
     expect(exportCanvasAsPngMock).toHaveBeenCalledWith(rf, "--gl-surface-window", expect.any(Function));
+  });
+
+  // ADR-021 stage 21.5: the two branch agents were reachable ONLY by
+  // keyboard shortcut - absent from this palette and every menu.
+  it("registers compare-branches and synthesize-branches, gated on a 2+ selection", () => {
+    const store = makeStore([
+      { id: "n0", x: 0, y: 0, title: "A", kind: "chat" },
+      { id: "n1", x: 0, y: 0, title: "B", kind: "chat" },
+    ]);
+    // @ts-expect-error - test double
+    const oneSelected = buildCommands(store, makeRf([{ id: "n0", selected: true }]), makeOverlays());
+    expect(oneSelected.find((c) => c.id === "compare-branches")!.enabled()).toBe(false);
+    expect(oneSelected.find((c) => c.id === "synthesize-branches")!.enabled()).toBe(false);
+
+    const rf = makeRf([
+      { id: "n0", selected: true },
+      { id: "n1", selected: true },
+    ]);
+    // @ts-expect-error - test double
+    const twoSelected = buildCommands(store, rf, makeOverlays());
+    expect(twoSelected.find((c) => c.id === "compare-branches")!.enabled()).toBe(true);
+    expect(twoSelected.find((c) => c.id === "synthesize-branches")!.enabled()).toBe(true);
+  });
+
+  it("compare-branches forwards the selected ids to the store", () => {
+    const store = makeStore([
+      { id: "n0", x: 0, y: 0, title: "A", kind: "chat" },
+      { id: "n1", x: 0, y: 0, title: "B", kind: "chat" },
+    ]);
+    const rf = makeRf([
+      { id: "n0", selected: true, type: "chat" },
+      { id: "n1", selected: true, type: "chat" },
+    ]);
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, rf, makeOverlays());
+
+    commands.find((c) => c.id === "compare-branches")!.run();
+
+    expect(store.compareBranches).toHaveBeenCalledWith(["n0", "n1"]);
+  });
+
+  it("synthesize-branches STAGES the selection rather than firing immediately", () => {
+    // The palette and the keyboard shortcut share one implementation
+    // (canvas/branchActions.ts) precisely so this non-obvious behavior -
+    // and its guards - cannot drift between the two surfaces.
+    const store = makeStore([
+      { id: "n0", x: 0, y: 0, title: "A", kind: "chat" },
+      { id: "n1", x: 0, y: 0, title: "B", kind: "chat" },
+    ]);
+    const rf = makeRf([
+      { id: "n0", selected: true, type: "chat" },
+      { id: "n1", selected: true, type: "chat" },
+    ]);
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, rf, makeOverlays());
+
+    commands.find((c) => c.id === "synthesize-branches")!.run();
+
+    expect(store.setSynthesizeTargetNodeIds).toHaveBeenCalledWith(["n0", "n1"]);
+  });
+
+  it("synthesize-branches refuses a non-chat selection with an explanation", () => {
+    const store = makeStore([
+      { id: "n0", x: 0, y: 0, title: "A", kind: "chat" },
+      { id: "n1", x: 0, y: 0, title: "B", kind: "code" },
+    ]);
+    const rf = makeRf([
+      { id: "n0", selected: true, type: "chat" },
+      { id: "n1", selected: true, type: "code" },
+    ]);
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, rf, makeOverlays());
+
+    commands.find((c) => c.id === "synthesize-branches")!.run();
+
+    expect(store.setSynthesizeTargetNodeIds).not.toHaveBeenCalled();
+    expect(store.showInfoNotification).toHaveBeenCalled();
   });
 });
 
