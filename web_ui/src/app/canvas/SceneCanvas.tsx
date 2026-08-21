@@ -2466,32 +2466,6 @@ function CanvasInner({
     },
     [],
   );
-  // Node-size reporting: the backend fits frames/containers around their
-  // members but cannot measure a rendered node itself, so the canvas tells
-  // it what it actually laid out. Debounced for the same reason onMove is
-  // (a streaming reply re-measures its node on nearly every token) and
-  // diffed against what was last sent, so a settled canvas reports nothing.
-  const nodeSizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reportedSizesRef = useRef<Map<string, string>>(new Map());
-  useEffect(
-    () => () => {
-      if (nodeSizeTimerRef.current) clearTimeout(nodeSizeTimerRef.current);
-    },
-    [],
-  );
-  const reportNodeSizesSoon = useCallback(() => {
-    if (nodeSizeTimerRef.current) clearTimeout(nodeSizeTimerRef.current);
-    nodeSizeTimerRef.current = setTimeout(() => {
-      nodeSizeTimerRef.current = null;
-      const changed = collectChangedNodeSizes(
-        nodesRef.current.map((n) => n.id),
-        (id) => measuredNodeSize(reactFlow, id),
-        reportedSizesRef.current,
-      );
-      store.reportNodeSizes(changed);
-    }, NODE_SIZE_REPORT_DEBOUNCE_MS);
-  }, [reactFlow, store]);
-
   const onMove: OnMove = useCallback(
     (_event, viewport) => {
       makeDebouncedViewportReport(viewportTimerRef, (zoomFactor, scrollX, scrollY) =>
@@ -2627,6 +2601,32 @@ function CanvasInner({
   // React Flow's own store update, where a setState call would be a
   // render-phase update.
   const pendingGuidesRef = useRef<GuideLine[]>([]);
+  // Node-size reporting: the backend fits frames/containers around their
+  // members but cannot measure a rendered node itself, so the canvas tells
+  // it what it actually laid out. Debounced for the same reason onMove is
+  // (a streaming reply re-measures its node on nearly every token) and
+  // diffed against what was last sent, so a settled canvas reports nothing.
+  const nodeSizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reportedSizesRef = useRef<Map<string, string>>(new Map());
+  useEffect(
+    () => () => {
+      if (nodeSizeTimerRef.current) clearTimeout(nodeSizeTimerRef.current);
+    },
+    [],
+  );
+  const reportNodeSizesSoon = useCallback(() => {
+    if (nodeSizeTimerRef.current) clearTimeout(nodeSizeTimerRef.current);
+    nodeSizeTimerRef.current = setTimeout(() => {
+      nodeSizeTimerRef.current = null;
+      const changed = collectChangedNodeSizes(
+        nodesRef.current.map((n) => n.id),
+        (id) => measuredNodeSize(reactFlow, id),
+        reportedSizesRef.current,
+      );
+      store.reportNodeSizes(changed);
+    }, NODE_SIZE_REPORT_DEBOUNCE_MS);
+  }, [reactFlow, store]);
+
 
   /**
    * DRAG-SYNC REBUILD: the drag-position corrections this canvas applies -
