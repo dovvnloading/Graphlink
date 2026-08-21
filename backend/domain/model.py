@@ -91,11 +91,14 @@ NOTE_AGENT_HEADER_COLOR = "#3f7dc9"
 # numbers reproduce). GROUP_PADDING applies to all 4 sides of the union rect;
 # GROUP_PADDING_TOP is the (larger) top-edge allowance instead of
 # GROUP_PADDING, leaving room for the header/label row every frame/container
-# renders. GROUP_MEMBER_DEFAULT_WIDTH/HEIGHT is the flat per-member footprint
-# estimate used when a member's own kind has no width/height field of its
-# own - true of every one of the 12 existing SceneNode kinds today (none
-# carries one), so this is always what is actually used in practice, not
-# just a defensive fallback. GROUP_COLLAPSED_WIDTH/HEIGHT is the fixed pill
+# renders. GROUP_MEMBER_DEFAULT_WIDTH/HEIGHT is the last-resort
+# per-member footprint estimate, used only for a member the frontend has
+# not measured yet (SceneDocument.measured_sizes) AND whose kind carries
+# no intrinsic size of its own -
+# see _member_footprint (backend/domain/groups.py) for the full fallback
+# chain. It used to be what EVERY member was measured by, which is
+# precisely why frames did not enclose their contents: no real rendered
+# node is 220x120 (a chat node alone is 422 wide and routinely 500+ tall). GROUP_COLLAPSED_WIDTH/HEIGHT is the fixed pill
 # size a frame/container shrinks to while is_collapsed.
 GROUP_PADDING = 40.0
 GROUP_PADDING_TOP = 50.0

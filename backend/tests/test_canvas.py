@@ -19,6 +19,8 @@ from backend.canvas import (
     BRANCH_HORIZONTAL_SPACING,
     DRAG_FACTOR_MAX,
     DRAG_FACTOR_MIN,
+    GROUP_MEMBER_DEFAULT_HEIGHT,
+    GROUP_MEMBER_DEFAULT_WIDTH,
     MESSAGE_VERTICAL_SPACING,
     NOTE_AGENT_BODY_COLOR,
     NOTE_AGENT_HEADER_COLOR,
@@ -6018,6 +6020,107 @@ def test_create_frame_sets_correct_defaults_and_initial_bbox():
     assert frame.state.group_height == pytest.approx(510.0)
 
 
+# -- measured member sizes (frames that actually enclose their contents) ----
+
+
+def test_reported_sizes_grow_a_frame_to_enclose_its_real_members():
+    """The bug this whole mechanism exists for: every member used to be
+    measured as a flat 220x120, so a frame around real nodes (a chat node
+    is 422 wide and routinely 500+ tall) rendered smaller than its own
+    contents."""
+    doc = SceneDocument()
+    top = doc.add_chat_node(0, 0, "question", is_user=True)
+    bottom = doc.add_chat_node(0, 600, "reply", is_user=False, parent_id=top.id)
+    frame = doc.create_frame([top.id, bottom.id])
+    estimated = (frame.state.group_width, frame.state.group_height)
+
+    changed = doc.set_measured_node_sizes([(top.id, 422.0, 112.0), (bottom.id, 422.0, 525.0)])
+
+    assert changed is True
+    assert (frame.state.group_width, frame.state.group_height) != estimated
+    # Union of x:[0,422] and y:[0,112]+[600,1125], padded 40/50/40/40.
+    assert frame.x == pytest.approx(-40.0)
+    assert frame.y == pytest.approx(-50.0)
+    assert frame.state.group_width == pytest.approx(502.0)
+    assert frame.state.group_height == pytest.approx(1215.0)
+    for member, height in ((top, 112.0), (bottom, 525.0)):
+        assert member.x >= frame.x
+        assert member.y >= frame.y
+        assert member.x + 422.0 <= frame.x + frame.state.group_width
+        assert member.y + height <= frame.y + frame.state.group_height
+
+
+def test_reporting_unchanged_sizes_reports_no_change():
+    """The steady state - the client re-measures constantly, and a report
+    that moves nothing must not cost a scene republish."""
+    doc = SceneDocument()
+    member = doc.add_chat_node(0, 0, "hi", is_user=True)
+    doc.create_frame([member.id])
+    doc.set_measured_node_sizes([(member.id, 422.0, 300.0)])
+
+    assert doc.set_measured_node_sizes([(member.id, 422.0, 300.0)]) is False
+
+
+def test_measured_sizes_are_ignored_for_unknown_ids_and_non_positive_values():
+    """A continuous background report from a client whose node set can be a
+    few frames behind must never raise, and a zero-size measurement (a node
+    mid-mount) must never collapse a group's box."""
+    doc = SceneDocument()
+    member = doc.add_chat_node(0, 0, "hi", is_user=True)
+    frame = doc.create_frame([member.id])
+    doc.set_measured_node_sizes([(member.id, 422.0, 300.0)])
+    good = (frame.state.group_width, frame.state.group_height)
+
+    assert doc.set_measured_node_sizes([("nope", 100.0, 100.0)]) is False
+    assert doc.set_measured_node_sizes([(member.id, 0.0, 0.0)]) is False
+    assert doc.set_measured_node_sizes([(member.id, -5.0, 300.0)]) is False
+    assert (frame.state.group_width, frame.state.group_height) == good
+
+
+def test_chart_member_uses_its_own_size_without_being_measured():
+    """A chart carries authoritative geometry the backend already owns, so
+    it needs no client round trip to be enclosed correctly."""
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "q", is_user=True)
+    chart = doc.add_chart_node(
+        0, 0, parent.id, "bar", {"type": "bar", "title": "t", "labels": ["x"], "values": [1.0]},
+    )
+    frame = doc.create_frame([chart.id])
+
+    # ChartState's own defaults, not GROUP_MEMBER_DEFAULT_WIDTH/HEIGHT.
+    assert frame.state.group_width == pytest.approx(chart.state.chart_width + 80.0)
+    assert frame.state.group_height == pytest.approx(chart.state.chart_height + 90.0)
+
+
+def test_unmeasured_member_of_a_sizeless_kind_still_uses_the_estimate():
+    """The last-resort branch is still reachable and unchanged - a node the
+    client has not measured yet, whose kind carries no size of its own."""
+    doc = SceneDocument()
+    member = doc.add_node(0, 0)
+    frame = doc.create_frame([member.id])
+
+    assert frame.state.group_width == pytest.approx(GROUP_MEMBER_DEFAULT_WIDTH + 80.0)
+    assert frame.state.group_height == pytest.approx(GROUP_MEMBER_DEFAULT_HEIGHT + 90.0)
+
+
+def test_measured_size_change_propagates_to_a_container_holding_the_frame():
+    """A member resize has to reach the group holding its group, not just
+    the innermost one."""
+    doc = SceneDocument()
+    member = doc.add_chat_node(0, 0, "hi", is_user=True)
+    frame = doc.create_frame([member.id])
+    container = doc.create_container([frame.id])
+    before = (container.state.group_width, container.state.group_height)
+
+    doc.set_measured_node_sizes([(member.id, 422.0, 900.0)])
+
+    assert (container.state.group_width, container.state.group_height) != before
+    assert frame.x >= container.x
+    assert frame.y >= container.y
+    assert frame.x + frame.state.group_width <= container.x + container.state.group_width
+    assert frame.y + frame.state.group_height <= container.y + container.state.group_height
+
+
 def test_create_container_sets_correct_defaults():
     doc = SceneDocument()
     m1 = doc.add_node(0, 0)
@@ -6408,6 +6511,44 @@ def test_move_nodes_intent_publishes_the_scene_exactly_once_for_a_whole_group_dr
         )
         assert (document.nodes[m1_id].x, document.nodes[m1_id].y) == (20.0, 20.0)
         assert (document.nodes[m2_id].x, document.nodes[m2_id].y) == (320.0, 320.0)
+
+    asyncio.run(run())
+
+
+def test_report_node_sizes_intent_publishes_only_when_a_group_box_moves():
+    """The client re-measures constantly, so the intent must be silent for
+    a report that changes nothing - otherwise every settled re-measure
+    costs a full scene snapshot on the wire."""
+    async def run():
+        bus, document, recorder = make_bus()
+        m1_id = await bus.dispatch_intent("scene", "addNode", [0, 0])
+        frame_id = await bus.dispatch_intent("scene", "createFrame", [[m1_id]])
+
+        publishes_before = recorder.topics_seen().count("scene")
+        await bus.dispatch_intent("scene", "reportNodeSizes", [[[m1_id, 422.0, 600.0]]])
+        assert recorder.topics_seen().count("scene") - publishes_before == 1
+        assert document.nodes[frame_id].state.group_height == pytest.approx(690.0)
+
+        # Same sizes again: nothing moved, nothing published.
+        publishes_after_first = recorder.topics_seen().count("scene")
+        await bus.dispatch_intent("scene", "reportNodeSizes", [[[m1_id, 422.0, 600.0]]])
+        assert recorder.topics_seen().count("scene") == publishes_after_first
+
+    asyncio.run(run())
+
+
+def test_report_node_sizes_intent_is_not_undoable():
+    """An observation about rendering is not a user edit - it must not land
+    in the undo stack, or Ctrl+Z would replay layout noise."""
+    async def run():
+        bus, document, _recorder = make_bus()
+        m1_id = await bus.dispatch_intent("scene", "addNode", [0, 0])
+        await bus.dispatch_intent("scene", "createFrame", [[m1_id]])
+        undo_depth_before = len(document.command_log)
+
+        await bus.dispatch_intent("scene", "reportNodeSizes", [[[m1_id, 422.0, 600.0]]])
+
+        assert len(document.command_log) == undo_depth_before
 
     asyncio.run(run())
 

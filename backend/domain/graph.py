@@ -111,6 +111,28 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
 
     nodes: dict[str, SceneNode] = field(default_factory=dict)
     edges: dict[str, SceneEdge] = field(default_factory=dict)
+    # node id -> (width, height): each node's ACTUAL rendered footprint in
+    # flow units, as last reported by the frontend (the reportNodeSizes
+    # intent -> set_measured_node_sizes). Only ids the client has measured
+    # appear here.
+    #
+    # This is the one piece of node geometry the backend cannot derive for
+    # itself - a chat node's height is whatever its markdown laid out to,
+    # which only the browser knows - and frame/container bounds math is the
+    # sole consumer (see _member_footprint in domain/groups.py for the
+    # measured -> intrinsic -> estimate fallback chain).
+    #
+    # Kept OFF SceneNode deliberately, in its own map rather than two more
+    # node fields: this is an observation about rendering, not document
+    # state. It is never persisted (session_save writes nodes, not this),
+    # never reaches the client (scene_payload emits node fields, and the
+    # client is where these came from), and never enters the undo stack -
+    # all three fall out structurally from living here instead of on the
+    # node, rather than depending on three separate places remembering to
+    # skip a field. tests/test_node_state_migration.py's ADR-002 gate locks
+    # SceneNode's own shape to its 14 core fields for closely related
+    # reasons.
+    measured_sizes: dict[str, tuple[float, float]] = field(default_factory=dict)
     pins: NavigationPinStore = field(default_factory=NavigationPinStore)
     grid: GridViewSettings = field(default_factory=GridViewSettings)
     snap_to_grid: bool = False
