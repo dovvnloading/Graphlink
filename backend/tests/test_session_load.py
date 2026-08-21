@@ -464,6 +464,83 @@ def test_frame_unlocked_flag_is_applied():
     assert frame.state.is_locked is False
 
 
+# Every frame payload below sits a single member at the origin, whose padded
+# estimated footprint is therefore (-40, -50) to (260, 210) - GROUP_PADDING 40
+# / GROUP_PADDING_TOP 50 around GROUP_MEMBER_DEFAULT_WIDTH/HEIGHT 220x120
+# (backend/domain/model.py). Saved rects here deliberately ENCLOSE that box,
+# which is the ordinary case: a real saved frame contains its own members. The
+# union test immediately below covers the case where it does not.
+
+
+def test_frame_position_is_restored_from_rect_as_a_manual_anchor():
+    """The saved rect's x/y is the frame's real position; create_frame's own
+    bbox-of-members placement (from 220x120 member ESTIMATES) is not. It
+    must land as a manual anchor, since that is the only form
+    _recompute_group_bounds preserves."""
+    document = _restore(
+        nodes=[_chat("a")],
+        frames=[{"items": [0], "note": "Moved", "position": {"x": -900, "y": -400},
+                 "rect": {"x": -900, "y": -400, "width": 1400, "height": 900}}],
+    )
+    frame = next(n for n in document.nodes.values() if n.kind == "frame")
+    assert (frame.state.group_manual_x, frame.state.group_manual_y) == (-900.0, -400.0)
+    assert (frame.x, frame.y) == (-900.0, -400.0)
+
+
+def test_frame_saved_rect_still_grows_to_enclose_a_member_outside_it():
+    """The restored anchor is UNIONED with live content, never substituted
+    for it - the same no-clip guarantee a live drag gets. Here the saved
+    rect starts below its own member (only reachable via a hand-edited or
+    cross-version payload), so the frame must grow up to re-enclose it
+    rather than restore a rect that visually cuts the member off."""
+    document = _restore(
+        nodes=[_chat("a")],
+        frames=[{"items": [0], "note": "Stale rect", "position": {"x": -500, "y": 250},
+                 "rect": {"x": -500, "y": 250, "width": 800, "height": 700}}],
+    )
+    frame = next(n for n in document.nodes.values() if n.kind == "frame")
+    member = document.nodes[frame.item_ids[0]]
+    assert frame.x <= member.x and frame.y <= member.y
+    assert frame.y == -50.0  # grown to the member's own padded top edge
+
+
+def test_frame_position_falls_back_to_the_position_key_when_rect_has_no_xy():
+    """The older "size"-only shape carries no rect x/y at all, but every era
+    of the payload has a top-level "position"."""
+    document = _restore(
+        nodes=[_chat("a")],
+        frames=[{"items": [0], "note": "Old shape", "position": {"x": -640, "y": -300},
+                 "size": {"width": 1000, "height": 800}}],
+    )
+    frame = next(n for n in document.nodes.values() if n.kind == "frame")
+    assert (frame.x, frame.y) == (-640.0, -300.0)
+
+
+def test_frame_with_no_position_information_keeps_its_computed_placement():
+    """Nothing to restore from - the bbox-of-members placement create_frame
+    already produced stands, and no anchor is invented for it."""
+    document = _restore(
+        nodes=[_chat("a")],
+        frames=[{"items": [0], "note": "No position"}],
+    )
+    frame = next(n for n in document.nodes.values() if n.kind == "frame")
+    assert frame.state.group_manual_x is None and frame.state.group_manual_y is None
+
+
+def test_collapsed_frame_restores_at_its_saved_position():
+    """The collapse branch of _recompute_group_bounds snaps the size and
+    leaves x/y alone, so the position must be restored before it runs."""
+    document = _restore(
+        nodes=[_chat("a")],
+        frames=[{"items": [0], "note": "Collapsed", "position": {"x": -500, "y": -400},
+                 "rect": {"x": -500, "y": -400, "width": 900, "height": 800},
+                 "is_collapsed": True}],
+    )
+    frame = next(n for n in document.nodes.values() if n.kind == "frame")
+    assert frame.is_collapsed is True
+    assert (frame.x, frame.y) == (-500.0, -400.0)
+
+
 # -- containers (nest frames/notes/charts, offset math) ----------------------
 
 

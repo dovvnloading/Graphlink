@@ -330,6 +330,52 @@ def test_frame_can_reference_a_chart_member_at_the_node_slot_count_offset():
     assert frame_payload["items"] == [0, node_slot_count]
 
 
+def test_frame_position_survives_a_save_load_round_trip():
+    """A frame the user dragged (and resized) must reload where they left
+    it. _serialize_frame has always written the full rect, but the loader
+    only ever read width/height back - so create_frame's own bbox-of-
+    members position (derived from GROUP_MEMBER_DEFAULT_WIDTH/HEIGHT
+    ESTIMATES, which no real rendered node matches) silently won, and every
+    reload teleported the frame. Members here are deliberately spaced far
+    wider than those 220x120 estimates, which is exactly when the drift is
+    visible rather than incidental."""
+    doc = SceneDocument()
+    a = doc.add_chat_node(0, 0, "question", is_user=True)
+    b = doc.add_chat_node(0, 600, "reply", is_user=False, parent_id=a.id)
+    frame = doc.create_frame([a.id, b.id])
+    doc.resize_frame(frame.id, 1072.0, 795.0)
+    doc.move_node(frame.id, -1170.0, 420.0)
+    expected = (frame.x, frame.y, frame.state.group_width, frame.state.group_height)
+
+    reloaded = _round_trip(doc)
+
+    restored = next(n for n in reloaded.nodes.values() if n.kind == "frame")
+    assert (restored.x, restored.y, restored.state.group_width, restored.state.group_height) == expected
+
+
+def test_reloaded_frame_keeps_its_position_when_a_member_later_moves():
+    """The position must be restored as a real manual ANCHOR (the same
+    thing move_node pins for a live drag), not just assigned to x/y: only
+    the anchor survives _recompute_group_bounds, which every later member
+    move triggers. Without it a reload looks correct until the user nudges
+    any member, at which point the frame jumps."""
+    doc = SceneDocument()
+    a = doc.add_chat_node(0, 0, "question", is_user=True)
+    b = doc.add_chat_node(0, 600, "reply", is_user=False, parent_id=a.id)
+    frame = doc.create_frame([a.id, b.id])
+    doc.resize_frame(frame.id, 1072.0, 795.0)
+    doc.move_node(frame.id, -1170.0, 420.0)
+
+    reloaded = _round_trip(doc)
+    restored = next(n for n in reloaded.nodes.values() if n.kind == "frame")
+    position_after_load = (restored.x, restored.y)
+    member_id = restored.item_ids[0]
+    member = reloaded.nodes[member_id]
+    reloaded.move_node(member_id, member.x + 5.0, member.y)
+
+    assert (restored.x, restored.y) == position_after_load
+
+
 def test_container_item_indices_reference_the_full_combined_offset_space():
     doc = SceneDocument()
     a = doc.add_chat_node(0, 0, "a", is_user=True)

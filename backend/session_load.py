@@ -1093,6 +1093,32 @@ def _restore_frames(
                 width_height = (float(size["width"]), float(size["height"]))
             if width_height is not None:
                 document.resize_frame(frame.id, width_height[0], width_height[1])
+            # The POSITION half of that same override, and for the identical
+            # reason. create_frame above placed this frame at its live
+            # bbox-of-members position, which _bbox_of_members derives from
+            # GROUP_MEMBER_DEFAULT_WIDTH/HEIGHT ESTIMATES (220x120,
+            # backend/domain/model.py) - no real rendered node is that size,
+            # so that placement is never where the user actually left the
+            # frame. Restoring the saved x/y through move_node (rather than
+            # assigning node.x/y directly) is what makes it STICK: move_node
+            # is the same call a live frame drag commits, and pinning
+            # group_manual_x/y is the only thing _recompute_group_bounds
+            # honors - a bare x/y assignment would be silently recomputed
+            # away by the very next member move. Union-with-live-content
+            # still applies exactly as it does for a drag, so a restored
+            # anchor can no more clip a member than a dragged one can.
+            # Ordered AFTER resize_frame (whose own trailing recompute
+            # re-centers on the member bbox) and BEFORE the collapse toggle
+            # below, so a collapsed frame's pill lands on the saved
+            # position too - that branch snaps the size and leaves x/y
+            # untouched.
+            position_xy = None
+            if isinstance(rect, dict) and "x" in rect and "y" in rect:
+                position_xy = (float(rect["x"]), float(rect["y"]))
+            elif isinstance(frame_payload.get("position"), dict):
+                position_xy = _position(frame_payload)
+            if position_xy is not None:
+                document.move_node(frame.id, position_xy[0], position_xy[1])
             if bool(frame_payload.get("is_collapsed", False)):
                 document.toggle_group_collapsed(frame.id)
         except Exception:
