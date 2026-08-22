@@ -2928,7 +2928,18 @@ def register_chat_library(
     export_workspace = make_export_workspace(bus, resolved_path, notifications)
 
     bus.register_intent("app-chat-library", "renameChat", _serialize_mutating_intent(rename))
-    bus.register_intent("app-chat-library", "deleteChat", delete)
+    # Serialized like every other mutating intent here. It was the one
+    # exception, and that was a real hazard rather than an oversight with no
+    # consequence: delete mutates canvas_document.current_chat_id and
+    # _last_saved, the same two cells an in-flight save/autosave writes when
+    # it completes. Interleaved - delete lands while a save for the very row
+    # being deleted is still inside save_chat_atomically_row's post-commit
+    # knowledge reindex - delete's continuation clears both cells, then the
+    # save's continuation repopulates them, leaving the session pointed at a
+    # deleted row with a digest claiming "already saved". That is exactly the
+    # silent-no-autosave state the audit fix inside delete() above was written
+    # to prevent, reachable by racing it rather than by the path it guarded.
+    bus.register_intent("app-chat-library", "deleteChat", _serialize_mutating_intent(delete))
     bus.register_intent("app-chat-library", "loadChat", _serialize_mutating_intent(load_chat))
     bus.register_intent("app-chat-library", "saveChat", _serialize_mutating_intent(save_chat))
     bus.register_intent("app-chat-library", "newChat", _serialize_mutating_intent(new_chat))

@@ -17,6 +17,40 @@ from graphlink_model_catalog import (
 logger = logging.getLogger(__name__)
 
 
+class _KeepExistingSecret:
+    """Type of the KEEP_EXISTING_SECRET sentinel below - a class only so it
+    has a readable repr in a traceback or a debugger."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<KEEP_EXISTING_SECRET>"
+
+
+# Pass this instead of a value to set_api_settings to mean "leave whatever is
+# already stored for this field exactly as it is".
+#
+# THE DATA LOSS THIS EXISTS TO PREVENT. Saving ONE provider's key used to
+# round-trip the other two through decrypt-then-re-encrypt: the caller read
+# them back with get_*_key() and handed the results straight to
+# set_api_settings. But get_*_key() returns "" whenever DPAPI decryption
+# FAILS, not only when no key is set - deliberately, on the read side - so a
+# transient CryptUnprotectData failure (a temporary-profile logon, an
+# unavailable master key on a domain machine, resource exhaustion; anything
+# graphlink_secrets' own blanket except turns into None) at the moment the
+# user saved their Anthropic key silently destroyed the still-recoverable
+# OpenAI and Gemini blobs, with no warning at the time and no way back. The
+# plaintext-migration path was hardened against exactly this hazard - it
+# never touches an undecryptable blob - and this sentinel closes the same
+# hole on the save path, by never reading those siblings at all rather than
+# by trying to tell a failed decrypt apart from an empty one after the fact.
+#
+# An explicit "" still clears a key, so a user genuinely emptying the field
+# is unaffected: the two intents are now distinguishable instead of collapsed
+# into the same empty string.
+KEEP_EXISTING_SECRET = _KeepExistingSecret()
+
+
 def _is_llama_cpp_gguf_path(path_value) -> bool:
     normalized = str(path_value or "").strip()
     return bool(normalized) and normalized.lower().endswith(".gguf")
@@ -423,9 +457,24 @@ class SettingsManager:
         if not self.state_file.exists():
             return self._create_initial_state()
         try:
-            with open(self.state_file, 'r') as f:
+            # encoding is explicit: this file is written as UTF-8 (_save_state
+            # opens for write with the same default text mode on the machine
+            # that produced it), but reading it back through the LOCALE codec
+            # made byte-level corruption fatal in a way the corrupt-file
+            # rescue below was written to prevent. Disk corruption that lands
+            # a byte the locale codec rejects (0x81/0x8D/0x9D under cp1252,
+            # far more under a CJK codepage) raises UnicodeDecodeError - a
+            # ValueError, caught by NEITHER handler here - and that escapes
+            # SettingsManager.__init__, which is constructed unguarded at boot
+            # (backend/app.py's create_app, and earlier still in
+            # graphlink_desktop.main). The app then fails to launch on every
+            # single start until the user finds and deletes the file by hand.
+            # UnicodeDecodeError is caught below for exactly that reason: a
+            # corrupt settings file must be backed up and replaced, never a
+            # permanent boot failure.
+            with open(self.state_file, 'r', encoding='utf-8') as f:
                 raw_state = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (json.JSONDecodeError, UnicodeDecodeError, IOError) as e:
             self._backup_corrupt_state_file(e)
             return self._create_initial_state()
 
@@ -643,7 +692,12 @@ class SettingsManager:
         data_to_save = state_data if state_data else self.state
         tmp_path = self.state_file.with_name(self.state_file.name + ".tmp")
         try:
-            with open(tmp_path, 'w') as f:
+            # encoding is explicit to match _load_state's own explicit utf-8
+            # read. json.dump defaults to ensure_ascii=True, so what actually
+            # lands here is pure ASCII either way and every previously-written
+            # file stays readable - this just removes the latent dependency on
+            # whatever locale codec the host happens to default to.
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 # ADR-004 stage 4.4 (adversarial-review fix): chmod the temp
                 # file immediately after opening it, BEFORE writing any
                 # content - chmod'ing only after fsync left a window where a
@@ -1113,9 +1167,17 @@ class SettingsManager:
     ):
         self.state["api_provider"] = provider
         self.state["api_base_url"] = base_url
-        self.state["openai_api_key"] = self._protect_and_track(openai_key)
-        self.state["anthropic_api_key"] = self._protect_and_track(anthropic_key)
-        self.state["gemini_api_key"] = self._protect_and_track(gemini_key)
+        # KEEP_EXISTING_SECRET leaves the stored value untouched - no decrypt,
+        # no re-encrypt, no write. See that sentinel's own comment for the
+        # sibling-key destruction this prevents; an ordinary "" still clears.
+        for state_key, value in (
+            ("openai_api_key", openai_key),
+            ("anthropic_api_key", anthropic_key),
+            ("gemini_api_key", gemini_key),
+        ):
+            if value is KEEP_EXISTING_SECRET:
+                continue
+            self.state[state_key] = self._protect_and_track(value)
         self._save_state()
 
     def set_api_models(self, models_dict: dict, provider: str | None = None):

@@ -176,6 +176,19 @@ KNOWN_RUNTIME_ISOLATION = frozenset({"in-process", "out-of-process"})
 
 _ID_PATTERN = re.compile(r"[a-z0-9_]+")
 
+# Both halves of an entry_point ("<module>:<callable>"). The module half is
+# interpolated straight into a filesystem path - `plugin_dir / f"{module}.py"`
+# in _import_entry_module - and that file is then EXECUTED, so it has to be a
+# bare module name and nothing else. Validating only the ":" split (all this
+# used to do) let a manifest say `entry_point = "../../../evil:register"`,
+# which resolves and executes a .py file OUTSIDE the plugin's own directory,
+# in the host process. A single path separator, drive letter, or ".." is the
+# whole exploit, so the allowlist is deliberately narrow: a leading letter or
+# underscore followed by word characters, which is what every real plugin
+# already uses ("plugin"). The callable half must likewise be a plain Python
+# identifier - it is fed to getattr on the imported module.
+_ENTRY_POINT_PART_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
 
 class PluginRegistrationError(Exception):
     """Raised for one plugin's own malformed manifest, bad register() call,
@@ -1216,6 +1229,19 @@ def _load_manifest(manifest_path: Path, plugin_dir: Path) -> PluginManifest:
         raise PluginRegistrationError(
             f'{manifest_path}: [plugin].entry_point must be "<module>:<callable>", got '
             f"{entry_point!r}"
+        )
+    # Both halves must be plain identifiers - see _ENTRY_POINT_PART_PATTERN's
+    # own comment for the path-traversal-into-code-execution this blocks.
+    if not _ENTRY_POINT_PART_PATTERN.fullmatch(module_name):
+        raise PluginRegistrationError(
+            f"{manifest_path}: [plugin].entry_point module {module_name!r} must be a plain "
+            "module name (letters, digits and underscores) - it names a file inside this "
+            "plugin's own directory, never a path"
+        )
+    if not _ENTRY_POINT_PART_PATTERN.fullmatch(fn_name):
+        raise PluginRegistrationError(
+            f"{manifest_path}: [plugin].entry_point callable {fn_name!r} must be a plain "
+            "Python identifier"
         )
 
     frontend_table = raw.get("frontend", {})

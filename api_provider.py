@@ -27,6 +27,61 @@ from graphlink_audio import guess_audio_mime_type
 from graphlink_model_catalog import FALLBACK_ENABLED_TASKS, ModelDescriptor, ModelRef, ollama_descriptor, sort_descriptors
 
 
+# The ollama package ships its module-level helpers (ollama.chat/embed/list/
+# show) as bound methods of ONE module-level Client, and that client is built
+# with `timeout=None` - i.e. no socket timeout of any kind. Every other
+# provider in this file is bounded (the OpenAI/Anthropic SDKs default to
+# 600s; the hand-rolled Anthropic/Gemini REST calls pass explicit timeouts),
+# so Ollama was the one path that could block a worker thread FOREVER.
+#
+# Why that is worse than it sounds: a daemon that accepts the TCP connection
+# but never answers (a GPU hang or a stuck model load - a real, known Ollama
+# failure mode) parks the calling thread on a socket read that never
+# returns. Cancellation cannot help, because the cancel event is only polled
+# between streamed chunks / after the call returns, and the dispatch watchdog
+# (asyncio.wait_for) only stops WAITING - the worker keeps its
+# asyncio.to_thread pool slot. Enough of those and the shared executor is
+# exhausted and every to_thread in the app - including all settings
+# mutations - queues forever: the whole backend soft-hangs.
+#
+# Configured on the existing shared client rather than by constructing our
+# own: every call site keeps calling `ollama.chat(...)` exactly as before,
+# and the test suite's monkeypatching of those module attributes keeps
+# working. READ_TIMEOUT is deliberately generous and sits ABOVE the dispatch
+# watchdog, so this is a backstop against a genuinely wedged daemon, not
+# something that can cut a legitimately slow local generation short (for a
+# streaming call httpx applies it per-chunk-read, i.e. to the GAP between
+# tokens, not to the whole reply).
+_OLLAMA_CONNECT_TIMEOUT_SECONDS = 10.0
+_OLLAMA_READ_TIMEOUT_SECONDS = 600.0
+
+
+def _configure_ollama_client_timeout() -> None:
+    """Bound the shared ollama client's socket timeouts. Best-effort: this
+    reaches into the package's own internals (the bound method's __self__
+    and its httpx client), so a future ollama release that reshapes either
+    must degrade to the previous no-timeout behavior rather than breaking
+    import of this whole module."""
+    try:
+        import httpx
+
+        client = getattr(ollama.chat, "__self__", None)
+        inner = getattr(client, "_client", None)
+        if inner is None:
+            return
+        inner.timeout = httpx.Timeout(
+            connect=_OLLAMA_CONNECT_TIMEOUT_SECONDS,
+            read=_OLLAMA_READ_TIMEOUT_SECONDS,
+            write=60.0,
+            pool=_OLLAMA_CONNECT_TIMEOUT_SECONDS,
+        )
+    except Exception:  # pragma: no cover - defensive, see docstring
+        pass
+
+
+_configure_ollama_client_timeout()
+
+
 USE_API_MODE = False
 API_PROVIDER_TYPE = None
 API_CLIENT = None
@@ -63,6 +118,40 @@ LLAMA_CPP_SETTINGS = {
 }
 _LLAMA_CPP_CLIENT_CACHE = {}
 _LLAMA_CPP_CLIENT_LOCK = threading.RLock()
+
+# _LLAMA_CPP_CLIENT_LOCK above guards only the CACHE (lookup/creation). It
+# does NOT guard INFERENCE, and those are genuinely different critical
+# sections: one cached Llama instance is handed to every caller that resolves
+# to the same model, and llama-cpp-python's Llama is not thread-safe (it
+# carries mutable per-sequence state - n_tokens and the KV cache - and
+# releases the GIL inside llama_decode). RunRegistry.is_busy is per-kind
+# per-session, so a streaming chat reply and a chart/note generation in the
+# same session, or two sessions at once, legitimately run concurrently on
+# separate worker threads - and before this lock they could interleave two
+# generations on ONE native context, which corrupts output or dies in native
+# code and takes the whole backend process with it.
+#
+# A plain Lock, not an RLock, and deliberately so: a stream() generator holds
+# this across its whole consumption and releases it in a finally, which -
+# if the caller abandons the generator - runs during garbage collection,
+# potentially on a DIFFERENT thread. RLock refuses a release from any thread
+# but its owner (RuntimeError); a plain Lock permits it, which is exactly the
+# behavior this ownership pattern needs.
+_LLAMA_CPP_SHARED_INFERENCE_LOCK = threading.Lock()
+
+
+def llama_cpp_inference_lock(client):
+    """The inference lock for one cached Llama instance - see
+    _LLAMA_CPP_SHARED_INFERENCE_LOCK's own comment for why inference needs a
+    lock separate from the cache lock.
+
+    Per-CLIENT rather than global, so two different models (separate native
+    contexts, no shared state) still run concurrently; only calls sharing one
+    instance serialize. A client with no attached lock - a monkeypatched fake
+    in a test, or an instance built before this existed - falls back to the
+    module-wide lock, which is over-strict but never unsafe."""
+    lock = getattr(client, "_graphlink_inference_lock", None)
+    return lock if lock is not None else _LLAMA_CPP_SHARED_INFERENCE_LOCK
 
 # Guards the provider globals above. Mutators (initialize_api,
 # initialize_local_provider, set_task_model) write under this lock;
@@ -1529,7 +1618,23 @@ def anthropic_reasoning_kwargs(model_id: str, level: str, max_tokens: int) -> di
     if level == "off":
         return {}
     if _is_anthropic_effort_model(model_id):
-        return {"effort": level}
+        # NESTED under output_config, not top-level. Verified directly
+        # against the installed SDK (anthropic 0.116.0): messages.create has
+        # no `effort` parameter and no **kwargs, but does take
+        # `output_config`, whose OutputConfigParam declares
+        # effort: Literal["low","medium","high","xhigh","max"] | None - so
+        # the three levels passed here are already valid values, and only
+        # the nesting was ever wrong.
+        #
+        # A flat {"effort": level} was silently useless on BOTH paths, which
+        # is why nothing caught it: on the SDK path
+        # _filter_kwargs_for_callable keeps only names the callable actually
+        # declares, so the unknown key was dropped and the user's Low/Medium/
+        # High selection simply never reached a paid API call - no error, no
+        # signal; on the SDK-absent REST path the same key went out as a
+        # top-level body field, which the API rejects with a 400 on every
+        # request that has reasoning enabled.
+        return {"output_config": {"effort": level}}
     budget = _ANTHROPIC_BUDGET_TOKENS[level]
     result = {"thinking": {"type": "enabled", "budget_tokens": budget}}
     if max_tokens <= budget:
@@ -1922,6 +2027,16 @@ def _get_llama_cpp_client(task: str, settings: dict | None = None):
             ) from exc
 
         _configure_llama_cpp_chat_handler(client, active_settings)
+        # This instance's own inference lock, attached once at construction so
+        # every caller that later resolves to this same cached client
+        # serializes its generations against the same object - see
+        # llama_cpp_inference_lock's own docstring.
+        try:
+            client._graphlink_inference_lock = threading.Lock()
+        except Exception:
+            # An exotic Llama build that refuses attribute assignment falls
+            # back to the module-wide lock rather than losing the guard.
+            pass
         _LLAMA_CPP_CLIENT_CACHE[cache_key] = client
         return client
 

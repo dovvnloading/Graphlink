@@ -28,6 +28,7 @@ from api_provider import (
     _prepare_llama_cpp_kwargs,
     _prepare_llama_cpp_messages,
     _raise_if_cancelled,
+    llama_cpp_inference_lock,
     llama_cpp_supports_reasoning,
 )
 from backend.providers.base import (
@@ -77,7 +78,12 @@ class LlamaCppProvider:
             client.create_chat_completion,
             _prepare_llama_cpp_kwargs(kwargs, self.settings),
         )
-        response = client.create_chat_completion(messages=llama_messages, **llama_kwargs)
+        # Serialized against every other generation on this same cached Llama
+        # instance - it is one native context with mutable KV state, and two
+        # concurrent decodes corrupt output or crash the process. See
+        # api_provider.llama_cpp_inference_lock.
+        with llama_cpp_inference_lock(client):
+            response = client.create_chat_completion(messages=llama_messages, **llama_kwargs)
         _raise_if_cancelled(cancel.event)
         # ADR-006 stage 6.8: llama.cpp's blocking response carries an
         # OpenAI-shaped usage dict; captured on a side attribute for
@@ -106,43 +112,57 @@ class LlamaCppProvider:
         # wrapped/faked create_chat_completion without a spelled-out `stream`
         # parameter silently degrade this into a blocking call.
         llama_kwargs.pop("stream", None)
-        chunks = client.create_chat_completion(
-            messages=llama_messages, stream=True, **llama_kwargs
-        )
 
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
+        # Held across the ENTIRE stream, not just the call that opens it: a
+        # llama.cpp generation advances its one native context incrementally
+        # as chunks are pulled, so releasing after the opening call would let
+        # a second decode interleave mid-reply on the same KV cache. Released
+        # in the outer finally below - which is precisely why this must be a
+        # plain Lock: if a caller abandons this generator, that finally runs
+        # during generator finalization, possibly on another thread, and an
+        # RLock would refuse the release. See api_provider's own
+        # llama_cpp_inference_lock.
+        inference_lock = llama_cpp_inference_lock(client)
+        inference_lock.acquire()
         try:
-            for chunk in chunks:
-                # Cooperative-only cancellation: no live HTTP stream to close
-                # (inference runs in-process); the finally below still closes
-                # the generator so the shared cached client is never left
-                # with a partially-consumed completion.
-                _raise_if_cancelled(cancel.event)
+            chunks = client.create_chat_completion(
+                messages=llama_messages, stream=True, **llama_kwargs
+            )
+            try:
+                for chunk in chunks:
+                    # Cooperative-only cancellation: no live HTTP stream to close
+                    # (inference runs in-process); the finally below still closes
+                    # the generator so the shared cached client is never left
+                    # with a partially-consumed completion.
+                    _raise_if_cancelled(cancel.event)
 
-                choices = _extract_response_field(chunk, "choices", []) or []
-                if not choices:
-                    continue
-                delta = _extract_response_field(choices[0], "delta", {}) or {}
-                delta_content = _extract_response_field(delta, "content") or ""
-                if delta_content:
-                    content_parts.append(delta_content)
-                    yield ProviderEvent("text", delta_content)
-                # The same wide net _extract_llama_cpp_text casts for
-                # thinking output, at the delta level.
-                delta_reasoning = (
-                    _extract_response_field(delta, "reasoning")
-                    or _extract_response_field(delta, "reasoning_content")
-                    or _extract_response_field(delta, "thinking")
-                    or ""
-                )
-                if delta_reasoning:
-                    reasoning_parts.append(delta_reasoning)
-                    yield ProviderEvent("reasoning", delta_reasoning)
+                    choices = _extract_response_field(chunk, "choices", []) or []
+                    if not choices:
+                        continue
+                    delta = _extract_response_field(choices[0], "delta", {}) or {}
+                    delta_content = _extract_response_field(delta, "content") or ""
+                    if delta_content:
+                        content_parts.append(delta_content)
+                        yield ProviderEvent("text", delta_content)
+                    # The same wide net _extract_llama_cpp_text casts for
+                    # thinking output, at the delta level.
+                    delta_reasoning = (
+                        _extract_response_field(delta, "reasoning")
+                        or _extract_response_field(delta, "reasoning_content")
+                        or _extract_response_field(delta, "thinking")
+                        or ""
+                    )
+                    if delta_reasoning:
+                        reasoning_parts.append(delta_reasoning)
+                        yield ProviderEvent("reasoning", delta_reasoning)
+            finally:
+                close = getattr(chunks, "close", None)
+                if callable(close):
+                    close()
         finally:
-            close = getattr(chunks, "close", None)
-            if callable(close):
-                close()
+            inference_lock.release()
 
         # Streamed and blocking paths compose through the SAME extraction:
         # a synthetic blocking-shaped response through _extract_llama_cpp_text

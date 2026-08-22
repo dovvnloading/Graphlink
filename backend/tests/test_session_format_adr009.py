@@ -342,3 +342,50 @@ def test_note_edges_survive_a_full_db_round_trip(tmp_path):
     assert _has_edge(restored, restored_notes[0].id, restored_chats[0].id), (
         "the system-prompt note lost its connection to the chat across a DB round-trip"
     )
+
+
+def test_an_unreadable_asset_ref_is_preserved_rather_than_erased(tmp_path):
+    """Regression: a TRANSIENT asset-read failure used to become permanent
+    picture loss on the very next save.
+
+    AssetStore.get() returns None both for "never stored" and for any OSError
+    on read (an antivirus lock on Windows is enough). The image node then
+    restored with no asset id, so the next save saw no bytes, fell through to
+    the inline branch and wrote image_bytes:"" - erasing the only pointer to
+    an asset file that was still sitting on disk the whole time. The ref is
+    now carried across the round-trip so the row keeps pointing at it."""
+    store = AssetStore(tmp_path / "assets")
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "draw me a cat", is_user=True)
+    doc.add_image_node(0, 120, PNG, "a cat", parent.id, mime_type="image/png")
+
+    saved = build_chat_data(doc, asset_store=store)
+    image_payload = next(
+        n for n in saved["nodes"] if n.get("node_type") == "image"
+    )
+    original_ref = image_payload["asset_ref"]
+    assert original_ref
+
+    # Reload while the store cannot produce the bytes (the transient failure).
+    class _UnreadableStore:
+        def get(self, ref):
+            return None
+
+        def put(self, data):  # pragma: no cover - not reached in this test
+            return content_ref(data)
+
+    notes_data = saved.pop("notes_data")
+    pins_data = saved.pop("pins_data")
+    reloaded = SceneDocument()
+    restore_chat_into_document(
+        reloaded, {"data": saved}, notes_data, pins_data, asset_store=_UnreadableStore()
+    )
+
+    # Now save again, exactly as an autosave tick would.
+    resaved = build_chat_data(reloaded, asset_store=store)
+    resaved_image = next(n for n in resaved["nodes"] if n.get("node_type") == "image")
+
+    assert resaved_image.get("asset_ref") == original_ref, (
+        "a transient asset-read failure erased the image's asset_ref on the next save"
+    )
+    assert not resaved_image.get("image_bytes")

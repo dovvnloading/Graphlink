@@ -571,3 +571,69 @@ class TestTmpFileIsChmoddedBeforeContentIsWritten:
 
         assert observed_sizes_at_tmp_chmod_time
         assert all(size == 0 for size in observed_sizes_at_tmp_chmod_time)
+
+
+class TestSavingOneProviderNeverDestroysTheOthersKeys:
+    """Regression: saving ONE provider's API key used to be able to wipe the
+    other two permanently.
+
+    saveApiConfiguration read the two providers it was NOT saving back with
+    get_*_key() and handed the results straight to set_api_settings. But
+    get_*_key() returns "" for a stored blob that fails to DECRYPT just as it
+    does for a key that was never set - so a transient DPAPI failure at that
+    moment re-encrypted "" over two still-recoverable blobs and destroyed
+    them, silently, with no way back. The siblings are now passed
+    KEEP_EXISTING_SECRET and never read or rewritten at all.
+    """
+
+    @staticmethod
+    def _toggle(monkeypatch, up=True):
+        state = {"up": up}
+        real_call = graphlink_secrets._dpapi_call
+
+        def toggling_call(data, encrypt):
+            if not state["up"]:
+                return None
+            return real_call(data, encrypt)
+
+        monkeypatch.setattr(graphlink_secrets, "_dpapi_call", toggling_call)
+        return state
+
+    def test_a_sibling_key_survives_a_save_made_while_dpapi_is_failing(self, tmp_path, monkeypatch):
+        from graphlink_settings_store import KEEP_EXISTING_SECRET
+
+        dpapi = self._toggle(monkeypatch, up=True)
+        state_file = tmp_path / "session.dat"
+        manager = SettingsManager(state_file)
+
+        # Both providers configured while DPAPI is healthy.
+        manager.set_api_settings("OpenAI-Compatible", "https://x/v1", "sk-openai-real", "sk-ant-real", "")
+        stored_before = json.loads(state_file.read_text(encoding="utf-8"))["openai_api_key"]
+        assert stored_before  # something real is on disk for the sibling
+
+        # DPAPI goes down, and the user saves ONLY the Anthropic key. The
+        # OpenAI blob must be left exactly as it is rather than overwritten
+        # with the "" a failed decrypt would have produced.
+        dpapi["up"] = False
+        manager.set_api_settings(
+            "Anthropic", "https://x/v1", KEEP_EXISTING_SECRET, "sk-ant-new", KEEP_EXISTING_SECRET
+        )
+
+        stored_after = json.loads(state_file.read_text(encoding="utf-8"))["openai_api_key"]
+        assert stored_after == stored_before, "saving one provider destroyed another provider's key"
+
+        # ...and once DPAPI recovers, the untouched blob still decrypts.
+        dpapi["up"] = True
+        assert SettingsManager(state_file).get_openai_key() == "sk-openai-real"
+
+    def test_an_explicit_empty_string_still_clears_a_key(self, tmp_path, monkeypatch):
+        """The sentinel must not make clearing impossible - "" is still a
+        real, honored instruction to remove the key."""
+        self._toggle(monkeypatch, up=True)
+        state_file = tmp_path / "session.dat"
+        manager = SettingsManager(state_file)
+        manager.set_api_settings("OpenAI-Compatible", "https://x/v1", "sk-openai-real", "", "")
+        assert manager.get_openai_key() == "sk-openai-real"
+
+        manager.set_api_settings("OpenAI-Compatible", "https://x/v1", "", "", "")
+        assert SettingsManager(state_file).get_openai_key() == ""
