@@ -678,6 +678,35 @@ class CommandOps:
                     f"Can't undo while \"{node.title}\" is still generating - "
                     "cancel it first."
                 )
+        # REVIEW-FIX: the loop above only catches a live run whose OWN
+        # busy marker sits on one of THIS command's touched nodes. A
+        # multi-step Builder run (backend/builder.py) marks
+        # pending_request_id on the PLAN node only, for the run's whole
+        # duration - never on the individual nodes its own per-step tool
+        # calls create/edit/connect (backend/tools_graph.py's handlers
+        # thread the SAME run_id into record_command but touch only the
+        # content node(s), never the plan node). So undoing an earlier
+        # step of a still-running build - whose own touched node is never
+        # the plan node - sailed through completely unguarded while the
+        # run kept writing more state on top of the now-vanished node.
+        # Cross-check the RUN itself, not just this command's own nodes:
+        # if this command belongs to a run (command.run_id) and that run's
+        # own plan node is still pending, refuse regardless of which node
+        # this particular command touched. Stays pure (no dispatcher/
+        # RunRegistry access, only node state already available here) by
+        # reading node.state.builder_run_id, the SAME value builder.py
+        # stamps onto the plan node with the identical run_id it threads
+        # into every tool-call command.
+        if command.run_id:
+            for node in self.nodes.values():
+                if (
+                    getattr(node.state, "builder_run_id", None) == command.run_id
+                    and node.pending_request_id
+                ):
+                    raise UndoRefusedError(
+                        "Can't undo a step from a build that is still running - "
+                        "stop it first."
+                    )
 
     def undo(self) -> "Command":
         """Reverses the most recent command and moves it onto the redo stack.
@@ -713,8 +742,45 @@ class CommandOps:
         not silently discarded to reach the agent's work underneath -
         undoing a build has to mean undoing the build, not everything after
         it too. Stops at the first command that is not part of the run."""
-        reversed_count = 0
-        while self.command_log and self.command_log[-1].run_id == run_id:
-            self.undo()
-            reversed_count += 1
-        return reversed_count
+        undone: list["Command"] = []
+        try:
+            while self.command_log and self.command_log[-1].run_id == run_id:
+                command = self.command_log[-1]
+                self._guard_live_runs(command)
+                command.invert(self)
+                self.command_log.pop()
+                self.redo_stack.append(command)
+                undone.append(command)
+        except UndoRefusedError:
+            # REVIEW-FIX: this loop is not atomic by construction - undoing
+            # command N here already applies a REAL document mutation
+            # (deleted nodes, popped edges) before an OLDER, still-refused
+            # command is even reached. Without this rollback, a refusal
+            # partway through left every already-undone command's mutation
+            # applied to the live document with no scene republish -
+            # intents_undo.py's own undo_run wrapper shows a notification
+            # on UndoRefusedError and returns without ever calling
+            # publish_scene(), so the backend document and every connected
+            # client's canvas silently diverged (proven directly: 2 of 3
+            # commands genuinely removed from document.nodes while only a
+            # "notification" topic message ever went out).
+            #
+            # Re-apply exactly what this call itself just undid, in
+            # reverse order, restoring the document to precisely the state
+            # it was in before this call started - a refusal is now
+            # observably a NO-OP, matching what the caller already assumes
+            # (return 0, nothing published).
+            #
+            # Deliberately bypasses the public undo()/redo() (and their
+            # own _guard_live_runs call) for this rollback: these commands
+            # were already proven safe to touch a moment ago (undone in
+            # THIS same call), and if the refused run is genuinely still
+            # live, the guard above would refuse re-applying them too -
+            # making the rollback itself undoable and leaving no way back
+            # to a consistent state at all.
+            for command in reversed(undone):
+                command.apply(self)
+                self.redo_stack.pop()
+                self.command_log.append(command)
+            raise
+        return len(undone)
