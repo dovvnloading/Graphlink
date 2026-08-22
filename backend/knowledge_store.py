@@ -89,7 +89,7 @@ BACKUP_FILENAME_PREFIX = "knowledge-"
 # a mid-batch crash without re-snapshotting on every single document.
 BACKUP_CADENCE_SECONDS = 600.0
 
-KNOWLEDGE_DB_SCHEMA_VERSION = 5
+KNOWLEDGE_DB_SCHEMA_VERSION = 6
 
 
 def content_hash(text: str) -> str:
@@ -300,12 +300,87 @@ def _migration_005_graph_node_chunks(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE chunks ADD COLUMN source_node_id TEXT")
 
 
+def _migration_006_unique_workspace_collections(conn: sqlite3.Connection) -> None:
+    """5 -> 6: closes a real race in get_or_create_workspace_collection - a
+    plain SELECT-then-INSERT with no unique constraint on workspace_id, so
+    two concurrent first-time calls for the same brand-new workspace
+    (reachable via asyncio.to_thread from several independent call sites -
+    a chat's own reindex-on-save, a search call, a branch-indexing toggle -
+    with no lock anywhere serializing them) could both observe no existing
+    row and both INSERT, silently splitting that workspace's knowledge base
+    across two collections rows with no error anywhere. Proven with a
+    forced two-thread race before this fix: both INSERTs succeeded,
+    producing two rows for one workspace_id.
+
+    Two parts, in order: first de-duplicate any collections rows a
+    database ALREADY carries from before this fix existed (this stage
+    cannot assume a fresh install - a real user's knowledge.db may already
+    have hit the race), then add the constraint that prevents it from ever
+    recurring. Guarded like every migration in this module: the dedup pass
+    is a no-op when there is nothing to deduplicate, and the index creation
+    uses IF NOT EXISTS, so a second run against an already-migrated
+    database does nothing either time."""
+    duplicate_groups = conn.execute(
+        """
+        SELECT workspace_id, MIN(id) AS survivor_id
+        FROM collections
+        WHERE workspace_id IS NOT NULL
+        GROUP BY workspace_id
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    for workspace_id, survivor_id in duplicate_groups:
+        loser_ids = [
+            row[0] for row in conn.execute(
+                "SELECT id FROM collections WHERE workspace_id = ? AND id != ?",
+                (workspace_id, survivor_id),
+            ).fetchall()
+        ]
+        for loser_id in loser_ids:
+            # Re-point this loser's documents to the survivor ONE ROW AT A
+            # TIME, not a bulk UPDATE: documents carries its own
+            # UNIQUE(content_hash, collection_id), and a document under the
+            # loser can legitimately share a content_hash with one already
+            # under the survivor - the same real content, ingested twice
+            # because of the exact race this migration exists to close. A
+            # bulk UPDATE would abort the whole statement on that one
+            # collision. Per row: re-point when there is no clash; when
+            # there IS one, the survivor already holds this exact content
+            # (content_hash equality means byte-identical text), so the
+            # loser's duplicate document - and its chunks, via ON DELETE
+            # CASCADE - is simply dropped. No real content is lost either
+            # way.
+            for doc_id, content_hash in conn.execute(
+                "SELECT id, content_hash FROM documents WHERE collection_id = ?", (loser_id,)
+            ).fetchall():
+                clash = conn.execute(
+                    "SELECT 1 FROM documents WHERE collection_id = ? AND content_hash = ?",
+                    (survivor_id, content_hash),
+                ).fetchone()
+                if clash is not None:
+                    conn.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
+                else:
+                    conn.execute("UPDATE documents SET collection_id = ? WHERE id = ?", (survivor_id, doc_id))
+            conn.execute("DELETE FROM collections WHERE id = ?", (loser_id,))
+
+    # Partial (WHERE workspace_id IS NOT NULL), not a plain UNIQUE index:
+    # workspace_id is nullable (pre-20.3 collections rows, and any future
+    # caller with no workspace context), and multiple NULLs must stay
+    # legal - a plain unique index would reject the second NULL row, which
+    # is not the invariant this migration is protecting.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_workspace_id_unique "
+        "ON collections (workspace_id) WHERE workspace_id IS NOT NULL"
+    )
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_fts5_lexical_index,
     3: _migration_003_vector_index,
     4: _migration_004_workspace_scoped_collections,
     5: _migration_005_graph_node_chunks,
+    6: _migration_006_unique_workspace_collections,
 }
 
 
@@ -621,11 +696,31 @@ def get_or_create_workspace_collection(db_path: Path, workspace_id: int) -> int:
             ).fetchone()
             if row is not None:
                 return int(row[0])
-            cursor = conn.execute(
-                "INSERT INTO collections (name, scope, created_at, workspace_id) VALUES (?, ?, ?, ?)",
-                (f"workspace-{workspace_id}", "workspace", _now_iso(), workspace_id),
-            )
-            return int(cursor.lastrowid)
+            try:
+                cursor = conn.execute(
+                    "INSERT INTO collections (name, scope, created_at, workspace_id) VALUES (?, ?, ?, ?)",
+                    (f"workspace-{workspace_id}", "workspace", _now_iso(), workspace_id),
+                )
+                return int(cursor.lastrowid)
+            except sqlite3.IntegrityError:
+                # REVIEW-FIX: the SELECT above and this INSERT are not one
+                # atomic step - a second, fully separate connection (every
+                # real caller reaches this via asyncio.to_thread, genuine
+                # OS threads) can run the identical SELECT-sees-nothing,
+                # INSERT sequence concurrently. Before migration 6 added
+                # idx_collections_workspace_id_unique, both INSERTs simply
+                # succeeded, silently splitting this workspace's knowledge
+                # base across two collections rows - proven with a forced
+                # two-thread race. Now the LOSING connection's INSERT hits
+                # that unique index and raises here instead: re-read the
+                # row the WINNING connection just committed and return its
+                # id, rather than erroring out or creating a duplicate.
+                row = conn.execute(
+                    "SELECT id FROM collections WHERE workspace_id = ?", (workspace_id,)
+                ).fetchone()
+                if row is None:
+                    raise  # the index rejected this INSERT for some other reason - do not mask it
+                return int(row[0])
     finally:
         conn.close()
 

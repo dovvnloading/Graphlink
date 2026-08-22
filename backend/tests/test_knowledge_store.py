@@ -388,6 +388,202 @@ class TestGetOrCreateWorkspaceCollection:
         assert len(results_b) == 1
         assert "beta" in results_b[0]["text"].lower()
 
+    def test_a_real_concurrent_race_for_a_brand_new_workspace_never_produces_two_collections(self, db_path):
+        """Regression: get_or_create_workspace_collection was a plain
+        SELECT-then-INSERT with no unique constraint and no lock. Every
+        real caller reaches it via asyncio.to_thread (genuine OS threads),
+        and nothing serializes two calls for the same brand-new workspace
+        arriving close together - a real, ordinary scenario (a chat's own
+        reindex-on-save racing a search call for a workspace that has
+        never been touched before). Forces the actual race with a barrier
+        placed right after the SELECT, so both threads are guaranteed to
+        observe "no row yet" before either proceeds to INSERT - the
+        standard technique for making a TOCTOU window deterministic
+        instead of hoping to get lucky."""
+        import threading
+
+        # Pre-warm the database OUTSIDE the barriered wrapper: schema
+        # creation/migrations are their own real (unrelated) concurrency
+        # hazard on a completely fresh SQLite file, and this test is
+        # specifically about the SELECT-then-INSERT race inside
+        # get_or_create_workspace_collection, not about first-open
+        # contention.
+        ks._connect(db_path).close()
+
+        barrier = threading.Barrier(2)
+        real_connect = ks._connect
+
+        class _BarrieredConnection:
+            """Wraps the real connection so the barrier waits exactly once,
+            right after the SELECT this function's own race hinges on -
+            not on every execute() call, which would deadlock against the
+            INSERT/re-SELECT retry path this fix adds."""
+
+            def __init__(self, inner):
+                self._inner = inner
+                self._select_count = 0
+
+            def execute(self, sql, *args, **kwargs):
+                if sql.strip().startswith("SELECT id FROM collections") and self._select_count == 0:
+                    self._select_count += 1
+                    barrier.wait(timeout=5)
+                return self._inner.execute(sql, *args, **kwargs)
+
+            def __enter__(self):
+                self._inner.__enter__()
+                return self
+
+            def __exit__(self, *exc):
+                return self._inner.__exit__(*exc)
+
+            def close(self):
+                self._inner.close()
+
+        def barriered_connect(*args, **kwargs):
+            return _BarrieredConnection(real_connect(*args, **kwargs))
+
+        results: list[int] = []
+        errors: list[BaseException] = []
+
+        def call():
+            try:
+                results.append(ks.get_or_create_workspace_collection(db_path, 4242))
+            except BaseException as exc:  # noqa: BLE001 - captured for the assertion below
+                errors.append(exc)
+
+        # A direct module-attribute swap, not monkeypatch.setattr: this
+        # patch must be visible to BOTH threads for the duration of the
+        # race, and restored exactly once afterward regardless of outcome -
+        # monkeypatch's own fixture teardown isn't the right shape for a
+        # patch that has to outlive this function's own return until both
+        # threads have actually finished.
+        ks._connect = barriered_connect
+        try:
+            threads = [threading.Thread(target=call) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+        finally:
+            ks._connect = real_connect
+
+        assert not errors, f"get_or_create_workspace_collection raised under the forced race: {errors}"
+        assert len(results) == 2
+        assert results[0] == results[1], "both racing calls must resolve to the SAME collection id"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM collections WHERE workspace_id = ?", (4242,),
+            ).fetchone()[0]
+            assert count == 1, "the race must never leave two collections rows for one workspace"
+        finally:
+            conn.close()
+
+
+class TestMigration006DeduplicatesExistingWorkspaceCollections:
+    """This stage cannot assume a fresh install - a real user's
+    knowledge.db may already have hit the pre-fix race and be carrying
+    duplicate collections rows from before migration 6 existed. The
+    migration must repair that data, not just prevent new occurrences."""
+
+    def test_two_duplicate_collections_are_merged_into_one_survivor(self, db_path, monkeypatch):
+        # Build the database at version 5 - before the unique-index
+        # migration exists at all - so a genuine duplicate can be inserted
+        # exactly the way the pre-fix race would have produced it.
+        monkeypatch.setattr(ks, "KNOWLEDGE_DB_SCHEMA_VERSION", 5)
+        monkeypatch.setattr(ks, "_MIGRATIONS", {
+            1: ks._migration_001_initial_schema,
+            2: ks._migration_002_fts5_lexical_index,
+            3: ks._migration_003_vector_index,
+            4: ks._migration_004_workspace_scoped_collections,
+            5: ks._migration_005_graph_node_chunks,
+        })
+        ks._connect(db_path).close()  # creates the schema at version 5
+
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                "INSERT INTO collections (name, scope, created_at, workspace_id) VALUES (?, ?, ?, ?)",
+                ("workspace-99", "workspace", "2026-01-01T00:00:00Z", 99),
+            )
+            conn.execute(
+                "INSERT INTO collections (name, scope, created_at, workspace_id) VALUES (?, ?, ?, ?)",
+                ("workspace-99", "workspace", "2026-01-01T00:00:01Z", 99),
+            )
+            survivor_id, loser_id = (
+                row[0] for row in conn.execute(
+                    "SELECT id FROM collections WHERE workspace_id = 99 ORDER BY id"
+                ).fetchall()
+            )
+            # A document under the LOSER, no content_hash clash with the
+            # survivor - must be re-pointed, not dropped.
+            conn.execute(
+                "INSERT INTO documents (collection_id, source_uri, title, content_hash, added_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (loser_id, "unique.txt", "Unique", "hash-unique", "2026-01-01T00:00:00Z"),
+            )
+            # A document under the SURVIVOR and a byte-identical one (same
+            # content_hash) also under the loser - the loser's copy must be
+            # dropped, not violate documents' own UNIQUE(content_hash,
+            # collection_id) when re-pointed.
+            conn.execute(
+                "INSERT INTO documents (collection_id, source_uri, title, content_hash, added_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (survivor_id, "dup-a.txt", "Dup A", "hash-shared", "2026-01-01T00:00:00Z"),
+            )
+            conn.execute(
+                "INSERT INTO documents (collection_id, source_uri, title, content_hash, added_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (loser_id, "dup-b.txt", "Dup B", "hash-shared", "2026-01-01T00:00:01Z"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        monkeypatch.undo()  # restore the real, full _MIGRATIONS + current schema version
+
+        # Any real connect (any query function) drives migration 6.
+        assert ks.get_document(db_path, 1) is not None or True  # trigger a connect regardless of id 1's existence
+        ks.list_documents(db_path, collection_id=survivor_id)
+
+        conn = sqlite3.connect(db_path)
+        try:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == ks.KNOWLEDGE_DB_SCHEMA_VERSION
+            remaining = conn.execute(
+                "SELECT id FROM collections WHERE workspace_id = 99"
+            ).fetchall()
+            assert remaining == [(survivor_id,)], "exactly one collection must survive the merge"
+
+            docs = {
+                row[0]: row[1]
+                for row in conn.execute(
+                    "SELECT source_uri, collection_id FROM documents WHERE collection_id = ?", (survivor_id,)
+                ).fetchall()
+            }
+            assert docs.get("unique.txt") == survivor_id, "a non-colliding document must be re-pointed, not dropped"
+            assert "dup-a.txt" in docs, "the survivor's own document must be untouched"
+            assert "dup-b.txt" not in docs, (
+                "the loser's byte-identical duplicate must be dropped, not violate the UNIQUE constraint"
+            )
+            assert conn.execute("SELECT COUNT(*) FROM documents WHERE collection_id = ?", (loser_id,)).fetchone()[0] == 0
+
+            # The constraint that prevents this from ever recurring.
+            index_names = {row[1] for row in conn.execute("PRAGMA index_list(collections)").fetchall()}
+            assert "idx_collections_workspace_id_unique" in index_names
+        finally:
+            conn.close()
+
+    def test_migrating_a_database_with_no_duplicates_is_a_pure_no_op(self, db_path):
+        ks.get_or_create_workspace_collection(db_path, 1)
+        ks.get_or_create_workspace_collection(db_path, 2)
+        conn = sqlite3.connect(db_path)
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM collections").fetchone()[0]
+            assert count == 2
+        finally:
+            conn.close()
+
 
 class TestFts5LexicalSearch:
     def test_search_finds_a_matching_chunk_with_correct_citation_fields(self, db_path):
