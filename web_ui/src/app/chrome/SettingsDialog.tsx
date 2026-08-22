@@ -1065,10 +1065,27 @@ function LlamaCppPage({ state, transport }: { state: AppSettingsState; transport
 // _register_configured_mcp_tools only connects enabled servers lazily, when
 // the Builder registry is next built), so replaying it after a reconnect is
 // always safe.
+/** "KEY=value" lines -> env record. Blank lines and lines without "=" are
+ * skipped; the first "=" splits, so a value may itself contain "=" (base64
+ * tokens routinely do). Exported for direct unit testing. */
+export function parseEnvLines(text: string): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    const eq = line.indexOf("=");
+    if (eq <= 0) continue;
+    const key = line.slice(0, eq).trim();
+    if (!key) continue;
+    env[key] = line.slice(eq + 1).trim();
+  }
+  return env;
+}
+
 function McpServersPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
   const [draftName, setDraftName] = useState("");
   const [draftCommand, setDraftCommand] = useState("");
   const [draftArgs, setDraftArgs] = useState("");
+  const [draftEnv, setDraftEnv] = useState("");
 
   const updateServers = (next: McpServerConfig[]) => {
     transport.fireIntent("app-settings", "setMcpServers", [next], undefined, true);
@@ -1081,11 +1098,15 @@ function McpServersPage({ state, transport }: { state: AppSettingsState; transpo
     const args = draftArgs.trim() ? draftArgs.trim().split(/\s+/) : [];
     updateServers([
       ...state.mcpServers,
-      { name, command, args, scopes: [], approval: "always", enabledTools: [], enabled: true, timeout: 30 },
+      {
+        name, command, args, scopes: [], approval: "always", enabledTools: [], enabled: true, timeout: 30,
+        env: parseEnvLines(draftEnv),
+      },
     ]);
     setDraftName("");
     setDraftCommand("");
     setDraftArgs("");
+    setDraftEnv("");
   };
 
   return (
@@ -1122,6 +1143,14 @@ function McpServersPage({ state, transport }: { state: AppSettingsState; transpo
                   {server.command}
                   {server.args.length > 0 ? ` ${server.args.join(" ")}` : ""}
                 </span>
+                {/* Names only, never values - these are the user's own
+                    tokens for a server they chose to run, and a settings
+                    page is no place to echo a secret back. */}
+                {Object.keys(server.env ?? {}).length > 0 && (
+                  <span className="settings-mcp-server-command">
+                    env: {Object.keys(server.env).sort().join(", ")}
+                  </span>
+                )}
               </span>
             </label>
             <button
@@ -1167,6 +1196,21 @@ function McpServersPage({ state, transport }: { state: AppSettingsState; transpo
             value={draftArgs}
             onChange={(event) => setDraftArgs(event.target.value)}
           />
+        </label>
+        <label className="settings-field">
+          <span className="settings-field-label">Environment variables (optional, one KEY=value per line)</span>
+          <textarea
+            className="settings-select settings-mcp-env-input"
+            rows={3}
+            placeholder={"GITHUB_TOKEN=ghp_...\nBRAVE_API_KEY=..."}
+            value={draftEnv}
+            onChange={(event) => setDraftEnv(event.target.value)}
+            spellCheck={false}
+          />
+          <span className="settings-field-hint">
+            A server receives only these variables plus basic system plumbing (PATH, TEMP, HOME) - never this
+            app&apos;s own provider keys.
+          </span>
         </label>
         <div className="settings-button-row">
           <button

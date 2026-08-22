@@ -54,6 +54,9 @@ class McpServerConfigPayload:
     enabledTools: list[str]
     enabled: bool
     timeout: float
+    # Per-server environment variables (KEY -> value), layered on the safe
+    # allowlist base at spawn - see backend/mcp_client.py's McpServerConfig.
+    env: dict[str, str]
 
 
 @dataclass

@@ -22,6 +22,20 @@ def _is_llama_cpp_gguf_path(path_value) -> bool:
     return bool(normalized) and normalized.lower().endswith(".gguf")
 
 
+def _normalize_mcp_env(raw):
+    """One MCP server's `env` as a clean str->str dict - tolerant of the
+    shapes a hand-edited session.dat or an older payload can carry (missing,
+    null, non-dict, non-string values, blank names). Malformed degrades to
+    "no extra variables", never to a dropped server entry."""
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key).strip(): str(value)
+        for key, value in raw.items()
+        if str(key).strip() and value is not None
+    }
+
+
 class SettingsManager:
     NOTIFICATION_TYPES = ("info", "success", "warning", "error")
     # R8a: the graded reasoning-effort vocabulary shared by all 5 providers'
@@ -1195,6 +1209,10 @@ class SettingsManager:
                 "enabled_tools": sorted({str(t) for t in (entry.get("enabled_tools") or [])}),
                 "enabled": bool(entry.get("enabled", True)),
                 "timeout": float(entry.get("timeout", 30.0) or 30.0),
+                # Absent on every entry persisted before the field existed -
+                # reads back as "no extra variables", the same default the
+                # write side stores.
+                "env": _normalize_mcp_env(entry.get("env")),
             })
         return servers
 
@@ -1224,6 +1242,13 @@ class SettingsManager:
                 "enabled_tools": sorted({str(t) for t in (entry.get("enabled_tools") or [])}),
                 "enabled": bool(entry.get("enabled", True)),
                 "timeout": float(entry.get("timeout", 30.0) or 30.0),
+                # Per-server environment variables - the only channel by
+                # which a server process receives anything beyond the safe
+                # allowlist base (see McpStdioClient.connect). Values are
+                # stored as given; they are the user's own secrets for a
+                # server the user chose to run, same posture as the API keys
+                # this store already holds.
+                "env": _normalize_mcp_env(entry.get("env")),
             })
         self.state["mcp_servers"] = normalized
         self._save_state()

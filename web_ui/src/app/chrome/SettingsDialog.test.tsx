@@ -1,7 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { SettingsDialog } from "./SettingsDialog";
+import { SettingsDialog, parseEnvLines } from "./SettingsDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { ExecutionLimitsProvider } from "../canvas/ExecutionLimitsContext";
 import type { WsTransport } from "../../lib/ws/transport";
@@ -922,6 +922,7 @@ describe("SettingsDialog", () => {
       enabledTools: [],
       enabled: true,
       timeout: 30,
+      env: {},
     };
 
     it("navigating to MCP Servers fires setActiveSection with its own key", async () => {
@@ -997,6 +998,7 @@ describe("SettingsDialog", () => {
             enabledTools: [],
             enabled: true,
             timeout: 30,
+            env: {},
           },
         ]],
       ]);
@@ -1030,6 +1032,7 @@ describe("SettingsDialog", () => {
         enabledTools: [],
         enabled: true,
         timeout: 30,
+        env: {},
       };
       const { user, push, intents } = setup();
       await goToMcpServers(user, push, { mcpServers: [fsServer, gitServer] });
@@ -1127,5 +1130,26 @@ describe("SettingsDialog", () => {
 
       expect(intents).toContainEqual(["app-plugins", "setPluginGrant", ["counter_node", false]]);
     });
+  });
+});
+
+describe("parseEnvLines (MCP server env field)", () => {
+  it("parses KEY=value lines into a record", () => {
+    expect(parseEnvLines("GITHUB_TOKEN=ghp_abc\nBRAVE_API_KEY=brv")).toEqual({
+      GITHUB_TOKEN: "ghp_abc",
+      BRAVE_API_KEY: "brv",
+    });
+  });
+
+  it("splits on the FIRST '=' only, so a value can itself contain '=' (base64 tokens do)", () => {
+    expect(parseEnvLines("TOKEN=abc==")).toEqual({ TOKEN: "abc==" });
+  });
+
+  it("skips blank lines, lines without '=', and lines with an empty key", () => {
+    expect(parseEnvLines("\n\nnot-a-pair\n=orphan-value\n  \nOK=1\r\n")).toEqual({ OK: "1" });
+  });
+
+  it("trims whitespace around keys and values and tolerates CRLF", () => {
+    expect(parseEnvLines("  A = 1 \r\n B=2\r\n")).toEqual({ A: "1", B: "2" });
   });
 });

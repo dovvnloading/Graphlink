@@ -423,6 +423,7 @@ def test_set_mcp_servers_persists_and_normalizes_a_round_trip(manager):
             "enabled_tools": ["read_file"],
             "enabled": True,
             "timeout": 30.0,
+            "env": {},
         },
     ]
 
@@ -2319,6 +2320,7 @@ def test_set_mcp_servers_round_trips_a_valid_call(manager):
             "enabled_tools": ["read_file"],
             "enabled": True,
             "timeout": 45.0,
+            "env": {},
         },
     ]
     # ...and republished on the wire in the camelCase shape the frontend reads.
@@ -2333,6 +2335,7 @@ def test_set_mcp_servers_round_trips_a_valid_call(manager):
             "enabledTools": ["read_file"],
             "enabled": True,
             "timeout": 45.0,
+            "env": {},
         },
     ]
 

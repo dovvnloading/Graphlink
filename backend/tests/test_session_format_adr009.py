@@ -264,3 +264,22 @@ def test_the_legacy_buckets_are_still_written_for_older_readers():
     assert "connections" in chat_data
     assert chat_data["system_prompt_connections"], "system-prompt bucket stopped being written"
     assert chat_data["group_summary_connections"], "group-summary bucket stopped being written"
+
+
+# -- ref validation: a ref names content, it is never a path ---------------
+
+
+def test_store_rejects_a_ref_that_is_not_a_content_digest(tmp_path):
+    """A ref is read straight out of persisted rows and imported archives -
+    data this process did not necessarily write - so a crafted value must
+    never be trusted into `root / ref[:2] / ref`. Only a SHA-256 hex digest
+    (exactly what content_ref produces) resolves to a path at all."""
+    store = AssetStore(tmp_path / "assets")
+    (tmp_path / "secret.txt").write_bytes(b"TOP SECRET")
+    ref = store.put(b"real image bytes")
+    assert store.get(ref) == b"real image bytes"
+
+    for crafted in ("../secret.txt", "../../secret.txt", "..\secret.txt", "", "x", ref.upper()):
+        assert store.get(crafted) is None, crafted
+        assert store.exists(crafted) is False, crafted
+        assert store.verify(crafted) is False, crafted
