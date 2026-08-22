@@ -413,7 +413,9 @@ def test_set_mcp_servers_persists_and_normalizes_a_round_trip(manager):
             "enabled": True,
         },
     ])
-    assert manager.get_mcp_servers() == [
+    servers = manager.get_mcp_servers()
+    assert servers[0].pop("id")  # server-assigned, non-empty, but not deterministic
+    assert servers == [
         {
             "name": "fs",
             "command": "npx",
@@ -2310,7 +2312,10 @@ def test_set_mcp_servers_round_trips_a_valid_call(manager):
     ]]))
 
     # Persisted through SettingsManager.set_mcp_servers' own snake_case shape...
-    assert manager.get_mcp_servers() == [
+    stored = manager.get_mcp_servers()
+    stored_id = stored[0].pop("id")
+    assert stored_id  # server-assigned, non-empty, but not deterministic
+    assert stored == [
         {
             "name": "fs",
             "command": "npx",
@@ -2323,9 +2328,13 @@ def test_set_mcp_servers_round_trips_a_valid_call(manager):
             "env": {},
         },
     ]
-    # ...and republished on the wire in the camelCase shape the frontend reads.
+    # ...and republished on the wire in the camelCase shape the frontend reads,
+    # echoing back the SAME id assigned above (the join key an edit needs to
+    # keep secrets from swapping between two same-named servers).
     assert recorder.messages[-1]["topic"] == "app-settings"
-    assert recorder.messages[-1]["payload"]["mcpServers"] == [
+    wire_servers = recorder.messages[-1]["payload"]["mcpServers"]
+    assert wire_servers[0].pop("id") == stored_id
+    assert wire_servers == [
         {
             "name": "fs",
             "command": "npx",
@@ -2475,17 +2484,49 @@ def test_editing_another_server_does_not_wipe_configured_env_values(tmp_path):
         {"name": "gh", "command": "npx", "env": {"GITHUB_TOKEN": "ghp_keep_me"}},
         {"name": "fs", "command": "uvx", "env": {}},
     ])
+    ids = {s["name"]: s["id"] for s in manager.get_mcp_servers()}
 
     # Exactly what the settings page now sends when the user unticks "fs":
-    # every field it knows about, and no `env` at all.
+    # every field it knows about (including the id it was assigned on the
+    # first call, echoed back exactly as the wire delivered it), and no
+    # `env` at all.
     manager.set_mcp_servers([
-        {"name": "gh", "command": "npx"},
-        {"name": "fs", "command": "uvx", "enabled": False},
+        {"id": ids["gh"], "name": "gh", "command": "npx"},
+        {"id": ids["fs"], "name": "fs", "command": "uvx", "enabled": False},
     ])
 
     servers = {s["name"]: s for s in manager.get_mcp_servers()}
     assert servers["gh"]["env"] == {"GITHUB_TOKEN": "ghp_keep_me"}, "an unrelated edit erased a configured secret"
     assert servers["fs"]["enabled"] is False
+
+
+def test_editing_another_server_sharing_the_same_name_no_longer_swaps_env_values(tmp_path):
+    """REVIEW-FIX regression: preserved_env used to be keyed by `name` alone.
+    Two servers can share a name - nothing has ever enforced uniqueness on
+    it - so an edit to one that omits `env` could silently adopt the OTHER
+    same-named server's secret, or vice versa. Keying by the server-assigned
+    `id` instead makes that impossible: same name, different id, no swap."""
+    from graphlink_settings_store import SettingsManager as _SettingsManager
+
+    manager = _SettingsManager(tmp_path / "session.dat")
+    manager.set_mcp_servers([
+        {"name": "search", "command": "npx", "env": {"BRAVE_API_KEY": "brave-secret"}},
+        {"name": "search", "command": "uvx", "env": {"OTHER_KEY": "other-secret"}},
+    ])
+    before = manager.get_mcp_servers()
+    ids = [s["id"] for s in before]
+    assert ids[0] != ids[1]
+
+    # Round-trip both, echoing each its OWN id, with no `env` on either -
+    # exactly what toggling an unrelated third server would send.
+    manager.set_mcp_servers([
+        {"id": ids[0], "name": "search", "command": "npx"},
+        {"id": ids[1], "name": "search", "command": "uvx"},
+    ])
+
+    after = manager.get_mcp_servers()
+    assert after[0]["env"] == {"BRAVE_API_KEY": "brave-secret"}
+    assert after[1]["env"] == {"OTHER_KEY": "other-secret"}
 
 
 def test_an_explicit_env_still_replaces_what_is_stored(tmp_path):

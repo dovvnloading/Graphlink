@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1255,6 +1256,7 @@ class SettingsManager:
         if not isinstance(raw_servers, list):
             return []
         servers = []
+        backfilled = False
         for entry in raw_servers:
             if not isinstance(entry, dict):
                 continue
@@ -1262,7 +1264,19 @@ class SettingsManager:
             command = str(entry.get("command", "")).strip()
             if not name or not command:
                 continue
+            # REVIEW-FIX: every entry needs a stable identity distinct from
+            # `name` (two servers can share a name - nothing has ever
+            # enforced uniqueness). Entries persisted before this field
+            # existed get one backfilled here, in place, on the raw stored
+            # dict - so it is written back below and never regenerated on a
+            # later read, which would make it useless as a join key.
+            entry_id = str(entry.get("id", "")).strip()
+            if not entry_id:
+                entry_id = uuid.uuid4().hex
+                entry["id"] = entry_id
+                backfilled = True
             servers.append({
+                "id": entry_id,
                 "name": name,
                 "command": command,
                 "args": [str(a) for a in (entry.get("args") or [])],
@@ -1281,6 +1295,9 @@ class SettingsManager:
                 # unchanged.
                 "env": self._unprotect_mcp_env(_normalize_mcp_env(entry.get("env"))),
             })
+        if backfilled:
+            self.state["mcp_servers"] = raw_servers
+            self._save_state()
         return servers
 
     def set_mcp_servers(self, servers: list) -> None:
@@ -1292,15 +1309,21 @@ class SettingsManager:
         patched map. Validates the same way get_mcp_servers reads back
         (name/command required, everything else normalized/defaulted) so
         a round trip through set then get is always well-formed."""
-        # What is already stored, keyed by server name, so an entry that
-        # arrives without an "env" key keeps its configured variables rather
-        # than losing them - see the "env" handling below.
+        # What is already stored, keyed by id (REVIEW-FIX: was keyed by
+        # name), so an entry that arrives without an "env" key keeps its
+        # configured variables rather than losing them - see the "env"
+        # handling below. Keying by name meant two servers sharing a name
+        # (nothing has ever enforced uniqueness) could silently swap or
+        # merge each other's secrets the moment either was edited without
+        # sending "env". A stored entry with no id yet (persisted before
+        # this field existed) simply has nothing to preserve under - it
+        # gets a fresh id below, same as a brand-new entry.
         preserved_env: dict[str, dict] = {}
         for stored in (self.state.get("mcp_servers") or []):
             if isinstance(stored, dict):
-                stored_name = str(stored.get("name", "")).strip()
-                if stored_name:
-                    preserved_env[stored_name] = _normalize_mcp_env(stored.get("env"))
+                stored_id = str(stored.get("id", "")).strip()
+                if stored_id:
+                    preserved_env[stored_id] = _normalize_mcp_env(stored.get("env"))
         normalized = []
         for entry in (servers or []):
             if not isinstance(entry, dict):
@@ -1309,7 +1332,14 @@ class SettingsManager:
             command = str(entry.get("command", "")).strip()
             if not name or not command:
                 continue
+            # An incoming entry echoes back whatever id an existing server
+            # already has (round-tripped through the wire unchanged); one
+            # with no id - a brand-new "Add Server" entry, or a legacy
+            # stored entry that never had one - gets a fresh one assigned
+            # here, server-side, never client-supplied.
+            entry_id = str(entry.get("id", "")).strip() or uuid.uuid4().hex
             normalized.append({
+                "id": entry_id,
                 "name": name,
                 "command": command,
                 "args": [str(a) for a in (entry.get("args") or [])],
@@ -1339,7 +1369,7 @@ class SettingsManager:
                 **(
                     {"env": self._protect_mcp_env(_normalize_mcp_env(entry.get("env")))}
                     if "env" in entry
-                    else {"env": preserved_env.get(name, {})}
+                    else {"env": preserved_env.get(entry_id, {})}
                 ),
             })
         self.state["mcp_servers"] = normalized

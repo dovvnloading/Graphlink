@@ -46,6 +46,19 @@ class McpServerConfigPayload:
     SettingsManager.set_mcp_servers' own "replace the whole collection"
     posture, not an incrementally-patched map)."""
 
+    # REVIEW-FIX: a stable identity distinct from `name`. Two servers can
+    # share a name (nothing anywhere enforces uniqueness - the "Add Server"
+    # form never checked, and neither did the backend's own normalize
+    # pass), and env-preservation on an edit that omits `env` used to be
+    # keyed by name alone - so toggling either server's checkbox could
+    # silently merge/swap their secrets onto each other. `id` (a
+    # server-side-assigned uuid4 hex, never user-editable) is the real join
+    # key now: SettingsManager.set_mcp_servers backfills one for any entry
+    # that arrives without it (a brand-new server from "Add Server") and
+    # echoes back whatever id an existing server already has, so the
+    # frontend's own bulk-replace round-trips identity correctly across
+    # add/remove/reorder, not just same-position edits.
+    id: str
     name: str
     command: str
     args: list[str]

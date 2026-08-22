@@ -163,6 +163,9 @@
             },
             "type": "array"
           },
+          "id": {
+            "type": "string"
+          },
           "name": {
             "type": "string"
           },
@@ -177,6 +180,7 @@
           }
         },
         "required": [
+          "id",
           "name",
           "command",
           "args",

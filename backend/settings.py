@@ -140,6 +140,7 @@ def _mcp_servers_for_wire(manager: SettingsManager) -> list[dict[str, Any]]:
     # setMcpServers intent (backend/api/intents_settings_general.py).
     return [
         {
+            "id": entry["id"],
             "name": entry["name"],
             "command": entry["command"],
             "args": list(entry.get("args", [])),

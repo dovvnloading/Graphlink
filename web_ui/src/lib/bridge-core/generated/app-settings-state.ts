@@ -11,6 +11,7 @@ export interface ApiModelDescriptor {
 }
 
 export interface McpServerConfig {
+  id: string;
   name: string;
   command: string;
   args: string[];
@@ -117,6 +118,11 @@ function checkApiModelDescriptor(value: unknown, path: string, errors: string[])
 
 function checkMcpServerConfig(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["id"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
+  }
   {
     const fieldValue = value["name"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.name: missing required field`);
