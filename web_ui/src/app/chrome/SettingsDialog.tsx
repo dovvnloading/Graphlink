@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppPluginGrant, AppPluginsState } from "../../lib/bridge-core/generated/app-plugins-state";
-import type { AppSettingsState, McpServerConfig } from "../../lib/bridge-core/generated/app-settings-state";
+import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import { useExecutionLimits } from "../canvas/ExecutionLimitsContext";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { CustomSelect } from "./CustomSelect";
