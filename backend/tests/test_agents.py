@@ -2882,6 +2882,55 @@ def _make_artifact_env():
     return bus, notifications, dispatcher
 
 
+def test_artifact_agent_get_response_keeps_the_whole_document_when_it_contains_the_closing_tag_text(monkeypatch):
+    """Regression: ArtifactAgent.get_response used a non-greedy regex
+    (r'<artifact>(.*?)</artifact>'), which stops at the FIRST literal
+    "</artifact>" occurrence anywhere in the model's reply. If the document
+    body itself legitimately contains that substring - an ordinary,
+    non-adversarial ask, e.g. documenting this very tag convention, or an
+    XML/HTML example that happens to use a same-named tag - the document
+    was silently truncated right there, and the genuine remainder ended up
+    misfiled into ai_message (the transient chat reply) instead of being
+    persisted. Tests the REAL regex, not a mocked get_response - every
+    other ArtifactAgent test in this file patches get_response away
+    entirely, so this parsing bug was untested."""
+    raw_reply = (
+        "<artifact># Graphlink Tag Reference\n\n"
+        "This document explains our internal format. The assistant wraps the document "
+        "body in `<artifact>` and `</artifact>` tags, for example:\n\n"
+        "    <artifact>Hello world</artifact>\n\n"
+        "That's the whole convention.</artifact> Let me know if you want more sections added!"
+    )
+    monkeypatch.setattr(
+        api_provider, "chat", lambda task, messages, **kwargs: {"message": {"content": raw_reply}}
+    )
+
+    agent = agents_module.ArtifactAgent()
+    new_artifact, ai_message = agent.get_response("", [])
+
+    assert new_artifact == (
+        "# Graphlink Tag Reference\n\n"
+        "This document explains our internal format. The assistant wraps the document "
+        "body in `<artifact>` and `</artifact>` tags, for example:\n\n"
+        "    <artifact>Hello world</artifact>\n\n"
+        "That's the whole convention."
+    ), "the document must include everything up to the REAL closing tag, not truncate at the inner mention"
+    assert ai_message == "Let me know if you want more sections added!"
+
+
+def test_artifact_agent_get_response_ordinary_case_with_no_inner_tag_mentions_is_unaffected(monkeypatch):
+    monkeypatch.setattr(
+        api_provider, "chat",
+        lambda task, messages, **kwargs: {
+            "message": {"content": "<artifact>Just a plain document.</artifact> Here you go!"}
+        },
+    )
+    agent = agents_module.ArtifactAgent()
+    new_artifact, ai_message = agent.get_response("", [])
+    assert new_artifact == "Just a plain document."
+    assert ai_message == "Here you go!"
+
+
 def test_call_artifact_agent_calls_get_response_and_returns_the_tuple(monkeypatch):
     captured = []
 

@@ -50,8 +50,25 @@ RULES:
         response = api_provider.chat(task=config.TASK_CHAT, messages=messages)
         raw_text = response['message']['content']
 
-        # Parse out the artifact and the conversational response
-        artifact_match = re.search(r'<artifact>(.*?)</artifact>', raw_text, re.DOTALL)
+        # Parse out the artifact and the conversational response.
+        #
+        # REVIEW-FIX: greedy (.*), not non-greedy (.*?). The non-greedy form
+        # stopped at the FIRST literal "</artifact>" occurrence anywhere in
+        # raw_text - if the document body itself legitimately contained
+        # that substring (e.g. the user asked this assistant to document
+        # its own tag convention, or to write an XML/HTML example using a
+        # same-named tag), the document was silently truncated right there
+        # mid-sentence, and the genuine remainder of the document ended up
+        # misfiled into ai_message (the transient chat reply) instead of
+        # being persisted - reproduced directly: a document explaining the
+        # <artifact> tag convention was cut off exactly at its own first
+        # mention of the closing tag. The system prompt's own contract
+        # (rule 2/3 above) is "one open tag, the whole document, one real
+        # close, then a short conversational trailer" - the true closing
+        # tag is therefore the LAST occurrence of the literal substring in
+        # the response, which is exactly what a greedy match with
+        # re.DOTALL backtracks to.
+        artifact_match = re.search(r'<artifact>(.*)</artifact>', raw_text, re.DOTALL)
         if not artifact_match:
             # Previously fell back to treating the ENTIRE raw response - including any
             # conversational preamble/explanation the model wrote outside the tags - as
