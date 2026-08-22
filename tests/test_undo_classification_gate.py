@@ -260,10 +260,13 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # and 169 -> 170 when ADR-008 stage 8.7 added builder's own deleteRecipe,
     # and 170 -> 171 when ADR-021 stage 21.5 added scene/
     # setWebResearchRetainToKnowledge (the per-node knowledge-retention
-    # opt-in that finally makes ADR-017's retention path reachable).
+    # opt-in that finally makes ADR-017's retention path reachable), and
+    # 171 -> 172 when scene/reportNodeSizes was added (the frontend's own
+    # rendered-size report, without which frame/container bounds fall back
+    # to a flat 220x120 estimate per member and do not enclose them).
     real = _collect_real_registrations()
-    assert len(real) == 171, (
-        f"expected exactly 171 real registered intents, found {len(real)} - "
+    assert len(real) == 172, (
+        f"expected exactly 172 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

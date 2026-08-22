@@ -117,6 +117,12 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "setSmartGuides", "B", "preference: canvas behavior toggle"),
     Classified("scene", "setDragFactor", "B", "preference: drag sensitivity"),
     Classified("scene", "setViewState", "B", "view-state: zoom/scroll position"),
+    Classified(
+        "scene", "reportNodeSizes", "B",
+        "render-observation: the client reporting what nodes actually laid out to, "
+        "so group bounds can enclose them - not a user action, and replaying layout "
+        "noise through Ctrl+Z would be meaningless",
+    ),
     Classified("scene", "organizeNodes", "A", "content: auto-layout repositions every node - one Ctrl+Z restores them all"),
     Classified("scene", "setFontFamily", "B", "preference: canvas-appearance font"),
     Classified("scene", "setFontSize", "B", "preference: canvas-appearance font"),

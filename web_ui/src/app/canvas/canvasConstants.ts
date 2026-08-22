@@ -60,6 +60,15 @@ export const VIEWPORT_REPORT_DEBOUNCE_MS = 250;
 export const HTML_SPLITTER_REPORT_DEBOUNCE_MS = 200;
 export const CHAT_SCROLL_REPORT_DEBOUNCE_MS = 200;
 
+/** How long node re-measurements settle before being reported to the
+ * backend (reportNodeSizes), which needs them to fit a frame/container
+ * around its members - the backend cannot compute a chat node's rendered
+ * height for itself. Same debounce posture as the three above, but the
+ * burst it guards is different in kind: a streaming reply re-measures its
+ * node on nearly every token, so this is the difference between one report
+ * per settled layout and hundreds per reply. */
+export const NODE_SIZE_REPORT_DEBOUNCE_MS = 200;
+
 /** R6.3: HTML view node splitter-position scaffolding. Legacy's own
  * splitter_state (graphlink_html_view.py's QSplitter) was a deliberate scope
  * cut back in R3.17/R3.18 (see HtmlNodeView.tsx/styles.css's own now-

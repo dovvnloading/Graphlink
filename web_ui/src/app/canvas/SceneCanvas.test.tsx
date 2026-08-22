@@ -15,6 +15,7 @@ import {
   groupDragKindOf,
   handleSelectionChange,
   isOrthogonalEligible,
+  collectChangedNodeSizes,
   makeDebouncedViewportReport,
   SceneCanvas,
   toFlowEdges,
@@ -2186,6 +2187,67 @@ describe("toFlowNodes (R6.3 html node splitter state)", () => {
     const flowNodes = toFlowNodes(scene, store);
     const htmlFlowNode = flowNodes.find((n) => n.id === "html-1");
     expect((htmlFlowNode!.data as { htmlSplitterState: number | null }).htmlSplitterState).toBeNull();
+  });
+});
+
+describe("collectChangedNodeSizes (node-size reporting for group bounds)", () => {
+  const sized = (sizes: Record<string, { width: number; height: number } | null>) =>
+    (id: string) => sizes[id] ?? null;
+
+  it("reports every measurable node the first time it is seen", () => {
+    const last = new Map<string, string>();
+    const changed = collectChangedNodeSizes(
+      ["a", "b"],
+      sized({ a: { width: 422, height: 112 }, b: { width: 680, height: 500 } }),
+      last,
+    );
+    expect(changed).toEqual([
+      ["a", 422, 112],
+      ["b", 680, 500],
+    ]);
+  });
+
+  it("reports nothing on a re-measure that produced identical sizes - the steady state costs no intent at all", () => {
+    const last = new Map<string, string>();
+    const measure = sized({ a: { width: 422, height: 112 } });
+    collectChangedNodeSizes(["a"], measure, last);
+
+    expect(collectChangedNodeSizes(["a"], measure, last)).toEqual([]);
+  });
+
+  it("reports only the node whose size actually moved", () => {
+    const last = new Map<string, string>();
+    collectChangedNodeSizes(
+      ["a", "b"],
+      sized({ a: { width: 422, height: 112 }, b: { width: 422, height: 300 } }),
+      last,
+    );
+
+    const changed = collectChangedNodeSizes(
+      ["a", "b"],
+      sized({ a: { width: 422, height: 112 }, b: { width: 422, height: 900 } }),
+      last,
+    );
+    expect(changed).toEqual([["b", 422, 900]]);
+  });
+
+  it("skips an unmeasurable node rather than reporting it as zero - an off-viewport node is unmounted, not shrunk", () => {
+    const last = new Map<string, string>();
+    collectChangedNodeSizes(["a"], sized({ a: { width: 422, height: 112 } }), last);
+
+    expect(collectChangedNodeSizes(["a"], sized({ a: null }), last)).toEqual([]);
+    // The last known size is retained, so scrolling back does not re-report.
+    expect(collectChangedNodeSizes(["a"], sized({ a: { width: 422, height: 112 } }), last)).toEqual([]);
+  });
+
+  it("skips non-positive measurements - a node mid-mount must never collapse its group's box", () => {
+    const last = new Map<string, string>();
+    const changed = collectChangedNodeSizes(
+      ["a", "b"],
+      sized({ a: { width: 0, height: 0 }, b: { width: 422, height: 0 } }),
+      last,
+    );
+    expect(changed).toEqual([]);
   });
 });
 

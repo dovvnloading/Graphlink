@@ -42,6 +42,7 @@ import { PlanNodeView, type PlanFlowNode, type PlanStepData } from "./PlanNodeVi
 import {
   GROUP_FALLBACK_HEIGHT,
   GROUP_FALLBACK_WIDTH,
+  NODE_SIZE_REPORT_DEBOUNCE_MS,
   VIEWPORT_REPORT_DEBOUNCE_MS,
 } from "./canvasConstants";
 import { handleKeyboardContextMenu } from "./keyboardContextMenu";
@@ -2211,6 +2212,43 @@ export function makeDebouncedViewportReport(
   };
 }
 
+/**
+ * The diff half of node-size reporting: given the ids currently on canvas,
+ * return only those whose rendered size differs from what was last sent,
+ * updating `lastReported` in place as it goes.
+ *
+ * Diffing is what makes this cheap enough to run on every re-measure. A
+ * streaming reply re-measures its node constantly but its WIDTH never
+ * moves and its height stops changing the moment the text settles, so the
+ * steady state is an empty array and no intent at all.
+ *
+ * Nodes that cannot be measured are SKIPPED, never reported as zero: with
+ * `onlyRenderVisibleElements` on, an off-viewport node is genuinely
+ * unmounted and unmeasurable, and the backend's last known size for it is
+ * better than a zero that would collapse its group's box. For the same
+ * reason this never removes ids from `lastReported` - a node that scrolls
+ * away and back has not changed size, so it should not re-report.
+ *
+ * Exported for direct unit testing, same posture as makeDebouncedViewport-
+ * Report/toFlowNodes above.
+ */
+export function collectChangedNodeSizes(
+  ids: string[],
+  measure: (id: string) => { width: number; height: number } | null,
+  lastReported: Map<string, string>,
+): Array<[string, number, number]> {
+  const changed: Array<[string, number, number]> = [];
+  for (const id of ids) {
+    const size = measure(id);
+    if (size === null || size.width <= 0 || size.height <= 0) continue;
+    const key = `${size.width}x${size.height}`;
+    if (lastReported.get(id) === key) continue;
+    lastReported.set(id, key);
+    changed.push([id, size.width, size.height]);
+  }
+  return changed;
+}
+
 // R8a: reads a real design-token value at render time rather than
 // hardcoding a hex literal - needed anywhere a color has to be a plain JS
 // string (an SVG-attribute-producing prop like MiniMap's nodeColor/
@@ -2563,6 +2601,32 @@ function CanvasInner({
   // React Flow's own store update, where a setState call would be a
   // render-phase update.
   const pendingGuidesRef = useRef<GuideLine[]>([]);
+  // Node-size reporting: the backend fits frames/containers around their
+  // members but cannot measure a rendered node itself, so the canvas tells
+  // it what it actually laid out. Debounced for the same reason onMove is
+  // (a streaming reply re-measures its node on nearly every token) and
+  // diffed against what was last sent, so a settled canvas reports nothing.
+  const nodeSizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reportedSizesRef = useRef<Map<string, string>>(new Map());
+  useEffect(
+    () => () => {
+      if (nodeSizeTimerRef.current) clearTimeout(nodeSizeTimerRef.current);
+    },
+    [],
+  );
+  const reportNodeSizesSoon = useCallback(() => {
+    if (nodeSizeTimerRef.current) clearTimeout(nodeSizeTimerRef.current);
+    nodeSizeTimerRef.current = setTimeout(() => {
+      nodeSizeTimerRef.current = null;
+      const changed = collectChangedNodeSizes(
+        nodesRef.current.map((n) => n.id),
+        (id) => measuredNodeSize(reactFlow, id),
+        reportedSizesRef.current,
+      );
+      store.reportNodeSizes(changed);
+    }, NODE_SIZE_REPORT_DEBOUNCE_MS);
+  }, [reactFlow, store]);
+
 
   /**
    * DRAG-SYNC REBUILD: the drag-position corrections this canvas applies -
@@ -2701,6 +2765,11 @@ function CanvasInner({
       const settledMoveIntents: Array<{ id: string; x: number; y: number }> = [];
       let sawDragging = false;
       let sawDragEnd = false;
+      // React Flow's own "this node was (re)measured" signal - the trigger
+      // for reporting sizes back to the backend's group-bounds math. Only
+      // schedules the debounced flush; the flush itself re-reads every
+      // node and sends just the diffs.
+      if (changes.some((change) => change.type === "dimensions")) reportNodeSizesSoon();
 
       for (const change of changes) {
         if (change.type !== "position") continue;
@@ -2771,7 +2840,7 @@ function CanvasInner({
       // eslint-disable-next-line react-hooks/immutability
       nodesRef.current = applyNodeChanges(changes, currentNodes);
     },
-    [store],
+    [store, reportNodeSizesSoon],
   );
 
   const onConnect = useCallback(

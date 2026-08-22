@@ -1113,6 +1113,18 @@ export class SceneStore {
     );
   }
 
+  // The backend owns all frame/container bounds math but cannot measure a
+  // node's rendered height itself, so the canvas reports what it actually
+  // laid out (SceneCanvas's own dimension-change handler, debounced and
+  // diffed - only genuinely changed sizes reach here). Queueable and
+  // idempotent last-write-wins for the same reason moveNodes is: a size
+  // report is a statement about the present, so a stale queued one is
+  // harmlessly superseded by the next.
+  reportNodeSizes(sizes: Array<[string, number, number]>): void {
+    if (sizes.length === 0) return;
+    this.transport.fireIntent("scene", "reportNodeSizes", [sizes], undefined, true);
+  }
+
   removeNodes(ids: string[]): void {
     if (ids.length > 0) this.transport.fireIntent("scene", "removeNodes", [ids]);
   }

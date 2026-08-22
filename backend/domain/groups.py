@@ -34,14 +34,111 @@ from backend.domain.node_states import ContainerState, FrameState
 
 class GroupOps:
 
+    def _member_footprint(self, member: SceneNode) -> tuple[float, float]:
+        """One member's (width, height) for bbox purposes, best source first:
+
+        1. The frontend's reported `measured_sizes` entry - what the node
+           actually rendered as.
+           The only source that is right for a chat node, whose height is
+           whatever its markdown laid out to.
+        2. The kind's own intrinsic size, for the three kinds that really
+           carry one: a chart's chart_width/height and a nested frame/
+           container's group_width/height are authoritative geometry this
+           backend already owns, so they need no client round trip.
+        3. GROUP_MEMBER_DEFAULT_WIDTH/HEIGHT - a flat estimate, and the
+           reason this helper exists: applying it to EVERY member (the
+           behavior before measured sizes) is what made frames render
+           smaller than the nodes they were supposed to enclose.
+
+        Non-positive values from any source fall through to the next one,
+        so a zero-size measurement (a node mid-mount, or one React Flow
+        never measured) can never collapse a group's box."""
+        measured = self.measured_sizes.get(member.id)
+        width, height = measured if measured is not None else (None, None)
+        if not (width and width > 0 and height and height > 0):
+            # Accessed through member.state, never an alias: tests/
+            # test_node_state_migration.py's ADR-002 gate reads this
+            # statically and an intermediate local would read as a bare
+            # field access on the node itself.
+            if member.kind == "chart" and member.state is not None:
+                width, height = member.state.chart_width, member.state.chart_height
+            elif member.kind in ("frame", "container") and member.state is not None:
+                width, height = member.state.group_width, member.state.group_height
+        if not (width and width > 0):
+            width = GROUP_MEMBER_DEFAULT_WIDTH
+        if not (height and height > 0):
+            height = GROUP_MEMBER_DEFAULT_HEIGHT
+        return float(width), float(height)
+
+    def set_measured_node_sizes(self, sizes: list[tuple[str, float, float]]) -> bool:
+        """Record the frontend's rendered size for each (node_id, w, h),
+        then re-fit every group affected. Returns True if anything actually
+        changed, so the caller can skip republishing the scene for the
+        steady-state case where the client re-reports sizes it already sent.
+
+        Unknown ids and non-positive sizes are skipped rather than raising:
+        this is a continuous background report from a client whose node set
+        can legitimately be a few frames behind the document's own.
+
+        NOT a recorded command - see SceneDocument.measured_sizes's own
+        comment for why an observation about rendering is not an undoable
+        edit, and why it lives off the node entirely."""
+        touched: set[str] = set()
+        for node_id, width, height in sizes:
+            if node_id not in self.nodes:
+                continue
+            try:
+                new_size = (float(width), float(height))
+            except (TypeError, ValueError):
+                continue
+            if new_size[0] <= 0 or new_size[1] <= 0:
+                continue
+            if self.measured_sizes.get(node_id) == new_size:
+                continue
+            self.measured_sizes[node_id] = new_size
+            touched.add(node_id)
+        # Deleted nodes' entries would otherwise accumulate for the life of
+        # the session. Pruned here rather than in remove_nodes so this map
+        # stays entirely self-managing, and on a debounced path so the scan
+        # is never hot.
+        if len(self.measured_sizes) > len(self.nodes):
+            for stale_id in [i for i in self.measured_sizes if i not in self.nodes]:
+                del self.measured_sizes[stale_id]
+        if not touched:
+            return False
+        # A resized member can change the box of the group holding it, and
+        # of any group holding THAT group - so recompute outward until
+        # nothing moves, rather than one level deep. Bounded by nesting
+        # depth, which this model caps at container-holding-frame.
+        changed = False
+        for _ in range(4):
+            pass_changed = False
+            for group in self.nodes.values():
+                if group.kind not in ("frame", "container"):
+                    continue
+                if not any(member_id in touched for member_id in group.item_ids):
+                    continue
+                before = (group.x, group.y, group.state.group_width, group.state.group_height)
+                self._recompute_group_bounds(group.id)
+                after = (group.x, group.y, group.state.group_width, group.state.group_height)
+                if before != after:
+                    pass_changed = True
+                    touched.add(group.id)
+            if not pass_changed:
+                break
+            changed = True
+        # Only a moved GROUP box is worth a republish: measured_sizes
+        # itself never reaches the client (it came FROM there), so a size
+        # report that leaves every box where it was is a no-op on the wire.
+        return changed
+
     def _bbox_of_members(self, item_ids: list[str]) -> tuple[float, float, float, float]:
         """Compute the padded union rect (x, y, width, height) enclosing
-        every member id's ESTIMATED footprint - GROUP_MEMBER_DEFAULT_WIDTH/
-        HEIGHT, since no current SceneNode kind carries its own width/height
-        field (see that constant's own comment). Stale/unknown member ids
-        (a member deleted out from under a group between mutations) are
-        silently skipped, never raise - a bbox recompute must never crash on
-        a dangling id. Falls back to a small default rect anchored at the
+        every member id's real footprint - see _member_footprint for where
+        each member's size comes from. Stale/unknown member ids (a member
+        deleted out from under a group between mutations) are silently
+        skipped, never raise - a bbox recompute must never crash on a
+        dangling id. Falls back to a small default rect anchored at the
         origin when item_ids is empty or every id is stale, so callers
         (including resize_frame's own minimum-size clamp) always get a
         well-defined rect back."""
@@ -50,9 +147,10 @@ class GroupOps:
             member = self.nodes.get(member_id)
             if member is None:
                 continue
+            member_width, member_height = self._member_footprint(member)
             mx1, my1 = member.x, member.y
-            mx2 = member.x + GROUP_MEMBER_DEFAULT_WIDTH
-            my2 = member.y + GROUP_MEMBER_DEFAULT_HEIGHT
+            mx2 = member.x + member_width
+            my2 = member.y + member_height
             left = mx1 if left is None else min(left, mx1)
             top = my1 if top is None else min(top, my1)
             right = mx2 if right is None else max(right, mx2)

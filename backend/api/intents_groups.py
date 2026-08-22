@@ -120,7 +120,22 @@ def register_groups_intents(bus: SessionBus, document: SceneDocument) -> None:
         )
         await publish_scene()
 
+    async def report_node_sizes(sizes):
+        # The frontend's continuous "here is what these nodes actually
+        # render as" report - the only way this backend can learn a chat
+        # node's real height (see SceneDocument.measured_sizes's comment).
+        # Deliberately NOT a recorded command: an observation about
+        # rendering is not a user edit, and putting it in the undo stack
+        # would make Ctrl+Z replay layout noise.
+        triples = [(s[0], s[1], s[2]) for s in sizes]
+        # Republish ONLY when a group box actually moved. The client
+        # re-reports steady-state sizes routinely (any re-measure), and a
+        # scene snapshot per report would be pure churn.
+        if document.set_measured_node_sizes(triples):
+            await publish_scene()
+
     bus.register_intent("scene", "addNote", add_note)
+    bus.register_intent("scene", "reportNodeSizes", report_node_sizes)
     bus.register_intent("scene", "setNoteContent", set_note_content)
     bus.register_intent("scene", "createFrame", create_frame)
     bus.register_intent("scene", "createContainer", create_container)
