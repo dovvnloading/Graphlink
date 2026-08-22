@@ -35,6 +35,7 @@ poorly - the same convention git's own object store uses.
 from __future__ import annotations
 
 import hashlib
+import re
 import logging
 import os
 from pathlib import Path
@@ -56,6 +57,10 @@ _EXTENSION_BY_MIME = {
 def content_ref(data: bytes) -> str:
     """The SHA-256 hex digest that names these exact bytes."""
     return hashlib.sha256(data).hexdigest()
+
+
+# Exactly what content_ref produces, and the only shape _path_for accepts.
+_CONTENT_REF_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def extension_for_mime(mime_type: str | None) -> str:
@@ -86,17 +91,27 @@ class AssetStore:
     def __init__(self, root: Path):
         self.root = Path(root)
 
-    def _path_for(self, ref: str) -> Path:
+    def _path_for(self, ref: str) -> Path | None:
+        """The on-disk path for a content ref, or None for anything that is
+        not one. A ref is a SHA-256 hex digest and nothing else - it is read
+        straight out of persisted chat rows and imported archives, i.e. data
+        this process did not necessarily write, so a crafted value like
+        "../../.ssh/id_rsa" must be rejected here, at the one place a ref
+        becomes a path, rather than trusted into `root / ref[:2] / ref`."""
+        if not _CONTENT_REF_RE.fullmatch(ref or ""):
+            return None
         return self.root / ref[:2] / ref
 
     def exists(self, ref: str) -> bool:
-        return self._path_for(ref).is_file()
+        target = self._path_for(ref)
+        return target is not None and target.is_file()
 
     def put(self, data: bytes) -> str:
         """Stores `data` and returns its ref. Idempotent: storing identical
         bytes twice writes once and returns the same ref both times."""
         ref = content_ref(data)
         target = self._path_for(ref)
+        assert target is not None  # content_ref always yields a valid ref
         if target.is_file():
             return ref
 
@@ -130,7 +145,7 @@ class AssetStore:
         and an import from a bundle whose assets were stripped is a
         legitimate, survivable state."""
         target = self._path_for(ref)
-        if not target.is_file():
+        if target is None or not target.is_file():
             return None
         try:
             return target.read_bytes()

@@ -19,6 +19,7 @@ export interface McpServerConfig {
   enabledTools: string[];
   enabled: boolean;
   timeout: number;
+  env: Record<string, string>;
 }
 
 export interface AppSettingsState {
@@ -158,6 +159,12 @@ function checkMcpServerConfig(value: unknown, path: string, errors: string[]): v
     const fieldValue = value["timeout"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.timeout: missing required field`);
     else { if (typeof fieldValue !== "number") errors.push(`${path}.timeout` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["env"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.env: missing required field`);
+    else { if (!isRecord(fieldValue)) errors.push(`${path}.env` + ": expected object");
+    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.env` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
   }
 }
 

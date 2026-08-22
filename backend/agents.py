@@ -482,7 +482,7 @@ class AgentDispatcher:
                 continue
             client = McpStdioClient(
                 command=config_entry.command, args=tuple(config_entry.args),
-                timeout=config_entry.timeout,
+                env=config_entry.env, timeout=config_entry.timeout,
             )
             try:
                 client.connect()

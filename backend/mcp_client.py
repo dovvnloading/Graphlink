@@ -45,11 +45,12 @@ import queue
 import subprocess
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from backend.providers.base import ToolSpec
 from backend.tools import RunContext, ToolResult
+from graphlink_process_env import safe_subprocess_env
 
 # The MCP spec's own date-versioned protocol string - the most recent
 # stable revision at the time this client was written. Sent verbatim in
@@ -97,6 +98,16 @@ class McpServerConfig:
     enabled_tools: frozenset[str] = frozenset()
     enabled: bool = True
     timeout: float = 30.0
+    # Extra environment variables for THIS server's process, layered on top
+    # of the safe allowlist base (graphlink_process_env.safe_subprocess_env)
+    # - the ONLY way a server receives anything beyond that base. A GitHub
+    # MCP server needs GITHUB_TOKEN, a Brave one BRAVE_API_KEY; the user
+    # names exactly the variable that server needs here, and nothing else
+    # crosses. Before this field existed the spawn inherited the backend's
+    # whole environment, so every such server silently received every
+    # provider key the user had configured as an env var - the exact leak
+    # safe_subprocess_env was written to close at every other spawn site.
+    env: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -108,6 +119,7 @@ class McpServerConfig:
             "enabled_tools": sorted(self.enabled_tools),
             "enabled": self.enabled,
             "timeout": self.timeout,
+            "env": dict(self.env),
         }
 
     @classmethod
@@ -121,7 +133,25 @@ class McpServerConfig:
             enabled_tools=frozenset(str(t) for t in (data.get("enabled_tools") or [])),
             enabled=bool(data.get("enabled", True)),
             timeout=float(data.get("timeout", 30.0) or 30.0),
+            env=_coerce_env(data.get("env")),
         )
+
+
+def _coerce_env(raw: object) -> dict[str, str]:
+    """A persisted/wire `env` value as a clean str->str dict. Tolerant of
+    the shapes a hand-edited session.dat or an older payload can carry
+    (missing, null, non-dict, non-string values) - a malformed env entry
+    degrades to "no extra variables", never to a failed config load that
+    would take the whole server list with it."""
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for key, value in raw.items():
+        name = str(key).strip()
+        if not name or value is None:
+            continue
+        out[name] = str(value)
+    return out
 
 
 class McpStdioClient:
@@ -153,12 +183,21 @@ class McpStdioClient:
         if self._process is not None:
             return
         try:
+            # env= is ALWAYS passed and ALWAYS built from the allowlist base:
+            # Popen(env=None) inherits the backend's full os.environ, which
+            # carries every provider API key the user configured as an
+            # environment variable. An MCP server is third-party code the
+            # user chose to run - it gets PATH/TEMP/HOME-class plumbing plus
+            # exactly the variables its own config names, nothing else. Same
+            # posture as pycoder/code_sandbox/plugin_sdk's spawns.
+            spawn_env = safe_subprocess_env()
+            spawn_env.update(self.env or {})
             self._process = subprocess.Popen(
                 [self.command, *self.args],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                env=self.env,
+                env=spawn_env,
                 cwd=self.cwd,
                 text=True,
                 bufsize=1,

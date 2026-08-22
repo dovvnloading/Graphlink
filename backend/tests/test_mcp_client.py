@@ -65,10 +65,20 @@ _FAKE_FS_SERVER_SCRIPT = textwrap.dedent(r'''
                         },
                     },
                     {"name": "unlisted_tool", "description": "Not enabled.", "inputSchema": {"type": "object"}},
+                    {"name": "read_env", "description": "Reports which env vars this process sees.",
+                     "inputSchema": {"type": "object", "properties": {"names": {"type": "array"}}}},
                 ]},
             })
         elif method == "tools/call":
             params = request.get("params", {})
+            if params.get("name") == "read_env":
+                import os
+                names = (params.get("arguments") or {}).get("names", [])
+                seen = {n: os.environ.get(n) for n in names}
+                send({"jsonrpc": "2.0", "id": request_id, "result": {
+                    "content": [{"type": "text", "text": json.dumps(seen)}], "isError": False,
+                }})
+                continue
             path = (params.get("arguments") or {}).get("path", "")
             try:
                 with open(path, "r", encoding="utf-8") as f:
@@ -115,7 +125,7 @@ def test_list_tools_returns_normalized_toolspecs(fake_fs_server):
         client.connect()
         specs = client.list_tools()
         names = [spec.name for spec in specs]
-        assert names == ["read_file", "unlisted_tool"]
+        assert names == ["read_file", "unlisted_tool", "read_env"]
         read_file_spec = specs[0]
         assert read_file_spec.description == "Reads a file's contents."
         assert read_file_spec.input_schema == {
@@ -251,3 +261,54 @@ def test_an_out_of_scope_mcp_call_is_denied_pre_handler(fake_fs_server, tmp_path
         assert prompted == []  # denied before any approval prompt, let alone the handler
     finally:
         client.close()
+
+
+# -- environment isolation (the spawn must never inherit the backend's env) --
+
+
+def _env_seen_by_server(monkeypatch, tmp_path, *, config_env=None):
+    """Spawn the fake server with a canary secret in THIS process's
+    environment and ask the server which variables it can actually see."""
+    import json as _json
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-CANARY-must-not-cross")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-CANARY-must-not-cross")
+    script = tmp_path / "fake_server.py"
+    script.write_text(_FAKE_FS_SERVER_SCRIPT, encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),), env=config_env or {})
+    client.connect()
+    try:
+        result = client.call_tool("read_env", {
+            "names": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "PATH"],
+        })
+    finally:
+        client.close()
+    return _json.loads(result.content)
+
+
+def test_server_process_does_not_inherit_provider_keys_from_the_backend(monkeypatch, tmp_path):
+    """The leak this closes: Popen(env=None) handed every provider API key
+    the user had set as an environment variable to whatever third-party
+    MCP server they configured. A server sees the allowlist base plus its
+    OWN config env - nothing else."""
+    seen = _env_seen_by_server(monkeypatch, tmp_path)
+    assert seen["OPENAI_API_KEY"] is None
+    assert seen["ANTHROPIC_API_KEY"] is None
+    assert seen["PATH"]  # launchers like npx/uvx still resolve
+
+
+def test_server_receives_exactly_the_variables_its_own_config_names(monkeypatch, tmp_path):
+    seen = _env_seen_by_server(monkeypatch, tmp_path, config_env={"GITHUB_TOKEN": "ghp_for_this_server_only"})
+    assert seen["GITHUB_TOKEN"] == "ghp_for_this_server_only"
+    assert seen["OPENAI_API_KEY"] is None  # still nothing beyond base + own config
+
+
+def test_config_env_round_trips_and_tolerates_malformed_values():
+    cfg = McpServerConfig.from_dict({
+        "name": "gh", "command": "npx",
+        "env": {"GITHUB_TOKEN": "ghp_x", " ": "dropped-blank-name", "NULL": None, 7: 8},
+    })
+    assert cfg.env == {"GITHUB_TOKEN": "ghp_x", "7": "8"}
+    assert McpServerConfig.from_dict(cfg.to_dict()).env == cfg.env
+    # non-dict / missing degrade to "no extra variables", never a failed load
+    assert McpServerConfig.from_dict({"name": "a", "command": "b", "env": "oops"}).env == {}
+    assert McpServerConfig.from_dict({"name": "a", "command": "b"}).env == {}

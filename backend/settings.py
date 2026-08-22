@@ -148,6 +148,7 @@ def _mcp_servers_for_wire(manager: SettingsManager) -> list[dict[str, Any]]:
             "enabledTools": list(entry.get("enabled_tools", [])),
             "enabled": bool(entry.get("enabled", True)),
             "timeout": float(entry.get("timeout", 30.0)),
+            "env": dict(entry.get("env") or {}),
         }
         for entry in manager.get_mcp_servers()
     ]

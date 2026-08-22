@@ -80,6 +80,7 @@ def _mcp_servers_from_wire(servers: object) -> list[dict] | None:
             "enabled_tools": entry.get("enabledTools", []),
             "enabled": entry.get("enabled", True),
             "timeout": entry.get("timeout", 30.0),
+            "env": entry.get("env", {}),
         })
     return normalized
 

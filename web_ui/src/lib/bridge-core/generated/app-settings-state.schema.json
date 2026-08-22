@@ -157,6 +157,12 @@
             },
             "type": "array"
           },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "name": {
             "type": "string"
           },
@@ -178,7 +184,8 @@
           "approval",
           "enabledTools",
           "enabled",
-          "timeout"
+          "timeout",
+          "env"
         ],
         "type": "object"
       },
