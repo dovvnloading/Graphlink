@@ -2616,6 +2616,47 @@ def make_export_workspace(bus: SessionBus, resolved_path: Path, notifications: N
     return export_workspace
 
 
+def make_delete_chat_intent(
+    bus: SessionBus,
+    resolved_path: Path,
+    canvas_document: SceneDocument | None,
+    last_saved: dict[str, Any],
+):
+    """Build the delete intent without inflating the registration function -
+    same extraction the rename/load/save/export intents below already use.
+
+    The caller wraps this in the shared chat-mutation guard, exactly like
+    every other mutating intent on this topic. That matters rather than being
+    cosmetic symmetry: this handler writes canvas_document.current_chat_id
+    and last_saved, the same two cells a completing save/autosave writes, so
+    an unguarded delete racing an in-flight save could leave the session
+    pointed at a deleted row while the digest still claimed "already saved" -
+    which is the silent no-autosave state the fix inside the handler itself
+    exists to prevent.
+    """
+
+    async def delete(chat_id: int):
+        # The SPA only calls this after its own two-step confirm, so no
+        # confirmation happens here - same contract as the legacy bridge.
+        await asyncio.to_thread(delete_chat, resolved_path, int(chat_id))
+        if canvas_document is not None and canvas_document.current_chat_id == int(chat_id):
+            # Audit fix: deleting the row this session is currently pointed at
+            # used to leave current_chat_id dangling AND leave the autosave
+            # digest looking "already saved", so a user who deleted their open
+            # chat and kept working silently had no autosave protection at all
+            # until they happened to edit the canvas. Dropping both makes the
+            # next tick treat this as an unsaved session and INSERT a fresh
+            # row - the same thing a manual Save already does here (save_chat's
+            # own existing_row-is-None fallback).
+            canvas_document.current_chat_id = None
+            last_saved["digest"] = None
+            last_saved["chat_id"] = None
+            last_saved["updated_at"] = None
+        await bus.publish("app-chat-library")
+
+    return delete
+
+
 def make_rename_chat_intent(
     bus: SessionBus,
     resolved_path: Path,
@@ -2782,24 +2823,7 @@ def register_chat_library(
         bus, resolved_path, canvas_document, notifications, _last_saved,
     )
 
-    async def delete(chat_id: int):
-        # The SPA only calls this after its own two-step confirm, so no
-        # confirmation happens here - same contract as the legacy bridge.
-        await asyncio.to_thread(delete_chat, resolved_path, int(chat_id))
-        if canvas_document is not None and canvas_document.current_chat_id == int(chat_id):
-            # Audit fix: deleting the row this session is currently pointed at
-            # used to leave current_chat_id dangling AND leave the autosave
-            # digest looking "already saved", so a user who deleted their open
-            # chat and kept working silently had no autosave protection at all
-            # until they happened to edit the canvas. Dropping both makes the
-            # next tick treat this as an unsaved session and INSERT a fresh
-            # row - the same thing a manual Save already does here (save_chat's
-            # own existing_row-is-None fallback).
-            canvas_document.current_chat_id = None
-            _last_saved["digest"] = None
-            _last_saved["chat_id"] = None
-            _last_saved["updated_at"] = None
-        await bus.publish("app-chat-library")
+    delete = make_delete_chat_intent(bus, resolved_path, canvas_document, _last_saved)
 
     load_chat = make_load_chat(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,

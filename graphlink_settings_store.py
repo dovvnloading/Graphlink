@@ -1273,8 +1273,13 @@ class SettingsManager:
                 "timeout": float(entry.get("timeout", 30.0) or 30.0),
                 # Absent on every entry persisted before the field existed -
                 # reads back as "no extra variables", the same default the
-                # write side stores.
-                "env": _normalize_mcp_env(entry.get("env")),
+                # write side stores. Decrypted here (values are encrypted at
+                # rest by _protect_mcp_env) so the ONLY consumer that needs
+                # the real values - the MCP server spawn in backend/agents.py
+                # - gets them, while the settings wire payload never carries
+                # them at all. Legacy plaintext entries pass through
+                # unchanged.
+                "env": self._unprotect_mcp_env(_normalize_mcp_env(entry.get("env"))),
             })
         return servers
 
@@ -1287,6 +1292,15 @@ class SettingsManager:
         patched map. Validates the same way get_mcp_servers reads back
         (name/command required, everything else normalized/defaulted) so
         a round trip through set then get is always well-formed."""
+        # What is already stored, keyed by server name, so an entry that
+        # arrives without an "env" key keeps its configured variables rather
+        # than losing them - see the "env" handling below.
+        preserved_env: dict[str, dict] = {}
+        for stored in (self.state.get("mcp_servers") or []):
+            if isinstance(stored, dict):
+                stored_name = str(stored.get("name", "")).strip()
+                if stored_name:
+                    preserved_env[stored_name] = _normalize_mcp_env(stored.get("env"))
         normalized = []
         for entry in (servers or []):
             if not isinstance(entry, dict):
@@ -1306,14 +1320,45 @@ class SettingsManager:
                 "timeout": float(entry.get("timeout", 30.0) or 30.0),
                 # Per-server environment variables - the only channel by
                 # which a server process receives anything beyond the safe
-                # allowlist base (see McpStdioClient.connect). Values are
-                # stored as given; they are the user's own secrets for a
-                # server the user chose to run, same posture as the API keys
-                # this store already holds.
-                "env": _normalize_mcp_env(entry.get("env")),
+                # allowlist base (see McpStdioClient.connect). These are real
+                # user secrets (a GITHUB_TOKEN, a BRAVE_API_KEY), so each
+                # VALUE is encrypted at rest exactly like the API keys this
+                # store already holds - an earlier version of this comment
+                # claimed the "same posture as the API keys" while in fact
+                # writing them as plaintext JSON. Names stay in the clear:
+                # the Settings page lists them, and a variable name is not
+                # the secret.
+                #
+                # An entry that carries no "env" key at all means "leave
+                # whatever is stored for this server alone" - the wire
+                # deliberately never sends these values back (see
+                # backend/settings.py's _mcp_servers_for_wire), so a
+                # bulk-replace triggered by toggling one server's checkbox
+                # would otherwise wipe every configured variable it could
+                # not see.
+                **(
+                    {"env": self._protect_mcp_env(_normalize_mcp_env(entry.get("env")))}
+                    if "env" in entry
+                    else {"env": preserved_env.get(name, {})}
+                ),
             })
         self.state["mcp_servers"] = normalized
         self._save_state()
+
+    def _protect_mcp_env(self, env: dict) -> dict:
+        """Encrypt each env VALUE at rest, leaving names readable. Mirrors
+        _protect_and_track's use of graphlink_secrets.protect for the
+        top-level API keys, including its plaintext fallback when DPAPI is
+        unavailable (see graphlink_secrets' own docstring - refusing to save
+        would be worse than saving what this platform can protect)."""
+        return {str(key): graphlink_secrets.protect(str(value)) for key, value in (env or {}).items()}
+
+    def _unprotect_mcp_env(self, env: dict) -> dict:
+        """The read side of _protect_mcp_env. Legacy plaintext values (written
+        before env was encrypted) come back unchanged - graphlink_secrets.
+        unprotect passes through anything without the "dpapi:" prefix, the
+        same way the top-level secrets migrated."""
+        return {str(key): graphlink_secrets.unprotect(str(value)) for key, value in (env or {}).items()}
 
     def get_plugin_grants(self) -> dict:
         """ADR-014 stage 14.4: install-time consent grants for discovered

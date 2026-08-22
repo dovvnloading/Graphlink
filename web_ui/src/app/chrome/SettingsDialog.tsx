@@ -1087,7 +1087,34 @@ function McpServersPage({ state, transport }: { state: AppSettingsState; transpo
   const [draftArgs, setDraftArgs] = useState("");
   const [draftEnv, setDraftEnv] = useState("");
 
-  const updateServers = (next: McpServerConfig[]) => {
+  // What setMcpServers SENDS, which is genuinely not the same shape the
+  // app-settings state carries back. env values are write-only on this wire
+  // (see the contract's own McpServerConfigPayload.envKeys): the state we
+  // render has names only, while an outgoing entry MAY carry real values
+  // when the user just typed them. A missing `env` means "keep whatever is
+  // stored for this server", which is what lets toggling or removing one
+  // server leave every other server's variables untouched.
+  //
+  // Spelled out in full rather than written as `McpServerConfig & { env?: }`
+  // deliberately: intersecting a generated wire type is the ADR-003 C9
+  // anti-pattern (see lib/bridge-core/wireTypeCastGuard.test.ts) - it tells
+  // TypeScript a wire field exists on the author's word. This type describes
+  // the OUTBOUND intent argument, which the generated inbound row type has
+  // no business defining.
+  type OutgoingMcpServer = {
+    name: string;
+    command: string;
+    args: string[];
+    scopes: string[];
+    approval: string;
+    enabledTools: string[];
+    enabled: boolean;
+    timeout: number;
+    envKeys: string[];
+    env?: Record<string, string>;
+  };
+
+  const updateServers = (next: OutgoingMcpServer[]) => {
     transport.fireIntent("app-settings", "setMcpServers", [next], undefined, true);
   };
 
@@ -1096,11 +1123,15 @@ function McpServersPage({ state, transport }: { state: AppSettingsState; transpo
     const command = draftCommand.trim();
     if (!name || !command) return;
     const args = draftArgs.trim() ? draftArgs.trim().split(/\s+/) : [];
+    const env = parseEnvLines(draftEnv);
     updateServers([
       ...state.mcpServers,
       {
         name, command, args, scopes: [], approval: "always", enabledTools: [], enabled: true, timeout: 30,
-        env: parseEnvLines(draftEnv),
+        // The one place values are sent: the user just typed them. envKeys
+        // keeps the entry the same shape the rest of the list has.
+        envKeys: Object.keys(env).sort(),
+        env,
       },
     ]);
     setDraftName("");
@@ -1146,9 +1177,9 @@ function McpServersPage({ state, transport }: { state: AppSettingsState; transpo
                 {/* Names only, never values - these are the user's own
                     tokens for a server they chose to run, and a settings
                     page is no place to echo a secret back. */}
-                {Object.keys(server.env ?? {}).length > 0 && (
+                {(server.envKeys ?? []).length > 0 && (
                   <span className="settings-mcp-server-command">
-                    env: {Object.keys(server.env).sort().join(", ")}
+                    env: {[...server.envKeys].sort().join(", ")}
                   </span>
                 )}
               </span>

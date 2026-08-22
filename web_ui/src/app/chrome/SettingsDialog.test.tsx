@@ -922,7 +922,7 @@ describe("SettingsDialog", () => {
       enabledTools: [],
       enabled: true,
       timeout: 30,
-      env: {},
+      envKeys: [],
     };
 
     it("navigating to MCP Servers fires setActiveSection with its own key", async () => {
@@ -998,6 +998,11 @@ describe("SettingsDialog", () => {
             enabledTools: [],
             enabled: true,
             timeout: 30,
+            // The add path is the one place env VALUES go out (the user just
+            // typed them); every other edit omits `env` entirely so the
+            // backend keeps what is stored. Empty here because this test
+            // typed no variables.
+            envKeys: [],
             env: {},
           },
         ]],
@@ -1032,7 +1037,7 @@ describe("SettingsDialog", () => {
         enabledTools: [],
         enabled: true,
         timeout: 30,
-        env: {},
+        envKeys: [],
       };
       const { user, push, intents } = setup();
       await goToMcpServers(user, push, { mcpServers: [fsServer, gitServer] });

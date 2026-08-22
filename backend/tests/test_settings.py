@@ -15,7 +15,7 @@ import backend.api.intents_settings_ollama as intents_settings_ollama_module
 from backend import native_dialogs
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from backend.settings import register_settings, settings_payload
+from backend.settings import _mcp_servers_for_wire, register_settings, settings_payload
 
 
 @pytest.fixture
@@ -2335,7 +2335,8 @@ def test_set_mcp_servers_round_trips_a_valid_call(manager):
             "enabledTools": ["read_file"],
             "enabled": True,
             "timeout": 45.0,
-            "env": {},
+            # Names only - env VALUES are write-only on this wire now.
+            "envKeys": [],
         },
     ]
 
@@ -2425,3 +2426,78 @@ def test_set_recipes_replaces_the_whole_list(manager):
     manager.set_recipes([{"name": "one", "goal": "g"}])
     manager.set_recipes([{"name": "two", "goal": "g"}])
     assert [r["name"] for r in manager.get_recipes()] == ["two"]
+
+
+# -- MCP env values are secrets: encrypted at rest, never on the wire --------
+
+
+def test_mcp_env_values_are_encrypted_at_rest_and_never_sent_on_the_wire(tmp_path):
+    """The regression this closes: per-server `env` was introduced to stop MCP
+    servers inheriting the backend's whole environment, but the values it
+    holds - a GITHUB_TOKEN, a BRAVE_API_KEY - were written to session.dat as
+    plaintext JSON AND republished in every app-settings payload, while the
+    API keys sitting beside them were encrypted and write-only."""
+    import json as _json
+
+    from graphlink_settings_store import SettingsManager as _SettingsManager
+
+    state_file = tmp_path / "session.dat"
+    manager = _SettingsManager(state_file)
+    manager.set_mcp_servers([
+        {"name": "gh", "command": "npx", "env": {"GITHUB_TOKEN": "ghp_super_secret_value"}},
+    ])
+
+    # 1. Not readable as plaintext in the settings file.
+    on_disk = state_file.read_text(encoding="utf-8")
+    assert "ghp_super_secret_value" not in on_disk, "MCP env value stored in plaintext"
+    # The NAME is fine - it is not the secret, and Settings lists it.
+    assert "GITHUB_TOKEN" in on_disk
+
+    # 2. The spawn path still gets the real value back.
+    servers = manager.get_mcp_servers()
+    assert servers[0]["env"] == {"GITHUB_TOKEN": "ghp_super_secret_value"}
+
+    # 3. The wire payload carries the name and NOT the value.
+    wire = _mcp_servers_for_wire(manager)
+    assert wire[0]["envKeys"] == ["GITHUB_TOKEN"]
+    assert "env" not in wire[0]
+    assert "ghp_super_secret_value" not in _json.dumps(wire)
+
+
+def test_editing_another_server_does_not_wipe_configured_env_values(tmp_path):
+    """Because the wire no longer echoes env values back, an ordinary edit -
+    toggling one server's checkbox - sends the whole list WITHOUT them. That
+    must mean "leave them alone", not "clear them"."""
+    from graphlink_settings_store import SettingsManager as _SettingsManager
+
+    manager = _SettingsManager(tmp_path / "session.dat")
+    manager.set_mcp_servers([
+        {"name": "gh", "command": "npx", "env": {"GITHUB_TOKEN": "ghp_keep_me"}},
+        {"name": "fs", "command": "uvx", "env": {}},
+    ])
+
+    # Exactly what the settings page now sends when the user unticks "fs":
+    # every field it knows about, and no `env` at all.
+    manager.set_mcp_servers([
+        {"name": "gh", "command": "npx"},
+        {"name": "fs", "command": "uvx", "enabled": False},
+    ])
+
+    servers = {s["name"]: s for s in manager.get_mcp_servers()}
+    assert servers["gh"]["env"] == {"GITHUB_TOKEN": "ghp_keep_me"}, "an unrelated edit erased a configured secret"
+    assert servers["fs"]["enabled"] is False
+
+
+def test_an_explicit_env_still_replaces_what_is_stored(tmp_path):
+    """The preservation rule must not make env impossible to change or clear:
+    an entry that DOES carry `env` is authoritative for that server."""
+    from graphlink_settings_store import SettingsManager as _SettingsManager
+
+    manager = _SettingsManager(tmp_path / "session.dat")
+    manager.set_mcp_servers([{"name": "gh", "command": "npx", "env": {"OLD": "1"}}])
+
+    manager.set_mcp_servers([{"name": "gh", "command": "npx", "env": {"NEW": "2"}}])
+    assert manager.get_mcp_servers()[0]["env"] == {"NEW": "2"}
+
+    manager.set_mcp_servers([{"name": "gh", "command": "npx", "env": {}}])
+    assert manager.get_mcp_servers()[0]["env"] == {}

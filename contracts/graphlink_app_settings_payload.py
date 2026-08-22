@@ -54,9 +54,14 @@ class McpServerConfigPayload:
     enabledTools: list[str]
     enabled: bool
     timeout: float
-    # Per-server environment variables (KEY -> value), layered on the safe
-    # allowlist base at spawn - see backend/mcp_client.py's McpServerConfig.
-    env: dict[str, str]
+    # The NAMES of this server's configured environment variables, never
+    # their values - those are real user secrets (a GITHUB_TOKEN, a
+    # BRAVE_API_KEY), they are encrypted at rest, and they are write-only on
+    # this wire for the same reason apiKeyConfigured is a bool rather than a
+    # key: this payload is republished to every subscribed client on every
+    # settings change. The Settings page lists these names; changing a value
+    # means retyping it. See backend/settings.py's _mcp_servers_for_wire.
+    envKeys: list[str]
 
 
 @dataclass

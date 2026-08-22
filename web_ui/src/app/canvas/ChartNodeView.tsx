@@ -1,7 +1,7 @@
 import { NodeResizer, type Node, type NodeProps } from "@xyflow/react";
 import { lazy, memo, Suspense, useEffect, useRef } from "react";
 import type { ChartDataRow } from "../../lib/bridge-core/generated/scene-state";
-import { withAuthToken } from "../../lib/auth/token";
+import { authHeaders } from "../../lib/auth/token";
 import {
   CHART_MAX_HEIGHT,
   CHART_MAX_WIDTH,
@@ -67,7 +67,9 @@ const LazyChartRenderer = lazy(() => import("./charts/ChartRenderer"));
  *
  * Export/PNG and Export/SVG both hit the same dedicated export endpoint (a
  * real matplotlib re-render server-side - PNG at 3x resolution, SVG as
- * vector - not anything this renderer draws), opened directly in a new tab.
+ * vector - not anything this renderer draws), fetched with the capability
+ * token in a header and saved from a blob. They are buttons rather than
+ * new-tab links precisely because of that token - see chartExportUrl.
  * That stays server-side deliberately: a downloadable, print-quality
  * raster/vector asset is a different job than "draw this interactively."
  * ADR-013 stage 13.4 moved that render off the event loop
@@ -95,9 +97,51 @@ export type ChartFlowNode = Node<ChartNodeData, "chart">;
  * assumption everywhere else (see lib/ws/transport.ts's own defaultWsUrl
  * default parameter). */
 export function chartExportUrl(nodeId: string, format: "png" | "svg" = "png"): string {
-  // ADR-004 stage 4.1: this one is a plain <a href> the user clicks, so it
-  // has no way to carry a header either - same query-param treatment.
-  return withAuthToken(`/api/assets/chart/${nodeId}/export?session=default&fmt=${format}`);
+  // Deliberately NO token in this URL. It used to be withAuthToken(...) and
+  // to be used as an <a href target="_blank">, which leaked the live
+  // capability token off the machine: in the pywebview/WebView2 shell a
+  // target=_blank click raises NewWindowRequested, whose default handler
+  // opens the fully-resolved URL in the OS default browser - so the token
+  // landed in that browser's address bar, history and download manager, and
+  // was copyable straight out of the link's context menu. A synced browser
+  // history uploads it. That token authorizes every /api intent, including
+  // the code-execution approval gate, so this was the one place the "the
+  // token never leaves this window" property (see lib/auth/token.ts) broke.
+  //
+  // The fetch below sends it as an Authorization HEADER instead, and the
+  // bytes are saved from a blob - nothing user-visible carries the secret.
+  return `/api/assets/chart/${nodeId}/export?session=default&fmt=${format}`;
+}
+
+/** Fetches a chart export with the capability token in a header and saves the
+ * resulting bytes as a file. Mirrors downloadTextFile.ts's blob -> object URL
+ * -> temporary anchor pattern (and ImageNodeView's own image export before
+ * it); the only difference is that the bytes come from an authenticated
+ * request rather than from memory. */
+export async function downloadChartExport(nodeId: string, format: "png" | "svg"): Promise<void> {
+  const response = await fetch(chartExportUrl(nodeId, format), { headers: authHeaders() });
+  if (!response.ok) throw new Error(`Chart export failed (${response.status})`);
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  // The server names the file from the chart's own title
+  // (backend/assets.py's _sanitize_chart_filename) and sends it in
+  // Content-Disposition - the same header the old navigated link relied on,
+  // so honoring it here keeps the downloaded filename identical.
+  anchor.download = filenameFromContentDisposition(response.headers.get("content-disposition"))
+    || `chart.${format}`;
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
+}
+
+/** Pulls `filename="..."` out of a Content-Disposition header. Exported for
+ * direct unit testing. Returns "" when the header is absent or unparseable,
+ * letting the caller fall back to its own default. */
+export function filenameFromContentDisposition(header: string | null): string {
+  if (!header) return "";
+  const match = /filename\s*=\s*"([^"]+)"/i.exec(header) ?? /filename\s*=\s*([^;]+)/i.exec(header);
+  return match ? match[1].trim() : "";
 }
 
 function chartTypeBadgeLabel(chartType: string): string {
@@ -220,22 +264,23 @@ export const ChartNodeView = memo(function ChartNodeView({
         >
           {data.chartAspectLocked ? "Unlock Aspect" : "Lock Aspect"}
         </button>
-        <a
+        {/* Buttons, not <a target="_blank"> links: the export request has to
+            carry the capability token, and a navigated link would hand it to
+            the OS default browser - see chartExportUrl's own comment. */}
+        <button
+          type="button"
           className="chart-node-btn chart-node-export-link"
-          href={chartExportUrl(id, "png")}
-          target="_blank"
-          rel="noreferrer"
+          onClick={() => { void downloadChartExport(id, "png"); }}
         >
           Export PNG
-        </a>
-        <a
+        </button>
+        <button
+          type="button"
           className="chart-node-btn chart-node-export-link"
-          href={chartExportUrl(id, "svg")}
-          target="_blank"
-          rel="noreferrer"
+          onClick={() => { void downloadChartExport(id, "svg"); }}
         >
           Export SVG
-        </a>
+        </button>
       </div>
     </NodeShell>
   );
