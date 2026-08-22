@@ -1133,6 +1133,60 @@ def test_send_conversation_message_reply_with_code_fence_lands_raw_and_unparsed(
     asyncio.run(run())
 
 
+def test_conversation_reply_landing_after_the_node_was_deleted_is_dropped_not_a_false_failure():
+    """Regression: _on_reply (backend/api/intents_conversation.py) had no
+    liveness guard, unlike its own sibling _on_partial three lines below.
+    AgentDispatcher._dispatch schedules the reply as an un-awaited task, so
+    the same WS connection is free to delete the node before the reply
+    lands. A genuinely SUCCESSFUL reply then raised SceneError ("unknown
+    node") out of append_conversation_assistant_message, which _dispatch's
+    generic except-Exception handler turned into a misleading "AI response
+    failed" notification for a request that had not failed at all -
+    discarding real model output. The fix mirrors _on_partial's own
+    established posture: skip silently, no notification, since the node
+    the reply would have landed on no longer exists for the user to see it
+    on anyway."""
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
+        node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_chat(task, messages, **kwargs):
+            started.set()
+            release.wait(5)
+            return {"message": {"content": "a reply that arrives too late"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", blocking_chat):
+            await bus.dispatch_intent(
+                "scene", "sendConversationMessage", [node_id, "what is this graph about?"]
+            )
+            await asyncio.to_thread(started.wait, 5)
+
+            # Delete the node WHILE its reply is still in flight - the
+            # generic removeNodes path, exactly as a real ConversationNode
+            # delete (Delete key / context menu) reaches it.
+            await bus.dispatch_intent("scene", "removeNodes", [[node_id]])
+            assert node_id not in document.nodes
+
+            release.set()
+            entry = next(iter(chat_slots(dispatcher).values()))
+            await entry["task"]  # must not raise out of the dispatch task
+
+        notice = await bus.publish("notification")
+        assert notice["visible"] is False, (
+            "a genuinely successful reply landing on a deleted node must not surface "
+            "a misleading 'AI response failed' notification"
+        )
+
+    asyncio.run(run())
+
+
 def test_cancel_chat_request_intent_on_scene_topic_calls_agent_dispatcher_cancel():
     # A lightweight fake dispatcher is sufficient here - no real LLM call
     # needed, this just confirms the intent forwards to cancel().

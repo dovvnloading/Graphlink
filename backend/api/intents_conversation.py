@@ -56,6 +56,25 @@ def register_conversation_intents(
             # with a flat plain-text-only history and no child-node concept
             # at all in legacy.
             #
+            # REVIEW-FIX: this liveness guard was missing here, unlike
+            # _on_partial three lines below - a genuinely separate gap from
+            # the response_parsing omission the paragraph above documents.
+            # The node can be deleted (removeNodes - a ConversationNode is
+            # never a branch point/reparented, so it goes through the
+            # generic delete path, not deleteChatNode) while its reply is
+            # still generating: AgentDispatcher._dispatch schedules the LLM
+            # call as an un-awaited task, so the same WS connection is free
+            # to process a delete before the reply lands. Without this
+            # guard, a genuinely SUCCESSFUL reply then raised SceneError
+            # ("unknown node") out of append_conversation_assistant_message,
+            # which _dispatch's generic except-Exception handler turned into
+            # a misleading "AI response failed" notification for a request
+            # that had not failed at all - discarding real model output and
+            # lying about why. Matches _on_partial's own established
+            # posture: skipping is safe, the user retries via the
+            # conversation's own send box.
+            if document.nodes.get(node_id) is None:
+                return
             # "agent" provenance, not "user" - this reply is model-produced,
             # same posture as intents_chat.py's own chatReply command.
             document.record_command(
