@@ -7,6 +7,8 @@ covered here are pure (no network/SDK calls, no module-global state), so
 they're unit-tested directly rather than only through those indirect paths.
 """
 
+import pytest
+
 import api_provider
 
 
@@ -105,7 +107,24 @@ def test_anthropic_reasoning_kwargs_does_not_bump_max_tokens_when_already_large_
 
 def test_anthropic_reasoning_kwargs_uses_effort_for_opus_4_7_and_later():
     result = api_provider.anthropic_reasoning_kwargs("claude-opus-4-7", "high", 4096)
-    assert result == {"effort": "high"}
+    # Nested under output_config, which is the parameter the API and the SDK
+    # actually take - a flat {"effort": ...} was dropped by the SDK kwarg
+    # filter (reasoning silently ignored) and 400'd on the REST fallback.
+    assert result == {"output_config": {"effort": "high"}}
+
+
+def test_anthropic_effort_kwargs_survive_the_sdk_kwarg_filter():
+    """The regression guard that the shape assertion above cannot give on its
+    own: _filter_kwargs_for_callable keeps only parameters the callable really
+    declares, so a wrongly-named reasoning kwarg is silently discarded on the
+    way to a paid API call. Asserting it SURVIVES the filter is what actually
+    proves the user's Low/Medium/High selection reaches the model."""
+    anthropic = pytest.importorskip("anthropic")
+
+    built = api_provider.anthropic_reasoning_kwargs("claude-opus-4-7", "high", 4096)
+    create = anthropic.Anthropic(api_key="not-a-real-key").messages.create
+
+    assert api_provider._filter_kwargs_for_callable(create, built) == built
 
 
 def test_anthropic_reasoning_kwargs_effort_model_detection_is_forward_looking():

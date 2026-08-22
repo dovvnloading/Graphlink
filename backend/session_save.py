@@ -133,6 +133,26 @@ _REGULAR_KINDS = (
     "web_research", "artifact", "gitlink", "pycoder", "code_sandbox", "plan",
 )
 
+
+def _is_plugin_kind(kind: str) -> bool:
+    """True for a Plugin SDK node kind, recognized by its namespacing alone
+    (f"{plugin_id}.{kind}" - backend/plugin_sdk.py's HostContext.
+    register_node_kind) rather than by membership in the CURRENT registry.
+
+    That distinction is the whole point. `all_nodes` used to include a
+    plugin node only when this save's own registry still recognized its
+    kind, so a plugin that failed discovery at save time - an import error,
+    an out-of-process worker that could not spawn, a directory renamed;
+    discover_plugins swallows any of those per plugin - silently EXCLUDED
+    every one of its live nodes from the written row, destroying them on the
+    next autosave. It also made _serialize_plugin_node's own documented
+    kind_spec-is-None branch ("this function itself never drops a node
+    outright") unreachable dead code. A node that is sitting in the live
+    document gets written out, whether or not the code that created it
+    happens to be loadable this second; no built-in kind contains a dot, so
+    this can never capture one."""
+    return "." in kind
+
 # Mirrors backend/session_load.py's own _PARENT_CONTENT_INDEX_KINDS /
 # _PARENT_NODE_INDEX_KINDS split exactly - every regular kind except "chat"
 # requires exactly one incoming edge (its structural parent), keyed to one
@@ -280,6 +300,20 @@ def _serialize_image_node(
             "node_type": "image",
             "asset_ref": asset_store.put(image_bytes),
             "mime_type": mime_type,
+            "prompt": node.content,
+        }
+    # No bytes in hand, but this node was loaded from a row that named an
+    # asset_ref we could not read at the time - write that ref straight back
+    # out rather than replacing it with an empty inline payload. See
+    # ImageState.unresolved_asset_ref: the asset file is very often still on
+    # disk, and erasing the only pointer to it is what turned a transient
+    # read failure into permanent loss on the next autosave.
+    unresolved_ref = getattr(node.state, "unresolved_asset_ref", "")
+    if not image_bytes and unresolved_ref:
+        return {
+            "node_type": "image",
+            "asset_ref": unresolved_ref,
+            "mime_type": getattr(node.state, "unresolved_asset_mime_type", "") or "image/png",
             "prompt": node.content,
         }
     return {
@@ -809,7 +843,7 @@ def _build_chat_data(
     plugin_kinds = plugin_registry.node_kinds
     all_nodes = [
         n for n in document.nodes.values()
-        if n.kind in _REGULAR_KINDS or n.kind in plugin_kinds
+        if n.kind in _REGULAR_KINDS or n.kind in plugin_kinds or _is_plugin_kind(n.kind)
     ]
     notes = [n for n in document.nodes.values() if n.kind == "note"]
     charts = [n for n in document.nodes.values() if n.kind == "chart"]

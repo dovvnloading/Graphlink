@@ -37,6 +37,23 @@ class ImageState(NodeState):
     itself)."""
 
     image_asset_id: str = ""
+    # The content-addressed asset_ref this node was SAVED with, kept only
+    # when its bytes could not be read back at load time (the file is
+    # missing, or the read raised - an antivirus lock on Windows is enough).
+    #
+    # Without it that ref was gone the moment the load finished: the node
+    # restored with no image_asset_id, so the next save saw no bytes, took
+    # the inline branch and wrote `image_bytes: ""`, erasing the only
+    # pointer to an asset file that is still sitting on disk. A transient,
+    # fully recoverable read failure became permanent picture loss on the
+    # next autosave tick. Carrying the ref lets the save write it straight
+    # back out, so the row keeps pointing at the asset and a later load -
+    # once whatever held the file lets go - resolves it normally.
+    #
+    # Never surfaced on the wire (SceneDocument's node payload publishes
+    # imageAssetId only); this is save/load bookkeeping, not UI state.
+    unresolved_asset_ref: str = ""
+    unresolved_asset_mime_type: str = ""
 
 
 @dataclass

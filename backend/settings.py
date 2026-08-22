@@ -148,7 +148,16 @@ def _mcp_servers_for_wire(manager: SettingsManager) -> list[dict[str, Any]]:
             "enabledTools": list(entry.get("enabled_tools", [])),
             "enabled": bool(entry.get("enabled", True)),
             "timeout": float(entry.get("timeout", 30.0)),
-            "env": dict(entry.get("env") or {}),
+            # NAMES ONLY, never values. These are real user secrets (a
+            # GITHUB_TOKEN for a GitHub MCP server, a BRAVE_API_KEY for a
+            # search one), and this payload is republished to every
+            # subscribed client on every settings change - shipping the
+            # values here contradicted the write-only posture this module
+            # already documents for the API keys and the GitHub token right
+            # above. The Settings page only ever displayed the names anyway;
+            # it now receives only what it displays, and a value the user
+            # wants to change is retyped, exactly like an API key.
+            "envKeys": sorted(str(k) for k in (entry.get("env") or {})),
         }
         for entry in manager.get_mcp_servers()
     ]

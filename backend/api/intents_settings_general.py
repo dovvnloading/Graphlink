@@ -71,7 +71,7 @@ def _mcp_servers_from_wire(servers: object) -> list[dict] | None:
     for entry in servers:
         if not isinstance(entry, dict):
             return None
-        normalized.append({
+        normalized_entry = {
             "name": entry.get("name", ""),
             "command": entry.get("command", ""),
             "args": entry.get("args", []),
@@ -80,8 +80,19 @@ def _mcp_servers_from_wire(servers: object) -> list[dict] | None:
             "enabled_tools": entry.get("enabledTools", []),
             "enabled": entry.get("enabled", True),
             "timeout": entry.get("timeout", 30.0),
-            "env": entry.get("env", {}),
-        })
+        }
+        # "env" is forwarded ONLY when the client actually sent one, and the
+        # absence is meaningful rather than a default: the settings payload
+        # deliberately no longer carries env VALUES back to the client (see
+        # backend/settings.py's _mcp_servers_for_wire), so an edit that
+        # merely toggles or removes some other server echoes the whole list
+        # WITHOUT them. Defaulting to {} here would make that ordinary edit
+        # silently erase every configured variable on every server.
+        # SettingsManager.set_mcp_servers reads the missing key as "keep what
+        # is stored for this server".
+        if "env" in entry:
+            normalized_entry["env"] = entry.get("env") or {}
+        normalized.append(normalized_entry)
     return normalized
 
 

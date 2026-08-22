@@ -312,3 +312,65 @@ def test_config_env_round_trips_and_tolerates_malformed_values():
     # non-dict / missing degrade to "no extra variables", never a failed load
     assert McpServerConfig.from_dict({"name": "a", "command": "b", "env": "oops"}).env == {}
     assert McpServerConfig.from_dict({"name": "a", "command": "b"}).env == {}
+
+
+# -- stderr must not deadlock the client (the pipe-buffer wedge) --------------
+
+
+_STDERR_FLOOD_SERVER_SCRIPT = textwrap.dedent(r'''
+    import json
+    import sys
+
+    def send(message):
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request = json.loads(line)
+        method = request.get("method")
+        request_id = request.get("id")
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "noisy", "version": "0.0.1"},
+            }})
+        elif method == "notifications/initialized":
+            pass
+        elif method == "tools/call":
+            # Flood stderr well past any OS pipe buffer (~4 KiB on Windows,
+            # ~64 KiB on Linux) BEFORE sending the stdout response. Without a
+            # client-side stderr drainer this write blocks on a full pipe and
+            # the response below is never sent - the client's _call() then
+            # hangs until its timeout.
+            sys.stderr.write("x" * (512 * 1024))
+            sys.stderr.flush()
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "content": [{"type": "text", "text": "ok"}], "isError": False,
+            }})
+        else:
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "error": {"code": -32601, "message": "unknown method"}})
+''')
+
+
+def test_a_server_flooding_stderr_does_not_deadlock_the_client(tmp_path):
+    """Regression: stderr was read only once, on unexpected close, so a
+    server writing more than the OS pipe buffer to stderr before answering
+    blocked on its own stderr write and never sent its stdout response - so
+    every call() hung until the timeout. A dedicated drainer thread keeps
+    the pipe empty so the response still arrives. The generous timeout here
+    is a backstop: with the fix this returns in well under a second; without
+    it, the call never returns and the timeout is what fails the test."""
+    script = tmp_path / "noisy_stderr_server.py"
+    script.write_text(_STDERR_FLOOD_SERVER_SCRIPT, encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),), timeout=20.0)
+    client.connect()
+    try:
+        result = client.call_tool("anything", {})
+        assert result.content == "ok"
+        assert result.is_error is False
+    finally:
+        client.close()

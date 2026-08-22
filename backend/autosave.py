@@ -137,14 +137,37 @@ async def autosave_tick(
         chat_data = build_chat_data(
             canvas_document, asset_store=store_for(db_path), settings_manager=settings_manager,
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("autosave: failed to build chat data for session %r", bus.session_id)
+        # LOUD ON FAILURE (see this module's own docstring) - this branch used
+        # to log and return silently, every tick, forever. The most likely way
+        # to reach it is AssetStore.put() raising OSError because the assets
+        # directory is unwritable or the disk is full, which is precisely the
+        # moment the user most needs to know autosave has stopped protecting
+        # their work. The manual Save path already notifies for the same
+        # failure; this one now matches it.
+        if notifications is not None:
+            notifications.show(f"Autosave failed: {exc}", "error")
+            await bus.publish("notification")
         return
 
     notes_data = chat_data.pop("notes_data", [])
     pins_data = chat_data.pop("pins_data", [])
 
-    digest = _content_digest(chat_data, notes_data, pins_data)
+    try:
+        digest = _content_digest(chat_data, notes_data, pins_data)
+    except Exception as exc:
+        # _content_digest json.dumps(..., sort_keys=True) the payload, which
+        # raises on a dict with mixed-type keys - a shape a plugin's own
+        # serialize hook can produce and that session_save's json validation
+        # accepts (it does not require sort-ability). Escaping here would kill
+        # this tick outside every try below, so the guard belongs here too,
+        # and it reports rather than dying quietly.
+        logger.exception("autosave: failed to digest chat data for session %r", bus.session_id)
+        if notifications is not None:
+            notifications.show(f"Autosave failed: {exc}", "error")
+            await bus.publish("notification")
+        return
     if digest == last_saved["digest"] and canvas_document.current_chat_id == last_saved["chat_id"]:
         # Both halves matter. Content alone is not enough: chats.db is shared
         # mutable state, and a row that vanished underneath this session (the

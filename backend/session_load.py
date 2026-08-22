@@ -182,6 +182,7 @@ literal values for the same concept):
 from __future__ import annotations
 
 import contextvars
+import logging
 import re
 import uuid
 from typing import Any
@@ -208,6 +209,8 @@ from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 from graphlink_navigation_pins import NavigationPinRecord
 from graphlink_settings_store import SettingsManager
+
+logger = logging.getLogger(__name__)
 
 # ADR-009 stage 9.5: the asset store in effect for the CURRENT restore.
 #
@@ -477,9 +480,17 @@ def _restore_image_payload(payload: dict[str, Any], document: SceneDocument) -> 
         if stored is not None:
             image_bytes = stored
             mime_type = str(payload.get("mime_type") or "image/png")
-        # A ref the store has never seen degrades to "this image does not
-        # render", never to "this chat will not load" - the conversation is
-        # worth far more than one of its pictures.
+        else:
+            # A ref the store has never seen degrades to "this image does not
+            # render", never to "this chat will not load" - the conversation is
+            # worth far more than one of its pictures. But the ref itself is
+            # REMEMBERED (see ImageState.unresolved_asset_ref): the read may
+            # have failed transiently while the asset file is still perfectly
+            # present, and dropping the ref here is what used to let the very
+            # next save overwrite it with an empty inline payload and lose the
+            # picture for good.
+            node.state.unresolved_asset_ref = asset_ref
+            node.state.unresolved_asset_mime_type = str(payload.get("mime_type") or "image/png")
 
     if not image_bytes:
         raw_b64 = payload.get("image_bytes")
@@ -897,8 +908,24 @@ def _restore_node(
                 try:
                     plugin_node = _restore_plugin_payload(payload, kind_spec, settings_manager)
                 except Exception:
+                    logger.exception(
+                        "session load: plugin node of kind %r failed to restore - skipping it", node_type,
+                    )
                     return None, None
                 return document.register_restored_node(plugin_node), None
+        # A saved node whose kind nothing currently registers. It is left out
+        # of the restored document (rendering an unknown kind is a frontend
+        # decision this layer cannot make), but it is NOT silently forgotten:
+        # the row on disk still holds it - session_save._is_plugin_kind keeps
+        # writing any plugin-namespaced node back out - so fixing or
+        # reinstalling the plugin and reloading brings it back. Logged
+        # because, before this, a plugin that failed discovery made its
+        # nodes disappear from the canvas with zero signal anywhere.
+        if node_type:
+            logger.warning(
+                "session load: no restorer registered for node kind %r - the node stays in the "
+                "saved row but is not on this canvas (a plugin that failed to load?)", node_type,
+            )
         return None, None
 
     parent_new_id: str | None = None

@@ -112,7 +112,10 @@ class ConcurrentSaveConflict(RuntimeError):
 # per-workspace default model pin and a (this stage deliberately leaves
 # unpopulated - see that migration's own docstring) knowledge-collection
 # mirror column - see _migration_004_workspace_defaults's own docstring.
-CHATS_DB_SCHEMA_VERSION = 4
+# The note-edge fix adds version "5": the notes table gains a note_id
+# column so note-endpoint edges survive a save/load round-trip - see
+# _migration_005_note_ids's own docstring.
+CHATS_DB_SCHEMA_VERSION = 5
 
 
 # ADR-009 stage 9.2: `created_at` and historical `updated_at` values use
@@ -1022,6 +1025,36 @@ def _migration_004_workspace_defaults(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE workspaces ADD COLUMN knowledge_collection_id INTEGER")
 
 
+def _migration_005_note_ids(conn: sqlite3.Connection) -> None:
+    """Migration "5" (4 -> 5): give the notes table a `note_id` column that
+    persists each note's save-time payload id (SceneNode.id).
+
+    THE DATA LOSS THIS CLOSES. Since stage 9.6 the flat `edges` list is the
+    authoritative edge record, and it references every endpoint by its
+    save-time payload id. Node ids round-trip via the `data` blob and chart
+    ids via their own in-blob id, but a NOTE's id was written only into the
+    `notes` table, which had no column for it - so load_notes_rows returned
+    notes with no id, backend/session_load.py's flat-edge pass could not
+    resolve any note endpoint, and EVERY note connection (a System Prompt
+    note attached to a chat, a chat->summary note, a user-drawn note link)
+    was silently dropped on load and then written back gone on the next
+    save. Persisting the id here is what lets those edges round-trip, the
+    same way pins already persist pin_id.
+
+    Nullable TEXT with no default: a pre-existing row keeps NULL, which
+    load_notes_rows surfaces as "" (falsy) - identical to the old "no id"
+    behaviour for that one legacy row (its note edges were already lost on
+    the save that predated this fix; nothing here can resurrect them), while
+    every row written from now on carries a real id and round-trips. Runs
+    inside run_sqlite_migrations' own managed transaction - must not BEGIN/
+    COMMIT/ROLLBACK itself - and is guarded by a PRAGMA table_info probe so a
+    second run against an already-migrated database is a pure no-op, exactly
+    like every migration above."""
+    notes_columns = [info[1] for info in conn.execute("PRAGMA table_info(notes)").fetchall()]
+    if "note_id" not in notes_columns:
+        conn.execute("ALTER TABLE notes ADD COLUMN note_id TEXT")
+
+
 # Keyed by the version each function PRODUCES (migration "1" takes a
 # database from 0 -> 1), matching graphlink_migrations' own ordering
 # convention - see run_sqlite_migrations' docstring. ADR-020 stage 20.1
@@ -1030,15 +1063,19 @@ def _migration_004_workspace_defaults(conn: sqlite3.Connection) -> None:
 # CHATS_DB_SCHEMA_VERSION to 3) for the tags/favorite/archive schema change;
 # stage 20.3 added step "4" (bumping CHATS_DB_SCHEMA_VERSION to 4) for the
 # workspace-default-model/knowledge-collection-mirror schema change - add
-# step "5" here (and bump CHATS_DB_SCHEMA_VERSION to 5) for the next schema
-# change; never renumber or replace step "1" through "4" now that all four
-# have shipped - each must stay exactly what it is today so it keeps
-# correctly upgrading every already-migrated real database.
+# step "5" (bumping CHATS_DB_SCHEMA_VERSION to 5) for the notes.note_id
+# column that lets note-endpoint edges round-trip - see
+# _migration_005_note_ids's own docstring - add step "6" here (and bump
+# CHATS_DB_SCHEMA_VERSION to 6) for the next schema change; never renumber
+# or replace step "1" through "5" now that all five have shipped - each must
+# stay exactly what it is today so it keeps correctly upgrading every
+# already-migrated real database.
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_workspaces_and_graphs,
     3: _migration_003_tags_favorite_archive,
     4: _migration_004_workspace_defaults,
+    5: _migration_005_note_ids,
 }
 
 
@@ -1446,7 +1483,7 @@ def load_notes_rows(db_path: Path, chat_id: int) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT content, position_x, position_y, width, height,
-                   color, header_color, is_system_prompt, is_summary_note
+                   color, header_color, is_system_prompt, is_summary_note, note_id
             FROM notes WHERE chat_id = ?
             """,
             (chat_id,),
@@ -1460,6 +1497,12 @@ def load_notes_rows(db_path: Path, chat_id: int) -> list[dict[str, Any]]:
             "header_color": row[6],
             "is_system_prompt": bool(row[7]),
             "is_summary_note": bool(row[8]),
+            # The save-time payload id, restored so backend/session_load.py's
+            # flat-edge pass can map a note endpoint back to its new node id.
+            # Only present (truthy) for rows written after the note-edge fix;
+            # a NULL from a pre-fix row stays absent, harmless to the loader's
+            # own `if note_payload.get("id")` guard.
+            "id": row[9] or "",
         }
         for row in rows
     ]
@@ -1639,8 +1682,9 @@ def save_chat_atomically_row(
                     """
                     INSERT INTO notes (
                         chat_id, content, position_x, position_y,
-                        width, height, color, header_color, is_system_prompt, is_summary_note
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        width, height, color, header_color, is_system_prompt, is_summary_note,
+                        note_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         resolved_chat_id,
@@ -1653,6 +1697,10 @@ def save_chat_atomically_row(
                         note.get("header_color"),
                         1 if note.get("is_system_prompt") else 0,
                         1 if note.get("is_summary_note") else 0,
+                        # The note's save-time payload id, so flat-edge restore
+                        # can resolve note endpoints on load - see _ensure_schema's
+                        # note_id column comment for the data-loss this closes.
+                        str(note.get("id") or "") or None,
                     ),
                 )
 
@@ -2568,6 +2616,47 @@ def make_export_workspace(bus: SessionBus, resolved_path: Path, notifications: N
     return export_workspace
 
 
+def make_delete_chat_intent(
+    bus: SessionBus,
+    resolved_path: Path,
+    canvas_document: SceneDocument | None,
+    last_saved: dict[str, Any],
+):
+    """Build the delete intent without inflating the registration function -
+    same extraction the rename/load/save/export intents below already use.
+
+    The caller wraps this in the shared chat-mutation guard, exactly like
+    every other mutating intent on this topic. That matters rather than being
+    cosmetic symmetry: this handler writes canvas_document.current_chat_id
+    and last_saved, the same two cells a completing save/autosave writes, so
+    an unguarded delete racing an in-flight save could leave the session
+    pointed at a deleted row while the digest still claimed "already saved" -
+    which is the silent no-autosave state the fix inside the handler itself
+    exists to prevent.
+    """
+
+    async def delete(chat_id: int):
+        # The SPA only calls this after its own two-step confirm, so no
+        # confirmation happens here - same contract as the legacy bridge.
+        await asyncio.to_thread(delete_chat, resolved_path, int(chat_id))
+        if canvas_document is not None and canvas_document.current_chat_id == int(chat_id):
+            # Audit fix: deleting the row this session is currently pointed at
+            # used to leave current_chat_id dangling AND leave the autosave
+            # digest looking "already saved", so a user who deleted their open
+            # chat and kept working silently had no autosave protection at all
+            # until they happened to edit the canvas. Dropping both makes the
+            # next tick treat this as an unsaved session and INSERT a fresh
+            # row - the same thing a manual Save already does here (save_chat's
+            # own existing_row-is-None fallback).
+            canvas_document.current_chat_id = None
+            last_saved["digest"] = None
+            last_saved["chat_id"] = None
+            last_saved["updated_at"] = None
+        await bus.publish("app-chat-library")
+
+    return delete
+
+
 def make_rename_chat_intent(
     bus: SessionBus,
     resolved_path: Path,
@@ -2734,24 +2823,7 @@ def register_chat_library(
         bus, resolved_path, canvas_document, notifications, _last_saved,
     )
 
-    async def delete(chat_id: int):
-        # The SPA only calls this after its own two-step confirm, so no
-        # confirmation happens here - same contract as the legacy bridge.
-        await asyncio.to_thread(delete_chat, resolved_path, int(chat_id))
-        if canvas_document is not None and canvas_document.current_chat_id == int(chat_id):
-            # Audit fix: deleting the row this session is currently pointed at
-            # used to leave current_chat_id dangling AND leave the autosave
-            # digest looking "already saved", so a user who deleted their open
-            # chat and kept working silently had no autosave protection at all
-            # until they happened to edit the canvas. Dropping both makes the
-            # next tick treat this as an unsaved session and INSERT a fresh
-            # row - the same thing a manual Save already does here (save_chat's
-            # own existing_row-is-None fallback).
-            canvas_document.current_chat_id = None
-            _last_saved["digest"] = None
-            _last_saved["chat_id"] = None
-            _last_saved["updated_at"] = None
-        await bus.publish("app-chat-library")
+    delete = make_delete_chat_intent(bus, resolved_path, canvas_document, _last_saved)
 
     load_chat = make_load_chat(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
@@ -2880,7 +2952,18 @@ def register_chat_library(
     export_workspace = make_export_workspace(bus, resolved_path, notifications)
 
     bus.register_intent("app-chat-library", "renameChat", _serialize_mutating_intent(rename))
-    bus.register_intent("app-chat-library", "deleteChat", delete)
+    # Serialized like every other mutating intent here. It was the one
+    # exception, and that was a real hazard rather than an oversight with no
+    # consequence: delete mutates canvas_document.current_chat_id and
+    # _last_saved, the same two cells an in-flight save/autosave writes when
+    # it completes. Interleaved - delete lands while a save for the very row
+    # being deleted is still inside save_chat_atomically_row's post-commit
+    # knowledge reindex - delete's continuation clears both cells, then the
+    # save's continuation repopulates them, leaving the session pointed at a
+    # deleted row with a digest claiming "already saved". That is exactly the
+    # silent-no-autosave state the audit fix inside delete() above was written
+    # to prevent, reachable by racing it rather than by the path it guarded.
+    bus.register_intent("app-chat-library", "deleteChat", _serialize_mutating_intent(delete))
     bus.register_intent("app-chat-library", "loadChat", _serialize_mutating_intent(load_chat))
     bus.register_intent("app-chat-library", "saveChat", _serialize_mutating_intent(save_chat))
     bus.register_intent("app-chat-library", "newChat", _serialize_mutating_intent(new_chat))

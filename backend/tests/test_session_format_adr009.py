@@ -283,3 +283,109 @@ def test_store_rejects_a_ref_that_is_not_a_content_digest(tmp_path):
         assert store.get(crafted) is None, crafted
         assert store.exists(crafted) is False, crafted
         assert store.verify(crafted) is False, crafted
+
+
+# -- note edges survive a real DB round-trip (not just the in-memory one) --
+
+
+def test_note_edges_survive_a_full_db_round_trip(tmp_path):
+    """Regression for the note-edge data-loss bug.
+
+    The existing round-trip tests feed notes_data (payload ids intact)
+    straight into restore_chat_into_document, which HIDES the defect: on the
+    real path notes_data is written to the `notes` DB TABLE and read back by
+    load_notes_rows, and that table had no column for the note's payload id.
+    So the flat `edges` list (authoritative since stage 9.6) could not
+    resolve any note endpoint on load, and every note connection - a System
+    Prompt note attached to a chat, a chat->summary note, a user-drawn note
+    link - was silently dropped, then written back gone on the next save.
+
+    This test therefore drives the REAL save/load path through the SQLite
+    row + notes table, the one place the id was being stripped."""
+    from backend.chat_library import (
+        load_chat_row,
+        load_notes_rows,
+        load_pins_rows,
+        save_chat_atomically_row,
+    )
+
+    db_path = tmp_path / "chats.db"
+
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "hello", is_user=True)
+    note = doc.add_note(0, -120, is_system_prompt=True)
+    doc.set_note_content(note.id, "You are a helpful assistant.")
+    doc.connect(note.id, chat.id)  # the system-prompt note -> chat edge
+    assert _has_edge(doc, note.id, chat.id)
+
+    chat_data = build_chat_data(doc)
+    notes_data = chat_data.pop("notes_data")
+    pins_data = chat_data.pop("pins_data")
+    assert notes_data, "precondition: the doc has a note to persist"
+
+    chat_id, _ = save_chat_atomically_row(db_path, None, "t", chat_data, notes_data, pins_data)
+
+    # Reload EXACTLY as chat_library.loadChat does - from the DB, through the
+    # notes table, not from the in-memory notes_data above.
+    row = load_chat_row(db_path, chat_id)
+    restored = SceneDocument()
+    restore_chat_into_document(
+        restored,
+        row,
+        load_notes_rows(db_path, chat_id),
+        load_pins_rows(db_path, chat_id),
+    )
+
+    restored_notes = [n for n in restored.nodes.values() if n.kind == "note"]
+    restored_chats = [n for n in restored.nodes.values() if n.kind == "chat"]
+    assert len(restored_notes) == 1 and len(restored_chats) == 1
+    assert _has_edge(restored, restored_notes[0].id, restored_chats[0].id), (
+        "the system-prompt note lost its connection to the chat across a DB round-trip"
+    )
+
+
+def test_an_unreadable_asset_ref_is_preserved_rather_than_erased(tmp_path):
+    """Regression: a TRANSIENT asset-read failure used to become permanent
+    picture loss on the very next save.
+
+    AssetStore.get() returns None both for "never stored" and for any OSError
+    on read (an antivirus lock on Windows is enough). The image node then
+    restored with no asset id, so the next save saw no bytes, fell through to
+    the inline branch and wrote image_bytes:"" - erasing the only pointer to
+    an asset file that was still sitting on disk the whole time. The ref is
+    now carried across the round-trip so the row keeps pointing at it."""
+    store = AssetStore(tmp_path / "assets")
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "draw me a cat", is_user=True)
+    doc.add_image_node(0, 120, PNG, "a cat", parent.id, mime_type="image/png")
+
+    saved = build_chat_data(doc, asset_store=store)
+    image_payload = next(
+        n for n in saved["nodes"] if n.get("node_type") == "image"
+    )
+    original_ref = image_payload["asset_ref"]
+    assert original_ref
+
+    # Reload while the store cannot produce the bytes (the transient failure).
+    class _UnreadableStore:
+        def get(self, ref):
+            return None
+
+        def put(self, data):  # pragma: no cover - not reached in this test
+            return content_ref(data)
+
+    notes_data = saved.pop("notes_data")
+    pins_data = saved.pop("pins_data")
+    reloaded = SceneDocument()
+    restore_chat_into_document(
+        reloaded, {"data": saved}, notes_data, pins_data, asset_store=_UnreadableStore()
+    )
+
+    # Now save again, exactly as an autosave tick would.
+    resaved = build_chat_data(reloaded, asset_store=store)
+    resaved_image = next(n for n in resaved["nodes"] if n.get("node_type") == "image")
+
+    assert resaved_image.get("asset_ref") == original_ref, (
+        "a transient asset-read failure erased the image's asset_ref on the next save"
+    )
+    assert not resaved_image.get("image_bytes")

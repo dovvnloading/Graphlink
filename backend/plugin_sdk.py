@@ -103,6 +103,7 @@ not part of this repo)."""
 
 from __future__ import annotations
 
+import collections
 import importlib.util
 import json
 import logging
@@ -174,6 +175,19 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 KNOWN_RUNTIME_ISOLATION = frozenset({"in-process", "out-of-process"})
 
 _ID_PATTERN = re.compile(r"[a-z0-9_]+")
+
+# Both halves of an entry_point ("<module>:<callable>"). The module half is
+# interpolated straight into a filesystem path - `plugin_dir / f"{module}.py"`
+# in _import_entry_module - and that file is then EXECUTED, so it has to be a
+# bare module name and nothing else. Validating only the ":" split (all this
+# used to do) let a manifest say `entry_point = "../../../evil:register"`,
+# which resolves and executes a .py file OUTSIDE the plugin's own directory,
+# in the host process. A single path separator, drive letter, or ".." is the
+# whole exploit, so the allowlist is deliberately narrow: a leading letter or
+# underscore followed by word characters, which is what every real plugin
+# already uses ("plugin"). The callable half must likewise be a plain Python
+# identifier - it is fed to getattr on the imported module.
+_ENTRY_POINT_PART_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 class PluginRegistrationError(Exception):
@@ -806,6 +820,16 @@ class PluginWorkerClient:
         self._process: subprocess.Popen | None = None
         self._guard = None
         self._reader_thread: threading.Thread | None = None
+        self._stderr_thread: threading.Thread | None = None
+        # A bounded tail of the worker's stderr, drained continuously by its
+        # own thread. Without a dedicated drainer, a worker that writes more
+        # than the OS pipe buffer (~4 KiB on Windows, measured) to stderr
+        # before we read it blocks on its own stderr write - and since stderr
+        # is only ever read after stdout already closed, its stdout response
+        # never arrives and call() hangs until the timeout on every request.
+        # A traceback from an uncaught exception in plugin code is easily
+        # that large. Mirrors McpStdioClient's own stderr drainer.
+        self._stderr_tail: "collections.deque[str]" = collections.deque(maxlen=200)
         self._responses: "queue.Queue[Any]" = queue.Queue()
         self._next_id = 0
         self._write_lock = threading.Lock()
@@ -852,6 +876,11 @@ class PluginWorkerClient:
         self._guard.assign(self._process.pid)
         self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
         self._reader_thread.start()
+        # Drain stderr continuously (see _stderr_tail's own comment): a
+        # worker that fills the stderr pipe buffer would otherwise block on
+        # its own stderr write and never send its stdout response.
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
 
     def close(self) -> None:
         process = self._process
@@ -921,9 +950,7 @@ class PluginWorkerClient:
                         f"calling {method!r}."
                     )
                 if payload is _WORKER_READER_CLOSED:
-                    stderr_tail = ""
-                    if self._process is not None and self._process.stderr is not None:
-                        stderr_tail = self._process.stderr.read(2000)
+                    stderr_tail = self._stderr_tail_text()
                     raise PluginWorkerError(
                         f'Plugin worker "{self.plugin_id}" closed its output unexpectedly '
                         f"while calling {method!r}."
@@ -959,6 +986,28 @@ class PluginWorkerClient:
                 self._responses.put(payload)
         finally:
             self._responses.put(_WORKER_READER_CLOSED)
+
+    def _drain_stderr(self) -> None:
+        """Continuously read the worker's stderr into a bounded ring buffer,
+        so a worker writing a large traceback to stderr can't fill the pipe
+        and block its own stdout response - see _stderr_tail's own comment.
+        Runs for the life of the process; ends at stderr EOF."""
+        process = self._process
+        if process is None or process.stderr is None:
+            return
+        try:
+            for line in process.stderr:
+                self._stderr_tail.append(line)
+        except (ValueError, OSError):
+            # stderr closed out from under us (close() race) - nothing left
+            # to drain.
+            pass
+
+    def _stderr_tail_text(self, limit: int = 2000) -> str:
+        """The most recent stderr output, bounded to `limit` chars, for the
+        unexpected-close diagnostic. Reads the ring buffer the drainer
+        thread fills, never the raw pipe (which the drainer owns)."""
+        return "".join(self._stderr_tail)[-limit:]
 
     def _write(self, message: dict) -> None:
         process = self._process
@@ -1180,6 +1229,19 @@ def _load_manifest(manifest_path: Path, plugin_dir: Path) -> PluginManifest:
         raise PluginRegistrationError(
             f'{manifest_path}: [plugin].entry_point must be "<module>:<callable>", got '
             f"{entry_point!r}"
+        )
+    # Both halves must be plain identifiers - see _ENTRY_POINT_PART_PATTERN's
+    # own comment for the path-traversal-into-code-execution this blocks.
+    if not _ENTRY_POINT_PART_PATTERN.fullmatch(module_name):
+        raise PluginRegistrationError(
+            f"{manifest_path}: [plugin].entry_point module {module_name!r} must be a plain "
+            "module name (letters, digits and underscores) - it names a file inside this "
+            "plugin's own directory, never a path"
+        )
+    if not _ENTRY_POINT_PART_PATTERN.fullmatch(fn_name):
+        raise PluginRegistrationError(
+            f"{manifest_path}: [plugin].entry_point callable {fn_name!r} must be a plain "
+            "Python identifier"
         )
 
     frontend_table = raw.get("frontend", {})

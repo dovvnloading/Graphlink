@@ -5,6 +5,7 @@ import {
   ChartNodeView,
   chartExportUrl,
   chartNodePropsAreEqual,
+  filenameFromContentDisposition,
   makeDebouncedChartResize,
   type ChartFlowNode,
 } from "./ChartNodeView";
@@ -91,14 +92,18 @@ describe("ChartNodeView", () => {
     expect(button).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("the Export PNG/SVG links point at the dedicated export endpoint for this node's id", () => {
+  it("Export PNG/SVG are buttons, never navigated links that could leak the token", () => {
+    // They used to be <a target="_blank"> carrying ?token=<capability token>.
+    // In the WebView2 shell that opens in the OS default browser, putting a
+    // live token into another browser's history/address bar. Asserting they
+    // are BUTTONS (and that no link with these names exists) is what keeps
+    // that from being reintroduced.
     renderChartNode({}, "chart-42");
-    const pngLink = screen.getByRole("link", { name: "Export PNG" });
-    expect(pngLink).toHaveAttribute("href", "/api/assets/chart/chart-42/export?session=default&fmt=png");
-    expect(pngLink).toHaveAttribute("target", "_blank");
-    const svgLink = screen.getByRole("link", { name: "Export SVG" });
-    expect(svgLink).toHaveAttribute("href", "/api/assets/chart/chart-42/export?session=default&fmt=svg");
-    expect(svgLink).toHaveAttribute("target", "_blank");
+
+    expect(screen.getByRole("button", { name: "Export PNG" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export SVG" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Export PNG" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "Export SVG" })).toBeNull();
   });
 });
 
@@ -264,5 +269,21 @@ describe("ChartNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
     );
     expect(root.className).not.toBe("CORRUPTED");
     expect(root.className).toContain("selected");
+  });
+});
+
+describe("chart export never puts the capability token in a URL", () => {
+  it("chartExportUrl carries no token query parameter", () => {
+    // The token lives in location.hash; withAuthToken() used to append it
+    // here. Anything user-visible or navigable must not carry it.
+    expect(chartExportUrl("node-1", "png")).not.toContain("token");
+    expect(chartExportUrl("node-1", "svg")).not.toContain("token");
+  });
+
+  it("filenameFromContentDisposition honors the server's own filename", () => {
+    expect(filenameFromContentDisposition('attachment; filename="Q4_Revenue.png"')).toBe("Q4_Revenue.png");
+    expect(filenameFromContentDisposition("attachment; filename=chart.svg")).toBe("chart.svg");
+    expect(filenameFromContentDisposition(null)).toBe("");
+    expect(filenameFromContentDisposition("attachment")).toBe("");
   });
 });

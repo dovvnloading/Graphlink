@@ -36,7 +36,7 @@ from backend.api._settings_shared import (
 )
 from backend.events import SessionBus
 from backend.notifications import NotificationState
-from graphlink_settings_store import SettingsManager
+from graphlink_settings_store import KEEP_EXISTING_SECRET, SettingsManager
 
 
 def register_settings_api_provider_intents(
@@ -256,9 +256,21 @@ def register_settings_api_provider_intents(
             # writing inside the same locked critical section makes this
             # atomic with respect to every other run_locked-guarded
             # mutation.
-            openai_key = api_key if provider == config.API_PROVIDER_OPENAI else manager.get_openai_key()
-            anthropic_key = api_key if provider == config.API_PROVIDER_ANTHROPIC else manager.get_anthropic_key()
-            gemini_key = api_key if provider == config.API_PROVIDER_GEMINI else manager.get_gemini_key()
+            #
+            # Follow-up fix: the two providers NOT being saved are no longer
+            # read back and rewritten at all - they are handed
+            # KEEP_EXISTING_SECRET, which set_api_settings leaves untouched on
+            # disk. Reading them was itself the hazard: get_*_key() returns ""
+            # both for "no key set" AND for "stored blob failed to decrypt",
+            # so a transient DPAPI failure while saving one provider silently
+            # re-encrypted "" over the other two's still-recoverable blobs and
+            # destroyed them. Not reading them removes the failure mode rather
+            # than trying to detect it after the fact - and it keeps the
+            # atomicity the comment above describes, since there is now
+            # nothing about the siblings to race on.
+            openai_key = api_key if provider == config.API_PROVIDER_OPENAI else KEEP_EXISTING_SECRET
+            anthropic_key = api_key if provider == config.API_PROVIDER_ANTHROPIC else KEEP_EXISTING_SECRET
+            gemini_key = api_key if provider == config.API_PROVIDER_GEMINI else KEEP_EXISTING_SECRET
             manager.set_api_settings(provider, base_url, openai_key, anthropic_key, gemini_key)
             manager.set_api_models(normalized_models, provider)
             for task, model_id in normalized_models.items():

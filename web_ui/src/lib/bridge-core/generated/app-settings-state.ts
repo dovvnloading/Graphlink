@@ -19,7 +19,7 @@ export interface McpServerConfig {
   enabledTools: string[];
   enabled: boolean;
   timeout: number;
-  env: Record<string, string>;
+  envKeys: string[];
 }
 
 export interface AppSettingsState {
@@ -161,10 +161,10 @@ function checkMcpServerConfig(value: unknown, path: string, errors: string[]): v
     else { if (typeof fieldValue !== "number") errors.push(`${path}.timeout` + ": expected number"); }
   }
   {
-    const fieldValue = value["env"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.env: missing required field`);
-    else { if (!isRecord(fieldValue)) errors.push(`${path}.env` + ": expected object");
-    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.env` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
+    const fieldValue = value["envKeys"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.envKeys: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.envKeys` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.envKeys` + `[${i}]` + ": expected string"); }); }
   }
 }
 

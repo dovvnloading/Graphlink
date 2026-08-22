@@ -17,6 +17,40 @@ from graphlink_model_catalog import (
 logger = logging.getLogger(__name__)
 
 
+class _KeepExistingSecret:
+    """Type of the KEEP_EXISTING_SECRET sentinel below - a class only so it
+    has a readable repr in a traceback or a debugger."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "<KEEP_EXISTING_SECRET>"
+
+
+# Pass this instead of a value to set_api_settings to mean "leave whatever is
+# already stored for this field exactly as it is".
+#
+# THE DATA LOSS THIS EXISTS TO PREVENT. Saving ONE provider's key used to
+# round-trip the other two through decrypt-then-re-encrypt: the caller read
+# them back with get_*_key() and handed the results straight to
+# set_api_settings. But get_*_key() returns "" whenever DPAPI decryption
+# FAILS, not only when no key is set - deliberately, on the read side - so a
+# transient CryptUnprotectData failure (a temporary-profile logon, an
+# unavailable master key on a domain machine, resource exhaustion; anything
+# graphlink_secrets' own blanket except turns into None) at the moment the
+# user saved their Anthropic key silently destroyed the still-recoverable
+# OpenAI and Gemini blobs, with no warning at the time and no way back. The
+# plaintext-migration path was hardened against exactly this hazard - it
+# never touches an undecryptable blob - and this sentinel closes the same
+# hole on the save path, by never reading those siblings at all rather than
+# by trying to tell a failed decrypt apart from an empty one after the fact.
+#
+# An explicit "" still clears a key, so a user genuinely emptying the field
+# is unaffected: the two intents are now distinguishable instead of collapsed
+# into the same empty string.
+KEEP_EXISTING_SECRET = _KeepExistingSecret()
+
+
 def _is_llama_cpp_gguf_path(path_value) -> bool:
     normalized = str(path_value or "").strip()
     return bool(normalized) and normalized.lower().endswith(".gguf")
@@ -423,9 +457,24 @@ class SettingsManager:
         if not self.state_file.exists():
             return self._create_initial_state()
         try:
-            with open(self.state_file, 'r') as f:
+            # encoding is explicit: this file is written as UTF-8 (_save_state
+            # opens for write with the same default text mode on the machine
+            # that produced it), but reading it back through the LOCALE codec
+            # made byte-level corruption fatal in a way the corrupt-file
+            # rescue below was written to prevent. Disk corruption that lands
+            # a byte the locale codec rejects (0x81/0x8D/0x9D under cp1252,
+            # far more under a CJK codepage) raises UnicodeDecodeError - a
+            # ValueError, caught by NEITHER handler here - and that escapes
+            # SettingsManager.__init__, which is constructed unguarded at boot
+            # (backend/app.py's create_app, and earlier still in
+            # graphlink_desktop.main). The app then fails to launch on every
+            # single start until the user finds and deletes the file by hand.
+            # UnicodeDecodeError is caught below for exactly that reason: a
+            # corrupt settings file must be backed up and replaced, never a
+            # permanent boot failure.
+            with open(self.state_file, 'r', encoding='utf-8') as f:
                 raw_state = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (json.JSONDecodeError, UnicodeDecodeError, IOError) as e:
             self._backup_corrupt_state_file(e)
             return self._create_initial_state()
 
@@ -643,7 +692,12 @@ class SettingsManager:
         data_to_save = state_data if state_data else self.state
         tmp_path = self.state_file.with_name(self.state_file.name + ".tmp")
         try:
-            with open(tmp_path, 'w') as f:
+            # encoding is explicit to match _load_state's own explicit utf-8
+            # read. json.dump defaults to ensure_ascii=True, so what actually
+            # lands here is pure ASCII either way and every previously-written
+            # file stays readable - this just removes the latent dependency on
+            # whatever locale codec the host happens to default to.
+            with open(tmp_path, 'w', encoding='utf-8') as f:
                 # ADR-004 stage 4.4 (adversarial-review fix): chmod the temp
                 # file immediately after opening it, BEFORE writing any
                 # content - chmod'ing only after fsync left a window where a
@@ -1113,9 +1167,17 @@ class SettingsManager:
     ):
         self.state["api_provider"] = provider
         self.state["api_base_url"] = base_url
-        self.state["openai_api_key"] = self._protect_and_track(openai_key)
-        self.state["anthropic_api_key"] = self._protect_and_track(anthropic_key)
-        self.state["gemini_api_key"] = self._protect_and_track(gemini_key)
+        # KEEP_EXISTING_SECRET leaves the stored value untouched - no decrypt,
+        # no re-encrypt, no write. See that sentinel's own comment for the
+        # sibling-key destruction this prevents; an ordinary "" still clears.
+        for state_key, value in (
+            ("openai_api_key", openai_key),
+            ("anthropic_api_key", anthropic_key),
+            ("gemini_api_key", gemini_key),
+        ):
+            if value is KEEP_EXISTING_SECRET:
+                continue
+            self.state[state_key] = self._protect_and_track(value)
         self._save_state()
 
     def set_api_models(self, models_dict: dict, provider: str | None = None):
@@ -1211,8 +1273,13 @@ class SettingsManager:
                 "timeout": float(entry.get("timeout", 30.0) or 30.0),
                 # Absent on every entry persisted before the field existed -
                 # reads back as "no extra variables", the same default the
-                # write side stores.
-                "env": _normalize_mcp_env(entry.get("env")),
+                # write side stores. Decrypted here (values are encrypted at
+                # rest by _protect_mcp_env) so the ONLY consumer that needs
+                # the real values - the MCP server spawn in backend/agents.py
+                # - gets them, while the settings wire payload never carries
+                # them at all. Legacy plaintext entries pass through
+                # unchanged.
+                "env": self._unprotect_mcp_env(_normalize_mcp_env(entry.get("env"))),
             })
         return servers
 
@@ -1225,6 +1292,15 @@ class SettingsManager:
         patched map. Validates the same way get_mcp_servers reads back
         (name/command required, everything else normalized/defaulted) so
         a round trip through set then get is always well-formed."""
+        # What is already stored, keyed by server name, so an entry that
+        # arrives without an "env" key keeps its configured variables rather
+        # than losing them - see the "env" handling below.
+        preserved_env: dict[str, dict] = {}
+        for stored in (self.state.get("mcp_servers") or []):
+            if isinstance(stored, dict):
+                stored_name = str(stored.get("name", "")).strip()
+                if stored_name:
+                    preserved_env[stored_name] = _normalize_mcp_env(stored.get("env"))
         normalized = []
         for entry in (servers or []):
             if not isinstance(entry, dict):
@@ -1244,14 +1320,45 @@ class SettingsManager:
                 "timeout": float(entry.get("timeout", 30.0) or 30.0),
                 # Per-server environment variables - the only channel by
                 # which a server process receives anything beyond the safe
-                # allowlist base (see McpStdioClient.connect). Values are
-                # stored as given; they are the user's own secrets for a
-                # server the user chose to run, same posture as the API keys
-                # this store already holds.
-                "env": _normalize_mcp_env(entry.get("env")),
+                # allowlist base (see McpStdioClient.connect). These are real
+                # user secrets (a GITHUB_TOKEN, a BRAVE_API_KEY), so each
+                # VALUE is encrypted at rest exactly like the API keys this
+                # store already holds - an earlier version of this comment
+                # claimed the "same posture as the API keys" while in fact
+                # writing them as plaintext JSON. Names stay in the clear:
+                # the Settings page lists them, and a variable name is not
+                # the secret.
+                #
+                # An entry that carries no "env" key at all means "leave
+                # whatever is stored for this server alone" - the wire
+                # deliberately never sends these values back (see
+                # backend/settings.py's _mcp_servers_for_wire), so a
+                # bulk-replace triggered by toggling one server's checkbox
+                # would otherwise wipe every configured variable it could
+                # not see.
+                **(
+                    {"env": self._protect_mcp_env(_normalize_mcp_env(entry.get("env")))}
+                    if "env" in entry
+                    else {"env": preserved_env.get(name, {})}
+                ),
             })
         self.state["mcp_servers"] = normalized
         self._save_state()
+
+    def _protect_mcp_env(self, env: dict) -> dict:
+        """Encrypt each env VALUE at rest, leaving names readable. Mirrors
+        _protect_and_track's use of graphlink_secrets.protect for the
+        top-level API keys, including its plaintext fallback when DPAPI is
+        unavailable (see graphlink_secrets' own docstring - refusing to save
+        would be worse than saving what this platform can protect)."""
+        return {str(key): graphlink_secrets.protect(str(value)) for key, value in (env or {}).items()}
+
+    def _unprotect_mcp_env(self, env: dict) -> dict:
+        """The read side of _protect_mcp_env. Legacy plaintext values (written
+        before env was encrypted) come back unchanged - graphlink_secrets.
+        unprotect passes through anything without the "dpapi:" prefix, the
+        same way the top-level secrets migrated."""
+        return {str(key): graphlink_secrets.unprotect(str(value)) for key, value in (env or {}).items()}
 
     def get_plugin_grants(self) -> dict:
         """ADR-014 stage 14.4: install-time consent grants for discovered
