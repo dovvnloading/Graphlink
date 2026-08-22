@@ -566,10 +566,34 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
     setEditingTagsId(null);
   }
 
+  // REVIEW-FIX: this used to fire-and-forget via transport.fireIntent and
+  // clear confirmingDeleteId the instant the message was SENT, not once the
+  // deletion was actually confirmed - a genuine failure (a raised exception
+  // server-side, the socket dropping mid-request) left the row sitting in
+  // the list with its "Delete?" confirm buttons already reverted to a
+  // normal row, no visible sign anything had gone wrong. transport.request()
+  // is the real request/response primitive for that (same "I need the
+  // actual outcome, not just to have sent something" reasoning as
+  // BuilderLaunchDialog.tsx's own deleteSelectedRecipe). A rejected promise
+  // - the genuine-failure case - deliberately leaves confirmingDeleteId in
+  // place: the confirm buttons staying up IS the failure signal here, and
+  // the user can just try again. A resolved `false` (the row was already
+  // gone - a double-click, or another tab/session beat this one to it) is
+  // NOT a rejection, but it means nothing was actually removed just now
+  // either, so it is treated the same as a failure rather than optimistically
+  // closing the confirm UI over a delete that didn't happen.
   function confirmDelete() {
     if (confirmingDeleteId === null) return;
-    transport.fireIntent("app-chat-library", "deleteChat", [confirmingDeleteId]);
-    setConfirmingDeleteId(null);
+    const chatId = confirmingDeleteId;
+    transport
+      .request("app-chat-library", "deleteChat", [chatId])
+      .then((deleted) => {
+        if (!deleted) return;
+        setConfirmingDeleteId((current) => (current === chatId ? null : current));
+      })
+      .catch((error) => {
+        console.error("[chat-library] Delete failed:", error);
+      });
   }
 
   function cancelDelete() {

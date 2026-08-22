@@ -1196,6 +1196,19 @@ def test_delete_chat_removes_the_row(db_path):
     assert all(row["id"] != chat_id for row in rows)
 
 
+def test_delete_chat_returns_whether_a_row_was_actually_removed(db_path):
+    """REVIEW-FIX: the SPA's own optimistic-UI fix (ChatLibraryDialog.tsx's
+    confirmDelete) depends on this return value to tell a real deletion
+    apart from a no-op (a chat_id that was already gone, e.g. deleted from
+    another tab) - it used to return nothing at all, making both cases look
+    identical."""
+    chat_id = _insert_chat(db_path, "Doomed")
+
+    assert delete_chat(db_path, chat_id) is True
+    assert delete_chat(db_path, chat_id) is False  # already gone - nothing to remove the 2nd time
+    assert delete_chat(db_path, 999999) is False  # never existed at all
+
+
 # -- ADR-020 stage 20.2: favorite/archived/tags + workspaces CRUD -----------
 
 
@@ -1413,8 +1426,28 @@ def test_delete_chat_intent_removes_and_republishes(db_path):
     recorder = Recorder()
     bus.attach(recorder)
 
-    asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [chat_id]))
+    result = asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [chat_id]))
     assert recorder.messages[-1]["payload"]["rows"] == []
+    # REVIEW-FIX: the intent's own return value (not just its side effect)
+    # is what ChatLibraryDialog.tsx's confirmDelete now awaits through
+    # transport.request() to decide whether to clear its confirm-delete UI.
+    assert result is True
+
+
+def test_delete_chat_intent_returns_false_for_a_chat_id_that_is_already_gone(db_path):
+    """The second of two rapid deletes (a double-click, or two tabs racing
+    the same row) must not look identical to the first on the wire - a
+    falsy reply is what tells the SPA nothing was actually removed this
+    time, rather than optimistically treating it as a fresh success."""
+    chat_id = _insert_chat(db_path, "Temp")
+    bus = SessionBus("chat-library-delete-already-gone-test")
+    register_chat_library(bus, db_path)
+
+    first = asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [chat_id]))
+    second = asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [chat_id]))
+
+    assert first is True
+    assert second is False
 
 
 # -- ADR-020 stage 20.2: the 6 new intents -----------------------------------

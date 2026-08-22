@@ -1185,7 +1185,7 @@ def rename_chat(
     return now if cursor.rowcount else None
 
 
-def delete_chat(db_path: Path, chat_id: int, *, knowledge_db_path: Path | None = None) -> None:
+def delete_chat(db_path: Path, chat_id: int, *, knowledge_db_path: Path | None = None) -> bool:
     """ADR-020 stage 20.4: also removes this graph's own indexed content
     from knowledge_store.py's knowledge.db (backend.knowledge_store.
     delete_graph_index - the deletion-side mirror of save_chat_atomically_
@@ -1195,9 +1195,17 @@ def delete_chat(db_path: Path, chat_id: int, *, knowledge_db_path: Path | None =
     cosmetic one. Best-effort and non-blocking, same posture and same
     resolve-DEFAULT_DB_PATH-at-call-time shape as save_chat_atomically_row's
     own indexing call - see _reindex_graph_into_knowledge_store's own
-    docstring for why."""
+    docstring for why.
+
+    REVIEW-FIX: returns whether a row was actually removed (rowcount > 0),
+    mirroring rename_chat's own `now if cursor.rowcount else None` shape
+    just above - the read side of the SPA's own optimistic-UI fix
+    (ChatLibraryDialog.tsx's confirmDelete only clears its confirm state on
+    a truthy result now, rather than unconditionally the instant the
+    fire-and-forget intent was SENT rather than actually confirmed)."""
     with contextlib.closing(_connect(db_path)) as conn, conn:
-        conn.execute("DELETE FROM graphs WHERE id = ?", (chat_id,))
+        cursor = conn.execute("DELETE FROM graphs WHERE id = ?", (chat_id,))
+        deleted = cursor.rowcount > 0
     resolved_knowledge_db_path = (
         knowledge_db_path if knowledge_db_path is not None else knowledge_store.DEFAULT_DB_PATH
     )
@@ -1207,6 +1215,7 @@ def delete_chat(db_path: Path, chat_id: int, *, knowledge_db_path: Path | None =
         logger.exception(
             "delete: failed to remove graph %s's indexed content from the knowledge store", chat_id,
         )
+    return deleted
 
 
 # -- ADR-020 stage 20.2: favorite/archived/tags + workspaces CRUD -----------
@@ -2635,10 +2644,21 @@ def make_delete_chat_intent(
     exists to prevent.
     """
 
-    async def delete(chat_id: int):
+    async def delete(chat_id: int) -> bool:
         # The SPA only calls this after its own two-step confirm, so no
         # confirmation happens here - same contract as the legacy bridge.
-        await asyncio.to_thread(delete_chat, resolved_path, int(chat_id))
+        #
+        # REVIEW-FIX: returns delete_chat's own bool (a row was actually
+        # removed) rather than nothing. This intent used to be fired via
+        # transport.fireIntent - sent and forgotten, with the confirm-delete
+        # UI clearing itself the instant the message was SENT, not once the
+        # deletion was actually confirmed. A genuine failure (delete_chat
+        # raising, the socket dropping mid-request) left the row sitting in
+        # the list with its confirm buttons already reverted to normal, no
+        # visible sign anything had gone wrong. The SPA now calls this
+        # through transport.request() and only clears its confirm state on
+        # a truthy reply - see ChatLibraryDialog.tsx's confirmDelete.
+        deleted = await asyncio.to_thread(delete_chat, resolved_path, int(chat_id))
         if canvas_document is not None and canvas_document.current_chat_id == int(chat_id):
             # Audit fix: deleting the row this session is currently pointed at
             # used to leave current_chat_id dangling AND leave the autosave
@@ -2653,6 +2673,7 @@ def make_delete_chat_intent(
             last_saved["chat_id"] = None
             last_saved["updated_at"] = None
         await bus.publish("app-chat-library")
+        return deleted
 
     return delete
 
