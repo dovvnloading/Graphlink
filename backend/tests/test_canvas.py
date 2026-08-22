@@ -86,6 +86,87 @@ def test_connect_validates_and_is_idempotent():
         doc.connect(a.id, "ghost")
 
 
+def test_connect_refuses_an_edge_that_would_close_a_cycle():
+    """Regression: connect() used to place no restriction on a reverse
+    edge, so two ordinary connect() calls in opposite directions (exactly
+    what a user dragging A->B then B->A on the canvas produces) silently
+    created a 2-node cycle - and get_branch_root/chat_branch_history, which
+    walk a node's parent chain on nearly every chat/branch action, have no
+    cycle guard of their own and hung forever the moment one existed,
+    freezing the whole single-process backend."""
+    doc = SceneDocument()
+    a, b = doc.add_node(0, 0), doc.add_node(100, 0)
+    doc.connect(a.id, b.id)
+    with pytest.raises(SceneError, match="cycle"):
+        doc.connect(b.id, a.id)
+    assert len(doc.edges) == 1, "the cycle-closing edge must not have been created"
+
+
+def test_connect_refuses_a_longer_cycle_not_just_a_direct_reverse_edge():
+    doc = SceneDocument()
+    a, b, c = doc.add_node(0, 0), doc.add_node(1, 0), doc.add_node(2, 0)
+    doc.connect(a.id, b.id)
+    doc.connect(b.id, c.id)
+    with pytest.raises(SceneError, match="cycle"):
+        doc.connect(c.id, a.id)
+
+
+def test_connect_still_allows_an_ordinary_shortcut_edge_along_an_existing_path():
+    """A parallel/shortcut edge in the SAME direction as an existing longer
+    path is not a cycle and must not be rejected."""
+    doc = SceneDocument()
+    a, b, c = doc.add_node(0, 0), doc.add_node(1, 0), doc.add_node(2, 0)
+    doc.connect(a.id, b.id)
+    doc.connect(b.id, c.id)
+    doc.connect(a.id, c.id)  # a already reaches c via b; this is not a cycle
+    assert any(e.source == a.id and e.target == c.id for e in doc.edges.values())
+
+
+def test_branch_walks_terminate_instead_of_hanging_on_a_cycle_from_old_data():
+    """connect() now prevents a LIVE edit from creating a cycle, but a
+    document loaded from a row saved before this fix existed could still
+    carry one - connect_unchecked (the legacy-restore escape hatch) is
+    exactly how such a row round-trips. get_branch_root/chat_branch_history
+    must terminate rather than hang either way - this is the
+    defense-in-depth half of the fix, proven directly against the
+    unchecked primitive since ordinary connect() can no longer produce a
+    cycle at all."""
+    doc = SceneDocument()
+    a = doc.add_chat_node(0, 0, "a", True)
+    b = doc.add_chat_node(10, 0, "b", False, parent_id=a.id)
+    doc.connect_unchecked(b.id, a.id)  # forces the cycle only the legacy path can
+
+    root = doc.get_branch_root(a.id)
+    assert root is not None  # terminates, does not hang
+
+    history = doc.chat_branch_history(a.id)
+    assert history  # terminates, does not hang
+
+
+def test_delete_chat_node_survives_a_2_cycle_from_old_data_without_corrupting_state():
+    """Regression: delete_chat_node used to pop the target's edges BEFORE
+    reconnecting its children to its parent. If a 2-node cycle already
+    existed (unreachable via live connect() since the fix above, but still
+    possible in a document loaded from data saved before it existed - see
+    connect_unchecked), reconnecting parent_id to itself raised, and the
+    old pop-then-reconnect order left the edges already gone but the node
+    itself never deleted - a corrupted, half-applied mutation. The fix
+    reorders the two steps and skips a would-be self-connect, so this must
+    now either succeed cleanly or - for any other unexpected reason -
+    leave the document completely unchanged."""
+    doc = SceneDocument()
+    a = doc.add_chat_node(0, 0, "a", True)
+    b = doc.add_chat_node(10, 0, "b", False, parent_id=a.id)
+    doc.connect_unchecked(b.id, a.id)  # a 2-cycle: a->b and b->a
+    assert len(doc.edges) == 2
+
+    doc.delete_chat_node(b.id)
+
+    assert b.id not in doc.nodes, "the node must actually be deleted"
+    assert a.id in doc.nodes
+    assert list(doc.edges.values()) == [], "no dangling self-edge or orphaned edge left behind"
+
+
 def test_removing_a_node_removes_its_edges():
     doc = SceneDocument()
     a, b, c = doc.add_node(0, 0), doc.add_node(1, 1), doc.add_node(2, 2)

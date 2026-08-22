@@ -5061,6 +5061,82 @@ def test_pycoder_ai_driven_repair_gate_discloses_the_repaired_code_not_the_origi
     asyncio.run(run())
 
 
+def test_pycoder_repair_gate_broadcasts_the_intermediate_not_awaiting_state(monkeypatch):
+    """Regression: the repair gate used to flip pycoder_awaiting_approval
+    False then True again (after the REPL-execute + repair-agent latency)
+    with NO scene publish for the False in between. The frontend's own
+    busy-flag reset (PyCoderNodeView.tsx) only fires on an OBSERVED
+    false->true transition, so across that invisible window it never saw
+    a transition at all (True -> [nothing] -> True) - the repair round's
+    mandatory approval dialog rendered with Approve and Deny permanently
+    disabled, with no other dismissal affordance. This asserts the actual
+    BROADCAST sequence (not just the final in-memory value, which was
+    already correct even with the bug) - the bug was specifically about
+    what reached the wire."""
+    monkeypatch.setattr(
+        agents_module.PyCoderExecutionAgent, "get_response",
+        lambda self, history, prompt: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.PyCoderRepairAgent, "get_response",
+        lambda self, code, error, is_final_attempt: "print('repaired')",
+    )
+    fake_repl = _FakeRepl(script=[("err", True)])
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
+
+    async def run():
+        bus = SessionBus("agents-code-exec-test")
+        notifications = NotificationState()
+        node = _make_pycoder_node(pycoder_mode="ai_driven")
+        bus.register_topic("notification", notifications.payload)
+        # Unlike _make_code_exec_env's placeholder `lambda: {}`, this
+        # builder snapshots the LIVE field the bug is about - the test
+        # needs to see what was actually BROADCAST at each publish, not
+        # just the final in-memory value.
+        bus.register_topic("scene", lambda: {"pycoderAwaitingApproval": node.state.pycoder_awaiting_approval})
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+
+        published: list[bool] = []
+
+        class _AwaitingApprovalRecorder:
+            async def send_json(self, data):
+                if data.get("kind") == "state" and data.get("topic") == "scene":
+                    published.append(data["payload"]["pycoderAwaitingApproval"])
+
+        bus.attach(_AwaitingApprovalRecorder())
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="ai_driven", prompt="do something impossible", code="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda *a: None,
+        )
+        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
+
+        for _ in range(200):
+            if node.state.pycoder_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert dispatcher.approve_code_execution(request_id) is True
+
+        for _ in range(200):
+            if len(fake_repl.calls) >= 1 and node.state.pycoder_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.pycoder_awaiting_approval is True, "the repair gate must have opened"
+
+        first_true = published.index(True)
+        assert False in published[first_true + 1:], (
+            "the repair gate never broadcast the intermediate 'not awaiting "
+            "approval' state between the two open gates - the frontend's "
+            "busy-flag reset (gated on an OBSERVED transition) would never fire"
+        )
+
+        assert dispatcher.deny_code_execution(request_id) is True
+        await entry["task"]
+
+    asyncio.run(run())
+
+
 def test_pycoder_execution_blocked_when_approved_fingerprint_does_not_match(monkeypatch):
     """ADR-002 P0 defense-in-depth: if node.state.pycoder_approved_fingerprint
     ever disagrees with the code about to execute (simulating a future bug
@@ -5847,6 +5923,109 @@ def test_code_sandbox_repair_loop_requires_a_fresh_approval_for_each_repaired_at
             "ADR-002 P0: one gate for the original code, plus one fresh gate per repaired "
             "variant (2) - repaired code must never run under the original approval"
         )
+
+    asyncio.run(run())
+
+
+def test_code_sandbox_repair_gate_broadcasts_the_intermediate_not_awaiting_state(monkeypatch):
+    """Regression: same bug as PyCoderNodeView's, independently reachable
+    through start_code_sandbox_run's own repair-loop re-gate. The
+    intermediate 'not awaiting approval' state after Approve is processed
+    used to never reach a scene publish before the repair gate reopened
+    (after the venv-create/pip-install/execute latency), so the
+    frontend's busy-flag reset (CodeSandboxNodeView.tsx, gated on an
+    OBSERVED false->true transition) never fired across a repair round -
+    the mandatory approval dialog rendered with Approve/Deny permanently
+    disabled. Asserts the actual BROADCAST sequence, not just the final
+    in-memory value."""
+    monkeypatch.setattr(
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
+    )
+    monkeypatch.setattr(
+        agents_module.SandboxRepairAgent, "get_response",
+        lambda self, code, error, manifest, original_prompt=None: "still broken",
+    )
+
+    class _FailingSandbox:
+        def __init__(self, sandbox_id):
+            self.execute_calls = []
+
+        def ensure_base_environment(self, should_continue, emit_line=None):
+            pass
+
+        def sync_requirements(self, manifest, should_continue, emit_line=None, allow_source_builds=False):
+            pass
+
+        def execute_code(self, code, should_continue, emit_line=None):
+            self.execute_calls.append(code)
+            return "Traceback (most recent call last):\nboom", 1
+
+    fake_sandbox_holder = {}
+
+    def _make_sandbox(sandbox_id):
+        sandbox = _FailingSandbox(sandbox_id)
+        fake_sandbox_holder["sandbox"] = sandbox
+        return sandbox
+
+    monkeypatch.setattr(agents_module, "VirtualEnvSandbox", _make_sandbox)
+
+    async def run():
+        bus = SessionBus("agents-code-exec-test")
+        notifications = NotificationState()
+        node = _make_code_sandbox_node()
+        bus.register_topic("notification", notifications.payload)
+        # Unlike _make_code_exec_env's placeholder `lambda: {}`, this
+        # builder snapshots the LIVE field the bug is about - the test
+        # needs to see what was actually BROADCAST at each publish.
+        bus.register_topic(
+            "scene", lambda: {"codeSandboxAwaitingApproval": node.state.code_sandbox_awaiting_approval}
+        )
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+
+        published: list[bool] = []
+
+        class _AwaitingApprovalRecorder:
+            async def send_json(self, data):
+                if data.get("kind") == "state" and data.get("topic") == "scene":
+                    published.append(data["payload"]["codeSandboxAwaitingApproval"])
+
+        bus.attach(_AwaitingApprovalRecorder())
+
+        await dispatcher.start_code_sandbox_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            sandbox_id="sandbox-42", prompt="do something impossible", existing_code="",
+            requirements_manifest="", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda *a: None,
+        )
+        request_id, entry = next(iter(code_sandbox_slots(dispatcher).items()))
+
+        for _ in range(200):
+            if node.state.code_sandbox_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert dispatcher.approve_code_execution(request_id) is True
+
+        for _ in range(200):
+            if "sandbox" in fake_sandbox_holder:
+                break
+            await asyncio.sleep(0.005)
+        sandbox = fake_sandbox_holder["sandbox"]
+        for _ in range(200):
+            if len(sandbox.execute_calls) >= 1 and node.state.code_sandbox_awaiting_approval:
+                break
+            await asyncio.sleep(0.005)
+        assert node.state.code_sandbox_awaiting_approval is True, "the repair gate must have opened"
+
+        first_true = published.index(True)
+        assert False in published[first_true + 1:], (
+            "the repair gate never broadcast the intermediate 'not awaiting "
+            "approval' state between the two open gates - the frontend's "
+            "busy-flag reset (gated on an OBSERVED transition) would never fire"
+        )
+
+        assert dispatcher.deny_code_execution(request_id) is True
+        await entry["task"]
 
     asyncio.run(run())
 
