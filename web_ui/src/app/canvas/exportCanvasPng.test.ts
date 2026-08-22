@@ -12,7 +12,7 @@ vi.mock("html-to-image", () => ({
   toPng: (...args: unknown[]) => toPngMock(...args),
 }));
 
-import { exportCanvasAsPng } from "./exportCanvasPng";
+import { exportCanvasAsPng, waitForChartPlaceholdersToClear } from "./exportCanvasPng";
 
 function fakeNode(id: string, x: number, y: number) {
   return {
@@ -208,6 +208,29 @@ describe("exportCanvasAsPng", () => {
     expect(rf.setViewportCalls).toEqual([expectedViewport, USER_VIEWPORT]);
   });
 
+  // -- REVIEW-FIX: chart nodes render through a lazily-loaded chunk; a
+  // -- capture taken before that chunk resolves used to grab the "Loading
+  // -- chart…" Suspense fallback instead of the actual chart.
+
+  it("waits for a still-loading chart node's placeholder to clear before rasterizing", async () => {
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const placeholder = document.createElement("div");
+    placeholder.className = "chart-node-placeholder";
+    viewportEl.appendChild(placeholder);
+    setTimeout(() => placeholder.remove(), 120); // simulates the chunk finishing its load mid-export
+
+    let placeholderClearedBeforeCapture = false;
+    toPngMock.mockImplementation(() => {
+      placeholderClearedBeforeCapture = viewportEl.querySelector(".chart-node-placeholder") === null;
+      return Promise.resolve("data:image/png;base64,fake");
+    });
+
+    await exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window");
+
+    expect(placeholderClearedBeforeCapture).toBe(true);
+  });
+
+
   it("restores the user's viewport and logs, without rejecting, when rasterization fails", async () => {
     // Audit finding: toPng genuinely rejects when a node's image asset is
     // unreachable (a state ImageNodeView already renders a placeholder for).
@@ -288,5 +311,54 @@ describe("exportCanvasAsPng", () => {
       vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
       await expect(exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window")).resolves.toBeUndefined();
     });
+  });
+});
+
+// -- REVIEW-FIX: chart nodes render through a lazily-loaded chunk with a
+// -- "Loading chart…" Suspense fallback (.chart-node-placeholder) shown until
+// -- it resolves - a capture taken before that finished used to grab the
+// -- placeholder text instead of the chart. Tested directly against tiny
+// -- timeoutMs/pollIntervalMs values (real timers, no fake-timer interaction
+// -- with the real requestAnimationFrame exportCanvasAsPng's own nextPaint
+// -- depends on) rather than through the full export flow, so the timeout
+// -- path runs in milliseconds instead of the real 5s default.
+describe("waitForChartPlaceholdersToClear", () => {
+  it("resolves immediately when there is no placeholder to wait for", async () => {
+    const root = document.createElement("div");
+    const start = Date.now();
+
+    await waitForChartPlaceholdersToClear(root, 200, 10);
+
+    expect(Date.now() - start).toBeLessThan(50);
+  });
+
+  it("waits for a placeholder already in the DOM to be removed", async () => {
+    const root = document.createElement("div");
+    const placeholder = document.createElement("div");
+    placeholder.className = "chart-node-placeholder";
+    root.appendChild(placeholder);
+    setTimeout(() => placeholder.remove(), 60);
+
+    await waitForChartPlaceholdersToClear(root, 1000, 10);
+
+    expect(root.querySelector(".chart-node-placeholder")).toBeNull();
+  });
+
+  it("gives up after timeoutMs instead of hanging forever on a stuck chunk load", async () => {
+    const root = document.createElement("div");
+    const placeholder = document.createElement("div");
+    placeholder.className = "chart-node-placeholder";
+    root.appendChild(placeholder); // never removed
+
+    const start = Date.now();
+    await waitForChartPlaceholdersToClear(root, 100, 10);
+    const elapsed = Date.now() - start;
+
+    // Gave up rather than hanging (bounded near timeoutMs, not open-ended)...
+    expect(elapsed).toBeGreaterThanOrEqual(90);
+    expect(elapsed).toBeLessThan(500);
+    // ...and left the placeholder exactly where it was - this function only
+    // decides WHEN to proceed, never removes anything itself.
+    expect(root.querySelector(".chart-node-placeholder")).not.toBeNull();
   });
 });
