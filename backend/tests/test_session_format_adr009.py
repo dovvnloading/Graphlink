@@ -283,3 +283,62 @@ def test_store_rejects_a_ref_that_is_not_a_content_digest(tmp_path):
         assert store.get(crafted) is None, crafted
         assert store.exists(crafted) is False, crafted
         assert store.verify(crafted) is False, crafted
+
+
+# -- note edges survive a real DB round-trip (not just the in-memory one) --
+
+
+def test_note_edges_survive_a_full_db_round_trip(tmp_path):
+    """Regression for the note-edge data-loss bug.
+
+    The existing round-trip tests feed notes_data (payload ids intact)
+    straight into restore_chat_into_document, which HIDES the defect: on the
+    real path notes_data is written to the `notes` DB TABLE and read back by
+    load_notes_rows, and that table had no column for the note's payload id.
+    So the flat `edges` list (authoritative since stage 9.6) could not
+    resolve any note endpoint on load, and every note connection - a System
+    Prompt note attached to a chat, a chat->summary note, a user-drawn note
+    link - was silently dropped, then written back gone on the next save.
+
+    This test therefore drives the REAL save/load path through the SQLite
+    row + notes table, the one place the id was being stripped."""
+    from backend.chat_library import (
+        load_chat_row,
+        load_notes_rows,
+        load_pins_rows,
+        save_chat_atomically_row,
+    )
+
+    db_path = tmp_path / "chats.db"
+
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "hello", is_user=True)
+    note = doc.add_note(0, -120, is_system_prompt=True)
+    doc.set_note_content(note.id, "You are a helpful assistant.")
+    doc.connect(note.id, chat.id)  # the system-prompt note -> chat edge
+    assert _has_edge(doc, note.id, chat.id)
+
+    chat_data = build_chat_data(doc)
+    notes_data = chat_data.pop("notes_data")
+    pins_data = chat_data.pop("pins_data")
+    assert notes_data, "precondition: the doc has a note to persist"
+
+    chat_id, _ = save_chat_atomically_row(db_path, None, "t", chat_data, notes_data, pins_data)
+
+    # Reload EXACTLY as chat_library.loadChat does - from the DB, through the
+    # notes table, not from the in-memory notes_data above.
+    row = load_chat_row(db_path, chat_id)
+    restored = SceneDocument()
+    restore_chat_into_document(
+        restored,
+        row,
+        load_notes_rows(db_path, chat_id),
+        load_pins_rows(db_path, chat_id),
+    )
+
+    restored_notes = [n for n in restored.nodes.values() if n.kind == "note"]
+    restored_chats = [n for n in restored.nodes.values() if n.kind == "chat"]
+    assert len(restored_notes) == 1 and len(restored_chats) == 1
+    assert _has_edge(restored, restored_notes[0].id, restored_chats[0].id), (
+        "the system-prompt note lost its connection to the chat across a DB round-trip"
+    )

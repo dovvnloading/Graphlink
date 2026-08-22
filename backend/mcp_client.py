@@ -40,6 +40,7 @@ by a finished settings panel.
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import queue
 import subprocess
@@ -170,6 +171,16 @@ class McpStdioClient:
         self.timeout = timeout
         self._process: subprocess.Popen | None = None
         self._reader_thread: threading.Thread | None = None
+        self._stderr_thread: threading.Thread | None = None
+        # A bounded tail of the server's stderr, drained continuously by its
+        # own thread. Without a dedicated drainer, a server that writes more
+        # than the OS pipe buffer (~4 KiB on Windows, measured) to stderr
+        # before we read it BLOCKS on its own stderr write - and since we
+        # never read stderr except after stdout already closed, its stdout
+        # response never arrives and _call hangs until the timeout on EVERY
+        # request. A ring buffer keeps the diagnostic tail close() and the
+        # unexpected-close path want, without unbounded memory growth.
+        self._stderr_tail: "collections.deque[str]" = collections.deque(maxlen=200)
         self._responses: "queue.Queue[Any]" = queue.Queue()
         self._next_id = 0
         self._write_lock = threading.Lock()
@@ -207,6 +218,11 @@ class McpStdioClient:
 
         self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
         self._reader_thread.start()
+        # Drain stderr continuously (see _stderr_tail's own comment): a
+        # server that fills the stderr pipe buffer would otherwise block on
+        # its own stderr write and never send its stdout response.
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
 
         try:
             response = self._call("initialize", {
@@ -287,6 +303,28 @@ class McpStdioClient:
         finally:
             self._responses.put(_READER_CLOSED)
 
+    def _drain_stderr(self) -> None:
+        """Continuously read the server's stderr into a bounded ring buffer.
+        Its whole job is to keep the stderr pipe from filling and blocking
+        the server's own writes - see _stderr_tail's own comment. Runs for
+        the life of the process; ends when stderr reaches EOF."""
+        process = self._process
+        if process is None or process.stderr is None:
+            return
+        try:
+            for line in process.stderr:
+                self._stderr_tail.append(line)
+        except (ValueError, OSError):
+            # stderr closed out from under us (close() race) - nothing left
+            # to drain.
+            pass
+
+    def _stderr_tail_text(self, limit: int = 2000) -> str:
+        """The most recent stderr output, newest-bounded to `limit` chars -
+        for the unexpected-close diagnostic. Reads the ring buffer the
+        drainer thread fills, never the raw pipe (which the drainer owns)."""
+        return "".join(self._stderr_tail)[-limit:]
+
     def _write(self, message: dict) -> None:
         process = self._process
         if process is None or process.stdin is None:
@@ -316,9 +354,7 @@ class McpStdioClient:
                 except queue.Empty:
                     raise McpError(f"MCP server {self.command!r} timed out after {self.timeout}s calling {method!r}.")
                 if payload is _READER_CLOSED:
-                    stderr_tail = ""
-                    if self._process is not None and self._process.stderr is not None:
-                        stderr_tail = self._process.stderr.read(2000)
+                    stderr_tail = self._stderr_tail_text()
                     raise McpError(
                         f"MCP server {self.command!r} closed its output unexpectedly while calling {method!r}."
                         + (f" stderr: {stderr_tail}" if stderr_tail.strip() else "")

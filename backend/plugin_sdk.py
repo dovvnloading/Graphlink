@@ -103,6 +103,7 @@ not part of this repo)."""
 
 from __future__ import annotations
 
+import collections
 import importlib.util
 import json
 import logging
@@ -806,6 +807,16 @@ class PluginWorkerClient:
         self._process: subprocess.Popen | None = None
         self._guard = None
         self._reader_thread: threading.Thread | None = None
+        self._stderr_thread: threading.Thread | None = None
+        # A bounded tail of the worker's stderr, drained continuously by its
+        # own thread. Without a dedicated drainer, a worker that writes more
+        # than the OS pipe buffer (~4 KiB on Windows, measured) to stderr
+        # before we read it blocks on its own stderr write - and since stderr
+        # is only ever read after stdout already closed, its stdout response
+        # never arrives and call() hangs until the timeout on every request.
+        # A traceback from an uncaught exception in plugin code is easily
+        # that large. Mirrors McpStdioClient's own stderr drainer.
+        self._stderr_tail: "collections.deque[str]" = collections.deque(maxlen=200)
         self._responses: "queue.Queue[Any]" = queue.Queue()
         self._next_id = 0
         self._write_lock = threading.Lock()
@@ -852,6 +863,11 @@ class PluginWorkerClient:
         self._guard.assign(self._process.pid)
         self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
         self._reader_thread.start()
+        # Drain stderr continuously (see _stderr_tail's own comment): a
+        # worker that fills the stderr pipe buffer would otherwise block on
+        # its own stderr write and never send its stdout response.
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
 
     def close(self) -> None:
         process = self._process
@@ -921,9 +937,7 @@ class PluginWorkerClient:
                         f"calling {method!r}."
                     )
                 if payload is _WORKER_READER_CLOSED:
-                    stderr_tail = ""
-                    if self._process is not None and self._process.stderr is not None:
-                        stderr_tail = self._process.stderr.read(2000)
+                    stderr_tail = self._stderr_tail_text()
                     raise PluginWorkerError(
                         f'Plugin worker "{self.plugin_id}" closed its output unexpectedly '
                         f"while calling {method!r}."
@@ -959,6 +973,28 @@ class PluginWorkerClient:
                 self._responses.put(payload)
         finally:
             self._responses.put(_WORKER_READER_CLOSED)
+
+    def _drain_stderr(self) -> None:
+        """Continuously read the worker's stderr into a bounded ring buffer,
+        so a worker writing a large traceback to stderr can't fill the pipe
+        and block its own stdout response - see _stderr_tail's own comment.
+        Runs for the life of the process; ends at stderr EOF."""
+        process = self._process
+        if process is None or process.stderr is None:
+            return
+        try:
+            for line in process.stderr:
+                self._stderr_tail.append(line)
+        except (ValueError, OSError):
+            # stderr closed out from under us (close() race) - nothing left
+            # to drain.
+            pass
+
+    def _stderr_tail_text(self, limit: int = 2000) -> str:
+        """The most recent stderr output, bounded to `limit` chars, for the
+        unexpected-close diagnostic. Reads the ring buffer the drainer
+        thread fills, never the raw pipe (which the drainer owns)."""
+        return "".join(self._stderr_tail)[-limit:]
 
     def _write(self, message: dict) -> None:
         process = self._process

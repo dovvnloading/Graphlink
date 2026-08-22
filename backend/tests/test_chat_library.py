@@ -1602,6 +1602,9 @@ def test_load_notes_rows_shape_matches_session_load_expectations(db_path):
     assert rows[0] == {
         "content": "A note", "position": {"x": 1.0, "y": 2.0}, "size": {"width": 100.0, "height": 50.0},
         "color": "#111111", "header_color": None, "is_system_prompt": True, "is_summary_note": False,
+        # note-edge fix: the payload id round-trips too; "" for a row (like this
+        # test helper's) that predates / omits the note_id column.
+        "id": "",
     }
 
 
