@@ -724,11 +724,42 @@ def create_app(
 
 
 async def _handle_message(session: SessionBus, websocket: WebSocket, message: dict) -> None:
+    # REVIEW-FIX: websocket.receive_json() is a bare json.loads() with no
+    # shape check (starlette's own implementation) - any syntactically
+    # valid top-level JSON value (a bare number, a list, null, a string)
+    # reaches here unchanged, and `message: dict` is only a type hint, not
+    # an enforced guarantee. Every OTHER malformed-input path in this
+    # function replies with a graceful `kind: error` frame instead of
+    # raising; a non-dict message used to raise AttributeError on the very
+    # next line ('int'/'list' object has no attribute 'get'), escaping the
+    # ONE try/except around the receive loop above (which catches
+    # WebSocketDisconnect only) and killing the connection outright with
+    # zero client-facing feedback. Reproduced directly: calling this
+    # function with 42 or [1, 2, 3] raised uncaught before this guard.
+    if not isinstance(message, dict):
+        await websocket.send_json(
+            {"kind": "error", "id": None, "error": "malformed message: expected a JSON object"}
+        )
+        return
+
     kind = message.get("kind")
     msg_id = message.get("id")
 
     if kind == "subscribe":
         topics = message.get("topics") or session.topic_names()
+        # REVIEW-FIX: same reasoning as the isinstance guard above, for the
+        # one field this branch trusts without a shape check. A truthy
+        # non-iterable "topics" (e.g. the JSON number 5) bypasses the `or`
+        # fallback above and used to raise TypeError ('int' object is not
+        # iterable) straight out of the `for topic in topics` loop below -
+        # reproduced directly. A malformed shape here gets the same
+        # graceful error reply every other bad-input path in this function
+        # already uses, instead of killing the connection.
+        if not isinstance(topics, list):
+            await websocket.send_json(
+                {"kind": "error", "id": msg_id, "error": "malformed message: 'topics' must be a list"}
+            )
+            return
         for topic in topics:
             try:
                 await session.send_snapshot(topic, websocket, request_id=msg_id)
