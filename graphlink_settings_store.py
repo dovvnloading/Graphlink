@@ -1338,16 +1338,36 @@ class SettingsManager:
             # stored entry that never had one - gets a fresh one assigned
             # here, server-side, never client-supplied.
             entry_id = str(entry.get("id", "")).strip() or uuid.uuid4().hex
+            # REVIEW-FIX: this method's own docstring above promises "name/
+            # command required, everything else normalized/defaulted" - but
+            # "args" and "timeout" were previously built with no guard at
+            # all: a non-iterable "args" (e.g. an int) raised TypeError out
+            # of the list comprehension, and a non-numeric truthy "timeout"
+            # (e.g. a string) raised ValueError out of float(). Either
+            # exception propagated straight out of set_mcp_servers, aborting
+            # the WHOLE bulk-replace and discarding every OTHER server's
+            # valid edit in the same call - not just the one malformed
+            # field on this one entry. Falling back to the same defaults
+            # get_mcp_servers/this method already use for a missing value
+            # keeps this entry (and every entry after it) instead.
+            try:
+                entry_args = [str(a) for a in (entry.get("args") or [])]
+            except TypeError:
+                entry_args = []
+            try:
+                entry_timeout = float(entry.get("timeout", 30.0) or 30.0)
+            except (TypeError, ValueError):
+                entry_timeout = 30.0
             normalized.append({
                 "id": entry_id,
                 "name": name,
                 "command": command,
-                "args": [str(a) for a in (entry.get("args") or [])],
+                "args": entry_args,
                 "scopes": sorted({str(s) for s in (entry.get("scopes") or [])}),
                 "approval": str(entry.get("approval") or "always"),
                 "enabled_tools": sorted({str(t) for t in (entry.get("enabled_tools") or [])}),
                 "enabled": bool(entry.get("enabled", True)),
-                "timeout": float(entry.get("timeout", 30.0) or 30.0),
+                "timeout": entry_timeout,
                 # Per-server environment variables - the only channel by
                 # which a server process receives anything beyond the safe
                 # allowlist base (see McpStdioClient.connect). These are real

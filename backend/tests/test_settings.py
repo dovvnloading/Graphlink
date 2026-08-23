@@ -448,6 +448,36 @@ def test_set_mcp_servers_drops_an_entry_missing_a_name_or_command(manager):
     assert [entry["name"] for entry in manager.get_mcp_servers()] == ["valid"]
 
 
+def test_set_mcp_servers_tolerates_a_non_numeric_timeout_on_one_entry(manager):
+    # REVIEW-FIX regression: a non-numeric truthy "timeout" used to raise
+    # ValueError out of float() for THIS entry, aborting the whole
+    # bulk-replace call and discarding "git"'s valid edit too - contrary to
+    # this method's own docstring ("everything else normalized/defaulted").
+    manager.set_mcp_servers([
+        {"name": "fs", "command": "npx", "timeout": "not-a-number"},
+        {"name": "git", "command": "uvx"},
+    ])
+    servers = manager.get_mcp_servers()
+    assert [entry["name"] for entry in servers] == ["fs", "git"]
+    # The malformed value is coerced to the same default a missing timeout
+    # gets, not dropped or left malformed.
+    assert servers[0]["timeout"] == 30.0
+    assert servers[1]["timeout"] == 30.0
+
+
+def test_set_mcp_servers_tolerates_non_iterable_args_on_one_entry(manager):
+    # REVIEW-FIX regression: a non-iterable "args" (e.g. an int) used to
+    # raise TypeError out of the list comprehension for THIS entry, aborting
+    # the whole bulk-replace call and discarding "git"'s valid edit too.
+    manager.set_mcp_servers([
+        {"name": "fs", "command": "npx", "args": 42},
+        {"name": "git", "command": "uvx"},
+    ])
+    servers = manager.get_mcp_servers()
+    assert [entry["name"] for entry in servers] == ["fs", "git"]
+    assert servers[0]["args"] == []
+
+
 def test_get_mcp_servers_tolerates_a_malformed_entry_on_disk_without_dropping_the_rest(tmp_path):
     import json
 
@@ -2358,6 +2388,23 @@ def test_set_mcp_servers_is_a_bulk_replace_not_a_merge(manager):
     asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [[{"name": "git", "command": "uvx"}]]))
 
     assert [entry["name"] for entry in manager.get_mcp_servers()] == ["git"]
+
+
+def test_set_mcp_servers_intent_tolerates_a_malformed_timeout_on_one_entry(manager):
+    # REVIEW-FIX regression, end-to-end through the intent: setMcpServers'
+    # own docstring (intents_settings_general.py) explicitly defers per-
+    # entry field validation to SettingsManager.set_mcp_servers - so a
+    # malformed timeout on one entry in an otherwise-valid multi-server
+    # payload must not lose every other server's edit in the same save.
+    bus = SessionBus("settings-set-mcp-servers-malformed-timeout-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [[
+        {"name": "fs", "command": "npx", "timeout": "not-a-number"},
+        {"name": "git", "command": "uvx"},
+    ]]))
+
+    assert [entry["name"] for entry in manager.get_mcp_servers()] == ["fs", "git"]
 
 
 def test_set_mcp_servers_rejects_a_non_list_payload_without_persisting(manager):
