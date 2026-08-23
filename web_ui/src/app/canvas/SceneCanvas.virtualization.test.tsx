@@ -36,6 +36,7 @@
  */
 import { ReactFlowProvider, useStoreApi, type Edge, type NodeChange } from "@xyflow/react";
 import { act, render } from "@testing-library/react";
+import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 type CapturedProps = {
@@ -67,9 +68,18 @@ let capturedMiddleware: ((changes: NodeChange[]) => NodeChange[]) | null = null;
 // only way to observe what the scene-sync effect actually committed - this
 // probe captures the API handle once at mount, then the test polls
 // `.getState().nodes` imperatively, same posture as capturedMiddleware.
-let capturedStoreApi: ReturnType<typeof useStoreApi> | null = null;
+const capturedStoreApiRef: { current: ReturnType<typeof useStoreApi> | null } = { current: null };
 function StoreApiProbe() {
-  capturedStoreApi = useStoreApi();
+  const api = useStoreApi();
+  // Mutating capturedStoreApiRef during render itself is a lint error
+  // (react-hooks/immutability - a module-level object isn't a real ref the
+  // linter can special-case, even named like one) - deferring to an effect
+  // is the rule's own suggested fix, and works fine here since the tests
+  // below only read capturedStoreApiRef.current AFTER act()/render() have
+  // already flushed effects.
+  useEffect(() => {
+    capturedStoreApiRef.current = api;
+  });
   return null;
 }
 
@@ -190,7 +200,7 @@ function chatRow(id: string, x: number, y = 0): SceneNodeRow {
 function mount() {
   const { store, stateListeners, transport } = makeWiredStore();
   capturedProps = [];
-  capturedStoreApi = null;
+  capturedStoreApiRef.current = null;
   render(
     <ReactFlowProvider>
       <SceneCanvas store={store} onOpenDocumentView={() => {}} />
@@ -353,7 +363,7 @@ describe("SceneCanvas <ReactFlow> wiring (ADR-011 stages 11.2/11.3)", () => {
     it("applies the latest scene snapshot the moment dragging ends, even though it arrived mid-drag and nothing publishes again afterward", () => {
       const { stateListeners } = mount();
       publish(stateListeners, { nodes: [chatRow("a", 0), chatRow("b", 200)], edges: [] });
-      expect(capturedStoreApi!.getState().nodes.map((n: { id: string }) => n.id).sort()).toEqual(["a", "b"]);
+      expect(capturedStoreApiRef.current!.getState().nodes.map((n: { id: string }) => n.id).sort()).toEqual(["a", "b"]);
 
       // Production's real sequence: React Flow runs the registered
       // middleware inside its own update first, then hands the CORRECTED
@@ -376,14 +386,14 @@ describe("SceneCanvas <ReactFlow> wiring (ADR-011 stages 11.2/11.3)", () => {
         nodes: [chatRow("a", 0), chatRow("b", 200), chatRow("c", 400)],
         edges: [],
       });
-      expect(capturedStoreApi!.getState().nodes.map((n: { id: string }) => n.id).sort()).toEqual(["a", "b"]);
+      expect(capturedStoreApiRef.current!.getState().nodes.map((n: { id: string }) => n.id).sort()).toEqual(["a", "b"]);
 
       // Drag ends. No further scene publish EVER arrives after this point -
       // the only thing that can surface "c" now is the drag-end transition
       // itself.
       drag({ id: "a", dragging: false, position: { x: 10, y: 0 } });
 
-      expect(capturedStoreApi!.getState().nodes.map((n: { id: string }) => n.id).sort()).toEqual([
+      expect(capturedStoreApiRef.current!.getState().nodes.map((n: { id: string }) => n.id).sort()).toEqual([
         "a",
         "b",
         "c",
