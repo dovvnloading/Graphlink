@@ -492,7 +492,26 @@ class AgentDispatcher:
                     "MCP server connected", extra={"kind": "builder"},
                 )
                 _ = registered
-            except (McpError, OSError) as exc:
+            except (McpError, OSError, ValueError) as exc:
+                # SECURITY-FIX: ValueError was NOT caught here, only McpError/
+                # OSError. registry.register() raises ValueError on a
+                # duplicate tool name, an unknown approval policy, or an
+                # unknown scope - all of which a hostile-or-updated MCP
+                # server (its tools/list returning two same-named tools -
+                # threat (d)) or a hand-edited session.dat (an approval/scope
+                # value outside the registry vocabulary - threat (c), since
+                # the settings store passes those through unvalidated) can
+                # trigger, as can an ordinary user configuring two servers
+                # with the same name (the store allows it). It escaped this
+                # loop into start_builder_run's task, which has only a
+                # `finally: release` - so run_build never ran, no _land()/
+                # notification fired, the Builder registry was never cached,
+                # and every subsequent Start re-spawned every server and
+                # crashed again, leaking a subprocess each time (client.close
+                # below was skipped on this path). Catching it here restores
+                # the per-server tolerance this loop's own contract promises:
+                # the bad server is logged and skipped, its client closed,
+                # and the Builder still starts with every other server.
                 logger.warning("MCP server %r unavailable: %s", config_entry.name, exc)
                 try:
                     client.close()
