@@ -583,11 +583,36 @@ def add_document_with_chunks(
             if last_saved is not None:
                 maybe_backup_before_write(db_path, last_saved)
 
-            cursor = conn.execute(
-                "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (collection_id, source_uri, title, mime, hash_value, _now_iso()),
-            )
+            try:
+                cursor = conn.execute(
+                    "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (collection_id, source_uri, title, mime, hash_value, _now_iso()),
+                )
+            except sqlite3.IntegrityError:
+                # REVIEW-FIX: the get_document_by_hash check above and this
+                # INSERT are not one atomic step - a second, fully separate
+                # connection (every real caller reaches this via
+                # asyncio.to_thread, genuine OS threads) can run the
+                # identical "no existing row" SELECT, then INSERT sequence
+                # concurrently for the same (content_hash, collection_id).
+                # Before this fix, the LOSING connection's INSERT hit the
+                # documents table's own UNIQUE(content_hash, collection_id)
+                # constraint and raised sqlite3.IntegrityError unhandled -
+                # this function's own docstring promises "always a no-op"
+                # for a content_hash that already exists, so an unhandled
+                # exception here broke that contract instead of the losing
+                # call simply returning the winner's already-committed
+                # document, same fix shape as get_or_create_workspace_
+                # collection's own identical race, above.
+                existing_id = get_document_by_hash(conn, content_hash_value=hash_value, collection_id=collection_id)
+                if existing_id is None:
+                    raise  # the constraint rejected this INSERT for some other reason - do not mask it
+                existing_count = conn.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE document_id = ?", (existing_id,),
+                ).fetchone()[0]
+                return IngestOutcome(document_id=existing_id, chunk_count=existing_count, was_new=False)
+
             document_id = cursor.lastrowid
             conn.executemany(
                 "INSERT INTO chunks (document_id, ordinal, text, token_count, offset_start, offset_end) "

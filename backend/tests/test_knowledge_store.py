@@ -99,6 +99,102 @@ class TestIdempotency:
         assert first.document_id != second.document_id
         assert second.was_new is True
 
+    def test_a_real_concurrent_race_ingesting_identical_content_never_raises_and_stays_a_no_op(self, db_path):
+        """Regression: add_document_with_chunks' own get_document_by_hash
+        idempotency check and its own INSERT were not one atomic step - two
+        concurrent ingests of the SAME (content_hash, collection_id)
+        (reachable via asyncio.to_thread, e.g. backend/api/
+        intents_knowledge.py's setChatIndexIntoKnowledge firing twice for
+        the same node with no reentrancy guard covering this intent) could
+        both observe "no existing row" and both attempt the INSERT; the
+        documents table's own UNIQUE(content_hash, collection_id) then made
+        the LOSING thread's INSERT raise sqlite3.IntegrityError unhandled,
+        breaking this function's own documented "always an idempotent
+        no-op" contract instead of the losing call simply returning the
+        winner's already-committed document. Forces the race with a
+        barrier placed right after the SELECT, the exact same technique as
+        TestGetOrCreateWorkspaceCollection's own identical race, below."""
+        import threading
+
+        ks._connect(db_path).close()
+
+        text = "Identical content ingested by two threads at once."
+        chunks = _chunks_for(text)
+
+        barrier = threading.Barrier(2)
+        real_connect = ks._connect
+
+        class _BarrieredConnection:
+            """Wraps the real connection so the barrier waits exactly once,
+            right after the SELECT this function's own race hinges on -
+            not on every execute() call, which would deadlock against the
+            INSERT/re-SELECT retry path this fix adds."""
+
+            def __init__(self, inner):
+                self._inner = inner
+                self._select_count = 0
+
+            def execute(self, sql, *args, **kwargs):
+                if sql.strip().startswith("SELECT id FROM documents WHERE content_hash") and self._select_count == 0:
+                    self._select_count += 1
+                    barrier.wait(timeout=5)
+                return self._inner.execute(sql, *args, **kwargs)
+
+            def executemany(self, sql, *args, **kwargs):
+                return self._inner.executemany(sql, *args, **kwargs)
+
+            def __enter__(self):
+                self._inner.__enter__()
+                return self
+
+            def __exit__(self, *exc):
+                return self._inner.__exit__(*exc)
+
+            def close(self):
+                self._inner.close()
+
+        def barriered_connect(*args, **kwargs):
+            return _BarrieredConnection(real_connect(*args, **kwargs))
+
+        results: list = []
+        errors: list[BaseException] = []
+
+        def call():
+            try:
+                results.append(ks.add_document_with_chunks(
+                    db_path, source_uri="racing-doc.txt", title="Doc", mime="text/plain",
+                    text=text, chunks=chunks,
+                ))
+            except BaseException as exc:  # noqa: BLE001 - captured for the assertion below
+                errors.append(exc)
+
+        # A direct module-attribute swap, not monkeypatch.setattr: this
+        # patch must be visible to BOTH threads for the duration of the
+        # race, and restored exactly once afterward regardless of outcome.
+        ks._connect = barriered_connect
+        try:
+            threads = [threading.Thread(target=call) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+        finally:
+            ks._connect = real_connect
+
+        assert not errors, f"add_document_with_chunks raised under the forced race: {errors}"
+        assert len(results) == 2
+        assert results[0].document_id == results[1].document_id, "both racing calls must resolve to the SAME document"
+        assert results[0].was_new != results[1].was_new, "exactly one of the two calls actually inserted the row"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM documents WHERE content_hash = ?", (ks.content_hash(text),),
+            ).fetchone()[0]
+            assert count == 1, "the race must never leave two documents rows for one content_hash"
+        finally:
+            conn.close()
+
 
 # -- CRUD ---------------------------------------------------------------------
 
