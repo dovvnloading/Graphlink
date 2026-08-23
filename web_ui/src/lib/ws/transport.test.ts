@@ -463,6 +463,50 @@ describe("WsTransport", () => {
     expect(t.getStatus()).toBe("open");
   });
 
+  // REVIEW-FIX (dispose-then-connect-requeues-inflight-queueable-intent):
+  // fireIntent()'s rejection handler used to gate its "disposed transport,
+  // nothing to recover into" branch on the live `this.disposed` boolean -
+  // but that check runs in the MICROTASK scheduled by dispose()'s own
+  // synchronous failAllPending() call, and connect() (see the StrictMode
+  // test above) resets `this.disposed` back to false SYNCHRONOUSLY. Calling
+  // dispose() immediately followed by connect() - exactly React 18
+  // StrictMode's dev-mode double-invoke on the same memoized transport -
+  // meant the early return never fired, and a queueable intent that was
+  // genuinely killed by dispose() got silently re-queued and replayed on
+  // the NEW connection: a second application of an already-sent mutating
+  // intent.
+  it("REVIEW-FIX: a queueable intent in flight when dispose() is immediately followed by connect() is dropped, not requeued onto the new connection", async () => {
+    const t = makeTransport();
+    t.connect();
+    const first = FakeSocket.instances[0];
+    first.open();
+
+    t.fireIntent("scene", "moveNodes", [[{ id: "n1", x: 1, y: 2 }]], undefined, true);
+    expect(first.sent).toHaveLength(1); // sent normally while open, now in flight
+
+    // StrictMode's synchronous dispose-then-remount: connect() re-arms the
+    // transport (this.disposed back to false) in the SAME tick dispose()
+    // set it true, before the rejection microtask below ever runs.
+    t.dispose();
+    t.connect();
+    const second = FakeSocket.instances[1];
+
+    // A real WebSocket's onopen fires asynchronously, well after this
+    // synchronous dispose()/connect() pair - giving the rejection handler's
+    // microtask (scheduled by dispose()'s own synchronous failAllPending())
+    // time to run BEFORE the new socket ever opens and flushes the offline
+    // queue. Flushing the microtask queue here before open() matters: with
+    // the bug, this is exactly when the intent gets silently re-queued.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    second.open();
+
+    expect(second.sent.map((raw) => JSON.parse(raw))).not.toContainEqual(
+      expect.objectContaining({ intent: "moveNodes" }),
+    );
+  });
+
   it("a truly unrecognized kind still logs the existing 'unknown message kind' error (contrast with stream's silent drop)", () => {
     const t = makeTransport();
     t.connect();

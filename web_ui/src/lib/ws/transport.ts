@@ -223,6 +223,20 @@ export class WsTransport {
   private socket: WsLike | null = null;
   private status: ConnectionStatus = "closed";
   private disposed = false;
+  /** REVIEW-FIX (dispose-then-connect-requeues-inflight-queueable-intent):
+   * incremented every dispose() call, never reset - unlike `disposed` itself,
+   * which connect() always resets to false (see connect()'s own doc: it must
+   * always re-arm a disposed transport for React 18 StrictMode's synchronous
+   * dispose-then-remount cycle). fireIntent()'s rejection handler runs as a
+   * MICROTASK scheduled by dispose()'s own synchronous failAllPending() call
+   * - if connect() runs synchronously right after dispose(), exactly as
+   * StrictMode does, `this.disposed` is already back to false by the time
+   * that microtask runs, so a check against the live boolean can no longer
+   * tell "this rejection was caused by a dispose()" from "this transport has
+   * never been disposed". Comparing against an epoch captured at the moment
+   * the request was fired (see fireIntent()) survives that reset, because
+   * this field is only ever incremented, never rolled back. */
+  private disposeEpoch = 0;
   private attempts = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -405,6 +419,7 @@ export class WsTransport {
 
   dispose(): void {
     this.disposed = true;
+    this.disposeEpoch += 1;
     if (this.reconnectTimer !== null) clearTimeout(this.reconnectTimer);
     this.failAllPending(new WsUnavailableError("transport disposed"));
     this.socket?.close();
@@ -734,13 +749,24 @@ export class WsTransport {
       }
       return;
     }
+    // REVIEW-FIX (dispose-then-connect-requeues-inflight-queueable-intent):
+    // captured before the request is even sent, so a dispose() anywhere
+    // during this request's lifetime is still detected below even if a
+    // synchronous connect() has already reset `this.disposed` back to false
+    // by the time the rejection handler runs - see disposeEpoch's own doc.
+    const epochAtFire = this.disposeEpoch;
     this.request(topic, intent, args, timeoutMs).then(
       () => onSettled?.(true),
       (err) => {
         // A disposed transport is real teardown (unmount, or StrictMode's
         // dev-only dispose-then-remount check) - there is nothing left to
         // recover into.
-        if (this.disposed) {
+        //
+        // REVIEW-FIX (dispose-then-connect-requeues-inflight-queueable-intent):
+        // compares the epoch captured at fire time, not the current (mutable,
+        // possibly already-reset-by-connect()) `this.disposed` boolean - see
+        // disposeEpoch's own doc for why the live flag is unreliable here.
+        if (this.disposeEpoch !== epochAtFire) {
           onSettled?.(false);
           return;
         }
