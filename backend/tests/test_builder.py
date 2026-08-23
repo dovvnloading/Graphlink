@@ -546,6 +546,42 @@ class TestBuilderIntents:
 
         asyncio.run(run())
 
+    def test_set_plan_steps_refuses_while_the_node_has_a_live_run(self):
+        """A second tab (or the same tab in the WS-eventual-consistency
+        window right after a Resume click lands) can still fire
+        setPlanSteps while run_build is mid-step - PlanNodeView's own
+        canEditPlan gate is client-side only. document.set_plan_steps
+        always rebuilds plan_steps as fresh dict objects, even for entries
+        it leaves value-for-value unchanged - so letting this through would
+        detach run_build's own in-flight `step` reference (backend/
+        builder.py) from the live list even when the edit only touches a
+        DIFFERENT, still-pending step."""
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            node = document.add_plan_node(0, 0, "goal")
+            node.state.plan_steps = [
+                {"id": "s1", "title": "step one", "status": "running", "detail": ""},
+                {"id": "s2", "title": "step two", "status": "pending", "detail": ""},
+            ]
+            node.state.builder_status = "running"
+            node.pending_request_id = "req-1"
+            live_step = node.state.plan_steps[0]
+
+            await bus.dispatch_intent("scene", "setPlanSteps", [
+                node.id, [
+                    {"id": "s1", "title": "step one", "status": "running", "detail": ""},
+                    {"id": "s2", "title": "edited", "status": "pending", "detail": ""},
+                ],
+            ])
+
+            # Refused with a notification, not applied - the identity of
+            # the running step's dict must survive so run_build's own
+            # reference stays live.
+            assert node.state.plan_steps[0] is live_step
+            assert node.state.plan_steps[1]["title"] == "step two"
+
+        asyncio.run(run())
+
     def test_start_execution_refuses_a_non_resumable_status(self):
         async def run():
             bus, document, recorder, dispatcher = make_bus_with_dispatcher()

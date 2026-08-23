@@ -208,6 +208,29 @@ def register_builder_intents(
         agent_dispatcher.deny_code_execution(request_id)
 
     async def set_plan_steps(node_id, steps):
+        node = document.nodes.get(node_id)
+        # REVIEW-FIX: a live run_build holds `step = _current_step(node)`
+        # (backend/builder.py) as a direct reference into the OLD dict
+        # object living inside node.state.plan_steps, for the whole step -
+        # document.set_plan_steps always REPLACES the list with fresh dicts
+        # (graph.py), even for unchanged entries. Letting this intent land
+        # while the node is busy detaches run_build's own reference: its
+        # later `step["status"] = "done"` writes to an orphaned object, and
+        # the real (frozen, non-pending) row in plan_steps can never be
+        # touched again. Only run_build's own replan path re-resolves the
+        # reference after a replacement (builder.py's `_apply_replan`
+        # caller); this externally-triggered mutation has no such recovery,
+        # so it must be refused outright - mirrors undo/redo's own
+        # _guard_live_runs (backend/domain/commands.py) checking the same
+        # node.pending_request_id for the identical hazard class.
+        if node is not None and node.pending_request_id:
+            notifications.show(
+                f"Can't edit \"{node.title}\"'s steps while it is still running - "
+                "cancel or wait for it to finish.",
+                "info",
+            )
+            await bus.publish("notification")
+            return
         try:
             document.record_command(
                 "setPlanSteps", "user",
