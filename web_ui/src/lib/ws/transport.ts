@@ -123,6 +123,17 @@ export type StateListener = (payload: Record<string, unknown>) => void;
 export type StatusListener = (status: ConnectionStatus) => void;
 export type StreamListener = (delta: string, done: boolean, reset: boolean, seq: number) => void;
 
+/** REVIEW-FIX (resubscribe-callback-dropped-on-version-rejection): the
+ * one-shot fence callback resubscribe() takes needs to be told when its
+ * correlated reply failed schema-version negotiation, not just handed a
+ * value on success - `payload` is null in exactly that case, the real
+ * payload otherwise. Deliberately a distinct type from StateListener
+ * (whose subscribe()/onStatus()-style contract never has anything to
+ * report but a value) rather than widening that shared type for every
+ * ordinary consumer that isn't the resubscribe fence - see
+ * handleMessage()'s "state" branch and resubscribe()'s own doc. */
+export type ResubscribeListener = (payload: Record<string, unknown> | null) => void;
+
 /** ADR-003 stage 3.4: one node-scoped delta from a `kind:"patch"` frame.
  * Deliberately typed loosely (`Record<string, unknown>` for the node/edge
  * bodies) - the transport's job is routing, not validating. Nothing here
@@ -231,7 +242,7 @@ export class WsTransport {
    * snapshot; the echoed request id identifies the actual authority fence. */
   private readonly resubscribeListeners = new Map<
     number,
-    { topic: string; listener: StateListener }
+    { topic: string; listener: ResubscribeListener }
   >();
   private readonly statusListeners = new Set<StatusListener>();
   /** Keyed by requestId - stream deltas are addressed to a specific in-flight
@@ -443,7 +454,7 @@ export class WsTransport {
    * socket is not open, matching intent()'s own pre-connect behavior:
    * reconnecting re-subscribes every topic from scratch anyway, which
    * resolves the gap by itself. */
-  resubscribe(topic: string, onSnapshot?: StateListener): boolean {
+  resubscribe(topic: string, onSnapshot?: ResubscribeListener): boolean {
     if (this.status !== "open" || !this.socket) return false;
     let id: number | undefined;
     if (onSnapshot) {
@@ -924,6 +935,16 @@ export class WsTransport {
       const topic = message.topic as string;
       const payload = message.payload as Record<string, unknown>;
       this.snapshotRequestsPending.delete(topic);
+      // REVIEW-FIX (resubscribe-callback-dropped-on-version-rejection): the
+      // correlated fence lookup now happens BEFORE the version check below,
+      // rather than after it, so it is still reachable on a rejection - see
+      // that branch for why.
+      const snapshotRequestId = message.id;
+      let resubscribeRequest: { topic: string; listener: ResubscribeListener } | undefined;
+      if (typeof snapshotRequestId === "number") {
+        const candidate = this.resubscribeListeners.get(snapshotRequestId);
+        if (candidate?.topic === topic) resubscribeRequest = candidate;
+      }
       // ADR-003 stage 3.5: the version envelope lives INSIDE payload for a
       // state frame (see _Topic._stamp on the backend) - checked and, on
       // rejection, dispatched to NOTHING below. A rejected payload is stale
@@ -932,18 +953,30 @@ export class WsTransport {
       // this stage exists to replace: at least the old frozen-UI failure
       // mode didn't also risk running shape validation against fields a
       // breaking version change may have renamed or removed.
+      //
+      // REVIEW-FIX (resubscribe-callback-dropped-on-version-rejection): "NOTHING
+      // below" used to include the correlated resubscribeListeners fence -
+      // this used to `return` before ever reaching its lookup/invoke/delete
+      // block. That fence is a one-shot callback some caller (composerStore's
+      // requestDraftResync, the real load-bearing case) is blocked on via its
+      // own re-entrancy guard; resubscribeListeners has no timeout-based
+      // cleanup the way pending (request()'s map) does, so leaving the entry
+      // un-invoked left both the entry and the caller's guard stuck for the
+      // topic's remaining lifetime. The fence is still invoked and deleted on
+      // rejection - with `null` rather than the withheld payload, so the
+      // caller can tell this was a rejection, not a snapshot it can trust.
       if (!this.checkVersionAndMaybeReject(topic, payload)) {
         this.stateSnapshots.delete(topic);
+        if (resubscribeRequest) {
+          this.resubscribeListeners.delete(snapshotRequestId as number);
+          resubscribeRequest.listener(null);
+        }
         return;
       }
       this.stateSnapshots.set(topic, payload);
-      const snapshotRequestId = message.id;
-      if (typeof snapshotRequestId === "number") {
-        const resubscribeRequest = this.resubscribeListeners.get(snapshotRequestId);
-        if (resubscribeRequest?.topic === topic) {
-          this.resubscribeListeners.delete(snapshotRequestId);
-          resubscribeRequest.listener(payload);
-        }
+      if (resubscribeRequest) {
+        this.resubscribeListeners.delete(snapshotRequestId as number);
+        resubscribeRequest.listener(payload);
       }
       const listeners = this.stateListeners.get(topic);
       if (listeners) {

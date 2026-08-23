@@ -1014,6 +1014,46 @@ describe("WsTransport", () => {
       expect(sceneRejections.at(-1)).toBeNull();
       expect(gridRejections.at(-1)).toMatchObject({ kind: "version" });
     });
+
+    // REVIEW-FIX (resubscribe-callback-dropped-on-version-rejection): the
+    // "state" branch used to `return` on a version-rejected frame before
+    // ever reaching the resubscribeListeners lookup/invoke/delete block, so
+    // a correlated resubscribe() fence was never invoked and its entry
+    // leaked for the topic's remaining lifetime - composerStore's
+    // requestDraftResync() is the real caller left permanently stuck this
+    // way, since its own re-entrancy fence is cleared ONLY inside that
+    // callback.
+    it("REVIEW-FIX: a version-incompatible reply to a correlated resubscribe() fence still invokes it (with null) instead of leaking the entry", () => {
+      const t = makeTransport();
+      t.connect();
+      const socket = FakeSocket.instances[0];
+      socket.open();
+      t.subscribe("app-composer", () => {});
+      const fence = vi.fn();
+
+      expect(t.resubscribe("app-composer", fence)).toBe(true);
+      const request = socket.lastSent();
+
+      socket.receive({
+        kind: "state",
+        topic: "app-composer",
+        id: request.id,
+        payload: { schemaVersion: 2, minCompatibleSchemaVersion: 99, revision: 1 },
+      });
+
+      expect(fence).toHaveBeenCalledOnce();
+      expect(fence).toHaveBeenCalledWith(null);
+
+      // The entry is deleted, not merely invoked - a stray repeat frame with
+      // the same id must not double-fire an already-settled fence.
+      socket.receive({
+        kind: "state",
+        topic: "app-composer",
+        id: request.id,
+        payload: { schemaVersion: READER_SCHEMA_VERSION, revision: 2 },
+      });
+      expect(fence).toHaveBeenCalledOnce();
+    });
   });
 
   // ADR-003 stage 3.5 review-fix: closes a real gap a 4-lens adversarial
