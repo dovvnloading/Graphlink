@@ -831,3 +831,228 @@ class TestReindexGraphContent:
 
     def test_delete_graph_index_on_a_graph_with_nothing_indexed_returns_false(self, db_path):
         assert ks.delete_graph_index(db_path, 12345) is False
+
+    def test_a_real_concurrent_race_reindexing_the_same_graph_never_produces_two_documents(self, db_path):
+        """Regression: reindex_graph_content's own existing-row lookup and
+        its own DELETE+INSERT were not one atomic step - two concurrent
+        reindexes of the SAME graph_id (reachable via asyncio.to_thread,
+        backend/chat_library.py's own post-commit reindex step with no
+        lock serializing two saves of the same chat from two sessions/
+        windows) could both read the same pre-race existing_ids and both
+        INSERT a fresh documents row, leaving two rows for one graph.
+
+        Forces the race by synchronizing both threads' own attempts to
+        acquire the write lock with a barrier, so they genuinely contend
+        for the SAME SQLite lock at the same instant - the same technique
+        TestGetOrCreateWorkspaceCollection's own identical race uses,
+        adapted to this fix's own lock-acquisition point (BEGIN IMMEDIATE)
+        rather than the SELECT that follows it: with the fix in place, a
+        losing thread's own SELECT is never even reachable until it
+        already holds the write lock, so barriering the SELECT itself
+        would deadlock the loser against the winner it is waiting on."""
+        import threading
+
+        collection_id = ks.get_or_create_workspace_collection(db_path, 1)
+
+        barrier = threading.Barrier(2)
+        real_connect = ks._connect
+
+        class _BarrieredConnection:
+            def __init__(self, inner):
+                self._inner = inner
+                self._waited = False
+
+            def execute(self, sql, *args, **kwargs):
+                if not self._waited and sql.strip() == "BEGIN IMMEDIATE":
+                    self._waited = True
+                    barrier.wait(timeout=5)
+                return self._inner.execute(sql, *args, **kwargs)
+
+            def executemany(self, sql, *args, **kwargs):
+                return self._inner.executemany(sql, *args, **kwargs)
+
+            def commit(self):
+                return self._inner.commit()
+
+            def rollback(self):
+                return self._inner.rollback()
+
+            def __enter__(self):
+                self._inner.__enter__()
+                return self
+
+            def __exit__(self, *exc):
+                return self._inner.__exit__(*exc)
+
+            def close(self):
+                self._inner.close()
+
+        def barriered_connect(*args, **kwargs):
+            return _BarrieredConnection(real_connect(*args, **kwargs))
+
+        errors: list[BaseException] = []
+
+        def call(node_text):
+            try:
+                ks.reindex_graph_content(
+                    db_path, graph_id=777, workspace_id=1, title="Racing Graph",
+                    node_chunks=[("node-a", node_text)],
+                )
+            except BaseException as exc:  # noqa: BLE001 - captured for the assertion below
+                errors.append(exc)
+
+        ks._connect = barriered_connect
+        try:
+            threads = [
+                threading.Thread(target=call, args=("Content from thread A about narwhals.",)),
+                threading.Thread(target=call, args=("Content from thread B about narwhals.",)),
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+        finally:
+            ks._connect = real_connect
+
+        assert not errors, f"reindex_graph_content raised under the forced race: {errors}"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM documents WHERE source_uri = ?", ("graph:777",),
+            ).fetchone()[0]
+            assert count == 1, "the race must never leave two documents rows for one graph"
+            chunk_count = conn.execute(
+                "SELECT COUNT(*) FROM chunks c JOIN documents d ON d.id = c.document_id "
+                "WHERE d.source_uri = ?", ("graph:777",),
+            ).fetchone()[0]
+            assert chunk_count == 1, "the surviving document must carry exactly its own one node's chunk"
+        finally:
+            conn.close()
+
+        assert collection_id == ks.get_or_create_workspace_collection(db_path, 1)
+
+    def test_a_real_concurrent_delete_never_gets_silently_undone_by_an_in_flight_reindex(self, db_path):
+        """Regression: reindex_graph_content's existing-row SELECT could,
+        before this fix, run BEFORE a concurrent delete_graph_index call
+        for the same graph committed its DELETE, so reindex's own later
+        DELETE (targeting the by-then-already-gone row) was a harmless
+        no-op while its INSERT still ran - silently resurrecting a graph
+        that delete_graph_index had just, apparently successfully, removed.
+        Unlike the duplicate-documents race above, this is NOT self-healing:
+        the graph no longer exists in chat_library.py, so no future
+        reindex_graph_content call would ever come along to clean up the
+        resurrected row.
+
+        Forces the exact interleaving: seed one real existing document row
+        for the graph, then start a reindex of the SAME graph and pause it
+        (via a barrier) right after it has already re-read that stale
+        existing row but BEFORE its own DELETE executes - the precise
+        window the bug lived in - while a concurrent delete_graph_index
+        call is, at the very same instant, also trying to remove that same
+        row. Before this fix this reproduced two documents rows briefly
+        colliding into a resurrection; with the fix, reindex's own BEGIN
+        IMMEDIATE means it is already holding the write lock by the time
+        it reaches this window, so delete_graph_index's own DELETE simply
+        blocks until reindex's whole SELECT-DELETE-INSERT sequence commits,
+        then correctly removes what reindex just wrote - the two can never
+        straddle each other, so the graph ends up consistently gone."""
+        import threading
+
+        ks.reindex_graph_content(
+            db_path, graph_id=888, workspace_id=1, title="Doomed Graph",
+            node_chunks=[("node-a", "Content about pangolins, soon to be deleted.")],
+        )
+        assert len(ks.search_chunks(db_path, "pangolins")) == 1
+
+        barrier = threading.Barrier(2)
+        real_connect = ks._connect
+
+        class _BarrieredConnection:
+            """Barriers reindex's own per-row DELETE (its stale-read window
+            reading the SAME target document as the concurrent delete) and
+            delete_graph_index's own DELETE against the SAME barrier, so
+            both connections genuinely contend for the write lock at the
+            same instant - reindex already holds it (from its own BEGIN
+            IMMEDIATE, executed before this point), delete_graph_index does
+            not yet (this is the first statement on its own connection)."""
+
+            def __init__(self, inner):
+                self._inner = inner
+                self._waited = False
+
+            def execute(self, sql, *args, **kwargs):
+                target = sql.strip() in (
+                    "DELETE FROM documents WHERE id = ?",
+                    "DELETE FROM documents WHERE source_uri = ?",
+                )
+                if not self._waited and target:
+                    self._waited = True
+                    barrier.wait(timeout=5)
+                return self._inner.execute(sql, *args, **kwargs)
+
+            def executemany(self, sql, *args, **kwargs):
+                return self._inner.executemany(sql, *args, **kwargs)
+
+            def commit(self):
+                return self._inner.commit()
+
+            def rollback(self):
+                return self._inner.rollback()
+
+            def __enter__(self):
+                self._inner.__enter__()
+                return self
+
+            def __exit__(self, *exc):
+                return self._inner.__exit__(*exc)
+
+            def close(self):
+                self._inner.close()
+
+        def barriered_connect(*args, **kwargs):
+            return _BarrieredConnection(real_connect(*args, **kwargs))
+
+        errors: list[BaseException] = []
+        delete_results: list[bool] = []
+
+        def reindex_call():
+            try:
+                ks.reindex_graph_content(
+                    db_path, graph_id=888, workspace_id=1, title="Doomed Graph",
+                    node_chunks=[("node-a", "Fresh content about pangolins, racing the delete.")],
+                )
+            except BaseException as exc:  # noqa: BLE001 - captured for the assertion below
+                errors.append(exc)
+
+        def delete_call():
+            try:
+                delete_results.append(ks.delete_graph_index(db_path, 888))
+            except BaseException as exc:  # noqa: BLE001 - captured for the assertion below
+                errors.append(exc)
+
+        ks._connect = barriered_connect
+        try:
+            threads = [threading.Thread(target=reindex_call), threading.Thread(target=delete_call)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+        finally:
+            ks._connect = real_connect
+
+        assert not errors, f"reindex_graph_content/delete_graph_index raised under the forced race: {errors}"
+        assert delete_results == [True], "the delete must observe (and remove) a real row, not silently no-op"
+
+        conn = sqlite3.connect(db_path)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM documents WHERE source_uri = ?", ("graph:888",),
+            ).fetchone()[0]
+            assert count == 0, (
+                "a delete racing an in-flight reindex of the same graph must never leave a "
+                "resurrected document row behind"
+            )
+        finally:
+            conn.close()
+        assert ks.search_chunks(db_path, "pangolins") == []

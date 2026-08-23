@@ -816,17 +816,47 @@ def reindex_graph_content(
     per-graph-unique by construction (empirically verified - see this
     function's own test_two_different_graphs_do_not_collide test) rather
     than colliding on the UNIQUE constraint the moment two graphs' content
-    happens to match."""
+    happens to match.
+
+    REVIEW-FIX: the SELECT below and the DELETE/INSERT that follow it are
+    not one atomic step under a plain `with conn:` - Python's sqlite3
+    module only implicitly opens a transaction before INSERT/UPDATE/DELETE,
+    never before a bare SELECT, so the SELECT ran unlocked before this fix.
+    Two concurrent reindex_graph_content calls for the SAME graph_id
+    (reachable with no lock serializing them - see this function's own
+    calling-path docstring above) could both read the same pre-race
+    existing_ids and both INSERT a fresh documents row, leaving two rows
+    for one graph with no error raised - proven with a forced two-thread
+    race. Worse, a reindex racing a concurrent delete_graph_index call for
+    the same graph could read existing_ids BEFORE the delete's own DELETE
+    committed, then run its own (by-then-stale, no-op) DELETE and INSERT
+    AFTER the delete committed - silently resurrecting a just-deleted
+    graph's index entry that no future reindex will ever clean up, since
+    the graph no longer exists to trigger one.
+
+    `BEGIN IMMEDIATE` below acquires the write lock BEFORE the SELECT runs
+    (instead of leaving it deferred until the first DML), so the entire
+    SELECT-then-DELETE-then-INSERT sequence serializes against ANY other
+    writer on this db file - including delete_graph_index's own single
+    DELETE statement, which already atomically holds the write lock for
+    its own duration (no preceding SELECT of its own) and needs no change
+    of its own to be safe against this. Either the delete fully lands
+    first (this call's own SELECT then correctly sees no existing row and
+    the graph reappears with fresh content, no different from a normal
+    reindex-after-open-elsewhere race, not this bug) or this call fully
+    lands first (the later delete then correctly removes what was just
+    inserted) - the two can no longer straddle each other."""
     collection_id = get_or_create_workspace_collection(db_path, workspace_id)
     source_uri = _graph_source_uri(graph_id)
     estimator = TokenEstimator()
 
     conn = _connect(db_path, notifications=notifications)
     try:
-        with conn:
-            if last_saved is not None:
-                maybe_backup_before_write(db_path, last_saved)
+        if last_saved is not None:
+            maybe_backup_before_write(db_path, last_saved)
 
+        conn.execute("BEGIN IMMEDIATE")
+        try:
             existing_ids = [
                 row[0]
                 for row in conn.execute(
@@ -840,6 +870,7 @@ def reindex_graph_content(
                 conn.execute("DELETE FROM documents WHERE id = ?", (existing_id,))
 
             if not node_chunks:
+                conn.commit()
                 return
 
             full_text = "\n\n".join(text for _, text in node_chunks)
@@ -861,6 +892,10 @@ def reindex_graph_content(
                     for ordinal, (node_id, text) in enumerate(node_chunks)
                 ],
             )
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
     finally:
         conn.close()
 
@@ -875,7 +910,18 @@ def delete_graph_index(db_path: Path, graph_id: int) -> bool:
     entry for a graph that no longer exists. Returns whether a row was
     actually deleted - False for a graph with nothing indexed (never saved
     with any indexable node content, or already deleted) is a normal
-    outcome, not an error - mirrors delete_document's own return contract."""
+    outcome, not an error - mirrors delete_document's own return contract.
+
+    Needs no locking of its own against reindex_graph_content's race fix
+    (see that function's own REVIEW-FIX docstring): this DELETE is the
+    first and only statement in its transaction, so it already atomically
+    acquires the write lock the moment it runs - there is no preceding
+    SELECT here for a concurrent writer to interleave around. It was
+    reindex_graph_content's own SELECT-before-DELETE/INSERT that could run
+    unlocked ahead of this DELETE and later resurrect what this call just
+    removed; reindex_graph_content's own BEGIN IMMEDIATE closes that
+    window from its side, which is sufficient since SQLite allows only one
+    writer at a time on this db file."""
     conn = _connect(db_path)
     try:
         with conn:
