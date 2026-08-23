@@ -513,6 +513,32 @@ def test_a_non_dict_top_level_message_gets_a_graceful_error_not_a_dropped_connec
         assert snapshot["kind"] == "state"
 
 
+def test_a_syntactically_invalid_json_frame_gets_a_graceful_error_not_a_dropped_connection():
+    """Regression: websocket.receive_json() is a bare json.loads() with no
+    try/except of its own (starlette's own implementation) - a text frame
+    that isn't syntactically valid JSON AT ALL (as opposed to
+    valid-JSON-but-wrong-shape, which the non-dict test above already
+    covers) raised json.JSONDecodeError straight out of that await, past
+    the only except clause around the receive loop (WebSocketDisconnect
+    only), and killed the connection outright with zero client-facing
+    feedback. Sends raw, deliberately unparseable text (not send_json,
+    which can only ever encode valid JSON) to put a genuinely malformed
+    frame on the wire, exactly as a garbling proxy or a truncated write
+    would."""
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text("{not valid json")
+        message = ws.receive_json()
+        assert message["kind"] == "error"
+        assert "malformed message" in message["error"]
+
+        # The connection must still be alive and working afterward - a
+        # graceful reply, not a dropped socket.
+        ws.send_json({"kind": "subscribe", "topics": ["system"]})
+        snapshot = ws.receive_json()
+        assert snapshot["kind"] == "state"
+
+
 def test_a_non_list_topics_field_gets_a_graceful_error_not_a_dropped_connection():
     """Regression: `topics = message.get("topics") or session.topic_names()`
     only falls back for a FALSY topics value - a truthy non-iterable (the

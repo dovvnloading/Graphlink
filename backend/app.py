@@ -24,6 +24,7 @@ intent - the acceptance round-trip. Real domain topics arrive per-phase
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -660,7 +661,29 @@ def create_app(
         session.attach(websocket, buffered=True)
         try:
             while True:
-                message = await websocket.receive_json()
+                # REVIEW-FIX: receive_json() is a bare json.loads() with no
+                # try/except of its own (starlette's own implementation) -
+                # a text frame that isn't syntactically valid JSON AT ALL
+                # (as opposed to valid-JSON-but-wrong-shape, which
+                # _handle_message's own guards below already handle
+                # gracefully) raised json.JSONDecodeError straight out of
+                # this await, past the only except clause here
+                # (WebSocketDisconnect only), and killed the connection
+                # outright with zero client-facing feedback - the same
+                # failure mode the non-dict/non-list REVIEW-FIXes in
+                # _handle_message already closed for their own trigger
+                # points, just left open at this earlier one. Caught here
+                # (inside the loop, not by the WebSocketDisconnect clause
+                # below) so a malformed frame gets the same graceful
+                # kind:error reply and the loop simply continues instead of
+                # tearing down the session.
+                try:
+                    message = await websocket.receive_json()
+                except json.JSONDecodeError:
+                    await websocket.send_json(
+                        {"kind": "error", "id": None, "error": "malformed message: invalid JSON"}
+                    )
+                    continue
                 await _handle_message(session, websocket, message)
         except WebSocketDisconnect:
             pass
