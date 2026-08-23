@@ -1,10 +1,11 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ChartNodeView,
   chartExportUrl,
   chartNodePropsAreEqual,
+  downloadChartExport,
   filenameFromContentDisposition,
   makeDebouncedChartResize,
   type ChartFlowNode,
@@ -285,5 +286,36 @@ describe("chart export never puts the capability token in a URL", () => {
     expect(filenameFromContentDisposition("attachment; filename=chart.svg")).toBe("chart.svg");
     expect(filenameFromContentDisposition(null)).toBe("");
     expect(filenameFromContentDisposition("attachment")).toBe("");
+  });
+});
+
+describe("downloadChartExport failure handling", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  // REVIEW-FIX: both toolbar buttons call this fire-and-forget
+  // (`void downloadChartExport(...)`), so a rejected promise used to
+  // escape as an unhandled rejection instead of anything the user or a
+  // test could observe cleanly. It must now resolve (not reject) and log,
+  // mirroring ImageNodeView's "does not throw when the clipboard write
+  // fails" test for the identical export-button failure mode.
+  it("does not throw when the export fetch responds non-OK", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500 } as Response));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(downloadChartExport("node-1", "png")).resolves.toBeUndefined();
+
+    expect(consoleError).toHaveBeenCalled();
+  });
+
+  it("does not throw when the export fetch itself rejects", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(downloadChartExport("node-1", "svg")).resolves.toBeUndefined();
+
+    expect(consoleError).toHaveBeenCalled();
   });
 });

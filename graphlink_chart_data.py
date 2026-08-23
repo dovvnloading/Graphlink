@@ -166,6 +166,29 @@ def _legacy_sankey_flows(payload):
     if not isinstance(nodes, list) or not isinstance(links, list):
         return None
 
+    # REVIEW-FIX: bound BEFORE either loop below, not after. The direct
+    # `{"flows": [...]}` shape is rejected by canonicalize_chart_data's own
+    # `len(raw_flows) > MAX_SANKEY_FLOWS` check in O(1) - a plain len() on
+    # a list never touches an element. This legacy nested shape used to do
+    # two full O(n) passes (building `names` from every node, `flows` from
+    # every link) BEFORE that same cap was ever consulted, so an oversized
+    # legacy-format payload did unbounded synchronous work first and only
+    # got rejected afterward. Measured directly: an equal-size legacy
+    # payload took roughly 60,000x longer to reject than the direct-list
+    # shape. This runs on the FastAPI event loop (backend/session_load.py's
+    # chat restore is not offloaded to a worker thread), so that stall
+    # blocks every other session on the process, not just the one loading
+    # this chat - a genuinely reachable exposure for any chat saved in the
+    # pre-"flows"-key era, not a contrived input.
+    if len(links) > MAX_SANKEY_FLOWS:
+        raise ChartDataError(f"Sankey charts support at most {MAX_SANKEY_FLOWS} flows")
+    # A legitimate sankey graph never needs more distinct nodes than it has
+    # flows, plus one - bounding this separately closes the case where
+    # `links` alone is small but `nodes` is huge (the names-building loop
+    # would otherwise still be unbounded on its own).
+    if len(nodes) > MAX_SANKEY_FLOWS + 1:
+        raise ChartDataError(f"Sankey charts support at most {MAX_SANKEY_FLOWS + 1} nodes")
+
     names = []
     for index, node in enumerate(nodes):
         if isinstance(node, dict):

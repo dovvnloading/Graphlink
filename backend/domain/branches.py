@@ -288,12 +288,37 @@ class BranchOps:
             if source_node is not None and source_node.kind == "note":
                 note_edges.append(edge)
 
+        # REVIEW-FIX: reconnect children to the deleted node's own parent
+        # BEFORE removing any edge below, not after (the original order).
+        # Reaching a cycle is no longer possible going forward now that
+        # connect() itself refuses to create one, but a document loaded
+        # from a row saved before that fix existed could still carry a
+        # pre-existing 2-node cycle - which used to make this exact
+        # scenario reachable: deleting the "child" side of such a cycle
+        # made parent_id == edge.target, so the reconnect below was really
+        # self.connect(parent_id, parent_id), which raises "cannot connect
+        # a node to itself" - and with the old pop-then-reconnect order,
+        # that exception fired AFTER the edges were already gone but
+        # BEFORE the node itself was deleted or last_chat_node_id/
+        # final_deliverable_node_id were updated: a corrupted, half-applied
+        # mutation with edges gone and the "deleted" node still present,
+        # with no rollback. Doing the reconnect first means ANY failure
+        # here (this case or an unforeseen future one) leaves the document
+        # completely unchanged - nothing has been popped yet - so the
+        # whole call fails cleanly instead of half-succeeding.
+        if parent_id is not None:
+            for edge in child_edges:
+                if edge.target == parent_id:
+                    # The precondition above (a pre-existing cycle) - skip
+                    # rather than self-connect: there is nothing meaningful
+                    # to reconnect when the parent and the child are the
+                    # same node.
+                    continue
+                self.connect(parent_id, edge.target)
+
         for edge in [parent_edge, *child_edges, *note_edges]:
             if edge is not None:
                 self.edges.pop(edge.id, None)
-        if parent_id is not None:
-            for edge in child_edges:
-                self.connect(parent_id, edge.target)
 
         if self.last_chat_node_id == node_id:
             # The active branch continues from wherever it now ends: the
@@ -386,7 +411,21 @@ class BranchOps:
         stop the walk quietly rather than raise."""
         history: list[dict] = []
         current_id: str | None = node_id
-        while current_id is not None:
+        # REVIEW-FIX: defense in depth against a cycle. connect() (domain/
+        # graph.py) now refuses to CREATE one, but a document loaded from a
+        # row saved before that fix existed could still carry one on disk -
+        # session_load.py's own flat-edge restore already tolerates a
+        # rejected connect() by skipping just that one edge, but a session
+        # saved and reloaded entirely under the OLD code before this fix
+        # shipped could have persisted the cycle itself. Without a visited
+        # set here, this walk (called on nearly every chat/branch action)
+        # would hang the single-process backend forever the moment it hit
+        # one. `current_id not in visited` stops the walk cleanly instead -
+        # a graph with no cycle is completely unaffected (every node is
+        # visited at most once either way).
+        visited: set[str] = set()
+        while current_id is not None and current_id not in visited:
+            visited.add(current_id)
             node = self.nodes.get(current_id)
             if node is None:
                 break
@@ -426,7 +465,11 @@ class BranchOps:
         shape can be walked."""
         current_id: str | None = node_id
         root: SceneNode | None = None
-        while current_id is not None:
+        # REVIEW-FIX: same cycle defense-in-depth as chat_branch_history's
+        # own visited set just above - see that one's comment for why.
+        visited: set[str] = set()
+        while current_id is not None and current_id not in visited:
+            visited.add(current_id)
             node = self.nodes.get(current_id)
             if node is None:
                 break

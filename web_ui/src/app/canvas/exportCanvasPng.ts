@@ -88,6 +88,19 @@ import { toPng } from "html-to-image";
  * slow one. Caught and logged here instead, matching ImageNodeView.tsx's own
  * handleExportImage - the directly analogous "rasterize/fetch, then download
  * via a temporary anchor" helper in this codebase.
+ *
+ * REVIEW-FIX: chart nodes render through a lazily-loaded chunk
+ * (ChartNodeView.tsx's LazyChartRenderer, `import("./charts/ChartRenderer")`)
+ * with a "Loading chart…" Suspense fallback (`.chart-node-placeholder`) shown
+ * until that chunk resolves. The two rAF frames nextPaint() waits for are
+ * enough for React Flow's OWN re-render at the export zoom to paint, but say
+ * nothing about a separate async chunk load that may still be in flight -
+ * the very first time a chart node mounts in a session (nothing before this
+ * export has ever triggered that import) captured the literal placeholder
+ * text instead of the chart. waitForChartPlaceholdersToClear polls the
+ * captured subtree for that class and proceeds only once none remain (or a
+ * bounded timeout elapses - a chunk load failure must degrade to "export
+ * anyway, placeholder and all" rather than hang the whole export forever).
  */
 
 const IMAGE_WIDTH = 1920;
@@ -96,6 +109,8 @@ const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 2.5;
 const PADDING = 0.1;
 const FALLBACK_BACKGROUND_COLOR = "#1a1a1a"; // matches graphlink_desktop.py's own pywebview window background_color
+const CHART_CHUNK_LOAD_TIMEOUT_MS = 5000;
+const CHART_CHUNK_POLL_INTERVAL_MS = 50;
 
 function timestampedFilename(): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -115,6 +130,34 @@ function nextPaint(): Promise<void> {
   return new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Polls `root` for any still-loading chart node (ChartNodeView.tsx's
+ * `.chart-node-placeholder` Suspense fallback) and resolves once none remain.
+ * Bounded by `timeoutMs` so a genuinely stuck or failed chunk load (offline,
+ * a bad deploy) degrades to "capture whatever is there" rather than hanging
+ * the export indefinitely - consistent with this module's broader "never
+ * strand the user" posture (see the try/finally around the capture below).
+ * Exported, and `timeoutMs`/`pollIntervalMs` are parameters rather than bare
+ * references to the module constants, purely so the timeout path is directly
+ * unit-testable in real time without either waiting out the real 5s default
+ * or reaching for fake timers against a function that also awaits a real
+ * requestAnimationFrame upstream (nextPaint, below) - same "parameterize the
+ * interval for direct testing" shape as makeDebouncedChartResize's own
+ * `debounceMs` parameter in ChartNodeView.tsx. */
+export async function waitForChartPlaceholdersToClear(
+  root: HTMLElement,
+  timeoutMs: number = CHART_CHUNK_LOAD_TIMEOUT_MS,
+  pollIntervalMs: number = CHART_CHUNK_POLL_INTERVAL_MS,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (root.querySelector(".chart-node-placeholder") && Date.now() < deadline) {
+    await sleep(pollIntervalMs);
+  }
 }
 
 export async function exportCanvasAsPng(
@@ -161,6 +204,7 @@ export async function exportCanvasAsPng(
   try {
     await rf.setViewport(viewport);
     await nextPaint();
+    await waitForChartPlaceholdersToClear(viewportEl);
 
     const dataUrl = await toPng(viewportEl, {
       backgroundColor: resolveBackgroundColor(backgroundColorVar),

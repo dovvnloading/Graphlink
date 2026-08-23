@@ -1102,6 +1102,13 @@ function McpServersPage({ state, transport }: { state: AppSettingsState; transpo
   // the OUTBOUND intent argument, which the generated inbound row type has
   // no business defining.
   type OutgoingMcpServer = {
+    // REVIEW-FIX: absent on a brand-new "Add Server" entry - the backend
+    // assigns a fresh one (see SettingsManager.set_mcp_servers). Present
+    // (via the `...s` spread below) on every existing server, echoed back
+    // unchanged - that id, not `name`, is now the join key the backend
+    // uses to preserve a server's env values across an edit that omits
+    // them, since two servers can share a name.
+    id?: string;
     name: string;
     command: string;
     args: string[];
@@ -1154,7 +1161,7 @@ function McpServersPage({ state, transport }: { state: AppSettingsState; transpo
           <p className="settings-update-status">No MCP servers configured yet.</p>
         )}
         {state.mcpServers.map((server, index) => (
-          <div className="settings-mcp-server-row" key={`${server.name}-${index}`}>
+          <div className="settings-mcp-server-row" key={server.id}>
             <label
               className="settings-checkbox-row settings-mcp-server-toggle"
               aria-label={server.name || "MCP server"}

@@ -1259,7 +1259,16 @@ def _restore_basic_connections(
             if source_id is None or target_id is None or source_id == target_id:
                 continue
             try:
-                document.connect(source_id, target_id)
+                # connect_unchecked, not connect(): this is the pre-stage-9.6
+                # per-kind bucket restore, where two connections between the
+                # same node pair in opposite directions (e.g. one from
+                # pycoder_connections, another from gitlink_connections)
+                # legitimately encoded two DIFFERENT semantic relationship
+                # kinds under the old classification scheme, not a mistake -
+                # connect()'s own cycle rejection (correct for a live edit)
+                # would silently drop real historical data here. See
+                # SceneDocument.connect_unchecked's own docstring.
+                document.connect_unchecked(source_id, target_id)
             except Exception:
                 continue
 
@@ -1285,7 +1294,10 @@ def _restore_system_prompt_and_summary_connections(
             target_id = _resolve_ref(entry, "end_node_id", "end_node_index", nodes_by_id, chat_nodes_map)
             if note_id is not None and target_id is not None:
                 try:
-                    document.connect(note_id, target_id)
+                    # connect_unchecked - see _restore_basic_connections' own
+                    # comment just above for why this legacy bucket restore
+                    # must not go through connect()'s cycle rejection.
+                    document.connect_unchecked(note_id, target_id)
                 except Exception:
                     continue
 
@@ -1298,7 +1310,9 @@ def _restore_system_prompt_and_summary_connections(
             note_id = notes_map.get(entry.get("end_note_index"))
             if source_id is not None and note_id is not None:
                 try:
-                    document.connect(source_id, note_id)
+                    # connect_unchecked - same reasoning as the two restore
+                    # sites above.
+                    document.connect_unchecked(source_id, note_id)
                 except Exception:
                     continue
 

@@ -86,6 +86,87 @@ def test_connect_validates_and_is_idempotent():
         doc.connect(a.id, "ghost")
 
 
+def test_connect_refuses_an_edge_that_would_close_a_cycle():
+    """Regression: connect() used to place no restriction on a reverse
+    edge, so two ordinary connect() calls in opposite directions (exactly
+    what a user dragging A->B then B->A on the canvas produces) silently
+    created a 2-node cycle - and get_branch_root/chat_branch_history, which
+    walk a node's parent chain on nearly every chat/branch action, have no
+    cycle guard of their own and hung forever the moment one existed,
+    freezing the whole single-process backend."""
+    doc = SceneDocument()
+    a, b = doc.add_node(0, 0), doc.add_node(100, 0)
+    doc.connect(a.id, b.id)
+    with pytest.raises(SceneError, match="cycle"):
+        doc.connect(b.id, a.id)
+    assert len(doc.edges) == 1, "the cycle-closing edge must not have been created"
+
+
+def test_connect_refuses_a_longer_cycle_not_just_a_direct_reverse_edge():
+    doc = SceneDocument()
+    a, b, c = doc.add_node(0, 0), doc.add_node(1, 0), doc.add_node(2, 0)
+    doc.connect(a.id, b.id)
+    doc.connect(b.id, c.id)
+    with pytest.raises(SceneError, match="cycle"):
+        doc.connect(c.id, a.id)
+
+
+def test_connect_still_allows_an_ordinary_shortcut_edge_along_an_existing_path():
+    """A parallel/shortcut edge in the SAME direction as an existing longer
+    path is not a cycle and must not be rejected."""
+    doc = SceneDocument()
+    a, b, c = doc.add_node(0, 0), doc.add_node(1, 0), doc.add_node(2, 0)
+    doc.connect(a.id, b.id)
+    doc.connect(b.id, c.id)
+    doc.connect(a.id, c.id)  # a already reaches c via b; this is not a cycle
+    assert any(e.source == a.id and e.target == c.id for e in doc.edges.values())
+
+
+def test_branch_walks_terminate_instead_of_hanging_on_a_cycle_from_old_data():
+    """connect() now prevents a LIVE edit from creating a cycle, but a
+    document loaded from a row saved before this fix existed could still
+    carry one - connect_unchecked (the legacy-restore escape hatch) is
+    exactly how such a row round-trips. get_branch_root/chat_branch_history
+    must terminate rather than hang either way - this is the
+    defense-in-depth half of the fix, proven directly against the
+    unchecked primitive since ordinary connect() can no longer produce a
+    cycle at all."""
+    doc = SceneDocument()
+    a = doc.add_chat_node(0, 0, "a", True)
+    b = doc.add_chat_node(10, 0, "b", False, parent_id=a.id)
+    doc.connect_unchecked(b.id, a.id)  # forces the cycle only the legacy path can
+
+    root = doc.get_branch_root(a.id)
+    assert root is not None  # terminates, does not hang
+
+    history = doc.chat_branch_history(a.id)
+    assert history  # terminates, does not hang
+
+
+def test_delete_chat_node_survives_a_2_cycle_from_old_data_without_corrupting_state():
+    """Regression: delete_chat_node used to pop the target's edges BEFORE
+    reconnecting its children to its parent. If a 2-node cycle already
+    existed (unreachable via live connect() since the fix above, but still
+    possible in a document loaded from data saved before it existed - see
+    connect_unchecked), reconnecting parent_id to itself raised, and the
+    old pop-then-reconnect order left the edges already gone but the node
+    itself never deleted - a corrupted, half-applied mutation. The fix
+    reorders the two steps and skips a would-be self-connect, so this must
+    now either succeed cleanly or - for any other unexpected reason -
+    leave the document completely unchanged."""
+    doc = SceneDocument()
+    a = doc.add_chat_node(0, 0, "a", True)
+    b = doc.add_chat_node(10, 0, "b", False, parent_id=a.id)
+    doc.connect_unchecked(b.id, a.id)  # a 2-cycle: a->b and b->a
+    assert len(doc.edges) == 2
+
+    doc.delete_chat_node(b.id)
+
+    assert b.id not in doc.nodes, "the node must actually be deleted"
+    assert a.id in doc.nodes
+    assert list(doc.edges.values()) == [], "no dangling self-edge or orphaned edge left behind"
+
+
 def test_removing_a_node_removes_its_edges():
     doc = SceneDocument()
     a, b, c = doc.add_node(0, 0), doc.add_node(1, 1), doc.add_node(2, 2)
@@ -1047,6 +1128,60 @@ def test_send_conversation_message_reply_with_code_fence_lands_raw_and_unparsed(
         ], "the raw reply (fences and all) lands verbatim - no parsing happened"
         assert not any(n.kind in ("code", "thinking") for n in document.nodes.values()), (
             "no child node of any kind was created for this reply"
+        )
+
+    asyncio.run(run())
+
+
+def test_conversation_reply_landing_after_the_node_was_deleted_is_dropped_not_a_false_failure():
+    """Regression: _on_reply (backend/api/intents_conversation.py) had no
+    liveness guard, unlike its own sibling _on_partial three lines below.
+    AgentDispatcher._dispatch schedules the reply as an un-awaited task, so
+    the same WS connection is free to delete the node before the reply
+    lands. A genuinely SUCCESSFUL reply then raised SceneError ("unknown
+    node") out of append_conversation_assistant_message, which _dispatch's
+    generic except-Exception handler turned into a misleading "AI response
+    failed" notification for a request that had not failed at all -
+    discarding real model output. The fix mirrors _on_partial's own
+    established posture: skip silently, no notification, since the node
+    the reply would have landed on no longer exists for the user to see it
+    on anyway."""
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
+        node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def blocking_chat(task, messages, **kwargs):
+            started.set()
+            release.wait(5)
+            return {"message": {"content": "a reply that arrives too late"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", blocking_chat):
+            await bus.dispatch_intent(
+                "scene", "sendConversationMessage", [node_id, "what is this graph about?"]
+            )
+            await asyncio.to_thread(started.wait, 5)
+
+            # Delete the node WHILE its reply is still in flight - the
+            # generic removeNodes path, exactly as a real ConversationNode
+            # delete (Delete key / context menu) reaches it.
+            await bus.dispatch_intent("scene", "removeNodes", [[node_id]])
+            assert node_id not in document.nodes
+
+            release.set()
+            entry = next(iter(chat_slots(dispatcher).values()))
+            await entry["task"]  # must not raise out of the dispatch task
+
+        notice = await bus.publish("notification")
+        assert notice["visible"] is False, (
+            "a genuinely successful reply landing on a deleted node must not surface "
+            "a misleading 'AI response failed' notification"
         )
 
     asyncio.run(run())

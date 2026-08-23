@@ -72,6 +72,10 @@ def _mcp_servers_from_wire(servers: object) -> list[dict] | None:
         if not isinstance(entry, dict):
             return None
         normalized_entry = {
+            # A blank/missing id (a brand-new "Add Server" entry) is left
+            # for SettingsManager.set_mcp_servers to assign, server-side -
+            # see its own docstring on why the client never mints one.
+            "id": str(entry.get("id") or "").strip(),
             "name": entry.get("name", ""),
             "command": entry.get("command", ""),
             "args": entry.get("args", []),

@@ -914,6 +914,7 @@ describe("SettingsDialog", () => {
   // intent fired.
   describe("MCP Servers page", () => {
     const fsServer = {
+      id: "fs-id",
       name: "fs",
       command: "npx",
       args: ["-y", "server-filesystem"],
@@ -1029,6 +1030,7 @@ describe("SettingsDialog", () => {
 
     it("Remove fires setMcpServers with the full array minus that entry", async () => {
       const gitServer = {
+        id: "git-id",
         name: "git",
         command: "uvx",
         args: [],

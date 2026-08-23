@@ -2056,17 +2056,100 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
     # -- edges -------------------------------------------------------------
 
     def connect(self, source: str, target: str) -> SceneEdge:
+        self._validate_connect_endpoints(source, target)
+        for edge in self.edges.values():
+            if edge.source == source and edge.target == target:
+                return edge  # idempotent, matching ChatScene's duplicate guard
+        # REVIEW-FIX: refuse an edge that would close a cycle. self.edges is
+        # written ONLY through this method and connect_unchecked below
+        # (grep-confirmed - every add_*_node method and every live/tool/
+        # intent call site goes through connect(); nothing ever assigns
+        # self.edges directly), so this pair is the one true chokepoint for
+        # the whole graph's shape. Before this check, two ordinary
+        # connectNodes calls in opposite directions (a user dragging A->B
+        # then B->A on the canvas, or the Builder's builderConnect tool
+        # doing the same) silently created a 2-node cycle - and
+        # get_branch_root/chat_branch_history (branches.py), which walk a
+        # node's parent chain on nearly every chat/branch action, have no
+        # cycle guard of their own and hung forever the moment one existed,
+        # freezing the single-process backend for every session. Proven
+        # empirically before this fix: doc.connect(a,b); doc.connect(b,a);
+        # doc.get_branch_root(a) never returned.
+        #
+        # A cycle is never a legitimate state for a LIVE edit - branch
+        # structure and note attachment are both meant to be a DAG - so
+        # this is a real invariant, not an over-broad restriction: refuses
+        # target -> ... -> source already existing (adding source -> target
+        # would close it), regardless of which of this app's edge "kinds"
+        # (branch parent-child, note attachment, a plain user-drawn
+        # connection - all the same SceneEdge shape) the existing path is
+        # made of. See connect_unchecked's own docstring for the one real
+        # exception this needs (loading pre-unification saved data).
+        if self._reaches(target, source):
+            raise SceneError(f"cannot connect {source} -> {target}: would create a cycle")
+        return self._insert_edge(source, target)
+
+    def connect_unchecked(self, source: str, target: str) -> SceneEdge:
+        """Everything connect() validates EXCEPT the cycle check - unknown
+        nodes and a self-loop still raise, an exact duplicate is still
+        idempotent. The one legitimate caller: backend/session_load.py's
+        restore of the pre-stage-9.6 per-kind connection buckets (system
+        prompt / group summary / the 12 generic ones), which is READING
+        DATA an OLDER classification scheme produced - one where two
+        connections between the same node pair in opposite directions
+        (e.g. one saved under pycoder_connections, another under
+        gitlink_connections) legitimately encoded two DIFFERENT semantic
+        relationship kinds, not a mistake. Rejecting that on load would
+        silently drop real historical data the user never asked to lose -
+        exactly the kind of destructive migration this codebase's own
+        WRITE-NEW/READ-BOTH discipline exists to avoid. The CURRENT flat
+        `edges` format (stage 9.6 onward, session_load.py's own
+        _restore_flat_edges) is NOT exempted - it is the single unified
+        model with no such per-kind distinction, so a bidirectional pair
+        surviving there could only be an artifact of this exact bug from
+        before it was fixed, which self-healing by dropping (via the
+        ordinary, cycle-checked connect()) is correct."""
+        self._validate_connect_endpoints(source, target)
+        for edge in self.edges.values():
+            if edge.source == source and edge.target == target:
+                return edge
+        return self._insert_edge(source, target)
+
+    def _validate_connect_endpoints(self, source: str, target: str) -> None:
         if source not in self.nodes or target not in self.nodes:
             raise SceneError(f"cannot connect unknown nodes: {source} -> {target}")
         if source == target:
             raise SceneError("cannot connect a node to itself")
-        for edge in self.edges.values():
-            if edge.source == source and edge.target == target:
-                return edge  # idempotent, matching ChatScene's duplicate guard
+
+    def _insert_edge(self, source: str, target: str) -> SceneEdge:
         edge_id = f"e{next(self._counter)}"
         edge = SceneEdge(id=edge_id, source=source, target=target)
         self.edges[edge_id] = edge
         return edge
+
+    def _reaches(self, start: str, goal: str) -> bool:
+        """True if `goal` is reachable from `start` by following existing
+        edges forward (edge.source -> edge.target). Plain BFS with a
+        visited set - the primitive connect() uses to refuse a
+        cycle-closing edge before it is ever created. See connect()'s own
+        comment for why a cycle here is a real hazard, not just an
+        oddity."""
+        if start == goal:
+            return True
+        visited = {start}
+        frontier = [start]
+        while frontier:
+            next_frontier = []
+            for node_id in frontier:
+                for edge in self.edges.values():
+                    if edge.source != node_id or edge.target in visited:
+                        continue
+                    if edge.target == goal:
+                        return True
+                    visited.add(edge.target)
+                    next_frontier.append(edge.target)
+            frontier = next_frontier
+        return False
 
     def remove_edges(self, edge_ids: list[str]) -> None:
         for edge_id in edge_ids:

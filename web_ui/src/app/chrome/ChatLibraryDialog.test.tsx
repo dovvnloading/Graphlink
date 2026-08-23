@@ -106,6 +106,18 @@ function makeTransport() {
   const intents: unknown[][] = [];
   const resubscribes: string[] = [];
   const listeners = new Map<string, (payload: Record<string, unknown>) => void>();
+  // REVIEW-FIX: confirmDelete now goes through transport.request() instead
+  // of fireIntent, the same "I need the actual reply" shape as
+  // DiagnosticsDialog.test.tsx's own makeTransport() (see that file's own
+  // comment) - a vi.fn() so individual tests can drive its resolution/
+  // rejection, wired to also record into the same `intents` array so one
+  // assertion list still covers all three call shapes.
+  // Defaults to a successful delete so every test that doesn't care about
+  // the specific resolved value (most of them) doesn't also have to arrange
+  // one - tests exercising the falsy/rejected paths override this per-call
+  // with mockResolvedValueOnce/mockRejectedValueOnce.
+  const request = vi.fn<(topic: string, intent: string, args?: unknown[]) => Promise<unknown>>()
+    .mockResolvedValue(true);
   const transport = {
     subscribe: (topic: string, l: (payload: Record<string, unknown>) => void) => {
       listeners.set(topic, l);
@@ -128,11 +140,16 @@ function makeTransport() {
     fireIntent: (topic: string, intent: string, args: unknown[] = []) => {
       intents.push([topic, intent, args]);
     },
+    request: (topic: string, intent: string, args: unknown[] = []) => {
+      intents.push([topic, intent, args]);
+      return request(topic, intent, args);
+    },
   } as unknown as WsTransport;
   return {
     transport,
     intents,
     resubscribes,
+    request,
     push: (payload: Record<string, unknown>, topic: string = "app-chat-library") => listeners.get(topic)?.(payload),
   };
 }
@@ -351,6 +368,50 @@ describe("ChatLibraryDialog", () => {
 
     expect(intents.filter((i) => i[1] === "deleteChat")).toEqual([]);
     expect(screen.getByLabelText('Delete "First Chat"')).toBeInTheDocument();
+  });
+
+  // -- REVIEW-FIX: confirmDelete used to fire-and-forget via fireIntent and
+  // -- clear its confirm state the instant the message was SENT, not once
+  // -- the deletion was actually confirmed - a genuine failure left the row
+  // -- sitting in the list with its "Delete?" buttons already reverted to
+  // -- normal, no visible sign anything had gone wrong.
+
+  it("a confirmed delete that actually removes the row closes the confirm UI", async () => {
+    const { user, request } = setup();
+    await user.click(screen.getByText("open library"));
+    request.mockResolvedValueOnce(true);
+
+    await user.click(screen.getByLabelText('Delete "First Chat"'));
+    await user.click(screen.getByLabelText('Confirm delete "First Chat"'));
+
+    await screen.findByLabelText('Delete "First Chat"'); // back to the normal (non-confirming) row action
+    expect(screen.queryByText("Delete?")).toBeNull();
+  });
+
+  it("a resolved-but-falsy delete (the row was already gone) leaves the confirm UI in place rather than optimistically closing it", async () => {
+    const { user, request } = setup();
+    await user.click(screen.getByText("open library"));
+    request.mockResolvedValueOnce(false);
+
+    await user.click(screen.getByLabelText('Delete "First Chat"'));
+    await user.click(screen.getByLabelText('Confirm delete "First Chat"'));
+    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+
+    expect(screen.getByText("Delete?")).toBeInTheDocument();
+  });
+
+  it("a rejected delete request leaves the confirm UI in place and logs, without throwing", async () => {
+    const { user, request } = setup();
+    await user.click(screen.getByText("open library"));
+    request.mockRejectedValueOnce(new Error("socket dropped"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await user.click(screen.getByLabelText('Delete "First Chat"'));
+    await user.click(screen.getByLabelText('Confirm delete "First Chat"'));
+    await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
+
+    expect(screen.getByText("Delete?")).toBeInTheDocument();
+    consoleError.mockRestore();
   });
 
   it("a DB-read notice still renders when present", async () => {

@@ -18,6 +18,8 @@ file's own tests of its validate_chart_data wrapper went with it; the
 canonicalize_chart_data tests below are unaffected (they exercise the
 canonical validator directly, not through any wrapper)."""
 
+import pytest
+
 from graphlink_chart_data import CHART_SPEC_VERSION, ChartDataError, canonicalize_chart_data
 
 
@@ -71,6 +73,50 @@ def test_canonicalize_chart_data_aggregates_duplicate_sankey_flows_and_rejects_c
         assert False, "expected ChartDataError for a sankey cycle"
     except ChartDataError as exc:
         assert "cannot contain cycles" in str(exc)
+
+
+def test_an_oversized_legacy_sankey_payload_is_rejected_without_unbounded_work():
+    """Regression: the legacy nested {data:{nodes,links}} shape was fully
+    materialized (a full pass building `names` from every node, a full
+    pass building `flows` from every link) BEFORE MAX_SANKEY_FLOWS was
+    ever checked - unlike the direct {"flows": [...]} shape, rejected in
+    O(1) by a plain len() that never touches an element. This runs on the
+    FastAPI event loop when restoring a saved chat (session_load.py is not
+    offloaded to a worker thread), so an oversized legacy-format payload
+    blocked every other session on the process for however long the two
+    passes took. Asserts wall-clock time directly, not an internal call
+    count, so this test would also catch the bound being silently moved
+    back after the loops in some future edit."""
+    import time
+
+    huge_links = [{"source": 0, "target": 1, "value": 1}] * 2_000_000
+    payload = {"type": "sankey", "data": {"nodes": [{"name": "A"}, {"name": "B"}], "links": huge_links}}
+
+    start = time.monotonic()
+    with pytest.raises(ChartDataError, match="at most"):
+        canonicalize_chart_data(payload, "sankey")
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.5, (
+        f"rejecting an oversized legacy sankey payload took {elapsed:.3f}s - "
+        "the size check must run before the payload is materialized, not after"
+    )
+
+
+def test_an_oversized_legacy_sankey_node_list_is_also_rejected_without_unbounded_work():
+    """The links-count bound alone would still leave the names-building
+    loop unbounded whenever `nodes` is huge but `links` is small."""
+    import time
+
+    huge_nodes = [{"name": f"n{i}"} for i in range(2_000_000)]
+    payload = {"type": "sankey", "data": {"nodes": huge_nodes, "links": [{"source": 0, "target": 1, "value": 1}]}}
+
+    start = time.monotonic()
+    with pytest.raises(ChartDataError, match="at most"):
+        canonicalize_chart_data(payload, "sankey")
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.5, f"rejecting an oversized legacy sankey node list took {elapsed:.3f}s"
 
 
 def test_canonicalize_chart_data_stamps_the_spec_version():

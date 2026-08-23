@@ -487,6 +487,51 @@ def test_unknown_message_kind_returns_error():
         assert "unknown message kind" in message["error"]
 
 
+def test_a_non_dict_top_level_message_gets_a_graceful_error_not_a_dropped_connection():
+    """Regression: websocket.receive_json() is a bare json.loads() with no
+    shape check - any syntactically valid top-level JSON value (a bare
+    number, a list, null, a string) reached _handle_message unchanged, and
+    `kind = message.get("kind")` raised AttributeError straight past the
+    only try/except in the receive loop (WebSocketDisconnect only),
+    silently killing the connection with zero client-facing feedback -
+    unlike every other malformed-input path in this same function, which
+    replies with a graceful kind:error frame. Sends raw text (not
+    send_json, which only ever encodes a dict-shaped Python value) to put
+    a genuinely non-dict JSON value on the wire, exactly as a malformed
+    client would."""
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_text("42")
+        message = ws.receive_json()
+        assert message["kind"] == "error"
+        assert "malformed message" in message["error"]
+
+        # The connection must still be alive and working afterward - a
+        # graceful reply, not a dropped socket.
+        ws.send_json({"kind": "subscribe", "topics": ["system"]})
+        snapshot = ws.receive_json()
+        assert snapshot["kind"] == "state"
+
+
+def test_a_non_list_topics_field_gets_a_graceful_error_not_a_dropped_connection():
+    """Regression: `topics = message.get("topics") or session.topic_names()`
+    only falls back for a FALSY topics value - a truthy non-iterable (the
+    JSON number 5) bypassed the fallback and raised TypeError straight out
+    of `for topic in topics`, escaping uncaught for the same reason as the
+    non-dict case above."""
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"kind": "subscribe", "topics": 5, "id": 1})
+        message = ws.receive_json()
+        assert message["kind"] == "error"
+        assert message["id"] == 1
+        assert "topics" in message["error"]
+
+        ws.send_json({"kind": "subscribe", "topics": ["system"]})
+        snapshot = ws.receive_json()
+        assert snapshot["kind"] == "state"
+
+
 def test_sessions_do_not_share_connections():
     # ADR-004 stage 4.3: tests EventBus's own generic cross-session
     # isolation mechanism, a scenario the real shipped app's restrictive

@@ -2659,6 +2659,23 @@ class AgentDispatcher:
                 await bus.publish("scene")
                 approved = await approval_future
                 node.state.pycoder_awaiting_approval = False
+                # REVIEW-FIX: without this publish, a REPAIR round's own
+                # re-gate further down (node.state.pycoder_awaiting_approval
+                # = True again, after the REPL execute + repair-agent
+                # latency) writes False then True with no scene broadcast
+                # for the False in between. The frontend's own
+                # CodeExecutionApprovalPanel busy flag (PyCoderNodeView.tsx)
+                # only resets on an OBSERVED false->true transition, so it
+                # never sees a transition at all across that whole window
+                # (True -> [invisible False] -> True) - every repair
+                # round's approval dialog renders with both Approve and
+                # Deny permanently disabled, and that panel has no other
+                # dismissal affordance by design. This publish is what
+                # makes the intermediate state real on the wire, not just
+                # in memory - see the identical fix on the repair gate's
+                # own False assignment further down, and
+                # start_code_sandbox_run's matching pair.
+                await bus.publish("scene")
 
                 if not approved:
                     on_failure("Py-Coder run cancelled: execution was not approved.")
@@ -2761,6 +2778,11 @@ class AgentDispatcher:
                         await bus.publish("scene")
                         approved = await repair_future
                         node.state.pycoder_awaiting_approval = False
+                        # REVIEW-FIX: see the initial gate's own identical
+                        # publish above for why - this loop can run more
+                        # than once (up to max_retries repair rounds), so
+                        # every False here needs its own broadcast too.
+                        await bus.publish("scene")
                         if not approved:
                             on_failure("Py-Coder run cancelled: repaired code was not approved.")
                             await bus.publish("scene")
@@ -3019,6 +3041,20 @@ class AgentDispatcher:
                 # but harmless, for every other path that lands there).
                 node.state.code_sandbox_approval_requirements = ""
                 node.state.code_sandbox_approval_allow_source_builds = False
+                # REVIEW-FIX: without this publish, a REPAIR round's own
+                # re-gate further down writes these fields back (True/
+                # non-empty) after the venv-create/pip-install/execute
+                # latency with no scene broadcast for THIS cleared state in
+                # between - see start_pycoder_run's identical fix for the
+                # full reasoning: CodeSandboxNodeView.tsx's busy flag only
+                # resets on an OBSERVED awaiting-approval false->true
+                # transition, so every repair round's approval dialog
+                # renders with both Approve and Deny permanently disabled
+                # otherwise. Placed after all four fields above are
+                # settled, not right after the first one, so this broadcast
+                # is a single coherent snapshot rather than one publish
+                # mid-way through an in-progress state update.
+                await bus.publish("scene")
 
                 if not approved:
                     on_failure("Sandbox run cancelled: execution was not approved.")
@@ -3128,6 +3164,11 @@ class AgentDispatcher:
                         repair_approved = await repair_future
                         node.state.code_sandbox_awaiting_approval = False
                         node.state.code_sandbox_approval_requirements = ""
+                        # REVIEW-FIX: see the initial gate's own identical
+                        # publish above for why - this loop can run more
+                        # than once (up to max_attempts repair rounds), so
+                        # every False here needs its own broadcast too.
+                        await bus.publish("scene")
                         if not repair_approved:
                             on_failure("Sandbox run cancelled: repaired code was not approved.")
                             await bus.publish("scene")

@@ -631,6 +631,85 @@ def test_undo_run_stops_at_the_users_own_later_edits(document):
     assert user_node.id in document.nodes
 
 
+def test_undo_is_refused_for_a_step_command_whose_run_is_still_live_on_a_different_node(document):
+    """Regression: _guard_live_runs used to check only the SPECIFIC
+    command's own touched_node_ids for a live pending_request_id. A
+    multi-step Builder run marks pending_request_id on the PLAN node only,
+    for the run's whole duration - never on the individual nodes its own
+    per-step tool calls create/edit/connect. So undoing an earlier step of
+    a still-running build - whose own touched node is never the plan node
+    - sailed through completely unguarded while the run kept writing more
+    state on top of the now-vanished node."""
+    plan = document.add_plan_node(0, 0, "build something")
+    plan.pending_request_id = "run-1"
+    plan.state.builder_run_id = "run-1"
+
+    content_node, command = document.record_command(
+        "builderCreateNode", "agent", lambda: document.add_note(100, 0),
+        run_id="run-1",
+    )
+    assert content_node.pending_request_id is None, "only the plan node is marked busy during a run"
+
+    with pytest.raises(Exception, match="still running"):
+        document.undo()
+    assert content_node.id in document.nodes, "the undo must have been refused, not silently applied"
+
+    # Once the run ends (the plan node's own busy marker clears), the exact
+    # same command undoes normally.
+    plan.pending_request_id = None
+    document.undo()
+    assert content_node.id not in document.nodes
+
+
+def test_undo_of_an_ordinary_user_edit_is_unaffected_by_an_unrelated_live_run(document):
+    """The new run-scoped check must not over-reach: a command with no
+    run_id at all (an ordinary user edit) must never be refused just
+    because SOME live run happens to exist elsewhere in the document."""
+    plan = document.add_plan_node(0, 0, "build something")
+    plan.pending_request_id = "run-1"
+    plan.state.builder_run_id = "run-1"
+
+    user_node, _ = document.record_command("addNote", "user", lambda: document.add_note(200, 200))
+    document.undo()
+    assert user_node.id not in document.nodes, "an unrelated user edit must undo normally"
+
+
+def test_undo_run_rolls_back_completely_when_an_older_command_in_the_run_is_refused(document):
+    """Regression: undo_run looped calling undo() with no transaction. If a
+    LATER call in the loop (an OLDER command in the run, since the stack
+    peels newest-first) got refused by the live-run guard, every command
+    already undone earlier in the SAME call stayed undone - real document
+    mutations already applied - while the resulting UndoRefusedError
+    propagated up to intents_undo.py's except branch, which shows a
+    notification and returns without ever calling publish_scene(). The
+    backend document and every connected client's canvas silently
+    diverged. undo_run must now be atomic: either the whole run undoes, or
+    none of it does, observable here as the document being byte-identical
+    to its pre-call state on a refusal.
+
+    Deliberately triggers the refusal via a live pending_request_id on the
+    OLDEST command's own touched node directly - the pre-existing, per-node
+    half of _guard_live_runs - so this test verifies undo_run's atomicity
+    in isolation, independent of the newer run-scoped guard covered by the
+    tests above."""
+    n0, _ = document.record_command("addNote", "agent", lambda: document.add_note(0, 0), run_id="run-1")
+    n1, _ = document.record_command("addNote", "agent", lambda: document.add_note(50, 0), run_id="run-1")
+    n2, _ = document.record_command("addNote", "agent", lambda: document.add_note(100, 0), run_id="run-1")
+    n0.pending_request_id = "still-generating"  # only the OLDEST command's own node is live
+
+    nodes_before = set(document.nodes)
+    command_log_before = list(document.command_log)
+    redo_stack_before = list(document.redo_stack)
+
+    with pytest.raises(Exception, match="still generating"):
+        document.undo_run("run-1")
+
+    assert set(document.nodes) == nodes_before, "undo_run must not have deleted anything on a refusal"
+    assert list(document.command_log) == command_log_before, "the command stack must be byte-identical to before the call"
+    assert list(document.redo_stack) == redo_stack_before
+    assert n0.id in document.nodes and n1.id in document.nodes and n2.id in document.nodes
+
+
 def test_session_load_clears_both_stacks(wired):
     bus, document = wired
     _dispatch(bus, "addNode", 0, 0, "old session")
