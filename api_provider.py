@@ -2064,6 +2064,26 @@ def _extract_openai_image_bytes(response) -> bytes:
     if not image_url and isinstance(first_item, dict):
         image_url = first_item.get("url")
     if image_url:
+        # SECURITY-FIX: image_url comes verbatim from the image endpoint's
+        # response - the OpenAI-compatible base_url is user-configurable and,
+        # under the threat model, a hostile or MITM'd provider response
+        # (boundary (d)) is untrusted. urllib.request.urlopen installs the
+        # file://, data: and ftp: handlers by default, so an unchecked URL
+        # here let a response body read an arbitrary LOCAL file (proven:
+        # file:///.../secret returned the file's bytes) or hit an internal
+        # host - classic SSRF - with the bytes then persisted and served
+        # back. The web_research subsystem already solved exactly this for
+        # LLM-reached URLs; reuse its audited FetchPolicy (https-only,
+        # rejects private/loopback/link-local/metadata addresses) rather
+        # than rolling a second, weaker check here.
+        from graphlink_plugins.web_research.fetch_policy import FetchPolicy, URLPolicyError
+
+        try:
+            FetchPolicy().validate(image_url)
+        except URLPolicyError as exc:
+            raise RuntimeError(
+                f"Image endpoint returned a URL blocked by fetch policy: {exc}"
+            ) from exc
         try:
             with urllib.request.urlopen(image_url, timeout=120) as resp:
                 return resp.read()
