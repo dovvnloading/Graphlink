@@ -419,7 +419,15 @@ def _approval_summary(call: ToolCall, document) -> str:
 
     code = run_node_pending_code(document, call)
     if code is not None:
-        return f"{call.name} will run this code:\n{_truncate(code, _APPROVAL_SUMMARY_CAP)}"
+        # SECURITY-FIX: NOT truncated. The cap below exists to keep an
+        # argument blob readable; applied to the code it meant everything
+        # past character 400 executed without ever being shown to the
+        # approver - a prompt-injected model just pads a benign prologue
+        # and puts the payload after the cut. The panel renders this in a
+        # scrollable <pre> (plan-node-approval-summary), so length costs
+        # nothing; the approver sees exactly the bytes PythonREPL.execute()
+        # will run.
+        return f"{call.name} will run this code:\n{code}"
     args = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
     return f"{call.name} {_truncate(args, _APPROVAL_SUMMARY_CAP)}"
 
@@ -538,7 +546,19 @@ async def run_build(
             # silently auto-running. Scope labels are config metadata, not
             # enforcement; "declared safe" must be an explicit, non-empty
             # claim to auto-approve on.
-            if spec_scopes and spec_scopes <= _AUTOPILOT_AUTO_SCOPES:
+            # SECURITY-FIX: an approval="always" registration is the tool
+            # author saying "a human looks at EVERY call, whatever the
+            # mode" - graph.delete_node registers that way precisely
+            # because a delete destroys content the user may not have
+            # read yet. This router only ever looked at scopes, so a
+            # delete (scope graph.mutate, inside the autopilot set) was
+            # auto-approved anyway, and the policy was decorative. Scope
+            # fit is necessary for auto-approval, not sufficient.
+            if (
+                spec_scopes
+                and spec_scopes <= _AUTOPILOT_AUTO_SCOPES
+                and registry.approval_for(call.name) != "always"
+            ):
                 return True
         future: asyncio.Future = loop.create_future()
         handle.approval_future = future

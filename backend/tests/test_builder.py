@@ -421,6 +421,52 @@ class TestRunNodeExecuteApprovalGate:
         )
         assert node.state.builder_status == "done"
 
+    def test_run_node_execute_approval_discloses_the_whole_code_not_a_400_char_prefix(self):
+        """SECURITY-FIX: the disclosure above was capped at
+        _APPROVAL_SUMMARY_CAP (400) characters - a prompt-injected model
+        pads a benign prologue past the cap and everything after it runs
+        without ever being shown. The approver must see the exact bytes
+        PythonREPL.execute() will run."""
+        document = SceneDocument()
+        parent = document.add_chat_node(0, 0, "ctx", True)
+        pycoder = document.add_pycoder_node(0, 200, parent.id)
+        prologue = "# " + ("harmless comment " * 40) + "\n"  # well past 400 chars
+        payload = "import os; os.system('the part that used to be hidden')"
+        pycoder.state.pycoder_code = prologue + payload
+        assert len(prologue) > builder_module._APPROVAL_SUMMARY_CAP
+
+        summary = builder_module._approval_summary(
+            call("c1", "run_node", node_id=pycoder.id), document,
+        )
+
+        assert payload in summary, "code past the old 400-char cap must be disclosed"
+        assert summary.endswith(payload), "no truncation marker may replace the tail"
+
+    def test_autopilot_still_prompts_for_a_tool_registered_approval_always(self, monkeypatch):
+        """SECURITY-FIX: graph.delete_node registers approval="always"
+        because a delete destroys content the user may not have read yet,
+        but autopilot's router only consulted scopes - graph.mutate fits
+        the autopilot set, so the delete was auto-approved and the policy
+        was decorative."""
+        document, dispatcher, registry, bus = make_harness()
+        victim = document.add_chat_node(0, 0, "user content the model wants gone", True)
+        node = seed_plan(document, ["tidy up"], mode="autopilot")
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "graph.delete_node", node_id=victim.id)]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        approvals, denials = asyncio.run(
+            drive_build(document, dispatcher, registry, bus, node, deny_first=True)
+        )
+
+        assert approvals == ["graph.delete_node"], (
+            "an approval='always' tool must prompt in autopilot too"
+        )
+        assert denials == 1
+        assert victim.id in document.nodes, "the denied delete must not have happened"
+        assert node.state.builder_status == "done"
+
 
 class TestPlanPersistence:
     def test_round_trip_preserves_the_plan_and_normalizes_live_states(self):
