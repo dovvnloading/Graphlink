@@ -982,9 +982,19 @@ def _restore_children(
             continue
         for position in range(max(len(child_ids), len(child_indices))):
             child_new_id = None
-            if position < len(child_ids) and child_ids[position] in nodes_by_id:
-                child_new_id = nodes_by_id[child_ids[position]]
-            elif position < len(child_indices):
+            # REVIEW-FIX: child_ids[position]/child_indices[position] come
+            # straight from untrusted payload JSON and can legitimately be a
+            # list/dict (valid JSON, wrong shape) instead of the expected
+            # scalar id/index - `x in dict`/`dict.get(x)` raise TypeError for
+            # an unhashable x, which would abort the entire chat load instead
+            # of skipping just this one child. nodes_by_id is always keyed by
+            # str(payload_id) (see _resolve_ref's identical str(...) guard),
+            # so str()-cast the id lookup; all_nodes_map is int-keyed, so
+            # isinstance-guard the index lookup the same way _resolve_ref
+            # guards its own index fallback.
+            if position < len(child_ids) and str(child_ids[position]) in nodes_by_id:
+                child_new_id = nodes_by_id[str(child_ids[position])]
+            elif position < len(child_indices) and isinstance(child_indices[position], int):
                 child_new_id = all_nodes_map.get(child_indices[position])
             if child_new_id is not None:
                 try:

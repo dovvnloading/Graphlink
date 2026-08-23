@@ -347,6 +347,42 @@ def test_children_ids_are_id_preferred_over_children_indices():
     assert not any(e.source == root.id and e.target == wrong_child.id for e in document.edges.values())
 
 
+def test_malformed_child_id_is_skipped_without_aborting_the_rest_of_the_load():
+    # A hand-edited/imported save with a non-scalar children_ids entry
+    # (valid JSON, wrong shape) must not raise TypeError and abort the
+    # whole load - only that one malformed child is dropped, a well-formed
+    # sibling entry at another position still resolves.
+    document = _restore(nodes=[
+        {"node_type": "chat", "id": "root", "raw_content": "root", "is_user": True,
+         "position": {"x": 0, "y": 0}, "children_ids": [["nested", "list"], "child-b"]},
+        {"node_type": "chat", "id": "child-a", "raw_content": "child-a", "is_user": False,
+         "position": {"x": 0, "y": 100}},
+        {"node_type": "chat", "id": "child-b", "raw_content": "child-b", "is_user": False,
+         "position": {"x": 0, "y": 200}},
+    ])
+    root = next(n for n in document.nodes.values() if n.content == "root")
+    child_b = next(n for n in document.nodes.values() if n.content == "child-b")
+    assert len(document.edges) == 1
+    assert any(e.source == root.id and e.target == child_b.id for e in document.edges.values())
+
+
+def test_malformed_child_index_is_skipped_without_aborting_the_rest_of_the_load():
+    # Same tolerance, but for a non-scalar children_indices entry (a dict)
+    # instead of children_ids.
+    document = _restore(nodes=[
+        {"node_type": "chat", "id": "root", "raw_content": "root", "is_user": True,
+         "position": {"x": 0, "y": 0}, "children_indices": [{"nested": True}, 2]},
+        {"node_type": "chat", "id": "unused", "raw_content": "unused", "is_user": False,
+         "position": {"x": 0, "y": 100}},
+        {"node_type": "chat", "id": "child", "raw_content": "child", "is_user": False,
+         "position": {"x": 0, "y": 200}},
+    ])
+    root = next(n for n in document.nodes.values() if n.content == "root")
+    child = next(n for n in document.nodes.values() if n.content == "child")
+    assert len(document.edges) == 1
+    assert any(e.source == root.id and e.target == child.id for e in document.edges.values())
+
+
 # -- notes --------------------------------------------------------------
 
 
