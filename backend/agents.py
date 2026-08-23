@@ -2560,7 +2560,22 @@ class AgentDispatcher:
         synchronous stretch as node.pending_request_id's own claim - same
         pattern as gitlink_run/gitlink_apply (stage 2.4f): node.pending_
         request_id remains the sole real busy guard, this registry claim
-        is pure task/cancel_event/approval_future bookkeeping."""
+        is task/cancel_event/approval_future bookkeeping.
+
+        REVIEW-FIX: ...plus `finalize` (see _finalize below), which used to
+        be omitted here. Without it, node.pending_request_id - the one
+        field runPyCoder's own busy pre-check and the frontend's spinner
+        both key off - was cleared ONLY by _run's own late `finally`, which
+        cannot run until the blocking repl.execute() call above actually
+        returns. RunRegistry.cancel() (cancel_pycoder, on every Cancel
+        click, node delete, and session disconnect) pops this handle and
+        frees is_busy("pycoder") immediately regardless, so a Cancel during
+        the EXECUTE stage used to leave the node showing busy - with zero
+        feedback - for up to PYCODER_EXECUTE_TIMEOUT_SECONDS after the run
+        was already gone from this registry. Every other cancellable kind
+        in this module either wires finalize (start_builder_run/_dispatch)
+        or gets near-instant natural cancellation anyway (code_sandbox's
+        should_continue() polling); this closes the one real gap."""
         if node.pending_request_id and node.pending_request_id != _CODE_EXEC_RUN_CLAIM_PLACEHOLDER:
             notifications_state.show("Py-Coder is already busy for this node.", "info")
             await bus.publish("notification")
@@ -2568,8 +2583,27 @@ class AgentDispatcher:
 
         cancel_event = threading.Event()
         approval_future: asyncio.Future = asyncio.get_running_loop().create_future()
+
+        async def _finalize() -> None:
+            """REVIEW-FIX: see this method's own docstring above - mirrors
+            start_builder_run's/_dispatch's identically-shaped _finalize.
+            Run by RunRegistry.cancel() the instant Cancel/Stop lands
+            (Cancel click, node delete, or session disconnect), well
+            before _run's own late `finally` can react to a blocking
+            repl.execute() call. `handle` is captured by reference to the
+            enclosing scope - safe even though this closure is defined
+            before `handle` itself is assigned below, since the body only
+            runs after claim() has returned."""
+            node.state.pycoder_awaiting_approval = False
+            node.state.pycoder_approved_fingerprint = None
+            node.state.pycoder_error = "Py-Coder execution cancelled."
+            if node.pending_request_id == handle.request_id:
+                node.pending_request_id = None
+            await bus.publish("scene")
+
         handle = self._runs.claim(
-            "pycoder", node_id=node_id, cancel_event=cancel_event, approval_future=approval_future
+            "pycoder", node_id=node_id, cancel_event=cancel_event,
+            approval_future=approval_future, finalize=_finalize,
         )
         request_id = handle.request_id
         node.pending_request_id = request_id
