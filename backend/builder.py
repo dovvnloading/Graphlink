@@ -65,11 +65,23 @@ BUILDER_GRANTED_SCOPES = frozenset({
 })
 
 # Autopilot's auto-approval set (design doc D5, user-confirmed 2026-08-09):
-# graph edits and code execution proceed unprompted (disclosed at launch;
-# ADR-005 resource caps still bound execution); net.fetch ALWAYS prompts -
-# the 8.5 exit criterion's "no network unless approved".
+# graph edits proceed unprompted; net.fetch ALWAYS prompts - the 8.5 exit
+# criterion's "no network unless approved".
+#
+# REVIEW-FIX: code.execute (run_node running a pycoder node) used to be in
+# this set too - "disclosed at launch" per the design doc - which let
+# Builder-authored Python run with zero human review whenever the model
+# steered itself into writing and then executing code in the same
+# autopilot run (e.g. off prompt-injected content it read via
+# graph.read_subgraph). Arbitrary code execution is a different risk class
+# than a graph edit (undoable, contained to the canvas) - it warrants the
+# same "always ask, even in autopilot" posture net.fetch already gets, not
+# a blanket auto-approve. Excluding it here is what forces run_node's
+# execute action through request_approval below regardless of mode; see
+# _approval_summary's own REVIEW-FIX for the matching visibility fix (the
+# prompt now shows the code, not just the call's arguments).
 _AUTOPILOT_AUTO_SCOPES = frozenset({
-    GRAPH_READ, GRAPH_MUTATE, CODE_EXECUTE, PROVIDER_CALL, KNOWLEDGE_READ,
+    GRAPH_READ, GRAPH_MUTATE, PROVIDER_CALL, KNOWLEDGE_READ,
 })
 
 _APPROVAL_SUMMARY_CAP = 400
@@ -395,7 +407,19 @@ def _truncate(text: str, cap: int) -> str:
     return text if len(text) <= cap else text[:cap] + "…"
 
 
-def _approval_summary(call: ToolCall) -> str:
+def _approval_summary(call: ToolCall, document) -> str:
+    """REVIEW-FIX: a run_node(action="execute") call's own arguments are
+    just {node_id, action} - the Python about to run lives on the TARGET
+    node's state, not in the call, so showing the arguments alone asks a
+    human to bless a black box (see run_node_pending_code's own doc for
+    why). Every other tool's arguments already say what will happen, so
+    they keep the plain JSON summary; only this one case substitutes the
+    code itself."""
+    from backend.tools_graph import run_node_pending_code
+
+    code = run_node_pending_code(document, call)
+    if code is not None:
+        return f"{call.name} will run this code:\n{_truncate(code, _APPROVAL_SUMMARY_CAP)}"
     args = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
     return f"{call.name} {_truncate(args, _APPROVAL_SUMMARY_CAP)}"
 
@@ -520,7 +544,7 @@ async def run_build(
         handle.approval_future = future
         node.state.builder_awaiting_tool_approval = True
         node.state.builder_approval_tool_name = call.name
-        node.state.builder_approval_summary = _approval_summary(call)
+        node.state.builder_approval_summary = _approval_summary(call, document)
         await bus.publish("scene")
         try:
             approved = bool(await future)

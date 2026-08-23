@@ -103,9 +103,12 @@ def seed_plan(document, steps, *, mode="copilot", **budgets):
     return node
 
 
-async def drive_build(document, dispatcher, registry, bus, node, *, approve=True, deny_first=False, notifications=None):
+async def drive_build(document, dispatcher, registry, bus, node, *, approve=True, deny_first=False, notifications=None, summaries=None):
     """Runs run_build while a driver coroutine plays the approving human.
-    Returns (approvals_seen, denials_issued)."""
+    Returns (approvals_seen, denials_issued). `summaries`, if passed, gets
+    each prompt's node.state.builder_approval_summary appended alongside
+    the matching approvals entry - opt-in so the existing two-tuple
+    callers are untouched."""
     cancel_event = threading.Event()
     handle = dispatcher._runs.claim("builder", node_id=node.id, cancel_event=cancel_event)
     approvals = []
@@ -130,6 +133,8 @@ async def drive_build(document, dispatcher, registry, bus, node, *, approve=True
             and not future.done()
         ):
             approvals.append(node.state.builder_approval_tool_name)
+            if summaries is not None:
+                summaries.append(node.state.builder_approval_summary)
             if deny_first and denials["count"] == 0:
                 denials["count"] += 1
                 future.set_result(False)
@@ -348,6 +353,71 @@ class TestAutopilotNetworkGate:
             "run_node registers graph.read only - the router must derive the "
             "research action's net.fetch scope or autopilot silently reaches "
             "the network"
+        )
+        assert node.state.builder_status == "done"
+
+
+class TestRunNodeExecuteApprovalGate:
+    """REVIEW-FIX regression: run_node(action="execute") on a pycoder node
+    used to bypass human review entirely - executing Builder-authored
+    Python straight through PythonREPL.execute() with no approval_future,
+    no pycoder_awaiting_approval, and (in autopilot, since code.execute
+    was in _AUTOPILOT_AUTO_SCOPES) no prompt at all. Mirrors
+    TestAutopilotNetworkGate's own shape for the identical class of gap,
+    now closed the same way: code.execute is no longer auto-approved, and
+    the prompt shown discloses the code itself (run_node_pending_code /
+    _approval_summary), not just the call's {node_id, action} arguments."""
+
+    def test_run_node_execute_prompts_in_autopilot_despite_the_registered_code_execute_scope(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        parent = document.add_chat_node(0, 0, "ctx", True)
+        pycoder = document.add_pycoder_node(0, 200, parent.id)
+        pycoder.state.pycoder_code = "print('should not run without review')"
+        node = seed_plan(document, ["run the code"], mode="autopilot")
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "run_node", node_id=pycoder.id)]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        approvals, denials = asyncio.run(
+            drive_build(document, dispatcher, registry, bus, node, deny_first=True)
+        )
+
+        assert approvals == ["run_node"], (
+            "code.execute must prompt even in autopilot - a Builder-written "
+            "pycoder node is arbitrary code execution, the same risk class "
+            "net.fetch already never auto-approves"
+        )
+        assert denials == 1
+        # Denied means invoke() never called the handler - LoopDispatcher.
+        # get_pycoder_repl raises if it's ever reached, so a passing build
+        # here (rather than an AssertionError bubbling out of the task) is
+        # itself proof the code never reached the REPL unapproved.
+        assert node.state.builder_status == "done"
+
+    def test_run_node_execute_approval_discloses_the_code_not_just_the_call_arguments(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        parent = document.add_chat_node(0, 0, "ctx", True)
+        pycoder = document.add_pycoder_node(0, 200, parent.id)
+        pycoder.state.pycoder_code = "import os\nos.system('echo hi')"
+        node = seed_plan(document, ["run the code"])  # copilot: already prompted pre-fix
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "run_node", node_id=pycoder.id)]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+        summaries: list = []
+
+        approvals, denials = asyncio.run(
+            drive_build(document, dispatcher, registry, bus, node, deny_first=True, summaries=summaries)
+        )
+
+        assert approvals == ["run_node"]
+        assert len(summaries) == 1
+        # The old summary was just the call's own arguments - node_id/action,
+        # never the code. The fix must show the code that will actually run.
+        assert pycoder.state.pycoder_code in summaries[0]
+        assert summaries[0] == builder_module._approval_summary(
+            call("c1", "run_node", node_id=pycoder.id), document,
         )
         assert node.state.builder_status == "done"
 

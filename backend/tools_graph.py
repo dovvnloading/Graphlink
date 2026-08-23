@@ -242,6 +242,29 @@ def run_node_effective_scope(document: SceneDocument, call: ToolCall) -> str | N
     return _RUN_NODE_ACTION_SCOPES.get(action)
 
 
+def run_node_pending_code(document: SceneDocument, call: ToolCall) -> str | None:
+    """REVIEW-FIX: the code a run_node(action="execute") call is about to
+    hand to PythonREPL.execute() - or None if `call` is not such a call.
+    Exists so the approval prompt shown to a human (builder.py's
+    _approval_summary) can disclose the CODE, not just the call's own
+    arguments ({"node_id": ..., "action": "execute"}). The code itself
+    lives on the TARGET node's state (set by an earlier, separately-
+    approved graph.set_node_content call), not in this call - a human
+    approving from arguments alone would be blessing a black box, unlike
+    every other run_node action where the arguments already say what will
+    happen. Mirrors run_node_effective_scope's "derive what the call will
+    actually do before it's invoked" shape."""
+    if call.name != "run_node":
+        return None
+    node = document.nodes.get(str(call.arguments.get("node_id") or ""))
+    if node is None or node.kind != "pycoder":
+        return None
+    action = str(call.arguments.get("action") or "") or _RUN_NODE_DEFAULT_ACTIONS.get(node.kind, "")
+    if action != "execute":
+        return None
+    return node.state.pycoder_code
+
+
 def _run_id_of(ctx: RunContext) -> str | None:
     """The builder's BuilderRunContext carries run_id; a bare RunContext
     (tests, a future non-builder caller) does not - unstamped is the
@@ -692,7 +715,8 @@ RUN_NODE_SPEC = ToolSpec(
     description=(
         "Run a node's action and return its result. Actions: execute (a "
         "pycoder node's default - runs its current code in its Python REPL; "
-        "requires the code.execute scope), reply (a chat node's default - "
+        "requires the code.execute scope; always prompts for human "
+        "approval showing the code, even in autopilot), reply (a chat "
         "generates an assistant reply as a new child node from its branch "
         "history; requires provider.call), chart (explicit action on any "
         "content node - chat/note/document/code - generates a chart node "
@@ -760,7 +784,22 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
     re-entering the fire-and-forget AgentDispatcher surfaces themselves:
     those claim their own busy kinds, wire callbacks to intents, and offer
     no awaitable completion; this runs inline under the BUILDER's run and
-    cancel event instead (the design doc's D9)."""
+    cancel event instead (the design doc's D9).
+
+    REVIEW-FIX: the execute action does NOT reuse start_pycoder_run's own
+    dedicated approval_future/pycoder_awaiting_approval gate (that surface
+    is fire-and-forget, as above) - it relies entirely on run_node's own
+    registry-level approval ("once", registered below) instead. That gate
+    used to be silently satisfied in autopilot (code.execute was in
+    builder.py's _AUTOPILOT_AUTO_SCOPES) and, in copilot, disclosed only
+    the call's own arguments (node_id/action, not the code) - the code
+    lives on the target node's state, written by an earlier, separately-
+    approved graph.set_node_content call the human may not connect to
+    this one. Fixed at the source: _AUTOPILOT_AUTO_SCOPES no longer
+    auto-approves code.execute (builder.py), and _approval_summary there
+    now shows the actual code for this call via run_node_pending_code
+    above - so BOTH modes now require a human to see and approve the
+    code immediately before it runs, not just the tool-call shape."""
 
     async def handler(call: ToolCall, ctx: RunContext) -> ToolResult:
         from backend import agents as _agents  # late import + late binding (test seam)
