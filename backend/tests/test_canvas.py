@@ -186,7 +186,7 @@ def test_delete_chat_node_refuses_atomically_when_a_later_childs_reconnect_would
     doc = SceneDocument()
     p = doc.add_chat_node(0, 0, "p", True)
     d = doc.add_chat_node(1, 0, "d", False, parent_id=p.id)
-    c1 = doc.add_chat_node(2, 0, "c1", True, parent_id=d.id)
+    _c1 = doc.add_chat_node(2, 0, "c1", True, parent_id=d.id)
     c2 = doc.add_chat_node(2, 1, "c2", True, parent_id=d.id)
     x = doc.add_node(3, 0, "x")
     # A multi-hop legacy cycle only connect_unchecked can produce: c2 -> x
