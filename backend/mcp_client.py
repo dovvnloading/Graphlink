@@ -258,15 +258,31 @@ class McpStdioClient:
 
     def list_tools(self) -> tuple[ToolSpec, ...]:
         response = self._call("tools/list", {})
-        tools = response.get("tools", []) if isinstance(response, dict) else []
-        return tuple(
-            ToolSpec(
-                name=str(tool["name"]),
+        raw_tools = response.get("tools") if isinstance(response, dict) else None
+        if not isinstance(raw_tools, list):
+            raw_tools = []
+        specs: list[ToolSpec] = []
+        for tool in raw_tools:
+            # REVIEW-FIX: a spec-noncompliant server's tools/list response
+            # (a non-dict entry, a missing/null/blank "name") used to crash
+            # via an uncaught KeyError/TypeError - the only real caller
+            # (agents.py's _register_configured_mcp_tools) only catches
+            # (McpError, OSError), so this took down the WHOLE Builder tool
+            # registry for the session, every other configured server's
+            # tools included, not just this one's. Same "drop the bad
+            # entry, keep the rest" posture as graphlink_settings_store.py's
+            # get_mcp_servers for a malformed persisted server entry.
+            if not isinstance(tool, dict):
+                continue
+            name = tool.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            specs.append(ToolSpec(
+                name=name,
                 description=str(tool.get("description") or ""),
                 input_schema=tool.get("inputSchema") or {"type": "object"},
-            )
-            for tool in tools
-        )
+            ))
+        return tuple(specs)
 
     def call_tool(self, name: str, arguments: dict) -> ToolResult:
         response = self._call("tools/call", {"name": name, "arguments": dict(arguments or {})})

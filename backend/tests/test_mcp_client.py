@@ -448,3 +448,108 @@ def test_a_stdin_write_that_the_server_never_drains_raises_instead_of_hanging_fo
         assert elapsed < 2.5, f"write timeout did not bound the call - took {elapsed:.1f}s"
     finally:
         client.close()
+
+
+# -- a malformed tools/list response must not crash the whole registry ------
+
+
+_MALFORMED_TOOLS_SERVER_SCRIPT = textwrap.dedent(r'''
+    import json
+    import sys
+
+    def send(message):
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request = json.loads(line)
+        method = request.get("method")
+        request_id = request.get("id")
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "buggy", "version": "0.0.1"},
+            }})
+        elif method == "notifications/initialized":
+            pass
+        elif method == "tools/list":
+            send({
+                "jsonrpc": "2.0", "id": request_id,
+                "result": {"tools": [
+                    {"name": "good_tool", "description": "the only well-formed entry",
+                     "inputSchema": {"type": "object"}},
+                    {"description": "missing the required name field entirely"},
+                    "not_even_a_dict",
+                    {"name": None, "description": "a null name"},
+                    {"name": "", "description": "a blank name"},
+                ]},
+            })
+        else:
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "error": {"code": -32601, "message": "unknown method"}})
+''')
+
+
+def test_list_tools_skips_malformed_entries_instead_of_crashing(tmp_path):
+    """Regression: list_tools() indexed tool["name"] with no shape
+    validation, so a single malformed entry (missing "name", a non-dict
+    entry, a null/blank name) raised KeyError/TypeError uncaught by the
+    only real caller - crashing the WHOLE Builder tool registry (every
+    other configured server's tools too) for the session. Malformed
+    entries must be skipped, not raised on - same "drop the bad entry, keep
+    the rest" posture as graphlink_settings_store.py's get_mcp_servers."""
+    script = tmp_path / "malformed_tools_server.py"
+    script.write_text(_MALFORMED_TOOLS_SERVER_SCRIPT, encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),))
+    try:
+        client.connect()
+        specs = client.list_tools()  # must not raise
+        assert [spec.name for spec in specs] == ["good_tool"]
+    finally:
+        client.close()
+
+
+_NULL_TOOLS_SERVER_SCRIPT = textwrap.dedent(r'''
+    import json
+    import sys
+
+    def send(message):
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request = json.loads(line)
+        method = request.get("method")
+        request_id = request.get("id")
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "buggy", "version": "0.0.1"},
+            }})
+        elif method == "notifications/initialized":
+            pass
+        elif method == "tools/list":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {"tools": None}})
+        else:
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "error": {"code": -32601, "message": "unknown method"}})
+''')
+
+
+def test_list_tools_tolerates_a_non_list_tools_field(tmp_path):
+    """A `"tools": null` response (or any non-list shape) must degrade to
+    "no tools", not raise - same tolerance as a malformed individual entry."""
+    script = tmp_path / "null_tools_server.py"
+    script.write_text(_NULL_TOOLS_SERVER_SCRIPT, encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),))
+    try:
+        client.connect()
+        assert client.list_tools() == ()
+    finally:
+        client.close()
