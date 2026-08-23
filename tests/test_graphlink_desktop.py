@@ -173,6 +173,9 @@ def desktop_harness(tmp_path, monkeypatch):
         webview_start_side_effect=None,
         wait_for_health_result=True,
         start_backend_auth_tokens=[],
+        start_backend_listeners=[],
+        bind_listener_requests=[],
+        bind_listener_error=None,
         wait_for_health_auth_tokens=[],
         sweep_scratch_calls=0,
         sweep_scratch_side_effect=None,
@@ -226,13 +229,38 @@ def desktop_harness(tmp_path, monkeypatch):
     fake_server = _FakeServer()
     fake_thread = _FakeThread(alive=True)
 
-    def fake_start_backend(port, previous_run_crashed=False, auth_token=None):
+    def fake_start_backend(port, previous_run_crashed=False, auth_token=None, listener=None):
         # ADR-004 stage 4.1: recorded, not ignored - the token main() mints
         # is exactly what test_main_always_starts_the_backend_with_a_
         # capability_token below asserts on, so "shipped with auth
         # accidentally disabled" is a test failure rather than silent.
         state.start_backend_auth_tokens.append(auth_token)
+        state.start_backend_listeners.append(listener)
         return fake_server, fake_thread
+
+    class _FakeListener:
+        """Stands in for _bind_listener's real socket so main() never binds
+        a live port under test - records the requested port and reports
+        it back (or a fixed fallback for port=None) via getsockname()."""
+
+        def __init__(self, requested):
+            self.requested = requested
+            self.port = requested if requested else 4242
+            self.closed = False
+
+        def getsockname(self):
+            return ("127.0.0.1", self.port)
+
+        def close(self):
+            self.closed = True
+
+    def fake_bind_listener(port):
+        state.bind_listener_requests.append(port)
+        if state.bind_listener_error is not None:
+            raise state.bind_listener_error
+        return _FakeListener(port)
+
+    monkeypatch.setattr(graphlink_desktop, "_bind_listener", fake_bind_listener)
 
     def fake_wait_for_health(base_url, timeout, thread=None, auth_token=None):
         state.wait_for_health_auth_tokens.append(auth_token)
@@ -426,3 +454,95 @@ def test_main_passes_the_token_to_the_window_as_a_url_fragment(desktop_harness):
     # the substring while losing the property.
     assert f"#token={token}" in url
     assert url.split("#", 1)[0].endswith("/"), "the fragment must not corrupt the page path"
+
+
+# -- SECURITY-FIX: exclusive listener bind, no probe-close-rebind window --------
+
+
+def test_bind_listener_refuses_a_port_another_process_already_holds_exclusively():
+    first = graphlink_desktop._bind_listener(None)
+    try:
+        port = first.getsockname()[1]
+        with pytest.raises(OSError):
+            graphlink_desktop._bind_listener(port)
+    finally:
+        first.close()
+
+
+@pytest.mark.skipif(not hasattr(__import__("socket"), "SO_EXCLUSIVEADDRUSE"), reason="Windows-only flag")
+def test_bind_listener_blocks_a_so_reuseaddr_hijack_of_the_live_port():
+    """The attack: uvicorn's own bind sets SO_REUSEADDR, which on Windows
+    lets a SECOND same-user socket bind the identical (127.0.0.1, port)
+    with no error and then receive the connections - and with them the
+    capability token. SO_EXCLUSIVEADDRUSE on our listener is what makes
+    that second bind fail."""
+    import socket
+
+    listener = graphlink_desktop._bind_listener(None)
+    try:
+        port = listener.getsockname()[1]
+        attacker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        attacker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            with pytest.raises(OSError):
+                attacker.bind(("127.0.0.1", port))
+        finally:
+            attacker.close()
+    finally:
+        listener.close()
+
+
+def test_bind_listener_without_exclusive_flag_is_hijackable_proving_the_flag_matters():
+    """Control for the test above: a plain SO_REUSEADDR listener (what
+    uvicorn creates on its own) DOES let the attacker's SO_REUSEADDR bind
+    succeed on Windows - so the protection really is the flag, not some
+    other property of the socket."""
+    import socket
+
+    if not hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+        pytest.skip("Windows-only semantics")
+    victim = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    victim.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    victim.bind(("127.0.0.1", 0))
+    victim.listen(1)
+    port = victim.getsockname()[1]
+    attacker = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    attacker.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        attacker.bind(("127.0.0.1", port))  # succeeds: this is the hole
+    finally:
+        attacker.close()
+        victim.close()
+
+
+def test_main_hands_the_exclusive_listener_to_the_backend_and_derives_the_port_from_it(desktop_harness):
+    result = graphlink_desktop.main()
+
+    assert result == 0
+    assert desktop_harness.bind_listener_requests == [None], "no env pin -> kernel picks the port"
+    [listener] = desktop_harness.start_backend_listeners
+    assert listener is not None and listener.port == 4242
+    (_args, kwargs) = desktop_harness.webview_create_window_calls[0]
+    assert kwargs["url"].split("#", 1)[0].rstrip("/") == "http://127.0.0.1:4242", (
+        "the window URL must use the port the bound socket actually got, not a re-probed one"
+    )
+
+
+def test_main_pins_the_listener_to_the_env_port(desktop_harness, monkeypatch):
+    monkeypatch.setenv("GRAPHLINK_BACKEND_PORT", "54321")
+
+    graphlink_desktop.main()
+
+    assert desktop_harness.bind_listener_requests == [54321]
+
+
+def test_main_fails_loudly_and_clears_the_sentinel_when_the_pinned_port_is_taken(desktop_harness, monkeypatch):
+    monkeypatch.setenv("GRAPHLINK_BACKEND_PORT", "54321")
+    desktop_harness.bind_listener_error = OSError("address in use")
+
+    result = graphlink_desktop.main()
+
+    assert result == 1, "a held port must refuse to start, never silently share"
+    assert desktop_harness.mark_clean_exit_calls == 1
+    assert desktop_harness.start_backend_listeners == []
+    assert desktop_harness.webview_create_window_calls == []
