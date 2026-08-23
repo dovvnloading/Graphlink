@@ -329,12 +329,44 @@ class McpStdioClient:
         process = self._process
         if process is None or process.stdin is None:
             raise McpError(f"MCP server {self.command!r} is not connected.")
+        payload = json.dumps(message) + "\n"
         with self._write_lock:
-            try:
-                process.stdin.write(json.dumps(message) + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, ValueError) as exc:
-                raise McpError(f"MCP server {self.command!r} is not accepting input: {exc}") from exc
+            # REVIEW-FIX: stdin.write()/flush() are plain blocking file
+            # calls - Python gives no async/select-based way to bound them.
+            # A subprocess that stops draining its stdin (busy, wedged, or
+            # just an ordinarily-sized argument that fills the OS pipe
+            # buffer, a few KB on Windows) used to block this forever, and
+            # since _call() holds _call_lock for its whole body, every
+            # future call on this client deadlocked too - with no way to
+            # interrupt it (asyncio.to_thread cancellation doesn't touch the
+            # underlying blocked OS thread). The write is offloaded to a
+            # daemon helper thread and bounded with a join() timeout instead
+            # - mirrors _call's own read-side timeout against self.timeout.
+            # If it doesn't finish in time we raise rather than wait
+            # forever; the blocked syscall (and its thread) leaks, but a
+            # leaked thread beats a permanently deadlocked client.
+            outcome: list[BaseException] = []
+
+            def _blocking_write() -> None:
+                try:
+                    process.stdin.write(payload)
+                    process.stdin.flush()
+                except Exception as exc:  # re-raised on the caller's thread below
+                    outcome.append(exc)
+
+            writer = threading.Thread(target=_blocking_write, daemon=True)
+            writer.start()
+            writer.join(self.timeout)
+            if writer.is_alive():
+                raise McpError(
+                    f"MCP server {self.command!r} timed out after {self.timeout}s writing a "
+                    f"{message.get('method')!r} request - the process is not reading its stdin."
+                )
+            if outcome:
+                exc = outcome[0]
+                if isinstance(exc, (BrokenPipeError, ValueError)):
+                    raise McpError(f"MCP server {self.command!r} is not accepting input: {exc}") from exc
+                raise exc
 
     def _notify(self, method: str, params: dict) -> None:
         self._write({"jsonrpc": "2.0", "method": method, "params": params})
