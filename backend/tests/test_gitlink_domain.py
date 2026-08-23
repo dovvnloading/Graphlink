@@ -742,6 +742,34 @@ def test_default_import_root_replaces_slashes_in_repo_and_branch():
     assert ".graphlink" in parts and "gitlink_repos" in parts
 
 
+def test_default_import_root_sanitizes_backslash_traversal_segments():
+    # On Windows, pathlib re-parses "\\" as a real separator once a string
+    # is joined into a Path - a repo value with a backslash-encoded ".."
+    # segment (e.g. pasted from a Windows path) must not be able to escape
+    # ~/.graphlink/gitlink_repos/ the way "/"-only sanitization allowed.
+    sandbox_root = Path.home() / ".graphlink" / "gitlink_repos"
+
+    escaped = default_import_root(
+        "a/xyz\\..\\..\\..\\AppData\\Local\\Temp\\evil", "marker"
+    )
+
+    # Exactly two path components (repo, branch) directly under the
+    # sandbox root - if the backslash segments had been reinterpreted as
+    # traversal, this would resolve to a shallower/different location, not
+    # a clean two-level path still rooted at gitlink_repos/.
+    relative_parts = escaped.relative_to(sandbox_root).parts
+    assert len(relative_parts) == 2
+    assert relative_parts[1] == "marker"
+
+
+def test_default_import_root_rejects_literal_dotdot_segment():
+    # Defense in depth: even a repo/branch value that sanitizes to the
+    # literal segment ".." (no slash or backslash to replace) must not be
+    # able to walk the resolved path back out of the sandbox root.
+    with pytest.raises(RuntimeError, match="escaped the local sandbox root"):
+        default_import_root("..", "marker")
+
+
 def test_scan_local_repo_paths_raises_when_root_missing(tmp_path):
     missing = tmp_path / "does-not-exist"
     with pytest.raises(RuntimeError, match="does not exist"):
