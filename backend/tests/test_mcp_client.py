@@ -450,6 +450,77 @@ def test_a_stdin_write_that_the_server_never_drains_raises_instead_of_hanging_fo
         client.close()
 
 
+# -- idle notifications must not accumulate in the response queue -----------
+
+
+_NOTIFICATION_FLOOD_SERVER_SCRIPT = textwrap.dedent(r'''
+    import json
+    import sys
+
+    def send(message):
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request = json.loads(line)
+        method = request.get("method")
+        request_id = request.get("id")
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "noisy", "version": "0.0.1"},
+            }})
+        elif method == "notifications/initialized":
+            pass
+        elif method == "tools/call":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "content": [{"type": "text", "text": "ok"}], "isError": False,
+            }})
+            # Legal MCP: a server may send notifications at any time, not
+            # just as a reply to a request. This floods a batch of them
+            # immediately after answering, while the client sits idle with
+            # no request in flight - the exact pattern a long-running
+            # progress/log-notifying server produces.
+            for i in range(300):
+                send({"jsonrpc": "2.0", "method": "notifications/message", "params": {"i": i}})
+        else:
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "error": {"code": -32601, "message": "unknown method"}})
+''')
+
+
+def test_idle_notifications_do_not_accumulate_in_the_response_queue(tmp_path):
+    """Regression: the reader thread queued EVERY parsed stdout line
+    unconditionally, including legal MCP notifications a server sends while
+    otherwise idle (no request in flight) - nothing ever drains those
+    between calls, so self._responses grew without bound for the client's
+    whole lifetime. Here the fake server floods 300 notifications right
+    after answering a normal call; they must be dropped, not queued."""
+    script = tmp_path / "noisy_notifications_server.py"
+    script.write_text(_NOTIFICATION_FLOOD_SERVER_SCRIPT, encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),))
+    try:
+        client.connect()
+        result = client.call_tool("noisy", {})
+        assert result.content == "ok"
+
+        # The reader thread drains the flood off stdout concurrently with
+        # this assertion - give it a bounded window to catch up.
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and client._responses.qsize() > 0:
+            time.sleep(0.05)
+
+        assert client._responses.qsize() == 0, (
+            "idle notifications must be dropped, not queued forever - "
+            f"found {client._responses.qsize()} still queued"
+        )
+    finally:
+        client.close()
+
+
 # -- a malformed tools/list response must not crash the whole registry ------
 
 
