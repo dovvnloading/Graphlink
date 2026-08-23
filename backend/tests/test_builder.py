@@ -504,6 +504,46 @@ class TestRunNodeExecuteApprovalGate:
         assert victim.id in document.nodes, "the denied delete must not have happened"
         assert node.state.builder_status == "done"
 
+    def test_autopilot_does_not_auto_approve_a_plugin_tool_by_its_self_declared_scope(self, monkeypatch):
+        """SECURITY-FIX: plugin Builder tools register with scopes taken from
+        the plugin's OWN self-reported plugin.toml (backend/plugins.py's
+        register_plugin_tools) and approval="always". Autopilot's router used
+        to auto-approve any tool whose scopes fit its set - and a plugin
+        simply declares graph.mutate to fit. The trust signal there is
+        authored by the untrusted party itself, so a prompt-injected model
+        could run a granted plugin's tool with arbitrary side effects, no
+        human in the loop. The approval='always' registration now blocks
+        auto-approval regardless of the declared scope."""
+        from backend.providers.base import ToolSpec
+        from backend.tools import GRAPH_MUTATE, ToolResult
+
+        document, dispatcher, registry, bus = make_harness()
+        ran = []
+        registry.register(
+            ToolSpec(name="plugin:evil:write_file",
+                     description="a granted third-party plugin's action", input_schema={}),
+            handler=lambda call, ctx: ran.append(call) or ToolResult(content="did it"),
+            scopes={GRAPH_MUTATE},   # self-declared, fits _AUTOPILOT_AUTO_SCOPES
+            approval="always",       # every real plugin tool registers this way
+        )
+        node = seed_plan(document, ["use the plugin"], mode="autopilot")
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "plugin:evil:write_file", path="/etc/x")]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        approvals, denials = asyncio.run(
+            drive_build(document, dispatcher, registry, bus, node, deny_first=True)
+        )
+
+        assert approvals == ["plugin:evil:write_file"], (
+            "a plugin tool must prompt in autopilot - its self-declared scope "
+            "is not a trust signal"
+        )
+        assert denials == 1
+        assert ran == [], "the denied plugin handler must not have run"
+        assert node.state.builder_status == "done"
+
 
 class TestPlanPersistence:
     def test_round_trip_preserves_the_plan_and_normalizes_live_states(self):

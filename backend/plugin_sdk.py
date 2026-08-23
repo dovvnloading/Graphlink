@@ -407,6 +407,25 @@ class BuiltinActionSpec:
     handler: BuiltinActionHandler
 
 
+# SECURITY-FIX: register_builtin_plugin (below) attaches a picker action that
+# _execute_discovered_plugin runs UN-gated by any install-time grant and that
+# is INVISIBLE in Settings > Plugins - deliberately, because the docstring's
+# stated purpose is migrating the 8 pre-SDK first-party built-ins without
+# renaming their shipped kind strings. But the method is public on the same
+# HostContext every plugin's register() receives, and nothing restricted it
+# to first-party callers: a third-party plugin could call it and thereby run
+# its handler with the live SceneDocument on every picker click, with no
+# consent prompt and no row in the consent UI. The hatch is now restricted to
+# exactly the first-party plugin ids that legitimately use it (grep-confirmed:
+# these are the only plugins/ packages that call register_builtin_plugin); any
+# other plugin_id calling it is a discovery-time PluginRegistrationError, which
+# is caught and surfaced as a load error rather than run.
+_BUILTIN_HATCH_ALLOWED_PLUGIN_IDS = frozenset({
+    "artifact", "code_sandbox", "conversation_node", "gitlink",
+    "html_renderer", "pycoder", "system_prompt", "web_research",
+})
+
+
 class HostContext:
     """Constructed fresh per plugin, once, at discovery time - NEVER shared
     across plugins, so plugin_id provenance is free on every call and one
@@ -563,6 +582,17 @@ class HostContext:
         register_builtin_plugin names) are checked once, globally, by
         _merge_into_registry - not here, since a single HostContext never
         sees another plugin's declarations."""
+        if self.plugin_id not in _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS:
+            # SECURITY-FIX: see _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS above. A
+            # third-party plugin must use register_node_kind /
+            # register_picker_entry (both grant-gated and visible in
+            # Settings), never this un-gated, consent-invisible first-party
+            # migration hatch.
+            raise PluginRegistrationError(
+                f'plugin "{self.plugin_id}": register_builtin_plugin is reserved for '
+                f"first-party built-ins; use register_node_kind or "
+                f"register_picker_entry instead."
+            )
         if name in self._builtin_actions:
             raise PluginRegistrationError(
                 f'plugin "{self.plugin_id}": builtin action "{name}" already registered by '
