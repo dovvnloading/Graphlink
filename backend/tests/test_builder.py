@@ -19,6 +19,7 @@ import time
 import api_provider
 from backend import builder as builder_module
 from backend import tools_graph as tools_graph_module
+from backend.api import intents_builder as intents_builder_module
 from backend.builder import run_build
 from backend.domain.graph import SceneDocument
 from backend.domain.model import MESSAGE_VERTICAL_SPACING
@@ -666,6 +667,52 @@ class TestBuilderIntents:
                 "builder", "saveRecipe", [source.id, "Research and summarize"],
             )
             assert result is None
+
+        asyncio.run(run())
+
+    def test_save_recipe_reads_and_writes_the_recipe_list_atomically_across_concurrent_calls(self, monkeypatch):
+        """Regression: save_recipe used to call settings.get_recipes() then
+        settings.set_recipes(...) directly on the event loop, with no lock
+        and no asyncio.to_thread - unlike every other settings-mutating
+        intent (backend/api/_settings_shared.py's own module docstring).
+        Mirrors test_settings.py's own run_locked atomicity regression
+        tests: patches intents_builder's own `run_locked` name binding to
+        inject a concurrent recipe write right where the real locked
+        section begins, then confirms this call's own read-modify-write
+        does not silently revert it."""
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            manager = dispatcher._settings_manager
+            manager.set_recipes([{"name": "Existing", "goal": "g", "mode": "copilot", "steps": []}])
+            source = document.add_plan_node(0, 0, "goal")
+            source.state.plan_steps = [{"id": "s1", "title": "step", "status": "done", "detail": ""}]
+
+            real_run_locked = intents_builder_module.run_locked
+            injected = {"done": False}
+
+            def _run_locked_with_a_concurrent_write_in_the_window(mutation, *args):
+                if not injected["done"]:
+                    injected["done"] = True
+                    # A second connection's own recipe change lands and
+                    # commits, in full, right here - before this call's own
+                    # closure (the `mutation` argument) ever runs.
+                    manager.set_recipes([
+                        r for r in manager.get_recipes() if r["name"] != "Existing"
+                    ] + [{"name": "Concurrent", "goal": "g2", "mode": "copilot", "steps": []}])
+                return real_run_locked(mutation, *args)
+
+            monkeypatch.setattr(
+                intents_builder_module, "run_locked", _run_locked_with_a_concurrent_write_in_the_window,
+            )
+
+            await bus.dispatch_intent("builder", "saveRecipe", [source.id, "My recipe"])
+
+            assert injected["done"], "the concurrent write never ran - the test no longer exercises the window"
+            names = [r["name"] for r in manager.get_recipes()]
+            assert "My recipe" in names
+            # Must NOT be reverted - the concurrently-saved recipe must
+            # survive this call's own read-modify-write.
+            assert "Concurrent" in names
 
         asyncio.run(run())
 
@@ -1335,6 +1382,43 @@ class TestDeleteRecipe:
             names = [r["name"] for r in listing["recipes"]]
             assert "My recipe" not in names
             assert "Research and summarize" in names, "built-ins are untouched"
+
+        asyncio.run(run())
+
+    def test_delete_recipe_reads_and_writes_the_recipe_list_atomically_across_concurrent_calls(self, monkeypatch):
+        """Same run_locked atomicity regression as save_recipe's own test
+        above - delete_recipe used to call settings.get_recipes()/
+        set_recipes() directly on the event loop too, with no lock and no
+        asyncio.to_thread."""
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            manager = dispatcher._settings_manager
+            manager.set_recipes([{"name": "My recipe", "goal": "g", "mode": "copilot", "steps": []}])
+
+            real_run_locked = intents_builder_module.run_locked
+            injected = {"done": False}
+
+            def _run_locked_with_a_concurrent_write_in_the_window(mutation, *args):
+                if not injected["done"]:
+                    injected["done"] = True
+                    manager.set_recipes(manager.get_recipes() + [
+                        {"name": "Concurrent", "goal": "g2", "mode": "copilot", "steps": []},
+                    ])
+                return real_run_locked(mutation, *args)
+
+            monkeypatch.setattr(
+                intents_builder_module, "run_locked", _run_locked_with_a_concurrent_write_in_the_window,
+            )
+
+            result = await bus.dispatch_intent("builder", "deleteRecipe", ["My recipe"])
+            assert result is True
+
+            assert injected["done"], "the concurrent write never ran - the test no longer exercises the window"
+            names = [r["name"] for r in manager.get_recipes()]
+            assert "My recipe" not in names
+            # Must NOT be reverted - the concurrently-saved recipe must
+            # survive this call's own read-modify-write.
+            assert "Concurrent" in names
 
         asyncio.run(run())
 

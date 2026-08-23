@@ -16,6 +16,9 @@ itself along with everything the build made.
 
 from __future__ import annotations
 
+import asyncio
+
+from backend.api._settings_shared import run_locked
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument, SceneError
 from backend.domain.node_states import PlanState
@@ -146,8 +149,27 @@ def register_builder_intents(
             await bus.publish("notification")
             return None
         settings = agent_dispatcher._settings_manager
-        existing = [r for r in settings.get_recipes() if r["name"] != clean_name]
-        settings.set_recipes(existing + [recipe_from_plan_node(node, clean_name)])
+        new_recipe = recipe_from_plan_node(node, clean_name)
+
+        def _persist() -> None:
+            existing = [r for r in settings.get_recipes() if r["name"] != clean_name]
+            settings.set_recipes(existing + [new_recipe])
+
+        # REVIEW-FIX: was an unlocked settings.get_recipes()/set_recipes()
+        # pair called directly on the event loop - every other settings-
+        # mutating intent in this codebase runs its SettingsManager writes
+        # through asyncio.to_thread(run_locked, ...) instead (backend/api/
+        # _settings_shared.py's own module docstring: _save_state's
+        # open()/json.dump()/fsync()/os.replace() sequence releases the GIL
+        # mid-write, so an unlocked writer here could land in the middle of
+        # another settings save's own write to the SAME state file).
+        # _save_state's except clause swallows the resulting IOError (logs
+        # and returns, never raises), so this used to report a successful
+        # save even when the disk write silently lost the change. The read
+        # and the write stay inside one run_locked closure rather than two
+        # separate to_thread calls, matching apply_ollama_chat_model's own
+        # "read-modify-write in a single locked section" precedent.
+        await asyncio.to_thread(run_locked, _persist)
         notifications.show(f'Saved recipe "{clean_name}".', "info")
         await bus.publish("notification")
         return clean_name
@@ -166,13 +188,22 @@ def register_builder_intents(
             await bus.publish("notification")
             return False
         settings = agent_dispatcher._settings_manager
-        existing = settings.get_recipes()
-        remaining = [r for r in existing if r["name"] != clean_name]
-        if len(remaining) == len(existing):
+        found = {"value": False}
+
+        def _persist() -> None:
+            existing = settings.get_recipes()
+            remaining = [r for r in existing if r["name"] != clean_name]
+            if len(remaining) != len(existing):
+                found["value"] = True
+                settings.set_recipes(remaining)
+
+        # REVIEW-FIX: same unlocked-write hazard save_recipe closed above -
+        # see its own comment for the full mechanism.
+        await asyncio.to_thread(run_locked, _persist)
+        if not found["value"]:
             notifications.show(f'No saved recipe named "{clean_name}".', "info")
             await bus.publish("notification")
             return False
-        settings.set_recipes(remaining)
         notifications.show(f'Deleted recipe "{clean_name}".', "info")
         await bus.publish("notification")
         return True
