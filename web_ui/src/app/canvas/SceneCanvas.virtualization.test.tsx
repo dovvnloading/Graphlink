@@ -95,6 +95,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
 
 import { SceneCanvas } from "./SceneCanvas";
 import { SceneStore, initialSceneState } from "./sceneStore";
+import { NODE_SIZE_REPORT_DEBOUNCE_MS } from "./canvasConstants";
 import type { WsTransport } from "../../lib/ws/transport";
 import type { SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 
@@ -118,7 +119,7 @@ function makeWiredStore() {
   } as unknown as WsTransport;
   const store = new SceneStore(transport);
   store.connect();
-  return { store, stateListeners };
+  return { store, stateListeners, transport };
 }
 
 // Minimal fixture - only the fields toFlowNodes actually branches on need
@@ -187,7 +188,7 @@ function chatRow(id: string, x: number, y = 0): SceneNodeRow {
 }
 
 function mount() {
-  const { store, stateListeners } = makeWiredStore();
+  const { store, stateListeners, transport } = makeWiredStore();
   capturedProps = [];
   capturedStoreApi = null;
   render(
@@ -196,7 +197,7 @@ function mount() {
       <StoreApiProbe />
     </ReactFlowProvider>,
   );
-  return { store, stateListeners };
+  return { store, stateListeners, transport };
 }
 
 function publish(stateListeners: Map<string, StateListener>, scene: Partial<SceneState>) {
@@ -387,6 +388,97 @@ describe("SceneCanvas <ReactFlow> wiring (ADR-011 stages 11.2/11.3)", () => {
         "b",
         "c",
       ]);
+    });
+  });
+
+  // REVIEW-FIX (round 3): a frame/container member that is off-viewport
+  // (unmounted under onlyRenderVisibleElements) is genuinely unmeasurable -
+  // its content can grow while unmounted with no dimensions change able to
+  // fire at all, so the backend's frame bbox keeps computing against the
+  // member's last known (smaller) size. See flushNodeSizes/
+  // unmeasurableIdsRef's own doc in SceneCanvas.tsx. That gap self-heals
+  // once the member remounts and gets measured for real - but only if the
+  // resulting report is not itself made to wait out the standard debounce,
+  // which exists to coalesce a busy streaming node's continuous resizes,
+  // not to delay a one-off catch-up that is already late by definition.
+  describe("node-size remount catch-up (REVIEW-FIX round 3, frame bounds staying stale)", () => {
+    function fakeMeasuredElement(width: number, height: number): HTMLElement {
+      const el = document.createElement("div");
+      Object.defineProperty(el, "offsetWidth", { value: width, configurable: true });
+      Object.defineProperty(el, "offsetHeight", { value: height, configurable: true });
+      return el;
+    }
+
+    it("reports a node's real size IMMEDIATELY once it remounts measurable, having been unmeasurable at the last flush - not on the next debounce tick", () => {
+      vi.useFakeTimers();
+      try {
+        const { stateListeners, transport } = mount();
+        publish(stateListeners, { nodes: [chatRow("n0", 0)], edges: [] });
+
+        const querySelectorSpy = vi.spyOn(document, "querySelector").mockReturnValue(null);
+        const dimensionsChange = [
+          { id: "n0", type: "dimensions", dimensions: { width: 0, height: 0 }, resizing: false },
+        ] as unknown as NodeChange[];
+
+        // n0 is off-viewport (unmounted) right now - the resize-observer
+        // signal that still reaches onNodesChange finds nothing measurable
+        // (measuredNodeSize's DOM fallback returns null, mocked above).
+        act(() => lastProps().onNodesChange(dimensionsChange));
+        expect(transport.fireIntent).not.toHaveBeenCalledWith(
+          "scene", "reportNodeSizes", expect.anything(), undefined, true,
+        );
+
+        // The standard debounce elapses. flushNodeSizes runs, finds n0
+        // still unmeasurable (nothing to report), but now KNOWS that.
+        act(() => vi.advanceTimersByTime(NODE_SIZE_REPORT_DEBOUNCE_MS));
+        expect(transport.fireIntent).not.toHaveBeenCalledWith(
+          "scene", "reportNodeSizes", expect.anything(), undefined, true,
+        );
+
+        // n0 remounts (back on-viewport) at its real, now-larger size -
+        // content grew the whole time it sat unmounted and unmeasurable.
+        querySelectorSpy.mockReturnValue(fakeMeasuredElement(600, 480));
+        act(() => lastProps().onNodesChange(dimensionsChange));
+
+        // Reported WITHOUT advancing the timer at all - the catch-up
+        // bypassed the debounce instead of waiting out another full cycle.
+        expect(transport.fireIntent).toHaveBeenCalledWith(
+          "scene", "reportNodeSizes", [[["n0", 600, 480]]], undefined, true,
+        );
+
+        querySelectorSpy.mockRestore();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still debounces an ordinary resize of an already-measurable node (no remount involved)", () => {
+      vi.useFakeTimers();
+      try {
+        const { stateListeners, transport } = mount();
+        publish(stateListeners, { nodes: [chatRow("n0", 0)], edges: [] });
+
+        const querySelectorSpy = vi.spyOn(document, "querySelector").mockReturnValue(fakeMeasuredElement(400, 300));
+        const dimensionsChange = [
+          { id: "n0", type: "dimensions", dimensions: { width: 400, height: 300 }, resizing: true },
+        ] as unknown as NodeChange[];
+
+        act(() => lastProps().onNodesChange(dimensionsChange));
+        // Not reported yet - n0 was never recorded as unmeasurable, so this
+        // is the ordinary debounced path, same as before this fix.
+        expect(transport.fireIntent).not.toHaveBeenCalledWith(
+          "scene", "reportNodeSizes", expect.anything(), undefined, true,
+        );
+
+        act(() => vi.advanceTimersByTime(NODE_SIZE_REPORT_DEBOUNCE_MS));
+        expect(transport.fireIntent).toHaveBeenCalledWith(
+          "scene", "reportNodeSizes", [[["n0", 400, 300]]], undefined, true,
+        );
+
+        querySelectorSpy.mockRestore();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });
