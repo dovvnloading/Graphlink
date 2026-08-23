@@ -159,7 +159,18 @@ export type VersionRejectionListener = (rejection: BridgeRejection | null) => vo
  * accepted write in order, while a text draft is explicitly last-write-wins. */
 export const COMPOSER_DRAFT_OFFLINE_COALESCE_KEY = "app-composer/updateDraft";
 export type OfflineIntentCoalesceKey = typeof COMPOSER_DRAFT_OFFLINE_COALESCE_KEY;
-export type IntentSettledListener = () => void;
+/** REVIEW-FIX: `succeeded` distinguishes the one path where the intent was
+ * actually accepted by the backend (the request Promise resolved) from
+ * every other way an intent can reach a terminal state without ever being
+ * queued for replay - refused while offline, cut off mid-flight and
+ * non-queueable, torn down via dispose, or rejected with a genuine
+ * server-side error. Existing zero-arg listeners (e.g. composerStore's
+ * onDraftSettled) stay valid without changes - they just ignore the extra
+ * argument - since composerStore's own resync-on-settle logic already
+ * re-derives truth from the server regardless of outcome. A caller that
+ * DOES care about the distinction (sendMessage's staged reply-target
+ * clearing, sceneStore.ts) can now branch on it instead of guessing. */
+export type IntentSettledListener = (succeeded: boolean) => void;
 export type OfflineIntentCoalescedListener = () => void;
 
 interface WsLike {
@@ -708,18 +719,18 @@ export class WsTransport {
         );
       } else {
         this.droppedWhileOffline += 1;
-        onSettled?.();
+        onSettled?.(false);
       }
       return;
     }
     this.request(topic, intent, args, timeoutMs).then(
-      () => onSettled?.(),
+      () => onSettled?.(true),
       (err) => {
         // A disposed transport is real teardown (unmount, or StrictMode's
         // dev-only dispose-then-remount check) - there is nothing left to
         // recover into.
         if (this.disposed) {
-          onSettled?.();
+          onSettled?.(false);
           return;
         }
         if (err instanceof WsUnavailableError) {
@@ -739,12 +750,12 @@ export class WsTransport {
             );
           } else {
             this.droppedWhileOffline += 1;
-            onSettled?.();
+            onSettled?.(false);
           }
           return;
         }
         this.showErrorDeduped(String(err.message));
-        onSettled?.();
+        onSettled?.(false);
       },
     );
   }
@@ -819,7 +830,7 @@ export class WsTransport {
     );
     if (ordinaryCount >= WsTransport.OFFLINE_QUEUE_MAX) {
       this.droppedWhileOffline += 1;
-      onSettled?.();
+      onSettled?.(false);
       return;
     }
     this.offlineQueue.push(item);
