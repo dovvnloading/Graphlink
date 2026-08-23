@@ -687,17 +687,27 @@ class CommandOps:
     def redo_label(self) -> str:
         return self.redo_stack[-1].label if self.redo_stack else ""
 
-    def _guard_live_runs(self, command: "Command") -> None:
+    def _guard_live_runs(self, command: "Command", verb: str = "undo") -> None:
         """ADR-010 stage 10.4: refuse to undo/redo across a node with a live
         run. A node mid-generation has an in-flight agent writing to it;
         restoring a snapshot from before that run started would race the
         write and leave the node in a state neither the user nor the agent
-        asked for. The ADR's own guardrail - cancel first, then undo."""
+        asked for. The ADR's own guardrail - cancel first, then undo.
+
+        `verb` (REVIEW-FIX): the two UndoRefusedError messages below used to
+        be hard-coded with "undo" wording, so a refusal from redo() - which
+        calls this same guard - told the user "Can't undo..." for an action
+        they never asked to undo. intents_undo.py's redo handler passes
+        str(exc) straight to the notification banner (UndoRefusedError's own
+        docstring: shown "verbatim"), so the wrong verb reached the UI on
+        every refused redo. undo() and undo_run() keep the default "undo";
+        redo() passes "redo" so the same guard reads correctly from either
+        direction."""
         for node_id in command.touched_node_ids:
             node = self.nodes.get(node_id)
             if node is not None and node.pending_request_id:
                 raise UndoRefusedError(
-                    f"Can't undo while \"{node.title}\" is still generating - "
+                    f"Can't {verb} while \"{node.title}\" is still generating - "
                     "cancel it first."
                 )
         # REVIEW-FIX: the loop above only catches a live run whose OWN
@@ -726,7 +736,7 @@ class CommandOps:
                     and node.pending_request_id
                 ):
                     raise UndoRefusedError(
-                        "Can't undo a step from a build that is still running - "
+                        f"Can't {verb} a step from a build that is still running - "
                         "stop it first."
                     )
 
@@ -748,7 +758,7 @@ class CommandOps:
         if not self.redo_stack:
             raise UndoRefusedError("Nothing to redo.")
         command = self.redo_stack[-1]
-        self._guard_live_runs(command)
+        self._guard_live_runs(command, "redo")  # REVIEW-FIX: redo-appropriate wording
         command.apply(self)
         self.redo_stack.pop()
         self.command_log.append(command)

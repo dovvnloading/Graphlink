@@ -15,7 +15,7 @@ import copy
 
 import pytest
 
-from backend.domain.commands import Command
+from backend.domain.commands import Command, UndoRefusedError
 from backend.domain.graph import SceneDocument
 from backend.domain.model import SceneNode
 
@@ -720,6 +720,56 @@ def test_undo_of_an_ordinary_user_edit_is_unaffected_by_an_unrelated_live_run(do
     user_node, _ = document.record_command("addNote", "user", lambda: document.add_note(200, 200))
     document.undo()
     assert user_node.id not in document.nodes, "an unrelated user edit must undo normally"
+
+
+def test_redo_refusal_message_says_redo_not_undo(document):
+    """REVIEW-FIX: _guard_live_runs' refusal message was hard-coded with
+    "undo" wording even though it is called identically from redo() -
+    intents_undo.py's redo handler passes str(exc) straight to the
+    notification banner shown to the user (UndoRefusedError's own
+    docstring: shown "verbatim"), so a refused redo used to tell the user
+    an undo had been blocked instead."""
+    node_id = document.add_note(0, 0).id
+    document.record_command(
+        "moveNode", "user", lambda: document.move_node(node_id, 10, 10), node_ids=[node_id],
+    )
+    document.undo()
+    assert document.can_redo()
+
+    # undo()'s invert() replaces the node object in document.nodes wholesale
+    # (see _restore) - the ORIGINAL `node` reference is now stale, so the
+    # live one has to be looked up fresh by id before mutating it.
+    document.nodes[node_id].pending_request_id = "req-live"
+    with pytest.raises(UndoRefusedError, match="Can't redo while") as exc_info:
+        document.redo()
+    assert "undo" not in str(exc_info.value)
+
+    document.nodes[node_id].pending_request_id = None
+    document.redo()
+    assert document.nodes[node_id].x == 10
+
+
+def test_redo_refusal_message_for_a_still_running_build_also_says_redo(document):
+    """Same fix, the run-scoped half of _guard_live_runs (the "step from a
+    build that is still running" message a still-live Builder run
+    triggers)."""
+    plan = document.add_plan_node(0, 0, "build something")
+    content_node, _command = document.record_command(
+        "builderCreateNode", "agent", lambda: document.add_note(100, 0),
+        run_id="run-1",
+    )
+    document.undo()
+    assert document.can_redo()
+
+    plan.pending_request_id = "run-1"
+    plan.state.builder_run_id = "run-1"
+    with pytest.raises(UndoRefusedError, match="Can't redo a step") as exc_info:
+        document.redo()
+    assert "undo" not in str(exc_info.value)
+
+    plan.pending_request_id = None
+    document.redo()
+    assert content_node.id in document.nodes
 
 
 def test_undo_run_rolls_back_completely_when_an_older_command_in_the_run_is_refused(document):
