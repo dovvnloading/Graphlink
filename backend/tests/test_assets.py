@@ -74,6 +74,29 @@ def test_get_asset_respects_the_mime_type_it_was_stored_with():
     assert response.headers["content-type"] == "image/jpeg"
 
 
+def test_get_asset_falls_back_to_a_safe_content_type_for_a_non_image_mime_type():
+    # Regression: neither write path into document.image_assets (the
+    # addImageNode WS intent, session_load._restore_image_payload) validates
+    # mime_type before storing it, so a stored value like "text/html" used to
+    # be passed straight through as the response's Content-Type - letting a
+    # caller who fully controls the bytes also pick an arbitrary Content-Type
+    # for them. The read side (get_asset) is now the one place that closes
+    # this regardless of how the bad value got stored.
+    client = make_client()
+    bus = client.app.state.bus
+    document = get_session_context(bus.session("default")).canvas_document
+    parent = document.add_node(0, 0, "parent")
+    node = document.add_image_node(
+        0, 0, b"<script>alert(1)</script>", "prompt", parent.id, mime_type="text/html"
+    )
+
+    response = client.get(f"/api/assets/{node.state.image_asset_id}")
+
+    assert response.status_code == 200
+    assert response.content == b"<script>alert(1)</script>"
+    assert response.headers["content-type"] == "application/octet-stream"
+
+
 def test_get_asset_for_unknown_id_returns_404_json():
     client = make_client()
 
