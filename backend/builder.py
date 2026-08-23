@@ -65,11 +65,23 @@ BUILDER_GRANTED_SCOPES = frozenset({
 })
 
 # Autopilot's auto-approval set (design doc D5, user-confirmed 2026-08-09):
-# graph edits and code execution proceed unprompted (disclosed at launch;
-# ADR-005 resource caps still bound execution); net.fetch ALWAYS prompts -
-# the 8.5 exit criterion's "no network unless approved".
+# graph edits proceed unprompted; net.fetch ALWAYS prompts - the 8.5 exit
+# criterion's "no network unless approved".
+#
+# REVIEW-FIX: code.execute (run_node running a pycoder node) used to be in
+# this set too - "disclosed at launch" per the design doc - which let
+# Builder-authored Python run with zero human review whenever the model
+# steered itself into writing and then executing code in the same
+# autopilot run (e.g. off prompt-injected content it read via
+# graph.read_subgraph). Arbitrary code execution is a different risk class
+# than a graph edit (undoable, contained to the canvas) - it warrants the
+# same "always ask, even in autopilot" posture net.fetch already gets, not
+# a blanket auto-approve. Excluding it here is what forces run_node's
+# execute action through request_approval below regardless of mode; see
+# _approval_summary's own REVIEW-FIX for the matching visibility fix (the
+# prompt now shows the code, not just the call's arguments).
 _AUTOPILOT_AUTO_SCOPES = frozenset({
-    GRAPH_READ, GRAPH_MUTATE, CODE_EXECUTE, PROVIDER_CALL, KNOWLEDGE_READ,
+    GRAPH_READ, GRAPH_MUTATE, PROVIDER_CALL, KNOWLEDGE_READ,
 })
 
 _APPROVAL_SUMMARY_CAP = 400
@@ -395,7 +407,19 @@ def _truncate(text: str, cap: int) -> str:
     return text if len(text) <= cap else text[:cap] + "…"
 
 
-def _approval_summary(call: ToolCall) -> str:
+def _approval_summary(call: ToolCall, document) -> str:
+    """REVIEW-FIX: a run_node(action="execute") call's own arguments are
+    just {node_id, action} - the Python about to run lives on the TARGET
+    node's state, not in the call, so showing the arguments alone asks a
+    human to bless a black box (see run_node_pending_code's own doc for
+    why). Every other tool's arguments already say what will happen, so
+    they keep the plain JSON summary; only this one case substitutes the
+    code itself."""
+    from backend.tools_graph import run_node_pending_code
+
+    code = run_node_pending_code(document, call)
+    if code is not None:
+        return f"{call.name} will run this code:\n{_truncate(code, _APPROVAL_SUMMARY_CAP)}"
     args = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
     return f"{call.name} {_truncate(args, _APPROVAL_SUMMARY_CAP)}"
 
@@ -520,7 +544,7 @@ async def run_build(
         handle.approval_future = future
         node.state.builder_awaiting_tool_approval = True
         node.state.builder_approval_tool_name = call.name
-        node.state.builder_approval_summary = _approval_summary(call)
+        node.state.builder_approval_summary = _approval_summary(call, document)
         await bus.publish("scene")
         try:
             approved = bool(await future)
@@ -603,32 +627,46 @@ async def run_build(
     node.pending_request_id = request_id
     await bus.publish("scene")
 
-    # ADR-021 stage 21.1: offer the model only tools this run could actually
-    # run. registry.specs() is deliberately unfiltered ("what exists" and
-    # "what this run may use" are independent questions - tools.py), but the
-    # Builder's grant set is FIXED (BUILDER_GRANTED_SCOPES), so any tool
-    # needing a scope outside it - an fs.read MCP server, say - can only ever
-    # be denied at invoke(). Offering it spends context on every turn to buy
-    # a guaranteed-failing call and a confused model. Filtered here rather
-    # than in the registry so the registry keeps its neutral contract.
-    specs = tuple(
-        spec for spec in registry.specs()
-        if (registry.scopes_for(spec.name) or frozenset()) <= BUILDER_GRANTED_SCOPES
-    )
-    system_prompt = resolve_prompt_text("builder-executor")
-    messages: list = [
-        {"role": "system", "content": system_prompt},
-        {
-            "role": "user",
-            "content": (
-                f"Goal:\n{node.state.plan_goal}\n\nCurrent plan:\n{_plan_digest(node)}\n\n"
-                f"The plan node's id is {plan_node_id}. Work the first pending step now."
-            ),
-        },
-    ]
-
     step: dict | None = None
     try:
+        # REVIEW-FIX: this setup (tool-spec filtering, prompt resolution,
+        # plan-digest formatting) used to sit BEFORE this try/except, in
+        # the same unguarded window the state-setting above already
+        # stamped builder_status="running"/pending_request_id=request_id
+        # into. An exception raised here used to escape run_build entirely -
+        # agents.py's own caller (start_builder_run's _run) wraps this call
+        # in only `finally: self._runs.release(request_id)`, no except - so
+        # the plan node was left stuck showing "running" forever with a
+        # pending_request_id no run backs anymore, and cancel_builder
+        # became a permanent silent no-op. Mirrors _run_builder_planning's
+        # own try/finally (backend/agents.py) around its equivalent setup
+        # window.
+        #
+        # ADR-021 stage 21.1: offer the model only tools this run could
+        # actually run. registry.specs() is deliberately unfiltered ("what
+        # exists" and "what this run may use" are independent questions -
+        # tools.py), but the Builder's grant set is FIXED
+        # (BUILDER_GRANTED_SCOPES), so any tool needing a scope outside it -
+        # an fs.read MCP server, say - can only ever be denied at invoke().
+        # Offering it spends context on every turn to buy a guaranteed-
+        # failing call and a confused model. Filtered here rather than in
+        # the registry so the registry keeps its neutral contract.
+        specs = tuple(
+            spec for spec in registry.specs()
+            if (registry.scopes_for(spec.name) or frozenset()) <= BUILDER_GRANTED_SCOPES
+        )
+        system_prompt = resolve_prompt_text("builder-executor")
+        messages: list = [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": (
+                    f"Goal:\n{node.state.plan_goal}\n\nCurrent plan:\n{_plan_digest(node)}\n\n"
+                    f"The plan node's id is {plan_node_id}. Work the first pending step now."
+                ),
+            },
+        ]
+
         while True:
             if cancel_event.is_set():
                 raise api_provider.RequestCancelledError("stopped")

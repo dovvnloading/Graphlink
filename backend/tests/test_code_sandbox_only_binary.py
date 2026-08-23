@@ -441,3 +441,155 @@ class TestAllowSourceBuildsInstallsARealSourceOnlyPackage:
                 f"benign-source-pkg==0.0.1\n--no-index\n--find-links {find_links_dir.as_posix()}",
                 should_continue=lambda: True,
             )
+
+
+class TestDirectReferenceRequirementsBypassOnlyBinary:
+    """ADR-005 stage 5.5 round-3 review-fix: `--only-binary :all:` only
+    governs requirements pip resolves against an index/--find-links dir (the
+    ONLY shape every test above this class exercises). A direct-URL
+    reference (`pkg @ <url>`) or an editable/local-path install (`-e
+    <path>`) is never index-resolved at all, so pip still invokes THAT
+    reference's own PEP 517 build backend even with --only-binary :all: on
+    the command line - this class proves the bypass is real (negative
+    control, mirroring TestOnlyBinaryBlocksAHostileSdist's own "DOES execute
+    without the flag" control) and that sync_requirements now rejects it
+    before pip ever runs, using the identical hostile backend fixture as the
+    rest of this module."""
+
+    def test_a_direct_file_url_reference_still_executes_its_backend_even_with_only_binary(self, tmp_path):
+        # Negative control: replicates pip's ACTUAL pre-fix-equivalent
+        # invocation (--only-binary :all:, no requirements-line validation)
+        # directly against a hostile PEP 517 backend referenced by a direct
+        # file:// URL rather than an index/--find-links lookup. Proves the
+        # audit finding's mechanism, not just that sync_requirements now
+        # rejects the line - if pip's own behavior for direct references
+        # ever changes, this control (not just the rejection test below)
+        # would catch it.
+        marker = tmp_path / "marker.txt"
+        pkg_dir = tmp_path / "hostile_pkg_src"
+        pkg_dir.mkdir()
+        _write_hostile_backend(pkg_dir, marker)
+
+        venv_dir = tmp_path / "venv"
+        subprocess.run(
+            [sys.executable, "-m", "venv", str(venv_dir)],
+            check=True, capture_output=True, text=True, timeout=180,
+        )
+        python_exe = venv_dir / "Scripts" / "python.exe" if sys.platform == "win32" else venv_dir / "bin" / "python"
+        direct_url = pkg_dir.as_uri()
+
+        subprocess.run(
+            [
+                str(python_exe), "-m", "pip", "install", "--disable-pip-version-check",
+                "--only-binary", ":all:", "--no-input", f"hostile-pkg @ {direct_url}",
+            ],
+            capture_output=True, text=True, timeout=120,
+        )
+
+        assert marker.exists(), (
+            "test harness sanity check failed: a direct file:// reference "
+            "should still invoke the hostile backend even with "
+            "--only-binary :all: passed - if this assert fails, pip's own "
+            "behavior for direct references has changed and this finding "
+            "needs re-verification, not just this test suite"
+        )
+
+    def test_sync_requirements_rejects_a_direct_url_reference_before_pip_ever_runs(self, tmp_path):
+        marker = tmp_path / "marker.txt"
+        pkg_dir = tmp_path / "hostile_pkg_src"
+        pkg_dir.mkdir()
+        _write_hostile_backend(pkg_dir, marker)
+        direct_url = pkg_dir.as_uri()
+
+        sandbox = _make_sandbox_with_real_venv(tmp_path, "direct-url-block-test")
+
+        with pytest.raises(RuntimeError, match="Dependency installation blocked"):
+            sandbox.sync_requirements(
+                f"hostile-pkg @ {direct_url}",
+                should_continue=lambda: True,
+            )
+
+        assert not marker.exists(), (
+            "the hostile backend's build_wheel() hook executed - the new "
+            "direct-URL/editable check did not block it before pip ran"
+        )
+
+    def test_sync_requirements_rejects_an_editable_local_path_reference(self, tmp_path):
+        marker = tmp_path / "marker.txt"
+        pkg_dir = tmp_path / "hostile_pkg_src"
+        pkg_dir.mkdir()
+        _write_hostile_backend(pkg_dir, marker)
+
+        sandbox = _make_sandbox_with_real_venv(tmp_path, "editable-block-test")
+
+        with pytest.raises(RuntimeError, match="Dependency installation blocked"):
+            sandbox.sync_requirements(
+                f"-e {pkg_dir.as_posix()}",
+                should_continue=lambda: True,
+            )
+
+        assert not marker.exists(), (
+            "the hostile backend's build_wheel() hook executed - the new "
+            "editable-install check did not block it before pip ran"
+        )
+
+    def test_allow_source_builds_true_still_lets_a_direct_url_reference_reach_pip(self, tmp_path):
+        # Mirrors TestAllowSourceBuildsEscalation's own mirror-image style:
+        # the new check must not block the explicit opt-in - a direct
+        # reference under allow_source_builds=True reaches pip exactly as
+        # before, the backend runs (proven by the marker), and the hostile
+        # backend's own deliberate failure then surfaces as the ordinary
+        # pip-invocation "Dependency installation failed" error, not the new
+        # pre-check's "Dependency installation blocked" error.
+        marker = tmp_path / "marker.txt"
+        pkg_dir = tmp_path / "hostile_pkg_src"
+        pkg_dir.mkdir()
+        _write_hostile_backend(pkg_dir, marker)
+        direct_url = pkg_dir.as_uri()
+
+        sandbox = _make_sandbox_with_real_venv(tmp_path, "direct-url-escalation-test")
+
+        with pytest.raises(RuntimeError, match="Dependency installation failed"):
+            sandbox.sync_requirements(
+                f"hostile-pkg @ {direct_url}",
+                should_continue=lambda: True,
+                allow_source_builds=True,
+            )
+
+        assert marker.exists(), (
+            "allow_source_builds=True should have let pip attempt the "
+            "direct-URL install - the hostile backend's build_wheel() hook "
+            "never executed"
+        )
+
+    def test_an_ordinary_pinned_manifest_is_not_flagged_and_still_reaches_pip(self, tmp_path, monkeypatch):
+        # False-positive guard, in TestPipCommandIncludesTheFlags's own fast
+        # (non-subprocess-executing) style: an everyday manifest - including
+        # extras, environment markers, and the exact --no-index/--find-links
+        # option lines the real end-to-end tests above already use - must
+        # still reach pip unchanged.
+        sandbox = VirtualEnvSandbox("ordinary-requirement-test")
+        sandbox.base_dir = tmp_path
+        sandbox.requirements_file = tmp_path / "requirements.txt"
+        sandbox.requirements_hash_file = tmp_path / ".requirements.sha256"
+        sandbox.venv_dir = tmp_path / "venv"
+
+        captured_args = {}
+
+        def fake_run_subprocess(args, **kwargs):
+            captured_args["args"] = args
+            return "", 0
+
+        monkeypatch.setattr(sandbox, "_run_subprocess", fake_run_subprocess)
+
+        sandbox.sync_requirements(
+            "requests>=2.31,<3\n"
+            "numpy==1.26.0\n"
+            "pandas[excel]==2.2.0 ; python_version >= '3.9'\n"
+            "--no-index\n"
+            "--find-links ./local-wheels",
+            should_continue=lambda: True,
+        )
+
+        assert "args" in captured_args, "an ordinary manifest must still reach pip"
+        assert "--only-binary" in captured_args["args"]

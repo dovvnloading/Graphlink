@@ -84,6 +84,87 @@ def _normalize_requirements(requirements_text):
     return "\n".join(lines).strip()
 
 
+# ADR-005 stage 5.5 round-3 review-fix: requirements-file option lines that
+# are NOT package specifiers - they legitimately carry their own paths/URLs
+# (--find-links, --index-url, ...) and must never be run through the
+# direct-reference check below, or every real end-to-end test in
+# test_code_sandbox_only_binary.py that uses `--find-links <path>` would
+# start failing alongside the actually-dangerous lines.
+_PIP_OPTION_LINE_PREFIXES = (
+    "-i", "--index-url",
+    "--extra-index-url",
+    "--no-index",
+    "-c", "--constraint",
+    "-r", "--requirement",
+    "-f", "--find-links",
+    "--no-binary",
+    "--only-binary",
+    "--prefer-binary",
+    "--require-hashes",
+    "--pre",
+    "--trusted-host",
+    "--use-feature",
+    "--global-option",
+    "--install-option",
+    "--config-settings",
+    "--hash",
+    "--no-deps",
+    "--no-build-isolation",
+)
+
+
+def _direct_reference_requirement_lines(normalized_requirements):
+    """Returns the requirements-file lines that name a package by direct
+    URL/VCS reference (`pkg @ <url>`, a bare `git+.../https://...` line),
+    editable install (`-e`/`--editable`), or bare local path, rather than an
+    ordinary index-resolved name.
+
+    THIS is the category `--only-binary :all:` (sync_requirements, below)
+    does NOT cover: none of these forms are ever resolved against an index,
+    so pip's index-only "no wheel published -> refuse" restriction never
+    even applies to them - pip downloads/reads the reference directly and
+    still runs ITS OWN PEP 517 build backend to produce a wheel. Verified
+    empirically against real pip (see test_code_sandbox_only_binary.py's
+    TestDirectReferenceRequirementsBypassOnlyBinary, mirroring this file's
+    own hostile-sdist proof for the plain-name case) that a `pkg @
+    file:///...` line reaches and executes a hostile build_wheel() hook
+    with --only-binary :all: on the command line, exactly as if the flag
+    were absent.
+
+    Deliberately a denylist of dangerous SHAPES, not an allowlist of a full
+    PEP 508 grammar - ordinary requirement lines (name, extras, version
+    specifiers, environment markers) never contain '@', '://', '/', or
+    '\\\\', so this stays conservative without needing to parse PEP 508
+    itself. A trailing '\\' line-continuation marker is stripped before the
+    path-character check so a routine multi-line hashed requirement
+    (`pkg==1.0 \\` / `    --hash=...`) is not mistaken for a Windows path.
+    """
+    unsafe_lines = []
+    for raw_line in normalized_requirements.split("\n"):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = re.split(r"\s+#", line, maxsplit=1)[0].strip()
+        if not line:
+            continue
+        if line.endswith("\\"):
+            line = line[:-1].rstrip()
+        if not line:
+            continue
+        if line.startswith(("-e", "--editable")):
+            unsafe_lines.append(raw_line.strip())
+            continue
+        if line.startswith(_PIP_OPTION_LINE_PREFIXES):
+            continue
+        if line.startswith("-"):
+            # An option this function does not special-case either way -
+            # not a package specifier, so it is not this check's concern.
+            continue
+        if "@" in line or "://" in line or "/" in line or "\\" in line:
+            unsafe_lines.append(raw_line.strip())
+    return unsafe_lines
+
+
 def _extract_python_block(response_text):
     tool_match = re.search(r"\[TOOL:PYTHON\](.*?)\[/TOOL\]", response_text, re.DOTALL)
     if tool_match:
@@ -346,6 +427,28 @@ class VirtualEnvSandbox:
 
     def sync_requirements(self, requirements_manifest, should_continue, emit_line=None, allow_source_builds=False):
         normalized = _normalize_requirements(requirements_manifest)
+        # ADR-005 stage 5.5 round-3 review-fix: checked unconditionally,
+        # ahead of even the cache short-circuit below - --only-binary :all:
+        # (further down this method) has NO effect on a direct-URL/editable/
+        # local-path requirement line (see _direct_reference_requirement_
+        # lines's own docstring for why), so those lines must never reach
+        # pip at all while the human has left source builds off, regardless
+        # of which branch of this method would otherwise run. Raising here,
+        # before the manifest hash is even computed against the cache, means
+        # a dangerous manifest can never become "the cached one" either.
+        if not allow_source_builds:
+            unsafe_lines = _direct_reference_requirement_lines(normalized)
+            if unsafe_lines:
+                offending = "\n".join(f"  {line}" for line in unsafe_lines)
+                raise RuntimeError(
+                    "Dependency installation blocked: the requirements list "
+                    "contains a direct URL, editable (-e), or local-path "
+                    "reference. Pip builds that reference using its own "
+                    "code regardless of --only-binary :all:, so this cannot "
+                    "be installed without explicitly allowing source "
+                    "builds. Enable \"Allow source builds\" to install it, "
+                    "or remove the line(s) below:\n" + offending
+                )
         manifest_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         previous_hash = self.requirements_hash_file.read_text(encoding="utf-8").strip() if self.requirements_hash_file.exists() else ""
 

@@ -1476,9 +1476,17 @@ def load_chat_row(db_path: Path, chat_id: int) -> dict[str, Any] | None:
     newChat(workspaceId=...). Fixed here, at the one place every load
     already reads this row, rather than only in the callers that needed it."""
     with contextlib.closing(_connect(db_path)) as conn, conn:
-        row = conn.execute(
-            "SELECT title, data, updated_at, workspace_id FROM graphs WHERE id = ?", (chat_id,)
-        ).fetchone()
+        return _load_chat_row_from_conn(conn, chat_id)
+
+
+def _load_chat_row_from_conn(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any] | None:
+    """The actual SELECT behind load_chat_row, split out so
+    load_chat_snapshot below can run it on a connection/transaction it
+    already owns instead of load_chat_row opening (and committing) its own -
+    see load_chat_snapshot's own REVIEW-FIX docstring for why."""
+    row = conn.execute(
+        "SELECT title, data, updated_at, workspace_id FROM graphs WHERE id = ?", (chat_id,)
+    ).fetchone()
     if row is None:
         return None
     return {"title": row[0], "data": json.loads(row[1]), "updated_at": row[2], "workspace_id": row[3]}
@@ -1489,14 +1497,20 @@ def load_notes_rows(db_path: Path, chat_id: int) -> list[dict[str, Any]]:
     SELECT column list; shape matches what backend/session_load.py's
     _restore_notes expects (nested "position"/"size" dicts)."""
     with contextlib.closing(_connect(db_path)) as conn, conn:
-        rows = conn.execute(
-            """
-            SELECT content, position_x, position_y, width, height,
-                   color, header_color, is_system_prompt, is_summary_note, note_id
-            FROM notes WHERE chat_id = ?
-            """,
-            (chat_id,),
-        ).fetchall()
+        return _load_notes_rows_from_conn(conn, chat_id)
+
+
+def _load_notes_rows_from_conn(conn: sqlite3.Connection, chat_id: int) -> list[dict[str, Any]]:
+    """The actual SELECT behind load_notes_rows - see _load_chat_row_from_
+    conn's own docstring for why this is split out."""
+    rows = conn.execute(
+        """
+        SELECT content, position_x, position_y, width, height,
+               color, header_color, is_system_prompt, is_summary_note, note_id
+        FROM notes WHERE chat_id = ?
+        """,
+        (chat_id,),
+    ).fetchall()
     return [
         {
             "content": row[0],
@@ -1521,15 +1535,21 @@ def load_pins_rows(db_path: Path, chat_id: int) -> list[dict[str, Any]]:
     """Mirrors ChatDatabase.load_pins exactly, including its own
     sort_order-defaults-to-enumerate-index fallback for pre-migration rows."""
     with contextlib.closing(_connect(db_path)) as conn, conn:
-        rows = conn.execute(
-            """
-            SELECT pin_id, title, note, position_x, position_y,
-                   anchor_item_id, sort_order, created_at
-            FROM pins WHERE chat_id = ?
-            ORDER BY sort_order, id
-            """,
-            (chat_id,),
-        ).fetchall()
+        return _load_pins_rows_from_conn(conn, chat_id)
+
+
+def _load_pins_rows_from_conn(conn: sqlite3.Connection, chat_id: int) -> list[dict[str, Any]]:
+    """The actual SELECT behind load_pins_rows - see _load_chat_row_from_
+    conn's own docstring for why this is split out."""
+    rows = conn.execute(
+        """
+        SELECT pin_id, title, note, position_x, position_y,
+               anchor_item_id, sort_order, created_at
+        FROM pins WHERE chat_id = ?
+        ORDER BY sort_order, id
+        """,
+        (chat_id,),
+    ).fetchall()
     return [
         {
             "pin_id": row[0],
@@ -1542,6 +1562,40 @@ def load_pins_rows(db_path: Path, chat_id: int) -> list[dict[str, Any]]:
         }
         for index, row in enumerate(rows)
     ]
+
+
+def load_chat_snapshot(
+    db_path: Path, chat_id: int,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    """REVIEW-FIX: make_load_chat's loadChat intent used to read a chat's
+    row, notes, and pins through three independent connections/transactions
+    (load_chat_row, then load_notes_rows, then load_pins_rows), each on its
+    own asyncio.to_thread hop with a genuine event-loop yield in between - a
+    concurrent session's real save_chat_atomically_row call (a single
+    atomic delete-then-reinsert transaction) landing in one of those gaps
+    produced a torn read: part of what got restored reflecting the
+    pre-write state, part reflecting the post-write state. This function
+    gives all three reads ONE connection and ONE explicit transaction
+    instead, so they share a single WAL snapshot - the same consistency
+    guarantee save_chat_atomically_row's own single transaction already
+    gives its writes.
+
+    An explicit `BEGIN` is required here - a bare SELECT never opens an
+    implicit transaction under sqlite3's default legacy isolation_level
+    (only INSERT/UPDATE/DELETE/REPLACE do), so without it these three reads
+    would each still get their own independent autocommit snapshot even on
+    one shared connection, reproducing the exact bug this closes. See
+    graphlink_migrations.py's run_sqlite_migrations for the same fact
+    documented in detail for the DDL/PRAGMA case."""
+    with contextlib.closing(_connect(db_path)) as conn:
+        conn.execute("BEGIN")
+        try:
+            row = _load_chat_row_from_conn(conn, chat_id)
+            notes_rows = _load_notes_rows_from_conn(conn, chat_id)
+            pins_rows = _load_pins_rows_from_conn(conn, chat_id)
+        finally:
+            conn.commit()
+    return row, notes_rows, pins_rows
 
 
 def save_chat_atomically_row(
@@ -1662,11 +1716,24 @@ def save_chat_atomically_row(
                             f"{expected_updated_at!r} did not match)"
                         )
                 else:
-                    conn.execute(
+                    # REVIEW-FIX: the checked branch just above already
+                    # raises on rowcount == 0; this blind branch used to skip
+                    # that check entirely, so a concurrent delete_chat of
+                    # this exact row landed as a silent no-op UPDATE and the
+                    # unconditional workspace_id read-back below then blew up
+                    # with an unhandled TypeError (fetchone() on a gone row)
+                    # instead of the same clean ConcurrentSaveConflict every
+                    # caller already knows how to turn into LOST_RACE_MESSAGE.
+                    cursor = conn.execute(
                         "UPDATE graphs SET title = ?, data = ?, preview = ?, message_count = ?, "
                         "updated_at = ? WHERE id = ?",
                         (title, chat_data_json, preview, message_count, now, chat_id),
                     )
+                    if cursor.rowcount == 0:
+                        raise ConcurrentSaveConflict(
+                            f"chat {chat_id} no longer exists (it was likely deleted elsewhere "
+                            "since it was last loaded/saved in this session)"
+                        )
                 resolved_chat_id = chat_id
             elif workspace_id is not None:
                 cursor = conn.execute(
@@ -1737,11 +1804,13 @@ def save_chat_atomically_row(
                 )
 
         # ADR-020 stage 20.4: runs AFTER the `with conn:` block above has
-        # committed (or, on a ConcurrentSaveConflict, never reached here at
-        # all - that exception propagates straight out of the `with conn:`
-        # block, so this line is unreachable for a lost write race, exactly
-        # as it should be: nothing was actually written, so nothing here
-        # needs re-indexing). One extra cheap read on the SAME still-open
+        # committed (or, on a ConcurrentSaveConflict - raised by EITHER the
+        # checked or the blind UPDATE branch above on rowcount == 0, see
+        # REVIEW-FIX there - never reached here at all: that exception
+        # propagates straight out of the `with conn:` block, so this line is
+        # unreachable for a lost write race, exactly as it should be:
+        # nothing was actually written, so nothing here needs re-indexing).
+        # One extra cheap read on the SAME still-open
         # connection - graphs.workspace_id is always a real, non-NULL int
         # for resolved_chat_id regardless of which branch above ran (the
         # INSERT branches always populate it - explicitly when `workspace_id`
@@ -2072,15 +2141,18 @@ def make_load_chat(
         # them; a real running session always has both (see backend/app.py's
         # _configure_session ordering).
         try:
-            row = await asyncio.to_thread(load_chat_row, resolved_path, int(chat_id))
+            # REVIEW-FIX: row/notes/pins now come from ONE shared connection/
+            # transaction (load_chat_snapshot) instead of three independent
+            # ones - see that function's own docstring for the torn-read gap
+            # this closes (a concurrent session's save landing between two
+            # of the three separate reads used to combine pre-write and
+            # post-write state into a single restore).
+            row, notes_rows, pins_rows = await asyncio.to_thread(load_chat_snapshot, resolved_path, int(chat_id))
             if row is None:
                 if notifications is not None:
                     notifications.show("This chat could not be found. It may have already been deleted.", "error")
                     await bus.publish("notification")
                 return
-
-            notes_rows = await asyncio.to_thread(load_notes_rows, resolved_path, int(chat_id))
-            pins_rows = await asyncio.to_thread(load_pins_rows, resolved_path, int(chat_id))
 
             if canvas_document is None:
                 return
@@ -2593,13 +2665,23 @@ def make_export_workspace(bus: SessionBus, resolved_path: Path, notifications: N
         if not target:
             return
 
+        # REVIEW-FIX: export used to hardcode {title, data, notes, pins} -
+        # tags/favorite/archived never rode along, even though they're
+        # already sitting in `all_chats` (fetched above to resolve
+        # graph_ids) rather than requiring a second DB round trip here.
+        chats_by_id = {int(row["id"]): row for row in all_chats}
+
         def _load_one(graph_id: int) -> dict[str, Any]:
             row = load_chat_row(resolved_path, graph_id)
+            meta = chats_by_id.get(graph_id, {})
             return {
                 "title": row["title"] if row else "Untitled",
                 "data": row["data"] if row else {},
                 "notes": load_notes_rows(resolved_path, graph_id),
                 "pins": load_pins_rows(resolved_path, graph_id),
+                "tags": list(meta.get("tags", [])),
+                "favorite": bool(meta.get("favorite", False)),
+                "archived": bool(meta.get("archived", False)),
             }
 
         def _do_export() -> Path:
@@ -2695,13 +2777,13 @@ def make_rename_chat_intent(
     this session's save/load/autosave operations.
     """
 
-    async def rename(chat_id: int, new_title: str):
+    async def rename(chat_id: int, new_title: str) -> str | None:
         # Non-empty guard matches the legacy `if ok and new_title:` - an
         # empty/whitespace title is ignored, no mutation, no error (the SPA
         # disables Save for an empty draft anyway).
         title = str(new_title or "").strip()
         if not title:
-            return
+            return None
         resolved_chat_id = int(chat_id)
         expected_updated_at: str | None = None
         if (
@@ -2727,7 +2809,7 @@ def make_rename_chat_intent(
             if notifications is not None:
                 notifications.show(LOST_RACE_MESSAGE_MANUAL, "warning")
                 await bus.publish("notification")
-            return
+            return None
         if (
             new_updated_at is not None
             and canvas_document is not None
@@ -2736,6 +2818,13 @@ def make_rename_chat_intent(
         ):
             last_saved["updated_at"] = new_updated_at
         await bus.publish("app-chat-library")
+        # REVIEW-FIX: returns rename_chat's own signal (None means the row
+        # no longer existed by the time the UPDATE ran) instead of always
+        # resolving to None - mirrors make_delete_chat_intent's delete()
+        # just above, which already returns delete_chat's own bool for the
+        # identical reason: a fire-and-forget caller has no way to tell a
+        # real rename apart from a silent no-op without this.
+        return new_updated_at
 
     return rename
 

@@ -289,32 +289,60 @@ class BranchOps:
                 note_edges.append(edge)
 
         # REVIEW-FIX: reconnect children to the deleted node's own parent
-        # BEFORE removing any edge below, not after (the original order).
-        # Reaching a cycle is no longer possible going forward now that
-        # connect() itself refuses to create one, but a document loaded
-        # from a row saved before that fix existed could still carry a
-        # pre-existing 2-node cycle - which used to make this exact
-        # scenario reachable: deleting the "child" side of such a cycle
-        # made parent_id == edge.target, so the reconnect below was really
-        # self.connect(parent_id, parent_id), which raises "cannot connect
-        # a node to itself" - and with the old pop-then-reconnect order,
-        # that exception fired AFTER the edges were already gone but
-        # BEFORE the node itself was deleted or last_chat_node_id/
-        # final_deliverable_node_id were updated: a corrupted, half-applied
-        # mutation with edges gone and the "deleted" node still present,
-        # with no rollback. Doing the reconnect first means ANY failure
-        # here (this case or an unforeseen future one) leaves the document
-        # completely unchanged - nothing has been popped yet - so the
-        # whole call fails cleanly instead of half-succeeding.
+        # BEFORE removing any edge below, not after (the original order) -
+        # and, as of this pass, check that EVERY child's reconnect will
+        # succeed before performing ANY of them, rather than one connect()
+        # per child interleaved with the loop.
+        #
+        # The reorder alone (reconnect-before-pop) already handles a
+        # pre-existing 2-node cycle where parent_id == edge.target (skipped
+        # just below rather than self-connected - see that comment), but it
+        # is NOT by itself atomic once node_id has 2+ children: connect()
+        # was being called once per child, sequentially, with no rollback
+        # around the loop. If child #1's reconnect succeeded (a real edge
+        # landed in self.edges) and child #2's reconnect then raised
+        # SceneError - reachable via a pre-existing MULTI-HOP legacy cycle,
+        # not just the direct 2-node case above, the same kind
+        # connect_unchecked still produces when session_load.py restores a
+        # pre-ADR-009-stage-9.6 per-kind connection-bucket save - the
+        # exception propagated with child #1's new edge already committed
+        # and node_id never deleted: a half-applied mutation, despite this
+        # comment previously (and wrongly) claiming that could no longer
+        # happen.
+        #
+        # Fixed by splitting "check" from "mutate" into two passes, the
+        # same discipline this session's undo_run fix (domain/commands.py)
+        # established for this same class of bug: the loop just below
+        # checks every child's reconnect with self._reaches BEFORE the
+        # second loop performs any connect() call at all. This is
+        # equivalent to checking each connect() as it would happen live,
+        # because connect() only ever ADDS an edge OUTGOING from
+        # parent_id, never one INCOMING to it - so nothing an earlier
+        # child's connect() call could do would change whether a LATER
+        # child's target can reach parent_id. Checking all of them against
+        # the graph exactly as it stood on entry to this method is
+        # therefore sound. A refusal here is now genuinely a no-op -
+        # nothing has been mutated yet - so the whole call fails cleanly
+        # instead of half-succeeding, for both the direct and the
+        # multi-hop cycle case.
         if parent_id is not None:
+            reconnect_targets = []
             for edge in child_edges:
                 if edge.target == parent_id:
-                    # The precondition above (a pre-existing cycle) - skip
-                    # rather than self-connect: there is nothing meaningful
-                    # to reconnect when the parent and the child are the
-                    # same node.
+                    # The direct-2-cycle precondition above - skip rather
+                    # than self-connect: there is nothing meaningful to
+                    # reconnect when the parent and the child are the same
+                    # node.
                     continue
-                self.connect(parent_id, edge.target)
+                reconnect_targets.append(edge.target)
+            for target in reconnect_targets:
+                if self._reaches(target, parent_id):
+                    raise SceneError(
+                        f"cannot delete {node_id}: reconnecting child {target} "
+                        f"to {parent_id} would create a cycle"
+                    )
+            for target in reconnect_targets:
+                self.connect(parent_id, target)
 
         for edge in [parent_edge, *child_edges, *note_edges]:
             if edge is not None:

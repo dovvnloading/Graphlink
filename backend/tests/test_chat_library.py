@@ -47,6 +47,7 @@ from backend.chat_library import (
     get_all_workspaces,
     get_workspace_default_model,
     load_chat_row,
+    load_chat_snapshot,
     load_notes_rows,
     load_pins_rows,
     register_chat_library,
@@ -1419,6 +1420,41 @@ def test_rename_chat_intent_persists_and_republishes(db_path):
     assert recorder.messages[-1]["payload"]["rows"][0]["title"] == "After"
 
 
+def test_rename_chat_intent_returns_the_new_updated_at_on_success(db_path):
+    # REVIEW-FIX: rename_chat's own write already signals "the graph no
+    # longer exists" by returning None (see that function's own docstring),
+    # but make_rename_chat_intent's rename() used to discard that signal
+    # entirely and never return anything - always resolving to None
+    # regardless of whether the rename actually applied. Mirrors
+    # test_delete_chat_intent_removes_and_republishes's own assertion for
+    # make_delete_chat_intent's delete(), the identical shape.
+    chat_id = _insert_chat(db_path, "Before")
+    bus = SessionBus("chat-library-rename-returns-test")
+    register_chat_library(bus, db_path)
+
+    result = asyncio.run(bus.dispatch_intent("app-chat-library", "renameChat", [chat_id, "After"]))
+
+    assert result is not None
+    assert result == load_chat_row(db_path, chat_id)["updated_at"]
+
+
+def test_rename_chat_intent_returns_none_when_the_row_no_longer_exists(db_path):
+    """The rename-a-since-deleted-row race: two tabs of the same session (or
+    a queued/replayed intent) can reach renameChat after another tab's
+    deleteChat already removed the row. Pre-fix, this silently resolved to
+    None indistinguishably from a genuine success - now it's the SAME None
+    a genuine no-op title guard already returns, so a caller can finally
+    tell the two cases apart from a real success."""
+    chat_id = _insert_chat(db_path, "Temp")
+    bus = SessionBus("chat-library-rename-gone-test")
+    register_chat_library(bus, db_path)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [chat_id]))
+
+    result = asyncio.run(bus.dispatch_intent("app-chat-library", "renameChat", [chat_id, "Too Late"]))
+
+    assert result is None
+
+
 def test_delete_chat_intent_removes_and_republishes(db_path):
     chat_id = _insert_chat(db_path, "Temp")
     bus = SessionBus("chat-library-delete-test")
@@ -1650,6 +1686,89 @@ def test_load_pins_rows_orders_by_sort_order_and_shape(db_path):
     assert [row["title"] for row in rows] == ["First", "Second"]
     assert rows[0]["position"] == {"x": 5.0, "y": 6.0}
     assert rows[0]["pin_id"] == "pin-a"
+
+
+# -- REVIEW-FIX: load_chat_snapshot - one shared connection/transaction for
+# -- the row/notes/pins reads make_load_chat's loadChat intent needs, closing
+# -- a torn-read gap the three independent load_chat_row/load_notes_rows/
+# -- load_pins_rows connections used to leave open (no existing test covered
+# -- this cross-call consistency at all before this fix).
+
+
+def test_load_chat_snapshot_reads_row_notes_and_pins_together(db_path):
+    chat_id = _insert_chat(db_path, "Snapshot", data=json.dumps({"nodes": []}))
+    _insert_note(db_path, chat_id, content="A note")
+    _insert_pin(db_path, chat_id, title="A pin")
+
+    row, notes_rows, pins_rows = load_chat_snapshot(db_path, chat_id)
+
+    assert row["title"] == "Snapshot"
+    assert len(notes_rows) == 1 and notes_rows[0]["content"] == "A note"
+    assert len(pins_rows) == 1 and pins_rows[0]["title"] == "A pin"
+
+
+def test_load_chat_snapshot_returns_none_row_and_empty_notes_pins_for_missing_id(db_path):
+    row, notes_rows, pins_rows = load_chat_snapshot(db_path, 999)
+    assert row is None
+    assert notes_rows == []
+    assert pins_rows == []
+
+
+def test_load_chat_snapshot_is_immune_to_a_concurrent_save_landing_mid_read(db_path, monkeypatch):
+    """Regression test for the torn-read finding: previously, load_chat_row/
+    load_notes_rows/load_pins_rows each opened and closed their OWN
+    connection, so a concurrent writer's real save_chat_atomically_row call
+    (a single atomic transaction) landing strictly BETWEEN two of those
+    three separate reads produced a torn combination - part of the pre-write
+    state, part of the post-write state. load_chat_snapshot now shares ONE
+    connection/transaction across all three reads, so the same concurrent
+    commit lands either entirely before or entirely after this call's own
+    WAL snapshot, never torn across it.
+
+    The race is simulated by monkeypatching the notes-read step to commit a
+    second, independent atomic save (via a fresh connection, standing in for
+    a different session) strictly between this call's row read (already
+    done by the time this runs) and its own notes/pins reads."""
+    chat_id, _ = save_chat_atomically_row(
+        db_path, None, "Before", {"nodes": []},
+        [{"content": "old note", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
+          "color": "#fff", "header_color": None, "is_system_prompt": False, "is_summary_note": False}],
+        [],
+    )
+
+    real_load_notes_rows_from_conn = chat_library_module._load_notes_rows_from_conn
+
+    def _load_notes_after_a_concurrent_save_lands(conn, cid):
+        # A different session's real, fully-committed atomic write - lands
+        # strictly between this call's already-done row read and this
+        # about-to-run notes read, exactly the gap the pre-fix three-
+        # separate-connections version left open.
+        save_chat_atomically_row(
+            db_path, chat_id, "After", {"nodes": []},
+            [{"content": "new note", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
+              "color": "#fff", "header_color": None, "is_system_prompt": False, "is_summary_note": False}],
+            [],
+        )
+        return real_load_notes_rows_from_conn(conn, cid)
+
+    monkeypatch.setattr(
+        chat_library_module, "_load_notes_rows_from_conn", _load_notes_after_a_concurrent_save_lands,
+    )
+
+    row, notes_rows, pins_rows = load_chat_snapshot(db_path, chat_id)
+
+    # This call's own snapshot was established at its FIRST read (the row
+    # itself), before the concurrent writer's commit - WAL's own snapshot
+    # isolation keeps that commit invisible for every read inside this same
+    # call, not just the first one.
+    assert row["title"] == "Before"
+    assert [n["content"] for n in notes_rows] == ["old note"]
+
+    # And the concurrent writer's commit really did land - a later, SEPARATE
+    # snapshot sees it, proving this isn't a stale cache masking the bug.
+    row_after, notes_after, _pins_after = load_chat_snapshot(db_path, chat_id)
+    assert row_after["title"] == "After"
+    assert [n["content"] for n in notes_after] == ["new note"]
 
 
 # -- R6.4: the loadChat intent -----------------------------------------------
@@ -2764,6 +2883,28 @@ class TestOptimisticConcurrency:
         assert new_id == chat_id
         assert load_chat_row(db_path, chat_id)["data"] == {"nodes": ["v2-blind"]}
 
+    def test_blind_update_raises_cleanly_instead_of_crashing_when_the_row_was_deleted_concurrently(self, db_path):
+        # REVIEW-FIX regression: the blind-write branch (expected_updated_at
+        # =None, exercised just above) used to skip the rowcount check the
+        # checked branch right above it already has. A concurrent delete_
+        # chat of this exact row made the UPDATE affect zero rows and
+        # commit as a silent no-op, then this function crashed with an
+        # unhandled TypeError on its own post-commit workspace_id read-back
+        # (fetchone() on a now-gone row). This must now raise the SAME
+        # clean ConcurrentSaveConflict the checked branch already raises,
+        # so every caller's existing `except ConcurrentSaveConflict`
+        # handling (see the saveChat/autosave lost-race tests elsewhere in
+        # this class) covers this path too.
+        chat_id, _ = save_chat_atomically_row(db_path, None, "T", {"nodes": ["v0"]}, [], [])
+        delete_chat(db_path, chat_id)  # a concurrent session deletes it out from under this call
+
+        with pytest.raises(ConcurrentSaveConflict):
+            save_chat_atomically_row(db_path, chat_id, "T", {"nodes": ["v1-should-not-land"]}, [], [])
+
+        # Genuinely gone, not resurrected - matches the checked branch's own
+        # "nothing here is ever partially applied" guarantee.
+        assert load_chat_row(db_path, chat_id) is None
+
     def test_two_sessions_racing_through_the_real_saveChat_intent_surfaces_the_lost_race_notice(self, db_path):
         # End-to-end through the real register_chat_library wiring: two
         # SEPARATE sessions (separate SceneDocuments/buses, exactly like two
@@ -3349,6 +3490,36 @@ class TestExportWorkspaceIntent:
         assert notifications.visible and notifications.msg_type == "success"
         assert '"Default"' in notifications.message  # the WORKSPACE name is quoted in the toast
         assert "1 graph" in notifications.message
+
+    def test_export_includes_tags_favorite_and_archived(self, db_path, tmp_path, monkeypatch):
+        # REVIEW-FIX regression: export_workspace's per-chat payload used to
+        # be hardcoded to {title, data, notes, pins} - tags/favorite/
+        # archived never rode along even though get_all_chats (already
+        # fetched to resolve graph_ids) carries all three.
+        workspace = create_workspace(db_path, "Tagged Workspace")
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "Tagged Graph", {"nodes": []}, [], [], workspace_id=workspace["id"],
+        )
+        set_graph_tags(db_path, chat_id, ["work", "urgent"])
+        set_graph_favorite(db_path, chat_id, True)
+        set_graph_archived(db_path, chat_id, True)
+
+        target = tmp_path / "tagged.graphlink"
+
+        async def _fake_pick_save_file(default_name, file_types=(), directory=""):
+            return str(target)
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", _fake_pick_save_file)
+        bus, _document, _notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+
+        archive = workspace_archive_module.read_archive(target)
+        chat = archive["chats"][0]
+        # get_all_chats returns each graph's tags already sorted (COLLATE
+        # NOCASE by tags.name) - see that function's own docstring.
+        assert chat["tags"] == ["urgent", "work"]
+        assert chat["favorite"] is True
+        assert chat["archived"] is True
 
     def test_seeds_the_dialog_with_a_sanitized_workspace_name(self, db_path, tmp_path, monkeypatch):
         workspace = create_workspace(db_path, "Client / Project #1")

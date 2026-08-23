@@ -53,6 +53,15 @@ _EXTENSION_BY_MIME = {
     "image/svg+xml": "svg",
 }
 
+# Same set as _EXTENSION_BY_MIME's keys, exported so the asset-serving HTTP
+# route (backend/assets.py's get_asset) can validate a stored mime_type
+# against it before trusting the string into a response's Content-Type
+# header. Neither write path into document.image_assets (the addImageNode
+# WS intent, session_load._restore_image_payload) validates mime_type
+# before storing it, so the read side is the one place that can close the
+# gap regardless of how a bad value got stored.
+ALLOWED_IMAGE_MIME_TYPES = frozenset(_EXTENSION_BY_MIME)
+
 
 def content_ref(data: bytes) -> str:
     """The SHA-256 hex digest that names these exact bytes."""

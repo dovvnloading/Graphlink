@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import textwrap
+import time
 
 import pytest
 
@@ -372,5 +373,254 @@ def test_a_server_flooding_stderr_does_not_deadlock_the_client(tmp_path):
         result = client.call_tool("anything", {})
         assert result.content == "ok"
         assert result.is_error is False
+    finally:
+        client.close()
+
+
+# -- stdin write must not hang forever (the write-side deadlock) ------------
+
+
+_DEAF_SERVER_SCRIPT = textwrap.dedent(r'''
+    import json
+    import sys
+    import time
+
+    def send(message):
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request = json.loads(line)
+        method = request.get("method")
+        request_id = request.get("id")
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "deaf", "version": "0.0.1"},
+            }})
+            # Stop reading stdin entirely from here on - simulates a server
+            # that is busy/wedged and never drains its stdin again. The
+            # sleep sits inside the loop body, so control never returns to
+            # `for line in sys.stdin` to pull the next request. Bounded
+            # (not e.g. a full minute) so client.close() - which itself
+            # waits for the leaked writer thread's blocked write() to
+            # finally unblock once this process resumes reading - doesn't
+            # make the test itself slow; it just needs to comfortably
+            # outlast the client's own 1s write timeout below.
+            time.sleep(3)
+        else:
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "error": {"code": -32601, "message": "unreachable - stdin is not read again"}})
+''')
+
+
+def test_a_stdin_write_that_the_server_never_drains_raises_instead_of_hanging_forever(tmp_path):
+    """Regression: _write() had no timeout on process.stdin.write()/flush().
+    A subprocess that stops draining its stdin blocks that write forever
+    while _call_lock is held, deadlocking every future call to this client
+    - with nothing anywhere that ever unblocks it short of killing the
+    process. Here the fake server answers the handshake and then never
+    reads stdin again; the client's next call carries an argument large
+    enough to fill the OS pipe buffer, so the write blocks. Bounded by the
+    fix's write-side timeout, the call must raise a clear McpError well
+    within a few seconds instead of hanging."""
+    script = tmp_path / "deaf_server.py"
+    script.write_text(_DEAF_SERVER_SCRIPT, encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),), timeout=1.0)
+    client.connect()
+    try:
+        # Comfortably larger than any OS pipe buffer (a few KB on Windows,
+        # tens of KB on Linux) - see the stderr-flood test above for the
+        # same reasoning on the read side.
+        big_argument = "x" * (4 * 1024 * 1024)
+        started = time.monotonic()
+        with pytest.raises(McpError, match="timed out"):
+            client.call_tool("anything", {"payload": big_argument})
+        elapsed = time.monotonic() - started
+        # The fake server first resumes draining stdin at the 3s mark (see
+        # its own comment) - well past self.timeout=1.0s. A tight bound
+        # here (not e.g. 10s) is deliberate: it's what actually proves the
+        # write was cut off by ITS OWN timeout rather than merely finishing
+        # whenever the server eventually got around to reading it.
+        assert elapsed < 2.5, f"write timeout did not bound the call - took {elapsed:.1f}s"
+    finally:
+        client.close()
+
+
+# -- idle notifications must not accumulate in the response queue -----------
+
+
+_NOTIFICATION_FLOOD_SERVER_SCRIPT = textwrap.dedent(r'''
+    import json
+    import sys
+
+    def send(message):
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request = json.loads(line)
+        method = request.get("method")
+        request_id = request.get("id")
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "noisy", "version": "0.0.1"},
+            }})
+        elif method == "notifications/initialized":
+            pass
+        elif method == "tools/call":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "content": [{"type": "text", "text": "ok"}], "isError": False,
+            }})
+            # Legal MCP: a server may send notifications at any time, not
+            # just as a reply to a request. This floods a batch of them
+            # immediately after answering, while the client sits idle with
+            # no request in flight - the exact pattern a long-running
+            # progress/log-notifying server produces.
+            for i in range(300):
+                send({"jsonrpc": "2.0", "method": "notifications/message", "params": {"i": i}})
+        else:
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "error": {"code": -32601, "message": "unknown method"}})
+''')
+
+
+def test_idle_notifications_do_not_accumulate_in_the_response_queue(tmp_path):
+    """Regression: the reader thread queued EVERY parsed stdout line
+    unconditionally, including legal MCP notifications a server sends while
+    otherwise idle (no request in flight) - nothing ever drains those
+    between calls, so self._responses grew without bound for the client's
+    whole lifetime. Here the fake server floods 300 notifications right
+    after answering a normal call; they must be dropped, not queued."""
+    script = tmp_path / "noisy_notifications_server.py"
+    script.write_text(_NOTIFICATION_FLOOD_SERVER_SCRIPT, encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),))
+    try:
+        client.connect()
+        result = client.call_tool("noisy", {})
+        assert result.content == "ok"
+
+        # The reader thread drains the flood off stdout concurrently with
+        # this assertion - give it a bounded window to catch up.
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and client._responses.qsize() > 0:
+            time.sleep(0.05)
+
+        assert client._responses.qsize() == 0, (
+            "idle notifications must be dropped, not queued forever - "
+            f"found {client._responses.qsize()} still queued"
+        )
+    finally:
+        client.close()
+
+
+# -- a malformed tools/list response must not crash the whole registry ------
+
+
+_MALFORMED_TOOLS_SERVER_SCRIPT = textwrap.dedent(r'''
+    import json
+    import sys
+
+    def send(message):
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request = json.loads(line)
+        method = request.get("method")
+        request_id = request.get("id")
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "buggy", "version": "0.0.1"},
+            }})
+        elif method == "notifications/initialized":
+            pass
+        elif method == "tools/list":
+            send({
+                "jsonrpc": "2.0", "id": request_id,
+                "result": {"tools": [
+                    {"name": "good_tool", "description": "the only well-formed entry",
+                     "inputSchema": {"type": "object"}},
+                    {"description": "missing the required name field entirely"},
+                    "not_even_a_dict",
+                    {"name": None, "description": "a null name"},
+                    {"name": "", "description": "a blank name"},
+                ]},
+            })
+        else:
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "error": {"code": -32601, "message": "unknown method"}})
+''')
+
+
+def test_list_tools_skips_malformed_entries_instead_of_crashing(tmp_path):
+    """Regression: list_tools() indexed tool["name"] with no shape
+    validation, so a single malformed entry (missing "name", a non-dict
+    entry, a null/blank name) raised KeyError/TypeError uncaught by the
+    only real caller - crashing the WHOLE Builder tool registry (every
+    other configured server's tools too) for the session. Malformed
+    entries must be skipped, not raised on - same "drop the bad entry, keep
+    the rest" posture as graphlink_settings_store.py's get_mcp_servers."""
+    script = tmp_path / "malformed_tools_server.py"
+    script.write_text(_MALFORMED_TOOLS_SERVER_SCRIPT, encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),))
+    try:
+        client.connect()
+        specs = client.list_tools()  # must not raise
+        assert [spec.name for spec in specs] == ["good_tool"]
+    finally:
+        client.close()
+
+
+_NULL_TOOLS_SERVER_SCRIPT = textwrap.dedent(r'''
+    import json
+    import sys
+
+    def send(message):
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request = json.loads(line)
+        method = request.get("method")
+        request_id = request.get("id")
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "buggy", "version": "0.0.1"},
+            }})
+        elif method == "notifications/initialized":
+            pass
+        elif method == "tools/list":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {"tools": None}})
+        else:
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "error": {"code": -32601, "message": "unknown method"}})
+''')
+
+
+def test_list_tools_tolerates_a_non_list_tools_field(tmp_path):
+    """A `"tools": null` response (or any non-list shape) must degrade to
+    "no tools", not raise - same tolerance as a malformed individual entry."""
+    script = tmp_path / "null_tools_server.py"
+    script.write_text(_NULL_TOOLS_SERVER_SCRIPT, encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),))
+    try:
+        client.connect()
+        assert client.list_tools() == ()
     finally:
         client.close()

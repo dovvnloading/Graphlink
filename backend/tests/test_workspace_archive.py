@@ -33,12 +33,15 @@ SECRET = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
 HOME_PATH = r"C:\Users\ada\Documents\private.xlsx"
 
 
-def _chat(title="Trip planning", *, data=None, notes=None, pins=None):
+def _chat(title="Trip planning", *, data=None, notes=None, pins=None, tags=None, favorite=False, archived=False):
     return {
         "title": title,
         "data": data if data is not None else {"nodes": [{"content": "hello"}]},
         "notes": notes or [],
         "pins": pins or [],
+        "tags": tags or [],
+        "favorite": favorite,
+        "archived": archived,
     }
 
 
@@ -82,6 +85,46 @@ def test_a_chat_round_trips_through_export_and_import(tmp_path):
     assert len(chats) == 1
     assert chats[0]["title"] == "Trip planning"
     assert chats[0]["data"]["nodes"][0]["content"] == "keep me"
+
+
+# REVIEW-FIX: tags/favorite/archived used to be dropped entirely on export -
+# export_archive's payload was hardcoded to {title, data, notes, pins}, with
+# no field anywhere in the format for these three to travel through. See
+# backend/chat_library.py's make_export_workspace._load_one for where the
+# real export path now sources them from (get_all_chats, not load_chat_row/
+# load_notes_rows/load_pins_rows).
+
+
+def test_tags_favorite_and_archived_round_trip_through_export_and_import(tmp_path):
+    archive = tmp_path / "out.graphlink"
+    export_archive(archive, [_chat(tags=["work", "urgent"], favorite=True, archived=True)])
+
+    chats = import_archive(archive)
+
+    assert len(chats) == 1
+    assert chats[0]["tags"] == ["work", "urgent"]
+    assert chats[0]["favorite"] is True
+    assert chats[0]["archived"] is True
+
+
+def test_an_older_archive_without_tags_favorite_archived_defaults_them_back_rather_than_crashing(tmp_path):
+    # Simulates an archive written before this fix existed: its chat entry
+    # is exactly the old {title, data, notes, pins} shape, with no tags/
+    # favorite/archived keys at all - import_archive must default them
+    # rather than KeyError or crash.
+    archive = tmp_path / "pre_fix.graphlink"
+    old_shaped_chat = {"title": "Old Export", "data": {"nodes": []}, "notes": [], "pins": []}
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+        zf.writestr("chats/0.json", json.dumps(old_shaped_chat))
+
+    chats = import_archive(archive)
+
+    assert len(chats) == 1
+    assert chats[0]["title"] == "Old Export"
+    assert chats[0]["tags"] == []
+    assert chats[0]["favorite"] is False
+    assert chats[0]["archived"] is False
 
 
 def test_assets_round_trip_into_a_DIFFERENT_store_the_second_machine_case(tmp_path):

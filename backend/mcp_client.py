@@ -183,6 +183,13 @@ class McpStdioClient:
         self._stderr_tail: "collections.deque[str]" = collections.deque(maxlen=200)
         self._responses: "queue.Queue[Any]" = queue.Queue()
         self._next_id = 0
+        # REVIEW-FIX: the id of the ONE request _call is currently waiting
+        # on (None when idle) - see _read_loop's own comment for why the
+        # reader thread checks this before queuing anything. Set/cleared
+        # only from within _call, always under _call_lock, matching this
+        # client's one-in-flight-request-at-a-time contract (see this
+        # class's own docstring).
+        self._pending_id: int | None = None
         self._write_lock = threading.Lock()
         self._call_lock = threading.Lock()
 
@@ -258,15 +265,31 @@ class McpStdioClient:
 
     def list_tools(self) -> tuple[ToolSpec, ...]:
         response = self._call("tools/list", {})
-        tools = response.get("tools", []) if isinstance(response, dict) else []
-        return tuple(
-            ToolSpec(
-                name=str(tool["name"]),
+        raw_tools = response.get("tools") if isinstance(response, dict) else None
+        if not isinstance(raw_tools, list):
+            raw_tools = []
+        specs: list[ToolSpec] = []
+        for tool in raw_tools:
+            # REVIEW-FIX: a spec-noncompliant server's tools/list response
+            # (a non-dict entry, a missing/null/blank "name") used to crash
+            # via an uncaught KeyError/TypeError - the only real caller
+            # (agents.py's _register_configured_mcp_tools) only catches
+            # (McpError, OSError), so this took down the WHOLE Builder tool
+            # registry for the session, every other configured server's
+            # tools included, not just this one's. Same "drop the bad
+            # entry, keep the rest" posture as graphlink_settings_store.py's
+            # get_mcp_servers for a malformed persisted server entry.
+            if not isinstance(tool, dict):
+                continue
+            name = tool.get("name")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            specs.append(ToolSpec(
+                name=name,
                 description=str(tool.get("description") or ""),
                 input_schema=tool.get("inputSchema") or {"type": "object"},
-            )
-            for tool in tools
-        )
+            ))
+        return tuple(specs)
 
     def call_tool(self, name: str, arguments: dict) -> ToolResult:
         response = self._call("tools/call", {"name": name, "arguments": dict(arguments or {})})
@@ -299,7 +322,22 @@ class McpStdioClient:
                     payload = json.loads(line)
                 except json.JSONDecodeError:
                     continue  # server-side logging on stdout, not JSON-RPC - skip
-                self._responses.put(payload)
+                # REVIEW-FIX: only queue a payload that answers the
+                # CURRENTLY in-flight request. Anything else - a legal MCP
+                # notification (no "id" at all; a server may send
+                # notifications/progress, notifications/message, etc. at
+                # any time, including while otherwise idle) or a stray/late
+                # response nothing is waiting on - used to be put() here
+                # unconditionally. Nothing ever drains self._responses
+                # between calls (the client sits idle/connected for most of
+                # a session), so a chatty/idle-notifying server grew this
+                # queue without bound for the client's whole lifetime.
+                # Dropping the non-matching payload here, rather than
+                # queuing then skipping past it in _call, is what actually
+                # bounds the queue.
+                pending_id = self._pending_id
+                if pending_id is not None and isinstance(payload, dict) and payload.get("id") == pending_id:
+                    self._responses.put(payload)
         finally:
             self._responses.put(_READER_CLOSED)
 
@@ -329,12 +367,44 @@ class McpStdioClient:
         process = self._process
         if process is None or process.stdin is None:
             raise McpError(f"MCP server {self.command!r} is not connected.")
+        payload = json.dumps(message) + "\n"
         with self._write_lock:
-            try:
-                process.stdin.write(json.dumps(message) + "\n")
-                process.stdin.flush()
-            except (BrokenPipeError, ValueError) as exc:
-                raise McpError(f"MCP server {self.command!r} is not accepting input: {exc}") from exc
+            # REVIEW-FIX: stdin.write()/flush() are plain blocking file
+            # calls - Python gives no async/select-based way to bound them.
+            # A subprocess that stops draining its stdin (busy, wedged, or
+            # just an ordinarily-sized argument that fills the OS pipe
+            # buffer, a few KB on Windows) used to block this forever, and
+            # since _call() holds _call_lock for its whole body, every
+            # future call on this client deadlocked too - with no way to
+            # interrupt it (asyncio.to_thread cancellation doesn't touch the
+            # underlying blocked OS thread). The write is offloaded to a
+            # daemon helper thread and bounded with a join() timeout instead
+            # - mirrors _call's own read-side timeout against self.timeout.
+            # If it doesn't finish in time we raise rather than wait
+            # forever; the blocked syscall (and its thread) leaks, but a
+            # leaked thread beats a permanently deadlocked client.
+            outcome: list[BaseException] = []
+
+            def _blocking_write() -> None:
+                try:
+                    process.stdin.write(payload)
+                    process.stdin.flush()
+                except Exception as exc:  # re-raised on the caller's thread below
+                    outcome.append(exc)
+
+            writer = threading.Thread(target=_blocking_write, daemon=True)
+            writer.start()
+            writer.join(self.timeout)
+            if writer.is_alive():
+                raise McpError(
+                    f"MCP server {self.command!r} timed out after {self.timeout}s writing a "
+                    f"{message.get('method')!r} request - the process is not reading its stdin."
+                )
+            if outcome:
+                exc = outcome[0]
+                if isinstance(exc, (BrokenPipeError, ValueError)):
+                    raise McpError(f"MCP server {self.command!r} is not accepting input: {exc}") from exc
+                raise exc
 
     def _notify(self, method: str, params: dict) -> None:
         self._write({"jsonrpc": "2.0", "method": method, "params": params})
@@ -343,34 +413,45 @@ class McpStdioClient:
         with self._call_lock:
             self._next_id += 1
             request_id = self._next_id
-            self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
-            deadline = time.monotonic() + self.timeout
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise McpError(f"MCP server {self.command!r} timed out after {self.timeout}s calling {method!r}.")
-                try:
-                    payload = self._responses.get(timeout=remaining)
-                except queue.Empty:
-                    raise McpError(f"MCP server {self.command!r} timed out after {self.timeout}s calling {method!r}.")
-                if payload is _READER_CLOSED:
-                    stderr_tail = self._stderr_tail_text()
-                    raise McpError(
-                        f"MCP server {self.command!r} closed its output unexpectedly while calling {method!r}."
-                        + (f" stderr: {stderr_tail}" if stderr_tail.strip() else "")
-                    )
-                if not isinstance(payload, dict) or payload.get("id") != request_id:
-                    # A notification, or a response to a different in-flight
-                    # id - can't happen from THIS client (one call at a time
-                    # under _call_lock), but a server sending its own
-                    # unsolicited notification is legal MCP and must not be
-                    # mistaken for our response.
-                    continue
-                if "error" in payload:
-                    error = payload["error"]
-                    message_text = error.get("message", error) if isinstance(error, dict) else error
-                    raise McpError(f"{method} failed: {message_text}")
-                return payload.get("result", {}) or {}
+            # REVIEW-FIX: recorded so _read_loop can tell "the response to
+            # THIS call" apart from an unsolicited notification or a stray
+            # response nothing is waiting on - see that method's own
+            # comment. Cleared in `finally` no matter how the call ends
+            # (result, error, or timeout) so a late response that arrives
+            # after we've already given up is dropped by the reader too,
+            # not left for whatever happens to read the queue next.
+            self._pending_id = request_id
+            try:
+                self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+                deadline = time.monotonic() + self.timeout
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise McpError(f"MCP server {self.command!r} timed out after {self.timeout}s calling {method!r}.")
+                    try:
+                        payload = self._responses.get(timeout=remaining)
+                    except queue.Empty:
+                        raise McpError(f"MCP server {self.command!r} timed out after {self.timeout}s calling {method!r}.")
+                    if payload is _READER_CLOSED:
+                        stderr_tail = self._stderr_tail_text()
+                        raise McpError(
+                            f"MCP server {self.command!r} closed its output unexpectedly while calling {method!r}."
+                            + (f" stderr: {stderr_tail}" if stderr_tail.strip() else "")
+                        )
+                    if not isinstance(payload, dict) or payload.get("id") != request_id:
+                        # Defense in depth: _read_loop now only ever queues
+                        # a payload matching self._pending_id (== request_id
+                        # for this call's whole duration), so this should be
+                        # unreachable - kept as a safety net rather than an
+                        # invariant this method silently trusts.
+                        continue
+                    if "error" in payload:
+                        error = payload["error"]
+                        message_text = error.get("message", error) if isinstance(error, dict) else error
+                        raise McpError(f"{method} failed: {message_text}")
+                    return payload.get("result", {}) or {}
+            finally:
+                self._pending_id = None
 
 
 def register_mcp_server_tools(registry, client: McpStdioClient, config: McpServerConfig) -> tuple[str, ...]:

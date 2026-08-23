@@ -167,6 +167,50 @@ def test_delete_chat_node_survives_a_2_cycle_from_old_data_without_corrupting_st
     assert list(doc.edges.values()) == [], "no dangling self-edge or orphaned edge left behind"
 
 
+def test_delete_chat_node_refuses_atomically_when_a_later_childs_reconnect_would_close_a_multihop_cycle():
+    """Regression: the fix above (reorder reconnect-before-pop, skip a
+    direct 2-cycle self-connect) only covers a node with ONE child on a
+    2-node cycle. With 2+ children, the reconnect loop used to call
+    connect() once per child, sequentially, with no rollback around the
+    loop - if the FIRST child's reconnect succeeded (a real edge landed in
+    self.edges) and a LATER child's reconnect then raised SceneError
+    (reachable via a pre-existing MULTI-HOP legacy cycle - the kind
+    connect_unchecked still produces when session_load.py restores a
+    pre-ADR-009-stage-9.6 per-kind connection-bucket save, an entirely
+    ordinary old-saved-chat load), the exception propagated with the first
+    child's new edge already committed and the node never deleted: a
+    half-applied mutation from an ordinary Delete Message action. The fix
+    pre-flight-checks every child's reconnect before performing any of
+    them, so a refusal here must leave the document byte-identical to its
+    pre-delete-attempt state - not just "no crash." """
+    doc = SceneDocument()
+    p = doc.add_chat_node(0, 0, "p", True)
+    d = doc.add_chat_node(1, 0, "d", False, parent_id=p.id)
+    _c1 = doc.add_chat_node(2, 0, "c1", True, parent_id=d.id)
+    c2 = doc.add_chat_node(2, 1, "c2", True, parent_id=d.id)
+    x = doc.add_node(3, 0, "x")
+    # A multi-hop legacy cycle only connect_unchecked can produce: c2 -> x
+    # -> p, combined with the ordinary p -> d -> c2 edges already in place,
+    # closes the loop p -> d -> c2 -> x -> p. Reconnecting c2 straight to p
+    # (what deleting d attempts, as the SECOND child processed since c1
+    # was added first) is exactly the edge that would close it - while
+    # reconnecting c1 (processed first) is perfectly fine on its own.
+    doc.connect_unchecked(c2.id, x.id)
+    doc.connect_unchecked(x.id, p.id)
+
+    nodes_before = set(doc.nodes)
+    edges_before = sorted((e.source, e.target) for e in doc.edges.values())
+
+    with pytest.raises(SceneError, match="cycle"):
+        doc.delete_chat_node(d.id)
+
+    assert set(doc.nodes) == nodes_before, "no node may be removed on refusal"
+    assert sorted((e.source, e.target) for e in doc.edges.values()) == edges_before, (
+        "no spurious edge (e.g. a p->c1 reconnect that succeeded before the "
+        "later c2 failure) may be left behind on refusal"
+    )
+
+
 def test_removing_a_node_removes_its_edges():
     doc = SceneDocument()
     a, b, c = doc.add_node(0, 0), doc.add_node(1, 1), doc.add_node(2, 2)

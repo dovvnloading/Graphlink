@@ -55,9 +55,33 @@ MAX_MANIFEST_ENTRIES = 1200
 
 
 def default_import_root(repo_name, branch_name):
-    safe_repo = repo_name.replace("/", "__")
-    safe_branch = branch_name.replace("/", "__")
-    return Path.home() / ".graphlink" / "gitlink_repos" / safe_repo / safe_branch
+    # Sanitizing only "/" left backslash-embedded ".." segments untouched -
+    # on Windows, pathlib re-parses "\\" as a real separator once the
+    # sanitized string is joined into a Path, so a repo/branch value such as
+    # "a/xyz\\..\\..\\..\\AppData\\Local\\Temp\\evil\\marker" turned back
+    # into literal ".." path components after the join and escaped the
+    # ~/.graphlink/gitlink_repos/ sandbox. Sanitizing "\\" the same way "/"
+    # already is collapses any embedded separator so a single repo/branch
+    # value can never reintroduce path components.
+    safe_repo = repo_name.replace("/", "__").replace("\\", "__")
+    safe_branch = branch_name.replace("/", "__").replace("\\", "__")
+
+    sandbox_root = Path.home() / ".graphlink" / "gitlink_repos"
+    candidate = sandbox_root / safe_repo / safe_branch
+
+    # Defense in depth, mirroring agent.py's _safe_local_target pattern
+    # (resolve, then verify the result is actually inside the intended
+    # root) rather than trusting sanitization alone to cover every case -
+    # e.g. a repo/branch value that is itself the literal segment "..".
+    # The containment check runs against resolved copies so any lexical
+    # ".." is normalized away for the comparison; the *returned* path is
+    # left unresolved so it is not silently rewritten to match the on-disk
+    # casing of any directory that happens to already exist there.
+    resolved_sandbox = sandbox_root.resolve()
+    resolved_candidate = candidate.resolve()
+    if resolved_candidate != resolved_sandbox and resolved_sandbox not in resolved_candidate.parents:
+        raise RuntimeError("Resolved Gitlink import path escaped the local sandbox root.")
+    return candidate
 
 
 def scan_local_repo_paths(local_root):

@@ -19,6 +19,7 @@ import time
 import api_provider
 from backend import builder as builder_module
 from backend import tools_graph as tools_graph_module
+from backend.api import intents_builder as intents_builder_module
 from backend.builder import run_build
 from backend.domain.graph import SceneDocument
 from backend.domain.model import MESSAGE_VERTICAL_SPACING
@@ -102,9 +103,12 @@ def seed_plan(document, steps, *, mode="copilot", **budgets):
     return node
 
 
-async def drive_build(document, dispatcher, registry, bus, node, *, approve=True, deny_first=False, notifications=None):
+async def drive_build(document, dispatcher, registry, bus, node, *, approve=True, deny_first=False, notifications=None, summaries=None):
     """Runs run_build while a driver coroutine plays the approving human.
-    Returns (approvals_seen, denials_issued)."""
+    Returns (approvals_seen, denials_issued). `summaries`, if passed, gets
+    each prompt's node.state.builder_approval_summary appended alongside
+    the matching approvals entry - opt-in so the existing two-tuple
+    callers are untouched."""
     cancel_event = threading.Event()
     handle = dispatcher._runs.claim("builder", node_id=node.id, cancel_event=cancel_event)
     approvals = []
@@ -129,6 +133,8 @@ async def drive_build(document, dispatcher, registry, bus, node, *, approve=True
             and not future.done()
         ):
             approvals.append(node.state.builder_approval_tool_name)
+            if summaries is not None:
+                summaries.append(node.state.builder_approval_summary)
             if deny_first and denials["count"] == 0:
                 denials["count"] += 1
                 future.set_result(False)
@@ -351,6 +357,71 @@ class TestAutopilotNetworkGate:
         assert node.state.builder_status == "done"
 
 
+class TestRunNodeExecuteApprovalGate:
+    """REVIEW-FIX regression: run_node(action="execute") on a pycoder node
+    used to bypass human review entirely - executing Builder-authored
+    Python straight through PythonREPL.execute() with no approval_future,
+    no pycoder_awaiting_approval, and (in autopilot, since code.execute
+    was in _AUTOPILOT_AUTO_SCOPES) no prompt at all. Mirrors
+    TestAutopilotNetworkGate's own shape for the identical class of gap,
+    now closed the same way: code.execute is no longer auto-approved, and
+    the prompt shown discloses the code itself (run_node_pending_code /
+    _approval_summary), not just the call's {node_id, action} arguments."""
+
+    def test_run_node_execute_prompts_in_autopilot_despite_the_registered_code_execute_scope(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        parent = document.add_chat_node(0, 0, "ctx", True)
+        pycoder = document.add_pycoder_node(0, 200, parent.id)
+        pycoder.state.pycoder_code = "print('should not run without review')"
+        node = seed_plan(document, ["run the code"], mode="autopilot")
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "run_node", node_id=pycoder.id)]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        approvals, denials = asyncio.run(
+            drive_build(document, dispatcher, registry, bus, node, deny_first=True)
+        )
+
+        assert approvals == ["run_node"], (
+            "code.execute must prompt even in autopilot - a Builder-written "
+            "pycoder node is arbitrary code execution, the same risk class "
+            "net.fetch already never auto-approves"
+        )
+        assert denials == 1
+        # Denied means invoke() never called the handler - LoopDispatcher.
+        # get_pycoder_repl raises if it's ever reached, so a passing build
+        # here (rather than an AssertionError bubbling out of the task) is
+        # itself proof the code never reached the REPL unapproved.
+        assert node.state.builder_status == "done"
+
+    def test_run_node_execute_approval_discloses_the_code_not_just_the_call_arguments(self, monkeypatch):
+        document, dispatcher, registry, bus = make_harness()
+        parent = document.add_chat_node(0, 0, "ctx", True)
+        pycoder = document.add_pycoder_node(0, 200, parent.id)
+        pycoder.state.pycoder_code = "import os\nos.system('echo hi')"
+        node = seed_plan(document, ["run the code"])  # copilot: already prompted pre-fix
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "run_node", node_id=pycoder.id)]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+        summaries: list = []
+
+        approvals, denials = asyncio.run(
+            drive_build(document, dispatcher, registry, bus, node, deny_first=True, summaries=summaries)
+        )
+
+        assert approvals == ["run_node"]
+        assert len(summaries) == 1
+        # The old summary was just the call's own arguments - node_id/action,
+        # never the code. The fix must show the code that will actually run.
+        assert pycoder.state.pycoder_code in summaries[0]
+        assert summaries[0] == builder_module._approval_summary(
+            call("c1", "run_node", node_id=pycoder.id), document,
+        )
+        assert node.state.builder_status == "done"
+
+
 class TestPlanPersistence:
     def test_round_trip_preserves_the_plan_and_normalizes_live_states(self):
         from backend.session_load import _restore_plan_payload
@@ -546,6 +617,42 @@ class TestBuilderIntents:
 
         asyncio.run(run())
 
+    def test_set_plan_steps_refuses_while_the_node_has_a_live_run(self):
+        """A second tab (or the same tab in the WS-eventual-consistency
+        window right after a Resume click lands) can still fire
+        setPlanSteps while run_build is mid-step - PlanNodeView's own
+        canEditPlan gate is client-side only. document.set_plan_steps
+        always rebuilds plan_steps as fresh dict objects, even for entries
+        it leaves value-for-value unchanged - so letting this through would
+        detach run_build's own in-flight `step` reference (backend/
+        builder.py) from the live list even when the edit only touches a
+        DIFFERENT, still-pending step."""
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            node = document.add_plan_node(0, 0, "goal")
+            node.state.plan_steps = [
+                {"id": "s1", "title": "step one", "status": "running", "detail": ""},
+                {"id": "s2", "title": "step two", "status": "pending", "detail": ""},
+            ]
+            node.state.builder_status = "running"
+            node.pending_request_id = "req-1"
+            live_step = node.state.plan_steps[0]
+
+            await bus.dispatch_intent("scene", "setPlanSteps", [
+                node.id, [
+                    {"id": "s1", "title": "step one", "status": "running", "detail": ""},
+                    {"id": "s2", "title": "edited", "status": "pending", "detail": ""},
+                ],
+            ])
+
+            # Refused with a notification, not applied - the identity of
+            # the running step's dict must survive so run_build's own
+            # reference stays live.
+            assert node.state.plan_steps[0] is live_step
+            assert node.state.plan_steps[1]["title"] == "step two"
+
+        asyncio.run(run())
+
     def test_start_execution_refuses_a_non_resumable_status(self):
         async def run():
             bus, document, recorder, dispatcher = make_bus_with_dispatcher()
@@ -630,6 +737,52 @@ class TestBuilderIntents:
                 "builder", "saveRecipe", [source.id, "Research and summarize"],
             )
             assert result is None
+
+        asyncio.run(run())
+
+    def test_save_recipe_reads_and_writes_the_recipe_list_atomically_across_concurrent_calls(self, monkeypatch):
+        """Regression: save_recipe used to call settings.get_recipes() then
+        settings.set_recipes(...) directly on the event loop, with no lock
+        and no asyncio.to_thread - unlike every other settings-mutating
+        intent (backend/api/_settings_shared.py's own module docstring).
+        Mirrors test_settings.py's own run_locked atomicity regression
+        tests: patches intents_builder's own `run_locked` name binding to
+        inject a concurrent recipe write right where the real locked
+        section begins, then confirms this call's own read-modify-write
+        does not silently revert it."""
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            manager = dispatcher._settings_manager
+            manager.set_recipes([{"name": "Existing", "goal": "g", "mode": "copilot", "steps": []}])
+            source = document.add_plan_node(0, 0, "goal")
+            source.state.plan_steps = [{"id": "s1", "title": "step", "status": "done", "detail": ""}]
+
+            real_run_locked = intents_builder_module.run_locked
+            injected = {"done": False}
+
+            def _run_locked_with_a_concurrent_write_in_the_window(mutation, *args):
+                if not injected["done"]:
+                    injected["done"] = True
+                    # A second connection's own recipe change lands and
+                    # commits, in full, right here - before this call's own
+                    # closure (the `mutation` argument) ever runs.
+                    manager.set_recipes([
+                        r for r in manager.get_recipes() if r["name"] != "Existing"
+                    ] + [{"name": "Concurrent", "goal": "g2", "mode": "copilot", "steps": []}])
+                return real_run_locked(mutation, *args)
+
+            monkeypatch.setattr(
+                intents_builder_module, "run_locked", _run_locked_with_a_concurrent_write_in_the_window,
+            )
+
+            await bus.dispatch_intent("builder", "saveRecipe", [source.id, "My recipe"])
+
+            assert injected["done"], "the concurrent write never ran - the test no longer exercises the window"
+            names = [r["name"] for r in manager.get_recipes()]
+            assert "My recipe" in names
+            # Must NOT be reverted - the concurrently-saved recipe must
+            # survive this call's own read-modify-write.
+            assert "Concurrent" in names
 
         asyncio.run(run())
 
@@ -921,6 +1074,32 @@ class TestReviewFixRegressions:
         assert "failed" in _RESUMABLE_STATUSES, (
             "a transient provider fault must not permanently kill a build "
             "whose goal/checklist/spent budgets are still on the canvas"
+        )
+
+    def test_a_setup_window_exception_lands_failed_instead_of_escaping(self, monkeypatch):
+        """Regression: the tool-spec filtering/prompt resolution/plan-digest
+        formatting between run_build's own busy-marker stamp (builder_status
+        ="running"/pending_request_id=request_id) and its try block used to
+        sit OUTSIDE any try/except. An exception raised there escaped
+        run_build entirely - agents.py's own caller wraps the call in only
+        `finally: self._runs.release(...)`, no except - leaving the plan
+        node stuck at "running" forever with a pending_request_id no run
+        backs anymore."""
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["a step"])
+
+        def boom_digest(node):
+            raise RuntimeError("boom during plan-digest formatting")
+
+        monkeypatch.setattr(builder_module, "_plan_digest", boom_digest)
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert node.state.builder_status == "failed"
+        assert node.pending_request_id is None, (
+            "a setup-window exception must still clear pending_request_id, "
+            "or the plan node is stuck 'running' forever with cancel_builder "
+            "a permanent no-op"
         )
 
 
@@ -1299,6 +1478,43 @@ class TestDeleteRecipe:
             names = [r["name"] for r in listing["recipes"]]
             assert "My recipe" not in names
             assert "Research and summarize" in names, "built-ins are untouched"
+
+        asyncio.run(run())
+
+    def test_delete_recipe_reads_and_writes_the_recipe_list_atomically_across_concurrent_calls(self, monkeypatch):
+        """Same run_locked atomicity regression as save_recipe's own test
+        above - delete_recipe used to call settings.get_recipes()/
+        set_recipes() directly on the event loop too, with no lock and no
+        asyncio.to_thread."""
+        async def run():
+            bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+            manager = dispatcher._settings_manager
+            manager.set_recipes([{"name": "My recipe", "goal": "g", "mode": "copilot", "steps": []}])
+
+            real_run_locked = intents_builder_module.run_locked
+            injected = {"done": False}
+
+            def _run_locked_with_a_concurrent_write_in_the_window(mutation, *args):
+                if not injected["done"]:
+                    injected["done"] = True
+                    manager.set_recipes(manager.get_recipes() + [
+                        {"name": "Concurrent", "goal": "g2", "mode": "copilot", "steps": []},
+                    ])
+                return real_run_locked(mutation, *args)
+
+            monkeypatch.setattr(
+                intents_builder_module, "run_locked", _run_locked_with_a_concurrent_write_in_the_window,
+            )
+
+            result = await bus.dispatch_intent("builder", "deleteRecipe", ["My recipe"])
+            assert result is True
+
+            assert injected["done"], "the concurrent write never ran - the test no longer exercises the window"
+            names = [r["name"] for r in manager.get_recipes()]
+            assert "My recipe" not in names
+            # Must NOT be reverted - the concurrently-saved recipe must
+            # survive this call's own read-modify-write.
+            assert "Concurrent" in names
 
         asyncio.run(run())
 

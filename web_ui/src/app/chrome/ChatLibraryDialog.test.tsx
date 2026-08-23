@@ -346,6 +346,62 @@ describe("ChatLibraryDialog", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 
+  // -- REVIEW-FIX: commitRename used to fire-and-forget via fireIntent and
+  // -- clear renamingId the instant the message was SENT, not once the
+  // -- rename was actually confirmed - the same fix confirmDelete already
+  // -- got below, applied here since renameChat's own intent now returns a
+  // -- real success/failure signal (null when the row is gone) instead of
+  // -- always resolving to undefined.
+
+  it("a confirmed rename that actually applies closes the rename input", async () => {
+    const { user, request } = setup();
+    await user.click(screen.getByText("open library"));
+    request.mockResolvedValueOnce("2026-01-16 09:00:00.000000");
+
+    await user.click(screen.getByLabelText('Rename "First Chat"'));
+    const input = screen.getByLabelText('Rename "First Chat"') as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "Renamed Title");
+    await user.click(screen.getByLabelText('Save "First Chat"'));
+
+    // Back to the normal (non-renaming) row action - the pencil button, not
+    // the input, now carries this label.
+    await screen.findByRole("button", { name: 'Rename "First Chat"' });
+    expect(screen.queryByRole("textbox", { name: 'Rename "First Chat"' })).toBeNull();
+  });
+
+  it("a resolved-but-falsy rename (the row was already gone) leaves the rename input in place rather than optimistically closing it", async () => {
+    const { user, request } = setup();
+    await user.click(screen.getByText("open library"));
+    request.mockResolvedValueOnce(null);
+
+    await user.click(screen.getByLabelText('Rename "First Chat"'));
+    const input = screen.getByLabelText('Rename "First Chat"') as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "Renamed Title");
+    await user.click(screen.getByLabelText('Save "First Chat"'));
+    await vi.waitFor(() => expect(request).toHaveBeenCalled());
+
+    expect(screen.getByRole("textbox", { name: 'Rename "First Chat"' })).toBeInTheDocument();
+  });
+
+  it("a rejected rename request leaves the rename input in place and logs, without throwing", async () => {
+    const { user, request } = setup();
+    await user.click(screen.getByText("open library"));
+    request.mockRejectedValueOnce(new Error("socket dropped"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await user.click(screen.getByLabelText('Rename "First Chat"'));
+    const input = screen.getByLabelText('Rename "First Chat"') as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "Renamed Title");
+    await user.click(screen.getByLabelText('Save "First Chat"'));
+    await vi.waitFor(() => expect(consoleError).toHaveBeenCalled());
+
+    expect(screen.getByRole("textbox", { name: 'Rename "First Chat"' })).toBeInTheDocument();
+    consoleError.mockRestore();
+  });
+
   it("deleting a row: trash opens an inline scoped confirm, confirming dispatches deleteChat for THAT row only", async () => {
     const { user, intents } = setup();
     await user.click(screen.getByText("open library"));

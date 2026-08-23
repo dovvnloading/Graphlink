@@ -178,6 +178,30 @@ class TestRunChat:
 
         assert result.is_error
 
+    def test_node_deleted_while_the_reply_was_in_flight_is_a_clean_no_op(self, monkeypatch):
+        """REVIEW-FIX regression: an ordinary user can delete the chat node
+        run_node is replying to while _call_chat_agent (the await below) is
+        still in flight - remove_nodes has no special-casing for a chat
+        node just because it has a pending run_node request. add_chat_node
+        raises SceneError for a missing parent by design; uncaught, that
+        used to propagate out of handler() into ToolRegistry.invoke's
+        generic except Exception, discarding the reply as a confusing
+        internal exception instead of a clean tool error."""
+        document, dispatcher, registry = make_setup()
+        root = document.add_chat_node(0, 0, "what is 6*7?", True)
+
+        def _reply_then_delete(history, persona, cancel, **kwargs):
+            document.remove_nodes([root.id])
+            return "It is 42."
+
+        monkeypatch.setattr(agents_module, "_call_chat_agent", _reply_then_delete)
+
+        result = run_node(registry, make_ctx(), root.id)
+
+        assert result.is_error
+        assert "no longer exists" in result.content
+        assert not any(n.content == "It is 42." for n in document.nodes.values())
+
 
 class TestRunChart:
     def test_generates_a_chart_node_from_the_source_content(self, monkeypatch):
@@ -255,6 +279,27 @@ class TestRunChart:
         result = run_node(registry, make_ctx(), source.id, action="chart", chart_type="bar")
 
         assert result.is_error
+        assert not any(n.kind == "chart" for n in document.nodes.values())
+
+    def test_node_deleted_while_the_chart_was_in_flight_is_a_clean_no_op(self, monkeypatch):
+        """REVIEW-FIX regression: same missing-node race as TestRunChat's
+        identical test above - a concurrent delete of `source` while
+        _call_chart_agent (the await) is still running used to surface as
+        an uncaught SceneError from add_chart_node instead of a clean tool
+        error, since a chart with no source node has nothing to attach to."""
+        document, dispatcher, registry = make_setup()
+        source = document.add_chat_node(0, 0, "sales: Q1 10, Q2 20, Q3 15", False)
+
+        def _chart_then_delete(text, chart_type, cancel_event=None):
+            document.remove_nodes([source.id])
+            return {"labels": ["Q1", "Q2", "Q3"], "values": [10, 20, 15]}
+
+        monkeypatch.setattr(agents_module, "_call_chart_agent", _chart_then_delete)
+
+        result = run_node(registry, make_ctx(), source.id, action="chart", chart_type="bar")
+
+        assert result.is_error
+        assert "no longer exists" in result.content
         assert not any(n.kind == "chart" for n in document.nodes.values())
 
 
@@ -366,6 +411,57 @@ class TestRunResearch:
 
         assert result.is_error
         assert node.state.research_error
+
+    def test_node_deleted_mid_research_still_returns_the_completed_answer(self, monkeypatch):
+        """REVIEW-FIX regression: unlike chat/chart above (which CREATE a
+        new child node and so have nothing to land once the parent is
+        gone), a completed research answer is already fully formed here -
+        complete_web_research_run raises SceneError for a missing node by
+        design, but the model should still get the answer it already paid
+        for, mirroring _run_pycoder's own posture (complete_pycoder_run's
+        silent no-op for a deleted node)."""
+        from graphlink_plugins.web_research import service as wr_service
+        from graphlink_plugins.web_research.domain import ResearchResult
+
+        document, dispatcher, registry = make_setup()
+        node = self._seed_research(document)
+
+        def fake_run(self, request, *, token=None, progress=None):
+            document.remove_nodes([node.id])
+            return ResearchResult(
+                request_id=request.request_id, original_query=request.original_query,
+                effective_query=request.original_query, answer_markdown="Solar output doubled.",
+            )
+
+        monkeypatch.setattr(wr_service.WebResearchService, "run", fake_run)
+
+        result = run_node(registry, make_ctx(scopes=ALL_SCOPES | frozenset({"net.fetch"})), node.id)
+
+        assert not result.is_error
+        assert "doubled" in json.loads(result.content)["answer"]
+        assert node.id not in document.nodes
+
+    def test_node_deleted_mid_research_failure_is_still_a_clean_tool_error(self, monkeypatch):
+        """REVIEW-FIX regression: the failure-landing counterpart of the
+        success-path test above - fail_web_research_run also raises
+        SceneError for a missing node by design; a concurrent delete must
+        not turn an ordinary research failure into an uncaught exception."""
+        from graphlink_plugins.web_research import service as wr_service
+        from graphlink_plugins.web_research.domain import ResearchFailure
+
+        document, dispatcher, registry = make_setup()
+        node = self._seed_research(document)
+
+        def fake_run(self, request, *, token=None, progress=None):
+            document.remove_nodes([node.id])
+            raise ResearchFailure("No sources could be fetched.", code="no_sources")
+
+        monkeypatch.setattr(wr_service.WebResearchService, "run", fake_run)
+
+        result = run_node(registry, make_ctx(scopes=ALL_SCOPES | frozenset({"net.fetch"})), node.id)
+
+        assert result.is_error
+        assert "No sources" in result.content
 
     def test_research_requires_the_net_fetch_scope(self):
         document, dispatcher, registry = make_setup()

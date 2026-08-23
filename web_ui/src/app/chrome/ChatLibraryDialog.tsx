@@ -493,12 +493,27 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
     setEditingTagsId(null);
   }
 
+  // REVIEW-FIX: this used to fire-and-forget via transport.fireIntent and
+  // clear renamingId the instant the message was SENT, not once the rename
+  // was actually confirmed - backend's renameChat intent already signals a
+  // no-op (the row was deleted elsewhere, or a lost optimistic-concurrency
+  // race) by resolving to `null`, but nothing here ever looked at it, so the
+  // rename input closed itself over a rename that silently never happened.
+  // Same transport.request()-then-check shape as confirmDelete just below.
   function commitRename() {
     const title = renameDraft.trim();
     if (renamingId === null || !title) return;
-    transport.fireIntent("app-chat-library", "renameChat", [renamingId, title], undefined, true);
-    setRenamingId(null);
-    lastTriggerRef.current?.focus();
+    const chatId = renamingId;
+    transport
+      .request("app-chat-library", "renameChat", [chatId, title])
+      .then((newUpdatedAt) => {
+        if (!newUpdatedAt) return;
+        setRenamingId((current) => (current === chatId ? null : current));
+        lastTriggerRef.current?.focus();
+      })
+      .catch((error) => {
+        console.error("[chat-library] Rename failed:", error);
+      });
   }
 
   function cancelRename() {

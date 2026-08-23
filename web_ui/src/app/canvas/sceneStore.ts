@@ -1077,15 +1077,42 @@ export class SceneStore {
   sendMessage(text: string): void {
     const synthesizeNodeIds = this.synthesizeTargetNodeIds;
     if (synthesizeNodeIds !== null) {
-      this.transport.fireIntent("scene", "synthesizeBranches", [synthesizeNodeIds, text]);
-      this.setSynthesizeTargetNodeIds(null);
+      // REVIEW-FIX: this used to clear the staged synthesize-target selection
+      // synchronously, in the same stack frame as firing the intent - before
+      // the request had any chance to succeed or fail. fireIntent's own send
+      // is always async (a WS send cannot settle synchronously), so the
+      // clear was provably racing ahead of any real signal. Deferred to
+      // onSettled and gated on success: a failed/dropped send (e.g. offline,
+      // since this intent is deliberately non-queueable - synthesizing
+      // branches creates new data, so it must not be replayed) leaves the
+      // staged selection in place so the user can retry it, instead of
+      // silently losing it.
+      this.transport.fireIntent(
+        "scene",
+        "synthesizeBranches",
+        [synthesizeNodeIds, text],
+        undefined,
+        false,
+        undefined,
+        (succeeded) => {
+          if (succeeded) this.setSynthesizeTargetNodeIds(null);
+        },
+      );
       return;
     }
     const branchFromNodeId = this.replyTargetNodeId;
     const args: unknown[] = [text];
     if (branchFromNodeId !== null) args.push(branchFromNodeId);
-    this.transport.fireIntent("scene", "sendMessage", args);
-    if (branchFromNodeId !== null) this.setReplyTargetNodeId(null);
+    // REVIEW-FIX: same optimistic-clear-before-confirm bug as above, for the
+    // "Branch from here" reply target. Cleared only once the send has
+    // actually settled successfully, so a failure leaves the staged branch
+    // target in effect for a retry rather than silently dropping it (a
+    // retry sent with no branch_from_node_id falls through to the current
+    // tip server-side - see backend/branches.py's send_message - silently
+    // misplacing the message the user meant to branch).
+    this.transport.fireIntent("scene", "sendMessage", args, undefined, false, undefined, (succeeded) => {
+      if (succeeded && branchFromNodeId !== null) this.setReplyTargetNodeId(null);
+    });
   }
 
   moveNode(id: string, x: number, y: number): void {

@@ -513,8 +513,29 @@ class SettingsManager:
         # CURRENT_SCHEMA_VERSION.
         if 'schema_version' not in migrated_state:
             migrated_state['schema_version'] = self.CURRENT_SCHEMA_VERSION
-        elif migrated_state.get('schema_version', 0) < self.CURRENT_SCHEMA_VERSION:
-            migrated_state['schema_version'] = self.CURRENT_SCHEMA_VERSION
+        else:
+            _stored_schema_version = migrated_state.get('schema_version')
+            # REVIEW-FIX: none of the migrations above touch 'schema_version'
+            # itself, so a syntactically-valid-JSON but non-numeric value
+            # here (null, a string, a list, a dict - from disk-level
+            # corruption or the hand-edited session.dat this exact region's
+            # comments above already anticipate) passes straight through
+            # untouched. The `<` comparison this used to run directly raised
+            # an uncaught TypeError for any such value, escaping _load_state
+            # and taking down SettingsManager.__init__ - and the whole app
+            # at boot, on every single launch - with no self-heal path (the
+            # JSONDecodeError/UnicodeDecodeError/IOError handler above only
+            # catches parse-level failures, not this). bool is excluded even
+            # though it is technically an int subclass: a stray True/False
+            # here is exactly the kind of "not really a version number"
+            # value this guard exists to catch. Treating a non-numeric value
+            # the same as a missing one - landing on CURRENT_SCHEMA_VERSION -
+            # routes it through the same backfill posture as a file that
+            # never had the field at all, instead of crashing.
+            if not isinstance(_stored_schema_version, (int, float)) or isinstance(_stored_schema_version, bool):
+                migrated_state['schema_version'] = self.CURRENT_SCHEMA_VERSION
+            elif _stored_schema_version < self.CURRENT_SCHEMA_VERSION:
+                migrated_state['schema_version'] = self.CURRENT_SCHEMA_VERSION
 
         # Save immediately only if this load actually changed something -
         # the refactored equivalent of the old per-field state_changed flag
@@ -1338,16 +1359,36 @@ class SettingsManager:
             # stored entry that never had one - gets a fresh one assigned
             # here, server-side, never client-supplied.
             entry_id = str(entry.get("id", "")).strip() or uuid.uuid4().hex
+            # REVIEW-FIX: this method's own docstring above promises "name/
+            # command required, everything else normalized/defaulted" - but
+            # "args" and "timeout" were previously built with no guard at
+            # all: a non-iterable "args" (e.g. an int) raised TypeError out
+            # of the list comprehension, and a non-numeric truthy "timeout"
+            # (e.g. a string) raised ValueError out of float(). Either
+            # exception propagated straight out of set_mcp_servers, aborting
+            # the WHOLE bulk-replace and discarding every OTHER server's
+            # valid edit in the same call - not just the one malformed
+            # field on this one entry. Falling back to the same defaults
+            # get_mcp_servers/this method already use for a missing value
+            # keeps this entry (and every entry after it) instead.
+            try:
+                entry_args = [str(a) for a in (entry.get("args") or [])]
+            except TypeError:
+                entry_args = []
+            try:
+                entry_timeout = float(entry.get("timeout", 30.0) or 30.0)
+            except (TypeError, ValueError):
+                entry_timeout = 30.0
             normalized.append({
                 "id": entry_id,
                 "name": name,
                 "command": command,
-                "args": [str(a) for a in (entry.get("args") or [])],
+                "args": entry_args,
                 "scopes": sorted({str(s) for s in (entry.get("scopes") or [])}),
                 "approval": str(entry.get("approval") or "always"),
                 "enabled_tools": sorted({str(t) for t in (entry.get("enabled_tools") or [])}),
                 "enabled": bool(entry.get("enabled", True)),
-                "timeout": float(entry.get("timeout", 30.0) or 30.0),
+                "timeout": entry_timeout,
                 # Per-server environment variables - the only channel by
                 # which a server process receives anything beyond the safe
                 # allowlist base (see McpStdioClient.connect). These are real

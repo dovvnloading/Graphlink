@@ -6434,6 +6434,74 @@ def test_cancel_all_trips_a_pycoder_run_that_is_mid_execution_past_the_approval_
     asyncio.run(run())
 
 
+def test_cancel_pycoder_clears_pending_request_id_immediately_not_after_execute_returns(monkeypatch):
+    """REVIEW-FIX regression: start_pycoder_run's self._runs.claim() used
+    to omit `finalize`, unlike start_builder_run's/_dispatch's own claim()
+    calls. cancel_pycoder pops the registry handle (freeing is_busy(
+    "pycoder")) the INSTANT Cancel lands, but with no finalize wired,
+    nothing else observed that - node.pending_request_id (the sole real
+    busy guard runPyCoder's own pre-check reads, and what the frontend's
+    spinner keys off) stayed stuck pointing at the cancelled request until
+    _run's own late `finally` eventually ran, which cannot happen until
+    the blocking repl.execute() call actually returns - up to
+    PYCODER_EXECUTE_TIMEOUT_SECONDS later, since the REPL has no polling
+    hook. This asserts the busy guard clears WHILE still blocked inside
+    execute() (release is only set afterward), not merely once the task
+    eventually finishes - the same distinction test_cancel_all_trips_a_
+    pycoder_run_...'s own await-the-whole-task shape does not cover."""
+    started = threading.Event()
+    release = threading.Event()
+
+    class _BlockingRepl:
+        last_run_failed = False
+
+        def execute(self, code):
+            started.set()
+            release.wait(5)
+            return "output"
+
+    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: _BlockingRepl())
+
+    async def run():
+        bus, notifications, dispatcher = _make_code_exec_env()
+        node = _make_pycoder_node(pycoder_mode="manual")
+
+        await dispatcher.start_pycoder_run(
+            bus=bus, notifications_state=notifications, node=node, node_id="n1",
+            mode="manual", prompt="", code="print(1)", conversation_history=[],
+            on_success=lambda *a: None, on_failure=lambda m: None,
+        )
+        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
+        await asyncio.to_thread(started.wait, 5)
+        assert node.pending_request_id == request_id, "sanity: busy before cancel"
+
+        # THE key action: Cancel, while still blocked inside repl.execute() -
+        # `release` is not set yet, so the orphaned task cannot have reached
+        # its own `finally` at any point below.
+        assert dispatcher.cancel_pycoder(request_id) is True
+        assert pycoder_slots(dispatcher) == {}, "the registry slot is freed immediately"
+
+        # finalize runs as a separately-scheduled task on this same loop
+        # (RunRegistry._schedule_finalize's run_coroutine_threadsafe) - give
+        # it a chance to actually execute before asserting on its effect.
+        for _ in range(50):
+            if node.pending_request_id is None:
+                break
+            await asyncio.sleep(0.01)
+
+        assert node.pending_request_id is None, (
+            "finalize must clear the busy guard the instant Cancel lands, "
+            "not wait for the orphaned execute() call to return"
+        )
+        assert node.state.pycoder_awaiting_approval is False
+        assert node.state.pycoder_error == "Py-Coder execution cancelled."
+
+        release.set()
+        await entry["task"]
+
+    asyncio.run(run())
+
+
 def test_cancel_code_sandbox_returns_false_for_an_unknown_request_id():
     dispatcher = AgentDispatcher(_FakeSettingsManager())
     assert dispatcher.cancel_code_sandbox("no-such-request") is False

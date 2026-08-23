@@ -151,8 +151,17 @@ export class ComposerStore {
     const fenceGeneration = this.latestOptimisticDraft.generation;
     this.draftResyncGeneration = fenceGeneration;
     const sent = this.transport.resubscribe("app-composer", (payload) => {
-      const validated = TOPIC_VALIDATORS["app-composer"](payload);
       this.draftResyncGeneration = null;
+      // REVIEW-FIX (resubscribe-callback-dropped-on-version-rejection): null
+      // means the correlated reply failed schema-version negotiation - there
+      // is no snapshot to resync from and no useful retry to attempt right
+      // here (the version skew, not a stale read, is the actual problem).
+      // Clearing the fence above is still the important part: without it,
+      // this callback previously never ran at all on a rejection, leaving
+      // draftResyncGeneration stuck non-null and every future resync request
+      // a permanent no-op for the rest of this store's life.
+      if (payload === null) return;
+      const validated = TOPIC_VALIDATORS["app-composer"](payload);
       if (!validated.ok) return;
       if (
         this.pendingDraftGenerations.size > 0 ||

@@ -47,9 +47,18 @@ import re
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 
+from backend.asset_store import ALLOWED_IMAGE_MIME_TYPES
 from backend.events import EventBus, UnknownSessionError
 from backend.session_context import get_session_context
 from graphlink_chart_rendering import render_chart_png, render_chart_svg
+
+# Fallback Content-Type for a stored mime_type that is not one of this app's
+# own real image types (ALLOWED_IMAGE_MIME_TYPES). octet-stream rather than
+# an image/* guess: it tells every consumer (browser tab, <img> tag, future
+# download affordance) "do not try to render this as anything", which is
+# the whole point - the caller who wrote the bad mime_type also fully
+# controls the bytes behind it.
+_FALLBACK_MIME_TYPE = "application/octet-stream"
 
 # 3x the display resolution - mirrors legacy ChartItem.EXPORT_SCALE exactly.
 CHART_EXPORT_DPI_SCALE = 3.0
@@ -94,6 +103,13 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
         if asset is None:
             return JSONResponse({"error": "unknown asset"}, status_code=404)
         image_bytes, mime_type = asset
+        # Neither write path into document.image_assets (addImageNode's
+        # caller-supplied mime_type, session_load._restore_image_payload's
+        # payload-supplied mime_type) validates the string before storing
+        # it, so it is not trustworthy here - pass it through only if it is
+        # one of this app's own real image types.
+        if mime_type not in ALLOWED_IMAGE_MIME_TYPES:
+            mime_type = _FALLBACK_MIME_TYPE
         return Response(content=image_bytes, media_type=mime_type)
 
     @app.get("/api/assets/chart/{node_id}/export")

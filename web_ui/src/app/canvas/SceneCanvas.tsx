@@ -2505,6 +2505,19 @@ function CanvasInner({
   }, [
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
     getComposerRoute, filterKinds, filterStatuses,
+    // REVIEW-FIX: a scene publish that lands while draggingRef.current is
+    // true bails out of this effect ABOVE and is discarded entirely, not
+    // queued - and draggingRef is a plain ref, so nothing here re-ran when
+    // dragging actually ended, permanently losing that snapshot unless some
+    // LATER, unrelated publish happened to change `scene` again. dragActive
+    // is reactive state that flips false in the exact same onNodesChange
+    // branch that clears draggingRef.current (see its own doc above), so
+    // listing it here is what makes this effect reconsider "should I sync
+    // now" the instant a drag gesture ends, using whichever `scene` this
+    // render already holds - not a special replay of whatever arrived
+    // mid-drag, just the ordinary reconciliation this effect always does,
+    // finally allowed to run once dragging stops.
+    dragActive,
   ]);
 
   // ADR-012 stage 12.3: Shift+F10 / the ContextMenu key opens a node's menu
@@ -2608,24 +2621,54 @@ function CanvasInner({
   // diffed against what was last sent, so a settled canvas reports nothing.
   const nodeSizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reportedSizesRef = useRef<Map<string, string>>(new Map());
+  // REVIEW-FIX: which node ids were unmeasurable as of the last flush - a
+  // node genuinely unmounted under onlyRenderVisibleElements (off-viewport)
+  // has no DOM to measure, so measuredNodeSize returns null for it and
+  // collectChangedNodeSizes correctly skips it rather than reporting a
+  // false zero. If that node's content grows while it sits off-viewport
+  // (e.g. a streaming member inside a frame), the growth produces no
+  // dimensions change at all until the node remounts - so the backend's
+  // frame/container bbox keeps computing against the member's last known
+  // (smaller) size, and the member can render visibly outside its frame's
+  // box for a moment once it scrolls back in. Tracked here so onNodesChange
+  // below can recognise exactly that "remount of a previously-unmeasurable
+  // node" transition and flush its real size immediately instead of behind
+  // the standard debounce, which exists to coalesce a busy streaming
+  // node's continuous resizes - not to delay a one-off catch-up report that
+  // is already late by definition. Rebuilt wholesale on every flush (below)
+  // rather than mutated incrementally, so it always reflects that flush's
+  // own measurements.
+  const unmeasurableIdsRef = useRef<Set<string>>(new Set());
   useEffect(
     () => () => {
       if (nodeSizeTimerRef.current) clearTimeout(nodeSizeTimerRef.current);
     },
     [],
   );
+  // The actual measure-diff-send pass, factored out so it can run either
+  // debounced (reportNodeSizesSoon, the common streaming-resize case) or
+  // immediately (the remount catch-up case in onNodesChange below).
+  const flushNodeSizes = useCallback(() => {
+    const currentlyUnmeasurable = new Set<string>();
+    const changed = collectChangedNodeSizes(
+      nodesRef.current.map((n) => n.id),
+      (id) => {
+        const size = measuredNodeSize(reactFlow, id);
+        if (size === null) currentlyUnmeasurable.add(id);
+        return size;
+      },
+      reportedSizesRef.current,
+    );
+    unmeasurableIdsRef.current = currentlyUnmeasurable;
+    store.reportNodeSizes(changed);
+  }, [reactFlow, store]);
   const reportNodeSizesSoon = useCallback(() => {
     if (nodeSizeTimerRef.current) clearTimeout(nodeSizeTimerRef.current);
     nodeSizeTimerRef.current = setTimeout(() => {
       nodeSizeTimerRef.current = null;
-      const changed = collectChangedNodeSizes(
-        nodesRef.current.map((n) => n.id),
-        (id) => measuredNodeSize(reactFlow, id),
-        reportedSizesRef.current,
-      );
-      store.reportNodeSizes(changed);
+      flushNodeSizes();
     }, NODE_SIZE_REPORT_DEBOUNCE_MS);
-  }, [reactFlow, store]);
+  }, [flushNodeSizes]);
 
 
   /**
@@ -2769,7 +2812,32 @@ function CanvasInner({
       // for reporting sizes back to the backend's group-bounds math. Only
       // schedules the debounced flush; the flush itself re-reads every
       // node and sends just the diffs.
-      if (changes.some((change) => change.type === "dimensions")) reportNodeSizesSoon();
+      //
+      // REVIEW-FIX: if any measured id was unmeasurable as of the last
+      // flush (unmeasurableIdsRef, populated by flushNodeSizes), this is a
+      // node that just remounted after being off-viewport - see that ref's
+      // own doc for why its content may have grown while unmounted, with
+      // no dimensions change able to fire during that whole window. That
+      // catch-up is flushed immediately, bypassing the debounce meant for
+      // coalescing an actively-streaming node's continuous resizes - a
+      // remount is a discrete one-off event, not a flurry, so there is no
+      // reason to make the frame's now-stale bbox wait out a debounce
+      // window it was never the cause of. Any pending debounced flush is
+      // cleared first so it doesn't fire again a moment later.
+      if (changes.some((change) => change.type === "dimensions")) {
+        const remountedFromUnmeasurable = changes.some(
+          (change) => change.type === "dimensions" && unmeasurableIdsRef.current.has(change.id),
+        );
+        if (remountedFromUnmeasurable) {
+          if (nodeSizeTimerRef.current) {
+            clearTimeout(nodeSizeTimerRef.current);
+            nodeSizeTimerRef.current = null;
+          }
+          flushNodeSizes();
+        } else {
+          reportNodeSizesSoon();
+        }
+      }
 
       for (const change of changes) {
         if (change.type !== "position") continue;
@@ -2840,7 +2908,7 @@ function CanvasInner({
       // eslint-disable-next-line react-hooks/immutability
       nodesRef.current = applyNodeChanges(changes, currentNodes);
     },
-    [store, reportNodeSizesSoon],
+    [store, reportNodeSizesSoon, flushNodeSizes],
   );
 
   const onConnect = useCallback(

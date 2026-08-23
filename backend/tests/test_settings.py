@@ -263,6 +263,37 @@ def test_an_old_settings_file_without_schema_version_is_backfilled(tmp_path):
     assert json.loads(state_file.read_text(encoding="utf-8"))["schema_version"] == SettingsManager.CURRENT_SCHEMA_VERSION
 
 
+@pytest.mark.parametrize(
+    "corrupt_schema_version",
+    [None, "not-a-version", [1], {"major": 1}, True],
+)
+def test_a_non_numeric_schema_version_is_backfilled_not_crashed_on(tmp_path, corrupt_schema_version):
+    # REVIEW-FIX regression: none of the dict migrations touch
+    # 'schema_version' itself, so a syntactically-valid-JSON but non-numeric
+    # value (a disk-level bit flip, or a hand-edited session.dat - a
+    # scenario this exact code region's own comments already anticipate)
+    # passed straight through to the `<` comparison, which raised an
+    # uncaught TypeError and took down SettingsManager.__init__ - and the
+    # whole app at boot - with no self-heal path. A non-numeric value must
+    # be treated the same as a missing one: backfilled to
+    # CURRENT_SCHEMA_VERSION, not a crash. (True is included even though it
+    # is technically an int subclass - it isn't a real version number
+    # either.)
+    import json
+
+    state_file = tmp_path / "session.dat"
+    state_file.write_text(
+        json.dumps({"schema_version": corrupt_schema_version, "show_token_counter": True}),
+        encoding="utf-8",
+    )
+
+    manager = SettingsManager(state_file)  # must not raise
+
+    assert manager.get_schema_version() == SettingsManager.CURRENT_SCHEMA_VERSION
+    manager.set_show_token_counter(False)  # persists the now-backfilled state
+    assert json.loads(state_file.read_text(encoding="utf-8"))["schema_version"] == SettingsManager.CURRENT_SCHEMA_VERSION
+
+
 # -- ADR-009 stage 9.1: scattered `if 'field' not in state` backfills refactored
 # -- into an explicit, ordered migration chain (graphlink_migrations.
 # -- run_dict_migrations). These are before/after equivalence tests: loading an
@@ -446,6 +477,36 @@ def test_set_mcp_servers_drops_an_entry_missing_a_name_or_command(manager):
         {"name": "valid", "command": "npx"},
     ])
     assert [entry["name"] for entry in manager.get_mcp_servers()] == ["valid"]
+
+
+def test_set_mcp_servers_tolerates_a_non_numeric_timeout_on_one_entry(manager):
+    # REVIEW-FIX regression: a non-numeric truthy "timeout" used to raise
+    # ValueError out of float() for THIS entry, aborting the whole
+    # bulk-replace call and discarding "git"'s valid edit too - contrary to
+    # this method's own docstring ("everything else normalized/defaulted").
+    manager.set_mcp_servers([
+        {"name": "fs", "command": "npx", "timeout": "not-a-number"},
+        {"name": "git", "command": "uvx"},
+    ])
+    servers = manager.get_mcp_servers()
+    assert [entry["name"] for entry in servers] == ["fs", "git"]
+    # The malformed value is coerced to the same default a missing timeout
+    # gets, not dropped or left malformed.
+    assert servers[0]["timeout"] == 30.0
+    assert servers[1]["timeout"] == 30.0
+
+
+def test_set_mcp_servers_tolerates_non_iterable_args_on_one_entry(manager):
+    # REVIEW-FIX regression: a non-iterable "args" (e.g. an int) used to
+    # raise TypeError out of the list comprehension for THIS entry, aborting
+    # the whole bulk-replace call and discarding "git"'s valid edit too.
+    manager.set_mcp_servers([
+        {"name": "fs", "command": "npx", "args": 42},
+        {"name": "git", "command": "uvx"},
+    ])
+    servers = manager.get_mcp_servers()
+    assert [entry["name"] for entry in servers] == ["fs", "git"]
+    assert servers[0]["args"] == []
 
 
 def test_get_mcp_servers_tolerates_a_malformed_entry_on_disk_without_dropping_the_rest(tmp_path):
@@ -2358,6 +2419,23 @@ def test_set_mcp_servers_is_a_bulk_replace_not_a_merge(manager):
     asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [[{"name": "git", "command": "uvx"}]]))
 
     assert [entry["name"] for entry in manager.get_mcp_servers()] == ["git"]
+
+
+def test_set_mcp_servers_intent_tolerates_a_malformed_timeout_on_one_entry(manager):
+    # REVIEW-FIX regression, end-to-end through the intent: setMcpServers'
+    # own docstring (intents_settings_general.py) explicitly defers per-
+    # entry field validation to SettingsManager.set_mcp_servers - so a
+    # malformed timeout on one entry in an otherwise-valid multi-server
+    # payload must not lose every other server's edit in the same save.
+    bus = SessionBus("settings-set-mcp-servers-malformed-timeout-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [[
+        {"name": "fs", "command": "npx", "timeout": "not-a-number"},
+        {"name": "git", "command": "uvx"},
+    ]]))
+
+    assert [entry["name"] for entry in manager.get_mcp_servers()] == ["fs", "git"]
 
 
 def test_set_mcp_servers_rejects_a_non_list_payload_without_persisting(manager):

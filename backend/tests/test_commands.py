@@ -15,7 +15,7 @@ import copy
 
 import pytest
 
-from backend.domain.commands import Command
+from backend.domain.commands import Command, UndoRefusedError
 from backend.domain.graph import SceneDocument
 from backend.domain.model import SceneNode
 
@@ -602,6 +602,54 @@ def test_a_composite_that_nets_out_to_nothing_is_not_logged(document):
     assert len(document.command_log) == 0
 
 
+def test_composite_discards_the_partial_buffer_on_a_mid_block_exception(document):
+    """REVIEW-FIX: composite()'s finally block used to merge and push
+    whatever had been buffered so far unconditionally, even when the
+    with-block raised partway through - silently committing a partial
+    group to the undo stack as if it were the whole action, with no
+    scene republish from the caller's own exception handler (which has
+    no reason to think the group ever completed). A mid-block exception
+    must now discard the buffer instead of committing it: only a clean
+    exit from the with-block pushes anything."""
+    node = document.add_note(0, 0)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with document.composite("multiMove", "user"):
+            document.record_command(
+                "moveNode", "user",
+                lambda: document.move_node(node.id, 10, 10), node_ids=[node.id],
+            )
+            raise RuntimeError("boom")
+
+    # The mutator itself already ran for real (the node did move) - that
+    # part is unavoidable and not what this fix addresses. What must NOT
+    # happen is the buffered moveNode landing on the undo stack as if the
+    # group had completed cleanly.
+    assert (document.nodes[node.id].x, document.nodes[node.id].y) == (10, 10)
+    assert len(document.command_log) == 0
+
+    # A later, unrelated composite must not see the discarded command leak
+    # in, and _composite_depth must have unwound back to 0 (not left stuck
+    # above 0, which would silently make every future composite non-
+    # outermost and never push anything at all). Two separate record_command
+    # calls forces the actual merge branch (a single one would pass through
+    # under its own original command_type), so a leftover moveNode from the
+    # discarded buffer would surface here as a 3rd merged member.
+    other_a = document.add_note(200, 0)
+    other_b = document.add_note(300, 0)
+    with document.composite("moveAgain", "user"):
+        document.record_command(
+            "moveNode", "user",
+            lambda: document.move_node(other_a.id, 20, 20), node_ids=[other_a.id],
+        )
+        document.record_command(
+            "moveNode", "user",
+            lambda: document.move_node(other_b.id, 30, 30), node_ids=[other_b.id],
+        )
+    assert len(document.command_log) == 1
+    assert document.command_log[-1].command_type == "moveAgain"
+
+
 def test_undo_run_reverses_a_whole_agent_build_in_one_action(document):
     """ADR-010 stage 10.5."""
     for index in range(3):
@@ -672,6 +720,56 @@ def test_undo_of_an_ordinary_user_edit_is_unaffected_by_an_unrelated_live_run(do
     user_node, _ = document.record_command("addNote", "user", lambda: document.add_note(200, 200))
     document.undo()
     assert user_node.id not in document.nodes, "an unrelated user edit must undo normally"
+
+
+def test_redo_refusal_message_says_redo_not_undo(document):
+    """REVIEW-FIX: _guard_live_runs' refusal message was hard-coded with
+    "undo" wording even though it is called identically from redo() -
+    intents_undo.py's redo handler passes str(exc) straight to the
+    notification banner shown to the user (UndoRefusedError's own
+    docstring: shown "verbatim"), so a refused redo used to tell the user
+    an undo had been blocked instead."""
+    node_id = document.add_note(0, 0).id
+    document.record_command(
+        "moveNode", "user", lambda: document.move_node(node_id, 10, 10), node_ids=[node_id],
+    )
+    document.undo()
+    assert document.can_redo()
+
+    # undo()'s invert() replaces the node object in document.nodes wholesale
+    # (see _restore) - the ORIGINAL `node` reference is now stale, so the
+    # live one has to be looked up fresh by id before mutating it.
+    document.nodes[node_id].pending_request_id = "req-live"
+    with pytest.raises(UndoRefusedError, match="Can't redo while") as exc_info:
+        document.redo()
+    assert "undo" not in str(exc_info.value)
+
+    document.nodes[node_id].pending_request_id = None
+    document.redo()
+    assert document.nodes[node_id].x == 10
+
+
+def test_redo_refusal_message_for_a_still_running_build_also_says_redo(document):
+    """Same fix, the run-scoped half of _guard_live_runs (the "step from a
+    build that is still running" message a still-live Builder run
+    triggers)."""
+    plan = document.add_plan_node(0, 0, "build something")
+    content_node, _command = document.record_command(
+        "builderCreateNode", "agent", lambda: document.add_note(100, 0),
+        run_id="run-1",
+    )
+    document.undo()
+    assert document.can_redo()
+
+    plan.pending_request_id = "run-1"
+    plan.state.builder_run_id = "run-1"
+    with pytest.raises(UndoRefusedError, match="Can't redo a step") as exc_info:
+        document.redo()
+    assert "undo" not in str(exc_info.value)
+
+    plan.pending_request_id = None
+    document.redo()
+    assert content_node.id in document.nodes
 
 
 def test_undo_run_rolls_back_completely_when_an_older_command_in_the_run_is_refused(document):

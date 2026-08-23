@@ -7,7 +7,21 @@ type StateListener = (payload: Record<string, unknown>) => void;
 type PatchListener = (patch: ScenePatch) => void;
 type VersionRejectionListener = (rejection: BridgeRejection | null) => void;
 
-function makeFakeTransport() {
+// REVIEW-FIX: fireIntent's optional 7th arg (onSettled) is now read by
+// sendMessage (see sceneStore.ts's own comment on that call site) to defer
+// clearing the staged reply/synthesize target until the request has
+// actually settled, rather than synchronously before it's even sent.
+// Defaulting to a synchronous onSettled(true) here keeps every existing
+// `expect(intents/state).toEqual(...)` assertion in this file working
+// unchanged - they all still observe the post-clear state immediately after
+// calling the store method, exactly as before. A test that specifically
+// needs to exercise the "not yet settled" or "settled as a failure" window
+// (see the reply-target tests below) opts out via
+// `{ autoSettleFireIntent: false }` and drives the captured
+// `fireIntentSettlers` callbacks itself.
+function makeFakeTransport(opts: { autoSettleFireIntent?: boolean } = {}) {
+  const autoSettleFireIntent = opts.autoSettleFireIntent ?? true;
+  const fireIntentSettlers: Array<(succeeded: boolean) => void> = [];
   const listeners = new Map<string, StateListener>();
   const patchListeners = new Map<string, PatchListener>();
   // ADR-003 stage 3.5: mirrors the real WsTransport's own map - kept
@@ -43,9 +57,22 @@ function makeFakeTransport() {
     // error-recovery path is exercised by transport.test.ts, not re-tested
     // at every one of this file's call sites) so none of this file's many
     // existing `expect(intents).toEqual([...])` assertions needed to change.
-    fireIntent: vi.fn((topic: string, intent: string, args: unknown[] = []) => {
-      intents.push({ topic, intent, args });
-    }),
+    fireIntent: vi.fn(
+      (
+        topic: string,
+        intent: string,
+        args: unknown[] = [],
+        _timeoutMs?: number,
+        _queueable?: boolean,
+        _offlineCoalesceKey?: unknown,
+        onSettled?: (succeeded: boolean) => void,
+      ) => {
+        intents.push({ topic, intent, args });
+        if (!onSettled) return;
+        if (autoSettleFireIntent) onSettled(true);
+        else fireIntentSettlers.push(onSettled);
+      },
+    ),
     request: requestImpl,
     // ADR-003 stage 3.4: the scene topic's delta channel. Kept in its own
     // map (mirroring the real WsTransport's own parallel registry) so a
@@ -85,6 +112,7 @@ function makeFakeTransport() {
     requests,
     requestImpl,
     requestResults,
+    fireIntentSettlers,
   };
 }
 
@@ -1484,6 +1512,54 @@ describe("SceneStore", () => {
     ]);
   });
 
+  // REVIEW-FIX regression coverage: this used to clear replyTargetNodeId
+  // synchronously in the same stack frame as firing the intent, before the
+  // request had any chance to settle. Proves the clear now waits for
+  // onSettled instead of racing ahead of it.
+  it("sendMessage does NOT clear the reply target until the send actually settles", () => {
+    const { transport, intents, fireIntentSettlers } = makeFakeTransport({
+      autoSettleFireIntent: false,
+    });
+    const store = new SceneStore(transport);
+    store.setReplyTargetNodeId("n-root");
+
+    store.sendMessage("branching off root");
+    expect(intents).toEqual([
+      { topic: "scene", intent: "sendMessage", args: ["branching off root", "n-root"] },
+    ]);
+    // Still pending - the send has not settled yet, so the staged target
+    // must still be in effect (a retry right now should still branch).
+    expect(store.getReplyTargetNodeId()).toBe("n-root");
+
+    fireIntentSettlers[0](true);
+    expect(store.getReplyTargetNodeId()).toBeNull();
+  });
+
+  // REVIEW-FIX regression coverage: a failed/dropped send must NOT silently
+  // discard the user's staged branch target - they should be able to retry
+  // with it still in effect instead of the retry silently landing as an
+  // ordinary continuation of the current tip.
+  it("sendMessage leaves the reply target in place when the send settles as a failure", () => {
+    const { transport, intents, fireIntentSettlers } = makeFakeTransport({
+      autoSettleFireIntent: false,
+    });
+    const store = new SceneStore(transport);
+    store.setReplyTargetNodeId("n-root");
+
+    store.sendMessage("branching off root");
+    fireIntentSettlers[0](false);
+    expect(store.getReplyTargetNodeId()).toBe("n-root");
+
+    // A retry now must still carry the (still-staged) branch target, not
+    // silently fall through to an ordinary continuation.
+    store.sendMessage("branching off root, retried");
+    expect(intents[1]).toEqual({
+      topic: "scene",
+      intent: "sendMessage",
+      args: ["branching off root, retried", "n-root"],
+    });
+  });
+
   // -- ADR-002 Workstream 1: "Synthesize Branches" ---------------------------
 
   it("setSynthesizeTargetNodeIds/getSynthesizeTargetNodeIds update state, notify listeners, and clear any pending reply target", () => {
@@ -1551,6 +1627,25 @@ describe("SceneStore", () => {
       { topic: "scene", intent: "synthesizeBranches", args: [["n1", "n2"], "merge the best of both"] },
       { topic: "scene", intent: "sendMessage", args: ["a normal follow-up"] },
     ]);
+  });
+
+  // REVIEW-FIX regression coverage: same optimistic-clear-before-confirm bug
+  // as the reply-target case above, for the synthesize-target branch.
+  it("sendMessage leaves the synthesize target in place until settled, and keeps it on failure", () => {
+    const { transport, fireIntentSettlers } = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(transport);
+    store.setSynthesizeTargetNodeIds(["n1", "n2"]);
+
+    store.sendMessage("merge the best of both");
+    // Not yet settled - still staged.
+    expect(store.getSynthesizeTargetNodeIds()).toEqual(["n1", "n2"]);
+
+    fireIntentSettlers[0](false);
+    // Settled as a failure - must NOT be silently discarded.
+    expect(store.getSynthesizeTargetNodeIds()).toEqual(["n1", "n2"]);
+
+    fireIntentSettlers[0](true);
+    expect(store.getSynthesizeTargetNodeIds()).toBeNull();
   });
 
   it("sendMessage prefers a pending synthesize target over a pending reply target (the two are already mutually exclusive, but this proves the check order)", () => {
