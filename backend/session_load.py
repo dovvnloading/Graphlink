@@ -329,8 +329,17 @@ def _resolve_ref(
     the reference silently, matching legacy's own tolerance for a
     partially-resolvable payload)."""
     ref_id = payload.get(id_key)
-    if ref_id and ref_id in nodes_by_id:
-        return nodes_by_id[ref_id]
+    # REVIEW-FIX: ref_id comes straight from untrusted payload JSON and can
+    # legitimately be a list/dict (valid JSON, wrong shape) in a hand-edited
+    # or legacy save file - `x in dict`/`dict[x]` raise TypeError for an
+    # unhashable key, which would abort the ENTIRE chat load instead of just
+    # dropping this one reference. nodes_by_id is itself always populated
+    # with str(payload_id) keys (see the node-restore loop above), so
+    # str()-casting the lookup here is both crash-safe (str() is always
+    # hashable) and consistent with every other nodes_by_id lookup in this
+    # module (e.g. final_deliverable_node_id's identical str(...) guard).
+    if ref_id and str(ref_id) in nodes_by_id:
+        return nodes_by_id[str(ref_id)]
     ref_index = payload.get(index_key)
     if isinstance(ref_index, int) and ref_index in position_map:
         return position_map[ref_index]
@@ -1290,7 +1299,14 @@ def _restore_system_prompt_and_summary_connections(
         for entry in sp_entries:
             if not isinstance(entry, dict):
                 continue
-            note_id = notes_map.get(entry.get("start_note_index"))
+            # REVIEW-FIX: start_note_index is an untrusted payload value and
+            # can legitimately be a list/dict instead of the expected int -
+            # notes_map.get(x) raises TypeError for an unhashable x, which
+            # would abort the entire chat load. notes_map is int-keyed, so
+            # guard with the same isinstance(..., int) check _resolve_ref
+            # above already uses for its own index fallback.
+            start_note_index = entry.get("start_note_index")
+            note_id = notes_map.get(start_note_index) if isinstance(start_note_index, int) else None
             target_id = _resolve_ref(entry, "end_node_id", "end_node_index", nodes_by_id, chat_nodes_map)
             if note_id is not None and target_id is not None:
                 try:
@@ -1307,7 +1323,11 @@ def _restore_system_prompt_and_summary_connections(
             if not isinstance(entry, dict):
                 continue
             source_id = _resolve_ref(entry, "start_node_id", "start_node_index", nodes_by_id, chat_nodes_map)
-            note_id = notes_map.get(entry.get("end_note_index"))
+            # REVIEW-FIX: same unhashable-JSON-value risk as start_note_index
+            # above - guard end_note_index the same way before using it as a
+            # notes_map key.
+            end_note_index = entry.get("end_note_index")
+            note_id = notes_map.get(end_note_index) if isinstance(end_note_index, int) else None
             if source_id is not None and note_id is not None:
                 try:
                     # connect_unchecked - same reasoning as the two restore

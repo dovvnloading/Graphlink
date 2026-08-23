@@ -670,6 +670,36 @@ def test_group_summary_connection_chat_to_note():
     assert any(e.source == chat.id and e.target == note.id for e in document.edges.values())
 
 
+def test_malformed_connection_id_is_skipped_without_aborting_the_rest_of_the_load():
+    # A hand-edited/imported save with a non-scalar start_node_id (valid
+    # JSON, wrong shape) must not raise TypeError out of _resolve_ref and
+    # abort the whole load - only that one malformed entry is dropped, the
+    # next (well-formed) entry in the same list still restores.
+    document = _restore(
+        nodes=[_chat("a"), _chat("b"), _chat("c")],
+        connections=[
+            {"start_node_id": ["nested", "list"], "end_node_id": "b"},
+            {"start_node_index": 0, "end_node_index": 2},
+        ],
+    )
+    a, b, c = list(document.nodes.values())
+    assert len(document.edges) == 1
+    assert any(e.source == a.id and e.target == c.id for e in document.edges.values())
+
+
+def test_malformed_system_prompt_note_index_is_skipped_without_aborting_the_load():
+    # start_note_index/end_note_index are also untrusted payload values fed
+    # straight into notes_map.get() - a dict there (valid JSON, wrong shape)
+    # must not raise TypeError and abort the load either.
+    document = _restore(
+        nodes=[_chat("only-chat")],
+        notes=[{"content": "sp", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
+                "color": "#fff", "header_color": None, "is_system_prompt": True}],
+        system_prompt_connections=[{"start_note_index": {"nested": True}, "end_node_index": 0}],
+    )
+    assert not document.edges
+
+
 # -- pins / view state / tokens ------------------------------------------
 
 
