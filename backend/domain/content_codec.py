@@ -93,6 +93,29 @@ def _process_content_for_deserialization(content):
                 except (binascii.Error, ValueError):
                     logging.exception("Failed to decode base64 image data during deserialization.")
                     processed_parts.append({"type": "text", "text": "[ERROR: Image Data Corrupted]"})
+            elif isinstance(part, dict) and part.get("type") == "audio_file":
+                # SECURITY-FIX: an audio_file part is a bare filesystem PATH
+                # that the provider layer opens lazily at SEND time
+                # (api_provider._read_attachment_bytes, openai_provider's
+                # input_audio, the Gemini Files upload). An image is
+                # persisted as its own base64 BYTES (decoded just above), so
+                # it is self-contained and safe to reload; audio persists
+                # only the path, and nothing records which paths the user
+                # actually staged, so once a chat is on disk there is no way
+                # to tell a user-attached path from one an attacker wrote
+                # into the row. A hostile chats.db row or imported .graphlink
+                # archive could carry {"type":"audio_file","path":"<any local
+                # file, e.g. an SSH key>"} - invisible in the UI (the SPA
+                # never renders audio_file, and the text mirror shows
+                # nothing) - and the first follow-up turn on that branch
+                # would read that file and ship it to the model provider
+                # (uploaded to Google, for Gemini). Reloaded audio is
+                # therefore neutralized to an inert text placeholder here,
+                # at the load-from-disk boundary: a live staged attachment
+                # in the SAME session still sends normally (it never passes
+                # through deserialization), but no path from persisted data
+                # is ever handed back to the provider layer.
+                processed_parts.append({"type": "text", "text": "[Audio attachment - reattach to include it]"})
             else:
                 processed_parts.append(part)
         return processed_parts

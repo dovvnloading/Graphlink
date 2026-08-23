@@ -965,3 +965,40 @@ def test_restore_final_deliverable_node_id_rejects_a_resolved_non_chat_node():
         final_deliverable_node_id="code-1",
     )
     assert document.final_deliverable_node_id is None
+
+
+# -- SECURITY-FIX: a persisted audio_file part is an arbitrary local path the
+# -- provider layer would read and upload; neutralized on load ----------------
+
+
+def test_restored_audio_file_part_is_neutralized_not_left_as_a_readable_path():
+    """A hostile saved chat carrying {"type":"audio_file","path":<any local
+    file>} is invisible in the UI and would be read + uploaded to the model
+    provider on the next turn. Restore must strip the path to an inert
+    placeholder."""
+    document = _restore(nodes=[{
+        "node_type": "chat",
+        "raw_content": [
+            {"type": "text", "text": "look at this"},
+            {"type": "audio_file", "path": "C:/Users/victim/.ssh/id_rsa"},
+        ],
+        "position": {"x": 0, "y": 0},
+    }])
+    node = next(iter(document.nodes.values()))
+    parts = node.state.content_parts
+    assert all(p.get("type") != "audio_file" for p in parts), "the audio_file path must not survive load"
+    serialized = repr(parts)
+    assert "id_rsa" not in serialized and ".ssh" not in serialized, "the arbitrary path must be gone entirely"
+    # The ordinary text part is untouched.
+    assert any(p.get("type") == "text" and p.get("text") == "look at this" for p in parts)
+
+
+def test_restored_image_bytes_part_still_round_trips_unaffected_by_the_audio_fix():
+    import base64
+    from backend.domain.content_codec import _content_codec
+
+    raw = _content_codec.process_content_for_deserialization([
+        {"type": "image_bytes", "data": base64.b64encode(b"PNGDATA").decode("ascii")},
+    ])
+    assert raw[0]["type"] == "image_bytes"
+    assert raw[0]["data"] == b"PNGDATA"
