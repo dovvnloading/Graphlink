@@ -513,8 +513,29 @@ class SettingsManager:
         # CURRENT_SCHEMA_VERSION.
         if 'schema_version' not in migrated_state:
             migrated_state['schema_version'] = self.CURRENT_SCHEMA_VERSION
-        elif migrated_state.get('schema_version', 0) < self.CURRENT_SCHEMA_VERSION:
-            migrated_state['schema_version'] = self.CURRENT_SCHEMA_VERSION
+        else:
+            _stored_schema_version = migrated_state.get('schema_version')
+            # REVIEW-FIX: none of the migrations above touch 'schema_version'
+            # itself, so a syntactically-valid-JSON but non-numeric value
+            # here (null, a string, a list, a dict - from disk-level
+            # corruption or the hand-edited session.dat this exact region's
+            # comments above already anticipate) passes straight through
+            # untouched. The `<` comparison this used to run directly raised
+            # an uncaught TypeError for any such value, escaping _load_state
+            # and taking down SettingsManager.__init__ - and the whole app
+            # at boot, on every single launch - with no self-heal path (the
+            # JSONDecodeError/UnicodeDecodeError/IOError handler above only
+            # catches parse-level failures, not this). bool is excluded even
+            # though it is technically an int subclass: a stray True/False
+            # here is exactly the kind of "not really a version number"
+            # value this guard exists to catch. Treating a non-numeric value
+            # the same as a missing one - landing on CURRENT_SCHEMA_VERSION -
+            # routes it through the same backfill posture as a file that
+            # never had the field at all, instead of crashing.
+            if not isinstance(_stored_schema_version, (int, float)) or isinstance(_stored_schema_version, bool):
+                migrated_state['schema_version'] = self.CURRENT_SCHEMA_VERSION
+            elif _stored_schema_version < self.CURRENT_SCHEMA_VERSION:
+                migrated_state['schema_version'] = self.CURRENT_SCHEMA_VERSION
 
         # Save immediately only if this load actually changed something -
         # the refactored equivalent of the old per-field state_changed flag

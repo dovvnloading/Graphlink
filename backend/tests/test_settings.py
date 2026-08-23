@@ -263,6 +263,37 @@ def test_an_old_settings_file_without_schema_version_is_backfilled(tmp_path):
     assert json.loads(state_file.read_text(encoding="utf-8"))["schema_version"] == SettingsManager.CURRENT_SCHEMA_VERSION
 
 
+@pytest.mark.parametrize(
+    "corrupt_schema_version",
+    [None, "not-a-version", [1], {"major": 1}, True],
+)
+def test_a_non_numeric_schema_version_is_backfilled_not_crashed_on(tmp_path, corrupt_schema_version):
+    # REVIEW-FIX regression: none of the dict migrations touch
+    # 'schema_version' itself, so a syntactically-valid-JSON but non-numeric
+    # value (a disk-level bit flip, or a hand-edited session.dat - a
+    # scenario this exact code region's own comments already anticipate)
+    # passed straight through to the `<` comparison, which raised an
+    # uncaught TypeError and took down SettingsManager.__init__ - and the
+    # whole app at boot - with no self-heal path. A non-numeric value must
+    # be treated the same as a missing one: backfilled to
+    # CURRENT_SCHEMA_VERSION, not a crash. (True is included even though it
+    # is technically an int subclass - it isn't a real version number
+    # either.)
+    import json
+
+    state_file = tmp_path / "session.dat"
+    state_file.write_text(
+        json.dumps({"schema_version": corrupt_schema_version, "show_token_counter": True}),
+        encoding="utf-8",
+    )
+
+    manager = SettingsManager(state_file)  # must not raise
+
+    assert manager.get_schema_version() == SettingsManager.CURRENT_SCHEMA_VERSION
+    manager.set_show_token_counter(False)  # persists the now-backfilled state
+    assert json.loads(state_file.read_text(encoding="utf-8"))["schema_version"] == SettingsManager.CURRENT_SCHEMA_VERSION
+
+
 # -- ADR-009 stage 9.1: scattered `if 'field' not in state` backfills refactored
 # -- into an explicit, ordered migration chain (graphlink_migrations.
 # -- run_dict_migrations). These are before/after equivalence tests: loading an
