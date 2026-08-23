@@ -378,8 +378,17 @@ class SettingsManager:
         api_models all already being present, which migration "1" above
         guarantees by running first."""
         if 'api_models_by_provider' not in state or not isinstance(state.get('api_models_by_provider'), dict):
+            # SECURITY-FIX: dict(state.get('api_models', {}) or {}) raised an
+            # uncaught ValueError when a hand-corrupted/hostile session.dat
+            # carried a non-empty list for api_models ("dictionary update
+            # sequence element #0 has length N"), escaping _load_state's own
+            # corrupt-file handling and crashing the app at boot. A wrong-
+            # typed api_models is corruption, not data - fall back to the
+            # same empty default a missing field gets, rather than raising.
+            raw_api_models = state.get('api_models', {})
+            seed_models = dict(raw_api_models) if isinstance(raw_api_models, dict) else {}
             state['api_models_by_provider'] = {
-                str(state.get('api_provider', 'OpenAI-Compatible')): dict(state.get('api_models', {}) or {})
+                str(state.get('api_provider', 'OpenAI-Compatible')): seed_models
             }
         self._migrate_model_settings(state)
         return state
@@ -477,6 +486,23 @@ class SettingsManager:
                 raw_state = json.load(f)
         except (json.JSONDecodeError, UnicodeDecodeError, IOError) as e:
             self._backup_corrupt_state_file(e)
+            return self._create_initial_state()
+
+        # SECURITY-FIX: json.load happily returns a non-dict top level for a
+        # syntactically valid file whose root is `[]`, `"x"`, `42`, or
+        # `null`. The migrations below immediately do `key in state` /
+        # `state[key] = ...` and raise TypeError on any of those, which the
+        # except above (JSONDecodeError/UnicodeDecodeError/IOError only) does
+        # NOT catch - so a hostile or hand-corrupted session.dat crashed the
+        # whole app at construction (backend/app.py create_app, and earlier
+        # graphlink_desktop.main) on every launch, the exact permanent-boot-
+        # failure this region's own comments say must never happen. A wrong-
+        # typed root is corruption just like unparseable bytes are, so it
+        # takes the same backup-and-replace path rather than a raise.
+        if not isinstance(raw_state, dict):
+            self._backup_corrupt_state_file(
+                TypeError(f"session.dat root is {type(raw_state).__name__}, expected object")
+            )
             return self._create_initial_state()
 
         # ADR-009 stage 9.1: every backfill above now runs through

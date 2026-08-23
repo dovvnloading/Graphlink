@@ -343,6 +343,45 @@ def test_normalize_repo_path_rejects_alternate_data_stream_colon():
         _normalize_repo_path("file.txt:hidden")
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".git/config",
+        ".git/hooks/pre-commit",
+        ".GIT/hooks/post-checkout",
+        "vendor/lib/.git/config",
+        ".git",
+    ],
+)
+def test_normalize_repo_path_rejects_any_dot_git_segment(path):
+    """SECURITY-FIX: a change set writing .git/hooks/* or .git/config is
+    arbitrary code execution on the user's next git command - inside
+    local_root, so every containment guard passed it through."""
+    with pytest.raises(RuntimeError, match=r"\.git"):
+        _normalize_repo_path(path)
+
+
+def test_normalize_repo_path_still_allows_a_file_merely_named_like_git():
+    # Only the exact ".git" segment is refused - ".gitignore", "git/", and
+    # "legit.git.txt" are ordinary repo content.
+    assert _normalize_repo_path(".gitignore") == ".gitignore"
+    assert _normalize_repo_path("git/README.md") == "git/README.md"
+    assert _normalize_repo_path("src/legit.git.txt") == "src/legit.git.txt"
+
+
+def test_apply_change_set_refuses_to_write_into_dot_git(tmp_path):
+    from graphlink_plugins.gitlink.repository import apply_change_set
+
+    (tmp_path / ".git" / "hooks").mkdir(parents=True)
+    (tmp_path / ".git" / "config").write_text("[core]\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match=r"\.git"):
+        apply_change_set(tmp_path, [
+            {"path": ".git/hooks/pre-commit", "operation": "create", "content": "#!/bin/sh\ncalc\n"},
+        ])
+    assert not (tmp_path / ".git" / "hooks" / "pre-commit").exists()
+    assert (tmp_path / ".git" / "config").read_text(encoding="utf-8") == "[core]\n"
+
+
 def test_safe_local_target_resolves_inside_root(tmp_path):
     target = _safe_local_target(tmp_path, "src/module.py")
     assert target == (tmp_path / "src" / "module.py").resolve()

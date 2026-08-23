@@ -175,6 +175,17 @@ class ToolRegistry:
         registration = self._registrations.get(name)
         return frozenset(registration.scopes) if registration is not None else None
 
+    def approval_for(self, name: str) -> str | None:
+        """The approval policy `name` was registered with ("auto" | "once" |
+        "always"), or None for an unknown tool. SECURITY-FIX: builder.py's
+        autopilot router used to decide purely on scopes_for(), never
+        reading this - so a tool registered approval="always" precisely
+        because its effect is destructive (graph.delete_node) was
+        auto-approved in autopilot like any other graph.mutate tool. The
+        router now refuses to auto-approve an "always" tool in any mode."""
+        registration = self._registrations.get(name)
+        return registration.approval if registration is not None else None
+
     def specs(self) -> tuple[ToolSpec, ...]:
         """Every registered tool's neutral spec, in registration order - what
         a caller passes as ChatRequest.tools for a run granted access to all

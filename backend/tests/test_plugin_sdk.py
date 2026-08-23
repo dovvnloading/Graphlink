@@ -287,7 +287,7 @@ def test_host_context_register_intent_same_plugin_name_reuse_raises():
 
 
 def test_host_context_register_builtin_plugin_stores_a_real_spec():
-    host = HostContext("some_plugin")
+    host = HostContext("web_research")  # a first-party id (register_builtin_plugin is first-party only)
 
     def _handler(document, run_ctx, parent_node_id):
         return "unused-in-this-test"
@@ -299,15 +299,52 @@ def test_host_context_register_builtin_plugin_stores_a_real_spec():
 
     assert len(host._builtin_actions) == 1
     spec = host._builtin_actions["Some Action"]
-    assert spec.plugin_id == "some_plugin"
+    assert spec.plugin_id == "web_research"
     assert spec.name == "Some Action"
     assert spec.description == "does a thing"
     assert spec.category == "More Plugins"
     assert spec.handler is _handler
 
 
+def test_register_builtin_plugin_is_refused_for_a_non_first_party_plugin():
+    """SECURITY-FIX: register_builtin_plugin attaches a picker action that
+    _execute_discovered_plugin runs UN-gated by any install-time grant and
+    that is invisible in Settings > Plugins - fine for the 8 first-party
+    built-ins it exists to migrate, but it was a public method any plugin
+    could call. A third-party plugin is now refused at registration."""
+    host = HostContext("some_third_party_plugin")
+    with pytest.raises(PluginRegistrationError, match="first-party"):
+        host.register_builtin_plugin(
+            name="Sneaky", description="looks helpful", category="Branch Foundations",
+            handler=lambda d, r, p: None,
+        )
+    assert host._builtin_actions == {}
+
+
+def test_a_third_party_plugin_using_the_builtin_hatch_becomes_a_load_error_at_discovery(tmp_path):
+    py_body = (
+        "from backend.plugin_sdk import HostContext\n\n\n"
+        "def register(host: HostContext) -> None:\n"
+        "    host.register_builtin_plugin(\n"
+        "        name='Helpful Thing', description='d', category='Branch Foundations',\n"
+        "        handler=lambda d, r, p: None,\n"
+        "    )\n"
+    )
+    _write_plugin(tmp_path, "sneaky", py_body=py_body, toml_body=None)
+
+    registry = discover_plugins(tmp_path)
+
+    # Refused at the source: no builtin action, no picker row, surfaced as a
+    # load error rather than a silently-registered, consent-invisible action.
+    assert registry.builtin_actions == {}
+    assert registry.resolve_builtin_action("Helpful Thing") is None
+    assert len(registry.load_errors) == 1
+    assert registry.load_errors[0].plugin_dir == "sneaky"
+    assert "first-party" in registry.load_errors[0].message
+
+
 def test_host_context_register_builtin_plugin_same_plugin_name_reuse_raises():
-    host = HostContext("some_plugin")
+    host = HostContext("web_research")
     host.register_builtin_plugin(
         name="Dup", description="d", category="More Plugins", handler=lambda d, r, p: None,
     )
@@ -324,14 +361,18 @@ def test_builtin_action_name_collision_between_two_plugins_is_recorded_first_win
     # sorted glob() ordering is deterministic.
     py_body_a = "from backend.plugin_sdk import HostContext\n\n\ndef register(host: HostContext) -> None:\n    host.register_builtin_plugin(name='Shared Builtin', description='a', category='More Plugins', handler=lambda d, r, p: None)\n"
     py_body_b = "from backend.plugin_sdk import HostContext\n\n\ndef register(host: HostContext) -> None:\n    host.register_builtin_plugin(name='Shared Builtin', description='b', category='More Plugins', handler=lambda d, r, p: None)\n"
-    _write_plugin(tmp_path, "plugin_a", dir_name="plugin_a", py_body=py_body_a, toml_body=None)
-    _write_plugin(tmp_path, "plugin_b", dir_name="plugin_b", py_body=py_body_b, toml_body=None)
+    # First-party ids only (register_builtin_plugin is first-party only),
+    # and discovery requires dir == id, so the ids ARE the dir names and
+    # drive the sorted-glob order: "gitlink" < "web_research", so gitlink
+    # is discovered first and wins the shared name.
+    _write_plugin(tmp_path, "gitlink", py_body=py_body_a, toml_body=None)
+    _write_plugin(tmp_path, "web_research", py_body=py_body_b, toml_body=None)
 
     registry = discover_plugins(tmp_path)
 
     assert len(registry.load_errors) == 1
-    assert registry.load_errors[0].plugin_dir == "plugin_b"
-    assert registry.builtin_actions["Shared Builtin"].plugin_id == "plugin_a"
+    assert registry.load_errors[0].plugin_dir == "web_research"
+    assert registry.builtin_actions["Shared Builtin"].plugin_id == "gitlink"
 
 
 def test_builtin_action_name_collision_with_a_picker_entry_name_is_recorded(tmp_path):
@@ -339,13 +380,16 @@ def test_builtin_action_name_collision_with_a_picker_entry_name_is_recorded(tmp_
     # register_picker_entry name (from a different plugin) must be
     # rejected too - one flat name space across both mechanisms.
     py_body_builtin = "from backend.plugin_sdk import HostContext\n\n\ndef register(host: HostContext) -> None:\n    host.register_builtin_plugin(name='Shared Name', description='b', category='More Plugins', handler=lambda d, r, p: None)\n"
-    _write_plugin(tmp_path, "plugin_a", dir_name="plugin_a", kind="greet", picker_name="Shared Name")
-    _write_plugin(tmp_path, "plugin_b", dir_name="plugin_b", py_body=py_body_builtin, toml_body=None)
+    _write_plugin(tmp_path, "plugin_a", kind="greet", picker_name="Shared Name")
+    # Builtin plugin must be first-party; "web_research" sorts after
+    # "plugin_a" so the picker entry is registered first and the builtin
+    # collision is the one recorded as an error.
+    _write_plugin(tmp_path, "web_research", py_body=py_body_builtin, toml_body=None)
 
     registry = discover_plugins(tmp_path)
 
     assert len(registry.load_errors) == 1
-    assert registry.load_errors[0].plugin_dir == "plugin_b"
+    assert registry.load_errors[0].plugin_dir == "web_research"
     assert registry.picker_entries["Shared Name"].plugin_id == "plugin_a"
     assert "Shared Name" not in registry.builtin_actions
 
@@ -359,13 +403,13 @@ def test_resolve_builtin_action_returns_none_for_unknown_name(tmp_path):
         "        handler=lambda d, r, p: None,\n"
         "    )\n"
     )
-    _write_plugin(tmp_path, "some_plugin", py_body=py_body, toml_body=None)
+    _write_plugin(tmp_path, "web_research", py_body=py_body, toml_body=None)
 
     registry = discover_plugins(tmp_path)
 
     resolved = registry.resolve_builtin_action("Real")
     assert resolved is not None
-    assert resolved.plugin_id == "some_plugin"
+    assert resolved.plugin_id == "web_research"
     assert registry.resolve_builtin_action("Nope") is None
 
 

@@ -183,6 +183,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import math
 import re
 import uuid
 from typing import Any
@@ -346,10 +347,29 @@ def _resolve_ref(
     return None
 
 
+def _finite_float(value: Any, default: float = 0.0) -> float:
+    """SECURITY-FIX: float() accepts the non-standard JSON literals NaN,
+    Infinity and -Infinity (json.loads parses them by default), and a
+    saved chat row or imported archive is hostile-data-on-disk. A
+    non-finite coordinate/size/zoom restored into the live SceneDocument
+    then rides scene_payload() into starlette's send_json (allow_nan=True),
+    which emits literal `NaN`/`Infinity` tokens - invalid JSON the SPA's
+    JSON.parse rejects, so it silently DROPS every scene frame from then
+    on: the canvas freezes for the whole session (the "bricks the scene
+    channel" DoS). Coercing any non-finite value to a safe default here
+    lets the chat still load, just with the poisoned number replaced,
+    instead of either crashing or wedging the wire."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return default
+    return result if math.isfinite(result) else default
+
+
 def _position(payload: dict[str, Any]) -> tuple[float, float]:
     position = payload.get("position")
     if isinstance(position, dict):
-        return float(position.get("x", 0.0)), float(position.get("y", 0.0))
+        return _finite_float(position.get("x", 0.0)), _finite_float(position.get("y", 0.0))
     return 0.0, 0.0
 
 
@@ -397,7 +417,7 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             # relabel every AI response in an old save as if the user had
             # typed it.
             is_user=bool(payload.get("is_user", True)),
-            chat_scroll_value=float(payload.get("scroll_value", 0.0) or 0.0),
+            chat_scroll_value=_finite_float(payload.get("scroll_value", 0.0) or 0.0),
             provider=payload.get("provider"),
             model=payload.get("model"),
             is_branch_synthesis=bool(payload.get("is_branch_synthesis", False)),
@@ -1084,7 +1104,7 @@ def _restore_charts(
                 document.toggle_chart_aspect_lock(chart.id)
             size = chart_payload.get("size")
             if isinstance(size, dict) and "width" in size and "height" in size:
-                document.resize_chart(chart.id, float(size["width"]), float(size["height"]))
+                document.resize_chart(chart.id, _finite_float(size["width"]), _finite_float(size["height"]))
         except Exception:
             continue
         charts_map[index] = chart.id
@@ -1134,9 +1154,9 @@ def _restore_frames(
             size = frame_payload.get("size")
             width_height = None
             if isinstance(rect, dict) and "width" in rect and "height" in rect:
-                width_height = (float(rect["width"]), float(rect["height"]))
+                width_height = (_finite_float(rect["width"]), _finite_float(rect["height"]))
             elif isinstance(size, dict) and "width" in size and "height" in size:
-                width_height = (float(size["width"]), float(size["height"]))
+                width_height = (_finite_float(size["width"]), _finite_float(size["height"]))
             if width_height is not None:
                 document.resize_frame(frame.id, width_height[0], width_height[1])
             # The POSITION half of that same override, and for the identical
@@ -1160,7 +1180,7 @@ def _restore_frames(
             # untouched.
             position_xy = None
             if isinstance(rect, dict) and "x" in rect and "y" in rect:
-                position_xy = (float(rect["x"]), float(rect["y"]))
+                position_xy = (_finite_float(rect["x"]), _finite_float(rect["y"]))
             elif isinstance(frame_payload.get("position"), dict):
                 position_xy = _position(frame_payload)
             if position_xy is not None:
@@ -1472,7 +1492,7 @@ def _restore_view_state(document: SceneDocument, chat_data: dict[str, Any]) -> N
         scroll_x = scroll.get("x", scroll_x)
         scroll_y = scroll.get("y", scroll_y)
     try:
-        document.set_view_state(float(zoom), float(scroll_x), float(scroll_y))
+        document.set_view_state(_finite_float(zoom), _finite_float(scroll_x), _finite_float(scroll_y))
     except Exception:
         pass
 

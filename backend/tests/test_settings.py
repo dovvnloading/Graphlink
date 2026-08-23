@@ -294,6 +294,41 @@ def test_a_non_numeric_schema_version_is_backfilled_not_crashed_on(tmp_path, cor
     assert json.loads(state_file.read_text(encoding="utf-8"))["schema_version"] == SettingsManager.CURRENT_SCHEMA_VERSION
 
 
+@pytest.mark.parametrize("corrupt_root", ["[]", '"just a string"', "42", "null", "true"])
+def test_a_non_object_settings_file_is_treated_as_corrupt_not_crashed_on(tmp_path, corrupt_root):
+    # SECURITY-FIX: json.load returns a non-dict for a syntactically valid
+    # file whose root is a list/string/number/null - the migrations then do
+    # `key in state` / `state[key] = ...` and raise TypeError, which
+    # _load_state's except (JSONDecodeError/UnicodeDecodeError/IOError only)
+    # does NOT catch, crashing the app at boot on every launch. A wrong-
+    # typed root is corruption and must take the backup-and-replace path.
+    state_file = tmp_path / "session.dat"
+    state_file.write_text(corrupt_root, encoding="utf-8")
+
+    manager = SettingsManager(state_file)  # must not raise
+
+    assert manager.get_schema_version() == SettingsManager.CURRENT_SCHEMA_VERSION
+    # A .corrupted-* backup of the bad file is left behind, same as for
+    # unparseable bytes.
+    assert any(p.name.startswith("session.dat.corrupted") for p in tmp_path.iterdir())
+
+
+def test_a_non_dict_api_models_field_does_not_crash_the_migration(tmp_path):
+    # SECURITY-FIX: migration_002 did dict(state.get("api_models", {}) or {}),
+    # which raised ValueError for a non-empty list ("dictionary update
+    # sequence element #0 has length N"), escaping _load_state uncaught.
+    import json
+
+    state_file = tmp_path / "session.dat"
+    state_file.write_text(json.dumps({"api_models": ["gpt-4", "gpt-5"]}), encoding="utf-8")
+
+    manager = SettingsManager(state_file)  # must not raise
+
+    # The wrong-typed field falls back to an empty models dict rather than
+    # crashing, and the store is usable.
+    assert isinstance(manager.get_api_models(), dict)
+
+
 # -- ADR-009 stage 9.1: scattered `if 'field' not in state` backfills refactored
 # -- into an explicit, ordered migration chain (graphlink_migrations.
 # -- run_dict_migrations). These are before/after equivalence tests: loading an

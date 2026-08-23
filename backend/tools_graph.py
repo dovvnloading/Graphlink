@@ -265,6 +265,37 @@ def run_node_pending_code(document: SceneDocument, call: ToolCall) -> str | None
     return node.state.pycoder_code
 
 
+def run_node_pending_disclosure(document: SceneDocument, call: ToolCall) -> str | None:
+    """SECURITY-FIX: the human-readable thing a run_node call is about to DO
+    that its own arguments ({node_id, action}) don't reveal - so the
+    approval prompt can disclose it. Two cases today:
+
+    - execute: the pycoder code (delegated to run_node_pending_code).
+    - research: the web_research node's content IS the search query that
+      gets sent to the external search/fetch provider (net.fetch, which
+      always prompts even in autopilot). The query lived only on the node,
+      so the approval summary showed 'run_node {"action":"research",...}'
+      and the approver blessed an outbound network request without seeing
+      what was being searched for - a query the model composed from canvas
+      content it may have been prompt-injected through, i.e. an exfiltration
+      channel the human had no chance to catch.
+
+    Returns None for any other call, leaving the plain-arguments summary."""
+    code = run_node_pending_code(document, call)
+    if code is not None:
+        return "will run this code:\n" + code
+    if call.name != "run_node":
+        return None
+    node = document.nodes.get(str(call.arguments.get("node_id") or ""))
+    if node is None or node.kind != "web_research":
+        return None
+    action = str(call.arguments.get("action") or "") or _RUN_NODE_DEFAULT_ACTIONS.get(node.kind, "")
+    if action != "research":
+        return None
+    query = (node.content or "").strip()
+    return "will search the web for:\n" + query if query else None
+
+
 def _run_id_of(ctx: RunContext) -> str | None:
     """The builder's BuilderRunContext carries run_id; a bare RunContext
     (tests, a future non-builder caller) does not - unstamped is the

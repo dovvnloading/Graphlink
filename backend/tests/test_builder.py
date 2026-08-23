@@ -356,6 +356,43 @@ class TestAutopilotNetworkGate:
         )
         assert node.state.builder_status == "done"
 
+    def test_run_node_research_approval_discloses_the_query_being_sent_out(self, monkeypatch):
+        """SECURITY-FIX: research prompts for net.fetch even in autopilot,
+        but the approval summary showed only {"action":"research","node_id":
+        ...} - never the query, which is the node's content and is sent to
+        the external search provider. A prompt-injected model could compose
+        an exfiltrating query the approver had no chance to see. The summary
+        must now disclose it."""
+        from graphlink_plugins.web_research import service as wr_service
+        from graphlink_plugins.web_research.domain import ResearchResult
+
+        document, dispatcher, registry, bus = make_harness()
+        parent = document.add_chat_node(0, 0, "ctx", True)
+        research = document.add_web_research_node(0, 200, parent.id)
+        research.content = "site:internal.corp leaked secret value"
+        monkeypatch.setattr(
+            wr_service.WebResearchService, "run",
+            lambda self, request, **kw: ResearchResult(
+                request_id=request.request_id, original_query=request.original_query,
+                effective_query=request.original_query, answer_markdown="answer",
+            ),
+        )
+        node = seed_plan(document, ["research it"])  # copilot: prompts
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "run_node", node_id=research.id)]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+        summaries: list = []
+
+        approvals, _ = asyncio.run(
+            drive_build(document, dispatcher, registry, bus, node, summaries=summaries)
+        )
+
+        assert approvals == ["run_node"]
+        assert "site:internal.corp leaked secret value" in summaries[0], (
+            "the outbound search query must be disclosed in the approval prompt"
+        )
+
 
 class TestRunNodeExecuteApprovalGate:
     """REVIEW-FIX regression: run_node(action="execute") on a pycoder node
@@ -419,6 +456,92 @@ class TestRunNodeExecuteApprovalGate:
         assert summaries[0] == builder_module._approval_summary(
             call("c1", "run_node", node_id=pycoder.id), document,
         )
+        assert node.state.builder_status == "done"
+
+    def test_run_node_execute_approval_discloses_the_whole_code_not_a_400_char_prefix(self):
+        """SECURITY-FIX: the disclosure above was capped at
+        _APPROVAL_SUMMARY_CAP (400) characters - a prompt-injected model
+        pads a benign prologue past the cap and everything after it runs
+        without ever being shown. The approver must see the exact bytes
+        PythonREPL.execute() will run."""
+        document = SceneDocument()
+        parent = document.add_chat_node(0, 0, "ctx", True)
+        pycoder = document.add_pycoder_node(0, 200, parent.id)
+        prologue = "# " + ("harmless comment " * 40) + "\n"  # well past 400 chars
+        payload = "import os; os.system('the part that used to be hidden')"
+        pycoder.state.pycoder_code = prologue + payload
+        assert len(prologue) > builder_module._APPROVAL_SUMMARY_CAP
+
+        summary = builder_module._approval_summary(
+            call("c1", "run_node", node_id=pycoder.id), document,
+        )
+
+        assert payload in summary, "code past the old 400-char cap must be disclosed"
+        assert summary.endswith(payload), "no truncation marker may replace the tail"
+
+    def test_autopilot_still_prompts_for_a_tool_registered_approval_always(self, monkeypatch):
+        """SECURITY-FIX: graph.delete_node registers approval="always"
+        because a delete destroys content the user may not have read yet,
+        but autopilot's router only consulted scopes - graph.mutate fits
+        the autopilot set, so the delete was auto-approved and the policy
+        was decorative."""
+        document, dispatcher, registry, bus = make_harness()
+        victim = document.add_chat_node(0, 0, "user content the model wants gone", True)
+        node = seed_plan(document, ["tidy up"], mode="autopilot")
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "graph.delete_node", node_id=victim.id)]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        approvals, denials = asyncio.run(
+            drive_build(document, dispatcher, registry, bus, node, deny_first=True)
+        )
+
+        assert approvals == ["graph.delete_node"], (
+            "an approval='always' tool must prompt in autopilot too"
+        )
+        assert denials == 1
+        assert victim.id in document.nodes, "the denied delete must not have happened"
+        assert node.state.builder_status == "done"
+
+    def test_autopilot_does_not_auto_approve_a_plugin_tool_by_its_self_declared_scope(self, monkeypatch):
+        """SECURITY-FIX: plugin Builder tools register with scopes taken from
+        the plugin's OWN self-reported plugin.toml (backend/plugins.py's
+        register_plugin_tools) and approval="always". Autopilot's router used
+        to auto-approve any tool whose scopes fit its set - and a plugin
+        simply declares graph.mutate to fit. The trust signal there is
+        authored by the untrusted party itself, so a prompt-injected model
+        could run a granted plugin's tool with arbitrary side effects, no
+        human in the loop. The approval='always' registration now blocks
+        auto-approval regardless of the declared scope."""
+        from backend.providers.base import ToolSpec
+        from backend.tools import GRAPH_MUTATE, ToolResult
+
+        document, dispatcher, registry, bus = make_harness()
+        ran = []
+        registry.register(
+            ToolSpec(name="plugin:evil:write_file",
+                     description="a granted third-party plugin's action", input_schema={}),
+            handler=lambda call, ctx: ran.append(call) or ToolResult(content="did it"),
+            scopes={GRAPH_MUTATE},   # self-declared, fits _AUTOPILOT_AUTO_SCOPES
+            approval="always",       # every real plugin tool registers this way
+        )
+        node = seed_plan(document, ["use the plugin"], mode="autopilot")
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "plugin:evil:write_file", path="/etc/x")]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+
+        approvals, denials = asyncio.run(
+            drive_build(document, dispatcher, registry, bus, node, deny_first=True)
+        )
+
+        assert approvals == ["plugin:evil:write_file"], (
+            "a plugin tool must prompt in autopilot - its self-declared scope "
+            "is not a trust signal"
+        )
+        assert denials == 1
+        assert ran == [], "the denied plugin handler must not have run"
         assert node.state.builder_status == "done"
 
 

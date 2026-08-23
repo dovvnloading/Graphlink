@@ -965,3 +965,75 @@ def test_restore_final_deliverable_node_id_rejects_a_resolved_non_chat_node():
         final_deliverable_node_id="code-1",
     )
     assert document.final_deliverable_node_id is None
+
+
+# -- SECURITY-FIX: a persisted audio_file part is an arbitrary local path the
+# -- provider layer would read and upload; neutralized on load ----------------
+
+
+def test_restored_audio_file_part_is_neutralized_not_left_as_a_readable_path():
+    """A hostile saved chat carrying {"type":"audio_file","path":<any local
+    file>} is invisible in the UI and would be read + uploaded to the model
+    provider on the next turn. Restore must strip the path to an inert
+    placeholder."""
+    document = _restore(nodes=[{
+        "node_type": "chat",
+        "raw_content": [
+            {"type": "text", "text": "look at this"},
+            {"type": "audio_file", "path": "C:/Users/victim/.ssh/id_rsa"},
+        ],
+        "position": {"x": 0, "y": 0},
+    }])
+    node = next(iter(document.nodes.values()))
+    parts = node.state.content_parts
+    assert all(p.get("type") != "audio_file" for p in parts), "the audio_file path must not survive load"
+    serialized = repr(parts)
+    assert "id_rsa" not in serialized and ".ssh" not in serialized, "the arbitrary path must be gone entirely"
+    # The ordinary text part is untouched.
+    assert any(p.get("type") == "text" and p.get("text") == "look at this" for p in parts)
+
+
+def test_restored_image_bytes_part_still_round_trips_unaffected_by_the_audio_fix():
+    import base64
+    from backend.domain.content_codec import _content_codec
+
+    raw = _content_codec.process_content_for_deserialization([
+        {"type": "image_bytes", "data": base64.b64encode(b"PNGDATA").decode("ascii")},
+    ])
+    assert raw[0]["type"] == "image_bytes"
+    assert raw[0]["data"] == b"PNGDATA"
+
+
+# -- SECURITY-FIX: non-finite floats from a hostile saved chat must not reach
+# -- the live document (they'd emit NaN/Infinity tokens that wedge the wire) --
+
+
+def test_non_finite_position_is_sanitized_on_load_not_carried_into_the_document():
+    import json
+    import math
+
+    # json.loads accepts these non-standard literals by default.
+    raw = json.loads('{"x": NaN, "y": Infinity}')
+    document = _restore(nodes=[{
+        "node_type": "chat", "raw_content": "hi", "position": raw,
+    }])
+    node = next(iter(document.nodes.values()))
+    assert math.isfinite(node.x) and math.isfinite(node.y), (
+        "a non-finite coordinate must be coerced to a finite default on load"
+    )
+
+
+def test_a_chat_with_non_finite_values_still_serializes_to_valid_json_for_the_wire():
+    import json
+
+    document = _restore(
+        nodes=[{"node_type": "chat", "raw_content": "hi",
+                "position": json.loads('{"x": NaN, "y": -Infinity}')}],
+        view_state={"zoom_factor": float("inf"), "scroll_x": float("nan"), "scroll_y": 0.0},
+    )
+    # Exactly what starlette's send_json does (separators + default allow_nan
+    # would emit bare NaN/Infinity tokens the SPA's JSON.parse rejects).
+    wire = json.dumps(document.scene_payload(), separators=(",", ":"), allow_nan=False)
+    # allow_nan=False raises if any non-finite survived - reaching here proves
+    # none did. Belt-and-suspenders: no literal token slipped through either.
+    assert "NaN" not in wire and "Infinity" not in wire

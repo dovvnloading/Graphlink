@@ -53,10 +53,41 @@ logger = logging.getLogger("graphlink.desktop")
 STARTUP_TIMEOUT_SECONDS = 15.0
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+def _bind_listener(port: int | None) -> socket.socket:
+    """Binds the backend's loopback listener ONCE, exclusively, and hands the
+    live socket to uvicorn (see _start_backend) instead of probing a free
+    port, closing it, and letting uvicorn re-bind it by number.
+
+    SECURITY-FIX: that probe-close-rebind sequence had two holes, both
+    reachable by any other process running as the same user (threat (a) in
+    backend/auth.py's model). uvicorn's own bind_socket() sets SO_REUSEADDR
+    and never SO_EXCLUSIVEADDRUSE; on Windows SO_REUSEADDR means a second
+    socket may bind the exact same (127.0.0.1, port) with NO error, and the
+    kernel delivers new connections to one binder only. So an attacker who
+    bound the port first - predictable when GRAPHLINK_BACKEND_PORT pins it,
+    or by winning the probe-close window otherwise - silently received the
+    WebView2's requests, each carrying the per-launch capability token that
+    ADR-004 exists to keep from exactly that attacker, and could serve its
+    own page into the address-bar-less window. uvicorn logged "listening"
+    as normal, so the hijack was invisible to the app and the user.
+
+    SO_EXCLUSIVEADDRUSE is the Windows flag that refuses a bind when the
+    address is already held by anyone, and makes a later SO_REUSEADDR bind
+    by someone else fail too; binding here and keeping the socket open
+    removes the rebind window entirely. On POSIX, SO_REUSEADDR does not
+    permit stealing a live listener, so the flag is simply not applied
+    there. port=None asks the kernel for any free port, which is then read
+    back from the bound socket rather than re-derived."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        listener.bind(("127.0.0.1", port or 0))
+        listener.listen(128)
+    except OSError:
+        listener.close()
+        raise
+    return listener
 
 
 def _wait_for_health(
@@ -95,7 +126,10 @@ def _wait_for_health(
 
 
 def _start_backend(
-    port: int, previous_run_crashed: bool = False, auth_token: str | None = None
+    port: int,
+    previous_run_crashed: bool = False,
+    auth_token: str | None = None,
+    listener: socket.socket | None = None,
 ) -> tuple[uvicorn.Server, threading.Thread]:
     import uvicorn
 
@@ -112,7 +146,15 @@ def _start_backend(
         # _shutdown_backend below.
     )
     server = uvicorn.Server(config)
-    thread = threading.Thread(target=server.run, name="graphlink-backend", daemon=True)
+    # `listener` is the already-bound, exclusive socket from _bind_listener
+    # - passed through so uvicorn serves on THAT socket (host/port above are
+    # then only what it logs) rather than binding a fresh SO_REUSEADDR one
+    # by number. uvicorn closes it on shutdown. None keeps the old
+    # bind-by-number path for callers that have no socket to hand over.
+    sockets = [listener] if listener is not None else None
+    thread = threading.Thread(
+        target=server.run, kwargs={"sockets": sockets}, name="graphlink-backend", daemon=True,
+    )
     thread.start()
     return server, thread
 
@@ -179,14 +221,24 @@ def main() -> int:
 
     raw_port = os.environ.get("GRAPHLINK_BACKEND_PORT")
     try:
-        port = int(raw_port) if raw_port else _free_port()
+        requested_port: int | None = int(raw_port) if raw_port else None
     except ValueError:
         # Guarded so a bad env value can't raise here, AFTER mark_running()
         # has already written the crash sentinel above - an uncaught raise
         # at this point used to skip mark_clean_exit() entirely, leaving a
         # false "previous run crashed" notice on the NEXT launch.
         logger.warning("GRAPHLINK_BACKEND_PORT=%r is not a valid port, ignoring", raw_port)
-        port = _free_port()
+        requested_port = None
+    try:
+        listener = _bind_listener(requested_port)
+    except OSError as exc:
+        # A pinned port already held by another process is exactly what the
+        # exclusive bind is supposed to refuse - fail loudly here instead of
+        # letting a silent hijack proceed, and still clear the sentinel.
+        logger.error("could not bind the backend listener on 127.0.0.1:%s: %s", requested_port or 0, exc)
+        mark_clean_exit()
+        return 1
+    port = listener.getsockname()[1]
     base_url = f"http://127.0.0.1:{port}"
 
     # ADR-004 stage 4.1: one fresh capability token per launch, never
@@ -196,7 +248,7 @@ def main() -> int:
     auth_token = mint_token()
 
     server, backend_thread = _start_backend(
-        port, previous_run_crashed=crashed, auth_token=auth_token
+        port, previous_run_crashed=crashed, auth_token=auth_token, listener=listener
     )
     if not _wait_for_health(
         base_url, STARTUP_TIMEOUT_SECONDS, thread=backend_thread, auth_token=auth_token

@@ -7987,3 +7987,62 @@ def test_register_agents_forwards_the_provider_runtime_to_the_dispatcher():
     )
 
     assert dispatcher._provider_runtime is runtime
+
+
+# -- SECURITY-FIX: one bad MCP server must not crash the whole Builder registry
+# -- or leak its subprocess (ValueError from registry.register was uncaught) ---
+
+
+class _McpFakeSettingsManager:
+    def __init__(self, servers):
+        self._servers = servers
+
+    def get_enable_system_prompt(self) -> bool:
+        return True
+
+    def get_mcp_servers(self):
+        return list(self._servers)
+
+
+def test_a_mcp_server_that_raises_valueerror_on_register_is_skipped_and_its_client_closed(monkeypatch):
+    """register_mcp_server_tools raises ValueError on a duplicate tool name /
+    unknown approval / unknown scope - from a hostile-or-updated server
+    (threat d) or a hand-edited session.dat (threat c). It used to escape the
+    per-server loop (caught only McpError/OSError), crashing the Builder
+    registry build and leaking the connected subprocess. The bad server must
+    now be skipped, its client closed, and the good server still registered."""
+    import backend.mcp_client as mcp_client_module
+    from backend.tools import ToolRegistry
+
+    closed = []
+
+    class _FakeClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+        def connect(self):
+            pass
+        def close(self):
+            closed.append(self)
+
+    def fake_register(registry, client, config):
+        if config.name == "bad":
+            raise ValueError("Tool 'mcp:bad:x' is already registered.")
+        return (f"mcp:{config.name}:ok",)
+
+    monkeypatch.setattr(mcp_client_module, "McpStdioClient", _FakeClient)
+    monkeypatch.setattr(mcp_client_module, "register_mcp_server_tools", fake_register)
+
+    servers = [
+        {"id": "1", "name": "bad", "command": "x", "args": [], "scopes": [], "approval": "always",
+         "enabled_tools": [], "enabled": True, "timeout": 30.0, "env": {}},
+        {"id": "2", "name": "good", "command": "y", "args": [], "scopes": [], "approval": "always",
+         "enabled_tools": [], "enabled": True, "timeout": 30.0, "env": {}},
+    ]
+    dispatcher = AgentDispatcher(_McpFakeSettingsManager(servers))
+    registry = ToolRegistry()
+
+    dispatcher._register_configured_mcp_tools(registry)  # must not raise
+
+    retained = getattr(dispatcher, "_mcp_clients", [])
+    assert len(retained) == 1, "only the good server's client is kept"
+    assert len(closed) == 1, "the bad server's connected client must be closed, not leaked"
