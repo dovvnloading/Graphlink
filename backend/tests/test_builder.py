@@ -356,6 +356,43 @@ class TestAutopilotNetworkGate:
         )
         assert node.state.builder_status == "done"
 
+    def test_run_node_research_approval_discloses_the_query_being_sent_out(self, monkeypatch):
+        """SECURITY-FIX: research prompts for net.fetch even in autopilot,
+        but the approval summary showed only {"action":"research","node_id":
+        ...} - never the query, which is the node's content and is sent to
+        the external search provider. A prompt-injected model could compose
+        an exfiltrating query the approver had no chance to see. The summary
+        must now disclose it."""
+        from graphlink_plugins.web_research import service as wr_service
+        from graphlink_plugins.web_research.domain import ResearchResult
+
+        document, dispatcher, registry, bus = make_harness()
+        parent = document.add_chat_node(0, 0, "ctx", True)
+        research = document.add_web_research_node(0, 200, parent.id)
+        research.content = "site:internal.corp leaked secret value"
+        monkeypatch.setattr(
+            wr_service.WebResearchService, "run",
+            lambda self, request, **kw: ResearchResult(
+                request_id=request.request_id, original_query=request.original_query,
+                effective_query=request.original_query, answer_markdown="answer",
+            ),
+        )
+        node = seed_plan(document, ["research it"])  # copilot: prompts
+        scripted_turns(monkeypatch, [
+            {"tool_calls": [call("c1", "run_node", node_id=research.id)]},
+            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
+        ], [])
+        summaries: list = []
+
+        approvals, _ = asyncio.run(
+            drive_build(document, dispatcher, registry, bus, node, summaries=summaries)
+        )
+
+        assert approvals == ["run_node"]
+        assert "site:internal.corp leaked secret value" in summaries[0], (
+            "the outbound search query must be disclosed in the approval prompt"
+        )
+
 
 class TestRunNodeExecuteApprovalGate:
     """REVIEW-FIX regression: run_node(action="execute") on a pycoder node

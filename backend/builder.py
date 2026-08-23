@@ -415,19 +415,20 @@ def _approval_summary(call: ToolCall, document) -> str:
     why). Every other tool's arguments already say what will happen, so
     they keep the plain JSON summary; only this one case substitutes the
     code itself."""
-    from backend.tools_graph import run_node_pending_code
+    from backend.tools_graph import run_node_pending_disclosure
 
-    code = run_node_pending_code(document, call)
-    if code is not None:
+    disclosure = run_node_pending_disclosure(document, call)
+    if disclosure is not None:
         # SECURITY-FIX: NOT truncated. The cap below exists to keep an
-        # argument blob readable; applied to the code it meant everything
-        # past character 400 executed without ever being shown to the
-        # approver - a prompt-injected model just pads a benign prologue
-        # and puts the payload after the cut. The panel renders this in a
-        # scrollable <pre> (plan-node-approval-summary), so length costs
-        # nothing; the approver sees exactly the bytes PythonREPL.execute()
-        # will run.
-        return f"{call.name} will run this code:\n{code}"
+        # argument blob readable; applied to the disclosed code/query it
+        # meant everything past character 400 was acted on without ever
+        # being shown to the approver - a prompt-injected model just pads a
+        # benign prologue and puts the payload (the code that runs, or the
+        # query sent to the external search provider) after the cut. The
+        # panel renders this in a scrollable <pre>
+        # (plan-node-approval-summary), so length costs nothing; the
+        # approver sees exactly what will run or go out over the network.
+        return f"{call.name} {disclosure}"
     args = json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
     return f"{call.name} {_truncate(args, _APPROVAL_SUMMARY_CAP)}"
 
