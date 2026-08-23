@@ -101,6 +101,22 @@ def _normalize_repo_path(path_text):
     # segment loudly instead of letting it collapse silently.
     if any(":" in part for part in normalized.parts):
         raise RuntimeError("Repository paths must stay inside the selected repository.")
+    # SECURITY-FIX: the containment guards above (and _safe_local_target's
+    # resolve() check below) keep a path INSIDE local_root, but said nothing
+    # about WHICH subtree - so ".git/hooks/pre-commit" or ".git/config"
+    # passed every check and apply_change_set wrote them verbatim. A hook,
+    # or a core.fsmonitor / alias line in .git/config, is arbitrary code
+    # execution on the user's very next git command, entirely outside this
+    # app's approval model (the Apply diff shows the file, but a reviewer
+    # skimming a plausible multi-file change has no reason to read a
+    # ".git/config" hunk as "this runs a program"). A "propose source edits"
+    # feature has no legitimate reason to touch .git at all - the read side
+    # already excludes it (repository.py's IGNORED_LOCAL_DIR_NAMES), so the
+    # write side now refuses it categorically too. Case-insensitive, since
+    # NTFS/APFS would alias ".GIT" onto the same directory; and every
+    # segment, not just the first, so a submodule's nested .git is covered.
+    if any(part.lower() == ".git" for part in normalized.parts):
+        raise RuntimeError("Repository paths may not reference the .git directory.")
     return normalized.as_posix()
 
 
