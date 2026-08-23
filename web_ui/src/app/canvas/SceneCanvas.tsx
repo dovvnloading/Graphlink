@@ -2505,6 +2505,19 @@ function CanvasInner({
   }, [
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
     getComposerRoute, filterKinds, filterStatuses,
+    // REVIEW-FIX: a scene publish that lands while draggingRef.current is
+    // true bails out of this effect ABOVE and is discarded entirely, not
+    // queued - and draggingRef is a plain ref, so nothing here re-ran when
+    // dragging actually ended, permanently losing that snapshot unless some
+    // LATER, unrelated publish happened to change `scene` again. dragActive
+    // is reactive state that flips false in the exact same onNodesChange
+    // branch that clears draggingRef.current (see its own doc above), so
+    // listing it here is what makes this effect reconsider "should I sync
+    // now" the instant a drag gesture ends, using whichever `scene` this
+    // render already holds - not a special replay of whatever arrived
+    // mid-drag, just the ordinary reconciliation this effect always does,
+    // finally allowed to run once dragging stops.
+    dragActive,
   ]);
 
   // ADR-012 stage 12.3: Shift+F10 / the ContextMenu key opens a node's menu

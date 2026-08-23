@@ -34,7 +34,7 @@
  * and correctly suspends it for an export, which is the actual surface this
  * app owns.
  */
-import { ReactFlowProvider, type Edge, type NodeChange } from "@xyflow/react";
+import { ReactFlowProvider, useStoreApi, type Edge, type NodeChange } from "@xyflow/react";
 import { act, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -57,6 +57,21 @@ let capturedProps: CapturedProps[] = [];
 // without a working xyflow measurement pipeline underneath, exactly as this
 // file already drives the captured props directly.
 let capturedMiddleware: ((changes: NodeChange[]) => NodeChange[]) | null = null;
+
+// REVIEW-FIX (round 3): the scene-sync effect writes straight into React
+// Flow's OWN internal store (storeApi.getState().setNodes(...)), never
+// through a `nodes` prop <ReactFlow> would otherwise receive - production
+// passes `defaultNodes` (uncontrolled), so CapturedProps.nodes above is
+// never actually populated. Reading that store directly (via the same
+// useStoreApi hook CanvasInner itself calls, left un-mocked below) is the
+// only way to observe what the scene-sync effect actually committed - this
+// probe captures the API handle once at mount, then the test polls
+// `.getState().nodes` imperatively, same posture as capturedMiddleware.
+let capturedStoreApi: ReturnType<typeof useStoreApi> | null = null;
+function StoreApiProbe() {
+  capturedStoreApi = useStoreApi();
+  return null;
+}
 
 vi.mock("@xyflow/react", async (importOriginal) => {
   const original = await importOriginal<typeof import("@xyflow/react")>();
@@ -174,9 +189,11 @@ function chatRow(id: string, x: number, y = 0): SceneNodeRow {
 function mount() {
   const { store, stateListeners } = makeWiredStore();
   capturedProps = [];
+  capturedStoreApi = null;
   render(
     <ReactFlowProvider>
       <SceneCanvas store={store} onOpenDocumentView={() => {}} />
+      <StoreApiProbe />
     </ReactFlowProvider>,
   );
   return { store, stateListeners };
@@ -318,6 +335,58 @@ describe("SceneCanvas <ReactFlow> wiring (ADR-011 stages 11.2/11.3)", () => {
 
       expect(querySelectorSpy).not.toHaveBeenCalled();
       querySelectorSpy.mockRestore();
+    });
+  });
+
+  // REVIEW-FIX (round 3): the scene-sync effect (SceneCanvas.tsx, just above
+  // dragActive's own dependency-array entry) used to bail out permanently on
+  // any scene publish that landed while draggingRef.current was true - the
+  // guard skipped the rebuild ENTIRELY rather than queuing it, and
+  // draggingRef is a plain ref, so nothing re-ran the effect once dragging
+  // actually ended. A publish that happened to be the LAST one before
+  // release stayed lost forever unless some later, unrelated publish
+  // changed `scene` again. Fixed by adding `dragActive` (reactive state
+  // that already flips false in the same onNodesChange branch that clears
+  // draggingRef.current) to the effect's dependency array.
+  describe("scene-sync catch-up once a drag ends (REVIEW-FIX round 3)", () => {
+    it("applies the latest scene snapshot the moment dragging ends, even though it arrived mid-drag and nothing publishes again afterward", () => {
+      const { stateListeners } = mount();
+      publish(stateListeners, { nodes: [chatRow("a", 0), chatRow("b", 200)], edges: [] });
+      expect(capturedStoreApi!.getState().nodes.map((n: { id: string }) => n.id).sort()).toEqual(["a", "b"]);
+
+      // Production's real sequence: React Flow runs the registered
+      // middleware inside its own update first, then hands the CORRECTED
+      // changes to onNodesChange - same helper as the smart-guide tests
+      // above.
+      const drag = (change: Partial<NodeChange> & { id: string }) =>
+        act(() => {
+          const raw = [{ type: "position", ...change } as NodeChange];
+          lastProps().onNodesChange(capturedMiddleware ? capturedMiddleware(raw) : raw);
+        });
+
+      // Start dragging "a".
+      drag({ id: "a", dragging: true, position: { x: 10, y: 0 } });
+
+      // A backend scene publish lands WHILE the drag is in flight - e.g. an
+      // unrelated node's streaming reply finishing mid-drag. The store must
+      // still show only the pre-drag nodes: the sync effect saw
+      // draggingRef.current === true and skipped the rebuild.
+      publish(stateListeners, {
+        nodes: [chatRow("a", 0), chatRow("b", 200), chatRow("c", 400)],
+        edges: [],
+      });
+      expect(capturedStoreApi!.getState().nodes.map((n: { id: string }) => n.id).sort()).toEqual(["a", "b"]);
+
+      // Drag ends. No further scene publish EVER arrives after this point -
+      // the only thing that can surface "c" now is the drag-end transition
+      // itself.
+      drag({ id: "a", dragging: false, position: { x: 10, y: 0 } });
+
+      expect(capturedStoreApi!.getState().nodes.map((n: { id: string }) => n.id).sort()).toEqual([
+        "a",
+        "b",
+        "c",
+      ]);
     });
   });
 });
