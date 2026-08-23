@@ -1419,6 +1419,41 @@ def test_rename_chat_intent_persists_and_republishes(db_path):
     assert recorder.messages[-1]["payload"]["rows"][0]["title"] == "After"
 
 
+def test_rename_chat_intent_returns_the_new_updated_at_on_success(db_path):
+    # REVIEW-FIX: rename_chat's own write already signals "the graph no
+    # longer exists" by returning None (see that function's own docstring),
+    # but make_rename_chat_intent's rename() used to discard that signal
+    # entirely and never return anything - always resolving to None
+    # regardless of whether the rename actually applied. Mirrors
+    # test_delete_chat_intent_removes_and_republishes's own assertion for
+    # make_delete_chat_intent's delete(), the identical shape.
+    chat_id = _insert_chat(db_path, "Before")
+    bus = SessionBus("chat-library-rename-returns-test")
+    register_chat_library(bus, db_path)
+
+    result = asyncio.run(bus.dispatch_intent("app-chat-library", "renameChat", [chat_id, "After"]))
+
+    assert result is not None
+    assert result == load_chat_row(db_path, chat_id)["updated_at"]
+
+
+def test_rename_chat_intent_returns_none_when_the_row_no_longer_exists(db_path):
+    """The rename-a-since-deleted-row race: two tabs of the same session (or
+    a queued/replayed intent) can reach renameChat after another tab's
+    deleteChat already removed the row. Pre-fix, this silently resolved to
+    None indistinguishably from a genuine success - now it's the SAME None
+    a genuine no-op title guard already returns, so a caller can finally
+    tell the two cases apart from a real success."""
+    chat_id = _insert_chat(db_path, "Temp")
+    bus = SessionBus("chat-library-rename-gone-test")
+    register_chat_library(bus, db_path)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [chat_id]))
+
+    result = asyncio.run(bus.dispatch_intent("app-chat-library", "renameChat", [chat_id, "Too Late"]))
+
+    assert result is None
+
+
 def test_delete_chat_intent_removes_and_republishes(db_path):
     chat_id = _insert_chat(db_path, "Temp")
     bus = SessionBus("chat-library-delete-test")

@@ -2710,13 +2710,13 @@ def make_rename_chat_intent(
     this session's save/load/autosave operations.
     """
 
-    async def rename(chat_id: int, new_title: str):
+    async def rename(chat_id: int, new_title: str) -> str | None:
         # Non-empty guard matches the legacy `if ok and new_title:` - an
         # empty/whitespace title is ignored, no mutation, no error (the SPA
         # disables Save for an empty draft anyway).
         title = str(new_title or "").strip()
         if not title:
-            return
+            return None
         resolved_chat_id = int(chat_id)
         expected_updated_at: str | None = None
         if (
@@ -2742,7 +2742,7 @@ def make_rename_chat_intent(
             if notifications is not None:
                 notifications.show(LOST_RACE_MESSAGE_MANUAL, "warning")
                 await bus.publish("notification")
-            return
+            return None
         if (
             new_updated_at is not None
             and canvas_document is not None
@@ -2751,6 +2751,13 @@ def make_rename_chat_intent(
         ):
             last_saved["updated_at"] = new_updated_at
         await bus.publish("app-chat-library")
+        # REVIEW-FIX: returns rename_chat's own signal (None means the row
+        # no longer existed by the time the UPDATE ran) instead of always
+        # resolving to None - mirrors make_delete_chat_intent's delete()
+        # just above, which already returns delete_chat's own bool for the
+        # identical reason: a fire-and-forget caller has no way to tell a
+        # real rename apart from a silent no-op without this.
+        return new_updated_at
 
     return rename
 
