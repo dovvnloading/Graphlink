@@ -2764,6 +2764,28 @@ class TestOptimisticConcurrency:
         assert new_id == chat_id
         assert load_chat_row(db_path, chat_id)["data"] == {"nodes": ["v2-blind"]}
 
+    def test_blind_update_raises_cleanly_instead_of_crashing_when_the_row_was_deleted_concurrently(self, db_path):
+        # REVIEW-FIX regression: the blind-write branch (expected_updated_at
+        # =None, exercised just above) used to skip the rowcount check the
+        # checked branch right above it already has. A concurrent delete_
+        # chat of this exact row made the UPDATE affect zero rows and
+        # commit as a silent no-op, then this function crashed with an
+        # unhandled TypeError on its own post-commit workspace_id read-back
+        # (fetchone() on a now-gone row). This must now raise the SAME
+        # clean ConcurrentSaveConflict the checked branch already raises,
+        # so every caller's existing `except ConcurrentSaveConflict`
+        # handling (see the saveChat/autosave lost-race tests elsewhere in
+        # this class) covers this path too.
+        chat_id, _ = save_chat_atomically_row(db_path, None, "T", {"nodes": ["v0"]}, [], [])
+        delete_chat(db_path, chat_id)  # a concurrent session deletes it out from under this call
+
+        with pytest.raises(ConcurrentSaveConflict):
+            save_chat_atomically_row(db_path, chat_id, "T", {"nodes": ["v1-should-not-land"]}, [], [])
+
+        # Genuinely gone, not resurrected - matches the checked branch's own
+        # "nothing here is ever partially applied" guarantee.
+        assert load_chat_row(db_path, chat_id) is None
+
     def test_two_sessions_racing_through_the_real_saveChat_intent_surfaces_the_lost_race_notice(self, db_path):
         # End-to-end through the real register_chat_library wiring: two
         # SEPARATE sessions (separate SceneDocuments/buses, exactly like two

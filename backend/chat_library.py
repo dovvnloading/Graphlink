@@ -1662,11 +1662,24 @@ def save_chat_atomically_row(
                             f"{expected_updated_at!r} did not match)"
                         )
                 else:
-                    conn.execute(
+                    # REVIEW-FIX: the checked branch just above already
+                    # raises on rowcount == 0; this blind branch used to skip
+                    # that check entirely, so a concurrent delete_chat of
+                    # this exact row landed as a silent no-op UPDATE and the
+                    # unconditional workspace_id read-back below then blew up
+                    # with an unhandled TypeError (fetchone() on a gone row)
+                    # instead of the same clean ConcurrentSaveConflict every
+                    # caller already knows how to turn into LOST_RACE_MESSAGE.
+                    cursor = conn.execute(
                         "UPDATE graphs SET title = ?, data = ?, preview = ?, message_count = ?, "
                         "updated_at = ? WHERE id = ?",
                         (title, chat_data_json, preview, message_count, now, chat_id),
                     )
+                    if cursor.rowcount == 0:
+                        raise ConcurrentSaveConflict(
+                            f"chat {chat_id} no longer exists (it was likely deleted elsewhere "
+                            "since it was last loaded/saved in this session)"
+                        )
                 resolved_chat_id = chat_id
             elif workspace_id is not None:
                 cursor = conn.execute(
@@ -1737,11 +1750,13 @@ def save_chat_atomically_row(
                 )
 
         # ADR-020 stage 20.4: runs AFTER the `with conn:` block above has
-        # committed (or, on a ConcurrentSaveConflict, never reached here at
-        # all - that exception propagates straight out of the `with conn:`
-        # block, so this line is unreachable for a lost write race, exactly
-        # as it should be: nothing was actually written, so nothing here
-        # needs re-indexing). One extra cheap read on the SAME still-open
+        # committed (or, on a ConcurrentSaveConflict - raised by EITHER the
+        # checked or the blind UPDATE branch above on rowcount == 0, see
+        # REVIEW-FIX there - never reached here at all: that exception
+        # propagates straight out of the `with conn:` block, so this line is
+        # unreachable for a lost write race, exactly as it should be:
+        # nothing was actually written, so nothing here needs re-indexing).
+        # One extra cheap read on the SAME still-open
         # connection - graphs.workspace_id is always a real, non-NULL int
         # for resolved_chat_id regardless of which branch above ran (the
         # INSERT branches always populate it - explicitly when `workspace_id`
