@@ -602,6 +602,54 @@ def test_a_composite_that_nets_out_to_nothing_is_not_logged(document):
     assert len(document.command_log) == 0
 
 
+def test_composite_discards_the_partial_buffer_on_a_mid_block_exception(document):
+    """REVIEW-FIX: composite()'s finally block used to merge and push
+    whatever had been buffered so far unconditionally, even when the
+    with-block raised partway through - silently committing a partial
+    group to the undo stack as if it were the whole action, with no
+    scene republish from the caller's own exception handler (which has
+    no reason to think the group ever completed). A mid-block exception
+    must now discard the buffer instead of committing it: only a clean
+    exit from the with-block pushes anything."""
+    node = document.add_note(0, 0)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        with document.composite("multiMove", "user"):
+            document.record_command(
+                "moveNode", "user",
+                lambda: document.move_node(node.id, 10, 10), node_ids=[node.id],
+            )
+            raise RuntimeError("boom")
+
+    # The mutator itself already ran for real (the node did move) - that
+    # part is unavoidable and not what this fix addresses. What must NOT
+    # happen is the buffered moveNode landing on the undo stack as if the
+    # group had completed cleanly.
+    assert (document.nodes[node.id].x, document.nodes[node.id].y) == (10, 10)
+    assert len(document.command_log) == 0
+
+    # A later, unrelated composite must not see the discarded command leak
+    # in, and _composite_depth must have unwound back to 0 (not left stuck
+    # above 0, which would silently make every future composite non-
+    # outermost and never push anything at all). Two separate record_command
+    # calls forces the actual merge branch (a single one would pass through
+    # under its own original command_type), so a leftover moveNode from the
+    # discarded buffer would surface here as a 3rd merged member.
+    other_a = document.add_note(200, 0)
+    other_b = document.add_note(300, 0)
+    with document.composite("moveAgain", "user"):
+        document.record_command(
+            "moveNode", "user",
+            lambda: document.move_node(other_a.id, 20, 20), node_ids=[other_a.id],
+        )
+        document.record_command(
+            "moveNode", "user",
+            lambda: document.move_node(other_b.id, 30, 30), node_ids=[other_b.id],
+        )
+    assert len(document.command_log) == 1
+    assert document.command_log[-1].command_type == "moveAgain"
+
+
 def test_undo_run_reverses_a_whole_agent_build_in_one_action(document):
     """ADR-010 stage 10.5."""
     for index in range(3):

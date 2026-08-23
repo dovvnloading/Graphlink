@@ -638,8 +638,28 @@ class CommandOps:
         outermost = self._composite_depth == 1
         try:
             yield
-        finally:
-            self._composite_depth -= 1
+        except BaseException:
+            # REVIEW-FIX: this block used to run its merge-and-push logic
+            # unconditionally from a `finally`, with no `except` at all - a
+            # mutator raising partway through the with-block (record_command's
+            # own AssertionError for an unanticipated deletion, or any
+            # exception from the wrapped domain call) still fell through to
+            # the same commit path, silently pushing whatever had been
+            # buffered SO FAR as if it were the complete action. That's a
+            # real, already-applied partial document mutation landing on the
+            # undo stack, while the caller's own exception handler has no
+            # reason to call publish_scene() for a group it believes never
+            # completed - the same live-document-diverges-from-clients shape
+            # undo_run's own REVIEW-FIX below already fixed for the reverse
+            # (undo) direction. Discard the buffered commands instead of
+            # merging/pushing them: a mid-block exception must mean the
+            # group never happened, matching what the caller already
+            # assumes when its own try/except catches this and never
+            # republishes.
+            if outermost:
+                self._composite_buffer.clear()
+            raise
+        else:
             if outermost:
                 buffered = list(self._composite_buffer)
                 self._composite_buffer.clear()
@@ -652,6 +672,8 @@ class CommandOps:
                 if merged is not None and not merged.is_noop:
                     self.redo_stack.clear()
                     self.command_log.append(merged)
+        finally:
+            self._composite_depth -= 1
 
     def can_undo(self) -> bool:
         return len(self.command_log) > 0
