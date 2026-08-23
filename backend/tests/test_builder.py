@@ -1006,6 +1006,32 @@ class TestReviewFixRegressions:
             "whose goal/checklist/spent budgets are still on the canvas"
         )
 
+    def test_a_setup_window_exception_lands_failed_instead_of_escaping(self, monkeypatch):
+        """Regression: the tool-spec filtering/prompt resolution/plan-digest
+        formatting between run_build's own busy-marker stamp (builder_status
+        ="running"/pending_request_id=request_id) and its try block used to
+        sit OUTSIDE any try/except. An exception raised there escaped
+        run_build entirely - agents.py's own caller wraps the call in only
+        `finally: self._runs.release(...)`, no except - leaving the plan
+        node stuck at "running" forever with a pending_request_id no run
+        backs anymore."""
+        document, dispatcher, registry, bus = make_harness()
+        node = seed_plan(document, ["a step"])
+
+        def boom_digest(node):
+            raise RuntimeError("boom during plan-digest formatting")
+
+        monkeypatch.setattr(builder_module, "_plan_digest", boom_digest)
+
+        asyncio.run(drive_build(document, dispatcher, registry, bus, node))
+
+        assert node.state.builder_status == "failed"
+        assert node.pending_request_id is None, (
+            "a setup-window exception must still clear pending_request_id, "
+            "or the plan node is stuck 'running' forever with cancel_builder "
+            "a permanent no-op"
+        )
+
 
 class TestActivityLog:
     """stage 8.7: the build's own visible record of what it did."""
