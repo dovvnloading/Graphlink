@@ -2665,13 +2665,23 @@ def make_export_workspace(bus: SessionBus, resolved_path: Path, notifications: N
         if not target:
             return
 
+        # REVIEW-FIX: export used to hardcode {title, data, notes, pins} -
+        # tags/favorite/archived never rode along, even though they're
+        # already sitting in `all_chats` (fetched above to resolve
+        # graph_ids) rather than requiring a second DB round trip here.
+        chats_by_id = {int(row["id"]): row for row in all_chats}
+
         def _load_one(graph_id: int) -> dict[str, Any]:
             row = load_chat_row(resolved_path, graph_id)
+            meta = chats_by_id.get(graph_id, {})
             return {
                 "title": row["title"] if row else "Untitled",
                 "data": row["data"] if row else {},
                 "notes": load_notes_rows(resolved_path, graph_id),
                 "pins": load_pins_rows(resolved_path, graph_id),
+                "tags": list(meta.get("tags", [])),
+                "favorite": bool(meta.get("favorite", False)),
+                "archived": bool(meta.get("archived", False)),
             }
 
         def _do_export() -> Path:

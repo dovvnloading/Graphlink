@@ -3,7 +3,11 @@
 FORMAT. A plain zip, deliberately readable without this app:
 
     manifest.json              format version, app version, export time, index
-    chats/<n>.json             one chat: {title, data, notes, pins}
+    chats/<n>.json             one chat: {title, data, notes, pins, tags,
+                                favorite, archived} - the last three are
+                                REVIEW-FIX additions (older archives simply
+                                lack them; import_archive defaults them back
+                                to empty/false rather than requiring them)
     assets/<ref>.<ext>         binary assets, real files, content-addressed
 
 Chats are JSON and assets are files precisely because the point is
@@ -121,9 +125,12 @@ def export_archive(
 ) -> Path:
     """Writes `chats` to `archive_path` as a `.graphlink` archive.
 
-    Each entry in `chats` is {"title", "data", "notes", "pins"} - the exact
-    shape backend/chat_library.py's own load_chat_row/load_notes_rows/
-    load_pins_rows already return, so the caller does no reshaping.
+    Each entry in `chats` is {"title", "data", "notes", "pins", "tags",
+    "favorite", "archived"} - the exact shape backend/chat_library.py's own
+    make_export_workspace._load_one already builds (title/data/notes/pins
+    from load_chat_row/load_notes_rows/load_pins_rows, tags/favorite/
+    archived from get_all_chats - see that closure's own REVIEW-FIX
+    comment), so the caller does no reshaping.
 
     Every payload is scrubbed on the way in. Assets are copied out of
     `live_assets` as real files; a ref the store has never seen is skipped
@@ -143,6 +150,16 @@ def export_archive(
                     "data": scrub(chat.get("data") or {}),
                     "notes": scrub(chat.get("notes") or []),
                     "pins": scrub(chat.get("pins") or []),
+                    # REVIEW-FIX: tags/favorite/archived used to be dropped
+                    # entirely on export, with no field in this format for
+                    # them to ever travel through - see this module's own
+                    # docstring FORMAT section. scrub() is applied to tags
+                    # the same as any other user-authored text; favorite/
+                    # archived are plain bools, which scrub() already passes
+                    # through non-string scalars untouched.
+                    "tags": scrub(chat.get("tags") or []),
+                    "favorite": bool(chat.get("favorite", False)),
+                    "archived": bool(chat.get("archived", False)),
                 }
                 member = f"{CHATS_PREFIX}{position}.json"
                 archive.writestr(member, json.dumps(payload, indent=2))
@@ -250,7 +267,13 @@ def import_archive(archive_path: Path, target_assets: AssetStore | None = None) 
     than stored under a name that lies about its contents. Returns the
     chat payloads for the caller to write; this module never touches the
     database itself, which keeps the "what does importing mean" decision
-    (new rows? merge? replace?) where it belongs."""
+    (new rows? merge? replace?) where it belongs.
+
+    REVIEW-FIX: tags/favorite/archived are defaulted here (empty list/
+    False) rather than left absent - an archive written before export_
+    archive carried these fields simply never has them, and a caller
+    reading `chat["tags"]` off an older archive's entry should not have to
+    special-case a KeyError to stay backward-compatible."""
     parsed = read_archive(archive_path)
 
     if target_assets is not None:
@@ -263,4 +286,9 @@ def import_archive(archive_path: Path, target_assets: AssetStore | None = None) 
                 continue
             target_assets.put(data)
 
-    return parsed["chats"]
+    chats = parsed["chats"]
+    for chat in chats:
+        chat.setdefault("tags", [])
+        chat.setdefault("favorite", False)
+        chat.setdefault("archived", False)
+    return chats

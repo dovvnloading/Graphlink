@@ -3491,6 +3491,36 @@ class TestExportWorkspaceIntent:
         assert '"Default"' in notifications.message  # the WORKSPACE name is quoted in the toast
         assert "1 graph" in notifications.message
 
+    def test_export_includes_tags_favorite_and_archived(self, db_path, tmp_path, monkeypatch):
+        # REVIEW-FIX regression: export_workspace's per-chat payload used to
+        # be hardcoded to {title, data, notes, pins} - tags/favorite/
+        # archived never rode along even though get_all_chats (already
+        # fetched to resolve graph_ids) carries all three.
+        workspace = create_workspace(db_path, "Tagged Workspace")
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "Tagged Graph", {"nodes": []}, [], [], workspace_id=workspace["id"],
+        )
+        set_graph_tags(db_path, chat_id, ["work", "urgent"])
+        set_graph_favorite(db_path, chat_id, True)
+        set_graph_archived(db_path, chat_id, True)
+
+        target = tmp_path / "tagged.graphlink"
+
+        async def _fake_pick_save_file(default_name, file_types=(), directory=""):
+            return str(target)
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", _fake_pick_save_file)
+        bus, _document, _notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+
+        archive = workspace_archive_module.read_archive(target)
+        chat = archive["chats"][0]
+        # get_all_chats returns each graph's tags already sorted (COLLATE
+        # NOCASE by tags.name) - see that function's own docstring.
+        assert chat["tags"] == ["urgent", "work"]
+        assert chat["favorite"] is True
+        assert chat["archived"] is True
+
     def test_seeds_the_dialog_with_a_sanitized_workspace_name(self, db_path, tmp_path, monkeypatch):
         workspace = create_workspace(db_path, "Client / Project #1")
         save_chat_atomically_row(
