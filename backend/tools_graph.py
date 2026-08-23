@@ -894,6 +894,20 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
             ),
             timeout=_agents_const("WATCHDOG_TIMEOUT_SECONDS"),
         )
+        # REVIEW-FIX: an ordinary user can delete node_id while the await
+        # above was in flight (remove_nodes has no special-casing for a
+        # chat node just because run_node has a pending request on it - see
+        # run_node_pending_code's own neighbourhood for the analogous
+        # pycoder case). add_chat_node below raises SceneError for a
+        # missing parent BY DESIGN (its own docstring) - uncaught, that
+        # would propagate out of handler() into ToolRegistry.invoke's
+        # generic `except Exception`, discarding a reply the model already
+        # paid for. Land it as a clean, expected tool error instead - the
+        # same graceful-no-op posture fail_pycoder_run's own silent no-op
+        # and intents_web_research.py's `if node_id not in document.nodes:
+        # return` already give the sibling cases of this identical race.
+        if node_id not in document.nodes:
+            return _error(f"Node {node_id!r} no longer exists - the reply was discarded.")
         x, y = _place_child(document, node_id)
 
         def mutator():
@@ -962,7 +976,19 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
                 timeout=_agents_const("WEB_RESEARCH_WATCHDOG_TIMEOUT_SECONDS"),
             )
         except ResearchFailure as exc:
-            document.fail_web_research_run(node_id, cancelled=token.cancelled, message=str(exc))
+            # REVIEW-FIX: node_id can be gone by the time this lands (a
+            # concurrent user delete - remove_nodes does not special-case a
+            # web_research node just because a run_node call has it
+            # pending). fail_web_research_run raises SceneError for a
+            # missing node BY DESIGN (its own docstring says the caller
+            # must check liveness first) - guard it here rather than
+            # letting that propagate out as an uncaught exception; the
+            # _error result below still reaches the model either way,
+            # mirroring _on_failure's own `if node_id not in document.
+            # nodes: return` in the dedicated WS intent (intents_web_
+            # research.py) for this identical race.
+            if node_id in document.nodes:
+                document.fail_web_research_run(node_id, cancelled=token.cancelled, message=str(exc))
             return _error(f"Research failed: {exc}")
         except RequestCancelled:
             # review-fix: this is a DIFFERENT class from api_provider's own
@@ -975,18 +1001,34 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
             # landed, leaving it wedged mid-run. Land it properly, then
             # re-raise as the type invoke() DOES special-case so Stop is
             # honored immediately instead of only at the loop's next
-            # cancel_event checkpoint.
-            document.fail_web_research_run(node_id, cancelled=True, message="Web research was cancelled.")
+            # cancel_event checkpoint. REVIEW-FIX: guarded for the same
+            # missing-node race as the ResearchFailure branch above - the
+            # re-raise must still happen unconditionally so Stop is
+            # honored, only the landing call is conditional.
+            if node_id in document.nodes:
+                document.fail_web_research_run(node_id, cancelled=True, message="Web research was cancelled.")
             raise RequestCancelledError("Web research was cancelled.")
         except asyncio.TimeoutError:
             token.cancel()
-            document.fail_web_research_run(
-                node_id, cancelled=False, message="Research timed out.",
-            )
+            # REVIEW-FIX: same missing-node race as the ResearchFailure
+            # branch above.
+            if node_id in document.nodes:
+                document.fail_web_research_run(
+                    node_id, cancelled=False, message="Research timed out.",
+                )
             return _error(f"Research on node {node_id!r} timed out.")
         finally:
             watcher.cancel()
-        document.complete_web_research_run(node_id, _research_result_wire(result))
+        # REVIEW-FIX: same missing-node race as the ResearchFailure branch
+        # above, on the success path. Unlike the chat/chart branches below
+        # (which CREATE a new node parented on node_id and so have nothing
+        # useful to return if that parent is gone), the research answer
+        # itself is already fully formed here - mirror _run_pycoder's own
+        # posture (complete_pycoder_run's silent no-op) rather than
+        # discarding a completed result the model already paid for: skip
+        # the landing call but still return it.
+        if node_id in document.nodes:
+            document.complete_web_research_run(node_id, _research_result_wire(result))
         return ToolResult(content=json.dumps({
             "node_id": node_id,
             "answer": result.answer_markdown[:_RUN_OUTPUT_EXCERPT_CHARS],
@@ -1030,6 +1072,16 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
             chart_data = canonicalize_chart_data(parsed, chart_type)
         except ChartDataError as exc:
             return _error(f"Chart generation produced invalid data: {exc}")
+        # REVIEW-FIX: node_id can be gone by the time this lands (same
+        # concurrent-delete race as _run_chat's own identical guard above -
+        # remove_nodes does not special-case a chat/note/document/code node
+        # just because run_node has it pending). add_chart_node below
+        # raises SceneError for a missing parent BY DESIGN - a chart with
+        # no source node to attach to is not a node this call can create at
+        # all, so there is nothing useful to land; fail cleanly instead of
+        # letting that SceneError propagate out of handler() uncaught.
+        if node_id not in document.nodes:
+            return _error(f"Node {node_id!r} no longer exists - the chart was discarded.")
         x, y = _place_child(document, node_id)
         chart_node, _command = document.record_command(
             "builderRunChart", "agent",
