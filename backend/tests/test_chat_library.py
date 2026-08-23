@@ -47,6 +47,7 @@ from backend.chat_library import (
     get_all_workspaces,
     get_workspace_default_model,
     load_chat_row,
+    load_chat_snapshot,
     load_notes_rows,
     load_pins_rows,
     register_chat_library,
@@ -1685,6 +1686,89 @@ def test_load_pins_rows_orders_by_sort_order_and_shape(db_path):
     assert [row["title"] for row in rows] == ["First", "Second"]
     assert rows[0]["position"] == {"x": 5.0, "y": 6.0}
     assert rows[0]["pin_id"] == "pin-a"
+
+
+# -- REVIEW-FIX: load_chat_snapshot - one shared connection/transaction for
+# -- the row/notes/pins reads make_load_chat's loadChat intent needs, closing
+# -- a torn-read gap the three independent load_chat_row/load_notes_rows/
+# -- load_pins_rows connections used to leave open (no existing test covered
+# -- this cross-call consistency at all before this fix).
+
+
+def test_load_chat_snapshot_reads_row_notes_and_pins_together(db_path):
+    chat_id = _insert_chat(db_path, "Snapshot", data=json.dumps({"nodes": []}))
+    _insert_note(db_path, chat_id, content="A note")
+    _insert_pin(db_path, chat_id, title="A pin")
+
+    row, notes_rows, pins_rows = load_chat_snapshot(db_path, chat_id)
+
+    assert row["title"] == "Snapshot"
+    assert len(notes_rows) == 1 and notes_rows[0]["content"] == "A note"
+    assert len(pins_rows) == 1 and pins_rows[0]["title"] == "A pin"
+
+
+def test_load_chat_snapshot_returns_none_row_and_empty_notes_pins_for_missing_id(db_path):
+    row, notes_rows, pins_rows = load_chat_snapshot(db_path, 999)
+    assert row is None
+    assert notes_rows == []
+    assert pins_rows == []
+
+
+def test_load_chat_snapshot_is_immune_to_a_concurrent_save_landing_mid_read(db_path, monkeypatch):
+    """Regression test for the torn-read finding: previously, load_chat_row/
+    load_notes_rows/load_pins_rows each opened and closed their OWN
+    connection, so a concurrent writer's real save_chat_atomically_row call
+    (a single atomic transaction) landing strictly BETWEEN two of those
+    three separate reads produced a torn combination - part of the pre-write
+    state, part of the post-write state. load_chat_snapshot now shares ONE
+    connection/transaction across all three reads, so the same concurrent
+    commit lands either entirely before or entirely after this call's own
+    WAL snapshot, never torn across it.
+
+    The race is simulated by monkeypatching the notes-read step to commit a
+    second, independent atomic save (via a fresh connection, standing in for
+    a different session) strictly between this call's row read (already
+    done by the time this runs) and its own notes/pins reads."""
+    chat_id, _ = save_chat_atomically_row(
+        db_path, None, "Before", {"nodes": []},
+        [{"content": "old note", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
+          "color": "#fff", "header_color": None, "is_system_prompt": False, "is_summary_note": False}],
+        [],
+    )
+
+    real_load_notes_rows_from_conn = chat_library_module._load_notes_rows_from_conn
+
+    def _load_notes_after_a_concurrent_save_lands(conn, cid):
+        # A different session's real, fully-committed atomic write - lands
+        # strictly between this call's already-done row read and this
+        # about-to-run notes read, exactly the gap the pre-fix three-
+        # separate-connections version left open.
+        save_chat_atomically_row(
+            db_path, chat_id, "After", {"nodes": []},
+            [{"content": "new note", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
+              "color": "#fff", "header_color": None, "is_system_prompt": False, "is_summary_note": False}],
+            [],
+        )
+        return real_load_notes_rows_from_conn(conn, cid)
+
+    monkeypatch.setattr(
+        chat_library_module, "_load_notes_rows_from_conn", _load_notes_after_a_concurrent_save_lands,
+    )
+
+    row, notes_rows, pins_rows = load_chat_snapshot(db_path, chat_id)
+
+    # This call's own snapshot was established at its FIRST read (the row
+    # itself), before the concurrent writer's commit - WAL's own snapshot
+    # isolation keeps that commit invisible for every read inside this same
+    # call, not just the first one.
+    assert row["title"] == "Before"
+    assert [n["content"] for n in notes_rows] == ["old note"]
+
+    # And the concurrent writer's commit really did land - a later, SEPARATE
+    # snapshot sees it, proving this isn't a stale cache masking the bug.
+    row_after, notes_after, _pins_after = load_chat_snapshot(db_path, chat_id)
+    assert row_after["title"] == "After"
+    assert [n["content"] for n in notes_after] == ["new note"]
 
 
 # -- R6.4: the loadChat intent -----------------------------------------------

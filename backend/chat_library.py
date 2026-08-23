@@ -1476,9 +1476,17 @@ def load_chat_row(db_path: Path, chat_id: int) -> dict[str, Any] | None:
     newChat(workspaceId=...). Fixed here, at the one place every load
     already reads this row, rather than only in the callers that needed it."""
     with contextlib.closing(_connect(db_path)) as conn, conn:
-        row = conn.execute(
-            "SELECT title, data, updated_at, workspace_id FROM graphs WHERE id = ?", (chat_id,)
-        ).fetchone()
+        return _load_chat_row_from_conn(conn, chat_id)
+
+
+def _load_chat_row_from_conn(conn: sqlite3.Connection, chat_id: int) -> dict[str, Any] | None:
+    """The actual SELECT behind load_chat_row, split out so
+    load_chat_snapshot below can run it on a connection/transaction it
+    already owns instead of load_chat_row opening (and committing) its own -
+    see load_chat_snapshot's own REVIEW-FIX docstring for why."""
+    row = conn.execute(
+        "SELECT title, data, updated_at, workspace_id FROM graphs WHERE id = ?", (chat_id,)
+    ).fetchone()
     if row is None:
         return None
     return {"title": row[0], "data": json.loads(row[1]), "updated_at": row[2], "workspace_id": row[3]}
@@ -1489,14 +1497,20 @@ def load_notes_rows(db_path: Path, chat_id: int) -> list[dict[str, Any]]:
     SELECT column list; shape matches what backend/session_load.py's
     _restore_notes expects (nested "position"/"size" dicts)."""
     with contextlib.closing(_connect(db_path)) as conn, conn:
-        rows = conn.execute(
-            """
-            SELECT content, position_x, position_y, width, height,
-                   color, header_color, is_system_prompt, is_summary_note, note_id
-            FROM notes WHERE chat_id = ?
-            """,
-            (chat_id,),
-        ).fetchall()
+        return _load_notes_rows_from_conn(conn, chat_id)
+
+
+def _load_notes_rows_from_conn(conn: sqlite3.Connection, chat_id: int) -> list[dict[str, Any]]:
+    """The actual SELECT behind load_notes_rows - see _load_chat_row_from_
+    conn's own docstring for why this is split out."""
+    rows = conn.execute(
+        """
+        SELECT content, position_x, position_y, width, height,
+               color, header_color, is_system_prompt, is_summary_note, note_id
+        FROM notes WHERE chat_id = ?
+        """,
+        (chat_id,),
+    ).fetchall()
     return [
         {
             "content": row[0],
@@ -1521,15 +1535,21 @@ def load_pins_rows(db_path: Path, chat_id: int) -> list[dict[str, Any]]:
     """Mirrors ChatDatabase.load_pins exactly, including its own
     sort_order-defaults-to-enumerate-index fallback for pre-migration rows."""
     with contextlib.closing(_connect(db_path)) as conn, conn:
-        rows = conn.execute(
-            """
-            SELECT pin_id, title, note, position_x, position_y,
-                   anchor_item_id, sort_order, created_at
-            FROM pins WHERE chat_id = ?
-            ORDER BY sort_order, id
-            """,
-            (chat_id,),
-        ).fetchall()
+        return _load_pins_rows_from_conn(conn, chat_id)
+
+
+def _load_pins_rows_from_conn(conn: sqlite3.Connection, chat_id: int) -> list[dict[str, Any]]:
+    """The actual SELECT behind load_pins_rows - see _load_chat_row_from_
+    conn's own docstring for why this is split out."""
+    rows = conn.execute(
+        """
+        SELECT pin_id, title, note, position_x, position_y,
+               anchor_item_id, sort_order, created_at
+        FROM pins WHERE chat_id = ?
+        ORDER BY sort_order, id
+        """,
+        (chat_id,),
+    ).fetchall()
     return [
         {
             "pin_id": row[0],
@@ -1542,6 +1562,40 @@ def load_pins_rows(db_path: Path, chat_id: int) -> list[dict[str, Any]]:
         }
         for index, row in enumerate(rows)
     ]
+
+
+def load_chat_snapshot(
+    db_path: Path, chat_id: int,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    """REVIEW-FIX: make_load_chat's loadChat intent used to read a chat's
+    row, notes, and pins through three independent connections/transactions
+    (load_chat_row, then load_notes_rows, then load_pins_rows), each on its
+    own asyncio.to_thread hop with a genuine event-loop yield in between - a
+    concurrent session's real save_chat_atomically_row call (a single
+    atomic delete-then-reinsert transaction) landing in one of those gaps
+    produced a torn read: part of what got restored reflecting the
+    pre-write state, part reflecting the post-write state. This function
+    gives all three reads ONE connection and ONE explicit transaction
+    instead, so they share a single WAL snapshot - the same consistency
+    guarantee save_chat_atomically_row's own single transaction already
+    gives its writes.
+
+    An explicit `BEGIN` is required here - a bare SELECT never opens an
+    implicit transaction under sqlite3's default legacy isolation_level
+    (only INSERT/UPDATE/DELETE/REPLACE do), so without it these three reads
+    would each still get their own independent autocommit snapshot even on
+    one shared connection, reproducing the exact bug this closes. See
+    graphlink_migrations.py's run_sqlite_migrations for the same fact
+    documented in detail for the DDL/PRAGMA case."""
+    with contextlib.closing(_connect(db_path)) as conn:
+        conn.execute("BEGIN")
+        try:
+            row = _load_chat_row_from_conn(conn, chat_id)
+            notes_rows = _load_notes_rows_from_conn(conn, chat_id)
+            pins_rows = _load_pins_rows_from_conn(conn, chat_id)
+        finally:
+            conn.commit()
+    return row, notes_rows, pins_rows
 
 
 def save_chat_atomically_row(
@@ -2087,15 +2141,18 @@ def make_load_chat(
         # them; a real running session always has both (see backend/app.py's
         # _configure_session ordering).
         try:
-            row = await asyncio.to_thread(load_chat_row, resolved_path, int(chat_id))
+            # REVIEW-FIX: row/notes/pins now come from ONE shared connection/
+            # transaction (load_chat_snapshot) instead of three independent
+            # ones - see that function's own docstring for the torn-read gap
+            # this closes (a concurrent session's save landing between two
+            # of the three separate reads used to combine pre-write and
+            # post-write state into a single restore).
+            row, notes_rows, pins_rows = await asyncio.to_thread(load_chat_snapshot, resolved_path, int(chat_id))
             if row is None:
                 if notifications is not None:
                     notifications.show("This chat could not be found. It may have already been deleted.", "error")
                     await bus.publish("notification")
                 return
-
-            notes_rows = await asyncio.to_thread(load_notes_rows, resolved_path, int(chat_id))
-            pins_rows = await asyncio.to_thread(load_pins_rows, resolved_path, int(chat_id))
 
             if canvas_document is None:
                 return
