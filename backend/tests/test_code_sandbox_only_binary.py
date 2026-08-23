@@ -562,6 +562,130 @@ class TestDirectReferenceRequirementsBypassOnlyBinary:
             "never executed"
         )
 
+class TestGuardDefeatingOptionLinesBypassOnlyBinary:
+    """SECURITY-FIX: option lines that are not package specifiers but that
+    DEFEAT (`--no-binary :all:`) or ROUTE AROUND (`-r`/`-c` nested files)
+    the --only-binary :all: guard. They sat on the generic option skip-list
+    and were waved straight through to pip."""
+
+    def test_no_binary_all_in_the_manifest_really_does_reverse_the_cli_flag(self, tmp_path, monkeypatch):
+        # The bypass itself, proven against real pip rather than assumed:
+        # with the pre-check disabled, a manifest carrying `--no-binary
+        # :all:` lets the hostile sdist's build_wheel() run even though
+        # --only-binary :all: is on the command line. (Same shape as
+        # TestDirectReferenceRequirementsBypassOnlyBinary's own proof.)
+        marker = tmp_path / "marker.txt"
+        sdist_path = _build_hostile_sdist(tmp_path, marker)
+        find_links_dir = tmp_path / "find_links"
+        find_links_dir.mkdir()
+        (find_links_dir / sdist_path.name).write_bytes(sdist_path.read_bytes())
+        sandbox = _make_sandbox_with_real_venv(tmp_path, "no-binary-bypass-proof")
+
+        from graphlink_plugins.code_sandbox import domain as sandbox_domain
+        monkeypatch.setattr(sandbox_domain, "_direct_reference_requirement_lines", lambda _text: [])
+
+        with pytest.raises(RuntimeError, match="Dependency installation failed"):
+            sandbox.sync_requirements(
+                f"hostile-pkg==0.0.1\n--no-binary :all:\n--no-index\n--find-links {find_links_dir.as_posix()}",
+                should_continue=lambda: True,
+            )
+        assert marker.exists(), (
+            "expected the hostile backend to RUN here - this test proves the "
+            "manifest's --no-binary :all: overrides the CLI --only-binary :all:, "
+            "which is the whole reason the pre-check must refuse that line"
+        )
+
+    def test_no_binary_all_in_the_manifest_is_refused_before_pip_runs(self, tmp_path):
+        marker = tmp_path / "marker.txt"
+        sdist_path = _build_hostile_sdist(tmp_path, marker)
+        find_links_dir = tmp_path / "find_links"
+        find_links_dir.mkdir()
+        (find_links_dir / sdist_path.name).write_bytes(sdist_path.read_bytes())
+        sandbox = _make_sandbox_with_real_venv(tmp_path, "no-binary-block-test")
+
+        with pytest.raises(RuntimeError, match="Dependency installation blocked"):
+            sandbox.sync_requirements(
+                f"hostile-pkg==0.0.1\n--no-binary :all:\n--no-index\n--find-links {find_links_dir.as_posix()}",
+                should_continue=lambda: True,
+            )
+        assert not marker.exists()
+
+    def test_a_nested_requirements_file_cannot_smuggle_a_direct_reference(self, tmp_path):
+        # The nested file's `pkg @ file://` line never passes through
+        # _direct_reference_requirement_lines - pip expands -r itself - so
+        # the `-r` line is what has to be refused.
+        marker = tmp_path / "marker.txt"
+        pkg_dir = tmp_path / "hostile_pkg_src"
+        pkg_dir.mkdir()
+        _write_hostile_backend(pkg_dir, marker)
+        nested = tmp_path / "nested-reqs.txt"
+        nested.write_text(f"hostile-pkg @ {pkg_dir.as_uri()}\n", encoding="utf-8")
+        sandbox = _make_sandbox_with_real_venv(tmp_path, "nested-r-block-test")
+
+        with pytest.raises(RuntimeError, match="Dependency installation blocked"):
+            sandbox.sync_requirements(
+                f"-r {nested.as_posix()}",
+                should_continue=lambda: True,
+            )
+        assert not marker.exists()
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "--no-binary :all:",
+            "--no-binary=hostile-pkg",
+            "-r other.txt",
+            "--requirement other.txt",
+            "-r https://example.invalid/reqs.txt",
+            "-c constraints.txt",
+            "--constraint=constraints.txt",
+            "--global-option=--evil",
+            "--install-option=--evil",
+            "--config-settings=x=y",
+            "--no-build-isolation",
+        ],
+    )
+    def test_each_guard_defeating_option_line_is_flagged(self, line):
+        from graphlink_plugins.code_sandbox.domain import _direct_reference_requirement_lines
+
+        assert _direct_reference_requirement_lines(f"requests==2.31.0\n{line}\n") == [line]
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "--no-index",
+            "--find-links ./wheels",
+            "--index-url https://pypi.org/simple",
+            "--extra-index-url https://pypi.org/simple",
+            "--only-binary :all:",
+            "--prefer-binary",
+            "--require-hashes",
+            "--pre",
+            "--no-deps",
+            "--trusted-host pypi.org",
+        ],
+    )
+    def test_wheel_source_selection_options_stay_allowed(self, line):
+        from graphlink_plugins.code_sandbox.domain import _direct_reference_requirement_lines
+
+        assert _direct_reference_requirement_lines(f"requests==2.31.0\n{line}\n") == []
+
+    def test_allow_source_builds_true_still_lets_no_binary_reach_pip(self, tmp_path, monkeypatch):
+        sandbox = VirtualEnvSandbox("no-binary-escalation-test")
+        sandbox.base_dir = tmp_path
+        sandbox.requirements_file = tmp_path / "requirements.txt"
+        sandbox.requirements_hash_file = tmp_path / ".requirements.sha256"
+        sandbox.venv_dir = tmp_path / "venv"
+        captured = {}
+        monkeypatch.setattr(sandbox, "_run_subprocess", lambda args, **kw: captured.setdefault("args", args) and ("", 0) or ("", 0))
+
+        sandbox.sync_requirements(
+            "requests==2.31.0\n--no-binary :all:", should_continue=lambda: True, allow_source_builds=True,
+        )
+        assert "args" in captured, "the explicit opt-in must still reach pip"
+
+
+class TestOrdinaryManifestsStillReachPip:
     def test_an_ordinary_pinned_manifest_is_not_flagged_and_still_reaches_pip(self, tmp_path, monkeypatch):
         # False-positive guard, in TestPipCommandIncludesTheFlags's own fast
         # (non-subprocess-executing) style: an everyday manifest - including
