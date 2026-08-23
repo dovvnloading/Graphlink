@@ -212,6 +212,34 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
       setSelectedPaths([]);
     }
   }, [data.gitlinkRepo, data.gitlinkBranch]);
+
+  // R5.3 post-review FIX 9: localRootDraft is, by the module doc's general
+  // policy, seeded once and never resynced - but Browse
+  // (data.onBrowseLocalRoot -> the native folder picker -> a fresh
+  // data.gitlinkLocalRoot prop pushed down through a new scene snapshot) is
+  // an externally-driven update that lands well after mount, and
+  // commitLocalRoot() always reads the local draft closure, never the prop
+  // itself. Without a resync, the very next blur of this field (clicking
+  // Build Context, the task-prompt textarea, anything else in the tab)
+  // silently sent the STALE pre-Browse value back to the server, reverting
+  // the folder the user just picked. Mirrors repoBranchRef's shape
+  // immediately above (a ref tracks the last-seen prop value; the effect
+  // only fires on an ACTUAL prop change, never on a bare re-render) but
+  // additionally skips the resync while the input is focused, so an
+  // unrelated scene push mid-type never clobbers what the user is actively
+  // typing - only a change that lands while the field is NOT being edited
+  // (exactly the Browse case) updates the draft.
+  const localRootRef = useRef(data.gitlinkLocalRoot);
+  const localRootFocusedRef = useRef(false);
+  useEffect(() => {
+    if (localRootRef.current !== data.gitlinkLocalRoot) {
+      localRootRef.current = data.gitlinkLocalRoot;
+      if (!localRootFocusedRef.current) {
+        setLocalRootDraft(data.gitlinkLocalRoot);
+      }
+    }
+  }, [data.gitlinkLocalRoot]);
+
   const [repoOptions, setRepoOptions] = useState<string[] | null>(null);
   const [repoOptionsLoading, setRepoOptionsLoading] = useState(false);
   const [repoOptionsError, setRepoOptionsError] = useState<string | null>(null);
@@ -454,7 +482,13 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                     className="gitlink-node-input"
                     value={localRootDraft}
                     onChange={(event) => setLocalRootDraft(event.target.value)}
-                    onBlur={commitLocalRoot}
+                    onFocus={() => {
+                      localRootFocusedRef.current = true;
+                    }}
+                    onBlur={() => {
+                      localRootFocusedRef.current = false;
+                      commitLocalRoot();
+                    }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter") {
                         event.preventDefault();

@@ -278,6 +278,51 @@ describe("GitlinkNodeView", () => {
     expect(data.onBrowseLocalRoot).toHaveBeenCalledOnce();
   });
 
+  it("Browse picking a new folder resyncs the Local root draft, and a later blur commits the NEW value (regression: stale draft used to revert the just-picked folder)", async () => {
+    const user = userEvent.setup();
+    const { data, rerenderWithData } = renderGitlinkNodeWithRerender({
+      gitlinkLocalRoot: "",
+    });
+
+    // Simulates the Browse flow: onBrowseLocalRoot -> the native picker ->
+    // a fresh scene snapshot carrying the newly-picked folder as a new
+    // gitlinkLocalRoot prop. The field itself was never touched/focused by
+    // the user here, mirroring a brand-new node where Browse is the first
+    // thing clicked.
+    rerenderWithData({ ...data, gitlinkLocalRoot: "C:/repos/picked-folder" });
+
+    const input = screen.getByRole("textbox", { name: "Local root" });
+    await waitFor(() => expect(input).toHaveValue("C:/repos/picked-folder"));
+
+    // Without the resync, commitLocalRoot() on blur would still read the
+    // stale pre-Browse draft ("") and send that back to the server,
+    // silently reverting the folder the user just picked.
+    await user.click(input);
+    await user.click(document.body);
+    expect(data.onSetLocalRoot).toHaveBeenCalledWith("C:/repos/picked-folder");
+  });
+
+  it("does not clobber in-progress typing in the Local root field when an unrelated prop update arrives while it is focused", async () => {
+    const user = userEvent.setup();
+    const { data, rerenderWithData } = renderGitlinkNodeWithRerender({
+      gitlinkLocalRoot: "C:/repos/original",
+    });
+
+    const input = screen.getByRole("textbox", { name: "Local root" }) as HTMLInputElement;
+    await user.click(input);
+    await user.type(input, "-edit");
+    expect(input.value).toBe("C:/repos/original-edit");
+
+    // An unrelated scene push (not the user's own Browse pick, not a
+    // commit) changes the prop while the field is still focused - the
+    // resync must skip it rather than stomp what the user is mid-typing.
+    rerenderWithData({ ...data, gitlinkLocalRoot: "C:/repos/somewhere-else" });
+    expect(input.value).toBe("C:/repos/original-edit");
+
+    await user.click(document.body);
+    expect(data.onSetLocalRoot).toHaveBeenCalledWith("C:/repos/original-edit");
+  });
+
   it("Import Repo Snapshot uses the current repo/branch draft field values", async () => {
     const user = userEvent.setup();
     const data = renderGitlinkNode();
@@ -783,7 +828,11 @@ describe("GitlinkNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
         </ReactFlowProvider>
       </OverlayProvider>,
     );
-    expect(lodVisibilityCalls.count).toBe(2);
+    // One render for the prop change itself, plus a second, chained render
+    // from the localRootDraft resync effect's setLocalRootDraft() call (see
+    // the Browse-resync regression test above) - the field is not focused
+    // here, so the effect always fires this second render.
+    expect(lodVisibilityCalls.count).toBe(3);
   });
 
   it("re-renders when a callback prop is rebound to a new closure (e.g. onDelete)", () => {
