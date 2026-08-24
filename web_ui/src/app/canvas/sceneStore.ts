@@ -897,6 +897,14 @@ export class SceneStore {
     this.transport.fireIntent("harness", "cancel", [requestId]);
   }
 
+  approveHarnessTool(requestId: string): void {
+    this.transport.fireIntent("harness", "approveTool", [requestId]);
+  }
+
+  denyHarnessTool(requestId: string): void {
+    this.transport.fireIntent("harness", "denyTool", [requestId]);
+  }
+
   // R5.2: real Artifact/Drafter plugin - sendArtifactMessage appends a real
   // user instruction AND triggers ArtifactAgent.get_response(current_artifact,
   // history) for an existing artifact node; cancelArtifactRequest targets it

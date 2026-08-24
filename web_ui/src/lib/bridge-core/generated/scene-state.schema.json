@@ -390,6 +390,15 @@
             },
             "type": "array"
           },
+          "harnessApprovalSummary": {
+            "type": "string"
+          },
+          "harnessApprovalToolName": {
+            "type": "string"
+          },
+          "harnessAwaitingApproval": {
+            "type": "boolean"
+          },
           "harnessGoal": {
             "type": "string"
           },
@@ -875,6 +884,9 @@
           "harnessStatusDetail",
           "harnessRunId",
           "harnessActivity",
+          "harnessAwaitingApproval",
+          "harnessApprovalToolName",
+          "harnessApprovalSummary",
           "harnessMaxTurns",
           "harnessSpentTurns",
           "harnessSpentTokens",

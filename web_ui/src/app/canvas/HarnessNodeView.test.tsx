@@ -14,6 +14,9 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessStatusDetail: "",
     harnessRunId: "run-1",
     harnessActivity: [],
+    harnessAwaitingApproval: false,
+    harnessApprovalToolName: "",
+    harnessApprovalSummary: "",
     harnessMaxTurns: 16,
     harnessSpentTurns: 3,
     harnessSpentTokens: 4321,
@@ -23,6 +26,8 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onDelete: vi.fn(),
     onSend: vi.fn(),
     onCancel: vi.fn(),
+    onApproveTool: vi.fn(),
+    onDenyTool: vi.fn(),
     ...overrides,
   };
 }
@@ -91,6 +96,22 @@ describe("HarnessNodeView", () => {
     );
     expect(screen.getByRole("alert")).toHaveTextContent("rate limited");
     expect(screen.getByLabelText("Follow-up message")).toBeInTheDocument();
+  });
+
+  it("shows the approval panel with the verbatim summary and fires approve/deny", async () => {
+    const user = userEvent.setup();
+    const data = makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "shell.exec",
+      harnessApprovalSummary: "shell.exec\npython build.py --all",
+    });
+    renderHarness(data);
+    expect(screen.getByText("shell.exec")).toBeInTheDocument();
+    expect(screen.getByText(/python build\.py --all/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    expect(data.onApproveTool).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Deny" }));
+    expect(data.onDenyTool).toHaveBeenCalledTimes(1);
   });
 
   it("renders activity rows with error styling on failures", () => {

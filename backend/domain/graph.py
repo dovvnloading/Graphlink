@@ -2548,6 +2548,15 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
                 ]
                 if isinstance(n.state, HarnessState) else []
             ),
+            "harnessAwaitingApproval": (
+                n.state.harness_awaiting_approval if isinstance(n.state, HarnessState) else False
+            ),
+            "harnessApprovalToolName": (
+                n.state.harness_approval_tool_name if isinstance(n.state, HarnessState) else ""
+            ),
+            "harnessApprovalSummary": (
+                n.state.harness_approval_summary if isinstance(n.state, HarnessState) else ""
+            ),
             "harnessMaxTurns": n.state.harness_max_turns if isinstance(n.state, HarnessState) else 0,
             "harnessSpentTurns": (
                 n.state.harness_spent_turns if isinstance(n.state, HarnessState) else 0

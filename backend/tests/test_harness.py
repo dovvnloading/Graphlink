@@ -315,6 +315,211 @@ class TestLoop:
         assert "fs.read" in offered[0]
 
 
+class TestWriteTools:
+    def _registry(self):
+        registry = ToolRegistry()
+        register_harness_fs_tools(registry)
+        return registry
+
+    def _write_ctx(self, workspace_id="ws1", approve=True):
+        from backend.tools import FS_WRITE
+
+        decisions = []
+
+        async def approver(call_):
+            decisions.append(call_.name)
+            return approve
+
+        ctx = HarnessRunContext(
+            granted_scopes=frozenset({FS_READ, FS_WRITE}),
+            request_approval=approver,
+            harness_workspace_id=workspace_id,
+        )
+        return ctx, decisions
+
+    def test_write_then_edit_roundtrip_prompts_once_each(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        registry = self._registry()
+        ctx, decisions = self._write_ctx()
+
+        async def go():
+            wrote = await registry.invoke(call("1", "fs.write", path="out/a.txt", content="alpha beta"), ctx)
+            edited = await registry.invoke(
+                call("2", "fs.edit", path="out/a.txt", old_string="beta", new_string="gamma"), ctx,
+            )
+            return wrote, edited
+
+        wrote, edited = asyncio.run(go())
+        assert not wrote.is_error and not edited.is_error
+        assert (ws / "out" / "a.txt").read_text(encoding="utf-8") == "alpha gamma"
+        assert decisions == ["fs.write", "fs.edit"]
+
+    def test_denied_write_leaves_disk_untouched(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        registry = self._registry()
+        ctx, _ = self._write_ctx(approve=False)
+
+        async def go():
+            return await registry.invoke(call("1", "fs.write", path="a.txt", content="x"), ctx)
+
+        result = asyncio.run(go())
+        assert result.is_error and "denied" in result.content
+        assert not (ws / "a.txt").exists()
+
+    def test_edit_refuses_zero_and_ambiguous_matches(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        (ws / "a.txt").write_text("dup dup", encoding="utf-8")
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+
+        async def go():
+            missing = await registry.invoke(
+                call("1", "fs.edit", path="a.txt", old_string="absent", new_string="x"), ctx,
+            )
+            ambiguous = await registry.invoke(
+                call("2", "fs.edit", path="a.txt", old_string="dup", new_string="x"), ctx,
+            )
+            return missing, ambiguous
+
+        missing, ambiguous = asyncio.run(go())
+        assert missing.is_error and "not found" in missing.content
+        assert ambiguous.is_error and "2 times" in ambiguous.content
+        assert (ws / "a.txt").read_text(encoding="utf-8") == "dup dup"
+
+    def test_write_escape_is_refused(self, workspace_root):
+        ensure_workspace("ws1")
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+
+        async def go():
+            return await registry.invoke(call("1", "fs.write", path="../evil.txt", content="x"), ctx)
+
+        result = asyncio.run(go())
+        assert result.is_error and "outside" in result.content
+
+
+class TestShellTool:
+    def _setup(self, workspace_id="ws1", approve=True):
+        from backend.harness.tools_shell import register_harness_shell_tool
+        from backend.tools import CODE_EXECUTE
+
+        registry = ToolRegistry()
+        register_harness_shell_tool(registry)
+
+        async def approver(call_):
+            return approve
+
+        ctx = HarnessRunContext(
+            granted_scopes=frozenset({CODE_EXECUTE}),
+            request_approval=approver,
+            harness_workspace_id=workspace_id,
+        )
+        return registry, ctx
+
+    def test_command_runs_in_the_workspace_and_reports_exit_code(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        (ws / "hello.txt").write_text("shell target", encoding="utf-8")
+        registry, ctx = self._setup()
+
+        async def go():
+            return await registry.invoke(
+                call("1", "shell.exec", command="python -c \"print(open('hello.txt').read())\""), ctx,
+            )
+
+        result = asyncio.run(go())
+        assert not result.is_error, result.content
+        assert "exit code 0" in result.content and "shell target" in result.content
+
+    def test_env_is_allowlisted_not_inherited(self, workspace_root, monkeypatch):
+        monkeypatch.setenv("GRAPHLINK_FAKE_API_KEY", "sk-secret")
+        ensure_workspace("ws1")
+        registry, ctx = self._setup()
+
+        async def go():
+            return await registry.invoke(
+                call("1", "shell.exec",
+                     command="python -c \"import os; print(os.environ.get('GRAPHLINK_FAKE_API_KEY', 'ABSENT'))\""),
+                ctx,
+            )
+
+        result = asyncio.run(go())
+        assert "ABSENT" in result.content and "sk-secret" not in result.content
+
+    def test_nonzero_exit_is_an_error_result_with_output(self, workspace_root):
+        ensure_workspace("ws1")
+        registry, ctx = self._setup()
+
+        async def go():
+            return await registry.invoke(
+                call("1", "shell.exec", command="python -c \"import sys; print('boom'); sys.exit(3)\""), ctx,
+            )
+
+        result = asyncio.run(go())
+        assert result.is_error and "exit code 3" in result.content and "boom" in result.content
+
+    def test_denied_command_never_spawns(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        registry, ctx = self._setup(approve=False)
+
+        async def go():
+            return await registry.invoke(
+                call("1", "shell.exec", command="python -c \"open('proof.txt','w').write('ran')\""), ctx,
+            )
+
+        result = asyncio.run(go())
+        assert result.is_error and "denied" in result.content
+        assert not (ws / "proof.txt").exists()
+
+
+class TestApprovalFlow:
+    def test_loop_parks_on_the_node_fields_and_approve_resumes(self, workspace_root, monkeypatch):
+        from backend.harness.tools_shell import register_harness_shell_tool
+
+        document = SceneDocument()
+        node = document.add_harness_node(0, 0, "run a command")
+        registry = ToolRegistry()
+        register_harness_fs_tools(registry)
+        register_harness_shell_tool(registry)
+        dispatcher = LoopDispatcher()
+        bus = FakeBus()
+        ensure_workspace(node.state.harness_workspace_id)
+        scripted_turns(monkeypatch, [
+            {"content": "", "tool_calls": [call("t1", "shell.exec", command="python -c \"print('hi')\"")]},
+            {"content": "done"},
+        ])
+        cancel_event = threading.Event()
+        handle = dispatcher._runs.claim("harness", node_id=node.id, cancel_event=cancel_event)
+        seen_summaries = []
+
+        async def run():
+            try:
+                await run_harness(
+                    document=document, dispatcher=dispatcher, registry=registry,
+                    bus=bus, notifications=None, harness_node_id=node.id,
+                    user_text="go", request_id=handle.request_id, handle=handle,
+                    cancel_event=cancel_event,
+                )
+            finally:
+                dispatcher._runs.release(handle.request_id)
+
+        async def main():
+            task = asyncio.create_task(run())
+            while not task.done():
+                future = handle.approval_future
+                if node.state.harness_awaiting_approval and future is not None and not future.done():
+                    seen_summaries.append(node.state.harness_approval_summary)
+                    future.set_result(True)
+                await asyncio.sleep(0)
+            await task
+
+        asyncio.run(main())
+        assert node.state.harness_status == "done"
+        # The disclosed summary carries the verbatim command, untruncated.
+        assert seen_summaries and "print('hi')" in seen_summaries[0]
+        assert node.state.harness_awaiting_approval is False
+        assert node.state.harness_approval_summary == ""
+
+
 class TestPersistence:
     def test_non_terminal_status_normalizes_to_interrupted(self):
         document = SceneDocument()

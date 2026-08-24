@@ -706,8 +706,10 @@ class AgentDispatcher:
         registry = self.builder_tool_registry(document)
         if not getattr(self, "_harness_fs_registered", False):
             from backend.harness.tools_fs import register_harness_fs_tools
+            from backend.harness.tools_shell import register_harness_shell_tool
 
             register_harness_fs_tools(registry)
+            register_harness_shell_tool(registry)
             self._harness_fs_registered = True
         return registry
 
@@ -745,6 +747,9 @@ class AgentDispatcher:
             if node.state.harness_status == "running":
                 node.state.harness_status = "stopped"
                 node.state.harness_status_detail = "Stopped by user."
+            node.state.harness_awaiting_approval = False
+            node.state.harness_approval_tool_name = ""
+            node.state.harness_approval_summary = ""
             if node.pending_request_id == handle.request_id:
                 node.pending_request_id = None
             await bus.publish("scene")
@@ -774,10 +779,12 @@ class AgentDispatcher:
         return request_id
 
     def cancel_harness(self, request_id: str) -> None:
-        """Stop for a harness run - the standard release-on-cancel. (No
-        parked approval to deny in H1: every offered tool is `auto`; the
-        deny-first line joins this method alongside H2's approval
-        surface.)"""
+        """Stop for a harness run: deny any parked approval first (cancel
+        means deny - the pycoder/builder precedent), then the standard
+        release-on-cancel."""
+        handle = self._runs.get(request_id)
+        if handle is not None and handle.approval_future is not None and not handle.approval_future.done():
+            handle.approval_future.set_result(False)
         self._runs.cancel(request_id, kind="harness")
 
     def get_pycoder_repl(self, node_id: str, repl_id: str) -> PythonREPL:
@@ -1009,7 +1016,10 @@ class AgentDispatcher:
         mid-EXECUTION (past the approval gate) previously left pycoder/
         code_sandbox's cancel_event untripped entirely, since neither
         lived in the dict cancel_all() used to walk."""
-        self._runs.cancel_all_pending_approvals(("pycoder", "code_sandbox"))
+        # H2: "harness" joins for the same reason the original two are
+        # here - its approval pause has no timeout by design, so a
+        # last-tab disconnect would otherwise park it forever.
+        self._runs.cancel_all_pending_approvals(("pycoder", "code_sandbox", "harness"))
 
     def cancel_gitlink(self, request_id: str) -> bool:
         """kind="gitlink_run": ADR-002 stage 2.4f - see RunRegistry.cancel's
