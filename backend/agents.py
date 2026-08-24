@@ -446,7 +446,12 @@ class AgentDispatcher:
             registry = ToolRegistry()
             register_graph_tools(registry, document)
             register_run_node_tool(registry, document, self)
-            register_knowledge_tools(registry)
+            # SECURITY-FIX: document scopes knowledge.search to THIS
+            # session's own current workspace - see that tool's own
+            # docstring (backend/tools_knowledge.py) for why an unscoped
+            # search tool handed to the model is a cross-workspace read
+            # primitive for prompt-injected content.
+            register_knowledge_tools(registry, document=document)
             register_builder_control_tools(registry)
             self._register_configured_mcp_tools(registry)
             self._register_plugin_tools(registry, document)
