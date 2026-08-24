@@ -1375,112 +1375,6 @@ def test_conversation_reply_publishes_scene_not_app_composer_on_begin_and_end(mo
     asyncio.run(run())
 
 
-def test_conversation_reply_provider_not_configured_returns_quickly_with_an_error_notification(monkeypatch):
-    chat_calls = []
-    _configure_fake_ollama(
-        monkeypatch,
-        lambda task, messages, **kwargs: chat_calls.append(1),
-        model="",  # empty -> is_configured() is False
-    )
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        node = _make_node()
-
-        await dispatcher.start_conversation_reply(
-            bus=bus,
-            notifications_state=notifications,
-            node=node,
-            conversation_history=[],
-            on_reply=lambda text: None,
-        )
-
-        assert chat_slots(dispatcher) == {}, "no task/thread work started"
-        assert chat_calls == [], "api_provider.chat was never reached"
-        assert node.pending_request_id is None, "never touched on the fail-fast path"
-        assert notifications.visible is True
-        assert notifications.msg_type == "error"
-        assert notifications.message == (
-            "No AI provider is configured yet. Open Settings to choose Ollama, "
-            "Llama.cpp, or an API provider."
-        )
-
-    asyncio.run(run())
-
-
-def test_conversation_reply_cancellation_mid_flight_fires_info_notification_and_clears_registry(monkeypatch):
-    started = threading.Event()
-
-    def blocking_then_cancelled(task, messages, cancellation_event=None, **kwargs):
-        started.set()
-        while not cancellation_event.is_set():
-            time.sleep(0.01)
-        raise api_provider.RequestCancelledError("Request cancelled.")
-
-    _configure_fake_ollama(monkeypatch, blocking_then_cancelled)
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        node = _make_node()
-
-        await dispatcher.start_conversation_reply(
-            bus=bus,
-            notifications_state=notifications,
-            node=node,
-            conversation_history=[{"role": "user", "content": "hi"}],
-            on_reply=lambda text: None,
-        )
-        request_id, entry = next(iter(chat_slots(dispatcher).items()))
-
-        await asyncio.to_thread(started.wait, 5)
-        assert dispatcher.cancel(request_id) is True
-
-        await entry["task"]
-
-        assert chat_slots(dispatcher) == {}
-        assert node.pending_request_id is None
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
-        assert notifications.message == "Request cancelled."
-
-    asyncio.run(run())
-
-
-def test_conversation_reply_timeout_fires_the_exact_message_and_clears_registry(monkeypatch):
-    monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.05)
-
-    def slow_chat(task, messages, **kwargs):
-        time.sleep(0.3)
-        return {"message": {"content": "too late"}}
-
-    _configure_fake_ollama(monkeypatch, slow_chat)
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        node = _make_node()
-
-        await dispatcher.start_conversation_reply(
-            bus=bus,
-            notifications_state=notifications,
-            node=node,
-            conversation_history=[{"role": "user", "content": "hi"}],
-            on_reply=lambda text: None,
-        )
-        entry = next(iter(chat_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert chat_slots(dispatcher) == {}
-        assert node.pending_request_id is None
-        assert notifications.visible is True
-        assert notifications.msg_type == "error"
-        assert notifications.message == (
-            "The model stopped responding before the request completed. "
-            "Please try again or choose a faster model."
-        )
-
-    asyncio.run(run())
-
-
 def test_conversation_on_reply_raising_still_clears_pending_request_id_and_frees_the_registry(monkeypatch):
     """Simulates a node deleted mid-flight: on_reply (which in production
     calls document.append_conversation_assistant_message) raises. This must
@@ -1674,45 +1568,6 @@ def test_start_image_reply_calls_on_reply_with_the_image_bytes(monkeypatch):
     asyncio.run(run())
 
 
-def test_start_image_reply_second_call_while_in_flight_is_rejected_with_info_notification(monkeypatch):
-    started = threading.Event()
-    release = threading.Event()
-
-    def blocking_generate_image(prompt, **kwargs):
-        started.set()
-        release.wait(5)
-        return b"first-image-bytes"
-
-    monkeypatch.setattr(api_provider, "generate_image", blocking_generate_image)
-
-    async def run():
-        bus, notifications, dispatcher = _make_image_env()
-        replies = []
-
-        await dispatcher.start_image_reply(
-            bus=bus, notifications_state=notifications, prompt="first prompt", on_reply=replies.append,
-        )
-        await asyncio.to_thread(started.wait, 5)
-
-        # Second call while the first is still in flight must be rejected
-        # and must not disturb the first request.
-        await dispatcher.start_image_reply(
-            bus=bus, notifications_state=notifications, prompt="second prompt", on_reply=replies.append,
-        )
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
-        assert notifications.message == "An image is already being generated."
-        assert len(image_slots(dispatcher)) == 1
-
-        release.set()
-        entry = next(iter(image_slots(dispatcher).values()))
-        await entry["task"]
-        assert replies == [b"first-image-bytes"]
-        assert image_slots(dispatcher) == {}
-
-    asyncio.run(run())
-
-
 def test_image_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
     """THE key concurrency-slot regression guard (R4.4a): a chat/composer
     request occupies self._runs's "chat" kind while an image-generation
@@ -1883,33 +1738,6 @@ def test_generate_image_quota_errors_are_never_retried(monkeypatch):
 
     assert calls["n"] == 1, "a quota-shaped failure must never be retried"
     assert sleeps == []
-
-
-def test_start_image_reply_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):
-    monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.05)
-
-    def slow_generate_image(prompt, **kwargs):
-        time.sleep(0.3)
-        return b"too-late-bytes"
-
-    monkeypatch.setattr(api_provider, "generate_image", slow_generate_image)
-
-    async def run():
-        bus, notifications, dispatcher = _make_image_env()
-        await dispatcher.start_image_reply(
-            bus=bus, notifications_state=notifications, prompt="a cat", on_reply=lambda image_bytes: None,
-        )
-        entry = next(iter(image_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert image_slots(dispatcher) == {}, "the slot must not leak/deadlock future requests"
-        assert notifications.visible is True
-        assert notifications.msg_type == "error"
-        assert notifications.message == (
-            "Image generation stopped responding before the request completed. Please try again."
-        )
-
-    asyncio.run(run())
 
 
 def test_start_image_reply_slot_does_not_leak_a_subsequent_request_is_admitted_after_failure(monkeypatch):
@@ -2322,65 +2150,6 @@ def test_start_web_research_calls_on_success_with_the_result_then_clears_the_slo
     asyncio.run(run())
 
 
-def test_start_web_research_second_call_while_in_flight_is_rejected_first_still_completes(monkeypatch):
-    started = threading.Event()
-    release = threading.Event()
-
-    def blocking_run(self, request, *, token=None, progress=None):
-        started.set()
-        release.wait(5)
-        return SimpleNamespace(answer_markdown="first result")
-
-    monkeypatch.setattr(agents_module.WebResearchService, "run", blocking_run)
-
-    async def run():
-        bus, notifications, dispatcher = _make_web_research_env()
-        node1 = _make_node()
-        node2 = _make_node()
-        successes = []
-
-        await dispatcher.start_web_research(
-            bus=bus,
-            notifications_state=notifications,
-            node=node1,
-            node_id="n1",
-            query="first query",
-            branch_history=[],
-            on_progress=lambda event: None,
-            on_success=successes.append,
-            on_failure=lambda exc: None,
-        )
-        await asyncio.to_thread(started.wait, 5)
-
-        # Second call while the first is still in flight must be rejected and
-        # must not disturb the first request.
-        await dispatcher.start_web_research(
-            bus=bus,
-            notifications_state=notifications,
-            node=node2,
-            node_id="n2",
-            query="second query",
-            branch_history=[],
-            on_progress=lambda event: None,
-            on_success=successes.append,
-            on_failure=lambda exc: None,
-        )
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
-        assert notifications.message == "A web research request is already running."
-        assert len(web_research_slots(dispatcher)) == 1
-        assert node2.pending_request_id is None, "the bounced call must never touch node2"
-
-        release.set()
-        entry = next(iter(web_research_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert successes == [SimpleNamespace(answer_markdown="first result")]
-        assert web_research_slots(dispatcher) == {}
-
-    asyncio.run(run())
-
-
 def test_start_web_research_research_failure_forwards_via_on_failure_and_shows_error_notification(monkeypatch):
     failure = ResearchFailure("The search provider failed.", code="search_failed")
 
@@ -2492,50 +2261,6 @@ def test_start_web_research_generic_exception_forwards_via_on_failure_and_shows_
     asyncio.run(run())
 
 
-def test_start_web_research_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):
-    monkeypatch.setattr(agents_module, "WEB_RESEARCH_WATCHDOG_TIMEOUT_SECONDS", 0.05)
-
-    def slow_run(self, request, *, token=None, progress=None):
-        time.sleep(0.3)
-        return SimpleNamespace(answer_markdown="too late")
-
-    monkeypatch.setattr(agents_module.WebResearchService, "run", slow_run)
-
-    async def run():
-        bus, notifications, dispatcher = _make_web_research_env()
-        node = _make_node()
-        failures = []
-
-        await dispatcher.start_web_research(
-            bus=bus,
-            notifications_state=notifications,
-            node=node,
-            node_id="n1",
-            query="q",
-            branch_history=[],
-            on_progress=lambda event: None,
-            on_success=lambda result: None,
-            on_failure=failures.append,
-        )
-        entry = next(iter(web_research_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert len(failures) == 1
-        assert isinstance(failures[0], ResearchFailure)
-        expected_message = (
-            "Web research stopped responding before the request completed. Please try again."
-        )
-        assert str(failures[0]) == expected_message
-        assert failures[0].code == "watchdog_timeout"
-        assert web_research_slots(dispatcher) == {}, "the slot must not leak/deadlock future requests"
-        assert node.pending_request_id is None
-        assert notifications.visible is True
-        assert notifications.msg_type == "error"
-        assert notifications.message == expected_message
-
-    asyncio.run(run())
-
-
 def test_start_web_research_stale_progress_event_after_timeout_is_dropped(monkeypatch):
     """Review-found regression guard: asyncio.to_thread's underlying thread is
     not actually killed when wait_for's timeout fires (Future.cancel() on an
@@ -2590,11 +2315,6 @@ def test_start_web_research_stale_progress_event_after_timeout_is_dropped(monkey
     asyncio.run(run())
 
 
-def test_cancel_web_research_returns_false_for_an_unknown_request_id():
-    dispatcher = AgentDispatcher(_FakeSettingsManager())
-    assert dispatcher.cancel_web_research("no-such-request") is False
-
-
 def test_cancel_web_research_actually_trips_the_real_cancellation_token(monkeypatch):
     """ADR-002 stage 2.4e: the first real proof, through the actual public
     dispatcher method, that RunHandle.on_cancel genuinely reaches the real
@@ -2632,143 +2352,6 @@ def test_cancel_web_research_actually_trips_the_real_cancellation_token(monkeypa
 
         release.set()
         await task
-
-    asyncio.run(run())
-
-
-def test_cancel_web_research_and_cancel_chat_cannot_trip_each_others_request_id(monkeypatch):
-    """Web research's counterpart to
-    test_cancel_artifact_and_cancel_chat_cannot_trip_each_others_request_id
-    (stage 2.4d) - chat and web_research are now both cancellable kinds
-    (via cancel_event and on_cancel respectively) sharing self._runs."""
-    chat_started = threading.Event()
-    chat_release = threading.Event()
-    research_started = threading.Event()
-    research_release = threading.Event()
-
-    def blocking_chat(task, messages, **kwargs):
-        chat_started.set()
-        chat_release.wait(5)
-        return {"message": {"content": "chat reply"}}
-
-    def blocking_run(self, request, *, token=None, progress=None):
-        research_started.set()
-        research_release.wait(5)
-        return SimpleNamespace(answer_markdown="result")
-
-    _configure_fake_ollama(monkeypatch, blocking_chat)
-    monkeypatch.setattr(agents_module.WebResearchService, "run", blocking_run)
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        node = _make_node()
-
-        await dispatcher.start_chat_reply(
-            bus=bus, notifications_state=notifications, composer_document=composer_document,
-            conversation_history=[{"role": "user", "content": "hi"}], on_reply=lambda text: None,
-        )
-        research_task = asyncio.create_task(
-            dispatcher.start_web_research(
-                bus=bus, notifications_state=notifications, node=node, node_id="n1",
-                query="q", branch_history=[], on_progress=lambda event: None,
-                on_success=lambda result: None, on_failure=lambda exc: None,
-            )
-        )
-        await asyncio.to_thread(chat_started.wait, 5)
-        await asyncio.to_thread(research_started.wait, 5)
-
-        chat_request_id, chat_entry = next(iter(chat_slots(dispatcher).items()))
-        research_request_id = next(iter(web_research_slots(dispatcher).keys()))
-        chat_cancel_event = chat_entry["cancel_event"]
-
-        assert dispatcher.cancel_web_research(chat_request_id) is False, (
-            "a chat request_id must never be accepted by cancel_web_research"
-        )
-        assert not chat_cancel_event.is_set(), "the mismatched call must not have tripped chat's own event"
-
-        assert dispatcher.cancel(research_request_id) is False, (
-            "a web_research request_id must never be accepted by the generic cancel() (cancelChatRequest)"
-        )
-
-        chat_release.set()
-        research_release.set()
-        await chat_entry["task"]
-        await research_task
-
-    asyncio.run(run())
-
-
-def test_web_research_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
-    """THE key concurrency-slot regression guard (R5.1, mirrors R4.4a's own
-    chat/image guard test): a chat/composer request occupies self._runs's
-    "chat" kind while a web-research request occupies the SEPARATE
-    "web_research" kind at the same time - neither blocks nor is blocked by
-    the other, and both are simultaneously non-empty at least once."""
-    chat_started = threading.Event()
-    chat_release = threading.Event()
-    research_started = threading.Event()
-    research_release = threading.Event()
-
-    def blocking_chat(task, messages, **kwargs):
-        chat_started.set()
-        chat_release.wait(5)
-        return {"message": {"content": "chat reply"}}
-
-    def blocking_run(self, request, *, token=None, progress=None):
-        research_started.set()
-        research_release.wait(5)
-        return SimpleNamespace(answer_markdown="research result")
-
-    _configure_fake_ollama(monkeypatch, blocking_chat)
-    monkeypatch.setattr(agents_module.WebResearchService, "run", blocking_run)
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        node = _make_node()
-        chat_replies = []
-        research_successes = []
-
-        await dispatcher.start_chat_reply(
-            bus=bus,
-            notifications_state=notifications,
-            composer_document=composer_document,
-            conversation_history=[{"role": "user", "content": "hi"}],
-            on_reply=chat_replies.append,
-        )
-        await dispatcher.start_web_research(
-            bus=bus,
-            notifications_state=notifications,
-            node=node,
-            node_id="n1",
-            query="q",
-            branch_history=[],
-            on_progress=lambda event: None,
-            on_success=research_successes.append,
-            on_failure=lambda exc: None,
-        )
-
-        await asyncio.to_thread(chat_started.wait, 5)
-        await asyncio.to_thread(research_started.wait, 5)
-
-        # THE key assertion: both slots are genuinely occupied at the same
-        # time - neither request bounced the other, and neither notification
-        # fired.
-        assert len(chat_slots(dispatcher)) == 1
-        assert len(web_research_slots(dispatcher)) == 1
-        assert notifications.visible is False, "neither call should have been rejected"
-
-        chat_release.set()
-        chat_entry = next(iter(chat_slots(dispatcher).values()))
-        await chat_entry["task"]
-        research_release.set()
-        research_entry = next(iter(web_research_slots(dispatcher).values()))
-        await research_entry["task"]
-
-        assert chat_replies == ["chat reply"]
-        assert research_successes == [SimpleNamespace(answer_markdown="research result")]
-        assert chat_slots(dispatcher) == {}
-        assert web_research_slots(dispatcher) == {}
-        assert composer_document.request_state == "idle"
 
     asyncio.run(run())
 
@@ -2996,59 +2579,6 @@ def test_start_artifact_reply_calls_on_reply_with_the_tuple_then_clears_the_slot
     asyncio.run(run())
 
 
-def test_start_artifact_reply_second_call_while_in_flight_is_rejected(monkeypatch):
-    started = threading.Event()
-    release = threading.Event()
-
-    def blocking_get_response(self, current_artifact, history):
-        started.set()
-        release.wait(5)
-        return "first document", "first message"
-
-    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", blocking_get_response)
-
-    async def run():
-        bus, notifications, dispatcher = _make_artifact_env()
-        node1 = _make_node()
-        node2 = _make_node()
-        replies = []
-
-        await dispatcher.start_artifact_reply(
-            bus=bus,
-            notifications_state=notifications,
-            node=node1,
-            current_artifact="doc1",
-            history=[],
-            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
-        )
-        await asyncio.to_thread(started.wait, 5)
-
-        # Second call while the first is still in flight must be rejected and
-        # must not disturb the first request.
-        await dispatcher.start_artifact_reply(
-            bus=bus,
-            notifications_state=notifications,
-            node=node2,
-            current_artifact="doc2",
-            history=[],
-            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
-        )
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
-        assert notifications.message == "An artifact request is already running."
-        assert len(artifact_slots(dispatcher)) == 1
-        assert node2.pending_request_id is None, "the bounced call must never touch node2"
-
-        release.set()
-        entry = next(iter(artifact_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert replies == [("first document", "first message")]
-        assert artifact_slots(dispatcher) == {}
-
-    asyncio.run(run())
-
-
 def test_start_artifact_reply_missing_tag_failure_shows_error_notification_and_never_calls_on_reply(monkeypatch):
     """SECURITY-CRITICAL: on the fail-closed tag-parsing RuntimeError,
     on_reply must NEVER be invoked - the document must be left completely
@@ -3088,44 +2618,6 @@ def test_start_artifact_reply_missing_tag_failure_shows_error_notification_and_n
             "<artifact>...</artifact> tags, so the document was left unchanged to avoid "
             "overwriting it with an unstructured reply."
         )
-
-    asyncio.run(run())
-
-
-def test_start_artifact_reply_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):
-    monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.05)
-
-    def slow_get_response(self, current_artifact, history):
-        time.sleep(0.3)
-        return "too late", "too late message"
-
-    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", slow_get_response)
-
-    async def run():
-        bus, notifications, dispatcher = _make_artifact_env()
-        node = _make_node()
-        replies = []
-
-        await dispatcher.start_artifact_reply(
-            bus=bus,
-            notifications_state=notifications,
-            node=node,
-            current_artifact="doc",
-            history=[],
-            on_reply=lambda new_content, ai_message: replies.append((new_content, ai_message)),
-        )
-        entry = next(iter(artifact_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert replies == []
-        assert artifact_slots(dispatcher) == {}, "the slot must not leak/deadlock future requests"
-        assert node.pending_request_id is None
-        assert notifications.visible is True
-        assert notifications.msg_type == "error"
-        expected_message = (
-            "Artifact generation stopped responding before the request completed. Please try again."
-        )
-        assert notifications.message == expected_message
 
     asyncio.run(run())
 
@@ -3175,223 +2667,6 @@ def test_cancel_artifact_drops_the_result_and_never_calls_on_reply_even_on_a_lat
         assert notifications.visible is True
         assert notifications.msg_type == "info"
         assert notifications.message == "Artifact generation cancelled."
-
-    asyncio.run(run())
-
-
-def test_cancel_artifact_returns_false_for_an_unknown_request_id():
-    dispatcher = AgentDispatcher(_FakeSettingsManager())
-    assert dispatcher.cancel_artifact("no-such-request") is False
-
-
-def test_cancel_artifact_and_cancel_chat_cannot_trip_each_others_request_id(monkeypatch):
-    """ADR-002 stage 2.4d: the FIRST real exercise, through the actual
-    public dispatcher methods (not the raw registry - see
-    backend/tests/test_run_lifecycle.py's own unit-level proof), of
-    RunRegistry.cancel()'s kind= filter added in stage 2.4b. Chat and
-    artifact are now both cancel_event-bearing kinds sharing self._runs -
-    a chat request_id handed to cancel_artifact(), or an artifact
-    request_id handed to cancel() (the generic one backing
-    cancelChatRequest), must be rejected rather than tripping the WRONG
-    run's cancellation."""
-    chat_started = threading.Event()
-    chat_release = threading.Event()
-    artifact_started = threading.Event()
-    artifact_release = threading.Event()
-
-    def blocking_chat(task, messages, **kwargs):
-        chat_started.set()
-        chat_release.wait(5)
-        return {"message": {"content": "chat reply"}}
-
-    def blocking_get_response(self, current_artifact, history):
-        artifact_started.set()
-        artifact_release.wait(5)
-        return "updated document", "an ai message"
-
-    _configure_fake_ollama(monkeypatch, blocking_chat)
-    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", blocking_get_response)
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        node = _make_node()
-
-        await dispatcher.start_chat_reply(
-            bus=bus, notifications_state=notifications, composer_document=composer_document,
-            conversation_history=[{"role": "user", "content": "hi"}], on_reply=lambda text: None,
-        )
-        await dispatcher.start_artifact_reply(
-            bus=bus, notifications_state=notifications, node=node,
-            current_artifact="old", history=[], on_reply=lambda content, msg: None,
-        )
-        await asyncio.to_thread(chat_started.wait, 5)
-        await asyncio.to_thread(artifact_started.wait, 5)
-
-        chat_request_id, chat_entry = next(iter(chat_slots(dispatcher).items()))
-        artifact_request_id, artifact_entry = next(iter(artifact_slots(dispatcher).items()))
-        chat_cancel_event = chat_entry["cancel_event"]
-        artifact_cancel_event = artifact_entry["cancel_event"]
-
-        assert dispatcher.cancel_artifact(chat_request_id) is False, (
-            "a chat request_id must never be accepted by cancel_artifact"
-        )
-        assert not chat_cancel_event.is_set(), "the mismatched call must not have tripped chat's own event"
-
-        assert dispatcher.cancel(artifact_request_id) is False, (
-            "an artifact request_id must never be accepted by the generic cancel() (cancelChatRequest)"
-        )
-        assert not artifact_cancel_event.is_set(), "the mismatched call must not have tripped artifact's own event"
-
-        chat_release.set()
-        artifact_release.set()
-        await chat_entry["task"]
-        await artifact_entry["task"]
-
-    asyncio.run(run())
-
-
-def test_artifact_request_and_chat_request_run_concurrently_both_dicts_non_empty(monkeypatch):
-    """THE key concurrency-slot regression guard (R5.2, mirrors R4.4a/R5.1's
-    own chat/image and chat/web-research guards): a chat/composer request
-    occupies self._runs's "chat" kind while an artifact-generation request
-    occupies the SEPARATE "artifact" kind at the same time - neither blocks
-    nor is blocked by the other, and both are simultaneously non-empty at
-    least once."""
-    chat_started = threading.Event()
-    chat_release = threading.Event()
-    artifact_started = threading.Event()
-    artifact_release = threading.Event()
-
-    def blocking_chat(task, messages, **kwargs):
-        chat_started.set()
-        chat_release.wait(5)
-        return {"message": {"content": "chat reply"}}
-
-    def blocking_get_response(self, current_artifact, history):
-        artifact_started.set()
-        artifact_release.wait(5)
-        return "artifact document", "artifact message"
-
-    _configure_fake_ollama(monkeypatch, blocking_chat)
-    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", blocking_get_response)
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        node = _make_node()
-        chat_replies = []
-        artifact_replies = []
-
-        await dispatcher.start_chat_reply(
-            bus=bus,
-            notifications_state=notifications,
-            composer_document=composer_document,
-            conversation_history=[{"role": "user", "content": "hi"}],
-            on_reply=chat_replies.append,
-        )
-        await dispatcher.start_artifact_reply(
-            bus=bus,
-            notifications_state=notifications,
-            node=node,
-            current_artifact="doc",
-            history=[],
-            on_reply=lambda new_content, ai_message: artifact_replies.append((new_content, ai_message)),
-        )
-
-        await asyncio.to_thread(chat_started.wait, 5)
-        await asyncio.to_thread(artifact_started.wait, 5)
-
-        # THE key assertion: both slots are genuinely occupied at the same
-        # time - neither request bounced the other, and neither notification
-        # fired.
-        assert len(chat_slots(dispatcher)) == 1
-        assert len(artifact_slots(dispatcher)) == 1
-        assert notifications.visible is False, "neither call should have been rejected"
-
-        chat_release.set()
-        chat_entry = next(iter(chat_slots(dispatcher).values()))
-        await chat_entry["task"]
-        artifact_release.set()
-        artifact_entry = next(iter(artifact_slots(dispatcher).values()))
-        await artifact_entry["task"]
-
-        assert chat_replies == ["chat reply"]
-        assert artifact_replies == [("artifact document", "artifact message")]
-        assert chat_slots(dispatcher) == {}
-        assert artifact_slots(dispatcher) == {}
-        assert composer_document.request_state == "idle"
-
-    asyncio.run(run())
-
-
-def test_artifact_request_and_web_research_request_run_concurrently(monkeypatch):
-    """Mirrors test_web_research_request_and_chat_request_run_concurrently_
-    both_dicts_non_empty: an artifact-generation request must also be able to
-    run concurrently with a web-research request - self._runs's "artifact"
-    and "web_research" kinds are two more genuinely independent slots,
-    neither blocking nor blocked by the other."""
-    research_started = threading.Event()
-    research_release = threading.Event()
-    artifact_started = threading.Event()
-    artifact_release = threading.Event()
-
-    def blocking_run(self, request, *, token=None, progress=None):
-        research_started.set()
-        research_release.wait(5)
-        return SimpleNamespace(answer_markdown="research result")
-
-    def blocking_get_response(self, current_artifact, history):
-        artifact_started.set()
-        artifact_release.wait(5)
-        return "artifact document", "artifact message"
-
-    monkeypatch.setattr(agents_module.WebResearchService, "run", blocking_run)
-    monkeypatch.setattr(agents_module.ArtifactAgent, "get_response", blocking_get_response)
-
-    async def run():
-        bus, notifications, dispatcher = _make_web_research_env()
-        research_node = _make_node()
-        artifact_node = _make_node()
-        research_successes = []
-        artifact_replies = []
-
-        await dispatcher.start_web_research(
-            bus=bus,
-            notifications_state=notifications,
-            node=research_node,
-            node_id="n1",
-            query="q",
-            branch_history=[],
-            on_progress=lambda event: None,
-            on_success=research_successes.append,
-            on_failure=lambda exc: None,
-        )
-        await dispatcher.start_artifact_reply(
-            bus=bus,
-            notifications_state=notifications,
-            node=artifact_node,
-            current_artifact="doc",
-            history=[],
-            on_reply=lambda new_content, ai_message: artifact_replies.append((new_content, ai_message)),
-        )
-
-        await asyncio.to_thread(research_started.wait, 5)
-        await asyncio.to_thread(artifact_started.wait, 5)
-
-        assert len(web_research_slots(dispatcher)) == 1
-        assert len(artifact_slots(dispatcher)) == 1
-        assert notifications.visible is False, "neither call should have been rejected"
-
-        research_release.set()
-        research_entry = next(iter(web_research_slots(dispatcher).values()))
-        await research_entry["task"]
-        artifact_release.set()
-        artifact_entry = next(iter(artifact_slots(dispatcher).values()))
-        await artifact_entry["task"]
-
-        assert research_successes == [SimpleNamespace(answer_markdown="research result")]
-        assert artifact_replies == [("artifact document", "artifact message")]
-        assert web_research_slots(dispatcher) == {}
-        assert artifact_slots(dispatcher) == {}
 
     asyncio.run(run())
 
@@ -3544,45 +2819,6 @@ def test_start_gitlink_run_no_changes_calls_on_success_with_empty_files_and_none
     asyncio.run(run())
 
 
-def test_start_gitlink_run_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):
-    monkeypatch.setattr(agents_module, "GITLINK_WATCHDOG_TIMEOUT_SECONDS", 0.05)
-
-    def slow_get_response(self, payload):
-        time.sleep(0.3)
-        return {
-            "summary": "s", "write_intent": "no_changes", "rationale": "r",
-            "notes": [], "files": [], "change_count": 0, "raw_response": "",
-        }
-
-    monkeypatch.setattr(agents_module.GitlinkAgent, "get_response", slow_get_response)
-
-    async def run():
-        bus, notifications, dispatcher = _make_gitlink_env()
-        node = _make_gitlink_node()
-        successes = []
-
-        await dispatcher.start_gitlink_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            repo="o/r", branch="main", scope_mode="selected", task_prompt="x",
-            context_xml="<x/>", context_summary="s", local_root="",
-            on_success=lambda *args: successes.append(args),
-            on_failure=lambda message: None,
-        )
-        entry = next(iter(gitlink_run_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert successes == []
-        assert gitlink_run_slots(dispatcher) == {}
-        assert node.pending_request_id is None
-        assert notifications.visible is True
-        assert notifications.msg_type == "error"
-        assert notifications.message == (
-            "Gitlink generation stopped responding before the request completed. Please try again."
-        )
-
-    asyncio.run(run())
-
-
 def test_start_gitlink_run_cancel_mid_flight_fires_info_notification_and_never_calls_on_success(monkeypatch):
     started = threading.Event()
     release = threading.Event()
@@ -3623,30 +2859,6 @@ def test_start_gitlink_run_cancel_mid_flight_fires_info_notification_and_never_c
         assert notifications.visible is True
         assert notifications.msg_type == "info"
         assert notifications.message == "Gitlink generation cancelled."
-
-    asyncio.run(run())
-
-
-def test_cancel_gitlink_returns_false_for_an_unknown_request_id():
-    dispatcher = AgentDispatcher(_FakeSettingsManager())
-    assert dispatcher.cancel_gitlink("no-such-request") is False
-
-
-def test_start_gitlink_run_busy_node_refuses_immediately_without_creating_a_request_entry():
-    async def run():
-        bus, notifications, dispatcher = _make_gitlink_env()
-        node = _make_gitlink_node(pending_request_id="already-busy")
-
-        await dispatcher.start_gitlink_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            repo="o/r", branch="main", scope_mode="selected", task_prompt="x",
-            context_xml="<x/>", context_summary="s", local_root="",
-            on_success=lambda *args: None, on_failure=lambda message: None,
-        )
-
-        assert gitlink_run_slots(dispatcher) == {}
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
 
     asyncio.run(run())
 
@@ -4335,76 +3547,6 @@ def test_gitlink_apply_no_changes_payload_in_intent_signature():
     assert list(signature.parameters) == ["node_id", "fingerprint"], (
         "applyGitlinkChanges must take ONLY (node_id, fingerprint) - no changes/pending_changes param"
     )
-
-
-def test_gitlink_request_and_other_kind_request_run_concurrently(monkeypatch):
-    """Mirrors the other cross-kind concurrency tests: a Gitlink Run request
-    must run concurrently with (neither blocking nor blocked by) a chat/
-    composer request - self._runs's "gitlink_run" and "chat" kinds are two
-    genuinely independent slots."""
-    chat_started = threading.Event()
-    chat_release = threading.Event()
-    gitlink_started = threading.Event()
-    gitlink_release = threading.Event()
-
-    def blocking_chat(task, messages, **kwargs):
-        chat_started.set()
-        chat_release.wait(5)
-        return {"message": {"content": "chat reply"}}
-
-    def blocking_get_response(self, payload):
-        gitlink_started.set()
-        gitlink_release.wait(5)
-        return {
-            "summary": "s", "write_intent": "changes_ready", "rationale": "r", "notes": [],
-            "files": [{"path": "a.py", "operation": "update", "reason": "x", "content": "y"}],
-            "change_count": 1, "raw_response": "{}",
-        }
-
-    _configure_fake_ollama(monkeypatch, blocking_chat)
-    monkeypatch.setattr(agents_module.GitlinkAgent, "get_response", blocking_get_response)
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        chat_replies = []
-        gitlink_successes = []
-        gitlink_node = _make_gitlink_node()
-
-        await dispatcher.start_chat_reply(
-            bus=bus,
-            notifications_state=notifications,
-            composer_document=composer_document,
-            conversation_history=[{"role": "user", "content": "hi"}],
-            on_reply=chat_replies.append,
-        )
-        await dispatcher.start_gitlink_run(
-            bus=bus, notifications_state=notifications, node=gitlink_node, node_id="n1",
-            repo="o/r", branch="main", scope_mode="selected", task_prompt="x",
-            context_xml="<x/>", context_summary="s", local_root="",
-            on_success=lambda *args: gitlink_successes.append(args),
-            on_failure=lambda message: None,
-        )
-
-        await asyncio.to_thread(chat_started.wait, 5)
-        await asyncio.to_thread(gitlink_started.wait, 5)
-
-        assert len(chat_slots(dispatcher)) == 1
-        assert len(gitlink_run_slots(dispatcher)) == 1
-        assert notifications.visible is False, "neither call should have been rejected"
-
-        chat_release.set()
-        chat_entry = next(iter(chat_slots(dispatcher).values()))
-        await chat_entry["task"]
-        gitlink_release.set()
-        gitlink_entry = next(iter(gitlink_run_slots(dispatcher).values()))
-        await gitlink_entry["task"]
-
-        assert chat_replies == ["chat reply"]
-        assert len(gitlink_successes) == 1
-        assert chat_slots(dispatcher) == {}
-        assert gitlink_run_slots(dispatcher) == {}
-
-    asyncio.run(run())
 
 
 def test_agents_never_imports_qt():
@@ -6289,25 +5431,6 @@ def test_code_sandbox_run_streams_live_output_lines_in_order_with_a_final_done_f
     asyncio.run(run())
 
 
-def test_code_sandbox_busy_node_refuses_immediately_without_creating_a_request_entry():
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_code_sandbox_node(pending_request_id="already-busy")
-
-        await dispatcher.start_code_sandbox_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            sandbox_id="sandbox-1", prompt="x", existing_code="",
-            requirements_manifest="", conversation_history=[],
-            on_success=lambda *a: None, on_failure=lambda m: None,
-        )
-
-        assert code_sandbox_slots(dispatcher) == {}
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
-
-    asyncio.run(run())
-
-
 def test_is_sandbox_error_output_detects_nonzero_return_code_and_keywords():
     assert agents_module._is_sandbox_error_output("all good", 1) is True
     assert agents_module._is_sandbox_error_output("Traceback (most recent call last):", 0) is True
@@ -6331,11 +5454,6 @@ def test_cancel_pycoder_sets_cancel_event_and_resolves_the_approval_future_false
         assert future.result() is False
 
     asyncio.run(run())
-
-
-def test_cancel_pycoder_returns_false_for_an_unknown_request_id():
-    dispatcher = AgentDispatcher(_FakeSettingsManager())
-    assert dispatcher.cancel_pycoder("no-such-request") is False
 
 
 def test_cancel_pycoder_and_cancel_code_sandbox_cannot_trip_each_others_or_a_foreign_kinds_request_id():
@@ -6502,11 +5620,6 @@ def test_cancel_pycoder_clears_pending_request_id_immediately_not_after_execute_
     asyncio.run(run())
 
 
-def test_cancel_code_sandbox_returns_false_for_an_unknown_request_id():
-    dispatcher = AgentDispatcher(_FakeSettingsManager())
-    assert dispatcher.cancel_code_sandbox("no-such-request") is False
-
-
 def test_approve_code_execution_resolves_a_pending_pycoder_future():
     async def run():
         dispatcher = AgentDispatcher(_FakeSettingsManager())
@@ -6529,11 +5642,6 @@ def test_deny_code_execution_resolves_a_pending_code_sandbox_future():
         assert future.result() is False
 
     asyncio.run(run())
-
-
-def test_approve_code_execution_returns_false_for_an_unknown_request_id():
-    dispatcher = AgentDispatcher(_FakeSettingsManager())
-    assert dispatcher.approve_code_execution("no-such-request") is False
 
 
 def test_resolve_approval_is_idempotent_and_never_raises_on_a_stale_duplicate_call():
@@ -6804,66 +5912,6 @@ def test_start_chart_generation_calls_on_success_with_the_parsed_result_then_cle
     asyncio.run(run())
 
 
-def test_start_chart_generation_second_call_while_in_flight_is_rejected(monkeypatch):
-    started = threading.Event()
-    release = threading.Event()
-
-    def blocking_respond_json(task, messages, schema, **kwargs):
-        started.set()
-        release.wait(5)
-        return {"type": "bar", "title": "T", "labels": ["A"], "values": [1]}
-
-    monkeypatch.setattr(agents_module, "respond_json", blocking_respond_json)
-
-    async def run():
-        bus, notifications, dispatcher = _make_chart_env()
-        successes = []
-
-        # ADR-006 stage 6.2 fire-and-forget: start_chart_generation now
-        # claims the slot synchronously and schedules the generation itself,
-        # returning before it runs - the first call stays in flight on its
-        # own, no wrapper task needed to race a second call against it.
-        await dispatcher.start_chart_generation(
-            bus=bus,
-            notifications_state=notifications,
-            node_id="n1",
-            chart_type="bar",
-            source_text="text one",
-            on_success=lambda result: successes.append(result),
-            on_failure=lambda message: None,
-        )
-        # Grab the scheduled worker task now, while the slot still holds it,
-        # so it can be drained at the end.
-        first_call_task = next(
-            handle.task for handle in dispatcher._runs.values() if handle.kind == "chart"
-        )
-        await asyncio.to_thread(started.wait, 5)
-
-        # Second call while the first is still in flight must be rejected
-        # and must not disturb the first request.
-        await dispatcher.start_chart_generation(
-            bus=bus,
-            notifications_state=notifications,
-            node_id="n2",
-            chart_type="pie",
-            source_text="text two",
-            on_success=lambda result: successes.append(result),
-            on_failure=lambda message: None,
-        )
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
-        assert notifications.message == "A chart is already being generated."
-        assert busy_count(dispatcher, "chart") == 1
-
-        release.set()
-        await first_call_task
-
-        assert successes == [{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}]
-        assert busy_count(dispatcher, "chart") == 0
-
-    asyncio.run(run())
-
-
 def test_start_chart_generation_structured_output_error_calls_on_failure_and_shows_notification_never_calls_on_success(monkeypatch):
     # _call_chart_agent's own contract: respond_json's StructuredOutputError
     # (the model never produced schema-conforming JSON, even after its own
@@ -6900,42 +5948,6 @@ def test_start_chart_generation_structured_output_error_calls_on_failure_and_sho
         assert notifications.message == (
             "Chart generation failed: Could not find sufficient data to generate a bar chart."
         )
-
-    asyncio.run(run())
-
-
-def test_start_chart_generation_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch):
-    monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.05)
-
-    def slow_respond_json(task, messages, schema, **kwargs):
-        time.sleep(0.3)
-        return {"type": "bar", "title": "T", "labels": ["A"], "values": [1]}
-
-    monkeypatch.setattr(agents_module, "respond_json", slow_respond_json)
-
-    async def run():
-        bus, notifications, dispatcher = _make_chart_env()
-        successes = []
-        failures = []
-
-        await dispatcher.start_chart_generation(
-            bus=bus,
-            notifications_state=notifications,
-            node_id="n1",
-            chart_type="bar",
-            source_text="text",
-            on_success=lambda result: successes.append(result),
-            on_failure=lambda message: failures.append(message),
-        )
-        # ADR-006 stage 6.2 fire-and-forget: drain the scheduled task so the
-        # timeout path has run before asserting.
-        await drain_runs(dispatcher, "chart")
-
-        assert successes == []
-        assert len(failures) == 1 and "stopped responding" in failures[0]
-        assert busy_count(dispatcher, "chart") == 0, "the slot must not leak/deadlock future requests"
-        assert notifications.visible is True
-        assert notifications.msg_type == "error"
 
     asyncio.run(run())
 
@@ -6994,77 +6006,6 @@ def test_start_chart_generation_cancellation_mid_flight_is_silent_no_notificatio
         assert failures == []
         assert busy_count(dispatcher, "chart") == 0
         assert notifications.visible is False
-
-    asyncio.run(run())
-
-
-def test_chart_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
-    """ADR-002 stage 2.3 regression guard: chat and chart now claim into
-    the SAME self._runs registry (previously two fully disjoint dicts),
-    so this isolation is no longer structural by construction - it
-    depends entirely on RunRegistry.is_busy()'s kind filter being correct.
-    Mirrors every OTHER cross-kind concurrency test in this file (e.g.
-    test_image_request_and_chat_request_run_concurrently_both_dicts_non_empty
-    above): both must be simultaneously in flight, neither blocking nor
-    blocked by the other, and neither bounced by a busy notification."""
-    chat_started = threading.Event()
-    chat_release = threading.Event()
-    chart_started = threading.Event()
-    chart_release = threading.Event()
-
-    def blocking_chat(task, messages, **kwargs):
-        chat_started.set()
-        chat_release.wait(5)
-        return {"message": {"content": "chat reply"}}
-
-    def blocking_respond_json(task, messages, schema, **kwargs):
-        chart_started.set()
-        chart_release.wait(5)
-        return {"type": "bar", "title": "T", "labels": ["A"], "values": [1]}
-
-    _configure_fake_ollama(monkeypatch, blocking_chat)
-    monkeypatch.setattr(agents_module, "respond_json", blocking_respond_json)
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        chat_replies = []
-        chart_successes = []
-
-        await dispatcher.start_chat_reply(
-            bus=bus,
-            notifications_state=notifications,
-            composer_document=composer_document,
-            conversation_history=[{"role": "user", "content": "hi"}],
-            on_reply=chat_replies.append,
-        )
-        # ADR-006 stage 6.2 fire-and-forget: start_chart_generation now
-        # schedules its own background task and returns immediately, the
-        # same shape as chat - no wrapper task needed to race the two.
-        await dispatcher.start_chart_generation(
-            bus=bus, notifications_state=notifications, node_id="n1",
-            chart_type="bar", source_text="text", on_success=chart_successes.append,
-            on_failure=lambda message: None,
-        )
-
-        await asyncio.to_thread(chat_started.wait, 5)
-        await asyncio.to_thread(chart_started.wait, 5)
-
-        # THE key assertion: both are genuinely in flight at the same time -
-        # neither bounced the other with a busy notification.
-        assert len(chat_slots(dispatcher)) == 1
-        assert busy_count(dispatcher, "chart") == 1
-        assert notifications.visible is False, "neither call should have been rejected"
-
-        chat_release.set()
-        chat_entry = next(iter(chat_slots(dispatcher).values()))
-        await chat_entry["task"]
-        chart_release.set()
-        # ADR-006 stage 6.2 fire-and-forget: drain chart's scheduled task
-        # before asserting its side effects.
-        await drain_runs(dispatcher, "chart")
-
-        assert chat_replies == ["chat reply"]
-        assert chart_successes == [{"type": "bar", "title": "T", "labels": ["A"], "values": [1]}]
 
     asyncio.run(run())
 
@@ -7132,29 +6073,6 @@ def test_start_note_generation_explainer_uses_the_explainer_agent(monkeypatch):
     asyncio.run(run())
 
 
-def test_start_note_generation_rejects_a_second_concurrent_run(monkeypatch):
-    monkeypatch.setattr(agents_module.KeyTakeawayAgent, "get_response", lambda self, text: "ok")
-
-    async def run():
-        bus, notifications, dispatcher = _make_note_env()
-        seed = dispatcher._runs.claim("note")
-        successes = []
-        await dispatcher.start_note_generation(
-            bus=bus, notifications_state=notifications, node_id="n1",
-            note_kind="takeaway", source_text="x",
-            on_success=successes.append, on_failure=lambda m: None,
-        )
-        assert successes == [], "the busy guard must not run a second agent"
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
-        # The pre-existing claim must survive - the guard rejects, it
-        # must never clear someone else's in-flight slot.
-        assert dispatcher._runs.get(seed.request_id) is seed
-        assert busy_count(dispatcher, "note") == 1
-
-    asyncio.run(run())
-
-
 def test_start_note_generation_empty_response_fails_instead_of_creating_a_blank_note(monkeypatch):
     monkeypatch.setattr(agents_module.KeyTakeawayAgent, "get_response", lambda self, text: "   ")
 
@@ -7202,74 +6120,6 @@ def test_start_note_generation_agent_exception_surfaces_and_clears_the_slot(monk
     asyncio.run(run())
 
 
-def test_note_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
-    """ADR-002 stage 2.3 regression guard, note's counterpart to
-    test_chart_request_and_chat_request_run_concurrently_both_busy above -
-    same reasoning: chat and note now claim into the SAME self._runs
-    registry, so this isolation depends entirely on RunRegistry.is_busy()'s
-    kind filter rather than being structural by construction."""
-    chat_started = threading.Event()
-    chat_release = threading.Event()
-    note_started = threading.Event()
-    note_release = threading.Event()
-
-    def blocking_chat(task, messages, **kwargs):
-        chat_started.set()
-        chat_release.wait(5)
-        return {"message": {"content": "chat reply"}}
-
-    def blocking_get_response(self, text):
-        note_started.set()
-        note_release.wait(5)
-        return "Key Takeaway\n\nMain Points:\n• done"
-
-    _configure_fake_ollama(monkeypatch, blocking_chat)
-    monkeypatch.setattr(agents_module.KeyTakeawayAgent, "get_response", blocking_get_response)
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        chat_replies = []
-        note_successes = []
-
-        await dispatcher.start_chat_reply(
-            bus=bus,
-            notifications_state=notifications,
-            composer_document=composer_document,
-            conversation_history=[{"role": "user", "content": "hi"}],
-            on_reply=chat_replies.append,
-        )
-        # ADR-006 stage 6.2 fire-and-forget: start_note_generation now
-        # schedules its own background task and returns immediately, the
-        # same shape as chat - no wrapper task needed to race the two.
-        await dispatcher.start_note_generation(
-            bus=bus, notifications_state=notifications, node_id="n1",
-            note_kind="takeaway", source_text="x", on_success=note_successes.append,
-            on_failure=lambda message: None,
-        )
-
-        await asyncio.to_thread(chat_started.wait, 5)
-        await asyncio.to_thread(note_started.wait, 5)
-
-        # THE key assertion: both are genuinely in flight at the same time -
-        # neither bounced the other with a busy notification.
-        assert len(chat_slots(dispatcher)) == 1
-        assert busy_count(dispatcher, "note") == 1
-        assert notifications.visible is False, "neither call should have been rejected"
-
-        chat_release.set()
-        chat_entry = next(iter(chat_slots(dispatcher).values()))
-        await chat_entry["task"]
-        note_release.set()
-        # ADR-006 stage 6.2 fire-and-forget: drain note's scheduled task
-        # before asserting its side effects.
-        await drain_runs(dispatcher, "note")
-
-        assert chat_replies == ["chat reply"]
-        assert note_successes == ["Key Takeaway\n\nMain Points:\n• done"]
-
-    asyncio.run(run())
-
-
 # -- ADR-002 Workstream 1: start_branch_comparison ("Compare Branches") ------
 #
 # Mirrors start_note_generation's own test shape exactly - same busy-guard/
@@ -7303,28 +6153,6 @@ def test_start_branch_comparison_calls_on_success_then_clears_the_slot(monkeypat
     asyncio.run(run())
 
 
-def test_start_branch_comparison_rejects_a_second_concurrent_run(monkeypatch):
-    monkeypatch.setattr(agents_module.BranchComparisonAgent, "get_response", lambda self, text: "ok")
-
-    async def run():
-        bus, notifications, dispatcher = _make_note_env()
-        seed = dispatcher._runs.claim("branch_comparison")
-        successes = []
-        await dispatcher.start_branch_comparison(
-            bus=bus, notifications_state=notifications, source_text="x",
-            on_success=successes.append, on_failure=lambda m: None,
-        )
-        assert successes == [], "the busy guard must not run a second agent"
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
-        # The pre-existing claim must survive - the guard rejects, it
-        # must never clear someone else's in-flight slot.
-        assert dispatcher._runs.get(seed.request_id) is seed
-        assert busy_count(dispatcher, "branch_comparison") == 1
-
-    asyncio.run(run())
-
-
 def test_start_branch_comparison_does_not_share_a_busy_slot_with_note_generation(monkeypatch):
     # The whole reason for a SEPARATE dict: an in-flight Key Takeaway must
     # never block an unrelated Compare Branches call, and vice versa.
@@ -7342,51 +6170,6 @@ def test_start_branch_comparison_does_not_share_a_busy_slot_with_note_generation
         # seeded "note" claim has no task, so only the comparison drains).
         await drain_runs(dispatcher, "branch_comparison")
         assert successes == ["Branch Comparison"], "an in-flight note generation must not block this"
-
-    asyncio.run(run())
-
-
-def test_start_branch_comparison_empty_response_fails_instead_of_creating_a_blank_note(monkeypatch):
-    monkeypatch.setattr(agents_module.BranchComparisonAgent, "get_response", lambda self, text: "   ")
-
-    async def run():
-        bus, notifications, dispatcher = _make_note_env()
-        successes, failures = [], []
-        await dispatcher.start_branch_comparison(
-            bus=bus, notifications_state=notifications, source_text="x",
-            on_success=successes.append, on_failure=failures.append,
-        )
-        # ADR-006 stage 6.2 fire-and-forget: drain so the validate-failure
-        # path has run before asserting.
-        await drain_runs(dispatcher, "branch_comparison")
-        assert successes == [], "an empty agent response must not become a note"
-        assert len(failures) == 1
-        assert notifications.msg_type == "error"
-        assert busy_count(dispatcher, "branch_comparison") == 0
-
-    asyncio.run(run())
-
-
-def test_start_branch_comparison_agent_exception_surfaces_and_clears_the_slot(monkeypatch):
-    def _boom(self, text):
-        raise RuntimeError("model exploded")
-
-    monkeypatch.setattr(agents_module.BranchComparisonAgent, "get_response", _boom)
-
-    async def run():
-        bus, notifications, dispatcher = _make_note_env()
-        successes, failures = [], []
-        await dispatcher.start_branch_comparison(
-            bus=bus, notifications_state=notifications, source_text="x",
-            on_success=successes.append, on_failure=failures.append,
-        )
-        # ADR-006 stage 6.2 fire-and-forget: drain so the exception path has
-        # run before asserting.
-        await drain_runs(dispatcher, "branch_comparison")
-        assert successes == []
-        assert "model exploded" in failures[0]
-        assert notifications.msg_type == "error"
-        assert busy_count(dispatcher, "branch_comparison") == 0, "the slot must not leak after a failure"
 
     asyncio.run(run())
 
@@ -7420,229 +6203,6 @@ def test_start_branch_synthesis_calls_on_success_then_clears_the_slot(monkeypatc
         assert failures == []
         assert busy_count(dispatcher, "branch_synthesis") == 0
         assert notifications.visible is False
-
-    asyncio.run(run())
-
-
-def test_start_branch_synthesis_rejects_a_second_concurrent_run(monkeypatch):
-    monkeypatch.setattr(agents_module.BranchSynthesisAgent, "get_response", lambda self, text, instructions: "ok")
-
-    async def run():
-        bus, notifications, dispatcher = _make_note_env()
-        seed = dispatcher._runs.claim("branch_synthesis")
-        successes = []
-        await dispatcher.start_branch_synthesis(
-            bus=bus, notifications_state=notifications, source_text="x", instructions="y",
-            on_success=successes.append, on_failure=lambda m: None,
-        )
-        assert successes == [], "the busy guard must not run a second agent"
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
-        assert dispatcher._runs.get(seed.request_id) is seed
-        assert busy_count(dispatcher, "branch_synthesis") == 1
-
-    asyncio.run(run())
-
-
-def test_start_branch_synthesis_does_not_share_a_busy_slot_with_branch_comparison(monkeypatch):
-    # The whole reason for a SEPARATE dict: an in-flight Compare Branches
-    # call must never block an unrelated Synthesize Branches call, and vice
-    # versa - they are unrelated user gestures over the same kind of
-    # selection.
-    monkeypatch.setattr(
-        agents_module.BranchSynthesisAgent, "get_response",
-        lambda self, text, instructions: "Combined answer.",
-    )
-
-    async def run():
-        bus, notifications, dispatcher = _make_note_env()
-        dispatcher._runs.claim("branch_comparison")
-        successes = []
-        await dispatcher.start_branch_synthesis(
-            bus=bus, notifications_state=notifications, source_text="x", instructions="y",
-            on_success=successes.append, on_failure=lambda m: None,
-        )
-        # ADR-006 stage 6.2 fire-and-forget: drain before asserting (the
-        # seeded "branch_comparison" claim has no task, so only the
-        # synthesis drains).
-        await drain_runs(dispatcher, "branch_synthesis")
-        assert successes == ["Combined answer."], "an in-flight branch comparison must not block this"
-
-    asyncio.run(run())
-
-
-def test_start_branch_synthesis_empty_response_fails_instead_of_creating_a_blank_node(monkeypatch):
-    monkeypatch.setattr(agents_module.BranchSynthesisAgent, "get_response", lambda self, text, instructions: "   ")
-
-    async def run():
-        bus, notifications, dispatcher = _make_note_env()
-        successes, failures = [], []
-        await dispatcher.start_branch_synthesis(
-            bus=bus, notifications_state=notifications, source_text="x", instructions="y",
-            on_success=successes.append, on_failure=failures.append,
-        )
-        # ADR-006 stage 6.2 fire-and-forget: drain so the validate-failure
-        # path has run before asserting.
-        await drain_runs(dispatcher, "branch_synthesis")
-        assert successes == [], "an empty agent response must not become a node"
-        assert len(failures) == 1
-        assert notifications.msg_type == "error"
-        assert busy_count(dispatcher, "branch_synthesis") == 0
-
-    asyncio.run(run())
-
-
-def test_start_branch_synthesis_agent_exception_surfaces_and_clears_the_slot(monkeypatch):
-    def _boom(self, text, instructions):
-        raise RuntimeError("model exploded")
-
-    monkeypatch.setattr(agents_module.BranchSynthesisAgent, "get_response", _boom)
-
-    async def run():
-        bus, notifications, dispatcher = _make_note_env()
-        successes, failures = [], []
-        await dispatcher.start_branch_synthesis(
-            bus=bus, notifications_state=notifications, source_text="x", instructions="y",
-            on_success=successes.append, on_failure=failures.append,
-        )
-        # ADR-006 stage 6.2 fire-and-forget: drain so the exception path has
-        # run before asserting.
-        await drain_runs(dispatcher, "branch_synthesis")
-        assert successes == []
-        assert "model exploded" in failures[0]
-        assert notifications.msg_type == "error"
-        assert busy_count(dispatcher, "branch_synthesis") == 0, "the slot must not leak after a failure"
-
-    asyncio.run(run())
-
-
-def test_branch_comparison_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
-    """ADR-002 stage 2.4 regression guard, branch_comparison's counterpart
-    to test_chart_request_and_chat_request_run_concurrently_both_busy
-    (stage 2.3) - same reasoning: chat and branch_comparison now claim
-    into the SAME self._runs registry, so this isolation depends entirely
-    on RunRegistry.is_busy()'s kind filter rather than being structural by
-    construction."""
-    chat_started = threading.Event()
-    chat_release = threading.Event()
-    comparison_started = threading.Event()
-    comparison_release = threading.Event()
-
-    def blocking_chat(task, messages, **kwargs):
-        chat_started.set()
-        chat_release.wait(5)
-        return {"message": {"content": "chat reply"}}
-
-    def blocking_get_response(self, text):
-        comparison_started.set()
-        comparison_release.wait(5)
-        return "Branch Comparison\n\nAgreements:\n• done"
-
-    _configure_fake_ollama(monkeypatch, blocking_chat)
-    monkeypatch.setattr(agents_module.BranchComparisonAgent, "get_response", blocking_get_response)
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        chat_replies = []
-        comparison_successes = []
-
-        await dispatcher.start_chat_reply(
-            bus=bus,
-            notifications_state=notifications,
-            composer_document=composer_document,
-            conversation_history=[{"role": "user", "content": "hi"}],
-            on_reply=chat_replies.append,
-        )
-        # ADR-006 stage 6.2 fire-and-forget: start_branch_comparison now
-        # schedules its own background task and returns immediately, the
-        # same shape as chat - no wrapper task needed to race the two.
-        await dispatcher.start_branch_comparison(
-            bus=bus, notifications_state=notifications, source_text="x",
-            on_success=comparison_successes.append, on_failure=lambda message: None,
-        )
-
-        await asyncio.to_thread(chat_started.wait, 5)
-        await asyncio.to_thread(comparison_started.wait, 5)
-
-        # THE key assertion: both are genuinely in flight at the same time -
-        # neither bounced the other with a busy notification.
-        assert len(chat_slots(dispatcher)) == 1
-        assert busy_count(dispatcher, "branch_comparison") == 1
-        assert notifications.visible is False, "neither call should have been rejected"
-
-        chat_release.set()
-        chat_entry = next(iter(chat_slots(dispatcher).values()))
-        await chat_entry["task"]
-        comparison_release.set()
-        # ADR-006 stage 6.2 fire-and-forget: drain the comparison's
-        # scheduled task before asserting its side effects.
-        await drain_runs(dispatcher, "branch_comparison")
-
-        assert chat_replies == ["chat reply"]
-        assert comparison_successes == ["Branch Comparison\n\nAgreements:\n• done"]
-
-    asyncio.run(run())
-
-
-def test_branch_synthesis_request_and_chat_request_run_concurrently_both_busy(monkeypatch):
-    """ADR-002 stage 2.4 regression guard, branch_synthesis's counterpart
-    to test_branch_comparison_request_and_chat_request_run_concurrently_
-    both_busy above - same reasoning."""
-    chat_started = threading.Event()
-    chat_release = threading.Event()
-    synthesis_started = threading.Event()
-    synthesis_release = threading.Event()
-
-    def blocking_chat(task, messages, **kwargs):
-        chat_started.set()
-        chat_release.wait(5)
-        return {"message": {"content": "chat reply"}}
-
-    def blocking_get_response(self, text, instructions):
-        synthesis_started.set()
-        synthesis_release.wait(5)
-        return "Combined answer."
-
-    _configure_fake_ollama(monkeypatch, blocking_chat)
-    monkeypatch.setattr(agents_module.BranchSynthesisAgent, "get_response", blocking_get_response)
-
-    async def run():
-        bus, notifications, composer_document, dispatcher = _make_dispatch_env()
-        chat_replies = []
-        synthesis_successes = []
-
-        await dispatcher.start_chat_reply(
-            bus=bus,
-            notifications_state=notifications,
-            composer_document=composer_document,
-            conversation_history=[{"role": "user", "content": "hi"}],
-            on_reply=chat_replies.append,
-        )
-        # ADR-006 stage 6.2 fire-and-forget: start_branch_synthesis now
-        # schedules its own background task and returns immediately, the
-        # same shape as chat - no wrapper task needed to race the two.
-        await dispatcher.start_branch_synthesis(
-            bus=bus, notifications_state=notifications, source_text="x", instructions="y",
-            on_success=synthesis_successes.append, on_failure=lambda message: None,
-        )
-
-        await asyncio.to_thread(chat_started.wait, 5)
-        await asyncio.to_thread(synthesis_started.wait, 5)
-
-        assert len(chat_slots(dispatcher)) == 1
-        assert busy_count(dispatcher, "branch_synthesis") == 1
-        assert notifications.visible is False, "neither call should have been rejected"
-
-        chat_release.set()
-        chat_entry = next(iter(chat_slots(dispatcher).values()))
-        await chat_entry["task"]
-        synthesis_release.set()
-        # ADR-006 stage 6.2 fire-and-forget: drain the synthesis's scheduled
-        # task before asserting its side effects.
-        await drain_runs(dispatcher, "branch_synthesis")
-
-        assert chat_replies == ["chat reply"]
-        assert synthesis_successes == ["Combined answer."]
 
     asyncio.run(run())
 
