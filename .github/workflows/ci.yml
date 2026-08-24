@@ -133,7 +133,7 @@ jobs:
       # version skew - see that test's own module docstring for the CI
       # failure that proved the shell-out approach unusable.
       - name: Install dev tooling (pytest, ruff, mypy - CI-only, not in the prod lockfile)
-        run: pip install --quiet pytest==9.1.1 pytest-cov==7.1.0 ruff==0.16.4 mypy==2.3.1
+        run: pip install --quiet pytest==9.1.1 pytest-cov==7.1.0 pytest-xdist==3.8.0 ruff==0.16.4 mypy==2.3.1
 
       - name: Compile check
         run: python -m compileall -q .
@@ -155,8 +155,8 @@ jobs:
       # own module docstring already asks for (stable timing, no
       # environmental noise) - coverage instrumentation is exactly the
       # kind of noise that docstring means.
-      - name: Run pytest (perf suite, uninstrumented - coverage tracing would corrupt its timing assertions)
-        run: python -m pytest -q backend/tests/perf
+      - name: Run pytest (perf suite, uninstrumented AND serial - coverage tracing and parallel sibling workers would both corrupt its timing assertions)
+        run: python -m pytest -q -n0 backend/tests/perf
 
       - name: pip-audit (known-vulnerability scan of the locked dependency set)
         run: pip install --quiet pip-audit==2.10.1 && python -m pip_audit -r requirements.txt

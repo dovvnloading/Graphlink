@@ -54,7 +54,7 @@ llamacpp = ["llama-cpp-python"]
 # (the prod lockfile). CI installs them ad hoc (see .github/workflows/ci.yml),
 # same pattern ruff already used before this stage; this extra exists so a
 # contributor gets the identical set via one `pip install -e .[dev]`.
-dev = ["pytest", "pytest-cov", "ruff", "mypy"]
+dev = ["pytest", "pytest-cov", "pytest-xdist", "ruff", "mypy"]
 
 [tool.pytest.ini_options]
 # ADR-015 stage 15.3: --strict-markers rejects a typo'd/unregistered
@@ -71,7 +71,16 @@ dev = ["pytest", "pytest-cov", "ruff", "mypy"]
 # differently). Chasing that surface to zero is a real, separate body of
 # work, not "add a filterwarnings policy" - see ADR-015 §2's own "no
 # big-bang cleanup" instruction for ruff, which applies equally here.
-addopts = "--strict-markers --strict-config"
+# -n auto --dist worksteal: the suite is parallel-safe (every test isolates
+# into tmp_path/monkeypatch) but ran single-process for its whole life -
+# 10+ minutes of wall clock on a 12-core machine. Parallel: ~80s locally,
+# and CI's 4-core runners get the same multiplier. worksteal (not the
+# default load) because the tail is a handful of 10s+ real-venv sandbox
+# tests that would otherwise strand one worker long after the rest drain.
+# Debugging escape hatch: append -n0 to run serial (breakpoints, -s, or
+# the perf suite - CI passes -n0 there explicitly, since its timing
+# assertions must not share a loaded machine with 11 sibling workers).
+addopts = "--strict-markers --strict-config -n auto --dist worksteal"
 filterwarnings = [
     "error::DeprecationWarning",
     "error::PendingDeprecationWarning",
