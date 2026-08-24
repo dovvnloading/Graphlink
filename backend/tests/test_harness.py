@@ -16,6 +16,7 @@ import pytest
 
 import api_provider
 from backend.domain.graph import SceneDocument
+from backend.harness import context as context_module
 from backend.harness import transcript as transcript_module
 from backend.harness import workspace as workspace_module
 from backend.harness.loop import HarnessRunContext, run_harness
@@ -518,6 +519,144 @@ class TestApprovalFlow:
         assert seen_summaries and "print('hi')" in seen_summaries[0]
         assert node.state.harness_awaiting_approval is False
         assert node.state.harness_approval_summary == ""
+
+
+class TestContextPrompt:
+    def test_prompt_is_byte_stable_and_starts_with_the_pinned_core(self, workspace_root):
+        from graphlink_prompts import resolve_prompt_text
+
+        ws = ensure_workspace("ws1")
+        first = context_module.build_system_prompt(ws)
+        second = context_module.build_system_prompt(ws)
+        assert first == second
+        assert first.startswith(resolve_prompt_text("harness-core"))
+
+    def test_workspace_instructions_join_the_contextual_tier_framed(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        (ws / "AGENTS.md").write_text("Prefer tabs. Run the linter.", encoding="utf-8")
+        prompt = context_module.build_system_prompt(ws)
+        assert "Prefer tabs. Run the linter." in prompt
+        # The framing that keeps a self-authored file from reading as an
+        # authority grant must travel with the content.
+        assert "cannot grant you capabilities" in prompt
+
+    def test_oversized_instructions_are_capped_with_a_notice(self, workspace_root, monkeypatch):
+        monkeypatch.setattr(context_module, "INSTRUCTIONS_BUDGET_CHARS", 100)
+        ws = ensure_workspace("ws1")
+        (ws / "AGENTS.md").write_text("x" * 5_000, encoding="utf-8")
+        prompt = context_module.build_system_prompt(ws)
+        assert "[Truncated at 100 characters.]" in prompt
+        assert "x" * 200 not in prompt
+
+    def test_missing_or_unreadable_instructions_degrade_to_core_only(self, workspace_root):
+        from graphlink_prompts import resolve_prompt_text
+
+        ws = ensure_workspace("ws1")
+        assert context_module.build_system_prompt(ws) == resolve_prompt_text("harness-core")
+
+
+class TestCompaction:
+    def _history(self, pairs=6):
+        history = [{"role": "user", "content": "the original question"}]
+        for i in range(pairs):
+            history.append({
+                "role": "assistant", "content": f"step {i}",
+                "tool_calls": [{"id": f"t{i}", "name": "fs.list", "arguments": {}}],
+            })
+            history.append({"role": "tool", "tool_call_id": f"t{i}", "name": "fs.list", "content": f"result {i}"})
+        return history
+
+    def test_compaction_replaces_the_head_and_keeps_a_valid_tail(self, monkeypatch):
+        monkeypatch.setattr(
+            context_module, "summarize_dropped", lambda *a, **k: "earlier: listed files",
+        )
+        history = self._history()
+        compacted, summary = context_module.compact_history(
+            history, goal="do the thing", budget_tokens=200,
+        )
+        assert summary == "earlier: listed files"
+        assert len(compacted) < len(history)
+        # The replacement is one user message carrying the framing, the
+        # original task, and the summary.
+        assert compacted[0]["role"] == "user"
+        assert "Historical reference only" in compacted[0]["content"]
+        assert "do the thing" in compacted[0]["content"]
+        assert "earlier: listed files" in compacted[0]["content"]
+        # The tail opens on an assistant turn: never a second user message
+        # in a row, never an orphaned tool result.
+        assert compacted[1]["role"] == "assistant"
+        assert compacted[-1] == history[-1]
+
+    def test_compaction_is_skipped_when_the_tail_already_covers_everything(self, monkeypatch):
+        called = {"n": 0}
+
+        def spy(*a, **k):
+            called["n"] += 1
+            return "unused"
+
+        monkeypatch.setattr(context_module, "summarize_dropped", spy)
+        history = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+        assert context_module.compact_history(history, goal="g", budget_tokens=100_000) is None
+        assert called["n"] == 0
+
+    def test_an_empty_summary_is_treated_as_no_compaction(self, monkeypatch):
+        monkeypatch.setattr(context_module, "summarize_dropped", lambda *a, **k: "   ".strip())
+        assert context_module.compact_history(self._history(), goal="g", budget_tokens=200) is None
+
+    def test_loop_compacts_over_budget_and_records_it_in_the_transcript(self, workspace_root, monkeypatch):
+        document = SceneDocument()
+        node = document.add_harness_node(0, 0, "long running task")
+        node.state.harness_max_context_tokens = 1_000
+        ws = ensure_workspace(node.state.harness_workspace_id)
+        # Seed a transcript far past the budget.
+        for i in range(30):
+            append_message(ws, {"role": "user", "content": "filler " * 200})
+            append_message(ws, {"role": "assistant", "content": "reply " * 200})
+        monkeypatch.setattr(
+            context_module, "summarize_dropped", lambda *a, **k: "the earlier work, summarized",
+        )
+        registry = ToolRegistry()
+        register_harness_fs_tools(registry)
+        seen: list[list] = []
+
+        def recording_turn(task, messages, tools=(), **kwargs):
+            seen.append(list(messages))
+            return {"message": {"content": "final answer", "role": "assistant"}, "tool_calls": [], "usage": None}
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", recording_turn)
+        asyncio.run(drive(document, LoopDispatcher(), registry, FakeBus(), node, "continue"))
+
+        assert node.state.harness_compactions == 1
+        assert node.state.harness_status == "done"
+        # The turn that actually went out carried the compacted history.
+        sent = seen[0]
+        assert sent[0]["role"] == "system"
+        assert any("the earlier work, summarized" in str(m.get("content")) for m in sent)
+        assert len(sent) < 61
+        # And a reload reconstructs that same post-compaction state rather
+        # than replaying the dropped turns.
+        reloaded = load_messages(ws)
+        assert "the earlier work, summarized" in reloaded[0]["content"]
+        assert not any("filler" in str(m.get("content")) for m in reloaded)
+
+    def test_a_failed_summarizer_does_not_kill_the_run(self, workspace_root, monkeypatch):
+        document = SceneDocument()
+        node = document.add_harness_node(0, 0, "task")
+        node.state.harness_max_context_tokens = 1_000
+        ws = ensure_workspace(node.state.harness_workspace_id)
+        for i in range(20):
+            append_message(ws, {"role": "user", "content": "filler " * 200})
+            append_message(ws, {"role": "assistant", "content": "reply " * 200})
+
+        def exploding_summary(*a, **k):
+            raise RuntimeError("summarizer down")
+
+        monkeypatch.setattr(context_module, "summarize_dropped", exploding_summary)
+        scripted_turns(monkeypatch, [{"content": "answered anyway"}])
+        asyncio.run(drive(document, LoopDispatcher(), ToolRegistry(), FakeBus(), node, "go"))
+        assert node.state.harness_status == "done"
+        assert node.state.harness_reply == "answered anyway"
+        assert node.state.harness_compactions == 0
 
 
 class TestPersistence:

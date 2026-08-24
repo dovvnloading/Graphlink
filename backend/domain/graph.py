@@ -2557,6 +2557,15 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             "harnessApprovalSummary": (
                 n.state.harness_approval_summary if isinstance(n.state, HarnessState) else ""
             ),
+            "harnessContextTokens": (
+                n.state.harness_context_tokens if isinstance(n.state, HarnessState) else 0
+            ),
+            "harnessMaxContextTokens": (
+                n.state.harness_max_context_tokens if isinstance(n.state, HarnessState) else 0
+            ),
+            "harnessCompactions": (
+                n.state.harness_compactions if isinstance(n.state, HarnessState) else 0
+            ),
             "harnessMaxTurns": n.state.harness_max_turns if isinstance(n.state, HarnessState) else 0,
             "harnessSpentTurns": (
                 n.state.harness_spent_turns if isinstance(n.state, HarnessState) else 0
