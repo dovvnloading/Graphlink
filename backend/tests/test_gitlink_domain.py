@@ -130,6 +130,49 @@ def test_build_headers_includes_bearer_token_when_present():
     assert headers["Authorization"] == "Bearer ghp_xyz"
 
 
+# -- SECURITY-FIX: the token must never be attached to a request whose URL
+# -- names a host outside the real GitHub API/content hosts - see
+# -- _ALLOWED_TOKEN_HOSTS' own comment in github_client.py.
+
+
+def test_build_headers_omits_the_token_for_a_non_github_host():
+    client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_xyz"))
+    headers = client.build_headers("https://evil.example/x")
+    assert "Authorization" not in headers
+
+
+def test_build_headers_includes_the_token_for_the_api_host():
+    client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_xyz"))
+    headers = client.build_headers("https://api.github.com/repos/o/r")
+    assert headers["Authorization"] == "Bearer ghp_xyz"
+
+
+def test_build_headers_includes_the_token_for_the_raw_content_host():
+    client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_xyz"))
+    headers = client.build_headers("https://raw.githubusercontent.com/o/r/main/f.txt")
+    assert headers["Authorization"] == "Bearer ghp_xyz"
+
+
+def test_request_does_not_leak_the_token_to_a_download_url_naming_a_hostile_host(monkeypatch):
+    # Reproduces the actual reported mechanism: fetch_github_file_text hands
+    # a response-supplied download_url straight to request() - a tampered/
+    # hostile GitHub API response naming an attacker host must not receive
+    # the saved token.
+    captured = {}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        captured.update(url=url, headers=headers)
+        return _FakeHTTPResponse(status_code=200, content=b"file bytes")
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_secret"))
+
+    client.request("https://evil.example/steal-my-token", expect_json=False)
+
+    assert captured["url"] == "https://evil.example/steal-my-token"
+    assert "Authorization" not in captured["headers"]
+
+
 def test_request_success_returns_parsed_json_and_forwards_params_and_timeout(monkeypatch):
     captured = {}
 
