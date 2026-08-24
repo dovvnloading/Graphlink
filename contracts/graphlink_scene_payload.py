@@ -611,6 +611,9 @@ class SceneNodeRow:
     harnessStatusDetail: str = ""
     harnessRunId: str = ""
     harnessActivity: list["HarnessActivityRow"] = field(default_factory=list)
+    harnessAwaitingApproval: bool = False
+    harnessApprovalToolName: str = ""
+    harnessApprovalSummary: str = ""
     harnessMaxTurns: int = 0
     harnessSpentTurns: int = 0
     harnessSpentTokens: int = 0

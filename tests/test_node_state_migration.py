@@ -365,7 +365,8 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     # in the workspace transcript, never on the wire).
     "harnessGoal", "harnessReply", "harnessStatus", "harnessStatusDetail",
     "harnessRunId", "harnessActivity", "harnessMaxTurns", "harnessSpentTurns",
-    "harnessSpentTokens",
+    "harnessSpentTokens", "harnessAwaitingApproval", "harnessApprovalToolName",
+    "harnessApprovalSummary",
 ])
 
 

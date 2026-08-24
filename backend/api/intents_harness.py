@@ -94,6 +94,14 @@ def register_harness_intents(
     async def cancel(request_id):
         agent_dispatcher.cancel_harness(request_id)
 
+    async def approve_tool(request_id):
+        agent_dispatcher.approve_code_execution(request_id)
+
+    async def deny_tool(request_id):
+        agent_dispatcher.deny_code_execution(request_id)
+
     bus.register_intent("harness", "start", start)
     bus.register_intent("harness", "send", send)
     bus.register_intent("harness", "cancel", cancel)
+    bus.register_intent("harness", "approveTool", approve_tool)
+    bus.register_intent("harness", "denyTool", deny_tool)

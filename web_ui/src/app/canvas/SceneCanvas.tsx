@@ -855,6 +855,16 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.cancelHarnessRun(n.pendingRequestId);
     },
+    // Zero-argument approve/deny closed over the CURRENT snapshot's
+    // pendingRequestId - the CodeExecutionApprovalPanel posture.
+    onApproveTool: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.approveHarnessTool(n.pendingRequestId);
+    },
+    onDenyTool: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.denyHarnessTool(n.pendingRequestId);
+    },
   };
 }
 
@@ -1518,6 +1528,9 @@ export function toFlowNodes(
           harnessStatusDetail: n.harnessStatusDetail,
           harnessRunId: n.harnessRunId,
           harnessActivity: n.harnessActivity,
+          harnessAwaitingApproval: n.harnessAwaitingApproval,
+          harnessApprovalToolName: n.harnessApprovalToolName,
+          harnessApprovalSummary: n.harnessApprovalSummary,
           harnessMaxTurns: n.harnessMaxTurns,
           harnessSpentTurns: n.harnessSpentTurns,
           harnessSpentTokens: n.harnessSpentTokens,

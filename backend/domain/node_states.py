@@ -906,3 +906,11 @@ class HarnessState(NodeState):
     harness_max_turns: int = 16
     harness_spent_turns: int = 0
     harness_spent_tokens: int = 0
+    # H2's live approval surface: mirrors the plan node's own
+    # builder_awaiting_* trio exactly - the panel renders from these,
+    # approve/deny resolve the run's approval_future, and (like the plan
+    # node's) they are deliberately NOT persisted: they describe a
+    # RunHandle that cannot survive a restart.
+    harness_awaiting_approval: bool = False
+    harness_approval_tool_name: str = ""
+    harness_approval_summary: str = ""

@@ -31,6 +31,9 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessStatusDetail: string;
   harnessRunId: string;
   harnessActivity: HarnessActivityRowData[];
+  harnessAwaitingApproval: boolean;
+  harnessApprovalToolName: string;
+  harnessApprovalSummary: string;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
   harnessSpentTokens: number;
@@ -40,6 +43,8 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onDelete: () => void;
   onSend: (text: string) => void;
   onCancel: () => void;
+  onApproveTool: () => void;
+  onDenyTool: () => void;
 }
 
 export type HarnessFlowNode = Node<HarnessNodeData, "harness">;
@@ -64,9 +69,19 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const collapsed = useLodVisibility() || data.isCollapsed;
   const running = data.harnessStatus === "running";
   const [draft, setDraft] = useState("");
+  const denyButtonRef = useRef<HTMLButtonElement>(null);
   const activityDetailsRef = useRef<HTMLDetailsElement>(null);
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.harnessActivity.filter((row) => row.outcome !== "ok").length;
+
+  // Deny is the safe default, so focus lands there the moment the panel
+  // appears - same effect (and same `collapsed` dependency reasoning) as
+  // PlanNodeView's approval panel.
+  useEffect(() => {
+    if (data.harnessAwaitingApproval && !collapsed) {
+      denyButtonRef.current?.focus();
+    }
+  }, [data.harnessAwaitingApproval, collapsed]);
 
   // Same follow-the-log behavior as PlanNodeView's activity list: pinned
   // to the newest row only while running and only while open.
@@ -141,6 +156,28 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             ))}
           </div>
         </details>
+      )}
+
+      {data.harnessAwaitingApproval && (
+        <div className="plan-node-approval" role="group" aria-label="Agent tool approval">
+          <div className="plan-node-approval-title">
+            The agent wants to run: <code>{data.harnessApprovalToolName}</code>
+          </div>
+          <pre className="plan-node-approval-summary">{data.harnessApprovalSummary}</pre>
+          <div className="plan-node-approval-actions">
+            <button type="button" className="plan-node-button nodrag" onClick={data.onApproveTool}>
+              Approve
+            </button>
+            <button
+              type="button"
+              className="plan-node-button plan-node-button-deny nodrag"
+              onClick={data.onDenyTool}
+              ref={denyButtonRef}
+            >
+              Deny
+            </button>
+          </div>
+        </div>
       )}
 
       {acceptsInput(data.harnessStatus) && (

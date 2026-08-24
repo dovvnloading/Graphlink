@@ -52,6 +52,12 @@ from graphlink_plugins.gitlink.agent import _fingerprint_changes
 GRAPH_READ = "graph.read"
 GRAPH_MUTATE = "graph.mutate"
 FS_READ = "fs.read"
+# PLAN-2026-08-24 H2: writes confined to a harness workspace
+# (backend/harness/tools_fs.py's fs.write/fs.edit) - a separate scope from
+# FS_READ so a run's grant set can offer reads without writes; the plan's
+# decision #1 keeps shell/python execution on CODE_EXECUTE rather than
+# minting a third scope here.
+FS_WRITE = "fs.write"
 CODE_EXECUTE = "code.execute"
 NET_FETCH = "net.fetch"
 PROVIDER_CALL = "provider.call"
@@ -64,7 +70,9 @@ KNOWLEDGE_READ = "knowledge.read"
 # The ADR's own closed vocabulary (§2) - register() rejects anything outside
 # it immediately, the same fail-fast posture EVENT_TYPES/ProviderEvent.type
 # already take for their own closed vocabularies (backend/providers/base.py).
-KNOWN_SCOPES = frozenset({GRAPH_READ, GRAPH_MUTATE, FS_READ, CODE_EXECUTE, NET_FETCH, PROVIDER_CALL, KNOWLEDGE_READ})
+KNOWN_SCOPES = frozenset({
+    GRAPH_READ, GRAPH_MUTATE, FS_READ, FS_WRITE, CODE_EXECUTE, NET_FETCH, PROVIDER_CALL, KNOWLEDGE_READ,
+})
 
 ApprovalPolicy = Literal["auto", "once", "always"]
 _KNOWN_APPROVAL_POLICIES = frozenset({"auto", "once", "always"})

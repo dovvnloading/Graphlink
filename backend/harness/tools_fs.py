@@ -22,9 +22,13 @@ import re
 
 from backend.harness.workspace import WorkspaceError, resolve_in_workspace, workspace_dir
 from backend.providers.base import ToolCall, ToolSpec
-from backend.tools import FS_READ, RunContext, ToolRegistry, ToolResult
+from backend.tools import FS_READ, FS_WRITE, RunContext, ToolRegistry, ToolResult
 
 _READ_CAP_CHARS = 40_000
+# H2 write bounds: a single fs.write/fs.edit call's content ceiling. Wire
+# input is untrusted model output - the same bounds-everywhere posture
+# every other cap in this file takes.
+_WRITE_CAP_CHARS = 200_000
 _LIST_CAP_ENTRIES = 500
 _GREP_CAP_MATCHES = 100
 _GREP_LINE_CAP = 400
@@ -61,6 +65,43 @@ FS_LIST_SPEC = ToolSpec(
         "type": "object",
         "properties": {"pattern": {"type": "string"}},
         "required": [],
+    },
+)
+
+FS_WRITE_SPEC = ToolSpec(
+    name="fs.write",
+    description=(
+        "Create or overwrite one text file in the workspace with the given "
+        "content. path is workspace-relative; parent directories are "
+        "created as needed. Overwrites silently - fs.read first if the "
+        "current content matters."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "content": {"type": "string"},
+        },
+        "required": ["path", "content"],
+    },
+)
+
+FS_EDIT_SPEC = ToolSpec(
+    name="fs.edit",
+    description=(
+        "Edit one file by exact string replacement: old_string must occur "
+        "EXACTLY ONCE in the file (the call fails on zero or multiple "
+        "occurrences - include more surrounding context to disambiguate); "
+        "it is replaced with new_string."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "path": {"type": "string"},
+            "old_string": {"type": "string"},
+            "new_string": {"type": "string"},
+        },
+        "required": ["path", "old_string", "new_string"],
     },
 )
 
@@ -199,6 +240,73 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             footer += f"\n[{skipped_large} file(s) skipped as too large]"
         return ToolResult(content="\n".join(matches) + footer)
 
+    async def fs_write(call: ToolCall, ctx: RunContext) -> ToolResult:
+        workspace_id = _workspace_id_of(ctx)
+        if workspace_id is None:
+            return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
+        content = call.arguments.get("content")
+        if not isinstance(content, str):
+            return ToolResult(content="fs.write needs string content.", is_error=True)
+        if len(content) > _WRITE_CAP_CHARS:
+            return ToolResult(
+                content=f"Content longer than {_WRITE_CAP_CHARS} characters - split it into parts.",
+                is_error=True,
+            )
+        try:
+            target = resolve_in_workspace(workspace_id, str(call.arguments.get("path") or ""))
+        except WorkspaceError as exc:
+            return ToolResult(content=str(exc), is_error=True)
+        if target == workspace_dir(workspace_id).resolve():
+            return ToolResult(content="path names the workspace root, not a file.", is_error=True)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            return ToolResult(content=f"Could not write file: {exc}", is_error=True)
+        return ToolResult(content=f"Wrote {len(content)} characters to {call.arguments.get('path')}.")
+
+    async def fs_edit(call: ToolCall, ctx: RunContext) -> ToolResult:
+        workspace_id = _workspace_id_of(ctx)
+        if workspace_id is None:
+            return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
+        old_string = call.arguments.get("old_string")
+        new_string = call.arguments.get("new_string")
+        if not isinstance(old_string, str) or not old_string or not isinstance(new_string, str):
+            return ToolResult(content="fs.edit needs a non-empty old_string and a new_string.", is_error=True)
+        if len(new_string) > _WRITE_CAP_CHARS:
+            return ToolResult(
+                content=f"Replacement longer than {_WRITE_CAP_CHARS} characters.", is_error=True,
+            )
+        try:
+            target = resolve_in_workspace(workspace_id, str(call.arguments.get("path") or ""))
+        except WorkspaceError as exc:
+            return ToolResult(content=str(exc), is_error=True)
+        if not target.is_file():
+            return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
+        try:
+            text = target.read_text(encoding="utf-8")
+        except OSError as exc:
+            return ToolResult(content=f"Could not read file: {exc}", is_error=True)
+        occurrences = text.count(old_string)
+        if occurrences == 0:
+            return ToolResult(content="old_string was not found in the file - fs.read it and retry with exact text.", is_error=True)
+        if occurrences > 1:
+            return ToolResult(
+                content=f"old_string occurs {occurrences} times - include more surrounding context so it is unique.",
+                is_error=True,
+            )
+        try:
+            target.write_text(text.replace(old_string, new_string, 1), encoding="utf-8")
+        except OSError as exc:
+            return ToolResult(content=f"Could not write file: {exc}", is_error=True)
+        return ToolResult(content=f"Edited {call.arguments.get('path')}.")
+
     registry.register(FS_READ_SPEC, fs_read, scopes={FS_READ}, approval="auto")
     registry.register(FS_LIST_SPEC, fs_list, scopes={FS_READ}, approval="auto")
     registry.register(FS_GREP_SPEC, fs_grep, scopes={FS_READ}, approval="auto")
+    # H2: writes prompt once per distinct call in a run (the managed-
+    # workspace posture the plan's §3.2.6 sets; "always" with its
+    # fingerprint memory would re-prompt only on ARGUMENT changes anyway -
+    # "once" is the honest name for a scratch-confined write).
+    registry.register(FS_WRITE_SPEC, fs_write, scopes={FS_WRITE}, approval="once")
+    registry.register(FS_EDIT_SPEC, fs_edit, scopes={FS_WRITE}, approval="once")
