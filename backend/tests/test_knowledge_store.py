@@ -702,6 +702,22 @@ class TestFts5LexicalSearch:
         assert ks.search_chunks(db_path, "") == []
         assert ks.search_chunks(db_path, "???...") == []
 
+    # -- SECURITY-FIX: FTS5 MATCH cost grows quadratically with the number of
+    # -- quoted phrase terms - a 200k-term query measured 93s of CPU on one
+    # -- worker thread, with no length bound on the query text anywhere on
+    # -- its three entry paths. Tests _fts5_match_expression directly (not
+    # -- through search_chunks/a real FTS5 MATCH) so this suite never pays
+    # -- the cost the fix exists to prevent.
+
+    def test_fts5_match_expression_caps_the_term_count(self):
+        huge_query = " ".join(f"term{i}" for i in range(5000))
+        expression = ks._fts5_match_expression(huge_query)
+        term_count = expression.count('"') // 2
+        assert term_count == ks._MAX_FTS5_QUERY_TERMS
+
+    def test_fts5_match_expression_is_unchanged_for_an_ordinary_query(self):
+        assert ks._fts5_match_expression("brown fox") == '"brown" "fox"'
+
     def test_a_query_containing_fts5_operator_syntax_is_treated_as_literal_terms(self, db_path):
         # "OR"/"-"/"*"/quotes are real FTS5 query-syntax operators - a naive
         # MATCH ? with the raw string would either throw a syntax error or

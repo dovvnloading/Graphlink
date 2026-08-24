@@ -1066,6 +1066,19 @@ def list_embeddings_for_search(
 # -- FTS5 lexical search (ADR-017 stage 17.2) --------------------------------
 
 
+# SECURITY-FIX: FTS5 MATCH cost over the implicit-AND phrase list grows
+# quadratically with the number of quoted terms - measured 93s of CPU on
+# one worker thread (holding a knowledge.db connection the whole time) for
+# a single 200k-term/1.5MB query, and the query text is never length-
+# bounded anywhere on any of its three entry paths (the globalSearch/search
+# and knowledge/search WS intents, and the auto-approved LLM tool
+# knowledge.search - none of them cap `query`, only `k`). Capping the TERM
+# COUNT here, in the one function every caller funnels through, bounds the
+# actual cost driver regardless of how a caller's text is separated, well
+# below where the measured blowup even starts (50k terms was already 2.4s).
+_MAX_FTS5_QUERY_TERMS = 256
+
+
 def _fts5_match_expression(query: str) -> str:
     """Turns free-form user text into a safe FTS5 MATCH expression: every
     \\w+ token double-quoted (an FTS5 string literal, immune to the
@@ -1073,8 +1086,12 @@ def _fts5_match_expression(query: str) -> str:
     text might otherwise contain and fail to parse or silently change
     meaning), joined with a space, which FTS5 treats as an implicit AND.
     Returns "" for a query with no word characters at all (blank, or pure
-    punctuation) - callers treat that as "no results", not a query to run."""
-    terms = re.findall(r"\w+", query, flags=re.UNICODE)
+    punctuation) - callers treat that as "no results", not a query to run.
+    Silently truncates past _MAX_FTS5_QUERY_TERMS - matching every other
+    query-shaping choice in this function, a caller with an implausibly
+    long query gets a best-effort search over its first N terms rather than
+    an error or an unbounded CPU burn."""
+    terms = re.findall(r"\w+", query, flags=re.UNICODE)[:_MAX_FTS5_QUERY_TERMS]
     return " ".join('"' + term.replace('"', '""') + '"' for term in terms)
 
 
