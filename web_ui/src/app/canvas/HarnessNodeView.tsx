@@ -34,6 +34,9 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessAwaitingApproval: boolean;
   harnessApprovalToolName: string;
   harnessApprovalSummary: string;
+  harnessContextTokens: number;
+  harnessMaxContextTokens: number;
+  harnessCompactions: number;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
   harnessSpentTokens: number;
@@ -130,6 +133,18 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           {data.harnessMaxTurns > 0 ? ` (max ${data.harnessMaxTurns}/task)` : ""}
         </span>
         <span>Tokens {data.harnessSpentTokens.toLocaleString()}</span>
+        {data.harnessMaxContextTokens > 0 && (
+          <span
+            title={
+              data.harnessCompactions > 0
+                ? `History summarized ${data.harnessCompactions} time${data.harnessCompactions === 1 ? "" : "s"} to stay within the context budget`
+                : "How much of the context budget this agent's history currently fills"
+            }
+          >
+            Context {Math.min(100, Math.round((data.harnessContextTokens / data.harnessMaxContextTokens) * 100))}%
+            {data.harnessCompactions > 0 && ` · compacted ${data.harnessCompactions}×`}
+          </span>
+        )}
       </div>
 
       {data.harnessActivity.length > 0 && (

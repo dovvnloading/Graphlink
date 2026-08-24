@@ -481,6 +481,12 @@ def _serialize_harness_node(node: SceneNode) -> dict[str, Any]:
         "max_turns": node.state.harness_max_turns,
         "spent_turns": node.state.harness_spent_turns,
         "spent_tokens": node.state.harness_spent_tokens,
+        # H3: the context estimate and compaction count describe the
+        # workspace transcript, which outlives the process - unlike the
+        # live approval fields above, which deliberately do not persist.
+        "context_tokens": node.state.harness_context_tokens,
+        "max_context_tokens": node.state.harness_max_context_tokens,
+        "compactions": node.state.harness_compactions,
         "is_collapsed": bool(node.is_collapsed),
     }
 

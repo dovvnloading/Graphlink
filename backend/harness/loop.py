@@ -1,4 +1,4 @@
-"""The harness turn loop (PLAN-2026-08-24 §2.1/§3.2.1, H1 slice).
+"""The harness turn loop (PLAN-2026-08-24 §2.1/§3.2.1).
 
 One task = one user message worked to completion: alternate model turns
 (api_provider.chat_turn_with_tools - the same stage-8.1 primitive the
@@ -15,6 +15,11 @@ node's HarnessState carries only the status/reply/activity surface the
 canvas renders - the plan-node "state lives where it can be resumed from"
 posture, with the transcript instead of the checklist as the resume point.
 
+The system prompt is built once per run and kept OUT of `history` (H3),
+so compaction can never touch it and the cacheable prefix is identical
+on every turn - see backend/harness/context.py. Context is measured
+before each model call and compacted when it exceeds the node's budget.
+
 Run identity/cancel ride RunRegistry (kind "harness", claimed by
 AgentDispatcher.start_harness_run); every terminal transition is gated on
 run liveness exactly like run_build's _land, so a Stop that already ran
@@ -30,7 +35,8 @@ from dataclasses import dataclass
 
 import graphlink_task_config as config
 from backend.domain.node_states import HarnessState
-from backend.harness.transcript import append_message, load_messages
+from backend.harness import context as context_module
+from backend.harness.transcript import append_compaction, append_message, load_messages
 from backend.harness.workspace import ensure_workspace
 from backend.providers.base import CancelToken, ToolCall
 from backend.tools import (
@@ -189,7 +195,6 @@ async def run_harness(
     AgentDispatcher.start_harness_run (which create_tasks this)."""
     import api_provider
     from backend import agents as _agents
-    from graphlink_prompts import resolve_prompt_text
 
     node = document.nodes.get(harness_node_id)
     if node is None or not isinstance(node.state, HarnessState):
@@ -266,14 +271,20 @@ async def run_harness(
             spec for spec in registry.specs()
             if (registry.scopes_for(spec.name) or frozenset()) <= HARNESS_GRANTED_SCOPES
         )
-        system_prompt = resolve_prompt_text("harness-core")
-        history = load_messages(workspace)
+        # H3: built ONCE, here, and never rebuilt inside the loop - the
+        # byte-stable prefix a provider's prompt cache keys on (see
+        # backend/harness/context.py's own docstring).
+        system_prompt = context_module.build_system_prompt(workspace)
         user_message = {"role": "user", "content": user_text}
         append_message(workspace, user_message)
-        messages: list = [{"role": "system", "content": system_prompt}, *history, user_message]
+        # `history` deliberately excludes the system prompt: it lives
+        # outside history so compaction structurally cannot touch it (and
+        # so the cacheable prefix is the same object every turn).
+        history: list = [*load_messages(workspace), user_message]
 
         turns = 0
         max_turns = max(1, int(node.state.harness_max_turns))
+        budget = max(1_000, int(node.state.harness_max_context_tokens))
         while True:
             if cancel_event.is_set():
                 raise api_provider.RequestCancelledError("stopped")
@@ -286,10 +297,43 @@ async def run_harness(
             turns += 1
             node.state.harness_spent_turns += 1
 
+            # H3: measure before every model call, compact when over
+            # budget. Deliberately BEFORE the call rather than after the
+            # append that caused the breach - a turn is never sent with a
+            # context this run already knows is too large.
+            node.state.harness_context_tokens = context_module.history_tokens(history)
+            if node.state.harness_context_tokens > budget:
+                try:
+                    compacted = await asyncio.to_thread(
+                        context_module.compact_history,
+                        history,
+                        goal=node.state.harness_goal,
+                        budget_tokens=budget,
+                        cancellation_event=cancel_event,
+                        settings_manager=settings_manager,
+                        runtime=runtime,
+                    )
+                except api_provider.RequestCancelledError:
+                    raise
+                except Exception:
+                    # A failed summarizer call must not kill a run that is
+                    # otherwise fine - degrade to the uncompacted history
+                    # (the chat agent's own "catch and degrade" posture for
+                    # the identical call). If the context genuinely no
+                    # longer fits, the model call below reports that as its
+                    # own error, which is the honest failure to surface.
+                    compacted = None
+                if compacted is not None:
+                    history, _summary = compacted
+                    append_compaction(workspace, history[0]["content"])
+                    node.state.harness_compactions += 1
+                    node.state.harness_context_tokens = context_module.history_tokens(history)
+                    await bus.publish("scene")
+
             turn = await asyncio.wait_for(
                 asyncio.to_thread(
                     api_provider.chat_turn_with_tools,
-                    config.TASK_CHAT, list(messages), specs,
+                    config.TASK_CHAT, [{"role": "system", "content": system_prompt}, *history], specs,
                     model_ref=model_ref, cancellation_event=cancel_event,
                     settings_manager=settings_manager, runtime=runtime,
                 ),
@@ -306,7 +350,7 @@ async def run_harness(
                 assistant_message["tool_calls"] = [
                     {"id": c.id, "name": c.name, "arguments": c.arguments} for c in tool_calls
                 ]
-            messages.append(assistant_message)
+            history.append(assistant_message)
             append_message(workspace, assistant_message)
 
             if not tool_calls:
@@ -325,7 +369,7 @@ async def run_harness(
                     "role": "tool", "tool_call_id": call.id,
                     "name": call.name, "content": result.content,
                 }
-                messages.append(tool_message)
+                history.append(tool_message)
                 append_message(workspace, tool_message)
                 await bus.publish("scene")
     except api_provider.RequestCancelledError:

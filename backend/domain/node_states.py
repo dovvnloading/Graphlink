@@ -914,3 +914,12 @@ class HarnessState(NodeState):
     harness_awaiting_approval: bool = False
     harness_approval_tool_name: str = ""
     harness_approval_summary: str = ""
+    # H3 context accounting. `context_tokens` is the live estimate of the
+    # reloaded history the NEXT model call would carry (not a cumulative
+    # spend counter - spent_tokens above is that); it drives the node's
+    # own context meter and the compaction trigger. `compactions` counts
+    # how many times this node's history has been summarized down, so a
+    # long-lived agent's history collapses visibly rather than silently.
+    harness_context_tokens: int = 0
+    harness_max_context_tokens: int = 48_000
+    harness_compactions: int = 0

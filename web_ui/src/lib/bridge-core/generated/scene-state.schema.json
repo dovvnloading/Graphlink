@@ -399,8 +399,17 @@
           "harnessAwaitingApproval": {
             "type": "boolean"
           },
+          "harnessCompactions": {
+            "type": "integer"
+          },
+          "harnessContextTokens": {
+            "type": "integer"
+          },
           "harnessGoal": {
             "type": "string"
+          },
+          "harnessMaxContextTokens": {
+            "type": "integer"
           },
           "harnessMaxTurns": {
             "type": "integer"
@@ -884,6 +893,9 @@
           "harnessStatusDetail",
           "harnessRunId",
           "harnessActivity",
+          "harnessContextTokens",
+          "harnessMaxContextTokens",
+          "harnessCompactions",
           "harnessAwaitingApproval",
           "harnessApprovalToolName",
           "harnessApprovalSummary",

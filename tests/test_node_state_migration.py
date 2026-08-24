@@ -366,7 +366,8 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "harnessGoal", "harnessReply", "harnessStatus", "harnessStatusDetail",
     "harnessRunId", "harnessActivity", "harnessMaxTurns", "harnessSpentTurns",
     "harnessSpentTokens", "harnessAwaitingApproval", "harnessApprovalToolName",
-    "harnessApprovalSummary",
+    "harnessApprovalSummary", "harnessContextTokens", "harnessMaxContextTokens",
+    "harnessCompactions",
 ])
 
 

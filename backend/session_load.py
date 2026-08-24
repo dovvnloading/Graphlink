@@ -860,6 +860,9 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
             harness_max_turns=_int("max_turns", 16),
             harness_spent_turns=_int("spent_turns", 0),
             harness_spent_tokens=_int("spent_tokens", 0),
+            harness_context_tokens=_int("context_tokens", 0),
+            harness_max_context_tokens=_int("max_context_tokens", 48_000),
+            harness_compactions=_int("compactions", 0),
         ),
         is_collapsed=bool(payload.get("is_collapsed", False)),
     )

@@ -119,6 +119,9 @@ export interface SceneNodeRow {
   harnessStatusDetail: string;
   harnessRunId: string;
   harnessActivity: HarnessActivityRow[];
+  harnessContextTokens: number;
+  harnessMaxContextTokens: number;
+  harnessCompactions: number;
   harnessAwaitingApproval: boolean;
   harnessApprovalToolName: string;
   harnessApprovalSummary: string;
@@ -849,6 +852,21 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessActivity: missing required field`);
     else { if (!Array.isArray(fieldValue)) errors.push(`${path}.harnessActivity` + ": expected array");
     else (fieldValue as unknown[]).forEach((item, i) => { checkHarnessActivityRow(item, `${path}.harnessActivity` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["harnessContextTokens"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessContextTokens: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.harnessContextTokens` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["harnessMaxContextTokens"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessMaxContextTokens: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.harnessMaxContextTokens` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["harnessCompactions"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessCompactions: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.harnessCompactions` + ": expected number"); }
   }
   {
     const fieldValue = value["harnessAwaitingApproval"];
