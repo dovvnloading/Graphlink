@@ -280,7 +280,8 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         # token recurs per turn.
         # v2 (H2): teaches the write/shell tools and the approval-denial
         # contract.
-        ("harness-core", 2, "9053063e9e426723b1f88a203c14cbae7bf5735e8f8cf26f669c0068264550d0"),
+        # v3 (H4): teaches subagent.spawn.
+        ("harness-core", 3, "73e9a2cb889e61c952f464845977ac0c6d7f99be8f3286306734b0677abe1b4d"),
         ("reasoning-hint-low", 1, "87d4a1d2e09416005d656faaca77fa2fb2305f0c4b52940f0dbaf0d234669552"),
         ("reasoning-hint-high", 1, "7a004877f0362c73208a61bdd81103d22d5b1eaafe998e82138d970273919d9b"),
     ]

@@ -705,11 +705,13 @@ class AgentDispatcher:
         model only what its own grant set could pass at invoke()."""
         registry = self.builder_tool_registry(document)
         if not getattr(self, "_harness_fs_registered", False):
+            from backend.harness.subagents import register_subagent_tool
             from backend.harness.tools_fs import register_harness_fs_tools
             from backend.harness.tools_shell import register_harness_shell_tool
 
             register_harness_fs_tools(registry)
             register_harness_shell_tool(registry)
+            register_subagent_tool(registry)
             self._harness_fs_registered = True
         return registry
 
