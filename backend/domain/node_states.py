@@ -902,6 +902,16 @@ class HarnessState(NodeState):
     harness_status_detail: str = ""
     harness_run_id: str = ""
     harness_workspace_id: str = ""
+    # The user directory this node is bound to work in, or "" for the
+    # managed scratch workspace (the default). A REQUEST, not a grant: it
+    # is honored at run time only if it is in the settings trust list (see
+    # backend/harness/workspace.bound_root); otherwise the run silently
+    # uses scratch. harness_workspace_active is the RESULT the last run
+    # actually bound - the resolved user dir when the trust check passed,
+    # else "" - so the UI can show "working in <dir>" vs "scratch" honestly
+    # rather than echoing the unverified request.
+    harness_workspace_path: str = ""
+    harness_workspace_active: str = ""
     harness_activity: list[dict[str, Any]] = field(default_factory=list)
     harness_max_turns: int = 16
     harness_spent_turns: int = 0

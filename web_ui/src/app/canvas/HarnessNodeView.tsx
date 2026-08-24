@@ -37,6 +37,8 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessContextTokens: number;
   harnessMaxContextTokens: number;
   harnessCompactions: number;
+  harnessWorkspacePath: string;
+  harnessWorkspaceActive: string;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
   harnessSpentTokens: number;
@@ -48,6 +50,8 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onCancel: () => void;
   onApproveTool: () => void;
   onDenyTool: () => void;
+  onPickWorkspace: () => void;
+  onUseScratch: () => void;
 }
 
 export type HarnessFlowNode = Node<HarnessNodeData, "harness">;
@@ -122,6 +126,47 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           {data.harnessStatusDetail}
         </p>
       )}
+
+      {/* Workspace binding. harnessWorkspacePath is the REQUEST (what the
+          node asks for); a run only honors it if the folder is trusted, and
+          reports the truth in harnessWorkspaceActive. So a bound path with
+          no matching active dir after a run means the grant did not apply on
+          this machine - shown as pending rather than as if it were live. */}
+      <div className="harness-node-workspace">
+        {data.harnessWorkspacePath ? (
+          <>
+            <span
+              className="harness-node-workspace-dir"
+              title={data.harnessWorkspacePath}
+            >
+              📁 {data.harnessWorkspacePath}
+              {!running &&
+                data.harnessWorkspaceActive !== data.harnessWorkspacePath &&
+                " (not trusted on this machine — using scratch)"}
+            </span>
+            <button
+              type="button"
+              className="plan-node-button nodrag"
+              onClick={data.onUseScratch}
+              disabled={running}
+            >
+              Use scratch
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="harness-node-workspace-dir">Scratch workspace</span>
+            <button
+              type="button"
+              className="plan-node-button nodrag"
+              onClick={data.onPickWorkspace}
+              disabled={running}
+            >
+              Choose folder…
+            </button>
+          </>
+        )}
+      </div>
 
       {data.harnessReply && (
         <div className="harness-node-reply nowheel nodrag">{data.harnessReply}</div>

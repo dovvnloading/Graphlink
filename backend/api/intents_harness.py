@@ -8,6 +8,12 @@ an ordinary Ctrl+Z-undoable command, the builder-plan precedent exactly.
 
 from __future__ import annotations
 
+import asyncio
+import os
+from pathlib import Path
+
+from backend import native_dialogs
+from backend.api._settings_shared import run_locked
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
 from backend.domain.node_states import HarnessState
@@ -94,6 +100,45 @@ def register_harness_intents(
     async def cancel(request_id):
         agent_dispatcher.cancel_harness(request_id)
 
+    async def pick_workspace(node_id):
+        """Bind this agent node to a real project directory. The pick IS
+        the consent (the gitlink local-root precedent): on success we add
+        the folder to the settings trust list AND set it as this node's
+        requested workspace. B-classified run-config, not document content -
+        a workspace binding is a run setting like the budget, and it also
+        writes the settings store, which is never an undo target."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        directory = node.state.harness_workspace_path or os.path.expanduser("~")
+        try:
+            folder = await native_dialogs.pick_folder(directory=directory)
+        except Exception as exc:  # noqa: BLE001 - a local folder path, not a credential
+            notifications.show(f"Could not open the folder picker: {exc}", "error")
+            await bus.publish("notification")
+            return
+        if not folder:
+            return
+        resolved = str(Path(folder).resolve())
+        settings = agent_dispatcher._settings_manager
+        if settings is not None:
+            # The grant write goes through the same locked writer every
+            # other settings mutation uses (save_recipe's precedent), so it
+            # cannot land mid-write against a concurrent settings save.
+            await asyncio.to_thread(run_locked, lambda: settings.add_harness_trusted_dir(resolved))
+        node.state.harness_workspace_path = resolved
+        await publish_scene()
+
+    async def use_scratch(node_id):
+        """Unbind from the user directory, reverting to the managed scratch
+        workspace. Leaves the trust grant in place (revoking trust is a
+        settings concern, not a per-node one)."""
+        node = document.nodes.get(node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            return
+        node.state.harness_workspace_path = ""
+        await publish_scene()
+
     async def approve_tool(request_id):
         agent_dispatcher.approve_code_execution(request_id)
 
@@ -105,3 +150,5 @@ def register_harness_intents(
     bus.register_intent("harness", "cancel", cancel)
     bus.register_intent("harness", "approveTool", approve_tool)
     bus.register_intent("harness", "denyTool", deny_tool)
+    bus.register_intent("harness", "pickWorkspace", pick_workspace)
+    bus.register_intent("harness", "useScratch", use_scratch)

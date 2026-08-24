@@ -267,6 +267,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "cancel", "B", "run-lifecycle: cancel"),
     Classified("harness", "approveTool", "B", "security: harness tool-call approval gate"),
     Classified("harness", "denyTool", "B", "security: harness tool-call approval gate"),
+    Classified("harness", "pickWorkspace", "B", "run-config: binds the node to a trusted user dir and writes the settings trust grant, not document content"),
+    Classified("harness", "useScratch", "B", "run-config: reverts the node to the scratch workspace"),
 
     # -- backend/api/intents_settings_general.py (app-settings) -------------
     Classified("app-settings", "setActiveSection", "B", "preference: which Settings page is open"),

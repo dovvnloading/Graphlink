@@ -856,6 +856,7 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
             ),
             harness_run_id=str(payload.get("harness_run_id", "")),
             harness_workspace_id=str(payload.get("workspace_id") or uuid.uuid4().hex[:12]),
+            harness_workspace_path=str(payload.get("workspace_path", "")),
             harness_activity=activity,
             harness_max_turns=_int("max_turns", 16),
             harness_spent_turns=_int("spent_turns", 0),

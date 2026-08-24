@@ -166,6 +166,8 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
   harnessContextTokens: 0,
   harnessMaxContextTokens: 48000,
   harnessCompactions: 0,
+  harnessWorkspacePath: "",
+  harnessWorkspaceActive: "",
   harnessAwaitingApproval: false,
   harnessApprovalToolName: "",
   harnessApprovalSummary: "",

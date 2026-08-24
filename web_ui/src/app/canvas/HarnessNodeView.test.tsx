@@ -17,6 +17,8 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessContextTokens: 0,
     harnessMaxContextTokens: 48000,
     harnessCompactions: 0,
+    harnessWorkspacePath: "",
+    harnessWorkspaceActive: "",
     harnessAwaitingApproval: false,
     harnessApprovalToolName: "",
     harnessApprovalSummary: "",
@@ -31,6 +33,8 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     onCancel: vi.fn(),
     onApproveTool: vi.fn(),
     onDenyTool: vi.fn(),
+    onPickWorkspace: vi.fn(),
+    onUseScratch: vi.fn(),
     ...overrides,
   };
 }
@@ -115,6 +119,48 @@ describe("HarnessNodeView", () => {
     expect(data.onApproveTool).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "Deny" }));
     expect(data.onDenyTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers a folder picker on scratch, and a trusted-vs-pending state when bound", async () => {
+    const user = userEvent.setup();
+    const scratch = makeData({ harnessStatus: "done", pendingRequestId: null });
+    const { rerender } = renderHarness(scratch);
+    expect(screen.getByText("Scratch workspace")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Choose folder…" }));
+    expect(scratch.onPickWorkspace).toHaveBeenCalledTimes(1);
+
+    // Bound and trusted: the active dir matches the request, no warning.
+    rerender(
+      <ReactFlowProvider>
+        <HarnessNodeView
+          id="n1" type="harness"
+          data={makeData({
+            harnessStatus: "done", pendingRequestId: null,
+            harnessWorkspacePath: "C:/proj", harnessWorkspaceActive: "C:/proj",
+          })}
+          selected={false} isConnectable={false} positionAbsoluteX={0} positionAbsoluteY={0}
+          zIndex={0} dragging={false} deletable selectable draggable parentId={undefined}
+        />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByText(/C:\/proj/)).toBeInTheDocument();
+    expect(screen.queryByText(/not trusted/)).not.toBeInTheDocument();
+
+    // Bound but not trusted on this machine: pending warning shown.
+    rerender(
+      <ReactFlowProvider>
+        <HarnessNodeView
+          id="n1" type="harness"
+          data={makeData({
+            harnessStatus: "done", pendingRequestId: null,
+            harnessWorkspacePath: "C:/proj", harnessWorkspaceActive: "",
+          })}
+          selected={false} isConnectable={false} positionAbsoluteX={0} positionAbsoluteY={0}
+          zIndex={0} dragging={false} deletable selectable draggable parentId={undefined}
+        />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByText(/not trusted on this machine/)).toBeInTheDocument();
   });
 
   it("renders activity rows with error styling on failures", () => {

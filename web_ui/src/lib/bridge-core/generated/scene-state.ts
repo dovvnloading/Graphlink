@@ -125,6 +125,8 @@ export interface SceneNodeRow {
   harnessAwaitingApproval: boolean;
   harnessApprovalToolName: string;
   harnessApprovalSummary: string;
+  harnessWorkspacePath: string;
+  harnessWorkspaceActive: string;
   harnessMaxTurns: number;
   harnessSpentTurns: number;
   harnessSpentTokens: number;
@@ -882,6 +884,16 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["harnessApprovalSummary"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessApprovalSummary: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.harnessApprovalSummary` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["harnessWorkspacePath"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessWorkspacePath: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.harnessWorkspacePath` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["harnessWorkspaceActive"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessWorkspaceActive: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.harnessWorkspaceActive` + ": expected string"); }
   }
   {
     const fieldValue = value["harnessMaxTurns"];

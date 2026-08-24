@@ -267,8 +267,8 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # rendered-size report, without which frame/container bounds fall back
     # to a flat 220x120 estimate per member and do not enclose them).
     real = _collect_real_registrations()
-    assert len(real) == 177, (
-        f"expected exactly 177 real registered intents, found {len(real)} - "
+    assert len(real) == 179, (
+        f"expected exactly 179 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

@@ -37,7 +37,7 @@ import graphlink_task_config as config
 from backend.domain.node_states import HarnessState
 from backend.harness import context as context_module
 from backend.harness.transcript import append_compaction, append_message, load_messages
-from backend.harness.workspace import ensure_workspace
+from backend.harness.workspace import bound_root, ensure_workspace
 from backend.providers.base import CancelToken, ToolCall
 from backend.tools import (
     CODE_EXECUTE,
@@ -117,6 +117,9 @@ class HarnessRunContext(RunContext):
     run_id: str | None = None
     harness_node_id: str | None = None
     harness_workspace_id: str | None = None
+    # The run's ONE resolved confinement root (a Path), set at run start -
+    # a trusted user dir or the scratch dir. The tools confine against this.
+    harness_workspace_dir: object = None
     model_ref: object = None
     settings_manager: object = None
     runtime: object = None
@@ -269,7 +272,20 @@ async def run_harness(
     await bus.publish("scene")
 
     try:
-        workspace = ensure_workspace(node.state.harness_workspace_id)
+        # The transcript ALWAYS lives in the managed scratch dir - never
+        # written into a user's own project folder. The confinement root
+        # (and the AGENTS.md the prompt reads) is whatever the run bound:
+        # a trusted user directory, or that same scratch dir. bound_root is
+        # the trust gate - an untrusted/missing path silently falls back to
+        # scratch (see workspace.bound_root).
+        transcript_dir = ensure_workspace(node.state.harness_workspace_id)
+        root, is_user_dir = bound_root(
+            node.state.harness_workspace_id,
+            node.state.harness_workspace_path,
+            settings_manager=settings_manager,
+        )
+        ctx.harness_workspace_dir = root
+        node.state.harness_workspace_active = str(root) if is_user_dir else ""
 
         # ADR-021 stage 21.1 posture: offer only tools this run could
         # actually pass the scope gate with - anything else spends context
@@ -281,13 +297,13 @@ async def run_harness(
         # H3: built ONCE, here, and never rebuilt inside the loop - the
         # byte-stable prefix a provider's prompt cache keys on (see
         # backend/harness/context.py's own docstring).
-        system_prompt = context_module.build_system_prompt(workspace)
+        system_prompt = context_module.build_system_prompt(root)
         user_message = {"role": "user", "content": user_text}
-        append_message(workspace, user_message)
+        append_message(transcript_dir, user_message)
         # `history` deliberately excludes the system prompt: it lives
         # outside history so compaction structurally cannot touch it (and
         # so the cacheable prefix is the same object every turn).
-        history: list = [*load_messages(workspace), user_message]
+        history: list = [*load_messages(transcript_dir), user_message]
 
         turns = 0
         max_turns = max(1, int(node.state.harness_max_turns))
@@ -332,7 +348,7 @@ async def run_harness(
                     compacted = None
                 if compacted is not None:
                     history, _summary = compacted
-                    append_compaction(workspace, history[0]["content"])
+                    append_compaction(transcript_dir, history[0]["content"])
                     node.state.harness_compactions += 1
                     node.state.harness_context_tokens = context_module.history_tokens(history)
                     await bus.publish("scene")
@@ -358,7 +374,7 @@ async def run_harness(
                     {"id": c.id, "name": c.name, "arguments": c.arguments} for c in tool_calls
                 ]
             history.append(assistant_message)
-            append_message(workspace, assistant_message)
+            append_message(transcript_dir, assistant_message)
 
             if not tool_calls:
                 await _land("done", "Task complete.", reply=assistant_text)
@@ -377,7 +393,7 @@ async def run_harness(
                     "name": call.name, "content": result.content,
                 }
                 history.append(tool_message)
-                append_message(workspace, tool_message)
+                append_message(transcript_dir, tool_message)
                 await bus.publish("scene")
     except api_provider.RequestCancelledError:
         await _land("stopped", "Stopped by user.")

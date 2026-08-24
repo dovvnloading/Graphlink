@@ -2566,6 +2566,12 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             "harnessCompactions": (
                 n.state.harness_compactions if isinstance(n.state, HarnessState) else 0
             ),
+            "harnessWorkspacePath": (
+                n.state.harness_workspace_path if isinstance(n.state, HarnessState) else ""
+            ),
+            "harnessWorkspaceActive": (
+                n.state.harness_workspace_active if isinstance(n.state, HarnessState) else ""
+            ),
             "harnessMaxTurns": n.state.harness_max_turns if isinstance(n.state, HarnessState) else 0,
             "harnessSpentTurns": (
                 n.state.harness_spent_turns if isinstance(n.state, HarnessState) else 0

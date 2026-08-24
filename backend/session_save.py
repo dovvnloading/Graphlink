@@ -477,6 +477,11 @@ def _serialize_harness_node(node: SceneNode) -> dict[str, Any]:
         "status_detail": node.state.harness_status_detail,
         "harness_run_id": node.state.harness_run_id,
         "workspace_id": node.state.harness_workspace_id,
+        # The user-dir request persists (re-checked against trust on the
+        # next run); the resolved-active result does not - it is recomputed
+        # per run, and a stale "active" from a machine that trusted the dir
+        # must never imply trust on a machine that does not.
+        "workspace_path": node.state.harness_workspace_path,
         "activity": [dict(a) for a in node.state.harness_activity],
         "max_turns": node.state.harness_max_turns,
         "spent_turns": node.state.harness_spent_turns,
