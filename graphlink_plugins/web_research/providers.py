@@ -227,7 +227,10 @@ class RequestsDocumentFetcher:
                     current_url = validated.canonical_url
 
                     try:
-                        owed = self.etiquette.gate(current_url, lambda robots_url: self._fetch_robots_bytes(robots_url, session))
+                        owed = self.etiquette.gate(
+                            current_url,
+                            lambda robots_url: self._fetch_robots_bytes(robots_url, session, token=token, started=started),
+                        )
                     except RobotsDisallowedError as exc:
                         raise ResearchFailure(str(exc), code="robots_disallowed", retryable=False, source_id=result.source_id) from exc
                     self._wait_politely(owed, token=token, started=started, result=result)
@@ -279,7 +282,37 @@ class RequestsDocumentFetcher:
                         maximum = min(self.policy.max_bytes, limits.max_bytes_per_source)
                         body = bytearray()
                         truncated = False
-                        for chunk in response.iter_content(chunk_size=16 * 1024):
+                        # SECURITY-FIX (web-research-slow-drip-bypasses-budget-
+                        # and-cancel): chunk_size used to be 16 KiB. requests/
+                        # urllib3's Response.iter_content(amt) is backed by
+                        # io.BufferedReader.read(amt), which does NOT return
+                        # after one recv() - it loops internally, calling
+                        # recv() again and again, until it has accumulated
+                        # `amt` bytes or hit EOF. The (connect, read) timeout
+                        # passed to session.get() below is a PER-RECV timeout
+                        # that resets on every recv() that returns ANY bytes,
+                        # even one. So a server dripping 1 byte every few
+                        # seconds (safely under read_timeout_seconds, never
+                        # tripping a single recv()'s own timeout) defers this
+                        # loop's cancellation/time-budget check below until a
+                        # full chunk_size has trickled in - with the old 16
+                        # KiB chunks that's chunk_size * drip_interval, i.e.
+                        # unbounded in practice (tens of hours), even though
+                        # this fetch's own total_timeout_seconds budget is
+                        # sitting right here doing nothing in between. Reading
+                        # ONE byte per iter_content() step makes "one chunk"
+                        # equal to "at most one recv() wait", so the worst-
+                        # case stall before this check re-runs collapses to
+                        # roughly one read-timeout window (bounded, and on the
+                        # order of total_timeout_seconds) instead of
+                        # chunk_size read-timeout windows (unbounded in
+                        # practice). This doesn't slow ordinary fast transfers
+                        # down to one syscall per byte - the BufferedReader
+                        # underneath already batches actual socket reads into
+                        # its own internal buffer regardless of the amt asked
+                        # for, so read(1) against a fast/local stream is
+                        # served from memory, not one recv() per byte.
+                        for chunk in response.iter_content(chunk_size=1):
                             token.raise_if_cancelled()
                             if time.monotonic() - started > self.policy.total_timeout_seconds:
                                 raise ResearchFailure("Source fetch exceeded the total time limit.", code="fetch_timeout", source_id=result.source_id)
@@ -322,7 +355,9 @@ class RequestsDocumentFetcher:
             raise ResearchFailure("The source could not be processed.", code="fetch_failed", source_id=result.source_id) from exc
         raise ResearchFailure("The source returned too many redirects.", code="redirect_limit", source_id=result.source_id)
 
-    def _fetch_robots_bytes(self, robots_url: str, session) -> "tuple[int, bytes] | None":
+    def _fetch_robots_bytes(
+        self, robots_url: str, session, *, token: CancellationToken | None = None, started: float | None = None
+    ) -> "tuple[int, bytes] | None":
         """Fetches robots.txt through the SAME SSRF-safe, IP-pinned
         mechanism the main content fetch uses - see _PinnedHTTPAdapter's
         own docstring for why urllib.robotparser.RobotFileParser.read()'s
@@ -333,8 +368,32 @@ class RequestsDocumentFetcher:
         no explicit rules found, CrawlEtiquette's own fail-open/no-rules
         handling applies either way). Returns None on anything that
         prevents a completed response (blocked by policy, network error,
-        timeout) - a completed response, whatever its status code, always
-        returns (status_code, body)."""
+        timeout, cancellation, or this fetch's own total_timeout_seconds
+        budget running out) - a completed response, whatever its status
+        code, always returns (status_code, body).
+
+        SECURITY-FIX (web-research-slow-drip-bypasses-budget-and-cancel):
+        `token` and `started` are new - this method used to take neither,
+        so a robots.txt response could stall the calling thread with NO
+        cancellation check and NO time-budget check at all (unlike fetch()'s
+        own content loop, which at least re-checked between chunks). A
+        malicious/compromised site's robots.txt endpoint - reached on every
+        single fetch, before the real request - could hold the worker
+        indefinitely with the Stop button and total_timeout_seconds both
+        powerless to stop it. token/started are threaded in from fetch()'s
+        own closure via the lambda at the call site below, so this reuses
+        the SAME CancellationToken and the SAME total_timeout_seconds
+        budget as the rest of this fetch, rather than inventing a second,
+        separate one. Both stay optional (defaulting to a fresh, never-
+        cancelled token and "budget starts now") so any OTHER caller of
+        this method - direct unit tests included - keeps working exactly
+        as before without needing to know about them; only fetch()'s own
+        call site actually needs to pass the real ones for the fix to take
+        effect."""
+        if token is None:
+            token = CancellationToken()
+        if started is None:
+            started = time.monotonic()
         try:
             validated = self.policy.validate(robots_url)
         except URLPolicyError:
@@ -351,7 +410,18 @@ class RequestsDocumentFetcher:
             return None
         try:
             body = bytearray()
-            for chunk in response.iter_content(chunk_size=8 * 1024):
+            # SECURITY-FIX (web-research-slow-drip-bypasses-budget-and-
+            # cancel): chunk_size=1, not the old 8 KiB - see fetch()'s own
+            # chunk_size=1 comment above for the exact mechanism (iter_
+            # content(amt) blocks until `amt` bytes accumulate, bounded only
+            # by a PER-RECV timeout that a slow drip keeps resetting). The
+            # token.raise_if_cancelled()/deadline check below now actually
+            # gets a chance to run at roughly one read-timeout-window's
+            # granularity instead of never running at all.
+            for chunk in response.iter_content(chunk_size=1):
+                token.raise_if_cancelled()
+                if time.monotonic() - started > self.policy.total_timeout_seconds:
+                    return None
                 if not chunk:
                     continue
                 remaining = self.ROBOTS_TXT_MAX_BYTES - len(body)
