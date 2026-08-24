@@ -624,3 +624,155 @@ def test_list_tools_tolerates_a_non_list_tools_field(tmp_path):
         assert client.list_tools() == ()
     finally:
         client.close()
+
+
+# -- SECURITY-FIX: unbounded memory/text growth from a hostile server -------
+
+
+def test_call_tool_truncates_an_oversized_result_instead_of_returning_it_whole(tmp_path):
+    """MAX_TOOL_RESULT_CHARS bounds what a tool result hands back to the
+    Builder - unlike every built-in graph tool's own excerpting, this was
+    previously unbounded, letting a hostile/misbehaving server blow the
+    model's context/cost budget with one call."""
+    from backend.mcp_client import MAX_TOOL_RESULT_CHARS
+
+    huge_script = tmp_path / "huge_result_server.py"
+    huge_script.write_text(textwrap.dedent(r'''
+        import json
+        import sys
+
+        def send(message):
+            sys.stdout.write(json.dumps(message) + "\n")
+            sys.stdout.flush()
+
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            request = json.loads(line)
+            method = request.get("method")
+            request_id = request.get("id")
+            if method == "initialize":
+                send({"jsonrpc": "2.0", "id": request_id, "result": {
+                    "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "huge", "version": "0.0.1"},
+                }})
+            elif method == "notifications/initialized":
+                pass
+            elif method == "tools/call":
+                text = "x" * 5_000_000
+                send({"jsonrpc": "2.0", "id": request_id, "result": {
+                    "content": [{"type": "text", "text": text}], "isError": False,
+                }})
+            else:
+                send({"jsonrpc": "2.0", "id": request_id,
+                      "error": {"code": -32601, "message": "unknown method"}})
+    '''), encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(huge_script),), timeout=20.0)
+    client.connect()
+    try:
+        result = client.call_tool("anything", {})
+        assert len(result.content) < 5_000_000
+        assert len(result.content) <= MAX_TOOL_RESULT_CHARS + 200
+        assert "truncated" in result.content
+    finally:
+        client.close()
+
+
+def test_read_loop_survives_a_never_terminated_stdout_line_without_deadlocking(tmp_path):
+    """SECURITY-FIX: `for line in process.stdout` used to accumulate an
+    entire line in memory before yielding it, with no bound - a server that
+    writes without ever emitting a newline grows that buffer without limit.
+    The bounded readline() loop must give up on that connection (not hang
+    or crash the reader thread) once the line exceeds the cap by more than
+    the resync budget, and a normal subsequent call must still work if the
+    server recovers."""
+    script = tmp_path / "no_newline_server.py"
+    script.write_text(textwrap.dedent(r'''
+        import json
+        import sys
+
+        def send(message):
+            sys.stdout.write(json.dumps(message) + "\n")
+            sys.stdout.flush()
+
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            request = json.loads(line)
+            method = request.get("method")
+            request_id = request.get("id")
+            if method == "initialize":
+                send({"jsonrpc": "2.0", "id": request_id, "result": {
+                    "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "no-newline", "version": "0.0.1"},
+                }})
+            elif method == "notifications/initialized":
+                pass
+            elif method == "tools/call":
+                # Write far more than the reader's per-read cap, with NO
+                # trailing newline ever - the real attack this closes.
+                sys.stdout.write("x" * 50_000_000)
+                sys.stdout.flush()
+                # Deliberately never send a real JSON-RPC response.
+            else:
+                send({"jsonrpc": "2.0", "id": request_id,
+                      "error": {"code": -32601, "message": "unknown method"}})
+    '''), encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),), timeout=20.0)
+    client.connect()
+    try:
+        # The reader gives up resyncing after a bounded number of oversized
+        # reads and stops - reported immediately as a closed connection
+        # rather than making the caller wait out the full timeout.
+        with pytest.raises(McpError, match="closed its output unexpectedly"):
+            client.call_tool("anything", {})
+    finally:
+        client.close()  # must not hang
+
+
+def test_call_tool_error_message_is_truncated_not_unbounded(tmp_path):
+    """SECURITY-FIX: an error response's message text flowed straight into
+    McpError with no length bound - a hostile server's error.message could
+    be arbitrarily large, and this text is logged and can reach a
+    user-facing notification."""
+    script = tmp_path / "huge_error_server.py"
+    script.write_text(textwrap.dedent(r'''
+        import json
+        import sys
+
+        def send(message):
+            sys.stdout.write(json.dumps(message) + "\n")
+            sys.stdout.flush()
+
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            request = json.loads(line)
+            method = request.get("method")
+            request_id = request.get("id")
+            if method == "initialize":
+                send({"jsonrpc": "2.0", "id": request_id, "result": {
+                    "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "huge-error", "version": "0.0.1"},
+                }})
+            elif method == "notifications/initialized":
+                pass
+            elif method == "tools/call":
+                send({"jsonrpc": "2.0", "id": request_id,
+                      "error": {"code": -1, "message": "e" * 500_000}})
+            else:
+                send({"jsonrpc": "2.0", "id": request_id,
+                      "error": {"code": -32601, "message": "unknown method"}})
+    '''), encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),), timeout=20.0)
+    client.connect()
+    try:
+        with pytest.raises(McpError) as excinfo:
+            client.call_tool("anything", {})
+        assert len(str(excinfo.value)) < 3000
+        assert "truncated" in str(excinfo.value)
+    finally:
+        client.close()

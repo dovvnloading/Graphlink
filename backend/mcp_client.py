@@ -61,6 +61,46 @@ from graphlink_process_env import safe_subprocess_env
 # client actually uses have been stable across every MCP revision to date).
 MCP_PROTOCOL_VERSION = "2024-11-05"
 _CLIENT_NAME = "graphlink"
+
+# SECURITY-FIX: an MCP tool result is returned to the Builder uncapped -
+# unlike every built-in graph tool (backend/tools_graph.py's own excerpting,
+# e.g. read_subgraph's nodes_truncated flag), a server's response text was
+# handed straight through, whatever its size. The server is untrusted (this
+# module's own docstring already treats it as such for env/approval), so an
+# oversized text block round-trips intact into the Builder's message list
+# and is re-sent to the provider on every subsequent turn - a cheap way for
+# a hostile or misbehaving server to blow the model's context/cost budget
+# with a single call. 200_000 chars comfortably covers a real tool answer
+# (a file read, a search result page) while bounding the pathological case.
+MAX_TOOL_RESULT_CHARS = 200_000
+
+# SECURITY-FIX: `for line in process.stdout` (below, in _read_loop) - plain
+# text-mode line iteration - accumulates an ENTIRE line in memory before
+# ever yielding it, with no upper bound. A hostile or simply broken server
+# that writes to stdout without ever emitting a newline grows that buffer
+# without limit; Python eventually raises MemoryError on the reader daemon
+# thread, which threading.excepthook reports through the crash logger,
+# taking the desktop app down. 8MB comfortably covers any real single
+# JSON-RPC message (tools/list, a tool result before its own
+# MAX_TOOL_RESULT_CHARS cap applies) while bounding the pathological case
+# to a fixed, small amount of memory per read.
+_MAX_STDOUT_LINE_CHARS = 8_000_000
+# How many additional bounded reads _read_loop will perform to resync past
+# a single oversized/never-terminated line before giving up and treating
+# the connection as unrecoverably desynced. Each read is itself capped at
+# _MAX_STDOUT_LINE_CHARS, so this bounds total memory for the discard, not
+# just each individual chunk.
+_MAX_OVERSIZED_LINE_RESYNC_READS = 4
+
+# SECURITY-FIX: _drain_stderr's ring buffer bounds the NUMBER of retained
+# lines (200) but not the LENGTH of any one of them - `for line in
+# process.stderr` accumulated an entire line in memory first, same as the
+# stdout case above. A hostile/broken server writing to stderr without
+# newlines could still exhaust memory even with the line-count cap in
+# place. _stderr_tail_text only ever keeps the final 2000 chars anyway, so
+# each stored line is capped well above that (with room for several lines
+# of real diagnostic context) rather than truly unbounded.
+_MAX_STDERR_LINE_CHARS = 4_000
 _CLIENT_VERSION = "1.0"
 
 # A reader-thread sentinel distinct from any real JSON-RPC payload (a plain
@@ -306,16 +346,53 @@ class McpStdioClient:
             for block in content
             if isinstance(block, dict) and block.get("type") == "text"
         ]
-        return ToolResult(content="\n".join(text_parts), is_error=bool(response.get("isError", False)))
+        result_text = "\n".join(text_parts)
+        if len(result_text) > MAX_TOOL_RESULT_CHARS:
+            result_text = (
+                result_text[:MAX_TOOL_RESULT_CHARS]
+                + f"\n...[truncated, {len(result_text) - MAX_TOOL_RESULT_CHARS} more characters omitted]"
+            )
+        return ToolResult(content=result_text, is_error=bool(response.get("isError", False)))
 
     # -- JSON-RPC framing ------------------------------------------------
+
+    @staticmethod
+    def _drain_oversized_line(stdout) -> bool:
+        """Consumes the remainder of a single line that already exceeded
+        _MAX_STDOUT_LINE_CHARS, in further _MAX_STDOUT_LINE_CHARS-bounded
+        reads, until the real trailing newline (or EOF) is found - so
+        _read_loop's own next readline() starts at a genuine line boundary
+        again instead of misinterpreting the tail of a too-long line as a
+        fresh one. Returns True once resynced, False if the line is still
+        not terminated after _MAX_OVERSIZED_LINE_RESYNC_READS more reads
+        (a server that just never stops writing) - the caller treats that
+        as unrecoverable and stops reading."""
+        for _ in range(_MAX_OVERSIZED_LINE_RESYNC_READS):
+            chunk = stdout.readline(_MAX_STDOUT_LINE_CHARS)
+            if chunk == "" or chunk.endswith("\n"):
+                return True
+        return False
 
     def _read_loop(self) -> None:
         process = self._process
         assert process is not None and process.stdout is not None
         try:
-            for line in process.stdout:
-                line = line.strip()
+            while True:
+                # SECURITY-FIX: readline(size) bounds a single read to
+                # _MAX_STDOUT_LINE_CHARS instead of the unbounded `for line
+                # in process.stdout` this replaced - see that constant's own
+                # doc. Returns "" only at real EOF; a chunk that hits the
+                # cap with no trailing "\n" means the real line is longer
+                # than the cap, so the rest of it is discarded (bounded, via
+                # _drain_oversized_line) rather than ever held in memory.
+                raw_line = process.stdout.readline(_MAX_STDOUT_LINE_CHARS)
+                if raw_line == "":
+                    break  # EOF
+                if len(raw_line) >= _MAX_STDOUT_LINE_CHARS and not raw_line.endswith("\n"):
+                    if not self._drain_oversized_line(process.stdout):
+                        break  # could not resync within the read budget - give up
+                    continue
+                line = raw_line.strip()
                 if not line:
                     continue
                 try:
@@ -350,7 +427,10 @@ class McpStdioClient:
         if process is None or process.stderr is None:
             return
         try:
-            for line in process.stderr:
+            while True:
+                line = process.stderr.readline(_MAX_STDERR_LINE_CHARS)
+                if line == "":
+                    break  # EOF
                 self._stderr_tail.append(line)
         except (ValueError, OSError):
             # stderr closed out from under us (close() race) - nothing left
@@ -448,6 +528,17 @@ class McpStdioClient:
                     if "error" in payload:
                         error = payload["error"]
                         message_text = error.get("message", error) if isinstance(error, dict) else error
+                        # SECURITY-FIX: message_text comes straight from the
+                        # (untrusted) server with no length bound - a hostile
+                        # or misbehaving server's error.message could be
+                        # arbitrarily large, and this exception's text flows
+                        # into agents.py's own logger.warning(...) call and
+                        # into user-facing notification text, unbounded.
+                        # Same 2000-char bound this file already uses for
+                        # the stderr-tail diagnostic just above.
+                        message_text = str(message_text)
+                        if len(message_text) > 2000:
+                            message_text = message_text[:2000] + "…[truncated]"
                         raise McpError(f"{method} failed: {message_text}")
                     return payload.get("result", {}) or {}
             finally:
