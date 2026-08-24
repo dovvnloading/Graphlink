@@ -43,6 +43,16 @@ def register_diagnostics_intents(
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"bundle-{utcnow.strftime('%Y%m%dT%H%M%SZ')}.json"
         path.write_text(json.dumps(bundle, indent=2), encoding="utf-8")
+        # SECURITY-FIX (OBS-3): the bundle is built from this same document's
+        # state (backend/diagnostic_bundle.py's own redaction allowlist
+        # notwithstanding, it can still carry absolute paths) and, like
+        # graphlink.log and faulthandler.log, was previously created at the
+        # process umask with no chmod - the one uncovered case among the
+        # three ~/.graphlink file kinds that skip write_text's own
+        # permission control entirely. Reuses crash_recovery's own helper
+        # (already reached into via _data_dir() above) rather than
+        # duplicating the POSIX-only/log-and-swallow chmod idiom here.
+        crash_recovery._chmod_0600(path)
         return {"bundle": bundle, "path": str(path)}
 
     async def open_log_folder():
