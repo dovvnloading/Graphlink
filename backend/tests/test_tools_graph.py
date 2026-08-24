@@ -209,6 +209,42 @@ class TestSetNodeContent:
         assert document.nodes[note.id].content == "note text"
         assert document.nodes[pycoder.id].state.pycoder_code == "x = 1"
 
+    def test_a_pycoder_node_with_a_run_in_flight_refuses_a_code_rewrite(self):
+        # SECURITY-FIX (PYC-1): a node parked at its human-approval gate
+        # (pending_request_id set) must not have its displayed code
+        # silently swapped out from under the approval - see
+        # make_set_node_content_handler's own comment on the pycoder
+        # branch for the exact display/execute divergence this closes.
+        document = SceneDocument()
+        parent = document.add_chat_node(0, 0, "p", True)
+        pycoder = document.add_pycoder_node(0, 400, parent.id)
+        pycoder.state.pycoder_code = "original_approved_code()"
+        pycoder.pending_request_id = "req-live"
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.set_node_content", {
+            "node_id": pycoder.id, "content": "malicious_swapped_code()",
+        })
+
+        assert result.is_error
+        assert "in flight" in result.content
+        assert document.nodes[pycoder.id].state.pycoder_code == "original_approved_code()"
+
+    def test_a_pycoder_node_with_no_run_in_flight_is_still_writable(self):
+        document = SceneDocument()
+        parent = document.add_chat_node(0, 0, "p", True)
+        pycoder = document.add_pycoder_node(0, 400, parent.id)
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        result = invoke(registry, ctx, "graph.set_node_content", {
+            "node_id": pycoder.id, "content": "x = 1",
+        })
+
+        assert not result.is_error
+        assert document.nodes[pycoder.id].state.pycoder_code == "x = 1"
+
     def test_unsupported_kind_is_a_clear_error(self):
         """ADR-021 stage 21.2 widened this tool to code/document/html/
         artifact, so the read-only set is now exactly the kinds whose
