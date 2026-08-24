@@ -106,6 +106,57 @@ class TestPrepareScratchDir:
         assert stat.S_IMODE(target.stat().st_mode) == 0o700
 
 
+# -- SECURITY-FIX (PYC-5): the shared ROOT (path.parent) must be secured
+# -- before a leaf is ever created inside it - a leaf's own 0700 does not
+# -- stop the owner of a pre-existing, attacker-controlled root from
+# -- renaming/symlink-swapping the leaf's directory entry.
+
+
+class TestPrepareScratchDirRootOwnership:
+    def test_a_root_owned_by_another_user_is_refused_not_silently_trusted(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(scratch_dirs.sys, "platform", "linux")
+        root = tmp_path / "shared_root"
+        root.mkdir()
+        real_owner_uid = root.stat().st_uid
+        # Fake THIS process's own uid as different from the root's real
+        # (test-created) owner - equivalent to "a different user
+        # pre-created this root", without needing real root/chown
+        # privileges a test can't have.
+        monkeypatch.setattr(scratch_dirs.os, "getuid", lambda: real_owner_uid + 1, raising=False)
+
+        with pytest.raises(OSError, match="refusing to use scratch root"):
+            scratch_dirs.prepare_scratch_dir(root / "leaf")
+
+        # Nothing was created inside the untrusted root.
+        assert not (root / "leaf").exists()
+
+    def test_a_root_owned_by_this_process_is_used_normally(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(scratch_dirs.sys, "platform", "linux")
+        root = tmp_path / "shared_root"
+        root.mkdir()
+        monkeypatch.setattr(scratch_dirs.os, "getuid", lambda: os.stat(root).st_uid, raising=False)
+
+        scratch_dirs.prepare_scratch_dir(root / "leaf")  # must not raise
+
+        assert (root / "leaf").is_dir()
+
+    def test_getuid_being_unavailable_does_not_raise(self, tmp_path, monkeypatch):
+        # Tolerated the same way as an OSError - see
+        # _ensure_private_scratch_root's own docstring on why (real POSIX
+        # always has getuid; only a hypothetical exotic platform wouldn't).
+        monkeypatch.setattr(scratch_dirs.sys, "platform", "linux")
+
+        def _no_getuid():
+            raise AttributeError("no getuid on this platform")
+
+        monkeypatch.setattr(scratch_dirs.os, "getuid", _no_getuid, raising=False)
+        root = tmp_path / "shared_root"
+
+        scratch_dirs.prepare_scratch_dir(root / "leaf")  # must not raise
+
+        assert (root / "leaf").is_dir()
+
+
 # -- remove_scratch_dir -----------------------------------------------------
 
 

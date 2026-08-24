@@ -63,6 +63,52 @@ def safe_scratch_id(raw_id: str) -> str:
     return re.sub(r"[^A-Za-z0-9_-]", "_", raw_id or "default")
 
 
+def _ensure_private_scratch_root(root: Path) -> None:
+    """SECURITY-FIX (PYC-5): prepare_scratch_dir's own chmod 0700 on the
+    LEAF only keeps other users out of it going forward - it does nothing
+    to stop a user who already owns/controls the SHARED root (one of
+    PYCODER_REPL_ROOT/EXECUTION_SANDBOX_ROOT, both predictable, fixed paths
+    under the system temp dir) from renaming or symlink-swapping the
+    leaf's own directory entry out from under this process: owning a
+    directory grants rename/unlink rights over every entry inside it
+    regardless of that entry's own mode, so a pre-existing, attacker-owned
+    root turns the window between this call and the caller's later
+    Popen(cwd=leaf) into a real TOCTOU race. Secures the ROOT itself first:
+    creates it 0700 if new, and - the actual fix - refuses (raises
+    OSError) to use a PRE-EXISTING root owned by a different user, rather
+    than silently trusting it. This is the same "don't touch what you
+    don't own" posture CPython's own tempfile.mkdtemp() takes for exactly
+    this class of shared-/tmp attack. Callers (PythonREPL.start,
+    VirtualEnvSandbox.ensure_base_environment) already run inside a
+    run-level try/except that reports setup failures gracefully - a raise
+    here becomes a failed run, not a crash.
+
+    os.getuid() does not exist on Windows at all; this is only ever
+    reached from prepare_scratch_dir's own POSIX-only branch, but a
+    missing getuid is tolerated the same way as an OSError below (log,
+    skip the ownership check, still attempt the chmod) rather than
+    crashing outright - real POSIX systems always have it."""
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        this_uid = os.getuid()
+    except AttributeError:
+        this_uid = None
+    if this_uid is not None:
+        try:
+            owner_uid = root.stat().st_uid
+        except OSError:
+            owner_uid = None
+        if owner_uid is not None and owner_uid != this_uid:
+            raise OSError(
+                f"refusing to use scratch root {root}: owned by uid {owner_uid}, "
+                f"expected this process's own uid {this_uid} - possible shared-tmp pre-creation attack"
+            )
+    try:
+        os.chmod(root, 0o700)
+    except OSError:
+        logger.warning("could not chmod scratch root %s to 0700 - continuing with existing permissions", root)
+
+
 def prepare_scratch_dir(path: Path) -> None:
     """mkdir -p, then chmod 0700 on POSIX (no-op on Windows, matching every
     other chmod call site in this codebase - os.chmod there only ever
@@ -70,7 +116,17 @@ def prepare_scratch_dir(path: Path) -> None:
     graphlink_settings_store.py's own chmod calls). A refused chmod is
     logged and otherwise ignored: a permissions tightening that can't be
     applied must not stop code execution from running, the same fail-open
-    stance graphlink_settings_store.py's 0600 file chmods already take."""
+    stance graphlink_settings_store.py's 0600 file chmods already take.
+
+    SECURITY-FIX (PYC-5): on POSIX, also secures path.parent (the shared
+    scratch root) via _ensure_private_scratch_root BEFORE creating
+    anything inside it - see that function's own docstring for why a
+    leaf's own chmod alone is not enough. This DOES raise (not
+    log-and-swallow) on a detected hostile pre-existing root, unlike the
+    leaf's own best-effort chmod below - see _ensure_private_scratch_root's
+    docstring for why that asymmetry is deliberate."""
+    if sys.platform != "win32":
+        _ensure_private_scratch_root(path.parent)
     path.mkdir(parents=True, exist_ok=True)
     if sys.platform == "win32":
         return
