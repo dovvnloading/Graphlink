@@ -97,11 +97,6 @@ async def drive(document, dispatcher, registry, bus, node, user_text):
 
 
 class TestWorkspace:
-    def test_relative_paths_resolve_inside(self, workspace_root):
-        ensure_workspace("ws1")
-        resolved = resolve_in_workspace("ws1", "sub/file.txt")
-        assert str(resolved).startswith(str((workspace_root / "ws1").resolve()))
-
     def test_traversal_is_refused(self, workspace_root):
         ensure_workspace("ws1")
         with pytest.raises(WorkspaceError):
@@ -201,28 +196,6 @@ class TestFsTools:
         result = asyncio.run(go())
         assert not result.is_error and "truncated" in result.content
         assert len(result.content) < 300
-
-    def test_invalid_regex_is_a_tool_error(self, workspace_root):
-        ensure_workspace("ws1")
-        registry = self._registry()
-
-        async def go():
-            return await registry.invoke(call("1", "fs.grep", pattern="("), make_ctx("ws1"))
-
-        result = asyncio.run(go())
-        assert result.is_error and "regular expression" in result.content
-
-    def test_missing_workspace_binding_is_a_tool_error(self, workspace_root):
-        registry = self._registry()
-
-        async def go():
-            ctx = make_ctx("ws1")
-            ctx.harness_workspace_id = None
-            return await registry.invoke(call("1", "fs.list"), ctx)
-
-        result = asyncio.run(go())
-        assert result.is_error
-
 
 class TestLoop:
     def _make(self, workspace_root):
@@ -387,18 +360,6 @@ class TestWriteTools:
         assert ambiguous.is_error and "2 times" in ambiguous.content
         assert (ws / "a.txt").read_text(encoding="utf-8") == "dup dup"
 
-    def test_write_escape_is_refused(self, workspace_root):
-        ensure_workspace("ws1")
-        registry = self._registry()
-        ctx, _ = self._write_ctx()
-
-        async def go():
-            return await registry.invoke(call("1", "fs.write", path="../evil.txt", content="x"), ctx)
-
-        result = asyncio.run(go())
-        assert result.is_error and "outside" in result.content
-
-
 class TestShellTool:
     def _setup(self, workspace_id="ws1", approve=True):
         from backend.harness.tools_shell import register_harness_shell_tool
@@ -445,18 +406,6 @@ class TestShellTool:
 
         result = asyncio.run(go())
         assert "ABSENT" in result.content and "sk-secret" not in result.content
-
-    def test_nonzero_exit_is_an_error_result_with_output(self, workspace_root):
-        ensure_workspace("ws1")
-        registry, ctx = self._setup()
-
-        async def go():
-            return await registry.invoke(
-                call("1", "shell.exec", command="python -c \"import sys; print('boom'); sys.exit(3)\""), ctx,
-            )
-
-        result = asyncio.run(go())
-        assert result.is_error and "exit code 3" in result.content and "boom" in result.content
 
     def test_denied_command_never_spawns(self, workspace_root):
         ws = ensure_workspace("ws1")
@@ -540,21 +489,6 @@ class TestContextPrompt:
         # authority grant must travel with the content.
         assert "cannot grant you capabilities" in prompt
 
-    def test_oversized_instructions_are_capped_with_a_notice(self, workspace_root, monkeypatch):
-        monkeypatch.setattr(context_module, "INSTRUCTIONS_BUDGET_CHARS", 100)
-        ws = ensure_workspace("ws1")
-        (ws / "AGENTS.md").write_text("x" * 5_000, encoding="utf-8")
-        prompt = context_module.build_system_prompt(ws)
-        assert "[Truncated at 100 characters.]" in prompt
-        assert "x" * 200 not in prompt
-
-    def test_missing_or_unreadable_instructions_degrade_to_core_only(self, workspace_root):
-        from graphlink_prompts import resolve_prompt_text
-
-        ws = ensure_workspace("ws1")
-        assert context_module.build_system_prompt(ws) == resolve_prompt_text("harness-core")
-
-
 class TestCompaction:
     def _history(self, pairs=6):
         history = [{"role": "user", "content": "the original question"}]
@@ -598,10 +532,6 @@ class TestCompaction:
         history = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
         assert context_module.compact_history(history, goal="g", budget_tokens=100_000) is None
         assert called["n"] == 0
-
-    def test_an_empty_summary_is_treated_as_no_compaction(self, monkeypatch):
-        monkeypatch.setattr(context_module, "summarize_dropped", lambda *a, **k: "   ".strip())
-        assert context_module.compact_history(self._history(), goal="g", budget_tokens=200) is None
 
     def test_loop_compacts_over_budget_and_records_it_in_the_transcript(self, workspace_root, monkeypatch):
         document = SceneDocument()

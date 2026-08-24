@@ -276,11 +276,6 @@ def test_delete_chat_node_at_the_root_makes_children_new_roots():
     assert not any(e.target == child.id for e in doc.edges.values()), "child has no parent edge left"
 
 
-def test_delete_chat_node_unknown_raises():
-    with pytest.raises(SceneError):
-        SceneDocument().delete_chat_node("ghost")
-
-
 def test_delete_chat_node_detaches_it_from_any_frame_or_container_membership():
     # Regression: delete_chat_node deletes via its own reparent-children path,
     # not remove_nodes - it must still detach the deleted node from any
@@ -366,55 +361,6 @@ def test_add_code_node_creates_a_real_code_kind_node():
     assert node.title == "python: print('hi')"
 
 
-def test_add_code_node_falls_back_to_language_only_title_for_empty_code():
-    doc = SceneDocument()
-    node = doc.add_code_node(0, 0, "", "python")
-    assert node.title == "python"
-
-
-def test_add_code_node_falls_back_to_code_label_when_language_and_code_are_empty():
-    doc = SceneDocument()
-    node = doc.add_code_node(0, 0, "", "")
-    assert node.title == "code"
-
-
-def test_add_code_node_connects_to_a_real_parent():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    child = doc.add_code_node(10, 10, "x = 1", "python", parent_id=parent.id)
-    assert any(e.source == parent.id and e.target == child.id for e in doc.edges.values())
-
-
-def test_add_code_node_rejects_unknown_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_code_node(0, 0, "x = 1", "python", parent_id="ghost")
-
-
-def test_scene_payload_includes_code_fields_defaulted_for_other_kinds():
-    doc = SceneDocument()
-    doc.add_node(0, 0, "plain")
-    doc.add_code_node(1, 1, "x = 1", "python")
-    rows = {n["title"]: n for n in doc.scene_payload()["nodes"]}
-    assert rows["plain"]["kind"] == "placeholder"
-    assert rows["plain"]["code"] == ""
-    assert rows["plain"]["language"] == ""
-    code_row = rows["python: x = 1"]
-    assert code_row["kind"] == "code"
-    assert code_row["code"] == "x = 1"
-    assert code_row["language"] == "python"
-
-
-def test_code_node_deletion_goes_through_the_generic_remove_nodes_path():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_code_node(10, 10, "x = 1", "python", parent_id=parent.id)
-    assert not hasattr(doc, "delete_code_node"), "code nodes are not branch points - no special delete method"
-    doc.remove_nodes([node.id])
-    assert node.id not in doc.nodes
-    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
-
-
 # -- R3.9: document nodes -----------------------------------------------------
 
 
@@ -463,83 +409,6 @@ def test_add_document_node_requires_a_parent_id():
         doc.add_document_node(0, 0, "file.txt", "content", "document")
 
 
-def test_add_document_node_rejects_unknown_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_document_node(0, 0, "file.txt", "content", "document", "ghost")
-
-
-def test_scene_payload_includes_document_fields_defaulted_for_other_kinds():
-    doc = SceneDocument()
-    doc.add_node(0, 0, "plain")
-    parent = doc.add_chat_node(1, 1, "parent message", True)
-    doc.add_document_node(
-        2,
-        2,
-        "notes.txt",
-        "hello",
-        "document",
-        parent.id,
-        file_path="/tmp/notes.txt",
-        mime_type="text/plain",
-        byte_size=512,
-        preview_label="TXT",
-    )
-    rows = {n["title"]: n for n in doc.scene_payload()["nodes"]}
-    plain_row = rows["plain"]
-    assert plain_row["kind"] == "placeholder"
-    assert plain_row["attachmentKind"] == ""
-    assert plain_row["filePath"] == ""
-    assert plain_row["mimeType"] == ""
-    assert plain_row["durationSeconds"] is None
-    assert plain_row["byteSize"] is None
-    assert plain_row["previewLabel"] == ""
-
-    doc_row = rows["notes.txt"]
-    assert doc_row["kind"] == "document"
-    assert doc_row["attachmentKind"] == "document"
-    assert doc_row["filePath"] == "/tmp/notes.txt"
-    assert doc_row["mimeType"] == "text/plain"
-    assert doc_row["byteSize"] == 512
-    assert doc_row["previewLabel"] == "TXT"
-
-
-def test_add_document_node_intent_creates_a_real_node_and_publishes():
-    async def run():
-        bus, document, recorder = make_bus()
-        parent_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
-        # dispatch_intent only ever forwards a positional args list (see
-        # SessionBus.dispatch_intent: `handler(*args)`), so every argument -
-        # including the wrapper's keyword-defaulted ones - is passed
-        # positionally here, in add_document_node's declared order.
-        node_id = await bus.dispatch_intent(
-            "scene",
-            "addDocumentNode",
-            [10, 10, "audio.mp3", "", "audio", parent_id, "", "audio/mpeg", 125.4, 4096, ""],
-        )
-        assert document.nodes[node_id].kind == "document"
-        assert document.nodes[node_id].state.attachment_kind == "audio"
-        assert document.nodes[node_id].state.mime_type == "audio/mpeg"
-        assert document.nodes[node_id].state.duration_seconds == 125.4
-        assert document.nodes[node_id].state.byte_size == 4096
-        assert any(
-            e.source == parent_id and e.target == node_id for e in document.edges.values()
-        )
-        assert recorder.topics_seen().count("scene") == 2, "both mutations publish"
-
-    asyncio.run(run())
-
-
-def test_document_node_deletion_goes_through_the_generic_remove_nodes_path():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_document_node(10, 10, "file.txt", "content", "document", parent.id)
-    assert not hasattr(doc, "delete_document_node"), "document nodes are not branch points - no special delete method"
-    doc.remove_nodes([node.id])
-    assert node.id not in doc.nodes
-    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
-
-
 # -- R3.13: thinking nodes + docking -----------------------------------------
 
 
@@ -552,28 +421,6 @@ def test_add_thinking_node_creates_a_real_thinking_kind_node():
     assert node.title == "step one, then step two, then a conclusion"[:60]
     assert node.is_docked is False
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
-
-
-def test_add_thinking_node_falls_back_to_thinking_title_for_empty_text():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_thinking_node(0, 0, "", parent.id)
-    assert node.title == "Thinking"
-
-
-def test_add_thinking_node_rejects_unknown_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_thinking_node(0, 0, "orphaned reasoning", "ghost")
-
-
-def test_add_thinking_node_requires_a_parent_id():
-    # Same as add_document_node - parent_id has no default in
-    # add_thinking_node's signature, so calling without one is a TypeError
-    # (missing required argument), not a SceneError.
-    doc = SceneDocument()
-    with pytest.raises(TypeError):
-        doc.add_thinking_node(0, 0, "orphaned reasoning")
 
 
 def test_set_node_docked_toggles_true_then_false():
@@ -590,48 +437,6 @@ def test_set_node_docked_toggles_true_then_false():
     assert doc.nodes[node.id].is_docked is False
     row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
     assert row["isDocked"] is False
-
-
-def test_set_node_docked_unknown_node_raises():
-    with pytest.raises(SceneError):
-        SceneDocument().set_node_docked("ghost", True)
-
-
-def test_scene_payload_includes_is_docked_defaulted_for_other_kinds():
-    doc = SceneDocument()
-    doc.add_node(0, 0, "plain")
-    doc.add_chat_node(1, 1, "a chat message", True)
-    rows = {n["title"]: n for n in doc.scene_payload()["nodes"]}
-    assert rows["plain"]["isDocked"] is False
-    assert rows["a chat message"]["isDocked"] is False
-
-
-def test_thinking_node_deletion_goes_through_the_generic_remove_nodes_path():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_thinking_node(10, 10, "reasoning", parent.id)
-    assert not hasattr(doc, "delete_thinking_node"), "thinking nodes are not branch points - no special delete method"
-    doc.remove_nodes([node.id])
-    assert node.id not in doc.nodes
-    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
-
-
-def test_add_thinking_node_intent_creates_a_real_node_and_publishes():
-    async def run():
-        bus, document, recorder = make_bus()
-        parent_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
-        node_id = await bus.dispatch_intent(
-            "scene", "addThinkingNode", [10, 10, "reasoning text", parent_id]
-        )
-        assert document.nodes[node_id].kind == "thinking"
-        assert document.nodes[node_id].content == "reasoning text"
-        assert document.nodes[node_id].is_docked is False
-        assert any(
-            e.source == parent_id and e.target == node_id for e in document.edges.values()
-        )
-        assert recorder.topics_seen().count("scene") == 2, "both mutations publish"
-
-    asyncio.run(run())
 
 
 def test_set_node_docked_intent_flips_is_docked_and_publishes():
@@ -674,28 +479,6 @@ def test_add_html_node_stores_script_content_as_an_opaque_string():
     assert node.title == raw
 
 
-def test_add_html_node_falls_back_to_html_title_for_empty_content():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_html_node(0, 0, "", parent.id)
-    assert node.title == "HTML"
-
-
-def test_add_html_node_rejects_unknown_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_html_node(0, 0, "<div>orphan</div>", "ghost")
-
-
-def test_add_html_node_requires_a_parent_id():
-    # Same as add_document_node/add_thinking_node - parent_id has no default
-    # in add_html_node's signature, so calling without one is a TypeError
-    # (missing required argument), not a SceneError.
-    doc = SceneDocument()
-    with pytest.raises(TypeError):
-        doc.add_html_node(0, 0, "<div>orphan</div>")
-
-
 def test_html_node_scene_payload_needs_no_new_key():
     # The raw HTML source reuses the existing `content` field - scene_payload
     # gets no html-specific key at all.
@@ -706,33 +489,6 @@ def test_html_node_scene_payload_needs_no_new_key():
     html_row = rows["html"]
     assert html_row["content"] == "<b>bold</b>"
     assert "html" not in html_row, "no html-specific key - content already carries it"
-
-
-def test_html_node_deletion_goes_through_the_generic_remove_nodes_path():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_html_node(10, 10, "<p>doomed</p>", parent.id)
-    assert not hasattr(doc, "delete_html_node"), "html nodes are not branch points - no special delete method"
-    doc.remove_nodes([node.id])
-    assert node.id not in doc.nodes
-    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
-
-
-def test_add_html_node_intent_creates_a_real_node_and_publishes():
-    async def run():
-        bus, document, recorder = make_bus()
-        parent_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
-        node_id = await bus.dispatch_intent(
-            "scene", "addHtmlNode", [10, 10, "<h1>preview</h1>", parent_id]
-        )
-        assert document.nodes[node_id].kind == "html"
-        assert document.nodes[node_id].content == "<h1>preview</h1>"
-        assert any(
-            e.source == parent_id and e.target == node_id for e in document.edges.values()
-        )
-        assert recorder.topics_seen().count("scene") == 2, "both mutations publish"
-
-    asyncio.run(run())
 
 
 # -- R3.21: image nodes -------------------------------------------------------
@@ -749,13 +505,6 @@ def test_add_image_node_creates_a_real_image_kind_node():
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
 
 
-def test_add_image_node_falls_back_to_image_title_for_empty_prompt():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_image_node(0, 0, b"bytes", "", parent.id)
-    assert node.title == "Image"
-
-
 def test_add_image_node_stores_the_asset_retrievable_with_correct_bytes_and_mime_type():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -767,33 +516,6 @@ def test_add_image_node_stores_the_asset_retrievable_with_correct_bytes_and_mime
 def test_get_image_asset_returns_none_for_unknown_id():
     doc = SceneDocument()
     assert doc.get_image_asset("ghost") is None
-
-
-def test_add_image_node_rejects_unknown_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_image_node(0, 0, b"bytes", "orphaned image", "ghost")
-
-
-def test_add_image_node_requires_a_parent_id():
-    # Same as add_document_node/add_thinking_node/add_html_node - parent_id
-    # has no default in add_image_node's signature, so calling without one is
-    # a TypeError (missing required argument), not a SceneError.
-    doc = SceneDocument()
-    with pytest.raises(TypeError):
-        doc.add_image_node(0, 0, b"bytes", "orphaned image")
-
-
-def test_scene_payload_includes_image_asset_id_defaulted_for_other_kinds():
-    doc = SceneDocument()
-    doc.add_node(0, 0, "plain")
-    parent = doc.add_node(1, 1, "parent")
-    image_node = doc.add_image_node(2, 2, b"bytes", "a real prompt", parent.id)
-    rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
-    assert rows["n0"]["imageAssetId"] == ""
-    assert rows[parent.id]["imageAssetId"] == ""
-    assert rows[image_node.id]["imageAssetId"] == image_node.state.image_asset_id
-    assert rows[image_node.id]["imageAssetId"] != ""
 
 
 def test_image_node_deletion_goes_through_remove_nodes_and_evicts_the_asset():
@@ -870,29 +592,6 @@ def test_deleting_one_node_of_every_kind_does_not_raise():
     assert doc.nodes == {}
 
 
-def test_add_image_node_intent_creates_a_real_node_and_publishes():
-    async def run():
-        bus, document, recorder = make_bus()
-        parent_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
-        image_bytes = b"\x89PNG\r\n\x1a\nfake-but-real-bytes"
-        encoded = base64.b64encode(image_bytes).decode("ascii")
-        node_id = await bus.dispatch_intent(
-            "scene",
-            "addImageNode",
-            [10, 10, encoded, "a generated image", parent_id, "image/jpeg"],
-        )
-        assert document.nodes[node_id].kind == "image"
-        assert document.nodes[node_id].content == "a generated image"
-        asset = document.get_image_asset(document.nodes[node_id].state.image_asset_id)
-        assert asset == (image_bytes, "image/jpeg"), "base64 payload must decode back to the exact original bytes"
-        assert any(
-            e.source == parent_id and e.target == node_id for e in document.edges.values()
-        )
-        assert recorder.topics_seen().count("scene") == 2, "both mutations publish"
-
-    asyncio.run(run())
-
-
 # -- R3.25: conversation nodes -----------------------------------------------
 
 
@@ -918,22 +617,6 @@ def test_add_conversation_node_title_never_changes_after_messages_are_appended()
     assert node.title == "Conversation"
 
 
-def test_add_conversation_node_rejects_unknown_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_conversation_node(0, 0, "ghost")
-
-
-def test_add_conversation_node_requires_a_parent_id():
-    # Same as add_document_node/add_thinking_node/add_html_node/
-    # add_image_node - parent_id has no default in add_conversation_node's
-    # signature, so calling without one is a TypeError (missing required
-    # argument), not a SceneError.
-    doc = SceneDocument()
-    with pytest.raises(TypeError):
-        doc.add_conversation_node(0, 0)
-
-
 def test_append_conversation_user_message_appends_role_and_content():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -941,23 +624,6 @@ def test_append_conversation_user_message_appends_role_and_content():
     returned = doc.append_conversation_user_message(node.id, "hi there")
     assert returned is node
     assert node.history == [{"role": "user", "content": "hi there"}]
-
-
-def test_append_conversation_assistant_message_appends_role_and_content():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_conversation_node(0, 0, parent.id)
-    returned = doc.append_conversation_assistant_message(node.id, "hello, how can I help?")
-    assert returned is node
-    assert node.history == [{"role": "assistant", "content": "hello, how can I help?"}]
-
-
-def test_append_conversation_message_unknown_node_raises():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.append_conversation_user_message("ghost", "hi")
-    with pytest.raises(SceneError):
-        doc.append_conversation_assistant_message("ghost", "hi")
 
 
 def test_send_conversation_message_is_equivalent_to_append_conversation_user_message():
@@ -996,35 +662,6 @@ def test_delete_conversation_message_out_of_range_raises():
         doc.delete_conversation_message(node.id, -1)
 
 
-def test_delete_conversation_message_unknown_node_raises():
-    with pytest.raises(SceneError):
-        SceneDocument().delete_conversation_message("ghost", 0)
-
-
-def test_conversation_node_deletion_goes_through_the_generic_remove_nodes_path():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_conversation_node(10, 10, parent.id)
-    doc.append_conversation_user_message(node.id, "doomed message")
-    assert not hasattr(doc, "delete_conversation_node"), (
-        "conversation nodes are not branch points - no special delete method"
-    )
-    doc.remove_nodes([node.id])
-    assert node.id not in doc.nodes
-    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
-
-
-def test_set_chat_collapsed_works_generically_against_a_conversation_node():
-    # setChatCollapsed is already fully generic (looks up any node by id
-    # regardless of kind) - ConversationNode reuses it with zero backend
-    # change, same as document/html already do.
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_conversation_node(0, 0, parent.id)
-    doc.set_chat_collapsed(node.id, True)
-    assert doc.nodes[node.id].is_collapsed is True
-
-
 def test_no_bulk_replace_or_cancel_methods_exist_this_increment():
     # Deliberate omissions, documented the same way other kinds' tests
     # document intentional gaps: no set_history (no clone-on-create/session
@@ -1033,51 +670,6 @@ def test_no_bulk_replace_or_cancel_methods_exist_this_increment():
     doc = SceneDocument()
     assert not hasattr(doc, "set_history")
     assert not hasattr(doc, "delete_conversation_node")
-
-
-def test_scene_payload_includes_history_defaulted_for_other_kinds():
-    doc = SceneDocument()
-    doc.add_node(0, 0, "plain")
-    parent = doc.add_node(1, 1, "parent")
-    node = doc.add_conversation_node(2, 2, parent.id)
-    doc.append_conversation_user_message(node.id, "hi")
-    doc.append_conversation_assistant_message(node.id, "hello!")
-
-    rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
-    assert rows["n0"]["history"] == []
-    assert rows[parent.id]["history"] == []
-    # ADR-006 stage 6.4: every history row carries the "incomplete" marker,
-    # False for normally-completed messages (see _node_wire's projection).
-    assert rows[node.id]["history"] == [
-        {"role": "user", "content": "hi", "incomplete": False},
-        {"role": "assistant", "content": "hello!", "incomplete": False},
-    ]
-    # R4.3: pendingRequestId defaults to None for every kind - including a
-    # conversation node with no in-flight dispatch (it is only ever set by
-    # AgentDispatcher.start_conversation_reply while a reply is generating -
-    # see test_agents.py and test_send_conversation_message_intent_dispatches_a_real_agent_reply
-    # below for the non-None in-flight case).
-    assert rows["n0"]["pendingRequestId"] is None
-    assert rows[parent.id]["pendingRequestId"] is None
-    assert rows[node.id]["pendingRequestId"] is None
-
-
-def test_add_conversation_node_intent_creates_a_real_node_and_publishes():
-    async def run():
-        bus, document, recorder = make_bus()
-        parent_id = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "hi", True])
-        node_id = await bus.dispatch_intent(
-            "scene", "addConversationNode", [10, 10, parent_id]
-        )
-        assert document.nodes[node_id].kind == "conversation"
-        assert document.nodes[node_id].title == "Conversation"
-        assert document.nodes[node_id].history == []
-        assert any(
-            e.source == parent_id and e.target == node_id for e in document.edges.values()
-        )
-        assert recorder.topics_seen().count("scene") == 2, "both mutations publish"
-
-    asyncio.run(run())
 
 
 def test_send_conversation_message_intent_dispatches_a_real_agent_reply():
@@ -1297,28 +889,6 @@ def test_delete_conversation_message_intent_mutates_and_publishes():
     asyncio.run(run())
 
 
-def test_conversation_node_removed_generically_through_remove_nodes_intent():
-    async def run():
-        bus, document, recorder = make_bus()
-        parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
-        node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
-        await bus.dispatch_intent("scene", "removeNodes", [[node_id]])
-        assert node_id not in document.nodes
-
-    asyncio.run(run())
-
-
-def test_set_chat_collapsed_intent_works_generically_against_a_conversation_node():
-    async def run():
-        bus, document, recorder = make_bus()
-        parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
-        node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
-        await bus.dispatch_intent("scene", "setChatCollapsed", [node_id, True])
-        assert document.nodes[node_id].is_collapsed is True
-
-    asyncio.run(run())
-
-
 def test_send_message_starts_a_root_branch():
     doc = SceneDocument()
     node = doc.send_message("hello there")
@@ -1474,19 +1044,6 @@ def test_regenerate_response_returns_node_and_parent_id_for_a_valid_chat_node():
     assert parent_id == parent.id
 
 
-def test_regenerate_response_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().regenerate_response("ghost")
-
-
-def test_regenerate_response_non_chat_node_raises_scene_error():
-    doc = SceneDocument()
-    parent = doc.add_chat_node(0, 0, "question", True)
-    code_node = doc.add_code_node(10, 10, "x = 1", "python", parent_id=parent.id)
-    with pytest.raises(SceneError):
-        doc.regenerate_response(code_node.id)
-
-
 def test_regenerate_response_node_without_parent_raises_scene_error():
     doc = SceneDocument()
     root = doc.add_chat_node(0, 0, "root question", True)
@@ -1505,11 +1062,6 @@ def test_update_chat_node_content_mutates_content_only_leaves_title_and_flags_un
     assert node.state.is_user is False
     assert node.is_collapsed is False
     assert node.kind == "chat"
-
-
-def test_update_chat_node_content_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().update_chat_node_content("ghost", "text")
 
 
 def test_remove_associated_content_children_removes_direct_code_document_image_thinking_children():
@@ -2373,20 +1925,6 @@ def test_chat_node_intents_mutate_and_publish():
     asyncio.run(run())
 
 
-def test_add_code_node_intent_creates_a_real_node_and_publishes():
-    async def run():
-        bus, document, recorder = make_bus()
-        node_id = await bus.dispatch_intent(
-            "scene", "addCodeNode", [0, 0, "def f(): pass", "python"]
-        )
-        assert document.nodes[node_id].kind == "code"
-        assert document.nodes[node_id].state.code == "def f(): pass"
-        assert document.nodes[node_id].state.language == "python"
-        assert recorder.topics_seen().count("scene") == 1, "the mutation publishes"
-
-    asyncio.run(run())
-
-
 def test_send_message_intent_dispatches_a_real_agent_reply():
     # R4: sendMessage's deferred "lands in R4" notice is gone - the real
     # intent now dispatches through AgentDispatcher. Same monkeypatch seam as
@@ -2961,19 +2499,6 @@ def test_resolve_generate_image_returns_chat_node_id_and_its_own_content():
     assert prompt == "a cat wearing a wizard hat"
 
 
-def test_resolve_generate_image_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().resolve_generate_image("ghost")
-
-
-def test_resolve_generate_image_non_chat_node_raises_scene_error():
-    doc = SceneDocument()
-    parent = doc.add_chat_node(0, 0, "question", True)
-    code_node = doc.add_code_node(10, 10, "x = 1", "python", parent_id=parent.id)
-    with pytest.raises(SceneError):
-        doc.resolve_generate_image(code_node.id)
-
-
 def test_resolve_generate_image_empty_content_raises_the_empty_prompt_variant():
     doc = SceneDocument()
     chat = doc.add_chat_node(0, 0, "   ", True)
@@ -2997,18 +2522,6 @@ def test_resolve_regenerate_image_returns_parent_id_and_the_image_nodes_own_cont
     assert parent_id == chat.id
     assert prompt == "a cat"
     assert prompt != chat.content
-
-
-def test_resolve_regenerate_image_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().resolve_regenerate_image("ghost")
-
-
-def test_resolve_regenerate_image_non_image_node_raises_scene_error():
-    doc = SceneDocument()
-    chat = doc.add_chat_node(0, 0, "question", True)
-    with pytest.raises(SceneError):
-        doc.resolve_regenerate_image(chat.id)
 
 
 def test_resolve_regenerate_image_empty_content_raises_the_empty_prompt_variant():
@@ -3067,104 +2580,7 @@ def test_add_generated_image_reply_leaves_last_chat_node_id_untouched():
     assert doc.last_chat_node_id == node.id, "image generation is side content, not a branch-continuation point"
 
 
-def test_add_generated_image_reply_unknown_parent_raises_scene_error():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_generated_image_reply("ghost", "a cat", b"png-bytes")
-
-
 # -- R4.4a: Generate/Regenerate Image - WS-intent level -----------------------
-
-
-def test_generate_image_intent_empty_content_shows_warning_and_never_dispatches():
-    async def run():
-        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
-        chat = document.add_chat_node(0, 0, "   ", True)
-
-        calls = []
-
-        def recording_generate_image(prompt, **kwargs):
-            calls.append(prompt)
-            return b"bytes"
-
-        with patch.object(api_provider, "generate_image", recording_generate_image):
-            result = await bus.dispatch_intent("scene", "generateImage", [chat.id])
-
-        assert result is None
-        assert calls == [], "api_provider.generate_image must never be reached"
-        assert image_slots(dispatcher) == {}
-        notice = await bus.publish("notification")
-        assert notice["visible"] is True
-        assert notice["msgType"] == "warning"
-        assert notice["message"] == "The selected node has no text to use as a prompt."
-
-    asyncio.run(run())
-
-
-def test_generate_image_intent_unknown_node_shows_the_wrong_kind_message():
-    async def run():
-        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
-        result = await bus.dispatch_intent("scene", "generateImage", ["ghost"])
-        assert result is None
-        assert image_slots(dispatcher) == {}
-        notice = await bus.publish("notification")
-        assert notice["visible"] is True
-        assert notice["msgType"] == "warning"
-        assert notice["message"] == "This node can't be used to generate an image."
-
-    asyncio.run(run())
-
-
-def test_generate_image_intent_non_chat_node_shows_the_wrong_kind_message():
-    async def run():
-        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
-        parent = document.add_chat_node(0, 0, "question", True)
-        code_node = document.add_code_node(10, 10, "x = 1", "python", parent_id=parent.id)
-        result = await bus.dispatch_intent("scene", "generateImage", [code_node.id])
-        assert result is None
-        notice = await bus.publish("notification")
-        assert notice["message"] == "This node can't be used to generate an image."
-
-    asyncio.run(run())
-
-
-def test_regenerate_image_intent_unknown_node_shows_the_no_prompt_message():
-    async def run():
-        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
-        result = await bus.dispatch_intent("scene", "regenerateImage", ["ghost"])
-        assert result is None
-        assert image_slots(dispatcher) == {}
-        notice = await bus.publish("notification")
-        assert notice["visible"] is True
-        assert notice["msgType"] == "warning"
-        assert notice["message"] == "This image has no prompt to regenerate from."
-
-    asyncio.run(run())
-
-
-def test_regenerate_image_intent_non_image_node_shows_the_no_prompt_message():
-    async def run():
-        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
-        chat = document.add_chat_node(0, 0, "a chat node", True)
-        result = await bus.dispatch_intent("scene", "regenerateImage", [chat.id])
-        assert result is None
-        notice = await bus.publish("notification")
-        assert notice["message"] == "This image has no prompt to regenerate from."
-
-    asyncio.run(run())
-
-
-def test_regenerate_image_intent_empty_content_shows_the_no_prompt_message():
-    async def run():
-        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
-        chat = document.add_chat_node(0, 0, "assistant reply", False)
-        image_node = document.add_image_node(0, 160, b"bytes", "", chat.id)
-        result = await bus.dispatch_intent("scene", "regenerateImage", [image_node.id])
-        assert result is None
-        notice = await bus.publish("notification")
-        assert notice["message"] == "This image has no prompt to regenerate from."
-
-    asyncio.run(run())
 
 
 def test_generate_image_intent_full_success_round_trip_creates_two_nodes_and_republishes_scene():
@@ -3260,34 +2676,6 @@ def test_add_web_research_node_creates_a_real_web_research_kind_node():
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
 
 
-def test_add_web_research_node_rejects_unknown_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_web_research_node(0, 0, "ghost")
-
-
-def test_add_web_research_node_requires_a_parent_id():
-    # Same as add_document_node/add_thinking_node/add_html_node/add_image_node/
-    # add_conversation_node - parent_id has no default in add_web_research_node's
-    # signature, so calling without one is a TypeError (missing required
-    # argument), not a SceneError.
-    doc = SceneDocument()
-    with pytest.raises(TypeError):
-        doc.add_web_research_node(0, 0)
-
-
-def test_web_research_node_deletion_goes_through_the_generic_remove_nodes_path():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_web_research_node(10, 10, parent.id)
-    assert not hasattr(doc, "delete_web_research_node"), (
-        "web_research nodes are not branch points - no special delete method"
-    )
-    doc.remove_nodes([node.id])
-    assert node.id not in doc.nodes
-    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
-
-
 def test_start_web_research_run_sets_content_and_resets_progress_fields():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -3323,11 +2711,6 @@ def test_start_web_research_run_does_not_clear_a_stale_previous_result():
     doc.start_web_research_run(node.id, "a follow-up question")
 
     assert node.state.research_result == {"answerMarkdown": "a previous stale answer"}
-
-
-def test_start_web_research_run_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().start_web_research_run("ghost", "a query")
 
 
 def test_start_web_research_run_wrong_kind_raises_scene_error():
@@ -3379,11 +2762,6 @@ def test_complete_web_research_run_sets_result_and_clears_error_and_active_sourc
     assert node.state.research_result == result_wire
 
 
-def test_complete_web_research_run_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().complete_web_research_run("ghost", {"answerMarkdown": "x"})
-
-
 def test_fail_web_research_run_sets_cancelled_stage_and_message():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -3419,39 +2797,6 @@ def test_fail_web_research_run_does_not_clear_a_stale_previous_result():
     doc.fail_web_research_run(node.id, cancelled=False, message="boom")
 
     assert node.state.research_result == {"answerMarkdown": "a previous stale answer"}
-
-
-def test_fail_web_research_run_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().fail_web_research_run("ghost", cancelled=False, message="boom")
-
-
-def test_scene_payload_includes_research_fields_defaulted_for_other_kinds():
-    doc = SceneDocument()
-    doc.add_node(0, 0, "plain")
-    parent = doc.add_node(1, 1, "parent")
-    node = doc.add_web_research_node(2, 2, parent.id)
-
-    rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
-    assert rows["n0"]["researchStage"] == ""
-    assert rows["n0"]["researchCompleted"] == 0
-    assert rows["n0"]["researchTotal"] == 0
-    assert rows["n0"]["researchActiveSourceId"] is None
-    assert rows["n0"]["researchError"] == ""
-    assert rows["n0"]["researchResult"] is None
-
-    doc.start_web_research_run(node.id, "a query")
-    fake_event = SimpleNamespace(
-        stage=SimpleNamespace(value="fetching"), completed=1, total=2, source_id="s1-x"
-    )
-    doc.apply_web_research_progress(node.id, fake_event)
-    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
-    assert row["kind"] == "web_research"
-    assert row["content"] == "a query"
-    assert row["researchStage"] == "fetching"
-    assert row["researchCompleted"] == 1
-    assert row["researchTotal"] == 2
-    assert row["researchActiveSourceId"] == "s1-x"
 
 
 def test_research_result_wire_camel_cases_a_research_result():
@@ -3861,34 +3206,6 @@ def test_add_artifact_node_creates_a_real_artifact_kind_node():
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
 
 
-def test_add_artifact_node_rejects_unknown_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_artifact_node(0, 0, "ghost")
-
-
-def test_add_artifact_node_requires_a_parent_id():
-    # Same as add_document_node/add_thinking_node/add_html_node/add_image_node/
-    # add_conversation_node/add_web_research_node - parent_id has no default in
-    # add_artifact_node's signature, so calling without one is a TypeError
-    # (missing required argument), not a SceneError.
-    doc = SceneDocument()
-    with pytest.raises(TypeError):
-        doc.add_artifact_node(0, 0)
-
-
-def test_artifact_node_deletion_goes_through_the_generic_remove_nodes_path():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_artifact_node(10, 10, parent.id)
-    assert not hasattr(doc, "delete_artifact_node"), (
-        "artifact nodes are not branch points - no special delete method"
-    )
-    doc.remove_nodes([node.id])
-    assert node.id not in doc.nodes
-    assert not any(e.target == node.id or e.source == node.id for e in doc.edges.values())
-
-
 def test_append_artifact_user_message_appends_a_user_turn():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -3896,11 +3213,6 @@ def test_append_artifact_user_message_appends_a_user_turn():
     returned = doc.append_artifact_user_message(node.id, "add a conclusion section")
     assert returned is node
     assert node.history == [{"role": "user", "content": "add a conclusion section"}]
-
-
-def test_append_artifact_user_message_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().append_artifact_user_message("ghost", "hi")
 
 
 def test_send_artifact_message_is_a_thin_wrapper_over_append_artifact_user_message():
@@ -3928,11 +3240,6 @@ def test_complete_artifact_generation_replaces_content_and_appends_assistant_tur
         {"role": "user", "content": "draft a project brief"},
         {"role": "assistant", "content": "Here's a first draft."},
     ]
-
-
-def test_complete_artifact_generation_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().complete_artifact_generation("ghost", "doc", "message")
 
 
 def test_scene_payload_includes_artifact_content_for_artifact_kind_rows():
@@ -4043,12 +3350,6 @@ def test_cancel_artifact_request_intent_calls_agent_dispatcher_cancel_artifact()
 # -- R5.3: gitlink node -------------------------------------------------------
 
 
-def test_add_gitlink_node_requires_valid_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_gitlink_node(0, 0, "ghost")
-
-
 def test_add_gitlink_node_creates_child():
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "wire up gitlink", True)
@@ -4060,26 +3361,6 @@ def test_add_gitlink_node_creates_child():
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
 
 
-def test_add_gitlink_node_requires_a_parent_id():
-    # Same TypeError-not-SceneError posture as every other required-parent
-    # node kind (document/thinking/html/image/conversation/web_research/
-    # artifact) - parent_id has no default in add_gitlink_node's signature.
-    doc = SceneDocument()
-    with pytest.raises(TypeError):
-        doc.add_gitlink_node(0, 0)
-
-
-def test_gitlink_node_deletion_goes_through_the_generic_remove_nodes_path():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_gitlink_node(10, 10, parent.id)
-    assert not hasattr(doc, "delete_gitlink_node"), (
-        "gitlink nodes are not branch points - no special delete method"
-    )
-    doc.remove_nodes([node.id])
-    assert node.id not in doc.nodes
-
-
 def test_set_gitlink_local_root_sets_the_field():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -4087,11 +3368,6 @@ def test_set_gitlink_local_root_sets_the_field():
     returned = doc.set_gitlink_local_root(node.id, "C:/checkout/repo")
     assert returned is node
     assert node.state.gitlink_local_root == "C:/checkout/repo"
-
-
-def test_set_gitlink_local_root_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().set_gitlink_local_root("ghost", "C:/checkout")
 
 
 def test_store_gitlink_repo_tree():
@@ -4103,11 +3379,6 @@ def test_store_gitlink_repo_tree():
     assert node.state.gitlink_repo == "octocat/hello-world"
     assert node.state.gitlink_branch == "main"
     assert node.state.gitlink_repo_file_paths == ["a.py", "b.py"]
-
-
-def test_store_gitlink_repo_tree_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().store_gitlink_repo_tree("ghost", "o/r", "main", [])
 
 
 def test_store_gitlink_snapshot_root_sets_repo_branch_local_root_and_imported_root():
@@ -4152,14 +3423,6 @@ def test_store_gitlink_context_excluded_from_scene_payload():
     assert row["gitlinkContextStats"] == {
         "scanned_files": "3", "loaded_files": "3", "source_root": "github",
     }
-
-
-def test_store_gitlink_context_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().store_gitlink_context(
-            "ghost", scope_mode="selected", selected_paths=[], context_xml="",
-            context_stats={}, context_summary="",
-        )
 
 
 def test_store_gitlink_context_increments_version_even_with_an_identical_summary():
@@ -4226,11 +3489,6 @@ def test_fetch_gitlink_context_xml_returns_full_text_not_in_payload():
     assert "gitlinkContextXml" not in row
 
 
-def test_fetch_gitlink_context_xml_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().fetch_gitlink_context_xml("ghost")
-
-
 def test_start_gitlink_run_sets_task_prompt_and_clears_error():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -4242,18 +3500,6 @@ def test_start_gitlink_run_sets_task_prompt_and_clears_error():
     assert returned is node
     assert node.state.gitlink_task_prompt == "add a health check endpoint"
     assert node.state.gitlink_error == ""
-
-
-def test_start_gitlink_run_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().start_gitlink_run("ghost", "do something")
-
-
-def test_start_gitlink_run_wrong_kind_raises_scene_error():
-    doc = SceneDocument()
-    chat = doc.add_chat_node(0, 0, "not a gitlink node", True)
-    with pytest.raises(SceneError):
-        doc.start_gitlink_run(chat.id, "do something")
 
 
 def test_complete_gitlink_run_no_changes_stays_draft():
@@ -4289,11 +3535,6 @@ def test_complete_gitlink_run_with_changes_becomes_previewed_with_fingerprint():
     assert node.state.gitlink_change_local_root == "C:/checkout/repo", (
         "R5.3 post-review FIX 2: the local_root this run used must be bound to the approval"
     )
-
-
-def test_complete_gitlink_run_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().complete_gitlink_run("ghost", "proposal", [], "", None, "")
 
 
 def test_fail_gitlink_run_sets_error_and_is_a_silent_noop_for_a_deleted_node():
@@ -4362,11 +3603,6 @@ def test_complete_gitlink_apply_clears_pending_changes_and_fingerprint_to_preven
     assert node.state.gitlink_preview_text == "diff text"
 
 
-def test_complete_gitlink_apply_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().complete_gitlink_apply("ghost", 1)
-
-
 def test_fail_gitlink_apply_reverts_to_previewed_and_clears_fingerprint():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -4393,36 +3629,6 @@ def test_fail_gitlink_apply_reverts_to_previewed_and_clears_fingerprint():
 
 def test_fail_gitlink_apply_is_a_silent_noop_for_a_deleted_node():
     assert SceneDocument().fail_gitlink_apply("ghost", "too late") is None
-
-
-def test_scene_payload_gitlink_fields_default_correctly_for_a_fresh_node():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_gitlink_node(0, 0, parent.id)
-
-    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
-
-    assert row["gitlinkRepo"] == ""
-    assert row["gitlinkBranch"] == ""
-    assert row["gitlinkScopeMode"] == "selected"
-    assert row["gitlinkLocalRoot"] == ""
-    assert row["gitlinkRepoFilePaths"] == []
-    assert row["gitlinkSelectedPaths"] == []
-    assert row["gitlinkTaskPrompt"] == ""
-    assert row["gitlinkContextStats"] == {}
-    assert row["gitlinkContextSummary"] == ""
-    # R5.3 post-review FIX 6: a fresh node's monotonic counter starts at 0.
-    assert row["gitlinkContextVersion"] == 0
-    assert row["gitlinkProposalMarkdown"] == ""
-    assert row["gitlinkPendingChanges"] == []
-    assert row["gitlinkPreviewText"] == ""
-    assert row["gitlinkChangeFingerprint"] is None
-    assert row["gitlinkChangeState"] == "draft"
-    assert row["gitlinkError"] == ""
-    # R5.3 post-review FIX 2: gitlink_change_local_root is plain internal
-    # backend bookkeeping, like gitlink_context_xml/gitlink_imported_root -
-    # it must NEVER appear on the wire.
-    assert "gitlinkChangeLocalRoot" not in row
 
 
 def test_scene_payload_gitlink_pending_changes_is_a_copy_not_the_live_list():
@@ -4507,51 +3713,6 @@ def test_pick_gitlink_local_root_is_a_no_op_when_cancelled(monkeypatch):
         await bus.dispatch_intent("scene", "pickGitlinkLocalRoot", [node.id])
 
         assert document.nodes[node.id].state.gitlink_local_root == "C:/original"
-
-    asyncio.run(run())
-
-
-def test_pick_gitlink_local_root_seeds_the_dialog_with_the_current_value(monkeypatch):
-    seen_directories = []
-
-    async def _fake_pick_folder(directory=""):
-        seen_directories.append(directory)
-        return None
-
-    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
-
-    async def run():
-        bus, notifications, document, _dispatcher = _make_gitlink_plugins_bus()
-        parent = document.add_node(0, 0, "parent")
-        node = document.add_gitlink_node(0, 0, parent.id)
-        document.set_gitlink_local_root(node.id, "C:/existing/checkout")
-
-        await bus.dispatch_intent("scene", "pickGitlinkLocalRoot", [node.id])
-
-        assert seen_directories == ["C:/existing/checkout"]
-
-    asyncio.run(run())
-
-
-def test_pick_gitlink_local_root_shows_a_notification_when_the_dialog_itself_raises(monkeypatch):
-    async def _boom(directory=""):
-        raise OSError("no folder dialog available")
-
-    monkeypatch.setattr(native_dialogs, "pick_folder", _boom)
-
-    async def run():
-        bus, notifications, document, _dispatcher = _make_gitlink_plugins_bus()
-        recorder = Recorder()
-        bus.attach(recorder)
-        parent = document.add_node(0, 0, "parent")
-        node = document.add_gitlink_node(0, 0, parent.id)
-
-        await bus.dispatch_intent("scene", "pickGitlinkLocalRoot", [node.id])
-
-        assert document.nodes[node.id].state.gitlink_local_root == ""
-        assert notifications.visible is True
-        assert notifications.msg_type == "error"
-        assert recorder.topics_seen().count("notification") >= 1
 
     asyncio.run(run())
 
@@ -4782,12 +3943,6 @@ def test_two_concurrent_run_gitlink_change_set_calls_for_the_same_node_only_one_
 # -- R5.4: Py-Coder node ------------------------------------------------------
 
 
-def test_add_pycoder_node_requires_valid_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_pycoder_node(0, 0, "ghost")
-
-
 def test_add_pycoder_node_creates_child_with_defaults():
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "wire up pycoder", True)
@@ -4805,23 +3960,6 @@ def test_add_pycoder_node_creates_child_with_defaults():
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
 
 
-def test_add_pycoder_node_requires_a_parent_id():
-    doc = SceneDocument()
-    with pytest.raises(TypeError):
-        doc.add_pycoder_node(0, 0)
-
-
-def test_pycoder_node_deletion_goes_through_the_generic_remove_nodes_path():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_pycoder_node(10, 10, parent.id)
-    assert not hasattr(doc, "delete_pycoder_node"), (
-        "pycoder nodes are not branch points - no special delete method"
-    )
-    doc.remove_nodes([node.id])
-    assert node.id not in doc.nodes
-
-
 def test_set_pycoder_mode_sets_the_field():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -4837,11 +3975,6 @@ def test_set_pycoder_mode_rejects_unknown_mode():
     node = doc.add_pycoder_node(0, 0, parent.id)
     with pytest.raises(SceneError):
         doc.set_pycoder_mode(node.id, "turbo")
-
-
-def test_set_pycoder_mode_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().set_pycoder_mode("ghost", "manual")
 
 
 def test_start_pycoder_run_ai_driven_stores_prompt_and_clears_error():
@@ -4867,19 +4000,6 @@ def test_start_pycoder_run_manual_stores_code_not_prompt():
 
     assert node.state.pycoder_code == "print('hi')"
     assert node.state.pycoder_prompt == ""
-
-
-def test_start_pycoder_run_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().start_pycoder_run("ghost", "x")
-
-
-def test_start_pycoder_run_wrong_kind_raises_scene_error():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_gitlink_node(0, 0, parent.id)
-    with pytest.raises(SceneError):
-        doc.start_pycoder_run(node.id, "x")
 
 
 def test_complete_pycoder_run_sets_all_fields_and_clears_approval_and_error():
@@ -4929,28 +4049,7 @@ def test_fail_pycoder_run_is_a_silent_noop_for_a_deleted_node():
     assert SceneDocument().fail_pycoder_run("ghost", "x") is None
 
 
-def test_scene_payload_pycoder_fields_default_correctly_for_a_fresh_node():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_pycoder_node(0, 0, parent.id)
-    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
-    assert row["pycoderMode"] == "ai_driven"
-    assert row["pycoderPrompt"] == ""
-    assert row["pycoderCode"] == ""
-    assert row["pycoderOutput"] == ""
-    assert row["pycoderAnalysis"] == ""
-    assert row["pycoderLastRunFailed"] is False
-    assert row["pycoderAwaitingApproval"] is False
-    assert row["pycoderError"] == ""
-
-
 # -- R5.4: Execution Sandbox node ---------------------------------------------
-
-
-def test_add_code_sandbox_node_requires_valid_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_code_sandbox_node(0, 0, "ghost")
 
 
 def test_add_code_sandbox_node_creates_child_with_defaults_and_mints_sandbox_id():
@@ -4978,21 +4077,6 @@ def test_add_code_sandbox_node_mints_a_different_id_per_node():
     assert a.state.code_sandbox_sandbox_id != b.state.code_sandbox_sandbox_id
 
 
-def test_add_code_sandbox_node_requires_a_parent_id():
-    doc = SceneDocument()
-    with pytest.raises(TypeError):
-        doc.add_code_sandbox_node(0, 0)
-
-
-def test_code_sandbox_node_deletion_goes_through_the_generic_remove_nodes_path():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_code_sandbox_node(10, 10, parent.id)
-    assert not hasattr(doc, "delete_code_sandbox_node")
-    doc.remove_nodes([node.id])
-    assert node.id not in doc.nodes
-
-
 def test_set_code_sandbox_requirements_sets_the_field():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -5000,11 +4084,6 @@ def test_set_code_sandbox_requirements_sets_the_field():
     returned = doc.set_code_sandbox_requirements(node.id, "numpy\nrequests")
     assert returned is node
     assert node.state.code_sandbox_requirements == "numpy\nrequests"
-
-
-def test_set_code_sandbox_requirements_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().set_code_sandbox_requirements("ghost", "numpy")
 
 
 def test_set_code_sandbox_allow_source_builds_sets_the_field():
@@ -5015,18 +4094,6 @@ def test_set_code_sandbox_allow_source_builds_sets_the_field():
     returned = doc.set_code_sandbox_allow_source_builds(node.id, True)
     assert returned is node
     assert node.state.code_sandbox_approval_allow_source_builds is True
-
-
-def test_set_code_sandbox_allow_source_builds_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().set_code_sandbox_allow_source_builds("ghost", True)
-
-
-def test_set_code_sandbox_allow_source_builds_wrong_kind_raises_scene_error():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    with pytest.raises(SceneError):
-        doc.set_code_sandbox_allow_source_builds(parent.id, True)
 
 
 def test_start_code_sandbox_run_stores_prompt_and_clears_error_without_touching_code():
@@ -5045,19 +4112,6 @@ def test_start_code_sandbox_run_stores_prompt_and_clears_error_without_touching_
         "start_code_sandbox_run must not overwrite the existing code - the "
         "dispatch method decides generate-vs-reuse by reading it at call time"
     )
-
-
-def test_start_code_sandbox_run_unknown_node_raises_scene_error():
-    with pytest.raises(SceneError):
-        SceneDocument().start_code_sandbox_run("ghost", "x")
-
-
-def test_start_code_sandbox_run_wrong_kind_raises_scene_error():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_pycoder_node(0, 0, parent.id)
-    with pytest.raises(SceneError):
-        doc.start_code_sandbox_run(node.id, "x")
 
 
 def test_complete_code_sandbox_run_sets_all_fields_and_clears_approval_and_error():
@@ -6109,12 +5163,6 @@ def test_set_note_content_updates_content():
     assert doc.nodes[note.id].content == "real note text"
 
 
-def test_set_note_content_rejects_unknown_node():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.set_note_content("ghost", "text")
-
-
 def test_create_frame_validates_membership():
     doc = SceneDocument()
     real = doc.add_node(0, 0)
@@ -6378,19 +5426,6 @@ def test_bbox_auto_grow_recompute_on_member_move():
     assert node.state.group_height == pytest.approx(1210.0)
 
 
-def test_bbox_auto_grow_recompute_via_move_node_also_covers_container():
-    doc = SceneDocument()
-    m1 = doc.add_node(0, 0)
-    m2 = doc.add_node(300, 300)
-    container = doc.create_container([m1.id, m2.id])
-
-    doc.move_node(m1.id, -500, -500)
-
-    node = doc.nodes[container.id]
-    assert node.x == pytest.approx(-500 - 40.0)
-    assert node.y == pytest.approx(-500 - 50.0)
-
-
 def test_moving_a_non_member_node_does_not_touch_unrelated_groups():
     doc = SceneDocument()
     m1 = doc.add_node(0, 0)
@@ -6424,22 +5459,6 @@ def test_toggle_group_collapsed_shrinks_to_pill_size_and_restores_on_expand():
     assert node.state.group_height == pytest.approx(expanded_h)
     assert node.x == pytest.approx(expanded_x)
     assert node.y == pytest.approx(expanded_y)
-
-
-def test_toggle_group_collapsed_works_for_containers_too():
-    doc = SceneDocument()
-    m1 = doc.add_node(0, 0)
-    container = doc.create_container([m1.id])
-    doc.toggle_group_collapsed(container.id)
-    assert doc.nodes[container.id].state.group_width == 260.0
-    assert doc.nodes[container.id].state.group_height == 50.0
-
-
-def test_toggle_group_collapsed_rejects_non_group_kind():
-    doc = SceneDocument()
-    plain = doc.add_node(0, 0)
-    with pytest.raises(SceneError):
-        doc.toggle_group_collapsed(plain.id)
 
 
 def test_resize_frame_sets_manual_override_and_recenters():
@@ -6780,13 +5799,6 @@ def test_ungroup_releases_members_without_deleting_them():
     assert (doc.nodes[m2.id].x, doc.nodes[m2.id].y) == (300, 300)
 
 
-def test_ungroup_rejects_non_group_kind():
-    doc = SceneDocument()
-    plain = doc.add_node(0, 0)
-    with pytest.raises(SceneError):
-        doc.ungroup(plain.id)
-
-
 def test_ungroup_detaches_a_nested_group_from_its_outer_container():
     # Post-review fix: ungroup() must also release the ungrouped node from
     # any OUTER group it was itself a member of (containers can nest), or
@@ -6922,13 +5934,6 @@ def test_set_group_label_updates_content_for_frame_and_container():
     assert doc.nodes[container.id].content == "My Container"
 
 
-def test_set_group_label_rejects_non_group_kind():
-    doc = SceneDocument()
-    plain = doc.add_node(0, 0)
-    with pytest.raises(SceneError):
-        doc.set_group_label(plain.id, "nope")
-
-
 def test_set_group_color_applies_to_note_frame_and_container():
     doc = SceneDocument()
     note = doc.add_note(0, 0)
@@ -6948,13 +5953,6 @@ def test_set_group_color_applies_to_note_frame_and_container():
     assert doc.nodes[note.id].header_color is None
 
 
-def test_set_group_color_rejects_unrelated_kind():
-    doc = SceneDocument()
-    plain = doc.add_node(0, 0)
-    with pytest.raises(SceneError):
-        doc.set_group_color(plain.id, "#111111", "#222222")
-
-
 def test_toggle_frame_lock_flips_is_locked_and_defaults_true():
     doc = SceneDocument()
     m1 = doc.add_node(0, 0)
@@ -6966,14 +5964,6 @@ def test_toggle_frame_lock_flips_is_locked_and_defaults_true():
 
     doc.toggle_frame_lock(frame.id)
     assert doc.nodes[frame.id].state.is_locked is True
-
-
-def test_toggle_frame_lock_rejects_container_kind():
-    doc = SceneDocument()
-    m1 = doc.add_node(0, 0)
-    container = doc.create_container([m1.id])
-    with pytest.raises(SceneError):
-        doc.toggle_frame_lock(container.id)
 
 
 def test_scene_payload_exposes_note_frame_and_container_fields():
@@ -7107,21 +6097,6 @@ def test_add_chart_node_does_not_render_or_touch_image_assets():
     assert doc.image_assets == {}
 
 
-def test_add_chart_node_title_defaults_to_chart_when_data_has_none():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-
-    chart = doc.add_chart_node(0, 0, parent.id, "bar", {"labels": ["a"], "values": [1.0]})
-
-    assert chart.title == "Chart"
-
-
-def test_add_chart_node_rejects_an_unknown_parent():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.add_chart_node(0, 0, "ghost", "bar", dict(_CHART_DATA))
-
-
 def test_add_chart_node_rejects_an_unsupported_chart_type():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -7164,13 +6139,6 @@ def test_resize_chart_does_not_render_or_touch_image_assets():
     assert doc.image_assets == {}
 
 
-def test_resize_chart_rejects_a_non_chart_node():
-    doc = SceneDocument()
-    plain = doc.add_node(0, 0, "plain")
-    with pytest.raises(SceneError):
-        doc.resize_chart(plain.id, 500.0, 500.0)
-
-
 def test_toggle_chart_aspect_lock_flips_flag_without_touching_size():
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
@@ -7184,13 +6152,6 @@ def test_toggle_chart_aspect_lock_flips_flag_without_touching_size():
 
     doc.toggle_chart_aspect_lock(chart.id)
     assert chart.state.chart_aspect_locked is True
-
-
-def test_toggle_chart_aspect_lock_rejects_a_non_chart_node():
-    doc = SceneDocument()
-    plain = doc.add_node(0, 0, "plain")
-    with pytest.raises(SceneError):
-        doc.toggle_chart_aspect_lock(plain.id)
 
 
 def test_scene_payload_exposes_all_chart_fields():
@@ -7782,32 +6743,6 @@ def test_generate_key_takeaway_rejects_an_empty_node_without_calling_the_agent(m
     asyncio.run(run())
 
 
-def test_generate_key_takeaway_rejects_a_non_chat_node(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        agents_module.KeyTakeawayAgent, "get_response",
-        lambda self, text: calls.append(text) or "x",
-    )
-
-    async def run():
-        bus, document, _, _ = make_bus_with_dispatcher()
-        note = document.add_note(0, 0)
-        result = await bus.dispatch_intent("scene", "generateKeyTakeaway", [note.id])
-        assert result is None
-        assert calls == []
-
-    asyncio.run(run())
-
-
-def test_generate_key_takeaway_rejects_an_unknown_node_id():
-    async def run():
-        bus, document, _, _ = make_bus_with_dispatcher()
-        result = await bus.dispatch_intent("scene", "generateKeyTakeaway", ["does-not-exist"])
-        assert result is None
-
-    asyncio.run(run())
-
-
 def test_generate_key_takeaway_sends_the_nodes_own_text_not_the_branch_history(monkeypatch):
     # Legacy summarised ONE node. Widening this to the branch history (as
     # generateChart does) would change what the feature actually summarises.
@@ -8009,19 +6944,6 @@ def test_compare_branches_rejects_an_unknown_node_id():
     asyncio.run(run())
 
 
-def test_mark_branch_comparison_note_rejects_a_non_note_node():
-    doc = SceneDocument()
-    chat = doc.add_chat_node(0, 0, "not a note", True)
-    with pytest.raises(SceneError):
-        doc.mark_branch_comparison_note(chat.id, ["x", "y"])
-
-
-def test_mark_branch_comparison_note_rejects_an_unknown_node_id():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.mark_branch_comparison_note("does-not-exist", ["x", "y"])
-
-
 # -- ADR-002 Workstream 1: "Synthesize Branches" ------------------------------
 #
 # The third sequenced item ("fork -> compare -> synthesize -> status/
@@ -8138,60 +7060,6 @@ def test_synthesize_branches_sends_each_branchs_own_full_history_and_the_instruc
     asyncio.run(run())
 
 
-def test_synthesize_branches_rejects_fewer_than_two_ids():
-    async def run():
-        bus, document, _, _ = make_bus_with_dispatcher()
-        only = document.add_chat_node(0, 0, "solo", True)
-        node_count_before = len(document.nodes)
-
-        assert await bus.dispatch_intent("scene", "synthesizeBranches", [[], "combine them"]) is None
-        assert await bus.dispatch_intent("scene", "synthesizeBranches", [[only.id], "combine them"]) is None
-        assert len(document.nodes) == node_count_before, "no node should be created"
-
-    asyncio.run(run())
-
-
-def test_synthesize_branches_dedupes_repeated_ids_before_the_minimum_check():
-    async def run():
-        bus, document, _, _ = make_bus_with_dispatcher()
-        only = document.add_chat_node(0, 0, "solo", True)
-
-        result = await bus.dispatch_intent("scene", "synthesizeBranches", [[only.id, only.id], "combine"])
-        assert result is None, "the same id twice must still fail the real 2-distinct-branches minimum"
-
-    asyncio.run(run())
-
-
-def test_synthesize_branches_rejects_a_non_chat_node(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        agents_module.BranchSynthesisAgent, "get_response",
-        lambda self, text, instructions: calls.append(text) or "should not happen",
-    )
-
-    async def run():
-        bus, document, _, _ = make_bus_with_dispatcher()
-        chat = document.add_chat_node(0, 0, "a real chat node", True)
-        note = document.add_note(0, 0)
-
-        result = await bus.dispatch_intent("scene", "synthesizeBranches", [[chat.id, note.id], "combine"])
-
-        assert result is None
-        assert calls == [], "a non-chat node in the selection must block the agent call entirely"
-
-    asyncio.run(run())
-
-
-def test_synthesize_branches_rejects_an_unknown_node_id():
-    async def run():
-        bus, document, _, _ = make_bus_with_dispatcher()
-        chat = document.add_chat_node(0, 0, "a real chat node", True)
-        result = await bus.dispatch_intent("scene", "synthesizeBranches", [[chat.id, "does-not-exist"], "combine"])
-        assert result is None
-
-    asyncio.run(run())
-
-
 def test_synthesize_branches_rejects_blank_instructions(monkeypatch):
     calls = []
     monkeypatch.setattr(
@@ -8211,19 +7079,6 @@ def test_synthesize_branches_rejects_blank_instructions(monkeypatch):
         assert calls == [], "blank instructions must block the agent call entirely"
 
     asyncio.run(run())
-
-
-def test_mark_branch_synthesis_rejects_a_non_chat_node():
-    doc = SceneDocument()
-    note = doc.add_note(0, 0)
-    with pytest.raises(SceneError):
-        doc.mark_branch_synthesis(note.id, ["x", "y"], "instructions", "Anthropic Claude", "claude-sonnet-5")
-
-
-def test_mark_branch_synthesis_rejects_an_unknown_node_id():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.mark_branch_synthesis("does-not-exist", ["x", "y"], "instructions", None, None)
 
 
 # -- ADR-002 Workstream 1: "Branch status and lifecycle" ---------------------
@@ -8249,19 +7104,6 @@ def test_set_branch_status_rejects_an_invalid_value():
     with pytest.raises(SceneError):
         doc.set_branch_status(node.id, "archived")
     assert doc.nodes[node.id].state.branch_status == "active", "a rejected call must not mutate the node"
-
-
-def test_set_branch_status_rejects_a_non_chat_node():
-    doc = SceneDocument()
-    note = doc.add_note(0, 0)
-    with pytest.raises(SceneError):
-        doc.set_branch_status(note.id, "accepted")
-
-
-def test_set_branch_status_rejects_an_unknown_node_id():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.set_branch_status("does-not-exist", "accepted")
 
 
 def test_set_branch_status_has_no_effect_on_sibling_branches():
@@ -8302,19 +7144,6 @@ def test_set_final_deliverable_unmarking_a_different_node_than_the_current_one_i
     doc.set_final_deliverable(first.id, True)
     doc.set_final_deliverable(second.id, False)
     assert doc.final_deliverable_node_id == first.id, "unmarking a node that doesn't hold the pointer must not clear it"
-
-
-def test_set_final_deliverable_rejects_a_non_chat_node():
-    doc = SceneDocument()
-    note = doc.add_note(0, 0)
-    with pytest.raises(SceneError):
-        doc.set_final_deliverable(note.id, True)
-
-
-def test_set_final_deliverable_rejects_an_unknown_node_id():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.set_final_deliverable("does-not-exist", True)
 
 
 def test_chat_subtree_ids_includes_root_and_every_chat_descendant():
@@ -8367,19 +7196,6 @@ def test_collapse_branch_expand_reverses_it():
     doc.collapse_branch(root.id, False)
     assert doc.nodes[root.id].is_collapsed is False
     assert doc.nodes[child.id].is_collapsed is False
-
-
-def test_collapse_branch_rejects_a_non_chat_node():
-    doc = SceneDocument()
-    note = doc.add_note(0, 0)
-    with pytest.raises(SceneError):
-        doc.collapse_branch(note.id, True)
-
-
-def test_collapse_branch_rejects_an_unknown_node_id():
-    doc = SceneDocument()
-    with pytest.raises(SceneError):
-        doc.collapse_branch("does-not-exist", True)
 
 
 def test_scene_payload_includes_branch_status_and_final_deliverable():

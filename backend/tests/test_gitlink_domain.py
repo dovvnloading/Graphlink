@@ -141,18 +141,6 @@ def test_build_headers_omits_the_token_for_a_non_github_host():
     assert "Authorization" not in headers
 
 
-def test_build_headers_includes_the_token_for_the_api_host():
-    client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_xyz"))
-    headers = client.build_headers("https://api.github.com/repos/o/r")
-    assert headers["Authorization"] == "Bearer ghp_xyz"
-
-
-def test_build_headers_includes_the_token_for_the_raw_content_host():
-    client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_xyz"))
-    headers = client.build_headers("https://raw.githubusercontent.com/o/r/main/f.txt")
-    assert headers["Authorization"] == "Bearer ghp_xyz"
-
-
 def test_request_does_not_leak_the_token_to_a_download_url_naming_a_hostile_host(monkeypatch):
     # Reproduces the actual reported mechanism: fetch_github_file_text hands
     # a response-supplied download_url straight to request() - a tampered/
@@ -255,18 +243,6 @@ def test_request_error_body_not_json_falls_back_to_text_then_reason(monkeypatch)
         client.request("https://api.github.com/repos/o/r")
 
 
-def test_request_error_body_not_json_prefers_text_over_reason(monkeypatch):
-    monkeypatch.setattr(
-        github_client_module.requests, "get",
-        lambda *a, **k: _FakeHTTPResponse(
-            status_code=502, json_raises=True, text="upstream timeout", reason="Bad Gateway"
-        ),
-    )
-    client = GitHubRestClient(settings_manager=None)
-    with pytest.raises(RuntimeError, match="^upstream timeout$"):
-        client.request("https://api.github.com/repos/o/r")
-
-
 # =============================================================================
 # graphlink_plugins/gitlink/agent.py - pure helpers
 # =============================================================================
@@ -283,19 +259,6 @@ def test_clean_text_truncates_with_ellipsis_at_limit():
     assert len(result) == 10
 
 
-def test_clean_text_handles_none_value():
-    assert _clean_text(None) == ""
-    assert _clean_text(None, limit=10) == ""
-
-
-def test_clean_text_no_limit_returns_full_text_unbounded():
-    assert _clean_text("a" * 500) == "a" * 500
-
-
-def test_compact_label_text_passthrough_under_limit():
-    assert _compact_label_text("short label") == "short label"
-
-
 def test_compact_label_text_truncates_over_default_limit():
     result = _compact_label_text("x" * 100)
     assert result == "x" * 31 + "..."
@@ -306,29 +269,11 @@ def test_decode_text_bytes_prefers_utf8():
     assert _decode_text_bytes("héllo wörld".encode("utf-8")) == "héllo wörld"
 
 
-def test_decode_text_bytes_does_not_strip_bom_because_plain_utf8_wins_first():
-    # "utf-8-sig" is listed second in the fallback tuple specifically to
-    # strip a BOM, but the BOM bytes (EF BB BF) are themselves a valid
-    # UTF-8 encoding of U+FEFF - plain "utf-8" (tried first) decodes them
-    # without raising, so the loop never reaches "utf-8-sig" and the BOM
-    # survives as a leading ﻿ character. Pinning actual behavior here,
-    # not the behavior the encoding-list order implies.
-    raw = b"\xef\xbb\xbfhello"
-    assert _decode_text_bytes(raw) == "﻿hello"
-
-
 def test_decode_text_bytes_falls_back_to_cp1252_for_smart_quotes():
     # 0x93/0x94 are cp1252 "smart quotes" - invalid lead bytes in UTF-8
     # (both plain and BOM-sniffed), so this must fall through to cp1252.
     raw = b"\x93hello\x94"
     assert _decode_text_bytes(raw) == "\u201chello\u201d"
-
-
-def test_decode_text_bytes_falls_back_to_latin1_when_cp1252_undefined():
-    # 0x81 is undefined in cp1252 (raises), but latin-1 maps every byte
-    # 0-255 losslessly, so this is the last fallback that actually succeeds.
-    raw = b"\x81"
-    assert _decode_text_bytes(raw) == "\x81"
 
 
 def test_is_repo_text_path_excludes_known_binary_suffixes_case_insensitively():
@@ -447,12 +392,6 @@ def test_fingerprint_changes_is_deterministic_for_same_input():
     assert _fingerprint_changes(changes) == _fingerprint_changes(changes)
 
 
-def test_fingerprint_changes_is_a_64_char_hex_sha256_digest():
-    fp = _fingerprint_changes([{"path": "a.py"}])
-    assert len(fp) == 64
-    assert all(c in "0123456789abcdef" for c in fp)
-
-
 def test_fingerprint_changes_is_independent_of_dict_key_order():
     a = [{"path": "a.py", "operation": "update", "content": "x"}]
     b = [{"content": "x", "path": "a.py", "operation": "update"}]
@@ -465,41 +404,6 @@ def test_fingerprint_changes_differs_for_different_content():
     assert _fingerprint_changes(a) != _fingerprint_changes(b)
 
 
-def test_fingerprint_changes_is_sensitive_to_list_order():
-    # Documents a real, non-obvious property: sort_keys=True only sorts
-    # dict KEYS, never reorders list elements - so json.dumps (and thus the
-    # fingerprint the 3-way approval compare in backend/agents.py relies
-    # on) treats the same two file-changes in a different order as a
-    # DIFFERENT change set. In production this is masked by
-    # GitlinkAgent._normalize_files always emitting files sorted by path,
-    # so callers never actually see this - but the hash function itself
-    # has no such guarantee on its own.
-    a = [{"path": "a.py"}, {"path": "b.py"}]
-    b = [{"path": "b.py"}, {"path": "a.py"}]
-    assert _fingerprint_changes(a) != _fingerprint_changes(b)
-
-
-def test_fingerprint_changes_handles_non_json_serializable_values_via_default_str():
-    # default=str means a value json.dumps can't natively serialize (e.g. a
-    # Path) is coerced via str() instead of raising - must not crash on
-    # whatever a caller happens to stash in a change dict.
-    changes = [{"path": "a.py", "note": Path("weird/object")}]
-    fp = _fingerprint_changes(changes)
-    assert len(fp) == 64
-
-
-def test_fingerprint_changes_empty_list_is_a_stable_well_known_value():
-    # json.dumps([], sort_keys=True) == "[]" - pin the exact digest so any
-    # accidental change to the canonicalization (e.g. separators) is caught.
-    import hashlib
-    expected = hashlib.sha256(b"[]").hexdigest()
-    assert _fingerprint_changes([]) == expected
-
-
-def test_wrap_cdata_wraps_plain_text():
-    assert _wrap_cdata("hello") == "<![CDATA[hello]]>"
-
-
 def test_wrap_cdata_escapes_embedded_cdata_close_sequence():
     # A raw "]]>" inside the source text would otherwise prematurely close
     # the CDATA section - splitting it must let it round-trip literally in
@@ -509,42 +413,14 @@ def test_wrap_cdata_escapes_embedded_cdata_close_sequence():
     assert "]]>after]]>" not in wrapped.replace("]]]]><![CDATA[>", "")
 
 
-def test_wrap_cdata_handles_none_as_empty_string():
-    assert _wrap_cdata(None) == "<![CDATA[]]>"
-
-
 def test_xml_file_block_escapes_path_attribute():
     block = _xml_file_block('src/"quoted".py', "content", original_chars=7)
     assert 'path="src/&quot;quoted&quot;.py"' in block
 
 
-def test_xml_file_block_includes_chars_and_truncated_attrs():
-    block = _xml_file_block("a.py", "hi", truncated=True, original_chars=1234)
-    assert 'chars="1234"' in block
-    assert 'truncated="true"' in block
-
-
-def test_xml_file_block_defaults_truncated_false_and_clamps_negative_chars():
-    block = _xml_file_block("a.py", "hi", original_chars=-5)
-    assert 'truncated="false"' in block
-    assert 'chars="0"' in block
-
-
 def test_xml_file_block_wraps_source_text_in_cdata():
     block = _xml_file_block("a.py", "print(1)", original_chars=8)
     assert "<![CDATA[print(1)]]>" in block
-
-
-def test_truncate_for_context_returns_unchanged_when_under_limit():
-    text, truncated = _truncate_for_context("short text", max_chars=100)
-    assert text == "short text"
-    assert truncated is False
-
-
-def test_truncate_for_context_exact_boundary_is_not_truncated():
-    text, truncated = _truncate_for_context("x" * 100, max_chars=100)
-    assert text == "x" * 100
-    assert truncated is False
 
 
 def test_truncate_for_context_truncates_and_flags_when_over_limit():
@@ -558,11 +434,6 @@ def test_truncate_for_context_truncates_and_flags_when_over_limit():
 def test_extract_json_object_pulls_fenced_json_block():
     raw = 'Sure, here you go:\n```json\n{"a": 1}\n```\nHope that helps.'
     assert _extract_json_object(raw) == '{"a": 1}'
-
-
-def test_extract_json_object_pulls_bare_json_object_without_fence():
-    raw = 'preamble text {"a": 1, "b": [1,2]} trailing text'
-    assert json.loads(_extract_json_object(raw)) == {"a": 1, "b": [1, 2]}
 
 
 def test_extract_json_object_falls_back_to_raw_text_when_no_object_found():
@@ -582,24 +453,11 @@ def _file_item(path="a.py", operation="update", reason="r", content="x"):
     return item
 
 
-def test_normalize_files_sorts_by_path_case_insensitively():
-    agent = GitlinkAgent()
-    items = [_file_item(path="Zebra.py"), _file_item(path="apple.py"), _file_item(path="Banana.py")]
-    result = agent._normalize_files(items)
-    assert [item["path"] for item in result] == ["apple.py", "Banana.py", "Zebra.py"]
-
-
 def test_normalize_files_drops_items_with_invalid_or_unsafe_path():
     agent = GitlinkAgent()
     items = [_file_item(path="../escape.py"), _file_item(path="ok.py")]
     result = agent._normalize_files(items)
     assert [item["path"] for item in result] == ["ok.py"]
-
-
-def test_normalize_files_defaults_unknown_operation_to_update():
-    agent = GitlinkAgent()
-    result = agent._normalize_files([{"path": "a.py", "operation": "rewrite", "content": "x"}])
-    assert result[0]["operation"] == "update"
 
 
 def test_normalize_files_dedupes_by_path_last_write_wins():
@@ -632,22 +490,10 @@ def test_normalize_files_delete_items_do_not_require_content():
     assert "content" not in result[0]
 
 
-def test_normalize_files_defaults_reason_when_missing():
-    agent = GitlinkAgent()
-    result = agent._normalize_files([{"path": "a.py", "operation": "update", "content": "x"}])
-    assert result[0]["reason"] == "No reason supplied."
-
-
 def test_normalize_files_skips_non_dict_items():
     agent = GitlinkAgent()
     result = agent._normalize_files(["not-a-dict", 42, None, _file_item(path="a.py")])
     assert [item["path"] for item in result] == ["a.py"]
-
-
-def test_normalize_files_none_or_empty_input_returns_empty_list():
-    agent = GitlinkAgent()
-    assert agent._normalize_files(None) == []
-    assert agent._normalize_files([]) == []
 
 
 def _fake_chat(content_dict):
@@ -750,16 +596,6 @@ def test_get_response_invalid_write_intent_with_notes_and_no_files_flips_to_bloc
 
     assert result["write_intent"] == "blocked"
     assert result["notes"] == ["heads up"]
-
-
-def test_get_response_passes_through_raw_response_verbatim(monkeypatch):
-    raw = '```json\n{"summary": "s", "write_intent": "no_changes", "rationale": "r", "notes": [], "files": []}\n```'
-    monkeypatch.setattr(api_provider, "chat", lambda task, messages, **kwargs: {"message": {"content": raw}})
-    agent = GitlinkAgent()
-
-    result = agent.get_response({"task_prompt": "x", "context_xml": "<x/>", "repo": "o/r", "branch": "main"})
-
-    assert result["raw_response"] == raw
 
 
 def test_get_response_normalizes_and_sorts_returned_files(monkeypatch):

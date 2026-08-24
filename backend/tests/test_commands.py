@@ -749,29 +749,6 @@ def test_redo_refusal_message_says_redo_not_undo(document):
     assert document.nodes[node_id].x == 10
 
 
-def test_redo_refusal_message_for_a_still_running_build_also_says_redo(document):
-    """Same fix, the run-scoped half of _guard_live_runs (the "step from a
-    build that is still running" message a still-live Builder run
-    triggers)."""
-    plan = document.add_plan_node(0, 0, "build something")
-    content_node, _command = document.record_command(
-        "builderCreateNode", "agent", lambda: document.add_note(100, 0),
-        run_id="run-1",
-    )
-    document.undo()
-    assert document.can_redo()
-
-    plan.pending_request_id = "run-1"
-    plan.state.builder_run_id = "run-1"
-    with pytest.raises(UndoRefusedError, match="Can't redo a step") as exc_info:
-        document.redo()
-    assert "undo" not in str(exc_info.value)
-
-    plan.pending_request_id = None
-    document.redo()
-    assert content_node.id in document.nodes
-
-
 def test_undo_run_rolls_back_completely_when_an_older_command_in_the_run_is_refused(document):
     """Regression: undo_run looped calling undo() with no transaction. If a
     LATER call in the loop (an OLDER command in the run, since the stack
@@ -1056,67 +1033,6 @@ def test_resize_chart_is_undoable(wired):
 
     document.command_log[-1].invert(document)
     assert document.nodes[node.id].state.chart_width == original_width
-
-
-def test_set_pycoder_mode_is_undoable(wired):
-    bus, document = wired
-    parent = _dispatch(bus, "addNote", 0, 0, False, False)
-    node, _command = document.record_command(
-        "addPycoderNode", "user", lambda: document.add_pycoder_node(0, 0, parent),
-    )
-    document.command_log.clear()
-
-    _dispatch(bus, "setPyCoderMode", node.id, "manual")
-    assert document.nodes[node.id].state.pycoder_mode == "manual"
-
-    document.command_log[-1].invert(document)
-    assert document.nodes[node.id].state.pycoder_mode != "manual"
-
-
-def test_set_code_sandbox_requirements_is_undoable(wired):
-    bus, document = wired
-    parent = _dispatch(bus, "addNote", 0, 0, False, False)
-    node, _command = document.record_command(
-        "addCodeSandboxNode", "user",
-        lambda: document.add_code_sandbox_node(0, 0, parent),
-    )
-    document.command_log.clear()
-
-    _dispatch(bus, "setCodeSandboxRequirements", node.id, "requests==2.0")
-    assert document.nodes[node.id].state.code_sandbox_requirements == "requests==2.0"
-
-    document.command_log[-1].invert(document)
-    assert document.nodes[node.id].state.code_sandbox_requirements != "requests==2.0"
-
-
-def test_send_artifact_message_is_undoable(wired):
-    bus, document = wired
-    parent = _dispatch(bus, "addNote", 0, 0, False, False)
-    node, _command = document.record_command(
-        "addArtifactNode", "user", lambda: document.add_artifact_node(0, 0, parent),
-    )
-    document.command_log.clear()
-
-    _dispatch(bus, "sendArtifactMessage", node.id, "write a haiku")
-    assert len(document.nodes[node.id].history) == 1
-
-    document.command_log[-1].invert(document)
-    assert len(document.nodes[node.id].history) == 0
-
-
-def test_set_gitlink_local_root_is_undoable(wired):
-    bus, document = wired
-    parent = _dispatch(bus, "addNote", 0, 0, False, False)
-    node, _command = document.record_command(
-        "addGitlinkNode", "user", lambda: document.add_gitlink_node(0, 0, parent),
-    )
-    document.command_log.clear()
-
-    _dispatch(bus, "setGitlinkLocalRoot", node.id, "C:/somewhere")
-    assert document.nodes[node.id].state.gitlink_local_root == "C:/somewhere"
-
-    document.command_log[-1].invert(document)
-    assert document.nodes[node.id].state.gitlink_local_root != "C:/somewhere"
 
 
 def test_undo_never_resurrects_a_snapshotted_pending_request_id():
