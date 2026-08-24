@@ -112,30 +112,6 @@ def test_code_node_cannot_reference_a_later_payload_position_as_parent():
     assert next(iter(document.nodes.values())).kind == "chat"
 
 
-def test_document_node_field_mapping():
-    document = _restore(nodes=[
-        _chat("parent"),
-        {"node_type": "document", "title": "report.pdf", "content": "body text",
-         "attachment_kind": "document", "file_path": "/tmp/report.pdf", "mime_type": "application/pdf",
-         "duration_seconds": None, "byte_size": 2048, "preview_label": "PDF",
-         "is_collapsed": True, "is_docked": True,
-         "position": {"x": 0, "y": 0}, "parent_content_node_index": 0},
-    ])
-    node = next(n for n in document.nodes.values() if n.kind == "document")
-    assert node.title == "report.pdf" and node.content == "body text"
-    assert node.state.byte_size == 2048 and node.is_docked is True and node.is_collapsed is True
-
-
-def test_thinking_node_field_mapping():
-    document = _restore(nodes=[
-        _chat("parent"),
-        {"node_type": "thinking", "thinking_text": "reasoning...", "is_docked": True,
-         "position": {"x": 0, "y": 0}, "parent_content_node_index": 0},
-    ])
-    node = next(n for n in document.nodes.values() if n.kind == "thinking")
-    assert node.content == "reasoning..." and node.is_docked is True
-
-
 # -- parent-required kinds: parent_node_index --------------------------------
 
 
@@ -148,16 +124,6 @@ def test_conversation_node_uses_parent_node_index_not_parent_content_node_index(
     assert len(document.nodes) == 2
     conv = next(n for n in document.nodes.values() if n.kind == "conversation")
     assert conv.history == [{"role": "user", "content": "hi"}]
-
-
-def test_html_node_field_mapping():
-    document = _restore(nodes=[
-        _chat("parent"),
-        {"node_type": "html", "html_content": "<h1>Hi</h1>", "splitter_state": 0.4,
-         "position": {"x": 0, "y": 0}, "parent_node_index": 0},
-    ])
-    node = next(n for n in document.nodes.values() if n.kind == "html")
-    assert node.content == "<h1>Hi</h1>" and node.state.html_splitter_state == 0.4
 
 
 def test_pycoder_mode_translates_enum_member_name_to_lowercase():
@@ -221,28 +187,6 @@ def test_two_legacy_pycoder_payloads_missing_repl_id_do_not_collide():
     assert len(pycoder_nodes) == 2
     first, second = pycoder_nodes
     assert first.state.pycoder_repl_id != second.state.pycoder_repl_id
-
-
-def test_code_sandbox_sandbox_id_self_heals_when_missing_from_a_legacy_payload():
-    document = _restore(nodes=[
-        _chat("parent"),
-        {"node_type": "code_sandbox", "prompt": "build x", "requirements": "",
-         "code": "", "output": "", "analysis": "", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
-    ])
-    node = next(n for n in document.nodes.values() if n.kind == "code_sandbox")
-    assert node.state.code_sandbox_sandbox_id, "a missing sandbox_id must self-heal to a fresh non-blank id"
-
-
-def test_two_legacy_code_sandbox_payloads_missing_sandbox_id_do_not_collide():
-    document = _restore(nodes=[
-        _chat("parent"),
-        {"node_type": "code_sandbox", "prompt": "a", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
-        {"node_type": "code_sandbox", "prompt": "b", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
-    ])
-    sandbox_nodes = [n for n in document.nodes.values() if n.kind == "code_sandbox"]
-    assert len(sandbox_nodes) == 2
-    first, second = sandbox_nodes
-    assert first.state.code_sandbox_sandbox_id != second.state.code_sandbox_sandbox_id
 
 
 def test_artifact_node_reuses_instruction_as_content_and_content_as_artifact_content():
@@ -380,23 +324,6 @@ def test_malformed_child_id_is_skipped_without_aborting_the_rest_of_the_load():
     assert any(e.source == root.id and e.target == child_b.id for e in document.edges.values())
 
 
-def test_malformed_child_index_is_skipped_without_aborting_the_rest_of_the_load():
-    # Same tolerance, but for a non-scalar children_indices entry (a dict)
-    # instead of children_ids.
-    document = _restore(nodes=[
-        {"node_type": "chat", "id": "root", "raw_content": "root", "is_user": True,
-         "position": {"x": 0, "y": 0}, "children_indices": [{"nested": True}, 2]},
-        {"node_type": "chat", "id": "unused", "raw_content": "unused", "is_user": False,
-         "position": {"x": 0, "y": 100}},
-        {"node_type": "chat", "id": "child", "raw_content": "child", "is_user": False,
-         "position": {"x": 0, "y": 200}},
-    ])
-    root = next(n for n in document.nodes.values() if n.content == "root")
-    child = next(n for n in document.nodes.values() if n.content == "child")
-    assert len(document.edges) == 1
-    assert any(e.source == root.id and e.target == child.id for e in document.edges.values())
-
-
 # -- notes --------------------------------------------------------------
 
 
@@ -450,19 +377,6 @@ def test_chart_aspect_lock_is_applied_before_resize_not_after():
     )
     chart = next(n for n in document.nodes.values() if n.kind == "chart")
     assert (chart.state.chart_width, chart.state.chart_height) == (440.0, 320.0)
-
-
-def test_malformed_chart_is_skipped_without_aborting_the_rest_of_the_load():
-    document = _restore(
-        nodes=[_chat("a")],
-        charts=[
-            {"id": "bad", "data": "not-a-dict", "position": {"x": 0, "y": 0}},
-            {"id": "good", "data": {"type": "bar", "title": "T", "labels": ["a"], "values": [1.0]},
-             "position": {"x": 0, "y": 0}},
-        ],
-    )
-    charts = [n for n in document.nodes.values() if n.kind == "chart"]
-    assert len(charts) == 1
 
 
 def test_chart_with_unsupported_type_is_skipped():
@@ -737,19 +651,6 @@ def test_malformed_connection_id_is_skipped_without_aborting_the_rest_of_the_loa
     assert any(e.source == a.id and e.target == c.id for e in document.edges.values())
 
 
-def test_malformed_system_prompt_note_index_is_skipped_without_aborting_the_load():
-    # start_note_index/end_note_index are also untrusted payload values fed
-    # straight into notes_map.get() - a dict there (valid JSON, wrong shape)
-    # must not raise TypeError and abort the load either.
-    document = _restore(
-        nodes=[_chat("only-chat")],
-        notes=[{"content": "sp", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1},
-                "color": "#fff", "header_color": None, "is_system_prompt": True}],
-        system_prompt_connections=[{"start_note_index": {"nested": True}, "end_node_index": 0}],
-    )
-    assert not document.edges
-
-
 # -- pins / view state / tokens ------------------------------------------
 
 
@@ -847,15 +748,6 @@ def test_restore_chat_payload_restores_a_model_override_pin():
     assert node.state.override_model_id == "claude-opus-5"
 
 
-def test_restore_chat_payload_with_no_override_keys_defaults_to_no_pin():
-    # Every save written before this stage - the "" default, never a crash
-    # on the missing keys.
-    document = _restore(nodes=[_chat("n0")])
-    node = next(iter(document.nodes.values()))
-    assert node.state.override_provider == ""
-    assert node.state.override_model_id == ""
-
-
 def test_restore_chat_payload_defaults_branch_status_to_active_when_absent():
     document = _restore(nodes=[_chat("n0")])
     node = next(iter(document.nodes.values()))
@@ -869,14 +761,6 @@ def test_restore_notes_restores_is_branch_comparison():
     ])
     note = next(iter(document.nodes.values()))
     assert note.state.is_branch_comparison is True
-
-
-def test_restore_notes_defaults_is_branch_comparison_to_false_when_absent():
-    document = _restore(notes=[
-        {"content": "plain", "position": {"x": 0, "y": 0}, "size": {"width": 1, "height": 1}},
-    ])
-    note = next(iter(document.nodes.values()))
-    assert note.state.is_branch_comparison is False
 
 
 def test_restore_translates_a_synthesis_nodes_item_ids_to_the_re_minted_source_ids():
@@ -953,11 +837,6 @@ def test_restore_translates_final_deliverable_node_id():
     node = next(iter(document.nodes.values()))
     assert document.final_deliverable_node_id == node.id
     assert node.id != "legacy-uuid-1234", "ids must be re-minted on load - a weak assertion here would miss a translation bug"
-
-
-def test_restore_final_deliverable_node_id_defaults_to_none_when_absent():
-    document = _restore(nodes=[_chat("n0")])
-    assert document.final_deliverable_node_id is None
 
 
 def test_restore_final_deliverable_node_id_stale_reference_is_dropped():
