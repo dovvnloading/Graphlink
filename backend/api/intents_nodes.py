@@ -10,12 +10,14 @@ own local scope; those are now explicit parameters instead.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 
 from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
 from backend.events import SessionBus
+from graphlink_scratch_dirs import HARNESS_WORKSPACE_ROOT, remove_scratch_dir_for_id
 
 
 def _capture_live_run_teardown(document: SceneDocument, ids: list[str]):
@@ -25,7 +27,8 @@ def _capture_live_run_teardown(document: SceneDocument, ids: list[str]):
     register_node_intents to keep it under the 300-line register*
     function cap (ADR-002 stage 2.6/2.7's own exit gate).
 
-    Returns (pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels):
+    Returns (pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels,
+    harness_workspace_ids, harness_cancels):
 
     - pycoder_ids: (node_id, repl_id) pairs - R5.4: a deleted Py-Coder
       node's REPL subprocess must not outlive it. ADR-005 stage 5.3
@@ -91,7 +94,23 @@ def _capture_live_run_teardown(document: SceneDocument, ids: list[str]):
         and document.nodes[node_id].kind == "plan"
         and document.nodes[node_id].pending_request_id
     ]
-    return pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels
+    # PLAN-2026-08-24 H1: a deleted harness node's workspace (files AND
+    # transcript - one unit by design) is removed via the same
+    # recompute-from-durable-id path the pycoder/sandbox dirs use, and its
+    # live run cancelled like a plan node's.
+    harness_workspace_ids = [
+        document.nodes[node_id].state.harness_workspace_id
+        for node_id in ids
+        if document.nodes.get(node_id) is not None and document.nodes[node_id].kind == "harness"
+    ]
+    harness_cancels = [
+        document.nodes[node_id].pending_request_id
+        for node_id in ids
+        if document.nodes.get(node_id) is not None
+        and document.nodes[node_id].kind == "harness"
+        and document.nodes[node_id].pending_request_id
+    ]
+    return pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels, harness_workspace_ids, harness_cancels
 
 
 def register_node_intents(
@@ -238,7 +257,9 @@ def register_node_intents(
 
     async def remove_nodes(node_ids):
         ids = list(node_ids)
-        pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels = _capture_live_run_teardown(document, ids)
+        pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels, harness_workspace_ids, harness_cancels = (
+            _capture_live_run_teardown(document, ids)
+        )
         # ADR-010 stage 10.1: the delete itself is recorded. Only the
         # DOCUMENT half is invertible - the subprocess teardown and
         # scratch-dir removal below are deliberately outside the command,
@@ -294,6 +315,17 @@ def register_node_intents(
             await agent_dispatcher.dispose_pycoder_repl(node_id, repl_id=repl_id, remove_scratch_dir=True)
         for sandbox_id in sandbox_ids:
             await agent_dispatcher.remove_code_sandbox_scratch_dir(sandbox_id)
+        for request_id in harness_cancels:
+            # Safe no-op if the run already finished between capture and
+            # here - the plan-cancel contract exactly.
+            agent_dispatcher.cancel_harness(request_id)
+        for workspace_id in harness_workspace_ids:
+            # Blank ids are refused inside remove_scratch_dir_for_id (the
+            # shared-"default"-bucket guard); rmtree runs off-loop like the
+            # sandbox removal's own to_thread posture.
+            await asyncio.to_thread(
+                remove_scratch_dir_for_id, HARNESS_WORKSPACE_ROOT, workspace_id,
+            )
         await publish_scene()
 
     async def connect_nodes(source, target):

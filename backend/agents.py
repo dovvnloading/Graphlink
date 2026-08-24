@@ -692,6 +692,94 @@ class AgentDispatcher:
             handle.approval_future.set_result(False)
         self._runs.cancel(request_id, kind="builder")
 
+    # -- PLAN-2026-08-24 H1: the agent harness -------------------------------
+
+    def harness_tool_registry(self, document) -> "object":
+        """The harness rides the SAME per-session registry the Builder
+        built (tools.py: one registry per session, RunContext is what's
+        per-run) - fs tools are simply registered into it on first harness
+        use. Cross-visibility is governed by scope filtering, not by
+        separate registries: the Builder's spec filter excludes fs.read
+        (outside BUILDER_GRANTED_SCOPES) and the harness's excludes
+        everything outside HARNESS_GRANTED_SCOPES, so each loop offers its
+        model only what its own grant set could pass at invoke()."""
+        registry = self.builder_tool_registry(document)
+        if not getattr(self, "_harness_fs_registered", False):
+            from backend.harness.tools_fs import register_harness_fs_tools
+
+            register_harness_fs_tools(registry)
+            self._harness_fs_registered = True
+        return registry
+
+    async def start_harness_run(
+        self,
+        *,
+        bus,
+        notifications_state,
+        document,
+        harness_node_id: str,
+        user_text: str,
+        model_ref=None,
+    ) -> str | None:
+        """Claims the "harness" kind and runs one harness task as a
+        background task (backend/harness/loop.run_harness). One harness
+        run per session at a time - the same kind-level busy guard every
+        other run kind has. Stop lands through finalize: RunRegistry.cancel
+        frees the slot immediately and finalize writes the terminal
+        "stopped" state (the 6.2 posture start_builder_run documents)."""
+        from backend.domain.node_states import HarnessState
+
+        if self._runs.is_busy("harness"):
+            notifications_state.show("An agent run is already in progress.", "info")
+            await bus.publish("notification")
+            return None
+        node = document.nodes.get(harness_node_id)
+        if node is None or not isinstance(node.state, HarnessState):
+            notifications_state.show("This agent node no longer exists.", "warning")
+            await bus.publish("notification")
+            return None
+
+        cancel_event = threading.Event()
+
+        async def _finalize() -> None:
+            if node.state.harness_status == "running":
+                node.state.harness_status = "stopped"
+                node.state.harness_status_detail = "Stopped by user."
+            if node.pending_request_id == handle.request_id:
+                node.pending_request_id = None
+            await bus.publish("scene")
+
+        handle = self._runs.claim(
+            "harness", node_id=harness_node_id, cancel_event=cancel_event, finalize=_finalize,
+        )
+        request_id = handle.request_id
+
+        async def _run() -> None:
+            from backend.harness import loop as harness_loop
+
+            try:
+                await harness_loop.run_harness(
+                    document=document, dispatcher=self,
+                    registry=self.harness_tool_registry(document),
+                    bus=bus, notifications=notifications_state,
+                    harness_node_id=harness_node_id, user_text=user_text,
+                    request_id=request_id, handle=handle, cancel_event=cancel_event,
+                    model_ref=model_ref, settings_manager=self._settings_manager,
+                    **self._runtime_kwargs(),
+                )
+            finally:
+                self._runs.release(request_id)
+
+        self._runs.attach_task(handle, asyncio.create_task(_run()))
+        return request_id
+
+    def cancel_harness(self, request_id: str) -> None:
+        """Stop for a harness run - the standard release-on-cancel. (No
+        parked approval to deny in H1: every offered tool is `auto`; the
+        deny-first line joins this method alongside H2's approval
+        surface.)"""
+        self._runs.cancel(request_id, kind="harness")
+
     def get_pycoder_repl(self, node_id: str, repl_id: str) -> PythonREPL:
         """Lazy-create-or-reuse - mirrors PyCoderReplManager.get_repl's own
         shape, keyed by node_id (transient, session-scoped: this dict and

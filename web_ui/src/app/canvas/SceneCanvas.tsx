@@ -39,6 +39,7 @@ import { PyCoderNodeView, type PyCoderFlowNode } from "./PyCoderNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNodeView";
 import { PlanNodeView, type PlanFlowNode, type PlanStepData } from "./PlanNodeView";
+import { HarnessNodeView, type HarnessFlowNode } from "./HarnessNodeView";
 import {
   GROUP_FALLBACK_HEIGHT,
   GROUP_FALLBACK_WIDTH,
@@ -86,7 +87,8 @@ export type SceneFlowNode =
   | NoteFlowNode
   | GroupFlowNode
   | ChartFlowNode
-  | PlanFlowNode;
+  | PlanFlowNode
+  | HarnessFlowNode;
 
 function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
   // ADR-011 stage 11.6/11.1 dedup: was its own local
@@ -133,6 +135,8 @@ const NODE_TYPES = {
   chart: ChartNodeView,
   // ADR-008 stage 8.3: the Builder's plan node - see PlanNodeView.tsx.
   plan: PlanNodeView,
+  // PLAN-2026-08-24 H1: the workspace agent - see HarnessNodeView.tsx.
+  harness: HarnessNodeView,
 };
 
 // R7.5b-2: the first custom edge type registered in this codebase - see
@@ -837,6 +841,23 @@ function makePlanFns(id: string, liveRef: { current: DispatcherLive }) {
   };
 }
 
+function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    // Node-id-shaped: which AGENT, not which run - the backend claims a
+    // fresh run per follow-up task (the startBuilderExecution shape).
+    onSend: (text: string) => liveRef.current.store.sendHarnessMessage(id, text),
+    onCancel: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.cancelHarnessRun(n.pendingRequestId);
+    },
+  };
+}
+
 function makeArtifactFns(id: string, liveRef: { current: DispatcherLive }) {
   return {
     onToggleCollapse: () => {
@@ -1463,6 +1484,43 @@ export function toFlowNodes(
           builderApprovalToolName: n.builderApprovalToolName,
           builderApprovalSummary: n.builderApprovalSummary,
           builderStatusDetail: n.builderStatusDetail,
+          isCollapsed: n.isCollapsed,
+          pendingRequestId: n.pendingRequestId ?? null,
+          ...fns,
+        },
+      };
+      cache.flowNodes.set(n, { extraSig, flowNode });
+      flowNodes.push(flowNode);
+      continue;
+    }
+    if (n.kind === "harness") {
+      // PLAN-2026-08-24 H1. Same shape as the plan branch above: no
+      // onDock, no branch-focus wiring, every harness field lives on the
+      // row itself so a changed row object IS a cache miss; only
+      // dimmedVal rides extraSig.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeHarnessFns);
+      if (cached && cached.extraSig === extraSig) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
+        id: n.id,
+        type: "harness" as const,
+        position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        data: {
+          harnessGoal: n.harnessGoal,
+          harnessReply: n.harnessReply,
+          harnessStatus: n.harnessStatus,
+          harnessStatusDetail: n.harnessStatusDetail,
+          harnessRunId: n.harnessRunId,
+          harnessActivity: n.harnessActivity,
+          harnessMaxTurns: n.harnessMaxTurns,
+          harnessSpentTurns: n.harnessSpentTurns,
+          harnessSpentTokens: n.harnessSpentTokens,
           isCollapsed: n.isCollapsed,
           pendingRequestId: n.pendingRequestId ?? null,
           ...fns,

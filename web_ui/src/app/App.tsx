@@ -35,6 +35,7 @@ import { GlobalSearchDialog } from "./chrome/GlobalSearchDialog";
 import { KnowledgeSearchDialog } from "./chrome/KnowledgeSearchDialog";
 import { QuickSwitcherDialog } from "./chrome/QuickSwitcherDialog";
 import { BuilderLaunchDialog } from "./chrome/BuilderLaunchDialog";
+import { HarnessLaunchDialog } from "./chrome/HarnessLaunchDialog";
 import { NotificationBanner } from "./chrome/NotificationBanner";
 import { OnboardingDialog } from "./chrome/OnboardingDialog";
 import { PinOverlay } from "./chrome/PinOverlay";
@@ -485,6 +486,7 @@ function App() {
                   <KnowledgeSearchDialog transport={transport} />
                   <GlobalSearchDialog transport={transport} />
                   <BuilderLaunchDialog transport={transport} store={sceneStore} />
+                  <HarnessLaunchDialog transport={transport} store={sceneStore} />
                   <LazySurface overlayName="settings">
                     <SettingsDialog transport={transport} />
                   </LazySurface>

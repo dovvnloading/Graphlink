@@ -46,6 +46,13 @@ logger = logging.getLogger(__name__)
 
 PYCODER_REPL_ROOT = Path(tempfile.gettempdir()) / "graphlink_pycoder_repls"
 EXECUTION_SANDBOX_ROOT = Path(tempfile.gettempdir()) / "graphlink_execution_sandboxes"
+# Agent-harness workspaces (backend/harness/workspace.py): one directory per
+# harness node, keyed by HarnessState.harness_workspace_id - the same
+# durable-id-not-node-id posture PYCODER_REPL_ROOT's children take. The
+# node's transcript.jsonl lives INSIDE its workspace so all three GC
+# triggers (delete/evict/age-sweep) cover conversation history and working
+# files as one unit.
+HARNESS_WORKSPACE_ROOT = Path(tempfile.gettempdir()) / "graphlink_harness_workspaces"
 
 # A generous default: this is a crash/abandoned-session net, not the
 # primary GC path (delete/evict are) - it should never race a normal,
@@ -247,7 +254,7 @@ def sweep_stale_scratch_dirs_on_launch(max_age_seconds: float = DEFAULT_MAX_AGE_
     other from being swept, and neither failure is allowed to abort app
     startup (matching mark_running()/configure_logging()'s own
     best-effort-and-log stance in backend/crash_recovery.py)."""
-    for root in (PYCODER_REPL_ROOT, EXECUTION_SANDBOX_ROOT):
+    for root in (PYCODER_REPL_ROOT, EXECUTION_SANDBOX_ROOT, HARNESS_WORKSPACE_ROOT):
         try:
             removed = gc_stale_by_age(root, max_age_seconds)
         except OSError:

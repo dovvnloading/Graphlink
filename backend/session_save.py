@@ -461,6 +461,30 @@ def _serialize_plan_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
+def _serialize_harness_node(node: SceneNode) -> dict[str, Any]:
+    """PLAN-2026-08-24 H1: the harness node. NEW-app-only kind, same
+    tolerant legacy-skip posture as the plan node. Deliberately small:
+    conversation history lives in the workspace transcript, not here (see
+    HarnessState's own docstring) - what persists is the render surface
+    plus the two durable identities (workspace id, last run id).
+    session_load normalizes a non-terminal harness_status to
+    "interrupted", the exact PlanState treatment."""
+    return {
+        "node_type": "harness",
+        "goal": node.state.harness_goal,
+        "reply": node.state.harness_reply,
+        "harness_status": node.state.harness_status,
+        "status_detail": node.state.harness_status_detail,
+        "harness_run_id": node.state.harness_run_id,
+        "workspace_id": node.state.harness_workspace_id,
+        "activity": [dict(a) for a in node.state.harness_activity],
+        "max_turns": node.state.harness_max_turns,
+        "spent_turns": node.state.harness_spent_turns,
+        "spent_tokens": node.state.harness_spent_tokens,
+        "is_collapsed": bool(node.is_collapsed),
+    }
+
+
 def _serialize_plugin_node(
     node: SceneNode,
     kind_spec: "NodeKindSpec | None",
@@ -557,6 +581,7 @@ _NODE_SERIALIZERS = {
     "pycoder": lambda node, document: _serialize_pycoder_node(node),
     "code_sandbox": lambda node, document: _serialize_code_sandbox_node(node),
     "plan": lambda node, document: _serialize_plan_node(node),
+    "harness": lambda node, document: _serialize_harness_node(node),
 }
 
 

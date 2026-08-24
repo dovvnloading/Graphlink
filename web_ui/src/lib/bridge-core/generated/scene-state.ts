@@ -113,6 +113,15 @@ export interface SceneNodeRow {
   builderApprovalToolName: string;
   builderApprovalSummary: string;
   builderStatusDetail: string;
+  harnessGoal: string;
+  harnessReply: string;
+  harnessStatus: string;
+  harnessStatusDetail: string;
+  harnessRunId: string;
+  harnessActivity: HarnessActivityRow[];
+  harnessMaxTurns: number;
+  harnessSpentTurns: number;
+  harnessSpentTokens: number;
   pluginState: Record<string, string>;
 }
 
@@ -201,6 +210,13 @@ export interface BuilderActivityRow {
   summary: string;
   outcome: string;
   stepId: string;
+  elapsedMs: number;
+}
+
+export interface HarnessActivityRow {
+  tool: string;
+  summary: string;
+  outcome: string;
   elapsedMs: number;
 }
 
@@ -801,6 +817,52 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     else { if (typeof fieldValue !== "string") errors.push(`${path}.builderStatusDetail` + ": expected string"); }
   }
   {
+    const fieldValue = value["harnessGoal"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessGoal: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.harnessGoal` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["harnessReply"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessReply: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.harnessReply` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["harnessStatus"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessStatus: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.harnessStatus` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["harnessStatusDetail"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessStatusDetail: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.harnessStatusDetail` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["harnessRunId"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessRunId: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.harnessRunId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["harnessActivity"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessActivity: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.harnessActivity` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkHarnessActivityRow(item, `${path}.harnessActivity` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["harnessMaxTurns"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessMaxTurns: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.harnessMaxTurns` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["harnessSpentTurns"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessSpentTurns: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.harnessSpentTurns` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["harnessSpentTokens"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.harnessSpentTokens: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.harnessSpentTokens` + ": expected number"); }
+  }
+  {
     const fieldValue = value["pluginState"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pluginState: missing required field`);
     else { if (!isRecord(fieldValue)) errors.push(`${path}.pluginState` + ": expected object");
@@ -1127,6 +1189,30 @@ function checkBuilderActivityRow(value: unknown, path: string, errors: string[])
     const fieldValue = value["stepId"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.stepId: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.stepId` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["elapsedMs"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.elapsedMs: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.elapsedMs` + ": expected number"); }
+  }
+}
+
+function checkHarnessActivityRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["tool"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.tool: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.tool` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["summary"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.summary: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.summary` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["outcome"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.outcome: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.outcome` + ": expected string"); }
   }
   {
     const fieldValue = value["elapsedMs"];

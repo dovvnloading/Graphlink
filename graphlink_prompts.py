@@ -190,6 +190,11 @@ def _resolve_builder_executor() -> str:
     return builder.BUILDER_EXECUTOR_PROMPT
 
 
+def _resolve_harness_core() -> str:
+    from backend.harness import loop
+    return loop.HARNESS_SYSTEM_PROMPT
+
+
 def _resolve_reasoning_hint_low() -> str:
     import api_provider
     return api_provider.reasoning_budget_hint("low")
@@ -220,6 +225,7 @@ _PROMPT_RESOLVERS = {
     "gitlink-system": _resolve_gitlink_system,
     "builder-planner": _resolve_builder_planner,
     "builder-executor": _resolve_builder_executor,
+    "harness-core": _resolve_harness_core,
     "reasoning-hint-low": _resolve_reasoning_hint_low,
     "reasoning-hint-high": _resolve_reasoning_hint_high,
 }
@@ -268,6 +274,11 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         # v2 (ADR-021 stage 21.1): teaches graph.list_nodes as the way to
         # find nodes the build was never told about.
         ("builder-executor", 2, "4d2866f7c342355ba693cc779e386f6947f079ca3a00a8dda9b872d865c844b2"),
+        # PLAN-2026-08-24 H1: the harness loop's system prompt
+        # (backend/harness/loop.py owns the text). Terse and
+        # interpolation-free by design - byte-stable per session, every
+        # token recurs per turn.
+        ("harness-core", 1, "32a6a3701020f1230cb08fca8b9466d2cf49d007fd3b1f8b21744f3a439d32c9"),
         ("reasoning-hint-low", 1, "87d4a1d2e09416005d656faaca77fa2fb2305f0c4b52940f0dbaf0d234669552"),
         ("reasoning-hint-high", 1, "7a004877f0362c73208a61bdd81103d22d5b1eaafe998e82138d970273919d9b"),
     ]

@@ -363,6 +363,57 @@
           "groupWidth": {
             "type": "number"
           },
+          "harnessActivity": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "elapsedMs": {
+                  "type": "integer"
+                },
+                "outcome": {
+                  "type": "string"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "tool": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tool",
+                "summary",
+                "outcome",
+                "elapsedMs"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "harnessGoal": {
+            "type": "string"
+          },
+          "harnessMaxTurns": {
+            "type": "integer"
+          },
+          "harnessReply": {
+            "type": "string"
+          },
+          "harnessRunId": {
+            "type": "string"
+          },
+          "harnessSpentTokens": {
+            "type": "integer"
+          },
+          "harnessSpentTurns": {
+            "type": "integer"
+          },
+          "harnessStatus": {
+            "type": "string"
+          },
+          "harnessStatusDetail": {
+            "type": "string"
+          },
           "headerColor": {
             "type": "string"
           },
@@ -818,6 +869,15 @@
           "builderApprovalToolName",
           "builderApprovalSummary",
           "builderStatusDetail",
+          "harnessGoal",
+          "harnessReply",
+          "harnessStatus",
+          "harnessStatusDetail",
+          "harnessRunId",
+          "harnessActivity",
+          "harnessMaxTurns",
+          "harnessSpentTurns",
+          "harnessSpentTokens",
           "pluginState"
         ],
         "type": "object"

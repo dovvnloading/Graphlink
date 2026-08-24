@@ -87,6 +87,7 @@ from backend.domain.node_states import (
     DocumentState,
     FrameState,
     GitlinkState,
+    HarnessState,
     HtmlState,
     ImageState,
     NodeState,
@@ -1630,6 +1631,32 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         self.nodes[node_id] = node
         return node
 
+    # -- PLAN-2026-08-24 H1: harness node (the workspace agent) --------------
+
+    def add_harness_node(self, x: float, y: float, goal: str, *, max_turns: int = 16) -> SceneNode:
+        """The harness node's creation primitive. Free-floating like a plan
+        node (a task starts from a prompt, it does not continue an existing
+        branch); harness_workspace_id is minted here, ONCE - the
+        pycoder_repl_id/code_sandbox_sandbox_id precedent exactly, see
+        HarnessState's own docstring for why node.id is not durable enough
+        to name the on-disk workspace."""
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title=f"Agent: {str(goal)[:CHAT_TITLE_PREVIEW_LENGTH]}" if goal else "Agent",
+            kind="harness",
+            content=str(goal),
+            state=HarnessState(
+                harness_goal=str(goal),
+                harness_workspace_id=uuid.uuid4().hex[:12],
+                harness_max_turns=int(max_turns),
+            ),
+        )
+        self.nodes[node_id] = node
+        return node
+
     _PLAN_STEP_STATUSES = ("pending", "running", "done", "failed", "skipped")
 
     def set_plan_steps(self, node_id: str, steps: list) -> SceneNode:
@@ -2500,6 +2527,34 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
                 n.state.builder_approval_summary if isinstance(n.state, PlanState) else ""
             ),
             "builderStatusDetail": n.state.builder_status_detail if isinstance(n.state, PlanState) else "",
+            # PLAN-2026-08-24 H1: harness node (the workspace agent).
+            # Conversation history deliberately does NOT cross the wire -
+            # the transcript lives in the workspace; only the render
+            # surface does (see HarnessState's own docstring).
+            "harnessGoal": n.state.harness_goal if isinstance(n.state, HarnessState) else "",
+            "harnessReply": n.state.harness_reply if isinstance(n.state, HarnessState) else "",
+            "harnessStatus": n.state.harness_status if isinstance(n.state, HarnessState) else "",
+            "harnessStatusDetail": (
+                n.state.harness_status_detail if isinstance(n.state, HarnessState) else ""
+            ),
+            "harnessRunId": n.state.harness_run_id if isinstance(n.state, HarnessState) else "",
+            "harnessActivity": (
+                [
+                    {
+                        "tool": a["tool"], "summary": a["summary"],
+                        "outcome": a["outcome"], "elapsedMs": a["elapsedMs"],
+                    }
+                    for a in n.state.harness_activity
+                ]
+                if isinstance(n.state, HarnessState) else []
+            ),
+            "harnessMaxTurns": n.state.harness_max_turns if isinstance(n.state, HarnessState) else 0,
+            "harnessSpentTurns": (
+                n.state.harness_spent_turns if isinstance(n.state, HarnessState) else 0
+            ),
+            "harnessSpentTokens": (
+                n.state.harness_spent_tokens if isinstance(n.state, HarnessState) else 0
+            ),
             # ADR-014 stage 14.2: the Plugin SDK's generic live-wire
             # fallback - see plugin_node_serializers' own field comment and
             # _plugin_state_wire's own docstring below.
