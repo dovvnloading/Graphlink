@@ -1569,7 +1569,18 @@ def _restore_chat_into_document(
     for index, node_payload in enumerate(node_payloads):
         if not isinstance(node_payload, dict):
             continue
-        node_type = node_payload.get("node_type", "chat")
+        # SECURITY-FIX: node_type feeds _NODE_RESTORERS.get(node_type) - a
+        # dict-key lookup that raises TypeError('unhashable type') uncaught
+        # for a non-hashable JSON value (a list or dict), aborting the
+        # ENTIRE chat load over one malformed node in a hostile or
+        # hand-corrupted saved chat, the same class of bug already fixed
+        # elsewhere in this file for other unhashable-lookup sites. A
+        # non-string node_type is simply unrecognized, exactly like any
+        # other unknown kind string - str() coercion keeps it hashable so
+        # the existing "skip, don't raise" fallback in _restore_node
+        # actually runs instead of crashing before it's reached.
+        raw_node_type = node_payload.get("node_type", "chat")
+        node_type = raw_node_type if isinstance(raw_node_type, str) else str(raw_node_type)
         node, parent_new_id = _restore_node(
             document, node_type, node_payload, all_nodes_map, plugin_registry, settings_manager,
         )
