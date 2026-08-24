@@ -132,7 +132,7 @@ function TableWrapper({ node: _node, ...props }: JSX.IntrinsicElements["table"] 
   );
 }
 
-function ZoomImage({ node: _node, alt, ...props }: JSX.IntrinsicElements["img"] & ExtraProps) {
+function ZoomImage({ node: _node, alt, src, ...props }: JSX.IntrinsicElements["img"] & ExtraProps) {
   // wrapElement="span": an <img> can legally appear INLINE inside a
   // <p> (e.g. "see this diagram: ![...](...)"), and Zoom's own default
   // wrapper is a <div> - a block element nested inside a <p> is invalid
@@ -144,9 +144,30 @@ function ZoomImage({ node: _node, alt, ...props }: JSX.IntrinsicElements["img"] 
   // ReactMarkdown's own img props, and `?? ""` covers the `![](src)` case
   // (no alt text authored) by falling back to an explicitly-decorative
   // empty alt rather than leaving it undefined.
+  //
+  // SECURITY-FIX (markdown-image-exfil): a hostile saved chat/imported
+  // document is this file's own attack vector for the same gap
+  // NodeMarkdown.tsx's own ZoomImage closes (see that file's copy of this
+  // comment for the full mechanism) - this is a genuinely separate
+  // component, not a shared import, so the fix is duplicated here rather
+  // than left half-applied. Same explicit http(s)-only allowlist this
+  // file's rehype-external-links pass already applies to <a> hrefs
+  // (`target`/`rel`, configured below in DocumentViewMarkdown itself),
+  // mirrored here for `src`: a non-http(s) `src` renders nothing. Actual
+  // arbitrary-host exfiltration over a syntactically-valid http(s) `src`
+  // is closed at the network layer instead, by backend/app.py's img-src
+  // CSP.
+  const isHttpUrl = !!src && /^https?:\/\//i.test(src.trim());
+  if (!isHttpUrl) {
+    return null;
+  }
   return (
     <Zoom wrapElement="span">
-      <img alt={alt ?? ""} {...props} />
+      {/* referrerPolicy="no-referrer": defense-in-depth alongside the CSP
+          above - never hand the image host this app's own URL as a
+          Referer. `{...props}` spread first, `src`/referrerPolicy last,
+          so nothing upstream can silently override them. */}
+      <img alt={alt ?? ""} {...props} src={src} referrerPolicy="no-referrer" />
     </Zoom>
   );
 }

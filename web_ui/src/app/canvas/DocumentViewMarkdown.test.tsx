@@ -108,6 +108,34 @@ describe("DocumentViewMarkdown", () => {
       const img = screen.getByAltText("a diagram") as HTMLImageElement;
       expect(img.src).toBe("https://example.com/diagram.png");
     });
+
+    it("sets referrerPolicy=no-referrer on a legitimate http(s) image (defense-in-depth alongside the img-src CSP)", () => {
+      render(<DocumentViewMarkdown content="![a diagram](https://example.com/diagram.png)" />);
+      const img = screen.getByAltText("a diagram") as HTMLImageElement;
+      expect(img.getAttribute("referrerpolicy")).toBe("no-referrer");
+    });
+
+    // markdown-image-exfil: a hostile saved chat / imported document is
+    // this file's own attack vector (see DocumentViewMarkdown.tsx's own
+    // updated doc comment on ZoomImage) - mirrors NodeMarkdown.test.tsx's
+    // identical coverage for the sibling component.
+    it("renders nothing for a javascript: image src", () => {
+      const { container } = render(<DocumentViewMarkdown content="![x](javascript:alert(1))" />);
+      expect(container.querySelector("img")).toBeNull();
+      expect(container.querySelector("[data-rmiz]")).toBeNull();
+    });
+
+    it("renders nothing for a data: image src", () => {
+      const { container } = render(
+        <DocumentViewMarkdown content="![x](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)" />,
+      );
+      expect(container.querySelector("img")).toBeNull();
+    });
+
+    it("renders nothing for a file: image src", () => {
+      const { container } = render(<DocumentViewMarkdown content="![x](file:///etc/passwd)" />);
+      expect(container.querySelector("img")).toBeNull();
+    });
   });
 
   describe("GitHub-style callouts", () => {

@@ -169,6 +169,42 @@ describe("NodeMarkdown", () => {
       const img = screen.getByAltText("a diagram") as HTMLImageElement;
       expect(img.src).toBe("https://example.com/diagram.png");
     });
+
+    it("sets referrerPolicy=no-referrer on a legitimate http(s) image (defense-in-depth alongside the img-src CSP)", () => {
+      render(<NodeMarkdown content="![a diagram](https://example.com/diagram.png)" />);
+      const img = screen.getByAltText("a diagram") as HTMLImageElement;
+      expect(img.getAttribute("referrerpolicy")).toBe("no-referrer");
+    });
+
+    // markdown-image-exfil: unlike a link, the browser fetches an <img src>
+    // automatically at render time - no click required - so LLM/web-
+    // authored markdown (every node kind's content, not just WebResearch)
+    // that a prompt injection steers into emitting a dangerous-scheme
+    // image src is a live risk the moment the node renders. Mirrors
+    // SafeAnchor's own javascript:/file:/data: hardening tests above,
+    // applied to the img path instead of the link path.
+    it("renders nothing for a javascript: image src", () => {
+      const { container } = render(<NodeMarkdown content="![x](javascript:alert(1))" />);
+      expect(container.querySelector("img")).toBeNull();
+      expect(container.querySelector("[data-rmiz]")).toBeNull();
+    });
+
+    it("renders nothing for a data: image src", () => {
+      const { container } = render(
+        <NodeMarkdown content="![x](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)" />,
+      );
+      expect(container.querySelector("img")).toBeNull();
+    });
+
+    it("renders nothing for a file: image src", () => {
+      const { container } = render(<NodeMarkdown content="![x](file:///etc/passwd)" />);
+      expect(container.querySelector("img")).toBeNull();
+    });
+
+    it("renders nothing for a mixed/upper-case dangerous scheme, exactly like the lowercase form", () => {
+      const { container } = render(<NodeMarkdown content="![x](JavaScript:alert(1))" />);
+      expect(container.querySelector("img")).toBeNull();
+    });
   });
 
   describe("LaTeX math (node redesign, stage 4)", () => {

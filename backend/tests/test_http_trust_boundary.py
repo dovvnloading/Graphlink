@@ -295,6 +295,80 @@ def test_the_spa_bootstrap_is_not_gated_by_origin(tmp_path):
 # -- middleware ordering (pins the layering, not just each check alone) -----
 
 
+# -- CSP: img-src (finding markdown-image-exfil) -----------------------------
+
+
+def _spa_client(tmp_path) -> TestClient:
+    # Same fixture shape as test_the_spa_bootstrap_is_not_gated_by_origin
+    # above: a real spa_dir so the `spa()` route's FileResponse branches
+    # (not the "SPA build not found" fallback) are actually exercised.
+    # favicon.ico deliberately sits at the SPA ROOT, not under assets/ - a
+    # file under assets/ is served by the separate `app.mount("/assets",
+    # StaticFiles(...))` mount registered above spa(), never reaching this
+    # route at all, so it would not exercise the branch this file's own
+    # test_a_built_asset_file_also_carries_the_csp needs.
+    spa_dir = tmp_path / "spa"
+    (spa_dir / "assets").mkdir(parents=True)
+    (spa_dir / "index.html").write_text("<html>graphlink</html>", encoding="utf-8")
+    (spa_dir / "assets" / "index.js").write_text("console.log(1)", encoding="utf-8")
+    (spa_dir / "favicon.ico").write_text("fake-icon-bytes", encoding="utf-8")
+    return TestClient(
+        create_app(
+            spa_dir=spa_dir,
+            auth_token=TOKEN,
+            settings_state_file=tmp_path / "session.dat",
+            chat_db_path=tmp_path / "chats.db",
+        ),
+        base_url="http://127.0.0.1",
+        headers={"host": "127.0.0.1"},
+    )
+
+
+def test_the_spa_bootstrap_carries_an_img_src_csp(tmp_path):
+    # backend/app.py's own CONTENT_SECURITY_POLICY docstring for the full
+    # mechanism: an unrestricted <img src> in LLM/web-authored markdown is a
+    # silent, no-click data-exfiltration channel once rendered, since the
+    # SPA document had no CSP at all to constrain which hosts an image may
+    # be fetched from. This pins the header actually reaches the real page
+    # load (GET /, no Origin - the normal top-level navigation case, same
+    # as test_the_spa_bootstrap_is_not_gated_by_origin above).
+    client = _spa_client(tmp_path)
+
+    response = client.get("/")
+
+    assert response.status_code == 200
+    csp = response.headers.get("content-security-policy")
+    assert csp is not None
+    assert "img-src 'self' data:" in csp
+
+
+def test_a_client_side_route_fallback_also_carries_the_csp(tmp_path):
+    # The spa() route's OTHER FileResponse branch (deep-link fallback to
+    # index.html for a path with no matching build file) - both branches
+    # must carry the header, not just the literal "/" case.
+    client = _spa_client(tmp_path)
+
+    response = client.get("/some/client-side/route")
+
+    assert response.status_code == 200
+    assert "img-src 'self' data:" in response.headers.get("content-security-policy", "")
+
+
+def test_a_built_asset_file_also_carries_the_csp(tmp_path):
+    # The spa() route's OTHER FileResponse branch: an actual on-disk build
+    # file served THROUGH this catch-all itself (not the separate /assets
+    # StaticFiles mount, which is a different route entirely and never
+    # reaches spa()'s own header-attaching code). Setting the header
+    # unconditionally on every response this handler returns, rather than
+    # only on "/", is what makes this branch safe too.
+    client = _spa_client(tmp_path)
+
+    response = client.get("/favicon.ico")
+
+    assert response.status_code == 200
+    assert "img-src 'self' data:" in response.headers.get("content-security-policy", "")
+
+
 def test_a_bad_origin_is_rejected_before_the_token_is_even_checked():
     # Pins the actual, empirically-verified registration order (see
     # backend/app.py's require_loopback_origin docstring): a request wrong
