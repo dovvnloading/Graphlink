@@ -1081,6 +1081,19 @@ export function parseEnvLines(text: string): Record<string, string> {
   return env;
 }
 
+// SECURITY-FIX (mcp-approval-auto-invisible-in-settings-ui): human-readable
+// labels for ToolRegistry's own three-value approval vocabulary
+// (backend/tools.py's ApprovalPolicy = Literal["auto", "once", "always"] /
+// _KNOWN_APPROVAL_POLICIES) - see the render site below for why this page
+// shows the value at all. Falls back to the raw wire string for anything
+// outside that set (defensive only; the backend rejects unknown policies
+// at registration time, so this page should never actually see one).
+const MCP_APPROVAL_LABELS: Record<string, string> = {
+  auto: "Auto (no confirmation)",
+  once: "Confirm once",
+  always: "Always confirm",
+};
+
 function McpServersPage({ state, transport }: { state: AppSettingsState; transport: WsTransport }) {
   const [draftName, setDraftName] = useState("");
   const [draftCommand, setDraftCommand] = useState("");
@@ -1189,6 +1202,52 @@ function McpServersPage({ state, transport }: { state: AppSettingsState; transpo
                     env: {[...server.envKeys].sort().join(", ")}
                   </span>
                 )}
+                {/* SECURITY-FIX (mcp-approval-auto-invisible-in-settings-ui):
+                    before this line, this row showed only name/command/
+                    args/env - a server whose config carries approval="auto"
+                    (settable via a hand-edited or imported session.dat; see
+                    this codebase's own "hostile data on disk" threat
+                    boundary) has its tools run with NO human confirmation
+                    in either Builder mode (backend/tools.py's ToolRegistry.
+                    invoke gates on `registration.approval != "auto"` -
+                    "auto" is the one policy that skips request_approval
+                    entirely), and there was no control surface here a user
+                    would think to check for it. Read-only display, not an
+                    editable control: the gap this closes is the value being
+                    INVISIBLE, not being un-settable, and this page's own
+                    edit-in-place mutations (the enabled checkbox above,
+                    Remove) are the only two established here - reusing that
+                    same bulk-replace `updateServers` path for a security-
+                    relevant field risked a confused-click flipping
+                    "always"->"auto" as a bigger, less-certain change than
+                    this pass calls for. Always rendered (unlike the
+                    conditional env line above) because the whole point is
+                    that this must never be easy to miss. "auto" additionally
+                    gets a distinct color - the same --gl-semantic-status-
+                    warning token .plan-node-approval already uses for its
+                    own approval-needed banner - so the one policy that
+                    skips confirmation reads as visually different from the
+                    two that don't, not just differently worded. */}
+                <span
+                  className={
+                    server.approval === "auto"
+                      ? "settings-mcp-server-command settings-mcp-server-approval-auto"
+                      : "settings-mcp-server-command"
+                  }
+                >
+                  Approval: {MCP_APPROVAL_LABELS[server.approval] ?? server.approval}
+                </span>
+                {/* SECURITY-FIX (mcp-approval-auto-invisible-in-settings-ui):
+                    same visibility gap as `approval` above, for the granted
+                    `scopes` list. Purely informational, matching
+                    PluginsPage's own established stance a few dozen lines
+                    down ("no per-scope editing UI - MCP Servers itself has
+                    never had one for its own `scopes` field") - scopes are
+                    what a server's config declares it was granted, not a
+                    per-tool pick a user makes here. */}
+                <span className="settings-mcp-server-command">
+                  Scopes: {server.scopes.length > 0 ? server.scopes.join(", ") : "No declared scopes"}
+                </span>
               </span>
             </label>
             <button
