@@ -784,6 +784,19 @@ async def _handle_message(session: SessionBus, websocket: WebSocket, message: di
             )
             return
         for topic in topics:
+            # SECURITY-FIX: `topics` was checked to be a list, but not that
+            # each ELEMENT is a hashable/string topic name. A subscribe frame
+            # like {"topics": [{}]} passed the list check and reached
+            # send_snapshot -> self._topics.get(topic), which raised
+            # TypeError('unhashable type: dict') - not UnknownTopicError, so
+            # it escaped the except clause below uncaught and killed the
+            # connection, the exact "malformed input drops the socket"
+            # failure this function's own adjacent REVIEW-FIXes all close.
+            if not isinstance(topic, str):
+                await websocket.send_json(
+                    {"kind": "error", "id": msg_id, "error": "malformed message: each topic must be a string"}
+                )
+                continue
             try:
                 await session.send_snapshot(topic, websocket, request_id=msg_id)
             except UnknownTopicError:
