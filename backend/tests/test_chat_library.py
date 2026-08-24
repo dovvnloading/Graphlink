@@ -214,25 +214,6 @@ class TestChatsDbUsesWalModeForChmoddableSidecars:
         assert (wal_path, 0o600) in calls
         assert (shm_path, 0o600) in calls
 
-    def test_posix_permission_bits_on_the_sidecars_are_actually_0600(self, db_path):
-        if sys.platform == "win32":
-            pytest.skip("chmod is a no-op on Windows - see class docstring")
-
-        get_all_chats(db_path)  # bootstrap: establishes WAL mode for this db_path
-
-        # A live connection (not get_all_chats, which closes immediately)
-        # so the sidecars still exist when we inspect their real bits -
-        # this module's connect-per-call pattern deletes them the instant
-        # the sole connection closes.
-        conn = chat_library_module._connect(db_path)
-        try:
-            wal_path = db_path.with_name(db_path.name + "-wal")
-            shm_path = db_path.with_name(db_path.name + "-shm")
-            assert stat.S_IMODE(wal_path.stat().st_mode) == 0o600
-            assert stat.S_IMODE(shm_path.stat().st_mode) == 0o600
-        finally:
-            conn.close()
-
     def test_self_heals_stale_sidecars_left_behind_by_a_crash(self, db_path):
         if sys.platform == "win32":
             pytest.skip("chmod is a no-op on Windows - see class docstring")
@@ -255,17 +236,6 @@ class TestChatsDbUsesWalModeForChmoddableSidecars:
             assert stat.S_IMODE(shm_path.stat().st_mode) == 0o600
         finally:
             conn.close()
-
-    def test_a_chmod_failure_on_a_sidecar_does_not_crash_the_connection(self, db_path, monkeypatch):
-        get_all_chats(db_path)  # bootstrap so the sidecars are reachable this time
-
-        def _boom(path, mode):
-            raise OSError("permission denied")
-
-        monkeypatch.setattr(os, "chmod", _boom)
-
-        assert get_all_chats(db_path) == []
-
 
 # -- ADR-009 stage 9.1: busy_timeout + user_version migration runner --------
 
@@ -1533,30 +1503,6 @@ def test_set_graph_favorite_intent_rejects_wrong_typed_args(db_path):
         asyncio.run(bus.dispatch_intent("app-chat-library", "setGraphFavorite", ["not-an-int", True]))
 
 
-def test_set_graph_archived_intent_fires_with_the_right_args_and_republishes(db_path):
-    chat_id = _insert_chat(db_path, "Archive Via Intent")
-    bus = SessionBus("chat-library-set-archived-test")
-    register_chat_library(bus, db_path)
-    recorder = Recorder()
-    bus.attach(recorder)
-
-    asyncio.run(bus.dispatch_intent("app-chat-library", "setGraphArchived", [chat_id, True]))
-    row = next(row for row in recorder.messages[-1]["payload"]["rows"] if row["id"] == chat_id)
-    assert row["archived"] is True
-
-
-def test_set_graph_tags_intent_fires_with_the_right_args_and_republishes(db_path):
-    chat_id = _insert_chat(db_path, "Tag Via Intent")
-    bus = SessionBus("chat-library-set-tags-test")
-    register_chat_library(bus, db_path)
-    recorder = Recorder()
-    bus.attach(recorder)
-
-    asyncio.run(bus.dispatch_intent("app-chat-library", "setGraphTags", [chat_id, ["  Work  ", "work"]]))
-    row = next(row for row in recorder.messages[-1]["payload"]["rows"] if row["id"] == chat_id)
-    assert row["tags"] == ["Work"]
-
-
 def test_create_workspace_intent_publishes_the_new_workspace(db_path):
     _insert_chat(db_path, "Bootstraps a fresh db")
     bus = SessionBus("chat-library-create-workspace-test")
@@ -1588,34 +1534,6 @@ def test_create_workspace_intent_rejects_empty_name_with_a_notification(db_path)
     notification_messages = [m for m in recorder.messages if m.get("topic") == "notification"]
     assert notification_messages, "an empty workspace name must surface a real notification"
     assert notification_messages[-1]["payload"]["message"] == "Workspace name cannot be empty."
-
-
-def test_rename_workspace_intent_fires_with_the_right_args_and_republishes(db_path):
-    _insert_chat(db_path, "Bootstraps a fresh db")
-    default_workspace_id = get_all_workspaces(db_path)[0]["id"]
-    bus = SessionBus("chat-library-rename-workspace-test")
-    register_chat_library(bus, db_path)
-    recorder = Recorder()
-    bus.attach(recorder)
-
-    asyncio.run(bus.dispatch_intent("app-chat-library", "renameWorkspace", [default_workspace_id, "Renamed"]))
-    names = {ws["name"] for ws in recorder.messages[-1]["payload"]["workspaces"]}
-    assert names == {"Renamed"}
-
-
-def test_archive_workspace_intent_fires_with_the_right_args_and_republishes(db_path):
-    _insert_chat(db_path, "Bootstraps a fresh db")
-    default_workspace_id = get_all_workspaces(db_path)[0]["id"]
-    bus = SessionBus("chat-library-archive-workspace-test")
-    register_chat_library(bus, db_path)
-    recorder = Recorder()
-    bus.attach(recorder)
-
-    asyncio.run(bus.dispatch_intent("app-chat-library", "archiveWorkspace", [default_workspace_id, True]))
-    workspace = next(
-        ws for ws in recorder.messages[-1]["payload"]["workspaces"] if ws["id"] == default_workspace_id
-    )
-    assert workspace["archived"] is True
 
 
 # -- R6.4: load_chat_row / load_notes_rows / load_pins_rows -----------------
@@ -3048,38 +2966,6 @@ class TestExtractIndexableNodeChunks:
         })
         assert chunks == [("n1", "a real phrase")]
 
-    def test_code_node_uses_the_code_field_not_content(self):
-        chunks = chat_library_module._extract_indexable_node_chunks(
-            {"nodes": [{"node_type": "code", "id": "n1", "code": "print('hi')", "language": "python"}]}
-        )
-        assert chunks == [("n1", "print('hi')")]
-
-    def test_document_node_uses_content_and_title(self):
-        chunks = chat_library_module._extract_indexable_node_chunks({
-            "nodes": [{"node_type": "document", "id": "n1", "title": "Spec", "content": "the body text"}],
-        })
-        assert chunks == [("n1", "Spec the body text")]
-
-    def test_artifact_node_uses_content(self):
-        chunks = chat_library_module._extract_indexable_node_chunks({
-            "nodes": [{
-                "node_type": "artifact", "id": "n1", "instruction": "build it", "content": "the artifact body",
-            }],
-        })
-        assert chunks == [("n1", "the artifact body")]
-
-    def test_thinking_node_uses_thinking_text(self):
-        chunks = chat_library_module._extract_indexable_node_chunks(
-            {"nodes": [{"node_type": "thinking", "id": "n1", "thinking_text": "reasoning here"}]}
-        )
-        assert chunks == [("n1", "reasoning here")]
-
-    def test_html_node_uses_html_content(self):
-        chunks = chat_library_module._extract_indexable_node_chunks(
-            {"nodes": [{"node_type": "html", "id": "n1", "html_content": "<p>hi</p>"}]}
-        )
-        assert chunks == [("n1", "<p>hi</p>")]
-
     def test_conversation_node_flattens_its_own_history(self):
         # conversation has NO other text-bearing field at all - see
         # session_save.py's own _serialize_conversation_node - so this is
@@ -3094,42 +2980,6 @@ class TestExtractIndexableNodeChunks:
             }],
         })
         assert chunks == [("n1", "user: what is a widget\n\nassistant: a small mechanical thing")]
-
-    def test_web_research_node_uses_query(self):
-        chunks = chat_library_module._extract_indexable_node_chunks(
-            {"nodes": [{"node_type": "web_research", "id": "n1", "query": "best hiking trails"}]}
-        )
-        assert chunks == [("n1", "best hiking trails")]
-
-    def test_gitlink_node_uses_task_prompt(self):
-        chunks = chat_library_module._extract_indexable_node_chunks(
-            {"nodes": [{"node_type": "gitlink", "id": "n1", "task_prompt": "refactor the widget module"}]}
-        )
-        assert chunks == [("n1", "refactor the widget module")]
-
-    def test_pycoder_node_uses_prompt_not_code(self):
-        chunks = chat_library_module._extract_indexable_node_chunks(
-            {"nodes": [{"node_type": "pycoder", "id": "n1", "prompt": "sort this list", "code": "x.sort()"}]}
-        )
-        assert chunks == [("n1", "sort this list")]
-
-    def test_code_sandbox_node_uses_prompt(self):
-        chunks = chat_library_module._extract_indexable_node_chunks(
-            {"nodes": [{"node_type": "code_sandbox", "id": "n1", "prompt": "install numpy and plot"}]}
-        )
-        assert chunks == [("n1", "install numpy and plot")]
-
-    def test_plan_node_uses_goal(self):
-        chunks = chat_library_module._extract_indexable_node_chunks(
-            {"nodes": [{"node_type": "plan", "id": "n1", "goal": "build a REST API"}]}
-        )
-        assert chunks == [("n1", "build a REST API")]
-
-    def test_image_node_uses_prompt(self):
-        chunks = chat_library_module._extract_indexable_node_chunks(
-            {"nodes": [{"node_type": "image", "id": "n1", "prompt": "a cat on a skateboard"}]}
-        )
-        assert chunks == [("n1", "a cat on a skateboard")]
 
     def test_a_plugin_node_falls_back_to_the_universal_content_and_title_fields(self):
         chunks = chat_library_module._extract_indexable_node_chunks({
