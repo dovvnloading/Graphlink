@@ -360,6 +360,142 @@ class TestEmptyBodyTimeoutEnforcement:
         assert exc_info.value.code == "fetch_timeout"
 
 
+class _SlowDripResponse:
+    """SECURITY-FIX regression fixture (web-research-slow-drip-bypasses-
+    budget-and-cancel): simulates a server that never actually finishes
+    sending a body - iter_content(chunk_size=N) always yields exactly one
+    more N-byte chunk, but only after "waiting" chunk_size *
+    PER_BYTE_DELAY_SECONDS of (fake) time for it, mirroring how a real
+    io.BufferedReader.read(amt) blocks accumulating `amt` bytes across many
+    individual recv() calls, each comfortably under the per-recv socket
+    timeout, before returning. With the pre-fix chunk_size (16 KiB for
+    fetch(), 8 KiB for _fetch_robots_bytes()) the very FIRST chunk this
+    yields would already cost tens of thousands of simulated seconds -
+    exactly the unbounded stall the fix closes. Never raises StopIteration
+    on its own: only the caller's own per-chunk cancellation/time-budget
+    check (the thing under test) can ever stop consuming it."""
+
+    PER_BYTE_DELAY_SECONDS = 10.0
+
+    def __init__(self, clock, status_code=200, content_type="text/html", headers=None):
+        self.status_code = status_code
+        self.headers = dict(headers or {})
+        self.headers.setdefault("Content-Type", content_type)
+        self.closed = False
+        self._clock = clock
+
+    @property
+    def is_redirect(self):
+        return False
+
+    @property
+    def is_permanent_redirect(self):
+        return False
+
+    def iter_content(self, chunk_size=16384):
+        while True:
+            self._clock.now += self.PER_BYTE_DELAY_SECONDS * chunk_size
+            yield b"x" * chunk_size
+
+    def close(self):
+        self.closed = True
+
+
+class TestSlowDripContentBypassesBudgetAndCancel:
+    """SECURITY-FIX regression (web-research-slow-drip-bypasses-budget-and-
+    cancel): fetch()'s per-chunk cancellation/time-budget check used to run
+    only once a FULL chunk_size worth of bytes had accumulated. A server
+    dripping bytes slowly enough to stay under read_timeout_seconds per
+    recv(), but never actually stalling any SINGLE recv() past its own
+    timeout, could defer that check by chunk_size * drip_interval - tens of
+    hours for the old 16 KiB chunks even at a modest 10s/byte drip. Reading
+    one byte per iter_content() step (see providers.py's own chunk_size=1
+    comment) bounds the stall between checks to close to a single
+    read-timeout window instead."""
+
+    def test_a_slow_drip_body_is_aborted_close_to_the_time_budget_not_after_an_unbounded_stall(self, limits, token):
+        clock = _FakeClock()
+        policy = _real_policy_with_fake_resolver("93.184.216.34")
+        fake_etiquette = MagicMock(spec=CrawlEtiquette)
+        fake_etiquette.gate.return_value = 0.0
+        drip_response = _SlowDripResponse(clock)
+        fake_session = _FakeSession([drip_response])
+        fetcher = RequestsDocumentFetcher(policy=policy, etiquette=fake_etiquette)
+
+        with patch.object(providers_module, "requests") as fake_requests_module, \
+             patch.object(providers_module.time, "monotonic", clock.monotonic):
+            fake_requests_module.Session.return_value = fake_session
+            fake_requests_module.RequestException = Exception
+            with pytest.raises(ResearchFailure) as exc_info:
+                fetcher.fetch(_search_result(), limits=limits, token=token)
+
+        assert exc_info.value.code == "fetch_timeout"
+        # Aborted within a couple of drip steps of the 30s total_timeout_
+        # seconds budget - the pre-fix 16 KiB chunk_size would have let the
+        # clock jump by 16384 * 10s (~45.5 simulated HOURS) before its very
+        # first per-chunk check could even run.
+        assert clock.now - 1_000.0 < 2 * policy.total_timeout_seconds
+
+
+class TestFetchRobotsBytesHonorsCancellationAndBudget:
+    """SECURITY-FIX regression (web-research-slow-drip-bypasses-budget-and-
+    cancel): _fetch_robots_bytes() used to take no token/started at all -
+    it had NO cancellation check and NO time-budget check anywhere in its
+    body, unlike fetch()'s own content loop. These exercise the method
+    directly (bypassing CrawlEtiquette.gate()'s own broad except-Exception
+    fallback) so a raised cancellation is observed here, not swallowed."""
+
+    def test_an_already_cancelled_token_stops_the_robots_read_after_one_chunk(self):
+        clock = _FakeClock()
+        policy = _real_policy_with_fake_resolver("93.184.216.34")
+        fetcher = RequestsDocumentFetcher(policy=policy)
+        token = CancellationToken()
+        token.cancel()
+        drip_response = _SlowDripResponse(clock)
+
+        class _RobotsSession(_FakeSession):
+            def get(self, url, **kwargs):
+                self.get_calls.append((url, kwargs))
+                return drip_response
+
+        fake_session = _RobotsSession([])
+
+        with pytest.raises(Exception):  # RequestCancelled
+            fetcher._fetch_robots_bytes(
+                "https://example.com/robots.txt", fake_session, token=token, started=clock.monotonic()
+            )
+
+        # Never advanced past the very first 1-byte drip step - it did NOT
+        # read the (effectively unbounded) response to completion.
+        assert clock.now == pytest.approx(1_000.0 + _SlowDripResponse.PER_BYTE_DELAY_SECONDS)
+
+    def test_a_slow_drip_robots_response_is_aborted_once_the_shared_total_budget_is_exceeded(self):
+        clock = _FakeClock()
+        policy = _real_policy_with_fake_resolver("93.184.216.34")
+        fetcher = RequestsDocumentFetcher(policy=policy)
+        token = CancellationToken()
+        drip_response = _SlowDripResponse(clock)
+
+        class _RobotsSession(_FakeSession):
+            def get(self, url, **kwargs):
+                self.get_calls.append((url, kwargs))
+                return drip_response
+
+        fake_session = _RobotsSession([])
+
+        with patch.object(providers_module.time, "monotonic", clock.monotonic):
+            result = fetcher._fetch_robots_bytes(
+                "https://example.com/robots.txt", fake_session, token=token, started=clock.monotonic()
+            )
+
+        # Fail-open, same contract as a network error or a real timeout.
+        assert result is None
+        # Aborted within a couple of drip steps of the shared total_
+        # timeout_seconds budget, not after draining an effectively
+        # unbounded response.
+        assert clock.now - 1_000.0 < 2 * policy.total_timeout_seconds
+
+
 class TestPinnedHTTPAdapterConnectionLogic:
     """Direct tests of _PinnedHTTPAdapter's own connection-pool construction
     - distinct from a real-network proof (already established manually

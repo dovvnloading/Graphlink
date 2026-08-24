@@ -24,6 +24,7 @@ server patch.
 from __future__ import annotations
 
 import asyncio
+from typing import TYPE_CHECKING
 
 import graphlink_task_config as config
 
@@ -32,6 +33,9 @@ from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.observability import apply_log_level
 from graphlink_settings_store import SettingsManager
+
+if TYPE_CHECKING:
+    from backend.agents import AgentDispatcher
 
 # ADR-006 stage 6.5: the three persisted provider-mode strings
 # apply_provider_mode dispatches on - the closed vocabulary setProviderMode
@@ -105,6 +109,7 @@ def register_settings_general_intents(
     manager: SettingsManager,
     state: SettingsSessionState,
     notifications: NotificationState | None = None,
+    agent_dispatcher: "AgentDispatcher | None" = None,
 ) -> None:
     # ADR-006 stage 6.5: notifications is optional (trailing, defaulted) so
     # the pre-6.5 tests that call register_settings_general_intents(bus,
@@ -228,6 +233,14 @@ def register_settings_general_intents(
                 await bus.publish("notification")
             return
         await asyncio.to_thread(run_locked, manager.set_mcp_servers, normalized)
+        # SECURITY-FIX: a Builder already started this session cached its
+        # ToolRegistry (and connected MCP clients) once and forever - see
+        # AgentDispatcher.invalidate_builder_registry's own docstring. Clear
+        # it on every save so a disabled/removed server, or a narrowed
+        # scope/approval, actually takes effect on the Builder's next run
+        # instead of silently staying live for the rest of the session.
+        if agent_dispatcher is not None:
+            agent_dispatcher.invalidate_builder_registry()
         await bus.publish("app-settings")
 
     bus.register_intent("app-settings", "setActiveSection", set_active_section)

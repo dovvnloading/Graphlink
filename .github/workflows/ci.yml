@@ -133,7 +133,7 @@ jobs:
       # version skew - see that test's own module docstring for the CI
       # failure that proved the shell-out approach unusable.
       - name: Install dev tooling (pytest, ruff, mypy - CI-only, not in the prod lockfile)
-        run: pip install --quiet pytest pytest-cov ruff mypy
+        run: pip install --quiet pytest==9.1.1 pytest-cov==7.1.0 ruff==0.16.4 mypy==2.3.1
 
       - name: Compile check
         run: python -m compileall -q .
@@ -159,7 +159,7 @@ jobs:
         run: python -m pytest -q backend/tests/perf
 
       - name: pip-audit (known-vulnerability scan of the locked dependency set)
-        run: pip install --quiet pip-audit && python -m pip_audit -r requirements.txt
+        run: pip install --quiet pip-audit==2.10.1 && python -m pip_audit -r requirements.txt
 
   build-check:
     name: Build check (wheel builds, installs, and imports cleanly)
@@ -179,7 +179,7 @@ jobs:
           cache: pip
 
       - name: Install build tooling
-        run: pip install build twine
+        run: pip install build==1.5.0 twine==7.0.0
 
       - name: Build the wheel
         run: python -m build --wheel

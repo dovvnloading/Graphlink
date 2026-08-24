@@ -4815,6 +4815,15 @@ mark.document-view-search-match-current {
   flex-shrink: 0;
 }
 
+/* SECURITY-FIX (mcp-approval-auto-invisible-in-settings-ui): the one
+   approval policy that skips confirmation entirely (backend/tools.py's
+   ApprovalPolicy "auto") reads as visually distinct from "once"/"always",
+   not just differently worded - same --gl-semantic-status-warning token
+   .plan-node-approval already uses for its own approval-needed banner. */
+.settings-mcp-server-approval-auto {
+  color: var(--gl-semantic-status-warning, currentColor);
+}
+
 .settings-fieldset {
   display: flex;
   flex-direction: column;

@@ -1124,6 +1124,29 @@ def test_get_all_chats_reads_real_rows(db_path):
         assert isinstance(row["workspaceId"], int)
 
 
+def test_get_all_chats_skips_a_row_with_a_non_numeric_column_instead_of_crashing(db_path):
+    """SECURITY-FIX: SQLite's type affinity does not enforce that an
+    INTEGER column actually holds a number - a hand-corrupted or hostile
+    chats.db can store TEXT there. int(row[...]) raised uncaught, and this
+    function backs the app-chat-library topic republished on nearly every
+    user action, so one bad row killed the whole library listing
+    repeatedly, not just once."""
+    good_id = _insert_chat(db_path, "Good")
+    get_all_chats(db_path)  # triggers the chats -> graphs migration first
+    with contextlib.closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute(
+            "INSERT INTO graphs (title, data, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("Corrupt", "{}", "2026-01-02T00:00:00", "2026-01-02T00:00:00"),
+        )
+        bad_id = conn.execute("SELECT id FROM graphs WHERE title = 'Corrupt'").fetchone()[0]
+        conn.execute("UPDATE graphs SET workspace_id = 'not-a-number' WHERE id = ?", (bad_id,))
+
+    rows = get_all_chats(db_path)  # must not raise
+
+    ids = {row["id"] for row in rows}
+    assert ids == {good_id}, "the corrupt row must be skipped, the good row must survive"
+
+
 def test_format_timestamp_matches_legacy_display_format():
     assert _format_timestamp("2026-01-02 11:30:00") == "Jan 02, 2026 11:30 AM"
     assert _format_timestamp("") == "Unknown"
@@ -3399,6 +3422,13 @@ class TestGlobalSearchAcrossWorkspaces:
     def test_a_workspace_filter_scopes_the_search_to_one_workspace(self, db_path, knowledge_db_path, monkeypatch):
         import backend.api.intents_global_search as igs_module
         monkeypatch.setattr(igs_module, "DEFAULT_DB_PATH", knowledge_db_path)
+        # get_all_workspaces/DEFAULT_DB_PATH are imported LAZILY inside
+        # intents_global_search.search() (see its own comment on why -
+        # circular with backend.canvas), so this must patch the real
+        # backend.chat_library attribute, not a module-level name on
+        # igs_module the way the knowledge_store DEFAULT_DB_PATH line above
+        # does.
+        monkeypatch.setattr(chat_library_module, "DEFAULT_DB_PATH", db_path)
 
         get_all_chats(db_path)
         workspace_a = get_all_workspaces(db_path)[0]
@@ -3426,6 +3456,47 @@ class TestGlobalSearchAcrossWorkspaces:
         )
         assert len(scoped_to_b["results"]) == 1
         assert scoped_to_b["results"][0]["sourceNodeId"] == "b1"
+
+    def test_a_nonexistent_workspace_id_does_not_create_a_phantom_collection_row(
+        self, db_path, knowledge_db_path, monkeypatch,
+    ):
+        # SECURITY-FIX: globalSearch/search is documented and used as a
+        # READ-ONLY intent, but it called get_or_create_workspace_collection
+        # (a SELECT-or-INSERT) directly on whatever integer workspaceId the
+        # caller sent, with no check that the id names a real chats.db
+        # workspace - so a "search" request against an id that never
+        # existed silently grew the knowledge.db collections table. It must
+        # now behave like an unrecognized id was never given: no new
+        # collection row, and results identical to an unscoped search.
+        import backend.api.intents_global_search as igs_module
+        monkeypatch.setattr(igs_module, "DEFAULT_DB_PATH", knowledge_db_path)
+        monkeypatch.setattr(chat_library_module, "DEFAULT_DB_PATH", db_path)
+
+        get_all_chats(db_path)  # bootstraps a fully-migrated chats.db
+        save_chat_atomically_row(
+            db_path, None, "Graph A", {"nodes": [
+                {"node_type": "chat", "id": "a1", "raw_content": "existent workspace term", "is_user": True},
+            ]}, [], [], knowledge_db_path=knowledge_db_path,
+        )
+
+        def _collection_count():
+            with contextlib.closing(sqlite3.connect(knowledge_db_path)) as conn:
+                return conn.execute("SELECT COUNT(*) FROM collections").fetchone()[0]
+
+        before = _collection_count()
+
+        bus, _document, _notifications = _bus_with_canvas(db_path)
+        register_global_search_intents(bus)
+        nonexistent_workspace_id = 999_999
+        result = asyncio.run(
+            bus.dispatch_intent("globalSearch", "search", ["existent workspace term", 10, nonexistent_workspace_id])
+        )
+
+        assert _collection_count() == before, "an unrecognized workspaceId must not mint a new collection row"
+        # Falls back to an unscoped search rather than erroring or returning
+        # nothing - same "omitted or invalid -> no filter" posture newChat
+        # already established for an unrecognized workspaceId.
+        assert len(result["results"]) == 1
 
     def test_a_document_hit_carries_no_graph_id_or_source_node_id(self, db_path, knowledge_db_path, monkeypatch):
         # A real ingested document (not a graph) must be distinguishable

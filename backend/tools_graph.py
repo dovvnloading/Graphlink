@@ -467,6 +467,30 @@ def make_set_node_content_handler(document: SceneDocument):
         elif node.kind == "note" and isinstance(node.state, NoteState):
             mutator = lambda: document.set_note_content(node_id, content)
         elif node.kind == "pycoder" and isinstance(node.state, PycoderState):
+            # SECURITY-FIX (PYC-1): a Py-Coder node parked at its human-
+            # approval gate (node.pending_request_id set while
+            # AgentDispatcher.start_pycoder_run awaits approval_future) has
+            # already committed to executing a SPECIFIC program - the
+            # approval panel renders node.state.pycoder_code reactively,
+            # but what actually runs after approval is the coroutine-local
+            # `current_code` captured when the gate opened, and the
+            # defense-in-depth fingerprint check compares that SAME local
+            # against pycoder_approved_fingerprint, never this field. This
+            # branch had no guard at all (unlike run_node/delete_node just
+            # above), so a SEPARATE, auto-approved tool call - e.g. an
+            # autopilot Builder run's own graph.set_node_content, needing
+            # no human click - could silently swap what the panel shows
+            # while the human approves what they SEE, not what runs: a
+            # genuine display/execute divergence at the one gate that
+            # exists specifically so a human can review code before it
+            # executes. Refused the same way delete_node already refuses a
+            # write against a node with a run in flight.
+            if getattr(node, "pending_request_id", None):
+                return _error(
+                    f"Node {node_id!r} has a run in flight - wait for it to "
+                    "finish or stop it before changing its code."
+                )
+
             def mutator():
                 node.state.pycoder_code = content
                 return node

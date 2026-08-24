@@ -39,6 +39,43 @@ from backend.notifications import NotificationState
 from graphlink_settings_store import KEEP_EXISTING_SECRET, SettingsManager
 
 
+def _resolve_stored_key_for_catalog_load(
+    manager: SettingsManager, provider: str, base_url: str
+) -> tuple[str, str | None]:
+    """SECURITY-FIX: resolve the effective API key for a catalog load whose
+    own key field arrived blank, and refuse the STORED-key fallback unless
+    that key is actually bound to the base_url this call is about to send it
+    to. Without the base_url check, any caller of the loadApiModels intent -
+    the SPA itself (so an XSS/prompt-injection foothold in canvas-rendered
+    content), or a local process holding the per-launch token - could send
+    api_key='', base_url='http://attacker.example/v1' and turn Load into a
+    decrypt-and-exfiltrate oracle for the DPAPI-protected OpenAI-compatible
+    key, without ever reading the encrypted blob itself: the stored key was
+    never bound to the base_url it was saved with, only save_api_configuration's
+    own separate "retype the key on a URL change" discipline enforced that,
+    and this intent bypasses it entirely by falling back server-side. Gated
+    on stored_key being non-empty so the ordinary "no key configured
+    anywhere" case still reports its own, more useful error at the call site
+    rather than this one. Anthropic has no user-configurable base_url (see
+    _build_api_client - the branch ignores it outright), so the stored
+    Anthropic key always ships to the same fixed host and needs no check.
+
+    Returns (key, error): a non-None `error` is a message to surface and
+    abort on; otherwise `key` is the resolved key (possibly "" when nothing
+    is stored, which the caller turns into its own "enter the API key"
+    error). Extracted to module level (not inlined in the load_api_models
+    closure) to keep register_settings_api_provider_intents under the
+    ADR-002 register-function line cap."""
+    stored_key = (
+        manager.get_openai_key()
+        if provider == config.API_PROVIDER_OPENAI
+        else manager.get_anthropic_key()
+    )
+    if stored_key and provider == config.API_PROVIDER_OPENAI and base_url != manager.get_api_base_url():
+        return "", "Enter the API Key to test a different Base URL."
+    return stored_key, None
+
+
 def register_settings_api_provider_intents(
     bus: SessionBus,
     manager: SettingsManager,
@@ -97,11 +134,15 @@ def register_settings_api_provider_intents(
         # the plaintext key off the wire entirely.
         key = str(api_key).strip()
         if not key:
-            key = (
-                manager.get_openai_key()
-                if provider == config.API_PROVIDER_OPENAI
-                else manager.get_anthropic_key()
-            )
+            # SECURITY-FIX: resolve the blank-key fallback through the helper,
+            # which refuses a stored key bound to a DIFFERENT base_url - see
+            # _resolve_stored_key_for_catalog_load's own docstring for the
+            # decrypt-and-exfiltrate oracle this closes.
+            key, base_url_error = _resolve_stored_key_for_catalog_load(manager, provider, base_url)
+            if base_url_error is not None:
+                state.api_catalog_state[provider] = {"status": "error", "message": base_url_error}
+                await bus.publish("app-settings")
+                return
         if not key:
             state.api_catalog_state[provider] = {"status": "error", "message": "Please enter the API Key."}
             await bus.publish("app-settings")

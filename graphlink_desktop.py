@@ -185,6 +185,7 @@ def main() -> int:
         mark_running,
         previous_run_crashed,
     )
+    from backend.observability import resolve_log_level
     from graphlink_scratch_dirs import sweep_stale_scratch_dirs_on_launch
     from graphlink_settings_store import SettingsManager
 
@@ -195,7 +196,10 @@ def main() -> int:
     # _save_state and the secrets migration it runs are idempotent, and this
     # function is the real entry point, never invoked by the test suite (see
     # backend/crash_recovery.py's own docstring on that same guarantee).
-    configured_level = getattr(logging, SettingsManager().get_log_level(), logging.INFO)
+    # SECURITY-FIX: was a bare getattr(logging, ..., INFO) - see
+    # resolve_log_level's own docstring for why that crashed the app at
+    # launch on a hostile/corrupted session.dat log_level value.
+    configured_level = resolve_log_level(SettingsManager().get_log_level())
     configure_logging(level=configured_level)
     install_exception_handlers()
     crashed = previous_run_crashed()

@@ -558,6 +558,45 @@ def test_a_non_list_topics_field_gets_a_graceful_error_not_a_dropped_connection(
         assert snapshot["kind"] == "state"
 
 
+def test_a_non_string_topic_element_gets_a_graceful_error_not_a_dropped_connection():
+    """SECURITY-FIX: `topics` was checked to be a list, but not that each
+    ELEMENT is a string - {"topics": [{}]} passed the list check and
+    reached send_snapshot -> self._topics.get(topic), which raised
+    TypeError('unhashable type: dict'), not UnknownTopicError, escaping
+    uncaught and killing the connection."""
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"kind": "subscribe", "topics": [{}], "id": 1})
+        message = ws.receive_json()
+        assert message["kind"] == "error"
+        assert message["id"] == 1
+        assert "topic" in message["error"]
+
+        ws.send_json({"kind": "subscribe", "topics": ["system"]})
+        snapshot = ws.receive_json()
+        assert snapshot["kind"] == "state"
+
+
+def test_a_non_list_args_field_for_an_unschemad_intent_gets_a_graceful_error_not_mangled_positional_unpacking():
+    """SECURITY-FIX: a schema'd intent already rejects non-list args via
+    _validate_intent_args (see test_showinfo_rejects_a_dict_shaped_args_
+    frame above); an intent with NO schema - "system"/"ping" here, which
+    takes `*args` - skipped that check entirely, so `handler(*args)`
+    unpacked whatever shape the client sent. A string star-unpacks by
+    character instead of raising a validation error."""
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"kind": "intent", "topic": "system", "intent": "ping", "args": "abc", "id": 1})
+        message = ws.receive_json()
+        assert message["kind"] == "error"
+        assert message["id"] == 1
+        assert message["error"] == "Invalid arguments: expected a list of arguments, got str."
+
+        ws.send_json({"kind": "subscribe", "topics": ["system"]})
+        snapshot = ws.receive_json()
+        assert snapshot["kind"] == "state"
+
+
 def test_sessions_do_not_share_connections():
     # ADR-004 stage 4.3: tests EventBus's own generic cross-session
     # isolation mechanism, a scenario the real shipped app's restrictive

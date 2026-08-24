@@ -51,6 +51,20 @@ def test_untagged_node_type_defaults_to_chat():
     assert next(iter(document.nodes.values())).kind == "chat"
 
 
+def test_a_non_hashable_node_type_is_skipped_not_raised():
+    """SECURITY-FIX: node_type used to feed a dict lookup
+    (_NODE_RESTORERS.get(node_type)) unguarded - a non-hashable JSON value
+    (a list or dict) raised TypeError('unhashable type') uncaught, aborting
+    the ENTIRE chat load over one malformed node in a hostile or hand-
+    corrupted saved chat."""
+    document = _restore(nodes=[
+        {"node_type": ["nested", "list"], "position": {"x": 0, "y": 0}},
+        _chat("survivor"),
+    ])
+    assert len(document.nodes) == 1
+    assert next(iter(document.nodes.values())).kind == "chat"
+
+
 def test_unrecognized_node_type_is_skipped_not_raised():
     document = _restore(nodes=[
         {"node_type": "some_future_kind", "position": {"x": 0, "y": 0}},

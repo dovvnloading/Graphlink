@@ -97,6 +97,55 @@ def test_get_asset_falls_back_to_a_safe_content_type_for_a_non_image_mime_type()
     assert response.headers["content-type"] == "application/octet-stream"
 
 
+def test_get_asset_coerces_svg_mime_type_to_octet_stream():
+    # SECURITY-FIX regression: image/svg+xml used to be in
+    # ALLOWED_IMAGE_MIME_TYPES, so a stored SVG (hostile bytes are within
+    # this app's documented threat boundary - a saved chat or imported
+    # archive, since neither write path into image_assets validates
+    # mime_type) came back with Content-Type: image/svg+xml, real active
+    # content at this app's own origin the moment anything ever loads an
+    # asset URL as a top-level document/iframe rather than an <img> src.
+    # asset_store.ALLOWED_IMAGE_MIME_TYPES now excludes svg+xml, so this
+    # route's existing "not in the allowlist" fallback catches it.
+    client = make_client()
+    bus = client.app.state.bus
+    document = get_session_context(bus.session("default")).canvas_document
+    parent = document.add_node(0, 0, "parent")
+    node = document.add_image_node(
+        0, 0, b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>",
+        "prompt", parent.id, mime_type="image/svg+xml",
+    )
+
+    response = client.get(f"/api/assets/{node.state.image_asset_id}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.content == b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>"
+
+
+def test_get_asset_sets_nosniff_and_content_disposition_on_every_response():
+    # SECURITY-FIX regression: this route used to set neither
+    # X-Content-Type-Options nor Content-Disposition at all, leaving a
+    # browser free to content-sniff the bytes into something other than the
+    # declared Content-Type and giving a future top-level-document/iframe
+    # consumer no explicit handling instruction. Checked against a plain,
+    # legitimate PNG so this isn't entangled with the svg/octet-stream
+    # coercion above, and the PNG's own mime type still round-trips
+    # unchanged (no regression to the normal case).
+    client = make_client()
+    bus = client.app.state.bus
+    document = get_session_context(bus.session("default")).canvas_document
+    parent = document.add_node(0, 0, "parent")
+    node = document.add_image_node(0, 0, b"\x89PNG raw bytes", "a test image", parent.id, mime_type="image/png")
+
+    response = client.get(f"/api/assets/{node.state.image_asset_id}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-disposition"] == f'inline; filename="{node.state.image_asset_id}.png"'
+
+
 def test_get_asset_for_unknown_id_returns_404_json():
     client = make_client()
 

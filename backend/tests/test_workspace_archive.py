@@ -225,6 +225,40 @@ def test_an_absolute_path_entry_is_refused(tmp_path):
         read_archive(archive)
 
 
+def test_an_archive_whose_members_sum_past_the_aggregate_cap_is_refused(tmp_path, monkeypatch):
+    # SECURITY-FIX regression: MAX_MEMBER_BYTES alone bounds ONE entry's
+    # declared size, but nothing bounded how many members an archive could
+    # carry or what their sizes summed to - a sub-MB archive with enough
+    # members could balloon to gigabytes in RAM without any single member
+    # ever tripping the per-member cap. Monkeypatches the real (2GB)
+    # threshold down to something a test can actually exceed without
+    # writing gigabytes of real data.
+    import backend.workspace_archive as workspace_archive_module
+    monkeypatch.setattr(workspace_archive_module, "MAX_TOTAL_UNCOMPRESSED_BYTES", 100)
+
+    archive = tmp_path / "bomb.graphlink"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+        for i in range(20):
+            zf.writestr(f"chats/{i}.json", json.dumps(_chat(title=f"chat {i}")))
+
+    with pytest.raises(ArchiveError, match="total more than"):
+        read_archive(archive)
+
+
+def test_an_archive_within_the_aggregate_cap_is_unaffected(tmp_path, monkeypatch):
+    import backend.workspace_archive as workspace_archive_module
+    monkeypatch.setattr(workspace_archive_module, "MAX_TOTAL_UNCOMPRESSED_BYTES", 1_000_000)
+
+    archive = tmp_path / "normal.graphlink"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+        zf.writestr("chats/0.json", json.dumps(_chat()))
+
+    result = read_archive(archive)  # must not raise
+    assert len(result["chats"]) == 1
+
+
 def test_an_archive_from_a_newer_format_version_is_refused_not_guessed_at(tmp_path):
     archive = tmp_path / "future.graphlink"
     with zipfile.ZipFile(archive, "w") as zf:

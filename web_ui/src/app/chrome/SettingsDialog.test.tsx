@@ -949,6 +949,43 @@ describe("SettingsDialog", () => {
       expect(screen.getByRole("checkbox")).toBeChecked();
     });
 
+    // SECURITY-FIX (mcp-approval-auto-invisible-in-settings-ui): before this
+    // fix, a server's approval policy (backend/tools.py's ApprovalPolicy -
+    // "auto" runs a server's tools with NO human confirmation in either
+    // Builder mode) had no visible control surface on this page at all.
+    // These two tests prove the fix closes that: an "auto" server renders
+    // visibly AND distinctly (a dedicated class, not just different text)
+    // from an "always" server, so the two are genuinely distinguishable to
+    // someone glancing at the page.
+    it("renders an approval=\"auto\" server's policy visibly, styled as the risky state", async () => {
+      const autoServer = { ...fsServer, id: "auto-id", approval: "auto" };
+      const { user, push } = setup();
+      await goToMcpServers(user, push, { mcpServers: [autoServer] });
+
+      const approvalText = screen.getByText("Approval: Auto (no confirmation)");
+      expect(approvalText).toBeInTheDocument();
+      expect(approvalText).toHaveClass("settings-mcp-server-approval-auto");
+    });
+
+    it("renders an approval=\"always\" server's policy distinctly from the auto case", async () => {
+      const { user, push } = setup();
+      await goToMcpServers(user, push, { mcpServers: [fsServer] });
+
+      const approvalText = screen.getByText("Approval: Always confirm");
+      expect(approvalText).toBeInTheDocument();
+      expect(approvalText).not.toHaveClass("settings-mcp-server-approval-auto");
+      expect(screen.queryByText("Approval: Auto (no confirmation)")).not.toBeInTheDocument();
+    });
+
+    it("shows a server's granted scopes, or a placeholder when none are declared", async () => {
+      const scopedServer = { ...fsServer, id: "scoped-id", scopes: ["graph.read", "graph.mutate"] };
+      const { user, push } = setup();
+      await goToMcpServers(user, push, { mcpServers: [scopedServer, fsServer] });
+
+      expect(screen.getByText("Scopes: graph.read, graph.mutate")).toBeInTheDocument();
+      expect(screen.getByText("Scopes: No declared scopes")).toBeInTheDocument();
+    });
+
     it("unchecking a server's enabled toggle fires setMcpServers with the full array, that entry flipped", async () => {
       const { user, push, intents } = setup();
       await goToMcpServers(user, push, { mcpServers: [fsServer] });

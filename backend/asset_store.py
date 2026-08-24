@@ -60,7 +60,21 @@ _EXTENSION_BY_MIME = {
 # WS intent, session_load._restore_image_payload) validates mime_type
 # before storing it, so the read side is the one place that can close the
 # gap regardless of how a bad value got stored.
-ALLOWED_IMAGE_MIME_TYPES = frozenset(_EXTENSION_BY_MIME)
+#
+# SECURITY-FIX: image/svg+xml is deliberately EXCLUDED from this set even
+# though _EXTENSION_BY_MIME still maps it - SVG stays storable (and keeps
+# its real .svg extension for workspace_archive.py's export path), only
+# serving it back as Content-Type: image/svg+xml is what this closes. An
+# SVG document can carry a <script> tag; get_asset trusts a mime_type it
+# never validated at either write path straight into the response's
+# Content-Type when that value is in this set, so a stored SVG used to come
+# back as genuinely active content at this app's own origin - inert today
+# behind an <img src> consumer, but a same-origin XSS with access to every
+# /api intent (including code-execution approval) the moment anything loads
+# an asset URL as a top-level document/iframe instead. get_asset already
+# falls back every mime_type NOT in this set to application/octet-stream,
+# so removing svg+xml here is sufficient on its own to close the gap.
+ALLOWED_IMAGE_MIME_TYPES = frozenset(_EXTENSION_BY_MIME) - {"image/svg+xml"}
 
 
 def content_ref(data: bytes) -> str:

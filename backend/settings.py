@@ -65,7 +65,7 @@ register_settings_*_intents function in turn.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import api_provider
 import graphlink_task_config as config
@@ -89,6 +89,9 @@ from backend.api.intents_settings_llama_cpp import register_settings_llama_cpp_i
 from backend.api.intents_settings_ollama import register_settings_ollama_intents
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+
+if TYPE_CHECKING:
+    from backend.agents import AgentDispatcher
 
 # Re-exported verbatim: backend/composer.py's own setReasoningLevel/setModel
 # intents import all seven of these directly (`from backend.settings import
@@ -374,12 +377,19 @@ def _build_settings_payload(manager: SettingsManager, state: SettingsSessionStat
 
 
 def register_settings(
-    bus: SessionBus, manager: SettingsManager, notifications: NotificationState | None = None
+    bus: SessionBus,
+    manager: SettingsManager,
+    notifications: NotificationState | None = None,
+    agent_dispatcher: "AgentDispatcher | None" = None,
 ) -> None:
     # notifications is optional only so the ~11 pre-R7.4a tests in
     # backend/tests/test_settings.py that call register_settings(bus,
     # manager) keep working unchanged - the real (and only) production call
     # site, backend/app.py's _configure_session, always passes a real one.
+    # agent_dispatcher is likewise optional and trailing, same reason: only
+    # setMcpServers (routed to register_settings_general_intents below)
+    # needs it, to invalidate the Builder's cached MCP tool registry on a
+    # save - see AgentDispatcher.invalidate_builder_registry's docstring.
     #
     # activeSection is session-local UI navigation, not SettingsManager
     # state - the legacy bridge didn't persist it either (the dialog always
@@ -400,7 +410,7 @@ def register_settings(
 
     # ADR-006 stage 6.5: the general page now takes notifications too - its
     # new setProviderMode intent surfaces switch failures/success banners.
-    register_settings_general_intents(bus, manager, state, notifications)
+    register_settings_general_intents(bus, manager, state, notifications, agent_dispatcher)
     register_settings_api_provider_intents(bus, manager, notifications, state)
     register_settings_ollama_intents(bus, manager, state)
     register_settings_llama_cpp_intents(bus, manager, state)

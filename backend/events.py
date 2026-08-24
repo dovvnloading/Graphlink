@@ -841,6 +841,21 @@ class SessionBus:
             errors = _validate_intent_args(registration.args_schema, args)
             if errors:
                 raise IntentValidationError(errors)
+        elif not isinstance(args, list):
+            # SECURITY-FIX: a schema'd intent already gets this exact check
+            # via _validate_intent_args above; an intent with NO schema
+            # (args_schema=None - most of them) skipped it entirely and
+            # `handler(*args)` unpacked whatever shape the client sent.
+            # Python star-unpacks a str by character and a dict by key, so a
+            # non-list args (e.g. a bare string) reached an *args/single-
+            # string-parameter handler as silently mangled positional values
+            # instead of the validation error a schema'd intent would raise
+            # for the identical mistake - a protocol-hardening gap that
+            # would otherwise re-open per-handler as intents are added.
+            # Reusing IntentValidationError's own message shape keeps every
+            # intent's malformed-args behavior identical regardless of
+            # whether it has a schema.
+            raise IntentValidationError([f"expected a list of arguments, got {type(args).__name__}"])
         handler = registration.handler
         if inspect.iscoroutinefunction(handler):
             return await handler(*args)

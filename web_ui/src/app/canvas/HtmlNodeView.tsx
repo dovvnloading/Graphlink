@@ -94,9 +94,39 @@ export type HtmlFlowNode = Node<HtmlNodeData, "html">;
  * makes the CSP actually enforceable rather than something the untrusted
  * content could race, override, or bypass by supplying its own competing
  * <head>/<meta> first.
+ *
+ * Base URL: an iframe[srcdoc] document with no <base> element of its own
+ * falls back to its CONTAINER document's base URL (the HTML spec's
+ * "fallback base url" algorithm) - here that's this app's own window,
+ * http://127.0.0.1:<port>/#token=<token> (see lib/auth/token.ts for why the
+ * live capability token lives in the fragment rather than ever being
+ * stripped from location.hash). The sandbox attribute's missing
+ * allow-same-origin (see the iframe's own comment below) stops script in
+ * this frame from reaching the app's real DOM/storage/network origin, but
+ * that is a SEPARATE mechanism from document.baseURI and does not touch it
+ * at all - untrusted script could previously read the live token straight
+ * out of `new URL(document.baseURI).hash` with no origin check involved.
+ * SANDBOX_BASE_ORIGIN below closes that: per spec, the first <base>
+ * element with an href in tree order (ours, unconditionally first, for the
+ * same "raw never gets parsed/sniffed" reason as above) freezes the
+ * document's base url to that value instead of falling back to the
+ * container's. The CSP's own base-uri directive has to explicitly allow
+ * this exact origin (rather than staying 'none') because base-uri
+ * validates ANY <base> element's href before letting it take effect,
+ * including this trusted, wrapper-authored one - leaving it 'none' would
+ * make the browser reject our own <base> too and silently fall back to the
+ * token-bearing base url this fix exists to avoid, turning the fix into a
+ * silent no-op. SANDBOX_BASE_ORIGIN is an RFC 2606 .invalid host (never
+ * resolvable, never a real page) so the placeholder can't collide with
+ * anything network-reachable, though every network-capable directive here
+ * (default-src/connect-src/img-src/frame-src/object-src) already forbids
+ * fetching it regardless - it only has to be a syntactically valid,
+ * token-free absolute URL for document.baseURI to report.
  */
+const SANDBOX_BASE_ORIGIN = "http://sandboxed-html-node.invalid";
+
 export function buildSandboxedHtmlDocument(raw: string): string {
-  return `<!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'; form-action 'none'"></head><body>
+  return `<!DOCTYPE html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri ${SANDBOX_BASE_ORIGIN}; frame-src 'none'; object-src 'none'; form-action 'none'"><base href="${SANDBOX_BASE_ORIGIN}/"></head><body>
 ${raw}
 </body></html>`;
 }
@@ -254,11 +284,19 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
       <div className="html-node-section">
         <p className="html-node-section-label">Preview</p>
         {/* sandbox is EXACTLY "allow-scripts" - no allow-same-origin (no
-            access to this app's origin/storage/parent DOM), no
+            access to this app's origin/storage/parent DOM via any DOM API -
+            parent.location/top.location correctly throw SecurityError), no
             allow-popups, no allow-top-navigation, no allow-forms, no
-            allow-modals. srcDoc (never a blob: URL, never `src`, never
-            dangerouslySetInnerHTML) is the only content-delivery path,
-            and it only ever holds buildSandboxedHtmlDocument's output. */}
+            allow-modals. This does NOT by itself stop document.baseURI from
+            reporting this app's own URL, token fragment included - that's a
+            distinct HTML-spec mechanism (the srcdoc "fallback base url"),
+            unrelated to the sandbox's origin isolation, which is why
+            buildSandboxedHtmlDocument's own wrapper additionally sets an
+            explicit <base> tag (see its doc comment) rather than relying on
+            sandbox alone to keep the token out of this frame's reach. srcDoc
+            (never a blob: URL, never `src`, never dangerouslySetInnerHTML)
+            is the only content-delivery path, and it only ever holds
+            buildSandboxedHtmlDocument's output. */}
         <iframe
           className="html-node-preview"
           style={{ height: previewHeightPx }}

@@ -31,7 +31,7 @@ _DEFAULT_K = 5
 _MAX_K = 25
 
 
-def _resolve_workspace_collection_id(document: SceneDocument) -> int:
+def _resolve_workspace_collection_id(document: SceneDocument, db_path=None) -> int:
     """ADR-020 stage 20.3: every real ingestion/search call in this module
     scopes to the CALLING SESSION's current workspace - see backend.
     knowledge_store.get_or_create_workspace_collection's own docstring for
@@ -45,6 +45,16 @@ def _resolve_workspace_collection_id(document: SceneDocument) -> int:
     undifferentiated pool every pre-20.3 build already used, rather than
     raising or guessing at some arbitrary workspace.
 
+    `db_path` defaults to this module's own DEFAULT_DB_PATH (every call
+    site in THIS file omits it, unchanged from before this parameter
+    existed) - added only so backend/tools_knowledge.py's
+    make_knowledge_search_handler, which already threads its own injectable
+    db_path through every other knowledge_store call it makes (see that
+    function's own docstring on why: test isolation, matching
+    knowledge_ingest.ingest_file's established "inject the path" pattern),
+    can reuse this SAME scoping logic against that same path rather than
+    silently resolving against the real default database.
+
     Real blocking SQLite I/O (a SELECT, or an INSERT the very first time a
     given workspace ever ingests/searches anything) - callers run this
     inside asyncio.to_thread, never inline on the event loop, same posture
@@ -53,7 +63,7 @@ def _resolve_workspace_collection_id(document: SceneDocument) -> int:
     workspace_id = document.current_workspace_id
     if workspace_id is None:
         return 0
-    return get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+    return get_or_create_workspace_collection(db_path if db_path is not None else DEFAULT_DB_PATH, workspace_id)
 
 
 def branch_history_to_text(history: list[dict]) -> str:

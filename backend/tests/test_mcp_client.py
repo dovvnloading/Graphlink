@@ -11,13 +11,20 @@ through register_mcp_server_tools -> ToolRegistry.invoke end to end.
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import textwrap
 import time
 
 import pytest
 
-from backend.mcp_client import McpError, McpServerConfig, McpStdioClient, register_mcp_server_tools
+from backend.mcp_client import (
+    MAX_TOOL_DESCRIPTION_CHARS,
+    McpError,
+    McpServerConfig,
+    McpStdioClient,
+    register_mcp_server_tools,
+)
 from backend.providers import ToolCall
 from backend.tools import RunContext, ToolRegistry
 
@@ -622,5 +629,283 @@ def test_list_tools_tolerates_a_non_list_tools_field(tmp_path):
     try:
         client.connect()
         assert client.list_tools() == ()
+    finally:
+        client.close()
+
+
+# -- SECURITY-FIX: unbounded memory/text growth from a hostile server -------
+
+
+def test_call_tool_truncates_an_oversized_result_instead_of_returning_it_whole(tmp_path):
+    """MAX_TOOL_RESULT_CHARS bounds what a tool result hands back to the
+    Builder - unlike every built-in graph tool's own excerpting, this was
+    previously unbounded, letting a hostile/misbehaving server blow the
+    model's context/cost budget with one call."""
+    from backend.mcp_client import MAX_TOOL_RESULT_CHARS
+
+    huge_script = tmp_path / "huge_result_server.py"
+    huge_script.write_text(textwrap.dedent(r'''
+        import json
+        import sys
+
+        def send(message):
+            sys.stdout.write(json.dumps(message) + "\n")
+            sys.stdout.flush()
+
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            request = json.loads(line)
+            method = request.get("method")
+            request_id = request.get("id")
+            if method == "initialize":
+                send({"jsonrpc": "2.0", "id": request_id, "result": {
+                    "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "huge", "version": "0.0.1"},
+                }})
+            elif method == "notifications/initialized":
+                pass
+            elif method == "tools/call":
+                text = "x" * 5_000_000
+                send({"jsonrpc": "2.0", "id": request_id, "result": {
+                    "content": [{"type": "text", "text": text}], "isError": False,
+                }})
+            else:
+                send({"jsonrpc": "2.0", "id": request_id,
+                      "error": {"code": -32601, "message": "unknown method"}})
+    '''), encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(huge_script),), timeout=20.0)
+    client.connect()
+    try:
+        result = client.call_tool("anything", {})
+        assert len(result.content) < 5_000_000
+        assert len(result.content) <= MAX_TOOL_RESULT_CHARS + 200
+        assert "truncated" in result.content
+    finally:
+        client.close()
+
+
+def test_read_loop_survives_a_never_terminated_stdout_line_without_deadlocking(tmp_path):
+    """SECURITY-FIX: `for line in process.stdout` used to accumulate an
+    entire line in memory before yielding it, with no bound - a server that
+    writes without ever emitting a newline grows that buffer without limit.
+    The bounded readline() loop must give up on that connection (not hang
+    or crash the reader thread) once the line exceeds the cap by more than
+    the resync budget, and a normal subsequent call must still work if the
+    server recovers."""
+    script = tmp_path / "no_newline_server.py"
+    script.write_text(textwrap.dedent(r'''
+        import json
+        import sys
+
+        def send(message):
+            sys.stdout.write(json.dumps(message) + "\n")
+            sys.stdout.flush()
+
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            request = json.loads(line)
+            method = request.get("method")
+            request_id = request.get("id")
+            if method == "initialize":
+                send({"jsonrpc": "2.0", "id": request_id, "result": {
+                    "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "no-newline", "version": "0.0.1"},
+                }})
+            elif method == "notifications/initialized":
+                pass
+            elif method == "tools/call":
+                # Write far more than the reader's per-read cap, with NO
+                # trailing newline ever - the real attack this closes.
+                sys.stdout.write("x" * 50_000_000)
+                sys.stdout.flush()
+                # Deliberately never send a real JSON-RPC response.
+            else:
+                send({"jsonrpc": "2.0", "id": request_id,
+                      "error": {"code": -32601, "message": "unknown method"}})
+    '''), encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),), timeout=20.0)
+    client.connect()
+    try:
+        # The reader gives up resyncing after a bounded number of oversized
+        # reads and stops - reported immediately as a closed connection
+        # rather than making the caller wait out the full timeout.
+        with pytest.raises(McpError, match="closed its output unexpectedly"):
+            client.call_tool("anything", {})
+    finally:
+        client.close()  # must not hang
+
+
+def test_call_tool_error_message_is_truncated_not_unbounded(tmp_path):
+    """SECURITY-FIX: an error response's message text flowed straight into
+    McpError with no length bound - a hostile server's error.message could
+    be arbitrarily large, and this text is logged and can reach a
+    user-facing notification."""
+    script = tmp_path / "huge_error_server.py"
+    script.write_text(textwrap.dedent(r'''
+        import json
+        import sys
+
+        def send(message):
+            sys.stdout.write(json.dumps(message) + "\n")
+            sys.stdout.flush()
+
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            request = json.loads(line)
+            method = request.get("method")
+            request_id = request.get("id")
+            if method == "initialize":
+                send({"jsonrpc": "2.0", "id": request_id, "result": {
+                    "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "huge-error", "version": "0.0.1"},
+                }})
+            elif method == "notifications/initialized":
+                pass
+            elif method == "tools/call":
+                send({"jsonrpc": "2.0", "id": request_id,
+                      "error": {"code": -1, "message": "e" * 500_000}})
+            else:
+                send({"jsonrpc": "2.0", "id": request_id,
+                      "error": {"code": -32601, "message": "unknown method"}})
+    '''), encoding="utf-8")
+    client = McpStdioClient(command=sys.executable, args=(str(script),), timeout=20.0)
+    client.connect()
+    try:
+        with pytest.raises(McpError) as excinfo:
+            client.call_tool("anything", {})
+        assert len(str(excinfo.value)) < 3000
+        assert "truncated" in str(excinfo.value)
+    finally:
+        client.close()
+
+
+# -- SECURITY-FIX regression: an untrusted tool description/schema must not
+# -- be forwarded unbounded/untyped into the model's tool definitions -------
+
+
+# A template rather than a fully static script (unlike the fixtures above):
+# the whole point of these tests is an oversized/malformed tools/list
+# payload, which is impractical to hand-write inline - __TOOLS_JSON__ is
+# replaced with json.dumps(...) of the actual tools list per test via plain
+# str.replace (not .format()), so the JSON's own braces need no escaping.
+_HOSTILE_TOOLS_SERVER_TEMPLATE = textwrap.dedent(r'''
+    import json
+    import sys
+
+    def send(message):
+        sys.stdout.write(json.dumps(message) + "\n")
+        sys.stdout.flush()
+
+    TOOLS = __TOOLS_JSON__
+
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request = json.loads(line)
+        method = request.get("method")
+        request_id = request.get("id")
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "hostile", "version": "0.0.1"},
+            }})
+        elif method == "notifications/initialized":
+            pass
+        elif method == "tools/list":
+            send({"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}})
+        else:
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "error": {"code": -32601, "message": "unknown method"}})
+''')
+
+_OVERSIZED_DESCRIPTION = "A" * (MAX_TOOL_DESCRIPTION_CHARS + 500)
+_NORMAL_DESCRIPTION = "Reads a file's contents."
+
+
+@pytest.fixture
+def hostile_tools_server(tmp_path):
+    """A fake MCP server (same shape as fake_fs_server above) advertising
+    three deliberately hostile/malformed tools/list entries: one whose
+    description is 500 chars past MAX_TOOL_DESCRIPTION_CHARS - the
+    prompt-injection vector this fix closes, since an untrusted server's
+    description is forwarded verbatim into the model's tool definitions on
+    every Builder turn - one with an ordinary description as a control, and
+    one with a non-dict inputSchema (a plain string, not the JSON Schema
+    object every provider's tool-call translation assumes)."""
+    tools = [
+        {
+            "name": "oversized_description_tool",
+            "description": _OVERSIZED_DESCRIPTION,
+            "inputSchema": {"type": "object"},
+        },
+        {
+            "name": "normal_description_tool",
+            "description": _NORMAL_DESCRIPTION,
+            "inputSchema": {"type": "object"},
+        },
+        {
+            "name": "bogus_schema_tool",
+            "description": "A tool advertising a non-dict inputSchema.",
+            "inputSchema": "not-a-json-schema-object",
+        },
+    ]
+    script_path = tmp_path / "hostile_tools_server.py"
+    script_path.write_text(
+        _HOSTILE_TOOLS_SERVER_TEMPLATE.replace("__TOOLS_JSON__", json.dumps(tools)),
+        encoding="utf-8",
+    )
+    return str(script_path)
+
+
+def test_list_tools_truncates_an_oversized_description(hostile_tools_server):
+    """The prompt-injection vector this closes: a hostile/compromised MCP
+    server's tools/list description used to be forwarded verbatim, with no
+    length cap, straight into the model's tool definitions on every Builder
+    turn - a channel never shown to the user anywhere (no Settings UI lists
+    tool descriptions). Past MAX_TOOL_DESCRIPTION_CHARS it must now be cut
+    with an explicit truncation marker, not silently forwarded whole."""
+    client = McpStdioClient(command=sys.executable, args=(hostile_tools_server,))
+    try:
+        client.connect()
+        specs = {spec.name: spec for spec in client.list_tools()}
+        description = specs["oversized_description_tool"].description
+        assert len(description) < len(_OVERSIZED_DESCRIPTION)
+        assert description.startswith("A" * MAX_TOOL_DESCRIPTION_CHARS)
+        assert "truncated" in description
+        assert "500 more characters omitted" in description
+    finally:
+        client.close()
+
+
+def test_list_tools_leaves_a_normal_length_description_unaffected(hostile_tools_server):
+    """Control for the truncation test above: a description well under the
+    cap must round-trip byte-for-byte, unmarked."""
+    client = McpStdioClient(command=sys.executable, args=(hostile_tools_server,))
+    try:
+        client.connect()
+        specs = {spec.name: spec for spec in client.list_tools()}
+        assert specs["normal_description_tool"].description == _NORMAL_DESCRIPTION
+    finally:
+        client.close()
+
+
+def test_list_tools_falls_back_to_object_schema_for_a_non_dict_input_schema(hostile_tools_server):
+    """Regression: `tool.get("inputSchema") or {...}` only falls back to the
+    safe default when inputSchema is missing/None/falsy - a non-dict but
+    TRUTHY value (a plain string here) was forwarded to ToolSpec as-is
+    instead of degrading the same way a missing one already does, breaking
+    the provider call downstream instead of failing gracefully."""
+    client = McpStdioClient(command=sys.executable, args=(hostile_tools_server,))
+    try:
+        client.connect()
+        specs = {spec.name: spec for spec in client.list_tools()}
+        assert specs["bogus_schema_tool"].input_schema == {"type": "object"}
     finally:
         client.close()

@@ -31,9 +31,15 @@ import {
 } from "./HtmlNodeView";
 import { HTML_SPLIT_MAX, HTML_SPLIT_MIN, HTML_SPLIT_TOTAL_PX } from "./canvasConstants";
 
+// SANDBOX_BASE_ORIGIN's exact value, duplicated here (not imported from
+// HtmlNodeView.tsx) deliberately - importing the implementation's own
+// constant would make these assertions tautological against a value the
+// implementation could change without any test noticing.
+const SANDBOX_BASE_ORIGIN = "http://sandboxed-html-node.invalid";
 const EXACT_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'; form-action 'none'";
+  `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri ${SANDBOX_BASE_ORIGIN}; frame-src 'none'; object-src 'none'; form-action 'none'`;
 const EXACT_CSP_META = `<meta http-equiv="Content-Security-Policy" content="${EXACT_CSP}">`;
+const EXACT_BASE_TAG = `<base href="${SANDBOX_BASE_ORIGIN}/">`;
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
 // ChatNodeView.test.tsx for why a bare ReactFlowProvider is enough here too.
@@ -85,8 +91,50 @@ describe("buildSandboxedHtmlDocument", () => {
   it("wraps raw content verbatim in the exact fixed structure with the exact CSP string", () => {
     const result = buildSandboxedHtmlDocument("<p>hi</p>");
     expect(result).toBe(
-      `<!DOCTYPE html><html><head>${EXACT_CSP_META}</head><body>\n<p>hi</p>\n</body></html>`,
+      `<!DOCTYPE html><html><head>${EXACT_CSP_META}${EXACT_BASE_TAG}</head><body>\n<p>hi</p>\n</body></html>`,
     );
+  });
+
+  // html-preview-reads-token-via-baseURI: an iframe[srcdoc] with no <base> of
+  // its own inherits the CONTAINER document's base URL, which for this app
+  // is http://127.0.0.1:<port>/#token=<token> - readable via
+  // document.baseURI regardless of the sandbox attribute (sandbox's missing
+  // allow-same-origin governs DOM/storage/network access, not this fallback
+  // base URL mechanism). The fixed <base> tag below is what actually closes
+  // that leak - it must be present, token-free, and land inside <head>
+  // (before any byte of `raw`, which starts in the body position) so it's
+  // unconditionally the base every browser sees regardless of what `raw`
+  // itself might contain.
+  it("sets an inert, token-free <base> tag in <head>, after the CSP meta and before any byte of `raw`", () => {
+    const result = buildSandboxedHtmlDocument("<p>hi</p>");
+
+    expect(result).not.toContain("token=");
+    expect(result).not.toContain("127.0.0.1");
+
+    const baseIndex = result.indexOf(EXACT_BASE_TAG);
+    const metaIndex = result.indexOf(EXACT_CSP_META);
+    const headCloseIndex = result.indexOf("</head>");
+    const rawIndex = result.indexOf("<p>hi</p>");
+    expect(baseIndex).toBeGreaterThan(-1);
+    // The CSP meta tag must precede the <base> tag in the parsed document,
+    // so the base-uri directive it carries is already the active policy by
+    // the time the parser reaches our <base> element and validates its href
+    // against it - a <base> parsed before any CSP meta would have nothing
+    // to validate against yet.
+    expect(metaIndex).toBeLessThan(baseIndex);
+    expect(baseIndex).toBeLessThan(headCloseIndex);
+    expect(headCloseIndex).toBeLessThan(rawIndex);
+
+    // Parse the produced string as a real Document (DOMParser, available in
+    // jsdom) and assert on the parsed structure rather than only the raw
+    // string - a genuine proof that this is a real, single <base> element
+    // with the expected href, not e.g. text that merely looks like one
+    // inside an attribute value.
+    const doc = new DOMParser().parseFromString(result, "text/html");
+    const baseEls = doc.querySelectorAll("base");
+    expect(baseEls.length).toBe(1);
+    expect(baseEls[0].getAttribute("href")).toBe(`${SANDBOX_BASE_ORIGIN}/`);
+    expect(baseEls[0].getAttribute("href")).not.toContain("token=");
   });
 
   it("never branches on adversarial content trying to inject a competing head/CSP", () => {
@@ -107,11 +155,35 @@ describe("buildSandboxedHtmlDocument", () => {
 
     // The wrapper's own head/body scaffolding is untouched: exactly one
     // <!DOCTYPE html>, exactly one wrapper <head>...</head> holding only our
-    // meta tag, and the attacker's entire string appears intact and
-    // unmodified inside the body position.
-    expect(result.startsWith(`<!DOCTYPE html><html><head>${EXACT_CSP_META}</head><body>\n`)).toBe(true);
+    // meta tag and our <base> tag, and the attacker's entire string appears
+    // intact and unmodified inside the body position.
+    expect(result.startsWith(`<!DOCTYPE html><html><head>${EXACT_CSP_META}${EXACT_BASE_TAG}</head><body>\n`)).toBe(
+      true,
+    );
     expect(result.endsWith(`${attacker}\n</body></html>`)).toBe(true);
-    expect(result).toBe(`<!DOCTYPE html><html><head>${EXACT_CSP_META}</head><body>\n${attacker}\n</body></html>`);
+    expect(result).toBe(
+      `<!DOCTYPE html><html><head>${EXACT_CSP_META}${EXACT_BASE_TAG}</head><body>\n${attacker}\n</body></html>`,
+    );
+  });
+
+  // html-preview-reads-token-via-baseURI: per the HTML spec, only the FIRST
+  // <base> element with an href in tree order ever takes effect - later ones
+  // are inert. Proves that property holds even when `raw` supplies its own
+  // competing <base> tag pointed at an attacker-chosen href: ours (in the
+  // wrapper's own <head>, unconditionally before `raw`) must still be the
+  // one a browser would honor, not the attacker's.
+  it("a competing <base> tag inside `raw` never precedes or replaces ours - ours stays first in tree order", () => {
+    const attacker = '<base href="https://attacker.example/">';
+    const result = buildSandboxedHtmlDocument(attacker);
+
+    const doc = new DOMParser().parseFromString(result, "text/html");
+    const baseEls = doc.querySelectorAll("base");
+    expect(baseEls.length).toBe(2);
+    // Ours is first in tree order - the one the HTML spec's "frozen base
+    // url" algorithm actually uses - regardless of what `raw` supplies.
+    expect(baseEls[0].getAttribute("href")).toBe(`${SANDBOX_BASE_ORIGIN}/`);
+    expect(baseEls[1].getAttribute("href")).toBe("https://attacker.example/");
+    expect(result.indexOf(EXACT_BASE_TAG)).toBeLessThan(result.indexOf(attacker));
   });
 });
 
@@ -170,8 +242,10 @@ describe("HtmlNodeView", () => {
 
     const srcDoc = getIframe(container).srcdoc;
 
-    // Our wrapper's own head/CSP is still the first thing in the document.
-    expect(srcDoc.startsWith(`<!DOCTYPE html><html><head>${EXACT_CSP_META}</head><body>\n`)).toBe(true);
+    // Our wrapper's own head/CSP/base is still the first thing in the document.
+    expect(srcDoc.startsWith(`<!DOCTYPE html><html><head>${EXACT_CSP_META}${EXACT_BASE_TAG}</head><body>\n`)).toBe(
+      true,
+    );
     const ourMetaIndex = srcDoc.indexOf(EXACT_CSP_META);
     const attackerMetaIndex = srcDoc.indexOf('content="script-src *"');
     expect(ourMetaIndex).toBe(0 + "<!DOCTYPE html><html><head>".length);
@@ -186,7 +260,9 @@ describe("HtmlNodeView", () => {
 
     // The attacker's payload made it through unparsed/unmodified, verbatim,
     // entirely within the body position after our fixed prefix.
-    expect(srcDoc).toBe(`<!DOCTYPE html><html><head>${EXACT_CSP_META}</head><body>\n${attacker}\n</body></html>`);
+    expect(srcDoc).toBe(
+      `<!DOCTYPE html><html><head>${EXACT_CSP_META}${EXACT_BASE_TAG}</head><body>\n${attacker}\n</body></html>`,
+    );
   });
 
   it("the Popout button is present, disabled, and wired to nothing observable", async () => {

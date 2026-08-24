@@ -12,6 +12,7 @@ import json
 import logging
 import logging.handlers
 import os
+import stat
 import sys
 import threading
 from pathlib import Path
@@ -32,6 +33,13 @@ from backend.crash_recovery import (
 )
 import backend.crash_recovery as crash_recovery_module
 from backend.notifications import NotificationState
+
+# chmod's real effect is POSIX-only (os.chmod on Windows only ever toggles
+# the read-only attribute, never real permission bits) - same split
+# backend/tests/test_scratch_dirs.py already uses for graphlink_scratch_dirs.py's
+# own chmod calls: a platform-independent "chmod was invoked with 0o600" spy
+# test that runs everywhere, plus a POSIX-only real-stat test skipped here.
+POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="POSIX chmod semantics only apply on POSIX")
 
 
 # -- path construction --------------------------------------------------
@@ -325,3 +333,112 @@ def test_install_exception_handlers_can_be_retried_after_a_failure(
     install_exception_handlers(tmp_path)
 
     assert sys.excepthook is not original_hook, "a retry after a failure must actually install"
+
+
+# -- SECURITY-FIX (OBS-3): 0600 permissions on log/crash files --------------
+#
+# graphlink.log (and its rotated backups), crash/faulthandler.log, and
+# diagnostics/bundle-*.json were the one remaining exception to this
+# codebase's established "every ~/.graphlink file that can carry user
+# content gets chmod'ed 0600" posture (session.dat, chats.db, asset files).
+# All three can embed chat content and absolute paths - see this module's
+# own docstring and the many logger.exception()/logger.error() call sites
+# this file's handler collects from across backend/.
+
+
+def test_chmod_0600_invokes_chmod_with_0o600_on_posix(tmp_path, monkeypatch):
+    monkeypatch.setattr(crash_recovery_module.sys, "platform", "linux")
+    calls = []
+    monkeypatch.setattr(crash_recovery_module.os, "chmod", lambda path, mode: calls.append((path, mode)))
+    target = tmp_path / "some.log"
+    target.write_text("x", encoding="utf-8")
+
+    crash_recovery_module._chmod_0600(target)
+
+    assert (target, 0o600) in calls
+
+
+def test_chmod_0600_is_not_invoked_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(crash_recovery_module.sys, "platform", "win32")
+    calls = []
+    monkeypatch.setattr(crash_recovery_module.os, "chmod", lambda path, mode: calls.append((path, mode)))
+
+    crash_recovery_module._chmod_0600(tmp_path / "some.log")
+
+    assert calls == []
+
+
+def test_chmod_0600_failure_is_logged_and_swallowed_not_raised(tmp_path, monkeypatch):
+    monkeypatch.setattr(crash_recovery_module.sys, "platform", "linux")
+
+    def _boom(path, mode):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(crash_recovery_module.os, "chmod", _boom)
+
+    crash_recovery_module._chmod_0600(tmp_path / "some.log")  # must not raise
+
+
+def test_configure_logging_chmods_the_log_file_to_0600_on_posix(tmp_path, monkeypatch, isolated_logging_state):
+    monkeypatch.setattr(crash_recovery_module.sys, "platform", "linux")
+    calls = []
+    monkeypatch.setattr(crash_recovery_module.os, "chmod", lambda path, mode: calls.append((path, mode)))
+
+    configure_logging(tmp_path)
+
+    assert (log_path(tmp_path), 0o600) in calls
+
+
+def test_configure_logging_does_not_chmod_on_windows(tmp_path, monkeypatch, isolated_logging_state):
+    monkeypatch.setattr(crash_recovery_module.sys, "platform", "win32")
+    calls = []
+    monkeypatch.setattr(crash_recovery_module.os, "chmod", lambda path, mode: calls.append((path, mode)))
+
+    configure_logging(tmp_path)
+
+    assert calls == []
+
+
+def test_install_exception_handlers_chmods_faulthandler_log_to_0600_on_posix(
+    tmp_path, monkeypatch, isolated_exception_handler_state,
+):
+    monkeypatch.setattr(crash_recovery_module.sys, "platform", "linux")
+    calls = []
+    monkeypatch.setattr(crash_recovery_module.os, "chmod", lambda path, mode: calls.append((path, mode)))
+
+    install_exception_handlers(tmp_path)
+
+    assert (crash_dir(tmp_path) / "faulthandler.log", 0o600) in calls
+
+
+def test_rotating_handler_chmods_the_freshly_rotated_file_on_posix(tmp_path, monkeypatch):
+    # Rotation renames the current log down the chain and then reopens a
+    # BRAND NEW file at the original path via the stdlib's unguarded open() -
+    # that reopened file is what needs a fresh chmod after every rollover,
+    # not just the very first file at handler-construction time.
+    monkeypatch.setattr(crash_recovery_module.sys, "platform", "linux")
+    calls = []
+    monkeypatch.setattr(crash_recovery_module.os, "chmod", lambda path, mode: calls.append((path, mode)))
+
+    target = tmp_path / "graphlink.log"
+    handler = crash_recovery_module._Chmod0600RotatingFileHandler(
+        target, maxBytes=1024, backupCount=3, encoding="utf-8",
+    )
+    try:
+        calls.clear()  # only the rollover's own chmod matters here, not construction's
+        handler.doRollover()
+        assert (target, 0o600) in calls
+    finally:
+        handler.close()
+
+
+@POSIX_ONLY
+def test_the_real_log_file_is_actually_0600_on_posix(tmp_path, isolated_logging_state):
+    configure_logging(tmp_path)
+    assert stat.S_IMODE(log_path(tmp_path).stat().st_mode) == 0o600
+
+
+@POSIX_ONLY
+def test_the_real_faulthandler_log_is_actually_0600_on_posix(tmp_path, isolated_exception_handler_state):
+    install_exception_handlers(tmp_path)
+    assert stat.S_IMODE((crash_dir(tmp_path) / "faulthandler.log").stat().st_mode) == 0o600

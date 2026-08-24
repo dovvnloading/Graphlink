@@ -914,6 +914,61 @@ def test_load_api_models_falls_back_to_the_saved_key_when_the_field_is_blank(man
     assert seen == ["sk-saved-openai"]
 
 
+# -- SECURITY-FIX: the stored key must never be sent to a base_url it wasn't
+# -- saved against - see load_api_models' own comment on the exfiltration
+# -- primitive an unbound fallback creates.
+
+
+def test_load_api_models_refuses_the_saved_key_fallback_for_a_different_base_url(manager, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        api_provider,
+        "list_models_for_config",
+        lambda provider, key, base_url=None: seen.append(key) or [],
+    )
+    manager.set_api_settings(config.API_PROVIDER_OPENAI, "https://x/v1", "sk-saved-openai", "", "")
+    bus = SessionBus("settings-load-key-fallback-different-url-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(
+        bus.dispatch_intent(
+            "app-settings", "loadApiModels",
+            [config.API_PROVIDER_OPENAI, "", "http://attacker.example/v1"],
+        )
+    )
+
+    assert seen == [], "the saved key must never be sent to a base_url it wasn't saved against"
+    payload = recorder.messages[-1]["payload"]
+    assert payload["apiCatalogStatus"] == "error"
+    assert "Base URL" in payload["apiCatalogMessage"]
+
+
+def test_load_api_models_honors_a_caller_supplied_key_for_a_different_base_url(manager, monkeypatch):
+    # The refusal above is specific to the SERVER-SIDE fallback - a caller
+    # who supplies their OWN key to test a different endpoint is unaffected,
+    # exactly the legitimate "try a different self-hosted proxy" workflow.
+    seen = []
+    monkeypatch.setattr(
+        api_provider,
+        "list_models_for_config",
+        lambda provider, key, base_url=None: seen.append(key) or [],
+    )
+    manager.set_api_settings(config.API_PROVIDER_OPENAI, "https://x/v1", "sk-saved-openai", "", "")
+    bus = SessionBus("settings-load-key-explicit-different-url-test")
+    register_settings(bus, manager)
+
+    asyncio.run(
+        bus.dispatch_intent(
+            "app-settings", "loadApiModels",
+            [config.API_PROVIDER_OPENAI, "sk-freshly-typed", "http://a-different-proxy.example/v1"],
+        )
+    )
+
+    assert seen == ["sk-freshly-typed"]
+
+
 def test_load_api_models_reports_a_clean_error_when_no_key_is_available_anywhere(manager, monkeypatch):
     called = []
     monkeypatch.setattr(api_provider, "list_models_for_config", lambda *a, **k: called.append(a))
@@ -2454,6 +2509,43 @@ def test_set_mcp_servers_is_a_bulk_replace_not_a_merge(manager):
     asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [[{"name": "git", "command": "uvx"}]]))
 
     assert [entry["name"] for entry in manager.get_mcp_servers()] == ["git"]
+
+
+def test_set_mcp_servers_invalidates_the_builder_registry_cache(manager):
+    # SECURITY-FIX regression: AgentDispatcher.builder_tool_registry() caches
+    # its ToolRegistry (and connected MCP clients) for the dispatcher's whole
+    # lifetime with nothing to invalidate it, so disabling/removing an MCP
+    # server - or narrowing its enabled_tools/scopes/approval - in Settings
+    # had no effect on a session whose Builder had already started once: the
+    # stale registry kept granting the OLD tools under the OLD scopes for
+    # the rest of the session. setMcpServers must now clear the cache on
+    # every save so the Builder's next start rebuilds from what was just
+    # persisted.
+    from backend.agents import AgentDispatcher
+
+    dispatcher = AgentDispatcher(manager)
+    # Stand in for "a Builder already ran once this session and cached a
+    # registry" without paying for a real ToolRegistry/MCP connection build.
+    dispatcher._builder_registry = object()
+
+    bus = SessionBus("settings-set-mcp-servers-invalidation-test")
+    register_settings(bus, manager, agent_dispatcher=dispatcher)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [[{"name": "fs", "command": "npx"}]]))
+
+    assert dispatcher._builder_registry is None
+
+
+def test_set_mcp_servers_without_a_dispatcher_still_saves(manager):
+    # agent_dispatcher is optional (trailing, defaulted None) - callers that
+    # don't have one (most of the pre-existing test suite) must keep working
+    # exactly as before; the invalidation call is skipped, not a crash.
+    bus = SessionBus("settings-set-mcp-servers-no-dispatcher-test")
+    register_settings(bus, manager)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "setMcpServers", [[{"name": "fs", "command": "npx"}]]))
+
+    assert [entry["name"] for entry in manager.get_mcp_servers()] == ["fs"]
 
 
 def test_set_mcp_servers_intent_tolerates_a_malformed_timeout_on_one_entry(manager):

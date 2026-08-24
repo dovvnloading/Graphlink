@@ -65,6 +65,19 @@ ASSETS_PREFIX = "assets/"
 # denial of service even from a file they trusted.
 MAX_MEMBER_BYTES = 256 * 1024 * 1024
 
+# SECURITY-FIX: MAX_MEMBER_BYTES above bounds ONE entry's declared
+# uncompressed size, but read_archive holds every chats/*+assets/* member
+# fully in memory at once, with nothing bounding how many members there
+# are or what their sizes sum to. Deflate gives roughly 1000:1 compression
+# on zero-filled data, so N members each lying up to the per-member cap
+# cost only N * ~256KB on disk while the archive balloons to N * 256MB in
+# the backend process's RAM the moment it's read - a sub-MB archive with
+# enough members exhausts memory on its own, without any single member
+# ever tripping MAX_MEMBER_BYTES. Bounds the AGGREGATE declared size
+# across every real member, checked in the same infolist() pass that
+# already enforces the per-member cap.
+MAX_TOTAL_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+
 
 class ArchiveError(Exception):
     """Any refusal to read an archive. Carries a message written for the
@@ -217,11 +230,18 @@ def read_archive(archive_path: Path) -> dict[str, Any]:
     try:
         with zipfile.ZipFile(archive_path) as archive:
             names = [_safe_member_name(info.filename) for info in archive.infolist() if not info.is_dir()]
+            total_uncompressed_bytes = 0
             for info in archive.infolist():
                 if info.file_size > MAX_MEMBER_BYTES:
                     raise ArchiveError(
                         f"{archive_path.name} contains an entry larger than "
                         f"{MAX_MEMBER_BYTES // (1024 * 1024)} MB and was refused"
+                    )
+                total_uncompressed_bytes += info.file_size
+                if total_uncompressed_bytes > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                    raise ArchiveError(
+                        f"{archive_path.name}'s contents total more than "
+                        f"{MAX_TOTAL_UNCOMPRESSED_BYTES // (1024 * 1024)} MB uncompressed and were refused"
                     )
             if MANIFEST_NAME not in names:
                 raise ArchiveError(f"{archive_path.name} is not a Graphlink archive (no manifest)")

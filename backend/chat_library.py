@@ -1122,24 +1122,44 @@ def get_all_chats(db_path: Path, notifications: NotificationState | None = None)
         ).fetchall()
     tags_by_graph_id: dict[int, list[str]] = {}
     for graph_id, tag_name in tag_rows:
-        tags_by_graph_id.setdefault(int(graph_id), []).append(str(tag_name))
-    return [
-        {
-            "id": int(row[0]),
-            "title": str(row[1]),
-            "createdLabel": _format_timestamp(row[2]),
-            "updatedLabel": _format_timestamp(row[3]),
-            "createdAtIso": _format_timestamp_iso(row[2]),
-            "updatedAtIso": _format_timestamp_iso(row[3]),
-            "preview": str(row[4] or ""),
-            "messageCount": int(row[5] or 0),
-            "workspaceId": int(row[6]),
-            "favorite": bool(row[7]),
-            "archived": bool(row[8]),
-            "tags": tags_by_graph_id.get(int(row[0]), []),
-        }
-        for row in rows
-    ]
+        try:
+            tags_by_graph_id.setdefault(int(graph_id), []).append(str(tag_name))
+        except (TypeError, ValueError):
+            continue
+    # SECURITY-FIX: SQLite's type affinity does NOT enforce that an INTEGER
+    # column actually holds a number - a hand-corrupted or hostile chats.db
+    # can store non-numeric TEXT in id/message_count/workspace_id, and
+    # int(...) raised an uncaught ValueError, escaping get_all_chats
+    # entirely. That crash was not a one-time load failure: this function
+    # backs the "app-chat-library" topic, republished on essentially every
+    # user action in this module (rename/delete/save/load/new-chat, every
+    # fresh subscribe) - one corrupt row killed the whole library listing
+    # on every single one of those, not just an initial open. A single bad
+    # row is now skipped (logged) rather than taking every other real,
+    # well-formed graph down with it - the same "malformed entries dropped,
+    # not raised on" posture the settings store already uses.
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            row_id = int(row[0])
+            results.append({
+                "id": row_id,
+                "title": str(row[1]),
+                "createdLabel": _format_timestamp(row[2]),
+                "updatedLabel": _format_timestamp(row[3]),
+                "createdAtIso": _format_timestamp_iso(row[2]),
+                "updatedAtIso": _format_timestamp_iso(row[3]),
+                "preview": str(row[4] or ""),
+                "messageCount": int(row[5] or 0),
+                "workspaceId": int(row[6]),
+                "favorite": bool(row[7]),
+                "archived": bool(row[8]),
+                "tags": tags_by_graph_id.get(row_id, []),
+            })
+        except (TypeError, ValueError):
+            logger.exception("get_all_chats: skipping a graph row with a malformed numeric field")
+            continue
+    return results
 
 
 def rename_chat(

@@ -30,6 +30,21 @@ from datetime import datetime, timezone
 
 _VALID_LEVEL_NAMES = ("DEBUG", "INFO", "WARNING", "ERROR")
 
+# Third-party SDK loggers whose own internal DEBUG logging includes the full
+# outbound request body: openai._base_client and anthropic._base_client both
+# do `log.debug("Request options: %s", model_dump(options))` on every call,
+# where `options` is the FinalRequestOptions carrying `json_data` - i.e.
+# every chat message and system prompt sent to the provider. Both loggers
+# are created via `logging.getLogger(__name__)` inside a `_base_client`
+# submodule, so capping the PACKAGE-ROOT name here governs every descendant
+# logger through Python's ancestor-lookup rule - no need to enumerate
+# `openai._base_client`, `openai._legacy_response`, etc individually.
+# (httpx/httpcore, the shared HTTP transport underneath both SDKs, were
+# checked too and don't need a cap: httpx logs its request/response lines at
+# INFO, not DEBUG, and httpcore's DEBUG trace logs repr() a Request object
+# whose __repr__ is `<Request [b'POST']>` - method only, no body.)
+_THIRD_PARTY_SDK_LOGGER_NAMES = ("openai", "anthropic")
+
 # The record attributes this formatter promotes into the JSON payload when a
 # call site supplies them via extra=. Never required - a plain
 # `logger.info("message")` with no extra still produces valid JSON, just
@@ -64,6 +79,26 @@ class JsonLogFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+def resolve_log_level(level_name: object, default: int = logging.INFO) -> int:
+    """SECURITY-FIX: maps a persisted log-level NAME to its logging-module
+    int constant, falling back to `default` for anything outside the closed
+    vocabulary - including a non-string JSON value (a list/int/null read
+    straight off session.dat) - instead of raising. graphlink_desktop.py's
+    main() used to do this itself via a bare
+    `getattr(logging, SettingsManager().get_log_level(), logging.INFO)`:
+    getattr's default only covers a MISSING attribute, not a present-but-
+    wrong-shaped one, so a persisted value naming any other module
+    attribute ("shutdown", "Formatter", "handlers") returned that object
+    instead of an int, and a non-string value raised TypeError outright -
+    either way crashing every launch, before configure_logging ever attaches
+    a handler or install_exception_handlers runs. Called before any handler
+    exists, so unlike apply_log_level below this can't just skip silently -
+    it must always return something configure_logging can use."""
+    if not isinstance(level_name, str) or level_name not in _VALID_LEVEL_NAMES:
+        return default
+    return getattr(logging, level_name)
+
+
 def apply_log_level(level_name: str) -> None:
     """Sets the ROOT logger's level at runtime - safe to call any time after
     configure_logging() has attached its handlers (backend/crash_recovery.py),
@@ -75,4 +110,17 @@ def apply_log_level(level_name: str) -> None:
     crash startup over something as low-stakes as verbosity."""
     if level_name not in _VALID_LEVEL_NAMES:
         return
-    logging.getLogger().setLevel(getattr(logging, level_name))
+    level = getattr(logging, level_name)
+    logging.getLogger().setLevel(level)
+    # SECURITY-FIX (OBS-1-debug-level-logs-chat-content): the ROOT setLevel
+    # above lets openai/anthropic's own internal loggers inherit DEBUG via
+    # normal propagation, which would dump the full request body (see the
+    # comment on _THIRD_PARTY_SDK_LOGGER_NAMES above) into graphlink.log -
+    # the file this app's own bug-report/Diagnostics flow tells users to
+    # attach. Cap those loggers to no more verbose than INFO explicitly, on
+    # EVERY call (not just when DEBUG is requested), so a later call with a
+    # less verbose level correctly de-escalates them too instead of leaving
+    # them pinned at a stale INFO cap from a previous DEBUG call.
+    third_party_level = max(level, logging.INFO)
+    for logger_name in _THIRD_PARTY_SDK_LOGGER_NAMES:
+        logging.getLogger(logger_name).setLevel(third_party_level)

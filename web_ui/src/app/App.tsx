@@ -249,6 +249,49 @@ function LazyDialogFallback() {
   );
 }
 
+/**
+ * ADR-012 stage 12.3: the very first focusable element in the page, per the
+ * standard skip-link convention - invisible until it itself receives focus
+ * (Tab from anywhere before the canvas lands here first). Jumps a keyboard
+ * user straight to the composer, bypassing every node on the canvas in one
+ * activation instead of N individual Tab presses (React Flow's own node
+ * wrapper is a real tab stop per node - see NodeMenu.tsx's own stage-12.3
+ * doc for why that's not changed here). Exported (rather than left inline in
+ * App's own JSX) so it can be exercised in isolation without booting the
+ * whole shell's WS transport/stores - see App.test.tsx.
+ *
+ * A plain `<a href="#composer-message-input">` here (the original stage-12.3
+ * shape, and the fix-security-pass finding key
+ * skip-link-clobbers-token-fragment) is a same-document fragment navigation,
+ * and the browser does NOT let React intercept a bare anchor click -
+ * activating it sets `location.hash` to the literal string
+ * "composer-message-input". lib/auth/token.ts reads that exact hash fresh on
+ * every /api and /ws call to recover the per-launch capability token
+ * graphlink_desktop.py wrote there (`#token=...`); once the hash is
+ * overwritten the token is gone for the rest of the window's life (there is
+ * no reload path in the WebView2 shell), and every image fetch / Copy /
+ * Export Image / chart export after that silently 401s. Since this is the
+ * FIRST tab stop on the page, any keyboard user hits it immediately. A
+ * <button> gets the identical accessible "move focus to the composer"
+ * behavior via a direct element.focus() call, without ever touching
+ * location.hash - .skip-link's CSS (base.css) is class-selected, not
+ * tag-selected, so the focus-reveal styling is unaffected by the tag swap.
+ */
+export function SkipToComposerLink() {
+  return (
+    <button
+      type="button"
+      className="skip-link"
+      style={{ font: "inherit", cursor: "pointer" }}
+      onClick={() => {
+        document.getElementById("composer-message-input")?.focus();
+      }}
+    >
+      Skip to message composer
+    </button>
+  );
+}
+
 function App() {
   const [status, setStatus] = useState<ConnectionStatus>("closed");
   const [system, setSystem] = useState<SystemState>({});
@@ -337,17 +380,7 @@ function App() {
             than a class, the same "invisible hook, not a rendered element"
             posture as aria-live regions elsewhere in this file. */}
         <div className="app-shell" data-connection-status={status}>
-          {/* ADR-012 stage 12.3: the very first focusable element in the
-              page, per the standard skip-link convention - invisible until
-              it itself receives focus (Tab from anywhere before the canvas
-              lands here first). Jumps a keyboard user straight to the
-              composer, bypassing every node on the canvas in one activation
-              instead of N individual Tab presses (React Flow's own node
-              wrapper is a real tab stop per node - see NodeMenu.tsx's own
-              stage-12.3 doc for why that's not changed here). */}
-          <a href="#composer-message-input" className="skip-link">
-            Skip to message composer
-          </a>
+          <SkipToComposerLink />
           {/* ADR-012 stage 12.3: the one aria-live region for streaming
               start/finish and per-node run status - see announcer.ts. Always
               mounted (not gated behind any dialog/overlay) so a transition

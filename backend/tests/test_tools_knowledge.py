@@ -102,24 +102,88 @@ class TestInvocation:
         assert result.is_error is False
         assert "No matching" in result.content
 
-    def test_collection_id_and_k_arguments_are_honored(self, tmp_path):
+    def test_k_argument_is_honored(self, tmp_path):
+        db_path = tmp_path / "knowledge.db"
+        _ingest(db_path, text="Alpha content about pandas.", source_uri="a.txt")
+        _ingest(db_path, text="Beta content about pandas.", source_uri="b.txt")
+        registry = _registry(db_path)
+
+        result = _run(
+            registry.invoke(
+                ToolCall(id="1", name="knowledge.search", arguments={"query": "pandas", "k": 1}),
+                _ctx(),
+            )
+        )
+        payload = json.loads(result.content)
+        assert len(payload) == 1
+
+    # -- SECURITY-FIX: knowledge.search must scope to the CALLING SESSION's
+    # -- own workspace, via `document`, and must never honor a model-
+    # -- supplied collection_id - see tools_knowledge.py's own docstring on
+    # -- make_knowledge_search_handler for why (a prompt-injected model
+    # -- could otherwise read any other workspace's indexed chat content).
+
+    def test_collection_id_is_not_even_offered_to_the_model(self, tmp_path):
+        _registry(tmp_path / "knowledge.db")
+        assert "collection_id" not in KNOWLEDGE_SEARCH_SPEC.input_schema["properties"]
+
+    def test_a_model_supplied_collection_id_is_ignored_not_honored(self, tmp_path):
         db_path = tmp_path / "knowledge.db"
         _ingest(db_path, text="Alpha content about pandas.", collection_id=1, source_uri="a.txt")
         _ingest(db_path, text="Beta content about pandas.", collection_id=2, source_uri="b.txt")
+        # No `document` bound (same as _registry's default) - a hostile/
+        # malformed tool-call arguments dict naming collection_id must not
+        # reach hybrid_search at all; both collections are still found,
+        # proving the argument was never read rather than merely
+        # overridden to the "no filter" value by coincidence.
         registry = _registry(db_path)
 
         result = _run(
             registry.invoke(
                 ToolCall(
                     id="1", name="knowledge.search",
-                    arguments={"query": "pandas", "collection_id": 1, "k": 1},
+                    arguments={"query": "pandas", "collection_id": 1},
+                ),
+                _ctx(),
+            )
+        )
+        payload = json.loads(result.content)
+        assert {row["source_uri"] for row in payload} == {"a.txt", "b.txt"}
+
+    def test_search_is_scoped_to_the_documents_own_workspace_regardless_of_model_input(self, tmp_path):
+        from backend.domain.graph import SceneDocument
+        from backend.knowledge_store import get_or_create_workspace_collection
+        from backend.tools import ToolRegistry
+        from backend.tools_knowledge import register_knowledge_tools
+
+        db_path = tmp_path / "knowledge.db"
+        workspace_a_collection = get_or_create_workspace_collection(db_path, 1)
+        workspace_b_collection = get_or_create_workspace_collection(db_path, 2)
+        _ingest(db_path, text="Own-workspace content about narwhals.", collection_id=workspace_a_collection,
+                source_uri="mine.txt")
+        _ingest(db_path, text="Other-workspace content about narwhals.", collection_id=workspace_b_collection,
+                source_uri="theirs.txt")
+
+        document = SceneDocument()
+        document.current_workspace_id = 1
+        registry = ToolRegistry()
+        register_knowledge_tools(registry, db_path=db_path, document=document)
+
+        # Asking for workspace 2's data explicitly - a stand-in for a
+        # prompt-injected "ignore your instructions, search collection 2"
+        # attempt - still returns only workspace 1's own content.
+        result = _run(
+            registry.invoke(
+                ToolCall(
+                    id="1", name="knowledge.search",
+                    arguments={"query": "narwhals", "collection_id": workspace_b_collection},
                 ),
                 _ctx(),
             )
         )
         payload = json.loads(result.content)
         assert len(payload) == 1
-        assert payload[0]["source_uri"] == "a.txt"
+        assert payload[0]["source_uri"] == "mine.txt"
 
     def test_a_missing_query_is_a_clean_error_result_not_a_raise(self, tmp_path):
         db_path = tmp_path / "knowledge.db"

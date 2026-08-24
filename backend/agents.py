@@ -446,12 +446,35 @@ class AgentDispatcher:
             registry = ToolRegistry()
             register_graph_tools(registry, document)
             register_run_node_tool(registry, document, self)
-            register_knowledge_tools(registry)
+            # SECURITY-FIX: document scopes knowledge.search to THIS
+            # session's own current workspace - see that tool's own
+            # docstring (backend/tools_knowledge.py) for why an unscoped
+            # search tool handed to the model is a cross-workspace read
+            # primitive for prompt-injected content.
+            register_knowledge_tools(registry, document=document)
             register_builder_control_tools(registry)
             self._register_configured_mcp_tools(registry)
             self._register_plugin_tools(registry, document)
             self._builder_registry = registry
         return self._builder_registry
+
+    def invalidate_builder_registry(self) -> None:
+        """SECURITY-FIX: builder_tool_registry() above builds the registry
+        ONCE and caches it for this dispatcher's entire lifetime, with
+        nothing to invalidate it - so disabling or removing an MCP server,
+        or narrowing its enabled_tools/scopes/approval, in Settings had no
+        effect on a session whose Builder had already started once: the
+        cached registry (and the already-connected McpStdioClient in
+        self._mcp_clients) kept granting the OLD tools under the OLD scopes
+        for the rest of the session, silently outliving the setting meant to
+        revoke them. Called from the setMcpServers intent (backend/api/
+        intents_settings_general.py) right after a save, so the Builder's
+        NEXT start rebuilds from the just-persisted config. Deliberately
+        just a cache-clear, not a live teardown: an in-flight Builder run
+        keeps the registry (and MCP clients) it already bound - this only
+        stops a STALE registry from surviving past the settings change that
+        was supposed to retire it."""
+        self._builder_registry = None
 
     def _register_configured_mcp_tools(self, registry) -> None:
         """ADR-008 stage 8.5: ADR-007's deferred MCP runtime wiring lands in

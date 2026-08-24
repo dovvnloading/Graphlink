@@ -106,10 +106,44 @@ def register_global_search_intents(bus: SessionBus) -> None:
         # filter, a real SELECT-or-INSERT), never called inline on the event
         # loop.
         def _search():
-            collection_id = (
-                get_or_create_workspace_collection(DEFAULT_DB_PATH, int(workspace_id))
-                if workspace_id is not None else None
-            )
+            collection_id = None
+            if workspace_id is not None:
+                try:
+                    candidate_workspace_id = int(workspace_id)
+                except (TypeError, ValueError):
+                    candidate_workspace_id = None
+                if candidate_workspace_id is not None:
+                    # SECURITY-FIX: get_or_create_workspace_collection is a
+                    # SELECT-or-INSERT with no existence check of its own -
+                    # calling it directly on a caller-supplied workspaceId
+                    # made this read-only intent into a persistent write
+                    # primitive that could grow the collections table
+                    # without bound for any integer, including workspace
+                    # ids that never existed in chats.db. Mirrors
+                    # chat_library.py's own newChat, which validates a
+                    # caller-supplied workspace id against get_all_workspaces
+                    # before using it: an unknown/stale id falls back to
+                    # "no filter" (global search) rather than minting a
+                    # collection row for a workspace that doesn't exist.
+                    #
+                    # Imported here, not at module top: backend.chat_library
+                    # imports backend.canvas (for SceneDocument), and
+                    # backend.canvas imports THIS module to register these
+                    # intents - a module-level import of backend.chat_library
+                    # here would be circular (confirmed by
+                    # test_chat_library_never_imports_qt's fresh-subprocess
+                    # import, the one place that circularity is actually
+                    # exercised).
+                    from backend.chat_library import DEFAULT_DB_PATH as CHAT_DB_PATH
+                    from backend.chat_library import get_all_workspaces
+
+                    existing_workspace_ids = {
+                        workspace["id"] for workspace in get_all_workspaces(CHAT_DB_PATH)
+                    }
+                    if candidate_workspace_id in existing_workspace_ids:
+                        collection_id = get_or_create_workspace_collection(
+                            DEFAULT_DB_PATH, candidate_workspace_id
+                        )
             return hybrid_search(DEFAULT_DB_PATH, query, k=k, collection_id=collection_id)
 
         results = await asyncio.to_thread(_search)

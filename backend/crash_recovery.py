@@ -74,6 +74,8 @@ from pathlib import Path
 from backend.notifications import NotificationState
 from backend.observability import JsonLogFormatter
 
+logger = logging.getLogger(__name__)
+
 _LOG_MAX_BYTES = 2 * 1024 * 1024
 _LOG_BACKUP_COUNT = 3
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
@@ -105,6 +107,49 @@ def crash_dir(base_dir: Path | str | None = None) -> Path:
     return _data_dir(base_dir) / "crash"
 
 
+def _chmod_0600(path: Path) -> None:
+    """SECURITY-FIX (OBS-3): best-effort POSIX 0600 tightening for a file
+    that can carry chat content or absolute paths, mirroring the exact
+    chmod idiom already used everywhere else in this codebase for files
+    like this (graphlink_settings_store.py's session.dat,
+    backend/chat_library.py's chats.db and its WAL sidecars,
+    graphlink_scratch_dirs.py's prepare_scratch_dir) - graphlink.log,
+    faulthandler.log, and the diagnostic bundle JSON were the one remaining
+    exception. No-op on Windows (os.chmod there only ever toggles the
+    read-only attribute, never real ACLs - the user's own profile ACLs are
+    the actual access control there). A refused chmod is logged and
+    swallowed, never raised: a permissions tightening that can't be applied
+    must not crash logging/diagnostics themselves. Reused directly by
+    backend/api/intents_diagnostics.py for the bundle file, the same way
+    that module already reaches into this one's _data_dir()."""
+    if sys.platform == "win32":
+        return
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        logger.warning("could not chmod %s to 0600 - continuing with existing permissions", path)
+
+
+class _Chmod0600RotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """SECURITY-FIX (OBS-3): plain RotatingFileHandler opens every file it
+    ever touches (the initial graphlink.log AND each rotated-open that
+    doRollover triggers) via the stdlib's unguarded open(), subject to the
+    process umask each time - chmod'ing the handler once at construction
+    only covers the first file. doRollover itself renames the current log
+    down the chain (graphlink.log -> .1 -> .2 -> .3, oldest discarded) and
+    then reopens a BRAND NEW file at the original path; the renamed-away
+    .1/.2/.3 copies need no extra treatment since POSIX rename preserves
+    the source inode's mode bits (same reasoning backend/chat_library.py's
+    corrupt-db quarantine rename already relies on) - so as long as the
+    active file was 0600 before rotation, every file it rotates into stays
+    0600 automatically. Only the freshly reopened current file needs a new
+    chmod after each rollover, which is all this override adds."""
+
+    def doRollover(self) -> None:
+        super().doRollover()
+        _chmod_0600(Path(self.baseFilename))
+
+
 def configure_logging(base_dir: Path | str | None = None, level: int = logging.INFO) -> None:
     """Attach a rotating file handler to the root logger. Idempotent - later
     calls are no-ops so handlers are never duplicated across a process's
@@ -119,9 +164,23 @@ def configure_logging(base_dir: Path | str | None = None, level: int = logging.I
 
     formatter = logging.Formatter(_LOG_FORMAT)
 
-    handler = logging.handlers.RotatingFileHandler(
+    handler = _Chmod0600RotatingFileHandler(
         resolved, maxBytes=_LOG_MAX_BYTES, backupCount=_LOG_BACKUP_COUNT, encoding="utf-8",
     )
+    # SECURITY-FIX (OBS-3): this file can hold chat content and absolute
+    # paths (per this module's own docstring and the many
+    # logger.exception()/logger.error() call sites this handler collects
+    # from across backend/), so it needs the same 0600 tightening every
+    # OTHER file in ~/.graphlink that can carry user content already gets.
+    # Runs on every real call, not just when the file is first created -
+    # this function is itself idempotent per-PROCESS only, so a fresh
+    # process re-attaching to an already-existing graphlink.log (the normal
+    # case on every launch after the first) still self-heals its
+    # permissions here, same "self-heal on every launch" posture
+    # graphlink_settings_store.py's SettingsManager.__init__ already takes
+    # for session.dat. Rotation-created files are covered separately by
+    # _Chmod0600RotatingFileHandler.doRollover above.
+    _chmod_0600(resolved)
     # ADR-016 stage 16.1: the file is JSON-lines (one JSON object per line,
     # with run_id/session/kind/node_id when a call site supplies them via
     # extra=) so it is machine-parseable - by the diagnostics bundle builder
@@ -163,7 +222,13 @@ def install_exception_handlers(base_dir: Path | str | None = None) -> None:
 
     directory = crash_dir(base_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    _faulthandler_file = open(directory / "faulthandler.log", "a", encoding="utf-8")
+    faulthandler_path = directory / "faulthandler.log"
+    _faulthandler_file = open(faulthandler_path, "a", encoding="utf-8")
+    # SECURITY-FIX (OBS-3): native/segfault tracebacks can embed the same
+    # absolute paths and in-flight state as graphlink.log - same 0600
+    # tightening as that file, applied right after open() creates it (or
+    # confirms it already exists) so there's no window at the default umask.
+    _chmod_0600(faulthandler_path)
     faulthandler.enable(file=_faulthandler_file)
 
     crash_logger = logging.getLogger("graphlink.crash")

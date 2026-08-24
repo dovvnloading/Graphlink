@@ -28,9 +28,38 @@ also what pywebview itself returns on cancel.
 from __future__ import annotations
 
 import asyncio
+import contextvars
+import functools
+from concurrent.futures import ThreadPoolExecutor
 from typing import Sequence
 
 import webview
+
+# SECURITY-FIX (native-dialog-intents-pin-default-executor-threads): a native
+# dialog blocks its worker thread until the user dismisses the OS picker -
+# no timeout, no cap. asyncio.to_thread always runs on the loop's shared
+# DEFAULT executor, the same pool ~177 other to_thread call sites across the
+# backend depend on (settings run_locked, chat-library/autosave SQLite work,
+# knowledge search, Ollama/llama.cpp scans). One dialog per WebSocket
+# connection, with enough connections, exhausts that shared pool and stalls
+# every other to_thread hop in the process until the dialogs are closed.
+# A small dedicated pool keeps dialog threads off the shared one entirely;
+# max_workers=4 is headroom above the one-dialog-at-a-time OS-modal reality,
+# not an invitation to run more concurrently.
+_DIALOG_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="native-dialog")
+
+
+async def _run_in_dialog_executor(func, /, *args, **kwargs):
+    """asyncio.to_thread's own implementation, minus its use of the shared
+    default executor - pinned to _DIALOG_EXECUTOR instead (see the
+    SECURITY-FIX comment above _DIALOG_EXECUTOR for why that distinction is
+    the entire point). contextvars.copy_context() is carried over from
+    asyncio.to_thread verbatim so callers see identical context propagation
+    either way."""
+    loop = asyncio.get_running_loop()
+    ctx = contextvars.copy_context()
+    func_call = functools.partial(ctx.run, func, *args, **kwargs)
+    return await loop.run_in_executor(_DIALOG_EXECUTOR, func_call)
 
 
 def _active_window():
@@ -48,7 +77,7 @@ async def pick_file(file_types: Sequence[str] = (), directory: str = "") -> str 
     window = _active_window()
     if window is None:
         return None
-    result = await asyncio.to_thread(
+    result = await _run_in_dialog_executor(
         window.create_file_dialog,
         webview.FileDialog.OPEN,
         directory=directory,
@@ -63,7 +92,7 @@ async def pick_folder(directory: str = "") -> str | None:
     window = _active_window()
     if window is None:
         return None
-    result = await asyncio.to_thread(window.create_file_dialog, webview.FileDialog.FOLDER, directory=directory)
+    result = await _run_in_dialog_executor(window.create_file_dialog, webview.FileDialog.FOLDER, directory=directory)
     return result[0] if result else None
 
 
@@ -83,7 +112,7 @@ async def pick_save_file(default_name: str, file_types: Sequence[str] = (), dire
     window = _active_window()
     if window is None:
         return None
-    result = await asyncio.to_thread(
+    result = await _run_in_dialog_executor(
         window.create_file_dialog,
         webview.FileDialog.SAVE,
         directory=directory,
