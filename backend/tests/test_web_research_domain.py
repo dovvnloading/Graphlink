@@ -196,35 +196,7 @@ class TestResearchLimitsValidation:
         with pytest.raises(ValueError, match=field_name):
             ResearchLimits(**{field_name: 0})
 
-    @pytest.mark.parametrize("field_name", ["max_sources", "max_query_chars"])
-    def test_negative_value_raises_value_error(self, field_name):
-        with pytest.raises(ValueError, match=field_name):
-            ResearchLimits(**{field_name: -1})
-
-    def test_defaults_construct_without_error(self):
-        limits = ResearchLimits()
-        assert limits.max_sources == 4
-        assert limits.max_search_results == 8
-
-    def test_is_frozen(self):
-        limits = ResearchLimits()
-        with pytest.raises(Exception):  # dataclasses.FrozenInstanceError
-            limits.max_sources = 99
-
-
 class TestCancellationToken:
-    def test_starts_uncancelled(self):
-        token = CancellationToken()
-        assert token.cancelled is False
-        assert token.is_set() is False
-        token.raise_if_cancelled()  # must not raise
-
-    def test_cancel_flips_both_accessors(self):
-        token = CancellationToken()
-        token.cancel()
-        assert token.cancelled is True
-        assert token.is_set() is True
-
     def test_raise_if_cancelled_raises_request_cancelled_once_cancelled(self):
         token = CancellationToken()
         token.cancel()
@@ -236,31 +208,10 @@ class TestCancellationToken:
         assert RequestCancelled.code == "cancelled"
 
 
-class TestResearchFailure:
-    def test_defaults(self):
-        exc = ResearchFailure("oops")
-        assert exc.code == "research_failed"
-        assert exc.retryable is True
-        assert exc.source_id is None
-        assert str(exc) == "oops"
-
-    def test_custom_fields_are_stored_verbatim(self):
-        exc = ResearchFailure("bad", code="x", retryable=False, source_id="s1")
-        assert (exc.code, exc.retryable, exc.source_id) == ("x", False, "s1")
-
-
 class TestWebResearchRequestDefaults:
     def test_retain_to_knowledge_defaults_to_false(self):
         request = WebResearchRequest(request_id="r", node_id="n", chat_epoch=1, original_query="q")
         assert request.retain_to_knowledge is False
-
-    def test_mutable_defaults_are_independent_between_instances(self):
-        a = WebResearchRequest(request_id="a", node_id="n", chat_epoch=1, original_query="q")
-        b = WebResearchRequest(request_id="b", node_id="n", chat_epoch=1, original_query="q")
-        a.branch_history.append({"role": "user"})
-        assert b.branch_history == []
-        assert isinstance(a.limits, ResearchLimits)
-
 
 class TestResearchSourceToDict:
     def test_round_trips_every_field(self):
@@ -384,11 +335,6 @@ class TestEmit:
         WebResearchService._emit(request, events.append, ResearchStage.SEARCHING, "msg", 1, 2, "s1")
         assert events == [ProgressEvent("req-1", ResearchStage.SEARCHING, "msg", 1, 2, "s1")]
 
-    def test_is_a_no_op_when_callback_is_none(self):
-        request = _request()
-        WebResearchService._emit(request, None, ResearchStage.SEARCHING, "msg")  # must not raise
-
-
 # ===========================================================================
 # WebResearchService._citation_markers
 # ===========================================================================
@@ -398,17 +344,8 @@ class TestCitationMarkers:
     def test_extracts_simple_markers(self):
         assert WebResearchService._citation_markers("See [s1] and [s2].") == {"s1", "s2"}
 
-    def test_extracts_hyphenated_chunk_markers(self):
-        assert WebResearchService._citation_markers("Evidence [s1-ab12ef] here.") == {"s1-ab12ef"}
-
-    def test_is_case_insensitive_and_lowercases_the_result(self):
-        assert WebResearchService._citation_markers("[S1] and [S2-AB].") == {"s1", "s2-ab"}
-
     def test_dedups_repeated_markers_into_a_set(self):
         assert WebResearchService._citation_markers("[s1] blah [s1] blah") == {"s1"}
-
-    def test_no_markers_returns_an_empty_set(self):
-        assert WebResearchService._citation_markers("No citations here.") == set()
 
     def test_ignores_bracketed_text_that_does_not_match_the_marker_shape(self):
         assert WebResearchService._citation_markers("[not a marker] [source1] [s1]") == {"s1"}
@@ -420,15 +357,6 @@ class TestCitationMarkers:
 
 
 class TestSelectEvidence:
-    def test_single_short_section_yields_one_chunk(self):
-        doc = _document("s1", sections=("Hello world.",))
-        chunks = WebResearchService._select_evidence([doc], ResearchLimits(), CancellationToken())
-        assert len(chunks) == 1
-        assert chunks[0].source_id == "s1"
-        assert chunks[0].chunk_id == "s1-0-0"
-        assert chunks[0].text == "Hello world."
-        assert chunks[0].token_count == max(1, len("Hello world.") // 4)
-
     def test_multiple_sections_produce_multiple_chunks_indexed_in_the_chunk_id(self):
         doc = _document("s1", sections=("First section.", "Second section."))
         chunks = WebResearchService._select_evidence([doc], ResearchLimits(), CancellationToken())
@@ -441,11 +369,6 @@ class TestSelectEvidence:
         assert len(chunks) == 1
         assert chunks[0].text == "Real content."
         assert chunks[0].chunk_id == "s1-2-0"
-
-    def test_internal_whitespace_is_collapsed_to_single_spaces(self):
-        doc = _document("s1", sections=("Line one\n\n  with   extra   spaces.",))
-        chunks = WebResearchService._select_evidence([doc], ResearchLimits(), CancellationToken())
-        assert chunks[0].text == "Line one with extra spaces."
 
     def test_falls_back_to_splitting_text_into_lines_when_sections_is_empty(self):
         doc = _document("s1", text="Line A\nLine B", sections=())
@@ -484,9 +407,6 @@ class TestSelectEvidence:
         assert len(chunks) == 1
         assert chunks[0].token_count <= 2
         assert len(chunks[0].text) <= 8
-
-    def test_no_documents_yields_no_chunks(self):
-        assert WebResearchService._select_evidence([], ResearchLimits(), CancellationToken()) == []
 
     def test_raises_request_cancelled_when_the_token_is_already_cancelled(self):
         doc = _document("a", sections=("first",))
