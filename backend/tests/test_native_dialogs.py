@@ -8,6 +8,7 @@ create_file_dialog's call signature.
 """
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 import webview
 
@@ -144,6 +145,45 @@ def test_pick_save_file_returns_none_when_the_dialog_resolves_to_an_empty_string
     result = asyncio.run(native_dialogs.pick_save_file("Default.graphlink"))
 
     assert result is None
+
+
+def test_dialog_calls_run_on_the_dedicated_executor_not_the_default_one(monkeypatch):
+    # SECURITY-FIX regression (native-dialog-intents-pin-default-executor-threads):
+    # dialogs used to go through asyncio.to_thread, which always runs on the
+    # loop's shared DEFAULT executor - the same pool ~177 other to_thread call
+    # sites depend on. Confirms run_in_executor is now called with the
+    # module's own _DIALOG_EXECUTOR (not None, which asyncio.to_thread would
+    # pass to mean "use the default executor").
+    fake = _FakeWindow(return_value=("C:/models/a.gguf",))
+    monkeypatch.setattr(webview, "windows", [fake])
+
+    seen_executors = []
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        real_run_in_executor = loop.run_in_executor
+
+        def recording_run_in_executor(executor, func, *args):
+            seen_executors.append(executor)
+            return real_run_in_executor(executor, func, *args)
+
+        monkeypatch.setattr(loop, "run_in_executor", recording_run_in_executor)
+        return await native_dialogs.pick_file(file_types=("GGUF files (*.gguf)",))
+
+    result = asyncio.run(run())
+
+    assert result == "C:/models/a.gguf"
+    assert seen_executors == [native_dialogs._DIALOG_EXECUTOR]
+    assert seen_executors[0] is not None
+
+
+def test_dialog_executor_is_a_small_dedicated_pool_distinct_from_the_default_executor():
+    # The whole fix is that this is NOT the same object asyncio.to_thread(...)
+    # would use (None -> the loop's shared default ThreadPoolExecutor) - a
+    # dedicated, small pool keeps a stuck/open dialog from wedging the ~177
+    # other to_thread call sites across the backend that share the default one.
+    assert isinstance(native_dialogs._DIALOG_EXECUTOR, ThreadPoolExecutor)
+    assert native_dialogs._DIALOG_EXECUTOR._max_workers == 4
 
 
 def test_uses_the_first_window_when_multiple_exist():
