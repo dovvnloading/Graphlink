@@ -47,7 +47,7 @@ import re
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 
-from backend.asset_store import ALLOWED_IMAGE_MIME_TYPES
+from backend.asset_store import ALLOWED_IMAGE_MIME_TYPES, extension_for_mime
 from backend.events import EventBus, UnknownSessionError
 from backend.session_context import get_session_context
 from graphlink_chart_rendering import render_chart_png, render_chart_svg
@@ -107,10 +107,28 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
         # caller-supplied mime_type, session_load._restore_image_payload's
         # payload-supplied mime_type) validates the string before storing
         # it, so it is not trustworthy here - pass it through only if it is
-        # one of this app's own real image types.
+        # one of this app's own real image types. ALLOWED_IMAGE_MIME_TYPES
+        # excludes image/svg+xml (see asset_store.py's SECURITY-FIX comment
+        # on that set) so a stored SVG lands in the octet-stream fallback
+        # below same as any other untrusted mime_type.
         if mime_type not in ALLOWED_IMAGE_MIME_TYPES:
             mime_type = _FALLBACK_MIME_TYPE
-        return Response(content=image_bytes, media_type=mime_type)
+        # SECURITY-FIX: this route used to set neither header at all. nosniff
+        # stops a browser from content-sniffing these bytes into something
+        # more dangerous than the declared Content-Type regardless of what
+        # mime_type ends up being; Content-Disposition: inline (still
+        # renders in an <img src>/fetch consumer, unlike "attachment") names
+        # a real extension explicitly instead of leaving a future top-level-
+        # document/iframe consumer to guess from the bytes themselves.
+        extension = extension_for_mime(mime_type)
+        return Response(
+            content=image_bytes,
+            media_type=mime_type,
+            headers={
+                "X-Content-Type-Options": "nosniff",
+                "Content-Disposition": f'inline; filename="{asset_id}.{extension}"',
+            },
+        )
 
     @app.get("/api/assets/chart/{node_id}/export")
     async def export_chart(node_id: str, session: str = "default", fmt: str = "png") -> Response:
