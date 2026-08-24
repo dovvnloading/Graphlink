@@ -1124,6 +1124,29 @@ def test_get_all_chats_reads_real_rows(db_path):
         assert isinstance(row["workspaceId"], int)
 
 
+def test_get_all_chats_skips_a_row_with_a_non_numeric_column_instead_of_crashing(db_path):
+    """SECURITY-FIX: SQLite's type affinity does not enforce that an
+    INTEGER column actually holds a number - a hand-corrupted or hostile
+    chats.db can store TEXT there. int(row[...]) raised uncaught, and this
+    function backs the app-chat-library topic republished on nearly every
+    user action, so one bad row killed the whole library listing
+    repeatedly, not just once."""
+    good_id = _insert_chat(db_path, "Good")
+    get_all_chats(db_path)  # triggers the chats -> graphs migration first
+    with contextlib.closing(sqlite3.connect(db_path)) as conn, conn:
+        conn.execute(
+            "INSERT INTO graphs (title, data, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            ("Corrupt", "{}", "2026-01-02T00:00:00", "2026-01-02T00:00:00"),
+        )
+        bad_id = conn.execute("SELECT id FROM graphs WHERE title = 'Corrupt'").fetchone()[0]
+        conn.execute("UPDATE graphs SET workspace_id = 'not-a-number' WHERE id = ?", (bad_id,))
+
+    rows = get_all_chats(db_path)  # must not raise
+
+    ids = {row["id"] for row in rows}
+    assert ids == {good_id}, "the corrupt row must be skipped, the good row must survive"
+
+
 def test_format_timestamp_matches_legacy_display_format():
     assert _format_timestamp("2026-01-02 11:30:00") == "Jan 02, 2026 11:30 AM"
     assert _format_timestamp("") == "Unknown"
