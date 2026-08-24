@@ -70,8 +70,13 @@ def test_format_preserves_non_ascii_text_unescaped():
 def isolated_root_level():
     root_logger = logging.getLogger()
     level_before = root_logger.level
+    third_party_levels_before = {
+        name: logging.getLogger(name).level for name in ("openai", "anthropic")
+    }
     yield
     root_logger.setLevel(level_before)
+    for name, level in third_party_levels_before.items():
+        logging.getLogger(name).setLevel(level)
 
 
 def test_apply_log_level_sets_the_root_logger_level(isolated_root_level):
@@ -120,3 +125,38 @@ def test_resolve_log_level_falls_back_to_default_for_a_non_string_value():
 
 def test_resolve_log_level_honors_a_custom_default():
     assert resolve_log_level("nonsense", default=logging.ERROR) == logging.ERROR
+
+
+def test_apply_log_level_debug_caps_third_party_sdk_loggers_to_info(isolated_root_level):
+    # OBS-1: DEBUG on the root must not cascade into openai/anthropic's own
+    # internal loggers - their _base_client dumps the full request body
+    # (every chat message) at DEBUG, and that would otherwise reach the
+    # rotating file handler via plain logging propagation.
+    apply_log_level("DEBUG")
+    assert logging.getLogger().level == logging.DEBUG
+    assert logging.getLogger("openai").level == logging.INFO
+    assert logging.getLogger("anthropic").level == logging.INFO
+
+
+def test_apply_log_level_debug_still_reaches_the_app_own_loggers(isolated_root_level):
+    # The cap is specific to the third-party SDK logger names - it must not
+    # dampen the app's own debug logging, which has no explicit level of its
+    # own and so inherits the root's effective level like any other logger.
+    apply_log_level("DEBUG")
+    app_logger = logging.getLogger("graphlink.test.some_module")
+    assert app_logger.getEffectiveLevel() == logging.DEBUG
+
+
+def test_apply_log_level_deescalates_third_party_sdk_loggers_after_a_prior_debug_call(
+    isolated_root_level,
+):
+    apply_log_level("DEBUG")
+    assert logging.getLogger("openai").level == logging.INFO
+    assert logging.getLogger("anthropic").level == logging.INFO
+
+    apply_log_level("WARNING")
+    assert logging.getLogger().level == logging.WARNING
+    # Must track the newly requested level, not stay stuck at the INFO cap
+    # left behind by the earlier DEBUG call.
+    assert logging.getLogger("openai").level == logging.WARNING
+    assert logging.getLogger("anthropic").level == logging.WARNING

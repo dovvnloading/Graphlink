@@ -30,6 +30,21 @@ from datetime import datetime, timezone
 
 _VALID_LEVEL_NAMES = ("DEBUG", "INFO", "WARNING", "ERROR")
 
+# Third-party SDK loggers whose own internal DEBUG logging includes the full
+# outbound request body: openai._base_client and anthropic._base_client both
+# do `log.debug("Request options: %s", model_dump(options))` on every call,
+# where `options` is the FinalRequestOptions carrying `json_data` - i.e.
+# every chat message and system prompt sent to the provider. Both loggers
+# are created via `logging.getLogger(__name__)` inside a `_base_client`
+# submodule, so capping the PACKAGE-ROOT name here governs every descendant
+# logger through Python's ancestor-lookup rule - no need to enumerate
+# `openai._base_client`, `openai._legacy_response`, etc individually.
+# (httpx/httpcore, the shared HTTP transport underneath both SDKs, were
+# checked too and don't need a cap: httpx logs its request/response lines at
+# INFO, not DEBUG, and httpcore's DEBUG trace logs repr() a Request object
+# whose __repr__ is `<Request [b'POST']>` - method only, no body.)
+_THIRD_PARTY_SDK_LOGGER_NAMES = ("openai", "anthropic")
+
 # The record attributes this formatter promotes into the JSON payload when a
 # call site supplies them via extra=. Never required - a plain
 # `logger.info("message")` with no extra still produces valid JSON, just
@@ -95,4 +110,17 @@ def apply_log_level(level_name: str) -> None:
     crash startup over something as low-stakes as verbosity."""
     if level_name not in _VALID_LEVEL_NAMES:
         return
-    logging.getLogger().setLevel(getattr(logging, level_name))
+    level = getattr(logging, level_name)
+    logging.getLogger().setLevel(level)
+    # SECURITY-FIX (OBS-1-debug-level-logs-chat-content): the ROOT setLevel
+    # above lets openai/anthropic's own internal loggers inherit DEBUG via
+    # normal propagation, which would dump the full request body (see the
+    # comment on _THIRD_PARTY_SDK_LOGGER_NAMES above) into graphlink.log -
+    # the file this app's own bug-report/Diagnostics flow tells users to
+    # attach. Cap those loggers to no more verbose than INFO explicitly, on
+    # EVERY call (not just when DEBUG is requested), so a later call with a
+    # less verbose level correctly de-escalates them too instead of leaving
+    # them pinned at a stale INFO cap from a previous DEBUG call.
+    third_party_level = max(level, logging.INFO)
+    for logger_name in _THIRD_PARTY_SDK_LOGGER_NAMES:
+        logging.getLogger(logger_name).setLevel(third_party_level)
