@@ -884,6 +884,19 @@ export class SceneStore {
     this.transport.fireIntent("builder", "saveRecipe", [nodeId, ""]);
   }
 
+  // PLAN-2026-08-24 H1: the workspace agent's run controls - node-id-shaped
+  // follow-up (which AGENT, not which run; the backend claims a fresh run
+  // per task) and the standard requestId-shaped cancel. `harness/start`
+  // itself is fired by HarnessLaunchDialog via transport.request (it
+  // answers with the new node's id - the BuilderLaunchDialog precedent).
+  sendHarnessMessage(nodeId: string, text: string): void {
+    this.transport.fireIntent("harness", "send", [nodeId, text]);
+  }
+
+  cancelHarnessRun(requestId: string): void {
+    this.transport.fireIntent("harness", "cancel", [requestId]);
+  }
+
   // R5.2: real Artifact/Drafter plugin - sendArtifactMessage appends a real
   // user instruction AND triggers ArtifactAgent.get_response(current_artifact,
   // history) for an existing artifact node; cancelArtifactRequest targets it

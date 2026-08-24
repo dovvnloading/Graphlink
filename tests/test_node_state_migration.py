@@ -361,6 +361,11 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "builderSpentSteps", "builderSpentTokens", "builderSpentWallSeconds",
     "builderAwaitingToolApproval", "builderApprovalToolName",
     "builderApprovalSummary", "builderStatusDetail",
+    # PLAN-2026-08-24 H1: the harness node's render surface (history stays
+    # in the workspace transcript, never on the wire).
+    "harnessGoal", "harnessReply", "harnessStatus", "harnessStatusDetail",
+    "harnessRunId", "harnessActivity", "harnessMaxTurns", "harnessSpentTurns",
+    "harnessSpentTokens",
 ])
 
 

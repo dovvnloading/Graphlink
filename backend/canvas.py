@@ -92,6 +92,7 @@ from backend.domain.node_states import (
     CodeState,
     DocumentState,
     GitlinkState,
+    HarnessState,
     HtmlState,
     ImageState,
     PlanState,
@@ -271,6 +272,7 @@ from backend.api.intents_nodes import register_node_intents  # noqa: E402
 from backend.api.intents_onboarding import register_onboarding_intents  # noqa: E402
 from backend.api.intents_pins import register_pins_intents  # noqa: E402
 from backend.api.intents_builder import register_builder_intents  # noqa: E402
+from backend.api.intents_harness import register_harness_intents  # noqa: E402
 from backend.api.intents_pycoder import register_pycoder_intents  # noqa: E402
 from backend.api.intents_view import register_view_intents  # noqa: E402
 from backend.api.intents_undo import register_undo_intents  # noqa: E402
@@ -368,6 +370,7 @@ def register_canvas(
     register_pycoder_intents(bus, document, notifications, agent_dispatcher)
     register_code_sandbox_intents(bus, document, notifications, agent_dispatcher)
     register_builder_intents(bus, document, notifications, agent_dispatcher)
+    register_harness_intents(bus, document, notifications, agent_dispatcher)
 
     register_groups_intents(bus, document)
     # ADR-012 stage 12.6: the bundled sample workspace - see that module's

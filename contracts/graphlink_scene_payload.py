@@ -308,6 +308,21 @@ class BuilderActivityRow:
 
 
 @dataclass
+class HarnessActivityRow:
+    """PLAN-2026-08-24 H1: one row of a harness run's activity log - the
+    typed wire shape of HarnessState.harness_activity's own {"tool",
+    "summary","outcome","elapsedMs"} dicts (backend/domain/node_states.py).
+    BuilderActivityRow minus stepId (a harness task has no checklist);
+    outcome is "ok"|"error", pinned as a plain string for the same
+    additive-evolution reason."""
+
+    tool: str
+    summary: str
+    outcome: str = "ok"
+    elapsedMs: int = 0
+
+
+@dataclass
 class ChartFlowRow:
     """One Sankey flow - the shape canonicalize_chart_data() (graphlink_
     chart_data.py) always builds every item of its "flows" list from, for
@@ -586,6 +601,19 @@ class SceneNodeRow:
     builderApprovalToolName: str = ""
     builderApprovalSummary: str = ""
     builderStatusDetail: str = ""
+    # PLAN-2026-08-24 H1: the harness node's render surface. Populated only
+    # for harness rows; conversation history deliberately never crosses the
+    # wire (it lives in the node's workspace transcript - see
+    # HarnessState's own docstring).
+    harnessGoal: str = ""
+    harnessReply: str = ""
+    harnessStatus: str = ""
+    harnessStatusDetail: str = ""
+    harnessRunId: str = ""
+    harnessActivity: list["HarnessActivityRow"] = field(default_factory=list)
+    harnessMaxTurns: int = 0
+    harnessSpentTurns: int = 0
+    harnessSpentTokens: int = 0
     # ADR-014 stage 14.2: the Plugin SDK's generic live-wire fallback for a
     # third-party plugin's own NodeState subclass fields - see this file's
     # own module docstring for the full rationale.

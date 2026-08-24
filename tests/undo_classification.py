@@ -258,6 +258,14 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("builder", "deleteRecipe", "B", "preference: writes the settings store's recipe list, not document state - same posture as saveRecipe"),
     Classified("scene", "setPlanSteps", "A", "content: the plan checklist is document state"),
 
+    # -- backend/api/intents_harness.py (harness) ----------------------------
+    # PLAN-2026-08-24 H1. Same split as the builder topic: node creation is
+    # content (an ordinary Ctrl+Z-undoable command, run_id-stamped after the
+    # claim); the run itself and its transcript live outside the undo domain.
+    Classified("harness", "start", "A", "content: creates the harness node (the run it then starts is separate lifecycle; history lives in the workspace transcript, not the document)"),
+    Classified("harness", "send", "B", "run-lifecycle: start a follow-up task against the existing node's transcript"),
+    Classified("harness", "cancel", "B", "run-lifecycle: cancel"),
+
     # -- backend/api/intents_settings_general.py (app-settings) -------------
     Classified("app-settings", "setActiveSection", "B", "preference: which Settings page is open"),
     Classified("app-settings", "setShowTokenCounter", "B", "preference: appearance toggle"),

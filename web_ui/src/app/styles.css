@@ -7494,6 +7494,47 @@ mark.document-view-search-match-current {
 .plan-node-button-stop { border-color: var(--gl-semantic-status-error); }
 .plan-node-button-deny { border-color: var(--gl-semantic-status-warning); }
 
+/* PLAN-2026-08-24 H1: the workspace agent node. Deliberately rides the
+   plan-node class vocabulary for everything shared (status band, detail,
+   budgets, activity, buttons) - only the reply body and the follow-up
+   composer are new surfaces. Status colors key off the harness's own
+   status names, same semantic tokens as the plan variants above. */
+.harness-node-status-failed { color: var(--gl-semantic-status-error); }
+.harness-node-status-done { color: var(--gl-semantic-status-success); }
+.harness-node-status-interrupted { color: var(--gl-semantic-status-warning); }
+.harness-node-reply {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--gl-surface-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  padding: 8px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+.harness-node-composer { display: flex; align-items: flex-end; gap: 8px; }
+.harness-node-input {
+  box-sizing: border-box;
+  flex: 1;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  resize: vertical;
+  min-height: 40px;
+  line-height: 1.45;
+}
+.harness-node-input:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
+
 /* <Dialog>'s own `className` lands on the PANEL (.overlay-dialog), never on
    the body - so a dialog's form layout has to be scoped to
    .overlay-dialog-body here, exactly the way .settings-dialog/.help-dialog/

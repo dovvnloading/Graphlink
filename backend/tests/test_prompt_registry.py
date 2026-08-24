@@ -46,6 +46,7 @@ EXPECTED_PROMPT_IDS = frozenset(
         # ADR-008 stage 8.3: the Builder's planner/executor pair.
         "builder-planner",
         "builder-executor",
+        "harness-core",
         "reasoning-hint-low",
         "reasoning-hint-high",
     }

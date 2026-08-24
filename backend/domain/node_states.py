@@ -861,3 +861,48 @@ class PlanState(NodeState):
     # builder_status, mirroring how research_error/research_stage share a
     # single narrative surface per state.
     builder_status_detail: str = ""
+
+
+@dataclass
+class HarnessState(NodeState):
+    """PLAN-2026-08-24 H1: the agent-harness node - a conversational,
+    tool-using agent bound to a per-node scratch workspace.
+
+    THE TRANSCRIPT IS THE RESUME POINT, not this state: conversation
+    history lives append-only in the workspace's transcript.jsonl
+    (backend/harness/transcript.py) and a follow-up task rebuilds context
+    by reloading its tail. This state carries only the render surface -
+    deliberately NOT the Py-Coder serializer-branch shape where run
+    content bloats session.dat.
+
+    `harness_workspace_id` is minted once at node creation (uuid hex, the
+    pycoder_repl_id precedent exactly) - node ids are reassigned by array
+    position on session reload, so the on-disk workspace needs its own
+    durable identity.
+
+    `harness_activity` rows are plain dicts {"tool","summary","outcome",
+    "elapsedMs"} - one per invoked tool call across the node's lifetime, a
+    capped ring buffer (loop.py's _ACTIVITY_CAP), same telemetry-not-undo
+    posture as PlanState.builder_activity.
+
+    `harness_status` state machine:
+      idle -> running -> done | failed | stopped
+      any non-terminal on session load -> "interrupted" (the PlanState
+      load-time normalization: a RunHandle never survives a restart).
+    done/failed/stopped/interrupted/idle all accept a new task (a
+    follow-up message starts a new run against the same transcript).
+
+    Spent counters are cumulative across the node's lifetime (display
+    surface); the hard per-task bound is harness_max_turns, checked
+    before every model turn."""
+
+    harness_goal: str = ""
+    harness_reply: str = ""
+    harness_status: str = "idle"
+    harness_status_detail: str = ""
+    harness_run_id: str = ""
+    harness_workspace_id: str = ""
+    harness_activity: list[dict[str, Any]] = field(default_factory=list)
+    harness_max_turns: int = 16
+    harness_spent_turns: int = 0
+    harness_spent_tokens: int = 0

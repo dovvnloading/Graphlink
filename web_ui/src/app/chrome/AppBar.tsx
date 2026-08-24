@@ -456,6 +456,15 @@ export function AppBar({ store }: { store: SceneStore }) {
         </button>
         <button
           type="button"
+          className={overflowItem("harness-launch")}
+          data-tier="4"
+          aria-pressed={overlays.isOpen("harness-launch")}
+          onClick={() => overlays.toggle("harness-launch", "dialog")}
+        >
+          Agent
+        </button>
+        <button
+          type="button"
           className={overflowItem("diagnostics")}
           data-tier="4"
           aria-pressed={overlays.isOpen("diagnostics")}
@@ -511,6 +520,14 @@ export function AppBar({ store }: { store: SceneStore }) {
           trigger="builder-launch"
           pressed={overlays.isOpen("builder-launch")}
           onClick={() => overlays.toggle("builder-launch", "dialog")}
+        />
+        <BarIconButton
+          icon="agent"
+          label="Agent"
+          className={chip("harness-launch")}
+          trigger="harness-launch"
+          pressed={overlays.isOpen("harness-launch")}
+          onClick={() => overlays.toggle("harness-launch", "dialog")}
         />
         <BarIconButton
           icon="diagnostics"

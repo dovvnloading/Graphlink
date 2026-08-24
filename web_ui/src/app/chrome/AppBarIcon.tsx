@@ -25,6 +25,7 @@ export type AppBarIconName =
   | "search"
   | "knowledge"
   | "builder"
+  | "agent"
   | "diagnostics"
   | "settings"
   | "help"
@@ -120,6 +121,17 @@ export function AppBarIcon({ name }: { name: AppBarIconName }) {
         <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
           <path d="M14 4a4 4 0 0 0-4 5l-6 6 3 3 6-6a4 4 0 0 0 5-4Z" />
           <path d="m14.5 9.5 4 4" />
+        </svg>
+      );
+    case "agent":
+      // A simple terminal/prompt glyph - the workspace agent works a
+      // scratch directory, and a prompt chevron is the established visual
+      // shorthand for that kind of surface.
+      return (
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
+          <rect x="3" y="5" width="18" height="14" rx="2" />
+          <path d="m7 10 3 2.5L7 15" />
+          <path d="M12.5 15H17" />
         </svg>
       );
     case "diagnostics":

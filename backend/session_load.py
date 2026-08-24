@@ -195,6 +195,7 @@ from backend.canvas import (
     CodeState,
     DocumentState,
     GitlinkState,
+    HarnessState,
     HtmlState,
     ImageState,
     PlanState,
@@ -804,6 +805,66 @@ def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
     )
 
 
+_HARNESS_TERMINAL_STATUSES = ("done", "failed", "stopped", "interrupted")
+
+
+def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
+    """PLAN-2026-08-24 H1. Same load-time normalization as the plan node: a
+    non-terminal harness_status describes a RunHandle that cannot survive a
+    restart, so it lands as "interrupted" (a follow-up message resumes
+    against the workspace transcript). A missing/blank workspace_id is
+    self-healed with a fresh mint - the pycoder_repl_id precedent at line
+    ~700 above, closing the shared-"default"-bucket collision the scratch
+    GC refuses to delete through."""
+    x, y = _position(payload)
+    goal = str(payload.get("goal", ""))
+    raw_status = str(payload.get("harness_status", "idle") or "idle")
+    status = raw_status if raw_status in _HARNESS_TERMINAL_STATUSES + ("idle",) else "interrupted"
+    activity = []
+    for raw in payload.get("activity") or []:
+        if isinstance(raw, dict) and raw.get("tool"):
+            try:
+                elapsed_ms = int(raw.get("elapsedMs", 0) or 0)
+            except (TypeError, ValueError):
+                elapsed_ms = 0
+            activity.append({
+                "tool": str(raw.get("tool", "")),
+                "summary": str(raw.get("summary", "")),
+                "outcome": str(raw.get("outcome", "ok")),
+                "elapsedMs": elapsed_ms,
+            })
+
+    def _int(key: str, default: int) -> int:
+        try:
+            return int(payload.get(key, default) or default)
+        except (TypeError, ValueError):
+            return default
+
+    return SceneNode(
+        id="", x=x, y=y,
+        title=f"Agent: {goal[:40]}" if goal else "Agent",
+        kind="harness",
+        content=goal,
+        state=HarnessState(
+            harness_goal=goal,
+            harness_reply=str(payload.get("reply", "")),
+            harness_status=status,
+            harness_status_detail=(
+                str(payload.get("status_detail", ""))
+                if raw_status == status
+                else "Interrupted by an app restart - send a follow-up to continue."
+            ),
+            harness_run_id=str(payload.get("harness_run_id", "")),
+            harness_workspace_id=str(payload.get("workspace_id") or uuid.uuid4().hex[:12]),
+            harness_activity=activity,
+            harness_max_turns=_int("max_turns", 16),
+            harness_spent_turns=_int("spent_turns", 0),
+            harness_spent_tokens=_int("spent_tokens", 0),
+        ),
+        is_collapsed=bool(payload.get("is_collapsed", False)),
+    )
+
+
 def _restore_plugin_payload(
     payload: dict[str, Any],
     kind_spec: "NodeKindSpec",
@@ -876,6 +937,7 @@ _NODE_RESTORERS = {
     "pycoder": lambda payload, document: _restore_pycoder_payload(payload),
     "code_sandbox": lambda payload, document: _restore_code_sandbox_payload(payload),
     "plan": lambda payload, document: _restore_plan_payload(payload),
+    "harness": lambda payload, document: _restore_harness_payload(payload),
 }
 
 # Verified directly against both serializers.py (which field each isinstance

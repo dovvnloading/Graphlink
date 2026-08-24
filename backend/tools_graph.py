@@ -42,6 +42,7 @@ from typing import Any
 
 from backend.domain.graph import SceneDocument, SceneError
 from backend.domain.model import MESSAGE_VERTICAL_SPACING
+from graphlink_scratch_dirs import HARNESS_WORKSPACE_ROOT, remove_scratch_dir_for_id
 from backend.domain.node_states import (
     ArtifactState,
     ChatState,
@@ -740,8 +741,8 @@ def make_delete_node_handler(document: SceneDocument, dispatcher):
             )
 
         ids = [node_id]
-        pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels = _capture_live_run_teardown(
-            document, ids,
+        pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels, harness_workspace_ids, harness_cancels = (
+            _capture_live_run_teardown(document, ids)
         )
         document.record_command(
             "builderDeleteNode", "agent", lambda: document.remove_nodes(ids),
@@ -754,12 +755,20 @@ def make_delete_node_handler(document: SceneDocument, dispatcher):
                 dispatcher.cancel_code_sandbox(request_id)
         for request_id in plan_cancels:
             dispatcher.cancel_builder(request_id)
+        for request_id in harness_cancels:
+            dispatcher.cancel_harness(request_id)
         for disposed_id, repl_id in pycoder_ids:
             await dispatcher.dispose_pycoder_repl(
                 disposed_id, repl_id=repl_id, remove_scratch_dir=True,
             )
         for sandbox_id in sandbox_ids:
             await dispatcher.remove_code_sandbox_scratch_dir(sandbox_id)
+        for workspace_id in harness_workspace_ids:
+            # The same recompute-from-durable-id removal the intent path
+            # uses (blank ids are refused inside remove_scratch_dir_for_id).
+            await asyncio.to_thread(
+                remove_scratch_dir_for_id, HARNESS_WORKSPACE_ROOT, workspace_id,
+            )
         return ToolResult(content=json.dumps({"deleted": node_id, "kind": node.kind}))
 
     return handler
