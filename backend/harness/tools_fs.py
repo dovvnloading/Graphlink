@@ -3,24 +3,26 @@ the fs.read scope with `auto` approval (the read-only posture every other
 auto tool in backend/tools.py's vocabulary already takes).
 
 Every handler resolves its path arguments through
-workspace.resolve_in_workspace - the single confinement choke point - and
-bounds its result before returning it (PLAN §2.3: results are capped at
-the boundary so no tool can flood the context; the same posture the MCP
-result caps and builder activity caps already establish).
+workspace.resolve_under_root against the run's ONE bound root - the single
+confinement choke point - and bounds its result before returning it (PLAN
+§2.3: results are capped at the boundary so no tool can flood the context;
+the same posture the MCP result caps and builder activity caps already
+establish).
 
-Handlers find their workspace via the duck-typed run context
-(ctx.harness_workspace_id) - the exact channel builder.py's control tools
-already read ctx.controls through: tools stay ordinary registry
-registrations with no special dispatch, and a context without the
-attribute (some non-harness run invoking them by mistake) degrades to an
-ordinary error ToolResult, never a crash.
+Handlers get that root from the duck-typed run context via _bound_root:
+the loop resolves the root once at run start (a managed scratch dir, or a
+trusted user directory) and sets ctx.harness_workspace_dir; a context with
+neither that nor a scratch id degrades to an ordinary error ToolResult,
+never a crash.
 """
 
 from __future__ import annotations
 
 import re
 
-from backend.harness.workspace import WorkspaceError, resolve_in_workspace, workspace_dir
+from pathlib import Path
+
+from backend.harness.workspace import WorkspaceError, resolve_under_root, workspace_dir
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import FS_READ, FS_WRITE, RunContext, ToolRegistry, ToolResult
 
@@ -124,29 +126,37 @@ FS_GREP_SPEC = ToolSpec(
 )
 
 
-def _workspace_id_of(ctx: RunContext) -> str | None:
+def _bound_root(ctx: RunContext) -> Path | None:
+    """The run's ONE confinement root, off the context. The loop resolves
+    it once (scratch dir or trusted user dir) and sets harness_workspace_dir;
+    an older caller that set only harness_workspace_id still works, binding
+    that id's scratch dir. None means no workspace is bound at all."""
+    root = getattr(ctx, "harness_workspace_dir", None)
+    if isinstance(root, Path):
+        return root.resolve()
     workspace_id = getattr(ctx, "harness_workspace_id", None)
-    return workspace_id if isinstance(workspace_id, str) and workspace_id else None
+    if isinstance(workspace_id, str) and workspace_id:
+        return workspace_dir(workspace_id).resolve()
+    return None
 
 
-def _iter_workspace_files(workspace_id: str, pattern: str):
-    """Workspace-relative iteration; resolve_in_workspace re-checks every
-    yielded candidate so a glob cannot be a traversal primitive (Path.glob
-    itself refuses '..' segments, but the double-check keeps confinement a
-    single-choke-point property rather than a per-caller convention)."""
-    root = workspace_dir(workspace_id).resolve()
+def _iter_under_root(root: Path, pattern: str):
+    """Root-relative iteration; resolve_under_root re-checks every yielded
+    candidate so a glob cannot be a traversal primitive (Path.glob itself
+    refuses '..' segments, but the double-check keeps confinement a single-
+    choke-point property rather than a per-caller convention)."""
     for path in sorted(root.glob(pattern or "**/*")):
-        resolved = resolve_in_workspace(workspace_id, str(path))
+        resolved = resolve_under_root(root, str(path))
         yield resolved, resolved.relative_to(root).as_posix()
 
 
 def register_harness_fs_tools(registry: ToolRegistry) -> None:
     async def fs_read(call: ToolCall, ctx: RunContext) -> ToolResult:
-        workspace_id = _workspace_id_of(ctx)
-        if workspace_id is None:
+        root = _bound_root(ctx)
+        if root is None:
             return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
         try:
-            target = resolve_in_workspace(workspace_id, str(call.arguments.get("path") or ""))
+            target = resolve_under_root(root, str(call.arguments.get("path") or ""))
         except WorkspaceError as exc:
             return ToolResult(content=str(exc), is_error=True)
         if not target.is_file():
@@ -172,14 +182,14 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         return ToolResult(content=header + body)
 
     async def fs_list(call: ToolCall, ctx: RunContext) -> ToolResult:
-        workspace_id = _workspace_id_of(ctx)
-        if workspace_id is None:
+        root = _bound_root(ctx)
+        if root is None:
             return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
         pattern = str(call.arguments.get("pattern") or "**/*")
         entries: list[str] = []
         truncated = False
         try:
-            for resolved, relative in _iter_workspace_files(workspace_id, pattern):
+            for resolved, relative in _iter_under_root(root, pattern):
                 if len(entries) >= _LIST_CAP_ENTRIES:
                     truncated = True
                     break
@@ -192,8 +202,8 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         return ToolResult(content="\n".join(entries) + suffix)
 
     async def fs_grep(call: ToolCall, ctx: RunContext) -> ToolResult:
-        workspace_id = _workspace_id_of(ctx)
-        if workspace_id is None:
+        root = _bound_root(ctx)
+        if root is None:
             return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
         raw_pattern = str(call.arguments.get("pattern") or "")
         if not raw_pattern:
@@ -208,7 +218,7 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         matches: list[str] = []
         skipped_large = 0
         try:
-            for resolved, relative in _iter_workspace_files(workspace_id, file_glob):
+            for resolved, relative in _iter_under_root(root, file_glob):
                 if len(matches) >= _GREP_CAP_MATCHES:
                     break
                 if not resolved.is_file():
@@ -241,8 +251,8 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         return ToolResult(content="\n".join(matches) + footer)
 
     async def fs_write(call: ToolCall, ctx: RunContext) -> ToolResult:
-        workspace_id = _workspace_id_of(ctx)
-        if workspace_id is None:
+        root = _bound_root(ctx)
+        if root is None:
             return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
         content = call.arguments.get("content")
         if not isinstance(content, str):
@@ -253,10 +263,10 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
                 is_error=True,
             )
         try:
-            target = resolve_in_workspace(workspace_id, str(call.arguments.get("path") or ""))
+            target = resolve_under_root(root, str(call.arguments.get("path") or ""))
         except WorkspaceError as exc:
             return ToolResult(content=str(exc), is_error=True)
-        if target == workspace_dir(workspace_id).resolve():
+        if target == root:
             return ToolResult(content="path names the workspace root, not a file.", is_error=True)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -266,8 +276,8 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         return ToolResult(content=f"Wrote {len(content)} characters to {call.arguments.get('path')}.")
 
     async def fs_edit(call: ToolCall, ctx: RunContext) -> ToolResult:
-        workspace_id = _workspace_id_of(ctx)
-        if workspace_id is None:
+        root = _bound_root(ctx)
+        if root is None:
             return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
         old_string = call.arguments.get("old_string")
         new_string = call.arguments.get("new_string")
@@ -278,7 +288,7 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
                 content=f"Replacement longer than {_WRITE_CAP_CHARS} characters.", is_error=True,
             )
         try:
-            target = resolve_in_workspace(workspace_id, str(call.arguments.get("path") or ""))
+            target = resolve_under_root(root, str(call.arguments.get("path") or ""))
         except WorkspaceError as exc:
             return ToolResult(content=str(exc), is_error=True)
         if not target.is_file():

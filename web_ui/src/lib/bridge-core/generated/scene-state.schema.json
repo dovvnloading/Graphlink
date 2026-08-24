@@ -432,6 +432,12 @@
           "harnessStatusDetail": {
             "type": "string"
           },
+          "harnessWorkspaceActive": {
+            "type": "string"
+          },
+          "harnessWorkspacePath": {
+            "type": "string"
+          },
           "headerColor": {
             "type": "string"
           },
@@ -899,6 +905,8 @@
           "harnessAwaitingApproval",
           "harnessApprovalToolName",
           "harnessApprovalSummary",
+          "harnessWorkspacePath",
+          "harnessWorkspaceActive",
           "harnessMaxTurns",
           "harnessSpentTurns",
           "harnessSpentTokens",

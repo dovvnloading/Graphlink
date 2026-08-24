@@ -617,6 +617,8 @@ class SceneNodeRow:
     harnessAwaitingApproval: bool = False
     harnessApprovalToolName: str = ""
     harnessApprovalSummary: str = ""
+    harnessWorkspacePath: str = ""
+    harnessWorkspaceActive: str = ""
     harnessMaxTurns: int = 0
     harnessSpentTurns: int = 0
     harnessSpentTokens: int = 0

@@ -7515,6 +7515,20 @@ mark.document-view-search-match-current {
   padding: 8px;
   background-color: var(--gl-surface-inset, var(--gl-surface-window));
 }
+.harness-node-workspace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
+}
+.harness-node-workspace-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .harness-node-composer { display: flex; align-items: flex-end; gap: 8px; }
 .harness-node-input {
   box-sizing: border-box;

@@ -865,6 +865,8 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.denyHarnessTool(n.pendingRequestId);
     },
+    onPickWorkspace: () => liveRef.current.store.pickHarnessWorkspace(id),
+    onUseScratch: () => liveRef.current.store.useHarnessScratch(id),
   };
 }
 
@@ -1531,6 +1533,8 @@ export function toFlowNodes(
           harnessContextTokens: n.harnessContextTokens,
           harnessMaxContextTokens: n.harnessMaxContextTokens,
           harnessCompactions: n.harnessCompactions,
+          harnessWorkspacePath: n.harnessWorkspacePath,
+          harnessWorkspaceActive: n.harnessWorkspaceActive,
           harnessAwaitingApproval: n.harnessAwaitingApproval,
           harnessApprovalToolName: n.harnessApprovalToolName,
           harnessApprovalSummary: n.harnessApprovalSummary,

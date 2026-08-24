@@ -87,7 +87,7 @@ SUBAGENT_SPAWN_SPEC = ToolSpec(
 async def run_subagent(
     *,
     registry: ToolRegistry,
-    workspace_id: str,
+    workspace_dir,
     task: str,
     model_ref=None,
     settings_manager=None,
@@ -97,9 +97,10 @@ async def run_subagent(
 ) -> str:
     """The child loop: a stripped-down run_harness that touches no node,
     no bus, and no transcript - it exists only to produce a string. Reads
-    the same workspace; keeps its whole conversation in local memory and
-    discards it when it returns. Blocking model calls run via to_thread,
-    exactly as the parent loop's do."""
+    the SAME bound root as its parent (scratch or trusted user dir - the
+    parent passes its resolved root as workspace_dir); keeps its whole
+    conversation in local memory and discards it when it returns. Blocking
+    model calls run via to_thread, exactly as the parent loop's do."""
     import api_provider
 
     async def _auto(_call: ToolCall) -> bool:
@@ -112,9 +113,9 @@ async def run_subagent(
         request_approval=_auto,
         cancel=CancelToken(cancel_event) if cancel_event is not None else None,
     )
-    # The duck-typed workspace channel the fs tools read (they look for
-    # ctx.harness_workspace_id); RunContext has no such field, so set it.
-    ctx.harness_workspace_id = workspace_id
+    # The duck-typed root channel the fs tools read (ctx.harness_workspace_dir),
+    # so the child confines to exactly its parent's root.
+    ctx.harness_workspace_dir = workspace_dir
 
     specs = tuple(
         spec for spec in registry.specs()
@@ -159,8 +160,17 @@ async def run_subagent(
 
 def register_subagent_tool(registry: ToolRegistry) -> None:
     async def spawn(call: ToolCall, ctx: RunContext) -> ToolResult:
-        workspace_id = getattr(ctx, "harness_workspace_id", None)
-        if not isinstance(workspace_id, str) or not workspace_id:
+        from pathlib import Path
+
+        from backend.harness.workspace import workspace_dir
+
+        # Inherit the parent's bound root: its resolved user/scratch dir if
+        # the loop set one, else recompute the scratch dir from the id.
+        root = getattr(ctx, "harness_workspace_dir", None)
+        if not isinstance(root, Path):
+            workspace_id = getattr(ctx, "harness_workspace_id", None)
+            root = workspace_dir(workspace_id) if isinstance(workspace_id, str) and workspace_id else None
+        if root is None:
             return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
         task = str(call.arguments.get("task") or "").strip()
         if not task:
@@ -168,7 +178,7 @@ def register_subagent_tool(registry: ToolRegistry) -> None:
         try:
             summary = await run_subagent(
                 registry=registry,
-                workspace_id=workspace_id,
+                workspace_dir=root,
                 task=task,
                 model_ref=getattr(ctx, "model_ref", None),
                 settings_manager=getattr(ctx, "settings_manager", None),

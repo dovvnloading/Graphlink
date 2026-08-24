@@ -74,7 +74,7 @@ def test_subagent_is_offered_only_read_tools_no_write_shell_or_spawn(workspace_r
         {"content": "", "tool_calls": [call("s1", "fs.read", path="a.txt")]},
         {"content": "a.txt contains findable content"},
     ])
-    answer = asyncio.run(run_subagent(registry=registry, workspace_id="ws1", task="what is in a.txt?"))
+    answer = asyncio.run(run_subagent(registry=registry, workspace_dir=ensure_workspace("ws1"), task="what is in a.txt?"))
     assert answer == "a.txt contains findable content"
     offered = set(seen[0])
     assert {"fs.read", "fs.list", "fs.grep"} <= offered
@@ -91,7 +91,7 @@ def test_a_write_attempt_by_the_subagent_is_denied_by_scope(workspace_root, monk
         {"content": "", "tool_calls": [call("s1", "fs.write", path="x.txt", content="nope")]},
         {"content": "I could not write; I can only read."},
     ])
-    answer = asyncio.run(run_subagent(registry=registry, workspace_id="ws1", task="try to write"))
+    answer = asyncio.run(run_subagent(registry=registry, workspace_dir=ensure_workspace("ws1"), task="try to write"))
     assert "only read" in answer
     assert not (ensure_workspace("ws1") / "x.txt").exists()
 
@@ -104,7 +104,7 @@ def test_turn_limit_returns_the_last_text_flagged(workspace_root, monkeypatch):
         {"content": "still looking", "tool_calls": [call("s2", "fs.list")]},
     ])
     answer = asyncio.run(
-        run_subagent(registry=registry, workspace_id="ws1", task="loop", max_turns=2)
+        run_subagent(registry=registry, workspace_dir=ensure_workspace("ws1"), task="loop", max_turns=2)
     )
     assert "turn limit" in answer
 

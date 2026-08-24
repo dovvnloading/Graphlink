@@ -31,6 +31,8 @@ import subprocess
 import sys
 import time
 
+from pathlib import Path
+
 from api_provider import RequestCancelledError
 from backend.harness.workspace import WorkspaceError, ensure_workspace
 from backend.providers.base import ToolCall, ToolSpec
@@ -110,16 +112,25 @@ def _run_command(command: str, cwd, cancel_event) -> tuple[str, "int | None", st
 
 def register_harness_shell_tool(registry: ToolRegistry) -> None:
     async def shell_exec(call: ToolCall, ctx: RunContext) -> ToolResult:
-        workspace_id = getattr(ctx, "harness_workspace_id", None)
-        if not isinstance(workspace_id, str) or not workspace_id:
-            return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
+        # The command runs with cwd = the run's bound root: the trusted
+        # user directory when one is bound (already ensured by the loop and
+        # carried on the context), else the managed scratch dir created
+        # here. A user dir is the person's own folder - never chmod'd or
+        # created by us.
+        bound = getattr(ctx, "harness_workspace_dir", None)
         command = str(call.arguments.get("command") or "").strip()
         if not command:
             return ToolResult(content="shell.exec needs a non-empty command.", is_error=True)
         if len(command) > _COMMAND_CAP_CHARS:
             return ToolResult(content=f"Command longer than {_COMMAND_CAP_CHARS} characters.", is_error=True)
         try:
-            workspace = ensure_workspace(workspace_id)
+            if isinstance(bound, Path):
+                workspace = bound
+            else:
+                workspace_id = getattr(ctx, "harness_workspace_id", None)
+                if not isinstance(workspace_id, str) or not workspace_id:
+                    return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
+                workspace = ensure_workspace(workspace_id)
         except (WorkspaceError, OSError) as exc:
             return ToolResult(content=f"Could not prepare the workspace: {exc}", is_error=True)
 
