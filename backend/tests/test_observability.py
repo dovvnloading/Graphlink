@@ -8,7 +8,7 @@ import logging
 
 import pytest
 
-from backend.observability import JsonLogFormatter, apply_log_level
+from backend.observability import JsonLogFormatter, apply_log_level, resolve_log_level
 
 
 def _make_record(msg="hello", level=logging.INFO, extra=None):
@@ -86,3 +86,37 @@ def test_apply_log_level_is_a_silent_noop_for_an_unrecognized_name(isolated_root
     logging.getLogger().setLevel(logging.WARNING)
     apply_log_level("NOT_A_REAL_LEVEL")  # must not raise
     assert logging.getLogger().level == logging.WARNING
+
+
+# -- SECURITY-FIX: resolve_log_level must never raise on a hostile/corrupted
+# -- persisted log_level - graphlink_desktop.py's boot path has no handler or
+# -- exception-handler installed yet, so a raise here crashed every launch. --
+
+
+def test_resolve_log_level_maps_every_real_level_name():
+    assert resolve_log_level("DEBUG") == logging.DEBUG
+    assert resolve_log_level("INFO") == logging.INFO
+    assert resolve_log_level("WARNING") == logging.WARNING
+    assert resolve_log_level("ERROR") == logging.ERROR
+
+
+def test_resolve_log_level_falls_back_to_default_for_an_unrecognized_name():
+    # Naming a real logging-module attribute that isn't a level (the actual
+    # reported crash: getattr(logging, "shutdown", INFO) returns the
+    # shutdown FUNCTION, which setLevel then rejects with TypeError).
+    assert resolve_log_level("shutdown") == logging.INFO
+    assert resolve_log_level("Formatter") == logging.INFO
+    assert resolve_log_level("not_a_real_level") == logging.INFO
+
+
+def test_resolve_log_level_falls_back_to_default_for_a_non_string_value():
+    # A JSON list/int/null read straight off a hand-edited session.dat -
+    # getattr(logging, value, INFO) raises TypeError for these outright,
+    # since the attribute-name argument must be a string.
+    assert resolve_log_level(["DEBUG"]) == logging.INFO
+    assert resolve_log_level(42) == logging.INFO
+    assert resolve_log_level(None) == logging.INFO
+
+
+def test_resolve_log_level_honors_a_custom_default():
+    assert resolve_log_level("nonsense", default=logging.ERROR) == logging.ERROR

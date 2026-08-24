@@ -64,6 +64,26 @@ class JsonLogFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
+def resolve_log_level(level_name: object, default: int = logging.INFO) -> int:
+    """SECURITY-FIX: maps a persisted log-level NAME to its logging-module
+    int constant, falling back to `default` for anything outside the closed
+    vocabulary - including a non-string JSON value (a list/int/null read
+    straight off session.dat) - instead of raising. graphlink_desktop.py's
+    main() used to do this itself via a bare
+    `getattr(logging, SettingsManager().get_log_level(), logging.INFO)`:
+    getattr's default only covers a MISSING attribute, not a present-but-
+    wrong-shaped one, so a persisted value naming any other module
+    attribute ("shutdown", "Formatter", "handlers") returned that object
+    instead of an int, and a non-string value raised TypeError outright -
+    either way crashing every launch, before configure_logging ever attaches
+    a handler or install_exception_handlers runs. Called before any handler
+    exists, so unlike apply_log_level below this can't just skip silently -
+    it must always return something configure_logging can use."""
+    if not isinstance(level_name, str) or level_name not in _VALID_LEVEL_NAMES:
+        return default
+    return getattr(logging, level_name)
+
+
 def apply_log_level(level_name: str) -> None:
     """Sets the ROOT logger's level at runtime - safe to call any time after
     configure_logging() has attached its handlers (backend/crash_recovery.py),
