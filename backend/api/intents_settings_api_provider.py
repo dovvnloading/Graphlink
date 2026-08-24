@@ -97,11 +97,37 @@ def register_settings_api_provider_intents(
         # the plaintext key off the wire entirely.
         key = str(api_key).strip()
         if not key:
-            key = (
+            stored_key = (
                 manager.get_openai_key()
                 if provider == config.API_PROVIDER_OPENAI
                 else manager.get_anthropic_key()
             )
+            # SECURITY-FIX: only fall back to a STORED key when it's actually
+            # bound to the base_url this call is about to send it to. Without
+            # this, any caller of this intent - the SPA itself (so an
+            # XSS/prompt-injection foothold in canvas-rendered content), or a
+            # local process holding the per-launch token - could send
+            # api_key='', base_url='http://attacker.example/v1' and turn Load
+            # into a decrypt-and-exfiltrate oracle for the DPAPI-protected
+            # OpenAI-compatible key, without ever reading the encrypted blob
+            # itself: the stored key was never bound to the base_url it was
+            # saved with, only save_api_configuration's own separate "retype
+            # the key on a URL change" discipline enforced that in practice,
+            # and this intent bypasses it entirely by falling back server-
+            # side. Gated on stored_key being non-empty so the ordinary "no
+            # key configured anywhere" case still reports its own, more
+            # useful error below rather than this one. Anthropic has no
+            # user-configurable base_url (see _build_api_client - the branch
+            # ignores it outright), so the stored Anthropic key always ships
+            # to the same fixed host and needs no such check.
+            if stored_key and provider == config.API_PROVIDER_OPENAI and base_url != manager.get_api_base_url():
+                state.api_catalog_state[provider] = {
+                    "status": "error",
+                    "message": "Enter the API Key to test a different Base URL.",
+                }
+                await bus.publish("app-settings")
+                return
+            key = stored_key
         if not key:
             state.api_catalog_state[provider] = {"status": "error", "message": "Please enter the API Key."}
             await bus.publish("app-settings")
