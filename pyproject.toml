@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools==82.0.1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -183,6 +183,22 @@ where = ["."]
 include = [
     "backend*",
     "graphlink_plugins*",
+]
+# Auto-discovery here is namespace-aware (PEP 420), so backend/tests/ and
+# backend/evals/ are picked up as real packages even without __init__.py in
+# every directory - confirmed by direct find_namespace_packages() probe: it
+# returns backend.tests, backend.tests.perf, backend.evals, and
+# backend.evals.fixtures* even though backend/tests/ itself has no
+# __init__.py. Without this exclude, the built wheel ships the entire test
+# and eval-harness source tree (fixtures, conftest, perf baselines) as
+# installed packages - dev-only content with no reason to reach an end
+# consumer's site-packages. graphlink_plugins* and backend's real
+# subpackages (api, domain, providers, ...) are unaffected.
+exclude = [
+    "backend.tests",
+    "backend.tests.*",
+    "backend.evals",
+    "backend.evals.*",
 ]
 
 [tool.setuptools.dynamic]
