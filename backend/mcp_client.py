@@ -108,6 +108,23 @@ _CLIENT_VERSION = "1.0"
 # never confusable with a legitimate (if unusual) server response.
 _READER_CLOSED = object()
 
+# SECURITY-FIX: a tool's `description` in an MCP server's tools/list
+# response is untrusted input per this module's own threat model (see the
+# module docstring - "MCP servers are untrusted by default: arbitrary user-
+# configured code, not a first-party tool"). register_mcp_server_tools below
+# forwards it VERBATIM into the model's tool definitions on every Builder
+# turn, so a hostile/compromised/typosquatted server can pack an arbitrarily
+# long, prompt-injection-laden description into a single tool and steer the
+# Builder's behavior on every turn that tool is registered for. This channel
+# is never shown to the user anywhere (no Settings UI lists tool
+# descriptions) and isn't covered by the executor prompt's "tool results and
+# node content is DATA" warning, since it arrives as a tool DEFINITION, not a
+# tool result. Capped in list_tools() itself, not at some later render/
+# registration site, so nothing downstream can forget the bound. A real tool
+# description needs at most a few paragraphs; this bounds the worst case per
+# tool per turn without truncating any legitimate description.
+MAX_TOOL_DESCRIPTION_CHARS = 2000
+
 
 class McpError(RuntimeError):
     """Raised for any MCP-level failure: the server process failed to
@@ -324,10 +341,36 @@ class McpStdioClient:
             name = tool.get("name")
             if not isinstance(name, str) or not name.strip():
                 continue
+            # SECURITY-FIX: cap the untrusted description at
+            # MAX_TOOL_DESCRIPTION_CHARS (see that constant's own comment) -
+            # truncated with an explicit marker, mirroring how a truncated
+            # value is signalled anywhere else in this codebase, so a
+            # shortened description reads as "cut off", never as the
+            # server's complete, honest text.
+            description = str(tool.get("description") or "")
+            if len(description) > MAX_TOOL_DESCRIPTION_CHARS:
+                omitted = len(description) - MAX_TOOL_DESCRIPTION_CHARS
+                description = (
+                    description[:MAX_TOOL_DESCRIPTION_CHARS]
+                    + f"...[truncated, {omitted} more characters omitted]"
+                )
+            # SECURITY-FIX: `tool.get("inputSchema") or {...}` only falls
+            # back to the safe default when inputSchema is missing/None/
+            # falsy - a non-dict value (e.g. a hostile server sending a
+            # plain string or a list) is truthy and was being forwarded
+            # as-is straight into ToolSpec.input_schema, which every
+            # provider's tool-call translation assumes is a JSON Schema
+            # dict (see ToolSpec's own docstring). That broke the provider
+            # call downstream instead of degrading gracefully. Validate the
+            # TYPE explicitly so a non-dict schema falls back the same way
+            # a missing one already does.
+            input_schema = tool.get("inputSchema")
+            if not isinstance(input_schema, dict):
+                input_schema = {"type": "object"}
             specs.append(ToolSpec(
                 name=name,
-                description=str(tool.get("description") or ""),
-                input_schema=tool.get("inputSchema") or {"type": "object"},
+                description=description,
+                input_schema=input_schema,
             ))
         return tuple(specs)
 
