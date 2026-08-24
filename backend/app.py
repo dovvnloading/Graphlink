@@ -283,7 +283,7 @@ def _configure_session(
     # real banner (same load-bearing ordering precedent as register_plugins/
     # register_chat_library above - notifications_state already exists by
     # this point in every case).
-    register_settings(bus, settings_manager, notifications_state)
+    register_settings(bus, settings_manager, notifications_state, agent_dispatcher)
     # R6.4: register_chat_library needs the same session's canvas_document
     # (built above) so loadChat can actually restore a session into it, and
     # notifications_state so a failed/empty load can surface a real banner -
