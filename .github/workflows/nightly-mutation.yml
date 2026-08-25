@@ -43,7 +43,12 @@ jobs:
   nightly-mutation:
     name: Mutation score (mutmut + Stryker, scoped modules)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Generous, not tuned: a local --dryRunOnly run (just the initial test
+    # pass, before any of the 405 real mutants across the 5 TS files) alone
+    # took ~2m40s, dominated by process-spawn overhead, not test time. This
+    # job is nightly and non-blocking, so a wide timeout costs nothing but
+    # runner-minutes if unused.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
