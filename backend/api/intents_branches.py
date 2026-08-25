@@ -15,10 +15,8 @@ from backend.agents import AgentDispatcher
 from backend.composer import ComposerDocument
 from backend.domain.graph import SceneDocument
 from backend.domain.model import (
-    MESSAGE_VERTICAL_SPACING,
     NOTE_AGENT_BODY_COLOR,
     NOTE_AGENT_HEADER_COLOR,
-    NOTE_AGENT_X_OFFSET,
 )
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -36,13 +34,16 @@ def register_branches_intents(
     # module-level import here.
     from backend.canvas import _format_branches_for_comparison
 
-    async def _generate_note_from_node(source_node_id, note_kind, x_offset, y_offset):
+    async def _generate_note_from_node(source_node_id, note_kind):
         """R8a: shared path for generateKeyTakeaway and generateExplainerNote.
 
         Both take one chat node, run its text through an agent, and drop the
-        result into a new note beside it - identical except for the agent and
-        the note's offset, so they share one implementation rather than two
-        that can drift.
+        result into a new note beside it - identical except for the agent,
+        so they share one implementation rather than two that can drift.
+        Placement is place_child(prefer="right"): beside the source node's
+        real right edge, fanning down past earlier notes, so a takeaway and
+        an explainer generated from the same node never land on top of each
+        other.
 
         Source text is the node's OWN content, not the branch history that
         generate_chart uses: legacy's takeaway/explainer passed a single
@@ -78,7 +79,8 @@ def register_branches_intents(
             # node. Agent provenance, per stage 10.5's eventual "undo this
             # build".
             def _create_agent_note():
-                created = document.add_note(source.x + x_offset, source.y + y_offset)
+                nx, ny = document.place_child(source.id, "note", prefer="right")
+                created = document.add_note(nx, ny)
                 document.set_note_content(created.id, text)
                 # Legacy tinted these notes "Mid Gray" with an info-coloured
                 # header. Both values come from the frontend's own palette
@@ -112,13 +114,10 @@ def register_branches_intents(
         return result_holder.get("node_id")
 
     async def generate_key_takeaway(source_node_id):
-        return await _generate_note_from_node(source_node_id, "takeaway", NOTE_AGENT_X_OFFSET, 0)
+        return await _generate_note_from_node(source_node_id, "takeaway")
 
     async def generate_explainer_note(source_node_id):
-        # Offset vertically as well as horizontally so a takeaway and an
-        # explainer generated from the same node don't land on top of each
-        # other - the same 100px stagger legacy used.
-        return await _generate_note_from_node(source_node_id, "explainer", NOTE_AGENT_X_OFFSET, 100)
+        return await _generate_note_from_node(source_node_id, "explainer")
 
     async def compare_branches(node_ids):
         """ADR-002 Workstream 1 ("Compare Branches") - the second sequenced
@@ -155,12 +154,11 @@ def register_branches_intents(
         ]
         formatted = _format_branches_for_comparison(branches)
 
-        # Positioned below-and-right of the source branches, the same
+        # Positioned beside the bottom-most source branch, the same
         # "offset to the side" convention _generate_note_from_node uses for
-        # a single source - averaged/maxed across all sources here since
-        # there's more than one.
-        avg_x = sum(node.x for node in sources) / len(sources)
-        max_y = max(node.y for node in sources)
+        # a single source - anchored to the deepest source since there's
+        # more than one.
+        anchor = max(sources, key=lambda node: (node.y, node.id))
 
         result_holder: dict[str, str] = {}
 
@@ -172,7 +170,8 @@ def register_branches_intents(
             # One command for the whole comparison note - see
             # _generate_note_from_node's own equivalent block above.
             def _create_comparison_note():
-                created = document.add_note(avg_x + NOTE_AGENT_X_OFFSET, max_y)
+                nx, ny = document.place_child(anchor.id, "note", prefer="right")
+                created = document.add_note(nx, ny)
                 document.set_note_content(created.id, text)
                 document.set_group_color(created.id, NOTE_AGENT_BODY_COLOR, NOTE_AGENT_HEADER_COLOR)
                 document.mark_branch_comparison_note(created.id, ids)
@@ -245,8 +244,6 @@ def register_branches_intents(
         formatted = _format_branches_for_comparison(branches)
 
         parent = sources[0]
-        avg_x = sum(node.x for node in sources) / len(sources)
-        max_y = max(node.y for node in sources)
         route = composer_document.route()
 
         result_holder: dict[str, str] = {}
@@ -263,9 +260,8 @@ def register_branches_intents(
             # it correctly on undo is part of stage 10.2's stack work, where
             # the cursor semantics actually live.
             def _create_synthesis_node():
-                created = document.add_chat_node(
-                    avg_x, max_y + MESSAGE_VERTICAL_SPACING, text, False, parent_id=parent.id,
-                )
+                sx, sy = document.place_child(parent.id, "chat")
+                created = document.add_chat_node(sx, sy, text, False, parent_id=parent.id)
                 document.mark_branch_synthesis(
                     created.id, ids, clean_instructions, route.get("provider"), route.get("modelLabel"),
                 )

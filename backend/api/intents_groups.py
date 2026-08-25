@@ -24,10 +24,15 @@ def register_groups_intents(bus: SessionBus, document: SceneDocument) -> None:
     # can close, per that ADR's own Consequences section ("Every new
     # mutating intent ... must produce a command").
     async def add_note(x, y, is_system_prompt=False, is_summary_note=False):
+        # The palette's "Add Note" always sends the viewport center, so a
+        # second note would land exactly on the first - collision-resolve
+        # the requested spot (a no-op when it is already clear).
+        width, height = document.kind_fallback_footprint("note")
+        nx, ny = document.find_free_position(float(x), float(y), width, height)
         node, _command = document.record_command(
             "addNote", "user",
             lambda: document.add_note(
-                x, y, is_system_prompt=is_system_prompt, is_summary_note=is_summary_note,
+                nx, ny, is_system_prompt=is_system_prompt, is_summary_note=is_summary_note,
             ),
         )
         await publish_scene()

@@ -54,6 +54,7 @@ from backend.domain.branches import BranchOps
 from backend.domain.commands import CommandOps
 from backend.domain.content_codec import _content_codec
 from backend.domain.groups import GroupOps
+from backend.domain.layout import LayoutOps
 from backend.domain.model import (
     CHART_MAX_HEIGHT,
     CHART_MAX_WIDTH,
@@ -69,9 +70,6 @@ from backend.domain.model import (
     GRID_COLOR_PRESETS,
     HTML_TITLE_PREVIEW_LENGTH,
     IMAGE_TITLE_PREVIEW_LENGTH,
-    MESSAGE_VERTICAL_SPACING,
-    ORGANIZE_SPACING_X,
-    ORGANIZE_SPACING_Y,
     SceneEdge,
     SceneError,
     SceneNode,
@@ -105,7 +103,7 @@ def _estimate_tokens(text: str) -> int:
 
 
 @dataclass
-class SceneDocument(BranchOps, GroupOps, CommandOps):
+class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
     """The canvas document for one session. Plain data + invariants; the
     R6 serializer will read/write exactly this shape."""
 
@@ -1758,9 +1756,9 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         (content=prompt, parent_id=<the new ChatNode's id>) - built entirely
         from the existing add_chat_node/add_image_node primitives, zero new
         mutation-in-place logic, matching this feature's create-new-nodes
-        scope decision. Positions via the same MESSAGE_VERTICAL_SPACING
-        offset convention send_message/regenerate_response's own new-child
-        placement already uses. last_chat_node_id is DELIBERATELY untouched
+        scope decision. Positions via place_child (backend/domain/layout.py),
+        the same collision-resolved placement send_message/regenerate_
+        response's own new-child placement uses. last_chat_node_id is DELIBERATELY untouched
         - mirrors legacy: handle_image_response never assigns
         self.current_node either, since image generation is side content,
         not a branch-continuation point (same posture as
@@ -1772,11 +1770,11 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         parent = self.nodes.get(parent_chat_node_id)
         if parent is None:
             raise SceneError(f"unknown parent node: {parent_chat_node_id}")
-        ax, ay = parent.x, parent.y + MESSAGE_VERTICAL_SPACING
+        ax, ay = self.place_child(parent_chat_node_id, "chat")
         chat_node = self.add_chat_node(
             ax, ay, f'Generated image for prompt: "{prompt}"', False, parent_id=parent_chat_node_id,
         )
-        ix, iy = ax, ay + MESSAGE_VERTICAL_SPACING
+        ix, iy = self.place_child(chat_node.id, "image")
         image_node = self.add_image_node(ix, iy, image_bytes, prompt, chat_node.id, mime_type=mime_type)
         return chat_node, image_node
 
@@ -2095,14 +2093,9 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         self.total_session_tokens += _estimate_tokens(str(text))
 
     def organize(self) -> None:
-        """Tidy layout: nodes into a near-square grid, stable id order."""
-        ordered = sorted(self.nodes.values(), key=lambda n: n.id)
-        if not ordered:
-            return
-        columns = max(1, math.ceil(math.sqrt(len(ordered))))
-        for index, node in enumerate(ordered):
-            node.x = float((index % columns) * ORGANIZE_SPACING_X)
-            node.y = float((index // columns) * ORGANIZE_SPACING_Y)
+        """Tidy layout: size-aware layered tree layout - see LayoutOps
+        .organize_layout (backend/domain/layout.py) for the algorithm."""
+        self.organize_layout()
 
     # -- snapshots ---------------------------------------------------------
 

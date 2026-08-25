@@ -9,7 +9,7 @@ shared register_builtin_plugin escape-hatch rationale."""
 
 from __future__ import annotations
 
-from backend.canvas import MESSAGE_VERTICAL_SPACING, SceneDocument
+from backend.canvas import SceneDocument
 from backend.plugin_sdk import HostContext, PluginRunContext
 
 
@@ -23,11 +23,10 @@ def _execute(
             "warning",
         )
         return None
-    parent = document.nodes[parent_node_id]
     node, _command = document.record_command(
         "pluginCodeSandbox", "user",
         lambda: document.add_code_sandbox_node(
-            parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id
+            *document.place_child(parent_node_id, "code_sandbox"), parent_node_id
         ),
         node_ids=[parent_node_id],
     )

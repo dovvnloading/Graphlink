@@ -43,14 +43,11 @@ _RESUMABLE_STATUSES = ("awaiting_start", "paused", "interrupted", "failed")
 
 
 def _place_plan_node(document: SceneDocument) -> tuple[float, float]:
-    """Right of the current scene's extent - the launcher has no canvas
-    anchor, and stacking new plans on (0,0) over existing work would be
-    worse than a simple fan to the right."""
-    if not document.nodes:
-        return 120.0, 120.0
-    max_x = max(n.x for n in document.nodes.values())
-    min_y = min(n.y for n in document.nodes.values())
-    return max_x + 420.0, max(min_y, 120.0)
+    """Right of the current scene's real extent (x + measured width, not
+    just max x) - the launcher has no canvas anchor, and stacking new
+    plans on (0,0) over existing work would be worse than a fan to the
+    right. See place_at_scene_right (backend/domain/layout.py)."""
+    return document.place_at_scene_right("plan")
 
 
 def register_builder_intents(

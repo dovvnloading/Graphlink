@@ -16,15 +16,12 @@ import pytest
 import backend.agents as agents_module
 from backend.agents import AgentDispatcher
 from backend.canvas import (
-    BRANCH_HORIZONTAL_SPACING,
     DRAG_FACTOR_MAX,
     DRAG_FACTOR_MIN,
     GROUP_MEMBER_DEFAULT_HEIGHT,
     GROUP_MEMBER_DEFAULT_WIDTH,
-    MESSAGE_VERTICAL_SPACING,
     NOTE_AGENT_BODY_COLOR,
     NOTE_AGENT_HEADER_COLOR,
-    NOTE_AGENT_X_OFFSET,
     SceneDocument,
     SceneEmptyPromptError,
     SceneError,
@@ -36,6 +33,7 @@ from backend.canvas import (
 )
 from backend import native_dialogs
 from backend.attachments import StagedAttachment
+from backend.domain.layout import NODE_GAP_X, NODE_GAP_Y
 from backend.composer import ComposerDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
@@ -956,9 +954,11 @@ def test_send_message_branch_from_node_id_fans_out_siblings_so_they_do_not_overl
     first_reply = doc.send_message("first reply", branch_from_node_id=root.id)
     second_reply = doc.send_message("second reply", branch_from_node_id=root.id)
 
-    assert first_reply.y == second_reply.y == root.y + MESSAGE_VERTICAL_SPACING
+    root_w, root_h = doc.node_footprint(root)
+    assert first_reply.y == second_reply.y == root.y + root_h + NODE_GAP_Y
     assert first_reply.x == root.x
-    assert second_reply.x == root.x + BRANCH_HORIZONTAL_SPACING
+    # The second sibling fans right past the first one's full footprint.
+    assert second_reply.x >= first_reply.x + doc.node_footprint(first_reply)[0]
     assert first_reply.x != second_reply.x, "two real siblings must never render at the exact same position"
 
 
@@ -975,7 +975,7 @@ def test_send_message_branch_from_node_id_fan_out_ignores_non_chat_children():
     assert first_reply.x == root.x, "non-chat children must not shift the first real branch's fan-out index"
 
     second_reply = doc.send_message("second real branch", branch_from_node_id=root.id)
-    assert second_reply.x == root.x + BRANCH_HORIZONTAL_SPACING
+    assert second_reply.x >= first_reply.x + doc.node_footprint(first_reply)[0]
 
 
 def test_send_message_branch_from_node_id_unknown_id_falls_back_to_last_chat_node_id():
@@ -2374,19 +2374,57 @@ def test_font_intents_use_bridge_slot_names_and_bound_values():
     asyncio.run(run())
 
 
-def test_organize_arranges_nodes_in_a_stable_grid():
+def test_organize_lines_up_disconnected_nodes_without_overlap():
     async def run():
         bus, document, _ = make_bus()
         for i in range(5):
             await bus.dispatch_intent("scene", "addNode", [500 - i * 37, i * 91])
         await bus.dispatch_intent("scene", "organizeNodes", [])
-        positions = {n.id: (n.x, n.y) for n in document.nodes.values()}
-        # 5 nodes -> 3 columns; stable id order fills rows left-to-right.
-        assert positions["n0"] == (0.0, 0.0)
-        assert positions["n1"] == (260.0, 0.0)
-        assert positions["n2"] == (520.0, 0.0)
-        assert positions["n3"] == (0.0, 180.0)
-        assert positions["n4"] == (260.0, 180.0)
+        nodes = sorted(document.nodes.values(), key=lambda n: n.x)
+        # Disconnected nodes are separate components: one shared top row,
+        # ordered by their pre-organize x (n4 was leftmost, n0 rightmost),
+        # each clear of its neighbour's real footprint.
+        assert [n.id for n in nodes] == ["n4", "n3", "n2", "n1", "n0"]
+        assert all(n.y == 0.0 for n in nodes)
+        for left, right in zip(nodes, nodes[1:]):
+            assert right.x >= left.x + document.node_footprint(left)[0]
+
+    asyncio.run(run())
+
+
+def test_organize_is_deterministic_and_stacks_children_below_parents():
+    async def run():
+        bus, document, _ = make_bus()
+        root = document.add_chat_node(300, 900, "root", True)
+        first = document.add_chat_node(280, 100, "first child", False, parent_id=root.id)
+        second = document.add_chat_node(310, 120, "second child", False, parent_id=root.id)
+        stray = document.add_note(305, 905)
+        await bus.dispatch_intent("scene", "organizeNodes", [])
+
+        # Children sit strictly below the root's real bottom edge, packed
+        # side by side without overlap; the disconnected note lands in its
+        # own component, clear of the tree.
+        root_bottom = root.y + document.node_footprint(root)[1]
+        assert first.y >= root_bottom and second.y >= root_bottom
+        left, right = sorted((first, second), key=lambda n: n.x)
+        assert right.x >= left.x + document.node_footprint(left)[0]
+
+        rects = {
+            n.id: (n.x, n.y, *document.node_footprint(n))
+            for n in (root, first, second, stray)
+        }
+        for a_id, (ax, ay, aw, ah) in rects.items():
+            for b_id, (bx, by, bw, bh) in rects.items():
+                if a_id < b_id:
+                    assert (
+                        ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay
+                    ), f"{a_id} and {b_id} overlap after organize"
+
+        first_positions = {n.id: (n.x, n.y) for n in document.nodes.values()}
+        await bus.dispatch_intent("scene", "organizeNodes", [])
+        assert first_positions == {n.id: (n.x, n.y) for n in document.nodes.values()}, (
+            "organize must be deterministic - a second run may not move anything"
+        )
 
     asyncio.run(run())
 
@@ -6306,8 +6344,9 @@ def test_generate_key_takeaway_creates_a_tinted_note_beside_the_source_node(monk
         note = document.nodes[new_ids.pop()]
         assert note.kind == "note"
         assert note.content == "Key Takeaway\n\nMain Points:\n• it works"
-        # Offset to the RIGHT of the source, clearing the chat node's width.
-        assert (note.x, note.y) == (100 + NOTE_AGENT_X_OFFSET, 200)
+        # Offset to the RIGHT of the source, clearing the chat node's real
+        # footprint width plus the standard gap.
+        assert (note.x, note.y) == (100 + document.node_footprint(chat)[0] + NODE_GAP_X, 200)
         assert note.color == NOTE_AGENT_BODY_COLOR
         assert note.header_color == NOTE_AGENT_HEADER_COLOR
         assert recorder.topics_seen().count("scene") > scene_publishes_before
@@ -6478,11 +6517,12 @@ def test_compare_branches_creates_a_note_linked_to_all_sources(monkeypatch):
         assert note.item_ids == [first.id, second.id]
         assert note.color == NOTE_AGENT_BODY_COLOR
         assert note.header_color == NOTE_AGENT_HEADER_COLOR
-        # Positioned below-and-between the two sources, offset to the side -
-        # same "clears the source's width" convention as the single-node
-        # note agents.
-        assert note.x == (first.x + second.x) / 2 + NOTE_AGENT_X_OFFSET
-        assert note.y == max(first.y, second.y)
+        # Positioned beside the bottom-most source, offset to the side -
+        # same "clears the source's real width" convention as the
+        # single-node note agents.
+        anchor = max((first, second), key=lambda n: (n.y, n.id))
+        assert note.x >= anchor.x + document.node_footprint(anchor)[0]
+        assert note.y == anchor.y
         assert recorder.topics_seen().count("scene") > scene_publishes_before
 
     asyncio.run(run())
@@ -6618,9 +6658,9 @@ def test_synthesize_branches_creates_a_chat_node_continuing_from_the_first_sourc
         parent_edge = document._branch_parent_edge(node.id)
         assert parent_edge is not None
         assert parent_edge.source == first.id
-        # Positioned below every source, averaged across all of them.
-        assert node.x == (first.x + second.x) / 2
-        assert node.y == max(first.y, second.y) + MESSAGE_VERTICAL_SPACING
+        # Positioned below its parent's (the first source's) real bottom
+        # edge - collision-resolved, so it lands clear of every source.
+        assert node.y >= first.y + document.node_footprint(first)[1]
         assert document.last_chat_node_id == node.id
         assert recorder.topics_seen().count("scene") > scene_publishes_before
 

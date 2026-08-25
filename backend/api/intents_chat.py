@@ -34,12 +34,7 @@ from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene, make_publish_token_counter
 from backend.composer import ComposerDocument
 from backend.domain.graph import SceneDocument
-from backend.domain.model import MESSAGE_VERTICAL_SPACING, SceneError
-
-# ADR-021 stage 21.5: two document attachments on one message fan out
-# sideways instead of stacking, the same convention tools_graph.py's own
-# sibling placement uses for a builder's parallel children.
-DOCUMENT_ATTACHMENT_HORIZONTAL_SPACING = 360
+from backend.domain.model import SceneError
 
 
 def _merge_staged_attachments(text: str, staged: list) -> "tuple[str, list | None]":
@@ -98,12 +93,17 @@ def _promote_document_attachments(document: SceneDocument, node, staged: list) -
         attachment for attachment in staged
         if attachment.kind == "document" and attachment.extracted_text is not None
     ]
-    for index, attachment in enumerate(promotable):
+    for attachment in promotable:
+        # place_child resolves collisions against already-landed siblings,
+        # so two attachments on one message fan out sideways instead of
+        # stacking (ADR-021 stage 21.5's requirement, now via the shared
+        # placement engine instead of a local index offset).
+        ax, ay = document.place_child(node.id, "document")
         document.record_command(
             "addDocumentNode", "user",
-            lambda attachment=attachment, index=index: document.add_document_node(
-                node.x + index * DOCUMENT_ATTACHMENT_HORIZONTAL_SPACING,
-                node.y + MESSAGE_VERTICAL_SPACING,
+            lambda attachment=attachment, ax=ax, ay=ay: document.add_document_node(
+                ax,
+                ay,
                 attachment.name,
                 attachment.extracted_text or "",
                 "document",
@@ -151,19 +151,19 @@ def _build_reply_nodes(document, parent_node, placeholder_text, parsed_parts):
     parsed reply calls for, returning the reply node. Wrapped by ONE
     record_command at each call site, so a single undo reverses the whole
     reply rather than peeling off one child per Ctrl+Z."""
-    ax, ay = parent_node.x, parent_node.y + MESSAGE_VERTICAL_SPACING
+    ax, ay = document.place_child(parent_node.id, "chat")
     ai = document.add_chat_node(ax, ay, placeholder_text, False, parent_id=parent_node.id)
+    # Thinking children hang off the reply's left flank, code children off
+    # its right - the legacy left/right convention, but via place_child so
+    # each lands clear of the reply's real footprint and of its own earlier
+    # siblings instead of at a fixed 160px offset.
     for part in parsed_parts:
         if part["type"] == "thinking":
-            document.add_thinking_node(
-                ax - MESSAGE_VERTICAL_SPACING, ay + MESSAGE_VERTICAL_SPACING,
-                part["content"], parent_id=ai.id,
-            )
+            tx, ty = document.place_child(ai.id, "thinking", prefer="left")
+            document.add_thinking_node(tx, ty, part["content"], parent_id=ai.id)
         elif part["type"] == "code":
-            document.add_code_node(
-                ax + MESSAGE_VERTICAL_SPACING, ay + MESSAGE_VERTICAL_SPACING,
-                part["content"], part["language"], parent_id=ai.id,
-            )
+            cx, cy = document.place_child(ai.id, "code", prefer="right")
+            document.add_code_node(cx, cy, part["content"], part["language"], parent_id=ai.id)
     return ai
 
 
@@ -192,17 +192,15 @@ def _regenerate_in_place(document, node_to_regenerate, reply_text):
     node_to_regenerate.state.prompt_tokens = None
     node_to_regenerate.state.completion_tokens = None
 
-    bx, by = node_to_regenerate.x, node_to_regenerate.y
+    # Same left/right flank convention as _build_reply_nodes above.
     for part in parsed_parts:
         if part["type"] == "thinking":
-            document.add_thinking_node(
-                bx - MESSAGE_VERTICAL_SPACING, by + MESSAGE_VERTICAL_SPACING,
-                part["content"], parent_id=node_to_regenerate.id,
-            )
+            tx, ty = document.place_child(node_to_regenerate.id, "thinking", prefer="left")
+            document.add_thinking_node(tx, ty, part["content"], parent_id=node_to_regenerate.id)
         elif part["type"] == "code":
+            cx, cy = document.place_child(node_to_regenerate.id, "code", prefer="right")
             document.add_code_node(
-                bx + MESSAGE_VERTICAL_SPACING, by + MESSAGE_VERTICAL_SPACING,
-                part["content"], part["language"], parent_id=node_to_regenerate.id,
+                cx, cy, part["content"], part["language"], parent_id=node_to_regenerate.id,
             )
 
 
@@ -215,7 +213,7 @@ def _land_partial_reply_node(document, parent_node, partial_text):
     match the complete path (_build_reply_nodes) exactly. Module-level for
     the same 300-line-cap reason as its two siblings above."""
     def _commit():
-        ax, ay = parent_node.x, parent_node.y + MESSAGE_VERTICAL_SPACING
+        ax, ay = document.place_child(parent_node.id, "chat")
         ai = document.add_chat_node(ax, ay, partial_text, False, parent_id=parent_node.id)
         ai.state.response_incomplete = True
         return ai

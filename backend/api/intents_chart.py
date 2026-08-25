@@ -23,7 +23,6 @@ from graphlink_chart_data import ChartDataError, canonicalize_chart_data, SUPPOR
 from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
-from backend.domain.model import MESSAGE_VERTICAL_SPACING
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -59,7 +58,6 @@ def register_chart_intents(
             await bus.publish("notification")
             return None
 
-        parent = document.nodes[parent_node_id]
         branch_history = document.chat_branch_history(parent_node_id)
         source_text = _chart_source_text(branch_history)
 
@@ -102,8 +100,7 @@ def register_chart_intents(
             node, _command = document.record_command(
                 "generateChart", "agent",
                 lambda: document.add_chart_node(
-                    parent.x + MESSAGE_VERTICAL_SPACING,
-                    parent.y,
+                    *document.place_child(parent_node_id, "chart", prefer="right"),
                     parent_node_id,
                     normalized_chart_type,
                     chart_data,

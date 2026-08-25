@@ -52,33 +52,18 @@ FONT_COLOR_PRESETS = [
 FONT_SIZE_MIN = 8
 FONT_SIZE_MAX = 16
 
-# Organize: the R2 tidy-layout for placeholder nodes (the Qt organize used
-# node-size-aware packing; that returns with real nodes in R3).
-ORGANIZE_SPACING_X = 260
-ORGANIZE_SPACING_Y = 180
+# All spawn placement and the Organize layout live in
+# backend/domain/layout.py (LayoutOps) - the fixed-offset spacing constants
+# that used to sit here (ORGANIZE_SPACING_X/Y, MESSAGE_VERTICAL_SPACING,
+# BRANCH_HORIZONTAL_SPACING, NOTE_AGENT_X_OFFSET) were size-blind stopgaps
+# from the Qt removal and are retired; placement now uses each node's real
+# measured footprint plus collision resolution.
 
-# R3.3: the Composer's Send action stacks each new message below its parent
-# by this much - a simple deterministic layout, not the legacy
-# find_branch_position packing algorithm (a later refinement).
-MESSAGE_VERTICAL_SPACING = 160
-
-# ADR-002 Workstream 1: how far apart real branch siblings (2+ chat-kind
-# children of the same parent, from "Branch from here") fan out
-# horizontally, so a genuine divergence doesn't render as two nodes stacked
-# exactly on top of each other. 460px clears a chat node's own current CSS
-# width (420px, styles.css's .chat-node) with room to spare, same "clears
-# the node's width, not just MESSAGE_VERTICAL_SPACING" reasoning the Key
-# Takeaway/Explainer Note offset just below already uses.
-BRANCH_HORIZONTAL_SPACING = 460
-
-# R8a: where a generated Key Takeaway / Explainer Note lands relative to its
-# source chat node, and how it is tinted. 400px clears a chat node's own
-# width (~292px) with room to spare, matching the legacy offset. The colours
+# R8a: how a generated Key Takeaway / Explainer Note is tinted. The colours
 # are hex because the backend never resolves colour NAMES (see SceneNode's
 # own comment) - these two are the frontend palette's "Mid Gray" body and
 # "Blue" header, the closest surviving equivalents to legacy's Mid Gray +
 # status_info pairing (there is no status_info token in the new stack).
-NOTE_AGENT_X_OFFSET = 400
 NOTE_AGENT_BODY_COLOR = "#7a7a7a"
 NOTE_AGENT_HEADER_COLOR = "#3f7dc9"
 

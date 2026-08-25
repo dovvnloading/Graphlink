@@ -47,7 +47,6 @@ from backend.token_counter import TokenCounterState
 from backend.domain.content_codec import _content_codec
 from backend.domain.graph import SceneDocument
 from backend.domain.model import (
-    BRANCH_HORIZONTAL_SPACING,
     CHART_MAX_HEIGHT,
     CHART_MAX_WIDTH,
     CHART_MIN_HEIGHT,
@@ -73,12 +72,8 @@ from backend.domain.model import (
     GROUP_PADDING_TOP,
     HTML_TITLE_PREVIEW_LENGTH,
     IMAGE_TITLE_PREVIEW_LENGTH,
-    MESSAGE_VERTICAL_SPACING,
     NOTE_AGENT_BODY_COLOR,
     NOTE_AGENT_HEADER_COLOR,
-    NOTE_AGENT_X_OFFSET,
-    ORGANIZE_SPACING_X,
-    ORGANIZE_SPACING_Y,
     SceneEdge,
     SceneEmptyPromptError,
     SceneError,

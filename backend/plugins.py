@@ -42,7 +42,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from backend.canvas import MESSAGE_VERTICAL_SPACING, SceneDocument
+from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.plugin_sdk import (
@@ -344,13 +344,13 @@ async def _execute_discovered_plugin(
         )
         await bus.publish("notification")
         return None
-    parent = canvas_document.nodes[parent_node_id]
     run_ctx = PluginRunContext(plugin_id=kind_spec.plugin_id, notifications=notifications)
 
     def _mutator():
         seed = kind_spec.factory(canvas_document, run_ctx, parent_node_id)
+        x, y = canvas_document.place_child(parent_node_id, kind_spec.kind)
         return canvas_document.add_plugin_node(
-            kind_spec.kind, parent.x, parent.y + MESSAGE_VERTICAL_SPACING, parent_node_id,
+            kind_spec.kind, x, y, parent_node_id,
             title=seed.title, content=seed.content, state=seed.state,
         )
 
