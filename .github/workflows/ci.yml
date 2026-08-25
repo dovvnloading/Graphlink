@@ -133,7 +133,7 @@ jobs:
       # version skew - see that test's own module docstring for the CI
       # failure that proved the shell-out approach unusable.
       - name: Install dev tooling (pytest, ruff, mypy - CI-only, not in the prod lockfile)
-        run: pip install --quiet pytest==9.1.1 pytest-cov==7.1.0 pytest-xdist==3.8.0 ruff==0.16.4 mypy==2.3.1
+        run: pip install --quiet pytest==9.1.1 pytest-cov==7.1.0 pytest-xdist==3.8.0 ruff==0.16.4 mypy==2.3.1 hypothesis==6.165.10
 
       - name: Compile check
         run: python -m compileall -q .

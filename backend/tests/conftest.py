@@ -1,6 +1,8 @@
+import os
 from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck, settings
 
 import backend  # noqa: F401 - exercises the package import
 # R7.2: api_provider.py sits at the repo root, a sibling of backend/ - the
@@ -11,6 +13,15 @@ import api_provider
 
 
 _REAL_DATA_DIR = (Path.home() / ".graphlink").resolve()
+
+# ADR-022 stage 22.1: shared runners are noisy (the same reasoning already
+# applied to faulthandler_timeout=60 and the perf-gate tier's generous CI
+# ceiling) - a per-test wall-clock deadline flakes under -n auto/worksteal
+# contention, and CI doesn't need hundreds of examples to get real signal.
+# GitHub Actions sets CI=true automatically in every job; local runs get
+# Hypothesis's fuller default profile (100 examples, real deadline).
+settings.register_profile("ci", max_examples=25, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+settings.load_profile("ci" if os.environ.get("CI") else "default")
 
 
 @pytest.fixture(autouse=True)
