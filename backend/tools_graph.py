@@ -988,7 +988,7 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         # letting that SceneError propagate out of handler() uncaught.
         if node_id not in document.nodes:
             return _error(f"Node {node_id!r} no longer exists - the chart was discarded.")
-        x, y = _place_child(document, node_id)
+        x, y = _place_child(document, node_id, kind="chart")
         chart_node, _command = document.record_command(
             "builderRunChart", "agent",
             lambda: document.add_chart_node(x, y, node_id, chart_type, chart_data),

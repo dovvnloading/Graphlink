@@ -18,7 +18,6 @@ import time
 
 import api_provider
 from backend import builder as builder_module
-from backend import tools_graph as tools_graph_module
 from backend.api import intents_builder as intents_builder_module
 from backend.builder import run_build
 from backend.domain.graph import SceneDocument

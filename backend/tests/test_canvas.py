@@ -963,9 +963,11 @@ def test_send_message_branch_from_node_id_fans_out_siblings_so_they_do_not_overl
 
 
 def test_send_message_branch_from_node_id_fan_out_ignores_non_chat_children():
-    """A docked/generated non-chat child (thinking, code, a generated note)
-    under the same parent must never count toward the fan-out index - only
-    real conversational branches are genuine "siblings" for this purpose."""
+    """Placement is geometric now, not index-counting: a non-chat child
+    (thinking, code) sitting AT the parent's own position does not occupy
+    the below-parent slot, so the first real branch still lands directly
+    under the parent - and a genuinely blocking child would shift it by
+    collision, which is the intended contract."""
     doc = SceneDocument()
     root = doc.send_message("root message")
     doc.add_thinking_node(root.x, root.y, "some reasoning", parent_id=root.id)

@@ -109,6 +109,36 @@ def test_place_at_scene_right_clears_the_widest_nodes_real_edge():
     )
 
 
+def test_organize_keeps_the_creation_edge_as_structural_parent():
+    """A node's FIRST edge (its creation edge, in insertion order - never a
+    lexicographic id sort, where e10 < e9) stays its structural parent; a
+    later cross-link (e.g. a note attached to the same node) must not steal
+    the subtree."""
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    child = doc.add_chat_node(0, 500, "child", False, parent_id=root.id)
+    note = doc.add_note(900, 0)
+    doc.connect(note.id, child.id)
+
+    doc.organize()
+
+    assert child.y >= root.y + doc.node_footprint(root)[1], (
+        "the child must hang below its chat parent, not below the later-linked note"
+    )
+    assert abs((child.x + doc.node_footprint(child)[0] / 2)
+               - (root.x + doc.node_footprint(root)[0] / 2)) < 1e-6
+
+
+def test_footprint_of_a_collapsed_group_is_the_pill_not_a_stale_measurement():
+    doc = SceneDocument()
+    member = doc.add_chat_node(0, 0, "m", True)
+    frame = doc.create_frame([member.id])
+    doc.set_measured_node_sizes([(frame.id, 1200.0, 800.0)])
+    doc.set_chat_collapsed(frame.id, True)
+    from backend.domain.model import GROUP_COLLAPSED_HEIGHT, GROUP_COLLAPSED_WIDTH
+    assert doc.node_footprint(frame) == (GROUP_COLLAPSED_WIDTH, GROUP_COLLAPSED_HEIGHT)
+
+
 # -- properties -------------------------------------------------------------
 
 @settings(max_examples=50, deadline=None)

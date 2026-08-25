@@ -98,16 +98,20 @@ class LayoutOps:
         """One node's (width, height) for placement purposes: measured ->
         intrinsic -> per-kind fallback. Non-positive values from any source
         fall through, same posture as groups.py's _member_footprint."""
+        if node.kind in ("frame", "container") and node.is_collapsed:
+            # The pill size wins over a measured entry: the measurement may
+            # be the EXPANDED box from before the collapse (the client only
+            # re-reports on the next dimensions change), and a stale
+            # 1200px-wide "obstacle" would shove every subsequent spawn
+            # past a phantom rect.
+            return GROUP_COLLAPSED_WIDTH, GROUP_COLLAPSED_HEIGHT
         measured = self.measured_sizes.get(node.id)
         width, height = measured if measured is not None else (None, None)
         if not (width and width > 0 and height and height > 0):
             if node.kind == "chart" and node.state is not None:
                 width, height = node.state.chart_width, node.state.chart_height
             elif node.kind in ("frame", "container") and node.state is not None:
-                if node.is_collapsed:
-                    width, height = GROUP_COLLAPSED_WIDTH, GROUP_COLLAPSED_HEIGHT
-                else:
-                    width, height = node.state.group_width, node.state.group_height
+                width, height = node.state.group_width, node.state.group_height
         if not (width and width > 0) or not (height and height > 0):
             fw, fh = KIND_FALLBACK_FOOTPRINTS.get(node.kind, DEFAULT_FALLBACK_FOOTPRINT)
             width = width if (width and width > 0) else fw
@@ -261,7 +265,13 @@ class LayoutOps:
             return
 
         parent_of: dict[str, str] = {}
-        for edge in sorted(self.edges.values(), key=lambda e: e.id):
+        # Insertion order, NOT sorted by id: edge ids are "e<counter>"
+        # strings, so a lexicographic sort puts e10 before e9 and a
+        # later-added cross-link could steal a node's structural parent
+        # from its real creation edge. self.edges preserves creation order
+        # (and a loaded session restores edges in saved order), which is
+        # exactly the "first edge wins" rule wanted here.
+        for edge in self.edges.values():
             source, target = edge.source, edge.target
             if (
                 source == target
@@ -293,10 +303,25 @@ class LayoutOps:
         roots = sorted(
             (nid for nid in layout_nodes if nid not in parent_of), key=order_key,
         )
+        # Keep roots that belong to the same frame/container adjacent, so a
+        # re-wrapped group's box does not stretch across another group's
+        # members sitting interleaved between its own. Stable sort: within
+        # one owner (and among the un-owned) the spatial x-order above is
+        # preserved; owner blocks line up in owner-id order.
+        owner_of: dict[str, str] = {}
+        for group in self.nodes.values():
+            if group.kind in ("frame", "container"):
+                for member_id in group.item_ids:
+                    owner_of.setdefault(member_id, group.id)
+        roots.sort(key=lambda nid: owner_of.get(nid, ""))
 
         # Subtree widths, iterative post-order (chat chains can be deep).
+        # packed_width is the children row's own span (0 for a leaf) -
+        # remembered so the assign pass below centres over the same number
+        # instead of re-deriving it.
         footprints = {nid: self.node_footprint(n) for nid, n in layout_nodes.items()}
         subtree_width: dict[str, float] = {}
+        packed_width: dict[str, float] = {}
         stack: list[tuple[str, bool]] = [(r, False) for r in reversed(roots)]
         while stack:
             node_id, expanded = stack.pop()
@@ -305,12 +330,12 @@ class LayoutOps:
                 stack.append((node_id, True))
                 stack.extend((k, False) for k in reversed(kids))
                 continue
-            own = footprints[node_id][0]
-            if kids:
-                packed = sum(subtree_width[k] for k in kids) + NODE_GAP_X * (len(kids) - 1)
-                subtree_width[node_id] = max(own, packed)
-            else:
-                subtree_width[node_id] = own
+            packed = (
+                sum(subtree_width[k] for k in kids) + NODE_GAP_X * (len(kids) - 1)
+                if kids else 0.0
+            )
+            packed_width[node_id] = packed
+            subtree_width[node_id] = max(footprints[node_id][0], packed)
 
         # Assign positions, iterative pre-order: each node centred over its
         # own subtree span, children on a row below its real bottom edge.
@@ -325,10 +350,7 @@ class LayoutOps:
             width, height = footprints[node_id]
             node.x = left + (subtree_width[node_id] - width) / 2.0
             node.y = y
-            child_left = left + (subtree_width[node_id] - (
-                sum(subtree_width[k] for k in children.get(node_id, []))
-                + NODE_GAP_X * max(len(children.get(node_id, [])) - 1, 0)
-            )) / 2.0
+            child_left = left + (subtree_width[node_id] - packed_width[node_id]) / 2.0
             for kid in children.get(node_id, []):
                 assign.append((kid, child_left, y + height + NODE_GAP_Y))
                 child_left += subtree_width[kid] + NODE_GAP_X
@@ -347,13 +369,54 @@ class LayoutOps:
         self._organize_groups()
 
     def _organize_groups(self) -> None:
-        """Post-layout group pass: re-wrap every expanded frame/container
-        around its members' new positions; line collapsed pills up in a
-        row below the laid-out content."""
+        """Post-layout group pass: line collapsed pills up in a row below
+        the laid-out content, then re-wrap every expanded frame/container
+        around its members' new positions - pills first, so a container
+        holding a collapsed pill wraps the pill's final spot, and
+        innermost groups first, so an outer container unions its inner
+        group's re-wrapped rect rather than a stale pre-organize one
+        (containers can legitimately nest - see create_container)."""
         groups = [n for n in self.nodes.values() if n.kind in ("frame", "container")]
         expanded = [g for g in groups if not g.is_collapsed]
         collapsed = [g for g in groups if g.is_collapsed]
-        for group in expanded:
+
+        if collapsed:
+            collapsed_set = {g.id for g in collapsed}
+            others = [
+                n for n in self.nodes.values()
+                if not n.is_docked and n.id not in collapsed_set
+            ]
+            if others:
+                left = min(n.x for n in others)
+                bottom = max(n.y + self.node_footprint(n)[1] for n in others)
+            else:
+                left, bottom = 0.0, -GROUP_COLLAPSED_HEIGHT - COMPONENT_GAP
+            x = left
+            y = bottom + COMPONENT_GAP
+            for group in sorted(collapsed, key=lambda g: g.id):
+                group.x, group.y = x, y
+                x += self.node_footprint(group)[0] + NODE_GAP_X
+
+        # Innermost-first: a group's nesting height is 1 + the tallest
+        # height among its member groups (0 when it holds no group).
+        height_cache: dict[str, int] = {}
+
+        def nesting_height(group_id: str, trail: frozenset[str] = frozenset()) -> int:
+            if group_id in height_cache:
+                return height_cache[group_id]
+            if group_id in trail:  # membership cycles cannot happen; belt and braces
+                return 0
+            group = self.nodes[group_id]
+            member_heights = [
+                nesting_height(member_id, trail | {group_id})
+                for member_id in group.item_ids
+                if (member := self.nodes.get(member_id)) is not None
+                and member.kind in ("frame", "container")
+            ]
+            height_cache[group_id] = 1 + max(member_heights, default=0) if member_heights else 0
+            return height_cache[group_id]
+
+        for group in sorted(expanded, key=lambda g: (nesting_height(g.id), g.id)):
             state = group.state
             if state is not None:
                 for attr in (
@@ -363,16 +426,3 @@ class LayoutOps:
                     if hasattr(state, attr):
                         setattr(state, attr, None)
             self._recompute_group_bounds(group.id)
-        if not collapsed:
-            return
-        others = [n for n in self.nodes.values() if not n.is_docked and n not in collapsed]
-        if others:
-            left = min(n.x for n in others)
-            bottom = max(n.y + self.node_footprint(n)[1] for n in others)
-        else:
-            left, bottom = 0.0, -GROUP_COLLAPSED_HEIGHT - COMPONENT_GAP
-        x = left
-        y = bottom + COMPONENT_GAP
-        for group in sorted(collapsed, key=lambda g: g.id):
-            group.x, group.y = x, y
-            x += GROUP_COLLAPSED_WIDTH + NODE_GAP_X
