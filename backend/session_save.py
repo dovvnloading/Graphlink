@@ -130,7 +130,7 @@ _ACTIVE_SAVE_ASSET_STORE: contextvars.ContextVar = contextvars.ContextVar(
 # deleted their deserializer branches).
 _REGULAR_KINDS = (
     "chat", "code", "document", "image", "thinking", "conversation", "html",
-    "web_research", "artifact", "gitlink", "pycoder", "code_sandbox", "plan",
+    "web_research", "artifact", "gitlink", "code_sandbox", "plan",
 )
 
 
@@ -159,7 +159,7 @@ def _is_plugin_kind(kind: str) -> bool:
 # of two legacy field names depending on kind.
 _PARENT_CONTENT_INDEX_KINDS = {"code", "document", "image", "thinking"}
 _PARENT_NODE_INDEX_KINDS = {
-    "conversation", "html", "pycoder", "code_sandbox", "web_research", "artifact", "gitlink",
+    "conversation", "html", "code_sandbox", "web_research", "artifact", "gitlink",
 }
 
 # Mirrors scene_index.py's CHILD_LINK_NODE_TYPES = (ChatNode, ConversationNode,
@@ -396,25 +396,6 @@ def _serialize_gitlink_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
-def _serialize_pycoder_node(node: SceneNode) -> dict[str, Any]:
-    return {
-        "node_type": "pycoder",
-        # Inverse of R6.4's own lowercase translation: legacy persists the
-        # enum MEMBER NAME, uppercase.
-        "mode": node.state.pycoder_mode.upper(),
-        "prompt": node.state.pycoder_prompt,
-        "code": node.state.pycoder_code,
-        "output": node.state.pycoder_output,
-        "analysis": node.state.pycoder_analysis,
-        # ADR-005 stage 5.3 (review-fix): round-trips the stable REPL
-        # scratch-dir key - see PycoderState.pycoder_repl_id's own
-        # docstring for why node.id alone cannot be used for this.
-        "pycoder_repl_id": node.state.pycoder_repl_id,
-        "conversation_history": _serialize_history(node.history),
-        "is_collapsed": bool(node.is_collapsed),
-    }
-
-
 def _serialize_code_sandbox_node(node: SceneNode) -> dict[str, Any]:
     return {
         "node_type": "code_sandbox",
@@ -589,7 +570,6 @@ _NODE_SERIALIZERS = {
     "web_research": lambda node, document: _serialize_web_node(node),
     "artifact": lambda node, document: _serialize_artifact_node(node),
     "gitlink": lambda node, document: _serialize_gitlink_node(node),
-    "pycoder": lambda node, document: _serialize_pycoder_node(node),
     "code_sandbox": lambda node, document: _serialize_code_sandbox_node(node),
     "plan": lambda node, document: _serialize_plan_node(node),
     "harness": lambda node, document: _serialize_harness_node(node),

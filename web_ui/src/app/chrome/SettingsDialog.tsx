@@ -1392,7 +1392,7 @@ function PluginsPage({ grants, transport }: { grants: AppPluginGrant[]; transpor
 // so unlike every other page in this file there is no transport prop and no
 // fireIntent call anywhere below. Sourced from useExecutionLimits()
 // (ExecutionLimitsContext.tsx) - the SAME context CodeExecutionApprovalPanel.tsx
-// already reads before a human approves a pending Py-Coder/Code-Sandbox run -
+// already reads before a human approves a pending Execution Sandbox run -
 // rather than a second copy of the strings, so this page and that panel can
 // never drift out of sync with each other or with the backend's own
 // platform-conditional computation (backend/execution_limits.py). Exists so
@@ -1401,22 +1401,15 @@ function PluginsPage({ grants, transport }: { grants: AppPluginGrant[]; transpor
 // pressure to decide.
 function ResourceLimitsPage() {
   const executionLimits = useExecutionLimits();
-  const hasAnyText = !!executionLimits.pycoderResourceLimitsText || !!executionLimits.codeSandboxResourceLimitsText;
+  const hasAnyText = !!executionLimits.codeSandboxResourceLimitsText;
 
   return (
     <div className="settings-general-page">
       <p className="settings-integrations-intro">
         The resource caps applied to AI-driven code execution, computed by the backend for this system. The same
-        text is shown in the Py-Coder / Virtual Environment Runner approval prompt before you approve a run -
+        text is shown in the Virtual Environment Runner approval prompt before you approve a run -
         this page just makes it reachable without waiting for one.
       </p>
-
-      {!!executionLimits.pycoderResourceLimitsText && (
-        <div className="settings-field">
-          <span className="settings-field-label">Py-Coder</span>
-          <p className="settings-update-status">{executionLimits.pycoderResourceLimitsText}</p>
-        </div>
-      )}
 
       {!!executionLimits.codeSandboxResourceLimitsText && (
         <div className="settings-field">

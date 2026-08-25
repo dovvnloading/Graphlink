@@ -40,7 +40,6 @@ from backend.tests.conftest import (
     gitlink_apply_slots,
     gitlink_run_slots,
     image_slots,
-    pycoder_slots,
     web_research_slots,
 )
 
@@ -3573,50 +3572,19 @@ def test_agents_never_imports_qt():
     assert result.returncode == 0, result.stderr
 
 
-# -- R5.4: Py-Coder / Execution Sandbox ---------------------------------------
+# -- R5.4: Execution Sandbox ---------------------------------------------------
 #
 # The approve/deny asyncio.Future mechanism is the novel piece this section
 # exercises hardest: the future is created EAGERLY, before the background
-# task is even scheduled (see AgentDispatcher.start_pycoder_run/
-# start_code_sandbox_run's own docstrings) - so approve_code_execution/
-# deny_code_execution/cancel_pycoder/cancel_code_sandbox/
-# cancel_all_pending_approvals can all resolve it at ANY point in the
-# request's lifetime, even before the pipeline itself ever reaches its own
-# `await approval_future` line. Tests below rely on this: resolving the
-# future immediately after start_*_run returns (before awaiting the task to
-# completion) is equivalent to resolving it while genuinely parked on the
-# gate, since asyncio.Future carries its resolved value regardless of when
-# `await` is issued on it.
-
-
-def _make_pycoder_node(**overrides):
-    """Duck-types a SceneNode for AgentDispatcher's pycoder methods, which
-    never check isinstance(node, SceneNode) (see this module's own
-    docstring). ADR-002 stage 2.5 PR9b: pycoder_* fields now live on
-    node.state (a nested SimpleNamespace here), matching real SceneNode
-    instances post-shim-removal - node.pending_request_id stays a
-    top-level attribute, matching the real dataclass's own core field.
-    Callers keep passing pycoder_* kwargs flat; this splits them into the
-    nested state automatically, so no call site needs to change shape."""
-    state_defaults = dict(
-        pycoder_mode="ai_driven",
-        pycoder_prompt="",
-        pycoder_code="",
-        pycoder_output="",
-        pycoder_analysis="",
-        pycoder_last_run_failed=False,
-        pycoder_awaiting_approval=False,
-        pycoder_approved_fingerprint=None,
-        pycoder_error="",
-        pycoder_repl_id="fake-repl-id",
-    )
-    node_overrides = {"pending_request_id": None}
-    for key, value in overrides.items():
-        if key in state_defaults:
-            state_defaults[key] = value
-        else:
-            node_overrides[key] = value
-    return SimpleNamespace(state=SimpleNamespace(**state_defaults), **node_overrides)
+# task is even scheduled (see AgentDispatcher.start_code_sandbox_run's own
+# docstring) - so approve_code_execution/deny_code_execution/
+# cancel_code_sandbox/cancel_all_pending_approvals can all resolve it at ANY
+# point in the request's lifetime, even before the pipeline itself ever
+# reaches its own `await approval_future` line. Tests below rely on this:
+# resolving the future immediately after start_code_sandbox_run returns
+# (before awaiting the task to completion) is equivalent to resolving it
+# while genuinely parked on the gate, since asyncio.Future carries its
+# resolved value regardless of when `await` is issued on it.
 
 
 def _make_code_sandbox_node(**overrides):
@@ -3684,707 +3652,6 @@ def _make_code_exec_env():
     bus.register_topic("scene", lambda: {})
     dispatcher = AgentDispatcher(_FakeSettingsManager())
     return bus, notifications, dispatcher
-
-
-class _FakeRepl:
-    """A duck-typed stand-in for PythonREPL - avoids spawning a real
-    subprocess for tests that only care about the dispatch pipeline's own
-    control flow."""
-
-    def __init__(self, script=None):
-        # script: list of (output, failed) tuples, one per execute() call;
-        # the last entry repeats if execute() is called more times than the
-        # script has entries.
-        self.script = list(script or [("", False)])
-        self.last_run_failed = False
-        self.calls = []
-        self.stopped = False
-
-    def execute(self, code):
-        self.calls.append(code)
-        output, failed = self.script.pop(0) if len(self.script) > 1 else self.script[0]
-        self.last_run_failed = failed
-        return output
-
-    def stop(self):
-        self.stopped = True
-
-
-# -- Py-Coder: manual mode -----------------------------------------------------
-
-
-def test_pycoder_manual_mode_blank_code_calls_on_failure_without_creating_a_repl(monkeypatch):
-    repl_created = []
-    monkeypatch.setattr(
-        AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: repl_created.append(node_id) or _FakeRepl()
-    )
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="manual")
-        failures = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="manual", prompt="", code="   ", conversation_history=[],
-            on_success=lambda *a: None, on_failure=failures.append,
-        )
-        entry = next(iter(pycoder_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert failures == ["Add Python code before running Py-Coder."]
-        assert repl_created == [], "a blank-code guard must never touch the REPL"
-        assert pycoder_slots(dispatcher) == {}
-        assert node.pending_request_id is None
-
-    asyncio.run(run())
-
-
-def test_pycoder_manual_mode_success_executes_once_and_analyzes(monkeypatch):
-    fake_repl = _FakeRepl(script=[("42", False)])
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
-    monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
-        lambda self, original_prompt, code, code_output: f"analysis of {code_output}",
-    )
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="manual")
-        successes = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="manual", prompt="", code="print(42)", conversation_history=[],
-            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
-        )
-        entry = next(iter(pycoder_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert successes == [("print(42)", "42", "analysis of 42", False)]
-        assert fake_repl.calls == ["print(42)"]
-        assert pycoder_slots(dispatcher) == {}
-        assert node.pending_request_id is None
-
-    asyncio.run(run())
-
-
-def test_pycoder_manual_mode_reports_last_run_failed_from_the_repl(monkeypatch):
-    fake_repl = _FakeRepl(script=[("Traceback...", True)])
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
-    monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
-        lambda self, original_prompt, code, code_output: "explains the error",
-    )
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="manual")
-        successes = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="manual", prompt="", code="raise ValueError()", conversation_history=[],
-            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
-        )
-        entry = next(iter(pycoder_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert len(successes) == 1
-        code, output, analysis, last_run_failed = successes[0]
-        assert last_run_failed is True
-        assert output == "Traceback..."
-
-    asyncio.run(run())
-
-
-def test_pycoder_manual_mode_execute_timeout_disposes_the_repl_and_calls_on_failure(monkeypatch):
-    monkeypatch.setattr(agents_module, "PYCODER_EXECUTE_TIMEOUT_SECONDS", 0.05)
-
-    class _SlowRepl:
-        def __init__(self):
-            self.last_run_failed = False
-            self.stopped = False
-
-        def execute(self, code):
-            time.sleep(0.3)
-            return "too late"
-
-        def stop(self):
-            self.stopped = True
-
-    fake_repl = _SlowRepl()
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        # Populate the REAL dict directly (not via a monkeypatched
-        # get_pycoder_repl) so dispose_pycoder_repl's own real pop-and-stop
-        # logic has something genuine to tear down.
-        dispatcher._pycoder_repls["n1"] = fake_repl
-        node = _make_pycoder_node(pycoder_mode="manual")
-        failures = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="manual", prompt="", code="while True: pass", conversation_history=[],
-            on_success=lambda *a: None, on_failure=failures.append,
-        )
-        entry = next(iter(pycoder_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert len(failures) == 1
-        assert "timed out" in failures[0] or "stopped responding" in failures[0]
-        assert fake_repl.stopped is True, "the hung REPL must be torn down on timeout"
-        assert "n1" not in dispatcher._pycoder_repls
-        assert pycoder_slots(dispatcher) == {}
-        assert node.pending_request_id is None
-        assert notifications.visible is True
-        assert notifications.msg_type == "error"
-
-    asyncio.run(run())
-
-
-# -- Py-Coder: ai_driven mode ---------------------------------------------------
-
-
-def test_pycoder_ai_driven_empty_prompt_calls_on_failure():
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
-        failures = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="   ", code="", conversation_history=[],
-            on_success=lambda *a: None, on_failure=failures.append,
-        )
-        entry = next(iter(pycoder_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert failures == ["Please enter a prompt."]
-        assert pycoder_slots(dispatcher) == {}
-        assert node.pending_request_id is None
-
-    asyncio.run(run())
-
-
-def test_pycoder_ai_driven_no_code_generated_calls_on_success_with_placeholder_and_skips_approval(monkeypatch):
-    monkeypatch.setattr(
-        agents_module.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "Here is a direct answer, no code needed.",
-    )
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
-        successes = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="what is 1+1", code="", conversation_history=[],
-            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
-        )
-        entry = next(iter(pycoder_slots(dispatcher).values()))
-        await entry["task"]
-
-        assert successes == [(
-            "# No code was generated for this prompt.",
-            "[Not applicable]",
-            "Here is a direct answer, no code needed.",
-            False,
-        )]
-        assert node.state.pycoder_awaiting_approval is False, "no code ever means no approval gate"
-
-    asyncio.run(run())
-
-
-def test_pycoder_ai_driven_denied_approval_calls_on_failure_with_the_exact_legacy_message(monkeypatch):
-    monkeypatch.setattr(
-        agents_module.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
-    )
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
-        failures = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="add 1+1", code="", conversation_history=[],
-            on_success=lambda *a: None, on_failure=failures.append,
-        )
-        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
-
-        # Resolve BEFORE awaiting the task to completion - proves the future
-        # carries its value regardless of when the pipeline's own `await
-        # approval_future` actually executes (see this section's own
-        # docstring).
-        assert dispatcher.deny_code_execution(request_id) is True
-        await entry["task"]
-
-        assert failures == ["Py-Coder run cancelled: execution was not approved."]
-        assert node.state.pycoder_awaiting_approval is False
-        assert pycoder_slots(dispatcher) == {}
-        assert node.pending_request_id is None
-
-    asyncio.run(run())
-
-
-def test_pycoder_ai_driven_gate_discloses_the_current_runs_code_not_a_stale_value(monkeypatch):
-    """Pins the human-approval gate's disclosure integrity (audit finding P1,
-    doc/adr/AUDIT-2026-08-03-approval-guards-results.md): node.state.pycoder_code
-    must reflect the CURRENT run's extracted code the instant the gate opens,
-    before approval is even requested - never a stale value left over from a
-    prior run. Deliberately independent of the fingerprint-based tests (e.g.
-    test_pycoder_execution_blocked_when_approved_fingerprint_does_not_match):
-    the fingerprint binds approval to the internal `current_code` local
-    regardless of what is actually displayed, so a bug that silently stops
-    refreshing the disclosed field would pass every fingerprint check while
-    showing the human stale code to approve - a bait-and-switch on the
-    reviewer, not a code-execution bypass, but a real breach of informed
-    consent, which is the whole point of a human-approval gate."""
-    monkeypatch.setattr(
-        agents_module.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "[TOOL:PYTHON]\nprint('fresh code')\n[/TOOL]",
-    )
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
-        # Simulates exactly the failure mode this test exists to catch: if
-        # the disclosure write at gate-open were ever silently dropped, this
-        # stale value would still be here when the human is asked to approve.
-        node.state.pycoder_code = "print('STALE FROM A PRIOR RUN')"
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="add 1+1", code="", conversation_history=[],
-            on_success=lambda *a: None, on_failure=lambda m: None,
-        )
-        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
-
-        for _ in range(200):
-            if node.state.pycoder_awaiting_approval or entry["task"].done():
-                break
-            await asyncio.sleep(0.005)
-        assert node.state.pycoder_awaiting_approval is True, "must genuinely be parked on the approval gate"
-        assert node.state.pycoder_code == "print('fresh code')", (
-            "the disclosed code must be the CURRENT run's extracted code the instant "
-            "the gate opens, not a stale value left over from a prior run"
-        )
-
-        assert dispatcher.deny_code_execution(request_id) is True
-        await entry["task"]
-
-    asyncio.run(run())
-
-
-def test_pycoder_ai_driven_initial_gate_fingerprint_is_computed_over_the_disclosed_code(monkeypatch):
-    """Hardens audit finding P2 (doc/adr/AUDIT-2026-08-03-approval-guards-results.md):
-    the existing fingerprint-mismatch coverage
-    (test_pycoder_execution_blocked_when_approved_fingerprint_does_not_match
-    and its repair-loop siblings) is real but INDIRECT - those tests only
-    catch a wrong-content fingerprint because a SEPARATE guard (the loop-top
-    re-check, a defense-in-depth check independent of the gate-open write
-    this test targets) happens to also depend on the same property and trips
-    first. If that separate re-check were ever weakened in the same change
-    as a bug here, this indirect coverage would silently disappear. This
-    asserts directly, independent of any other guard, that node.state.
-    pycoder_approved_fingerprint is exactly _fingerprint_changes({"code":
-    <the disclosed code>}) the instant the gate opens - never executing any
-    code, so no other check is ever in a position to also catch this."""
-    monkeypatch.setattr(
-        agents_module.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "[TOOL:PYTHON]\nprint('exact code')\n[/TOOL]",
-    )
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="add 1+1", code="", conversation_history=[],
-            on_success=lambda *a: None, on_failure=lambda m: None,
-        )
-        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
-
-        for _ in range(200):
-            if node.state.pycoder_awaiting_approval or entry["task"].done():
-                break
-            await asyncio.sleep(0.005)
-        assert node.state.pycoder_awaiting_approval is True
-
-        expected_fingerprint = agents_module._fingerprint_changes({"code": node.state.pycoder_code})
-        assert node.state.pycoder_approved_fingerprint == expected_fingerprint, (
-            "the approval fingerprint must be computed directly over the disclosed "
-            "code, independent of any other guard that might happen to also verify this"
-        )
-
-        assert dispatcher.deny_code_execution(request_id) is True
-        await entry["task"]
-
-    asyncio.run(run())
-
-
-def test_pycoder_ai_driven_approved_executes_successfully(monkeypatch):
-    monkeypatch.setattr(
-        agents_module.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "[TOOL:PYTHON]\nprint(2)\n[/TOOL]",
-    )
-    fake_repl = _FakeRepl(script=[("2", False)])
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
-    monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
-        lambda self, original_prompt, code, code_output: "the answer is 2",
-    )
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
-        successes = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="add 1+1", code="", conversation_history=[],
-            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
-        )
-        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
-        assert dispatcher.approve_code_execution(request_id) is True
-        await entry["task"]
-
-        assert successes == [("print(2)", "2", "the answer is 2", False)]
-        assert node.state.pycoder_awaiting_approval is False
-        assert fake_repl.calls == ["print(2)"]
-        assert pycoder_slots(dispatcher) == {}
-        assert node.pending_request_id is None
-
-    asyncio.run(run())
-
-
-def test_pycoder_ai_driven_repair_loop_exhausts_retries_calls_on_success_with_last_run_failed_true(monkeypatch):
-    monkeypatch.setattr(
-        agents_module.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
-    )
-    repair_calls = []
-    monkeypatch.setattr(
-        agents_module.PyCoderRepairAgent, "get_response",
-        lambda self, code, error, is_final_attempt: repair_calls.append(1) or f"still broken v{len(repair_calls)}",
-    )
-    monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
-        lambda self, original_prompt, code, code_output: "explains the persistent failure",
-    )
-    fake_repl = _FakeRepl(script=[("err", True)])  # every execute() call fails
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
-
-    # ADR-002 P0 regression guard: every repaired variant must open its own
-    # fresh gate - a local SimpleNamespace subclass (NOT a patch on the
-    # shared builtin SimpleNamespace type) counts how many times
-    # pycoder_awaiting_approval transitions to True, since its final value is
-    # always False by the time the run completes and would hide a regression
-    # back to "one gate, reused for every repair". ADR-002 stage 2.5 PR9b:
-    # pycoder_awaiting_approval now lives on node.state (see
-    # _make_pycoder_node's own docstring), so this wraps the STATE object,
-    # not the node itself.
-    class _CountingState(SimpleNamespace):
-        def __setattr__(self, name, value):
-            if name == "pycoder_awaiting_approval" and value is True:
-                self.__dict__["gate_open_count"] = self.__dict__.get("gate_open_count", 0) + 1
-            super().__setattr__(name, value)
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
-        node.state = _CountingState(**vars(node.state), gate_open_count=0)
-        successes = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="do something impossible", code="", conversation_history=[],
-            on_success=lambda *a: successes.append(a), on_failure=lambda m: None,
-        )
-        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
-        await _approve_every_gate_until_done(dispatcher, request_id, entry["task"])
-        await entry["task"]
-
-        assert len(successes) == 1, "an exhausted repair loop is still a completed run, never on_failure"
-        code, output, analysis, last_run_failed = successes[0]
-        assert last_run_failed is True
-        assert analysis.startswith("**PROCESS FAILED**")
-        assert len(fake_repl.calls) == 4, "max_retries=4, matching legacy exactly"
-        assert repair_calls == [1, 1, 1], "3 repairs between the 4 execute attempts"
-        assert node.state.gate_open_count == 4, (
-            "ADR-002 P0: one gate for the original code, plus one fresh gate per repaired "
-            "variant (3) - repaired code must never run under the original approval"
-        )
-
-    asyncio.run(run())
-
-
-def test_pycoder_ai_driven_repair_gate_denied_stops_immediately_without_further_repairs(monkeypatch):
-    """ADR-002 P0: denying a LATER gate (a repaired variant, not the
-    original code) must stop the run with its own distinct message, and must
-    not fall through to yet another repair attempt.
-
-    The `await entry["task"]` below is deliberately bounded (see its own
-    comment): this test's approve-then-deny handshake assumes each gate
-    genuinely blocks, and a mutation-testing audit proved that if the
-    FIRST gate ever stops blocking, the handshake slides out of sync and
-    this test parks forever on a Future nothing will resolve - hanging the
-    whole suite with no output, and masking the 5 other tests that DO
-    correctly catch that same regression."""
-    monkeypatch.setattr(
-        agents_module.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
-    )
-    monkeypatch.setattr(
-        agents_module.PyCoderRepairAgent, "get_response",
-        lambda self, code, error, is_final_attempt: "still broken",
-    )
-    fake_repl = _FakeRepl(script=[("err", True)])  # every execute() call fails
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
-        failures = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="do something impossible", code="", conversation_history=[],
-            on_success=lambda *a: None, on_failure=failures.append,
-        )
-        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
-
-        # Approve the FIRST gate (the original code) only.
-        for _ in range(200):
-            if node.state.pycoder_awaiting_approval:
-                break
-            await asyncio.sleep(0.005)
-        assert dispatcher.approve_code_execution(request_id) is True
-
-        # Wait for the SECOND gate (the repaired code) to open, then deny it.
-        for _ in range(200):
-            if len(fake_repl.calls) >= 1 and node.state.pycoder_awaiting_approval:
-                break
-            await asyncio.sleep(0.005)
-        assert node.state.pycoder_awaiting_approval is True, "the repaired variant must open its own gate"
-        assert dispatcher.deny_code_execution(request_id) is True
-        # Bounded, not a bare await - see this test's own docstring. A
-        # regression that stops the first gate blocking desyncs the
-        # handshake above and leaves this task parked on an unresolvable
-        # Future; without this bound that is an infinite, output-less hang
-        # rather than a clean, located failure.
-        await asyncio.wait_for(entry["task"], timeout=10)
-
-        assert failures == ["Py-Coder run cancelled: repaired code was not approved."]
-        assert len(fake_repl.calls) == 1, "denying the repair gate must prevent the repaired code from ever running"
-        assert node.state.pycoder_awaiting_approval is False
-        assert pycoder_slots(dispatcher) == {}
-        assert node.pending_request_id is None
-
-    asyncio.run(run())
-
-
-def test_pycoder_ai_driven_repair_gate_discloses_the_repaired_code_not_the_original(monkeypatch):
-    """Pins the repair gate's disclosure integrity (audit finding P4,
-    doc/adr/AUDIT-2026-08-03-approval-guards-results.md): node.state.pycoder_code
-    must be updated to the REPAIRED code the instant the repair gate opens,
-    not left showing the original (pre-repair) code the human already saw at
-    the first gate. Deliberately independent of the fingerprint/fresh-Future
-    tests above (test_pycoder_ai_driven_repair_gate_denied_stops_immediately_
-    without_further_repairs, test_pycoder_ai_driven_repair_loop_exhausts_
-    retries_...): those bind approval to the internal `current_code` local
-    regardless of what is actually displayed, so a bug that stops refreshing
-    the disclosed field at the repair gate would pass every one of them
-    while showing the human the WRONG code to approve - exactly the
-    "approval is not bound to what was shown" gap the ADR-002 P0 security
-    review named explicitly, just at the disclosure layer instead of the
-    execution-binding layer those other tests already cover."""
-    monkeypatch.setattr(
-        agents_module.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
-    )
-    monkeypatch.setattr(
-        agents_module.PyCoderRepairAgent, "get_response",
-        lambda self, code, error, is_final_attempt: "print('repaired')",
-    )
-    fake_repl = _FakeRepl(script=[("err", True)])  # every execute() call fails
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
-        failures = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="do something impossible", code="", conversation_history=[],
-            on_success=lambda *a: None, on_failure=failures.append,
-        )
-        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
-
-        # Approve the FIRST gate (the original "broken" code) only.
-        for _ in range(200):
-            if node.state.pycoder_awaiting_approval:
-                break
-            await asyncio.sleep(0.005)
-        assert node.state.pycoder_code == "broken"
-        assert dispatcher.approve_code_execution(request_id) is True
-
-        # Wait for the SECOND gate (the repaired code) to open.
-        for _ in range(200):
-            if len(fake_repl.calls) >= 1 and node.state.pycoder_awaiting_approval:
-                break
-            await asyncio.sleep(0.005)
-        assert node.state.pycoder_awaiting_approval is True, "the repaired variant must open its own gate"
-        assert node.state.pycoder_code == "print('repaired')", (
-            "the repair gate's disclosure must show the REPAIRED code, not the "
-            "original (already-seen) code from the first gate"
-        )
-
-        assert dispatcher.deny_code_execution(request_id) is True
-        await entry["task"]
-
-    asyncio.run(run())
-
-
-def test_pycoder_repair_gate_broadcasts_the_intermediate_not_awaiting_state(monkeypatch):
-    """Regression: the repair gate used to flip pycoder_awaiting_approval
-    False then True again (after the REPL-execute + repair-agent latency)
-    with NO scene publish for the False in between. The frontend's own
-    busy-flag reset (PyCoderNodeView.tsx) only fires on an OBSERVED
-    false->true transition, so across that invisible window it never saw
-    a transition at all (True -> [nothing] -> True) - the repair round's
-    mandatory approval dialog rendered with Approve and Deny permanently
-    disabled, with no other dismissal affordance. This asserts the actual
-    BROADCAST sequence (not just the final in-memory value, which was
-    already correct even with the bug) - the bug was specifically about
-    what reached the wire."""
-    monkeypatch.setattr(
-        agents_module.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
-    )
-    monkeypatch.setattr(
-        agents_module.PyCoderRepairAgent, "get_response",
-        lambda self, code, error, is_final_attempt: "print('repaired')",
-    )
-    fake_repl = _FakeRepl(script=[("err", True)])
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
-
-    async def run():
-        bus = SessionBus("agents-code-exec-test")
-        notifications = NotificationState()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
-        bus.register_topic("notification", notifications.payload)
-        # Unlike _make_code_exec_env's placeholder `lambda: {}`, this
-        # builder snapshots the LIVE field the bug is about - the test
-        # needs to see what was actually BROADCAST at each publish, not
-        # just the final in-memory value.
-        bus.register_topic("scene", lambda: {"pycoderAwaitingApproval": node.state.pycoder_awaiting_approval})
-        dispatcher = AgentDispatcher(_FakeSettingsManager())
-
-        published: list[bool] = []
-
-        class _AwaitingApprovalRecorder:
-            async def send_json(self, data):
-                if data.get("kind") == "state" and data.get("topic") == "scene":
-                    published.append(data["payload"]["pycoderAwaitingApproval"])
-
-        bus.attach(_AwaitingApprovalRecorder())
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="do something impossible", code="", conversation_history=[],
-            on_success=lambda *a: None, on_failure=lambda *a: None,
-        )
-        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
-
-        for _ in range(200):
-            if node.state.pycoder_awaiting_approval:
-                break
-            await asyncio.sleep(0.005)
-        assert dispatcher.approve_code_execution(request_id) is True
-
-        for _ in range(200):
-            if len(fake_repl.calls) >= 1 and node.state.pycoder_awaiting_approval:
-                break
-            await asyncio.sleep(0.005)
-        assert node.state.pycoder_awaiting_approval is True, "the repair gate must have opened"
-
-        first_true = published.index(True)
-        assert False in published[first_true + 1:], (
-            "the repair gate never broadcast the intermediate 'not awaiting "
-            "approval' state between the two open gates - the frontend's "
-            "busy-flag reset (gated on an OBSERVED transition) would never fire"
-        )
-
-        assert dispatcher.deny_code_execution(request_id) is True
-        await entry["task"]
-
-    asyncio.run(run())
-
-
-def test_pycoder_execution_blocked_when_approved_fingerprint_does_not_match(monkeypatch):
-    """ADR-002 P0 defense-in-depth: if node.state.pycoder_approved_fingerprint
-    ever disagrees with the code about to execute (simulating a future bug
-    that mutates current_code without opening a fresh gate), the run must
-    fail loudly instead of silently executing unapproved content."""
-    monkeypatch.setattr(
-        agents_module.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
-    )
-    fake_repl = _FakeRepl(script=[("1", False)])
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: fake_repl)
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="ai_driven")
-        failures = []
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="add 1", code="", conversation_history=[],
-            on_success=lambda *a: None, on_failure=failures.append,
-        )
-        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
-        for _ in range(200):
-            if node.state.pycoder_awaiting_approval:
-                break
-            await asyncio.sleep(0.005)
-        # Tamper with the fingerprint the way a hypothetical future bug that
-        # mutated the code without re-gating would leave it mismatched.
-        node.state.pycoder_approved_fingerprint = "not-the-real-fingerprint"
-        assert dispatcher.approve_code_execution(request_id) is True
-        await entry["task"]
-
-        assert failures == [
-            "Py-Coder execution blocked: the approved code no longer matches what is about to run."
-        ]
-        assert fake_repl.calls == [], "execution must never happen once the fingerprint check fails"
-
-    asyncio.run(run())
-
-
-def test_pycoder_busy_node_refuses_immediately_without_creating_a_request_entry():
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pending_request_id="already-busy")
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="ai_driven", prompt="x", code="", conversation_history=[],
-            on_success=lambda *a: None, on_failure=lambda m: None,
-        )
-
-        assert pycoder_slots(dispatcher) == {}
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
-
-    asyncio.run(run())
 
 
 # -- Execution Sandbox ----------------------------------------------------------
@@ -4541,7 +3808,7 @@ def test_code_sandbox_approved_full_success_flow_runs_venv_and_analyzes(monkeypa
         lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
     )
     monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
+        agents_module.CodeAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "sandbox ran fine",
     )
 
@@ -4618,7 +3885,7 @@ def test_code_sandbox_source_builds_defaults_to_false_when_never_toggled(monkeyp
         lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
     )
     monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
+        agents_module.CodeAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "ok",
     )
     sandbox_holder = {}
@@ -4661,7 +3928,7 @@ def test_code_sandbox_source_builds_true_is_threaded_through_to_sync_requirement
         lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
     )
     monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
+        agents_module.CodeAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "ok",
     )
     sandbox_holder = {}
@@ -4802,7 +4069,7 @@ def test_code_sandbox_source_builds_toggle_after_approval_resolves_does_not_affe
         lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
     )
     monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
+        agents_module.CodeAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "ok",
     )
     sandbox_holder = {}
@@ -4872,7 +4139,7 @@ def test_code_sandbox_source_builds_snapshotted_atomically_at_approve_time_not_a
         lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
     )
     monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
+        agents_module.CodeAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "ok",
     )
     sandbox_holder = {}
@@ -4947,7 +4214,7 @@ def test_code_sandbox_repair_gate_resets_allow_source_builds_and_marks_is_repair
         lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
     )
     monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
+        agents_module.CodeAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "explains the failure",
     )
 
@@ -5040,8 +4307,10 @@ def test_code_sandbox_repair_gate_resets_allow_source_builds_and_marks_is_repair
 
 
 def test_code_sandbox_repair_loop_requires_a_fresh_approval_for_each_repaired_attempt(monkeypatch):
-    """ADR-002 P0: the code_sandbox twin of the pycoder repair-gate test
-    above - same confirmed gap, same fix, same shape."""
+    """ADR-002 P0: a repaired attempt must open a FRESH approval gate rather
+    than silently re-running under the original one - see
+    CodeSandboxState.code_sandbox_approval_is_repair's own comment for the
+    confirmed gap this closes."""
     monkeypatch.setattr(
         agents_module.SandboxGenerationAgent, "get_response",
         lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nbroken\n[/TOOL]",
@@ -5052,7 +4321,7 @@ def test_code_sandbox_repair_loop_requires_a_fresh_approval_for_each_repaired_at
         lambda self, code, error, manifest, original_prompt=None: repair_calls.append(1) or "still broken",
     )
     monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
+        agents_module.CodeAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "explains the persistent failure",
     )
 
@@ -5082,8 +4351,8 @@ def test_code_sandbox_repair_loop_requires_a_fresh_approval_for_each_repaired_at
 
     # ADR-002 stage 2.5 PR10b: code_sandbox_awaiting_approval now lives on
     # node.state (see _make_code_sandbox_node's own docstring), so this
-    # wraps the STATE object, not the node itself - mirroring the identical
-    # rewiring already done for pycoder's own gate counter above.
+    # wraps the STATE object, not the node itself, to count every time the
+    # gate reopens for a repaired attempt.
     class _CountingState(SimpleNamespace):
         def __setattr__(self, name, value):
             if name == "code_sandbox_awaiting_approval" and value is True:
@@ -5368,7 +4637,7 @@ def test_code_sandbox_run_streams_live_output_lines_in_order_with_a_final_done_f
         lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint('ok')\n[/TOOL]",
     )
     monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
+        agents_module.CodeAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "sandbox ran fine",
     )
 
@@ -5441,14 +4710,14 @@ def test_is_sandbox_error_output_detects_nonzero_return_code_and_keywords():
 # -- shared approve/deny + cancel + disconnect auto-deny mechanics ------------
 
 
-def test_cancel_pycoder_sets_cancel_event_and_resolves_the_approval_future_false():
+def test_cancel_code_sandbox_sets_cancel_event_and_resolves_the_approval_future_false():
     async def run():
         bus, notifications, dispatcher = _make_code_exec_env()
         cancel_event = threading.Event()
         future = asyncio.get_running_loop().create_future()
-        handle = dispatcher._runs.claim("pycoder", cancel_event=cancel_event, approval_future=future)
+        handle = dispatcher._runs.claim("code_sandbox", cancel_event=cancel_event, approval_future=future)
 
-        assert dispatcher.cancel_pycoder(handle.request_id) is True
+        assert dispatcher.cancel_code_sandbox(handle.request_id) is True
         assert cancel_event.is_set() is True
         assert future.done() is True
         assert future.result() is False
@@ -5456,175 +4725,53 @@ def test_cancel_pycoder_sets_cancel_event_and_resolves_the_approval_future_false
     asyncio.run(run())
 
 
-def test_cancel_pycoder_and_cancel_code_sandbox_cannot_trip_each_others_or_a_foreign_kinds_request_id():
-    """ADR-002 stage 2.4g: cancel_pycoder/cancel_code_sandbox both need an
-    explicit kind check (unlike _resolve_approval, whose approval_future
-    is None discriminator already handles this) because they unconditionally
-    call handle.cancel_event.set() - a foreign kind's handle could have
-    cancel_event=None (e.g. chart) and AttributeError, or - worse - a
-    request_id belonging to a DIFFERENT cancel_event-bearing kind (chat,
-    artifact, gitlink_run, or the OTHER of this pair) could silently trip
-    that unrelated run's cancellation instead of being rejected."""
+def test_cancel_code_sandbox_and_cancel_harness_cannot_trip_each_others_or_a_foreign_kinds_request_id():
+    """ADR-002 stage 2.4g (cancel_code_sandbox) / PLAN-2026-08-24 H5 fix
+    (cancel_harness): both need an explicit kind check before touching
+    handle.cancel_event/approval_future - a foreign kind's handle could
+    have cancel_event=None (e.g. chart) and AttributeError, or - worse - a
+    request_id belonging to a DIFFERENT approval-gated kind could silently
+    have its OWN pending human-approval gate denied, or its unrelated run's
+    cancellation tripped, instead of being rejected. See cancel_builder's
+    own docstring (backend/agents.py) for the exact race this guards."""
     async def run():
         dispatcher = AgentDispatcher(_FakeSettingsManager())
         loop = asyncio.get_running_loop()
         chat_handle = dispatcher._runs.claim("chat", cancel_event=threading.Event())
-        pycoder_handle = dispatcher._runs.claim(
-            "pycoder", cancel_event=threading.Event(), approval_future=loop.create_future()
+        harness_handle = dispatcher._runs.claim(
+            "harness", cancel_event=threading.Event(), approval_future=loop.create_future()
         )
         sandbox_handle = dispatcher._runs.claim(
             "code_sandbox", cancel_event=threading.Event(), approval_future=loop.create_future()
         )
 
-        assert dispatcher.cancel_pycoder(chat_handle.request_id) is False
+        dispatcher.cancel_harness(chat_handle.request_id)
         assert not chat_handle.cancel_event.is_set()
 
-        assert dispatcher.cancel_pycoder(sandbox_handle.request_id) is False
+        dispatcher.cancel_harness(sandbox_handle.request_id)
         assert not sandbox_handle.cancel_event.is_set()
+        assert not sandbox_handle.approval_future.done(), "a foreign kind's approval must never be denied"
 
-        assert dispatcher.cancel_code_sandbox(pycoder_handle.request_id) is False
-        assert not pycoder_handle.cancel_event.is_set()
+        assert dispatcher.cancel_code_sandbox(harness_handle.request_id) is False
+        assert not harness_handle.cancel_event.is_set()
+        assert not harness_handle.approval_future.done(), "a foreign kind's approval must never be denied"
 
         # Sanity: each method DOES accept its own matching kind.
-        assert dispatcher.cancel_pycoder(pycoder_handle.request_id) is True
-        assert pycoder_handle.cancel_event.is_set()
+        dispatcher.cancel_harness(harness_handle.request_id)
+        assert harness_handle.cancel_event.is_set()
+        assert harness_handle.approval_future.result() is False
         assert dispatcher.cancel_code_sandbox(sandbox_handle.request_id) is True
         assert sandbox_handle.cancel_event.is_set()
+        assert sandbox_handle.approval_future.result() is False
 
     asyncio.run(run())
 
 
-def test_cancel_all_trips_a_pycoder_run_that_is_mid_execution_past_the_approval_gate(monkeypatch):
-    """ADR-002 stage 2.4g: proves the NEW capability this migration slice
-    unlocks - previously pycoder's cancel_event lived in its own private
-    dict that cancel_all() never walked at all, so a session disconnect
-    mid-EXECUTION (already past any approval gate, blocked in the REPL)
-    left the run running server-side, untethered, until it finished on
-    its own. Now that pycoder shares self._runs with every other
-    cancellable kind, cancel_all() - the same method backend/app.py's
-    disconnect handler calls first, before cancel_all_pending_approvals()
-    - genuinely reaches it too. Uses manual mode deliberately: it has no
-    approval gate at all, so this isolates the EXECUTE-stage cancellation
-    specifically from the (already separately tested) approval-pause
-    auto-deny path."""
-    started = threading.Event()
-    release = threading.Event()
-
-    class _BlockingRepl:
-        last_run_failed = False
-
-        def execute(self, code):
-            started.set()
-            release.wait(5)
-            return "output"
-
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: _BlockingRepl())
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="manual")
-        failures = []
-
-        # start_pycoder_run is itself fire-and-forget - it schedules _run()
-        # internally and returns almost immediately, well before execution
-        # reaches the REPL. Await it directly (not wrapped in create_task);
-        # the REAL background work is entry["task"] below, grabbed only
-        # after this returns and the registry claim has landed.
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="manual", prompt="", code="print(1)", conversation_history=[],
-            on_success=lambda *a: None, on_failure=failures.append,
-        )
-        entry = next(iter(pycoder_slots(dispatcher).values()))
-        await asyncio.to_thread(started.wait, 5)
-
-        # THE key action: cancel_all() - exactly what backend/app.py's
-        # disconnect handler calls - must trip this run's cancel_event even
-        # though it is mid-execution, with no approval gate involved at all.
-        dispatcher.cancel_all()
-
-        release.set()
-        await entry["task"]
-
-        assert notifications.visible is True
-        assert notifications.message == "Py-Coder execution cancelled."
-
-    asyncio.run(run())
-
-
-def test_cancel_pycoder_clears_pending_request_id_immediately_not_after_execute_returns(monkeypatch):
-    """REVIEW-FIX regression: start_pycoder_run's self._runs.claim() used
-    to omit `finalize`, unlike start_builder_run's/_dispatch's own claim()
-    calls. cancel_pycoder pops the registry handle (freeing is_busy(
-    "pycoder")) the INSTANT Cancel lands, but with no finalize wired,
-    nothing else observed that - node.pending_request_id (the sole real
-    busy guard runPyCoder's own pre-check reads, and what the frontend's
-    spinner keys off) stayed stuck pointing at the cancelled request until
-    _run's own late `finally` eventually ran, which cannot happen until
-    the blocking repl.execute() call actually returns - up to
-    PYCODER_EXECUTE_TIMEOUT_SECONDS later, since the REPL has no polling
-    hook. This asserts the busy guard clears WHILE still blocked inside
-    execute() (release is only set afterward), not merely once the task
-    eventually finishes - the same distinction test_cancel_all_trips_a_
-    pycoder_run_...'s own await-the-whole-task shape does not cover."""
-    started = threading.Event()
-    release = threading.Event()
-
-    class _BlockingRepl:
-        last_run_failed = False
-
-        def execute(self, code):
-            started.set()
-            release.wait(5)
-            return "output"
-
-    monkeypatch.setattr(AgentDispatcher, "get_pycoder_repl", lambda self, node_id, repl_id=None: _BlockingRepl())
-
-    async def run():
-        bus, notifications, dispatcher = _make_code_exec_env()
-        node = _make_pycoder_node(pycoder_mode="manual")
-
-        await dispatcher.start_pycoder_run(
-            bus=bus, notifications_state=notifications, node=node, node_id="n1",
-            mode="manual", prompt="", code="print(1)", conversation_history=[],
-            on_success=lambda *a: None, on_failure=lambda m: None,
-        )
-        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
-        await asyncio.to_thread(started.wait, 5)
-        assert node.pending_request_id == request_id, "sanity: busy before cancel"
-
-        # THE key action: Cancel, while still blocked inside repl.execute() -
-        # `release` is not set yet, so the orphaned task cannot have reached
-        # its own `finally` at any point below.
-        assert dispatcher.cancel_pycoder(request_id) is True
-        assert pycoder_slots(dispatcher) == {}, "the registry slot is freed immediately"
-
-        # finalize runs as a separately-scheduled task on this same loop
-        # (RunRegistry._schedule_finalize's run_coroutine_threadsafe) - give
-        # it a chance to actually execute before asserting on its effect.
-        for _ in range(50):
-            if node.pending_request_id is None:
-                break
-            await asyncio.sleep(0.01)
-
-        assert node.pending_request_id is None, (
-            "finalize must clear the busy guard the instant Cancel lands, "
-            "not wait for the orphaned execute() call to return"
-        )
-        assert node.state.pycoder_awaiting_approval is False
-        assert node.state.pycoder_error == "Py-Coder execution cancelled."
-
-        release.set()
-        await entry["task"]
-
-    asyncio.run(run())
-
-
-def test_approve_code_execution_resolves_a_pending_pycoder_future():
+def test_approve_code_execution_resolves_a_pending_code_sandbox_future():
     async def run():
         dispatcher = AgentDispatcher(_FakeSettingsManager())
         future = asyncio.get_running_loop().create_future()
-        handle = dispatcher._runs.claim("pycoder", approval_future=future)
+        handle = dispatcher._runs.claim("code_sandbox", approval_future=future)
 
         assert dispatcher.approve_code_execution(handle.request_id) is True
         assert future.result() is True
@@ -5651,7 +4798,7 @@ def test_resolve_approval_is_idempotent_and_never_raises_on_a_stale_duplicate_ca
     async def run():
         dispatcher = AgentDispatcher(_FakeSettingsManager())
         future = asyncio.get_running_loop().create_future()
-        handle = dispatcher._runs.claim("pycoder", approval_future=future)
+        handle = dispatcher._runs.claim("code_sandbox", approval_future=future)
 
         assert dispatcher.approve_code_execution(handle.request_id) is True
         assert future.result() is True
@@ -5666,12 +4813,12 @@ def test_resolve_approval_is_idempotent_and_never_raises_on_a_stale_duplicate_ca
 def test_cancel_all_pending_approvals_auto_denies_every_undone_future_in_both_dicts():
     async def run():
         dispatcher = AgentDispatcher(_FakeSettingsManager())
-        pycoder_future = asyncio.get_running_loop().create_future()
+        harness_future = asyncio.get_running_loop().create_future()
         sandbox_future = asyncio.get_running_loop().create_future()
         already_resolved_future = asyncio.get_running_loop().create_future()
         already_resolved_future.set_result(True)
 
-        dispatcher._runs.claim("pycoder", cancel_event=threading.Event(), approval_future=pycoder_future)
+        dispatcher._runs.claim("harness", cancel_event=threading.Event(), approval_future=harness_future)
         dispatcher._runs.claim("code_sandbox", cancel_event=threading.Event(), approval_future=sandbox_future)
         dispatcher._runs.claim(
             "code_sandbox", cancel_event=threading.Event(), approval_future=already_resolved_future
@@ -5679,120 +4826,13 @@ def test_cancel_all_pending_approvals_auto_denies_every_undone_future_in_both_di
 
         dispatcher.cancel_all_pending_approvals()
 
-        assert pycoder_future.result() is False
+        assert harness_future.result() is False
         assert sandbox_future.result() is False
         assert already_resolved_future.result() is True, (
             "an already-resolved future must never be clobbered by the auto-deny sweep"
         )
 
     asyncio.run(run())
-
-
-def test_get_pycoder_repl_returns_the_same_instance_for_the_same_node_id():
-    dispatcher = AgentDispatcher(_FakeSettingsManager())
-    first = dispatcher.get_pycoder_repl("n1", "repl-1")
-    second = dispatcher.get_pycoder_repl("n1", "repl-1")
-    assert first is second
-    assert dispatcher.get_pycoder_repl("n2", "repl-2") is not first
-
-
-def test_get_pycoder_repl_is_keyed_by_node_id_not_repl_id():
-    # ADR-005 stage 5.3 (review-fix): the in-memory dict lookup is
-    # node_id-keyed (session-scoped, safe to reuse - see get_pycoder_repl's
-    # own docstring); repl_id only affects the constructed PythonREPL's
-    # on-disk cwd, not which dict entry is returned. A lookup on the same
-    # node_id must reuse the SAME live REPL even if a caller (incorrectly,
-    # or via some future bug) passed a different repl_id the second time -
-    # the repl_id argument on that second call must simply be ignored, not
-    # cause a second REPL to be created.
-    dispatcher = AgentDispatcher(_FakeSettingsManager())
-    first = dispatcher.get_pycoder_repl("n1", "repl-1")
-    second = dispatcher.get_pycoder_repl("n1", "some-other-repl-id")
-    assert first is second
-    assert first.cwd.name == "repl-1"
-
-
-def test_dispose_pycoder_repl_tolerates_a_missing_node_id_silently():
-    async def run():
-        dispatcher = AgentDispatcher(_FakeSettingsManager())
-        await dispatcher.dispose_pycoder_repl("never-created")  # must not raise
-
-    asyncio.run(run())
-
-
-def test_dispose_pycoder_repl_stops_and_removes_the_repl():
-    class _StoppableRepl:
-        def __init__(self):
-            self.stopped = False
-
-        def stop(self):
-            self.stopped = True
-
-    async def run():
-        dispatcher = AgentDispatcher(_FakeSettingsManager())
-        fake_repl = _StoppableRepl()
-        dispatcher._pycoder_repls["n1"] = fake_repl
-
-        await dispatcher.dispose_pycoder_repl("n1")
-
-        assert fake_repl.stopped is True
-        assert "n1" not in dispatcher._pycoder_repls
-
-    asyncio.run(run())
-
-
-def test_dispose_all_pycoder_repls_stops_every_tracked_repl_and_clears_the_dict():
-    class _StoppableRepl:
-        def __init__(self):
-            self.stopped = False
-
-        def stop(self):
-            self.stopped = True
-
-    dispatcher = AgentDispatcher(_FakeSettingsManager())
-    repl_a = _StoppableRepl()
-    repl_b = _StoppableRepl()
-    dispatcher._pycoder_repls["n1"] = repl_a
-    dispatcher._pycoder_repls["n2"] = repl_b
-
-    dispatcher.dispose_all_pycoder_repls()
-
-    assert dispatcher._pycoder_repls == {}
-    # stop() runs on a background thread (see the method's own docstring
-    # for why) - give it a moment to actually land before asserting.
-    for _ in range(50):
-        if repl_a.stopped and repl_b.stopped:
-            break
-        time.sleep(0.02)
-    assert repl_a.stopped is True
-    assert repl_b.stopped is True
-
-
-def test_dispose_all_pycoder_repls_does_not_block_the_caller_on_a_slow_stop():
-    # ADR-005 stage 5.3 (review-fix): its one real caller
-    # (_evict_idle_session) runs on the live asyncio event loop - a
-    # blocking inline repl.stop() would stall every other connected
-    # client's WS/HTTP handling for however long the OS takes to kill and
-    # reap the process. Proven here with a repl.stop() that would take
-    # noticeably longer than "instant" if called inline.
-    class _SlowRepl:
-        def __init__(self):
-            self.stopped = threading.Event()
-
-        def stop(self):
-            time.sleep(0.5)
-            self.stopped.set()
-
-    dispatcher = AgentDispatcher(_FakeSettingsManager())
-    slow_repl = _SlowRepl()
-    dispatcher._pycoder_repls["n1"] = slow_repl
-
-    start = time.monotonic()
-    dispatcher.dispose_all_pycoder_repls()
-    elapsed = time.monotonic() - start
-
-    assert elapsed < 0.2, "must return almost immediately, not block on the slow stop()"
-    assert slow_repl.stopped.wait(timeout=2.0), "the background thread must still actually call stop()"
 
 
 def test_remove_code_sandbox_scratch_dir_refuses_a_blank_sandbox_id():

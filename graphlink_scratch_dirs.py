@@ -1,8 +1,8 @@
 """ADR-005 stage 5.3: shared location, permissioning, and garbage collection
-for the two per-node scratch directories LLM-generated/executed code can
-read and write - Py-Coder's REPL cwd (graphlink_plugins/pycoder/domain.py)
-and Execution Sandbox's venv base_dir (graphlink_plugins/code_sandbox/
-domain.py).
+for the per-node/per-instance scratch directories LLM-generated/executed
+code can read and write - PythonREPL's own cwd (graphlink_plugins/common/
+python_repl.py) and Execution Sandbox's venv base_dir (graphlink_plugins/
+code_sandbox/domain.py).
 
 Location stays under tempfile.gettempdir(), unchanged from stage 5.1 - an
 earlier draft of this stage's ADR entry proposed moving both under
@@ -17,16 +17,15 @@ directory tree as the app's small, deliberately-backed-up config/secrets
 files, for no security benefit. Kept simple instead.
 
 GC is needed because nothing else ever removes these directories on its
-own: Py-Coder's REPL persists across disconnects by design (see
-PythonREPL's own docstring) and is torn down only by explicit node
-deletion; Execution Sandbox's VirtualEnvSandbox is reconstructed fresh per
-run and never even holds a reference to a previous run's directory. Three
-triggers, matching this stage's exit criterion:
+own: a PythonREPL persists across disconnects by design (see its own
+docstring) and is torn down only by explicit caller action; Execution
+Sandbox's VirtualEnvSandbox is reconstructed fresh per run and never even
+holds a reference to a previous run's directory. Three triggers, matching
+this stage's exit criterion:
   - node delete (backend/api/intents_nodes.py's remove_nodes) - exact,
     synchronous removal of the one deleted node's own directory.
-  - session evict (backend/app.py's _evict_idle_session) - process-only,
-    via AgentDispatcher.dispose_all_pycoder_repls(); deliberately does NOT
-    call remove_scratch_dir here, see that method's own docstring for why.
+  - session evict (backend/app.py's _evict_idle_session) - process-only
+    teardown of live in-memory resources for the evicted session.
   - age sweep on launch (graphlink_desktop.py's main()) - a crash/
     abandoned-session cleanup net for whatever the first two triggers
     never got to (e.g. a hard process kill, no clean node-delete ever
@@ -44,14 +43,14 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-PYCODER_REPL_ROOT = Path(tempfile.gettempdir()) / "graphlink_pycoder_repls"
+PYTHON_REPL_ROOT = Path(tempfile.gettempdir()) / "graphlink_python_repls"
 EXECUTION_SANDBOX_ROOT = Path(tempfile.gettempdir()) / "graphlink_execution_sandboxes"
 # Agent-harness workspaces (backend/harness/workspace.py): one directory per
 # harness node, keyed by HarnessState.harness_workspace_id - the same
-# durable-id-not-node-id posture PYCODER_REPL_ROOT's children take. The
-# node's transcript.jsonl lives INSIDE its workspace so all three GC
-# triggers (delete/evict/age-sweep) cover conversation history and working
-# files as one unit.
+# durable-id-not-caller-supplied-object-identity posture PYTHON_REPL_ROOT's
+# children take. The node's transcript.jsonl lives INSIDE its workspace so
+# all three GC triggers (delete/evict/age-sweep) cover conversation history
+# and working files as one unit.
 HARNESS_WORKSPACE_ROOT = Path(tempfile.gettempdir()) / "graphlink_harness_workspaces"
 
 # A generous default: this is a crash/abandoned-session net, not the
@@ -74,7 +73,7 @@ def _ensure_private_scratch_root(root: Path) -> None:
     """SECURITY-FIX (PYC-5): prepare_scratch_dir's own chmod 0700 on the
     LEAF only keeps other users out of it going forward - it does nothing
     to stop a user who already owns/controls the SHARED root (one of
-    PYCODER_REPL_ROOT/EXECUTION_SANDBOX_ROOT, both predictable, fixed paths
+    PYTHON_REPL_ROOT/EXECUTION_SANDBOX_ROOT, both predictable, fixed paths
     under the system temp dir) from renaming or symlink-swapping the
     leaf's own directory entry out from under this process: owning a
     directory grants rename/unlink rights over every entry inside it
@@ -249,12 +248,12 @@ def gc_stale_by_age(root: Path, max_age_seconds: float = DEFAULT_MAX_AGE_SECONDS
 def sweep_stale_scratch_dirs_on_launch(max_age_seconds: float = DEFAULT_MAX_AGE_SECONDS) -> None:
     """The one-time-per-launch age sweep - called from
     graphlink_desktop.py's main(), see this module's own docstring for why
-    this trigger exists alongside delete/evict. Iterates both scratch
+    this trigger exists alongside delete/evict. Iterates all three scratch
     roots; a failure sweeping one root is logged and does not stop the
-    other from being swept, and neither failure is allowed to abort app
+    others from being swept, and no failure is allowed to abort app
     startup (matching mark_running()/configure_logging()'s own
     best-effort-and-log stance in backend/crash_recovery.py)."""
-    for root in (PYCODER_REPL_ROOT, EXECUTION_SANDBOX_ROOT, HARNESS_WORKSPACE_ROOT):
+    for root in (PYTHON_REPL_ROOT, EXECUTION_SANDBOX_ROOT, HARNESS_WORKSPACE_ROOT):
         try:
             removed = gc_stale_by_age(root, max_age_seconds)
         except OSError:

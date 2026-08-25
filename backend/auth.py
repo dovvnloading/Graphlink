@@ -5,9 +5,9 @@ THE THREAT (audit finding C5). Graphlink binds a loopback HTTP/WS port with
 no authentication of any kind, so ANY other process running as the same user
 - a background updater, a rogue npm postinstall script, a browser extension's
 native host, anything - can open /ws and drive all 131 intents. That includes
-runPyCoder, runCodeSandbox, applyGitlinkChanges, and (critically)
-approveCodeExecution: the human-approval gate is itself just another intent on
-the same unauthenticated channel, so a non-browser caller can approve its own
+runCodeSandbox, applyGitlinkChanges, and (critically) approveCodeExecution:
+the human-approval gate is itself just another intent on the same
+unauthenticated channel, so a non-browser caller can approve its own
 code execution. The existing WS Origin check (backend/app.py's
 _is_allowed_ws_origin) is a genuinely good defense and stays, but it defends a
 DIFFERENT threat - a malicious PAGE in the user's browser, which cannot forge

@@ -5,7 +5,6 @@
 export interface ExecutionLimitsState {
   schemaVersion: number;
   revision: number;
-  pycoderResourceLimitsText: string;
   codeSandboxResourceLimitsText: string;
   minCompatibleSchemaVersion?: number | null;
 }
@@ -36,11 +35,6 @@ function checkExecutionLimitsState(value: unknown, path: string, errors: string[
     const fieldValue = value["revision"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.revision: missing required field`);
     else { if (typeof fieldValue !== "number") errors.push(`${path}.revision` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["pycoderResourceLimitsText"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pycoderResourceLimitsText: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.pycoderResourceLimitsText` + ": expected string"); }
   }
   {
     const fieldValue = value["codeSandboxResourceLimitsText"];

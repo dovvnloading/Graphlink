@@ -15,19 +15,18 @@ import { useLodVisibility } from "./useLodVisibility";
  * internal kind="code_sandbox" identifier/CSS classes/WS intents are
  * UNCHANGED, only the display string moved) - the Code-Sandbox plugin's
  * React card. Same overall shell as every plugin-node sibling
- * (PyCoderNodeView/GitlinkNodeView): collapse/expand OR-ed with LOD, a card
+ * (GitlinkNodeView): collapse/expand OR-ed with LOD, a card
  * menu with outside-click/Escape dismiss, the shared NodeMarkdown.tsx
  * renderer (node redesign stage 1), no dock-to-parent action.
  *
- * Unlike Py-Coder, there is no mode toggle here - backend/canvas.py's own
- * start_code_sandbox_run docstring is explicit that there is "no
- * mode-dependent field split here" for this kind: a Run's input_text always
- * lands in code_sandbox_prompt, and code_sandbox_code is only ever populated
- * as the OUTPUT of a prior generation (there is no manual-code entry point
- * for this kind at all, unlike Py-Coder). So Run is enabled whenever there is
- * EITHER a non-empty prompt draft OR already-generated code to re-run -
- * mirroring the backend's own guard ("if prompt_text: regenerate ... elif
- * not current_code: refuse") rather than requiring the prompt box to be
+ * There is no mode toggle here - a Run's input_text always lands in
+ * code_sandbox_prompt, and code_sandbox_code is only ever populated as the
+ * OUTPUT of a prior generation (there is no manual-code entry point for
+ * this kind at all - see backend/domain/graph.py's own
+ * start_code_sandbox_run). So Run is enabled whenever there is EITHER a
+ * non-empty prompt draft OR already-generated code to re-run - mirroring
+ * the backend's own guard ("if prompt_text: regenerate ... elif not
+ * current_code: refuse") rather than requiring the prompt box to be
  * non-empty unconditionally.
  *
  * Requirements field: local draft committed via data.onSetRequirements only
@@ -40,11 +39,9 @@ import { useLodVisibility } from "./useLodVisibility";
  * commit, since - unlike Local Root's single path string - a requirements
  * manifest is naturally multi-line (one package per line).
  *
- * Live terminal: this is the one genuine capability asymmetry against
- * Py-Coder, matching the backends' own real difference (not a frontend
- * embellishment) - VirtualEnvSandbox's subprocess-based execution has a real
- * line-emission hook (`emit_line`) its Py-Coder REPL-based counterpart has
- * no equivalent for, so ONLY this node subscribes to transport's existing
+ * Live terminal: VirtualEnvSandbox's subprocess-based execution has a real
+ * line-emission hook (`emit_line`) - a genuine backend capability, not a
+ * frontend embellishment - so this node subscribes to transport's existing
  * subscribeStream(requestId, listener) mechanism (already exercised by
  * R4.4's own chat token streaming) for its own pendingRequestId while a run
  * is in flight, falling back to the static data.codeSandboxOutput field once
@@ -83,7 +80,7 @@ export interface CodeSandboxNodeData extends Record<string, unknown> {
 export type CodeSandboxFlowNode = Node<CodeSandboxNodeData, "code_sandbox">;
 
 /** Same outside-click/Escape dismiss pattern every sibling node menu uses
- * (ChatNodeMenu/ArtifactNodeMenu/GitlinkNodeMenu/PyCoderNodeMenu/...). */
+ * (ChatNodeMenu/ArtifactNodeMenu/GitlinkNodeMenu/...). */
 // -- card-level menu -------------------------------------------------------
 
 function CodeSandboxNodeMenu({
@@ -197,8 +194,8 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
     data.onSetRequirements(requirementsDraft.trim());
   }
 
-  // -- prompt: single local draft, same one-shot-until-Run economy as ------
-  // PyCoderNodeView's own input (see module doc re: Run-enablement).
+  // -- prompt: single local draft, committed only via Run (see module doc
+  // re: Run-enablement) --------------------------------------------------
   const [promptDraft, setPromptDraft] = useState(data.codeSandboxPrompt);
 
   const busy = !!data.pendingRequestId;
@@ -240,8 +237,11 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
   }, [data.pendingRequestId]);
 
   // -- approval --------------------------------------------------------------
-  // Same render-time-adjustment posture as the streamedOutput reset above -
-  // see PyCoderNodeView's own identical pattern for the full rationale.
+  // Same render-time-adjustment posture as the streamedOutput reset above:
+  // an OBSERVED false->true transition on codeSandboxAwaitingApproval, not
+  // a useEffect, so the busy flag clears in the SAME render the new gate's
+  // props arrive - a useEffect would paint one stale frame with the old
+  // (now-wrong) button state first.
   const [approvalBusy, setApprovalBusy] = useState(false);
   const [awaitingApprovalSeen, setAwaitingApprovalSeen] = useState(data.codeSandboxAwaitingApproval);
   if (data.codeSandboxAwaitingApproval !== awaitingApprovalSeen) {

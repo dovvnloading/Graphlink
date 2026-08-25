@@ -10,10 +10,10 @@ import type { ExecutionLimitsState } from "../../lib/bridge-core/generated/execu
  * must be backend-computed rather than a hardcoded frontend string.
  *
  * Threaded via Context rather than prop-drilling through
- * PyCoderNodeView/CodeSandboxNodeView and @xyflow/react's own per-node
- * `data` mapping (SceneCanvas.tsx's toFlowNodes): the caps are NOT per-node
- * state (every pycoder/code_sandbox node shares the identical, session-wide
- * limits), so carrying them on every node's own `data` object would
+ * CodeSandboxNodeView and @xyflow/react's own per-node `data` mapping
+ * (SceneCanvas.tsx's toFlowNodes): the caps are NOT per-node state (every
+ * code_sandbox node shares the identical, session-wide limits), so
+ * carrying them on every node's own `data` object would
  * duplicate the same static strings across however many nodes exist, for a
  * value that is really global. Mirrors AboutDialog.tsx's own "no client
  * store class needed for a single read-only, never-mutated topic" subscribe
@@ -26,7 +26,6 @@ const initialState: ExecutionLimitsState = {
   schemaVersion: 1,
   minCompatibleSchemaVersion: 1,
   revision: 0,
-  pycoderResourceLimitsText: "",
   codeSandboxResourceLimitsText: "",
 };
 

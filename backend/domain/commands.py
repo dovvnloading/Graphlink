@@ -18,10 +18,10 @@ practice, not just tedious:
   values (SceneDocument._counter). A hand-authored "invert a delete by
   calling add_chat_node again" gets a NEW id - every reference to the old
   one (edges, frame/container item_ids, last_chat_node_id, pins) would need
-  remapping. See node_states.py's PycoderState.pycoder_repl_id for the
-  documented precedent of a REAL bug this exact instability already caused
-  once (session reload silently swapping which on-disk REPL directory a
-  node resolved to).
+  remapping. See node_states.py's CodeSandboxState.code_sandbox_sandbox_id
+  for the documented precedent of a REAL bug this exact instability already
+  caused once (session reload silently swapping which on-disk scratch
+  directory a node resolved to).
 - remove_nodes() cascades silently: it evicts image/chart asset bytes from
   image_assets with no return value, and calls _detach_node_from_membership
   (groups.py), which can itself delete a SECOND node (an emptied frame/
@@ -325,7 +325,6 @@ _COMMAND_LABELS = {
     "appendConversationAssistantMessage": "Assistant Reply",
     "sendArtifactMessage": "Send Instruction",
     "completeArtifactGeneration": "Artifact Reply",
-    "setPyCoderMode": "Set Mode",
     "setCodeSandboxRequirements": "Edit Requirements",
     "setGitlinkLocalRoot": "Set Local Folder",
 }

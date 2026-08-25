@@ -247,8 +247,8 @@ def _flatten_conversation_history(history: Any) -> str:
 # artifact_content but _serialize_artifact_node writes it under the wire
 # key "content", the SAME key "document" nodes use for their own content).
 # NAMED, HONEST GAP: only each kind's single most obviously-dominant
-# prompt/instruction/body field is indexed here - pycoder/code_sandbox's
-# own code/output/analysis, gitlink's own context_xml/proposal_data, plan's
+# prompt/instruction/body field is indexed here - code_sandbox's own
+# code/output/analysis, gitlink's own context_xml/proposal_data, plan's
 # own steps, and web_research's own research_result body are NOT indexed,
 # per this stage's own explicit "a reasonable single text field is enough;
 # skip the rest" allowance for kinds with no one obvious whole-content
@@ -262,10 +262,10 @@ _TEXT_FIELD_BY_NODE_TYPE = {
     "html": "html_content",
     "web_research": "query",
     "gitlink": "task_prompt",
-    "pycoder": "prompt",
     "code_sandbox": "prompt",
     "plan": "goal",
     "image": "prompt",
+    "harness": "goal",
 }
 
 
@@ -3154,17 +3154,16 @@ def flush_dirty_session_before_teardown(
     default) was silently lost the instant this session's SceneDocument
     became unreachable. Confirmed as a real, live gap (not a hypothetical)
     by reading _evict_idle_session as it stood before this stage: it calls
-    cancel_all/cancel_all_pending_approvals/dispose_all_pycoder_repls, then
-    autosave_task.cancel() - no flush anywhere in between.
+    cancel_all/cancel_all_pending_approvals, then autosave_task.cancel() -
+    no flush anywhere in between.
 
     This is the SYNCHRONOUS counterpart of backend/autosave.py's
     autosave_tick, for the one caller (eviction teardown) that has no
     natural async dispatch to await asyncio.to_thread the way every other
     write path in this codebase does - _evict_idle_session already performs
-    other blocking teardown work synchronously (cancel_all,
-    dispose_all_pycoder_repls), so one more small, bounded blocking DB
-    write here is consistent with that existing posture, not a new kind of
-    risk.
+    other blocking teardown work synchronously (cancel_all), so one more
+    small, bounded blocking DB write here is consistent with that existing
+    posture, not a new kind of risk.
 
     Deliberately mirrors autosave_tick's own change-guard (skip if nothing
     changed since last_saved) and title-resolution (never regenerate an

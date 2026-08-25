@@ -579,30 +579,6 @@
           "provider": {
             "type": "string"
           },
-          "pycoderAnalysis": {
-            "type": "string"
-          },
-          "pycoderAwaitingApproval": {
-            "type": "boolean"
-          },
-          "pycoderCode": {
-            "type": "string"
-          },
-          "pycoderError": {
-            "type": "string"
-          },
-          "pycoderLastRunFailed": {
-            "type": "boolean"
-          },
-          "pycoderMode": {
-            "type": "string"
-          },
-          "pycoderOutput": {
-            "type": "string"
-          },
-          "pycoderPrompt": {
-            "type": "string"
-          },
           "researchActiveSourceId": {
             "type": "string"
           },
@@ -837,14 +813,6 @@
           "gitlinkPreviewText",
           "gitlinkChangeState",
           "gitlinkError",
-          "pycoderMode",
-          "pycoderPrompt",
-          "pycoderCode",
-          "pycoderOutput",
-          "pycoderAnalysis",
-          "pycoderLastRunFailed",
-          "pycoderAwaitingApproval",
-          "pycoderError",
           "codeSandboxRequirements",
           "codeSandboxPrompt",
           "codeSandboxCode",

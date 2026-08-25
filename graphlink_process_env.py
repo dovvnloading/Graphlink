@@ -1,12 +1,15 @@
 """ADR-002 P0: an explicit-allowlist environment builder for subprocesses
-that execute AI-generated code (Py-Coder's persistent REPL,
-graphlink_plugins/pycoder/domain.py; the Virtual Environment Runner's
-venv-create/pip-install/script-run trio, graphlink_plugins/code_sandbox/
-domain.py). Both previously called subprocess.Popen(...) with no `env=`
-argument, which means Python's default applies: the child inherits the
-FULL parent os.environ - including every provider API key this app itself
-reads via os.environ.get(...) fallbacks (see api_provider.py), if the user
-has configured one as an environment variable rather than through Settings.
+that execute AI-generated code - originally written to close a real gap in
+two callers that had called subprocess.Popen(...) with no `env=` argument
+at all (PythonREPL, now graphlink_plugins/common/python_repl.py; the
+Virtual Environment Runner's venv-create/pip-install/script-run trio,
+graphlink_plugins/code_sandbox/domain.py). Omitting `env=` means Python's
+default applies: the child inherits the FULL parent os.environ - including
+every provider API key this app itself reads via os.environ.get(...)
+fallbacks (see api_provider.py), if the user has configured one as an
+environment variable rather than through Settings. Every subsequent
+subprocess-spawning tool in this codebase (e.g. the harness's shell.exec,
+backend/harness/tools_shell.py) is built on this module from the start.
 
 An ALLOWLIST, not a blocklist: block-listing known secret var names is
 fragile - a user's own OS environment can carry secrets under names this

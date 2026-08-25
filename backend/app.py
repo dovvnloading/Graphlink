@@ -360,13 +360,6 @@ def _evict_idle_session(bus: SessionBus) -> bool:
         return False
     context.agent_dispatcher.cancel_all()
     context.agent_dispatcher.cancel_all_pending_approvals()
-    # ADR-005 stage 5.3: without this, any Py-Coder REPL subprocess left
-    # idle (not in-flight - the check above already vetoed eviction if one
-    # were) is orphaned the moment `del self._sessions[session_id]` below
-    # drops the last reference able to ever call stop() on it - see
-    # AgentDispatcher.dispose_all_pycoder_repls' own docstring for why this
-    # does NOT also remove each REPL's scratch directory.
-    context.agent_dispatcher.dispose_all_pycoder_repls()
 
     # ADR-009 stage 9.2 / ADR-004 stage 4.3 interaction: flush a dirty
     # session's chat BEFORE cancelling its autosave task - see
@@ -743,7 +736,7 @@ def create_app(
                 else:
                     agent_dispatcher.cancel_all()
                     # R5.4: a DELIBERATE, SCOPED extension of this disconnect
-                    # contract, applied ONLY to the Py-Coder/Execution Sandbox
+                    # contract, applied ONLY to the Execution Sandbox/Harness
                     # approval-pause slots - not retrofitted onto the
                     # pre-existing web_research/artifact/gitlink slots (a real,
                     # separate, out-of-scope gap: every one of those already

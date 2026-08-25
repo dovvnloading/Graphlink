@@ -89,14 +89,6 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     gitlinkChangeFingerprint: null,
     gitlinkChangeState: "",
     gitlinkError: "",
-    pycoderMode: "ai_driven",
-    pycoderPrompt: "",
-    pycoderCode: "",
-    pycoderOutput: "",
-    pycoderAnalysis: "",
-    pycoderLastRunFailed: false,
-    pycoderAwaitingApproval: false,
-    pycoderError: "",
     codeSandboxRequirements: "",
     codeSandboxApprovalRequirements: "",
     codeSandboxApprovalAllowSourceBuilds: false,
@@ -918,150 +910,6 @@ describe("toFlowNodes (R5.3 gitlink node)", () => {
 
     (glFlowNode!.data as { onDelete: () => void }).onDelete();
     expect(removeSpy).toHaveBeenCalledWith(["gl-1"]);
-  });
-});
-
-describe("toFlowNodes (R5.4 pycoder node)", () => {
-  it("maps a pycoder scene node's all 8 new fields onto the flow node's data", () => {
-    const scene = baseScene({
-      nodes: [
-        baseNode({
-          id: "pc-1",
-          kind: "pycoder",
-          isCollapsed: true,
-          pendingRequestId: "req-1",
-          pycoderMode: "manual",
-          pycoderPrompt: "write a fibonacci function",
-          pycoderCode: "def fib(n): ...",
-          pycoderOutput: "[1, 1, 2, 3]",
-          pycoderAnalysis: "Computes Fibonacci numbers.",
-          pycoderLastRunFailed: true,
-          pycoderAwaitingApproval: true,
-          pycoderError: "previous run timed out",
-        }),
-      ],
-      edges: [],
-    });
-    const store = makeStore();
-
-    const flowNodes = toFlowNodes(scene, store);
-    const pcFlowNode = flowNodes.find((n) => n.id === "pc-1");
-    expect(pcFlowNode).toBeDefined();
-    expect(pcFlowNode!.type).toBe("pycoder");
-    expect(pcFlowNode!.data).toMatchObject({
-      pycoderMode: "manual",
-      pycoderPrompt: "write a fibonacci function",
-      pycoderCode: "def fib(n): ...",
-      pycoderOutput: "[1, 1, 2, 3]",
-      pycoderAnalysis: "Computes Fibonacci numbers.",
-      pycoderLastRunFailed: true,
-      pycoderAwaitingApproval: true,
-      pycoderError: "previous run timed out",
-      isCollapsed: true,
-      pendingRequestId: "req-1",
-    });
-  });
-
-  it("coalesces a null-ish pendingRequestId to null", () => {
-    const scene = baseScene({
-      nodes: [baseNode({ id: "pc-2", kind: "pycoder" })],
-      edges: [],
-    });
-    const store = makeStore();
-
-    const flowNodes = toFlowNodes(scene, store);
-    const pcFlowNode = flowNodes.find((n) => n.id === "pc-2");
-    expect(pcFlowNode).toBeDefined();
-    expect(pcFlowNode!.data).toMatchObject({ pendingRequestId: null });
-  });
-
-  it("onSetMode/onRun resolve to this node's id", () => {
-    const scene = baseScene({ nodes: [baseNode({ id: "pc-1", kind: "pycoder" })], edges: [] });
-    const store = makeStore();
-    const setModeSpy = vi.spyOn(store, "setPyCoderMode");
-    const runSpy = vi.spyOn(store, "runPyCoder");
-
-    const flowNodes = toFlowNodes(scene, store);
-    const pcFlowNode = flowNodes.find((n) => n.id === "pc-1");
-    const data = pcFlowNode!.data as unknown as {
-      onSetMode: (mode: string) => void;
-      onRun: (inputText: string) => void;
-    };
-
-    data.onSetMode("manual");
-    expect(setModeSpy).toHaveBeenCalledWith("pc-1", "manual");
-    data.onRun("print('hi')");
-    expect(runSpy).toHaveBeenCalledWith("pc-1", "print('hi')");
-  });
-
-  it("onCancel fires cancelPyCoderRequest with pendingRequestId when set, and is a no-op otherwise", () => {
-    const scene = baseScene({
-      nodes: [
-        baseNode({ id: "pc-pending", kind: "pycoder", pendingRequestId: "req-77" }),
-        baseNode({ id: "pc-idle", kind: "pycoder", pendingRequestId: null }),
-      ],
-      edges: [],
-    });
-    const store = makeStore();
-    const intentSpy = vi.spyOn(store, "cancelPyCoderRequest");
-
-    const flowNodes = toFlowNodes(scene, store);
-    const pendingNode = flowNodes.find((n) => n.id === "pc-pending");
-    const idleNode = flowNodes.find((n) => n.id === "pc-idle");
-
-    (pendingNode!.data as { onCancel: () => void }).onCancel();
-    expect(intentSpy).toHaveBeenCalledWith("req-77");
-
-    (idleNode!.data as { onCancel: () => void }).onCancel();
-    expect(intentSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("onApprove/onDeny always resolve to the CURRENT scene snapshot's own pendingRequestId, never a UI-supplied id, and are no-ops when it is null", () => {
-    const scene = baseScene({
-      nodes: [
-        baseNode({ id: "pc-pending", kind: "pycoder", pendingRequestId: "req-approve-1" }),
-        baseNode({ id: "pc-idle", kind: "pycoder", pendingRequestId: null }),
-      ],
-      edges: [],
-    });
-    const store = makeStore();
-    const approveSpy = vi.spyOn(store, "approveCodeExecution");
-    const denySpy = vi.spyOn(store, "denyCodeExecution");
-
-    const flowNodes = toFlowNodes(scene, store);
-    const pendingNode = flowNodes.find((n) => n.id === "pc-pending");
-    const idleNode = flowNodes.find((n) => n.id === "pc-idle");
-    const pendingData = pendingNode!.data as unknown as { onApprove: () => void; onDeny: () => void };
-    const idleData = idleNode!.data as unknown as { onApprove: () => void; onDeny: () => void };
-
-    pendingData.onApprove();
-    expect(approveSpy).toHaveBeenCalledWith("req-approve-1");
-    pendingData.onDeny();
-    expect(denySpy).toHaveBeenCalledWith("req-approve-1");
-
-    idleData.onApprove();
-    idleData.onDeny();
-    expect(approveSpy).toHaveBeenCalledTimes(1);
-    expect(denySpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("onToggleCollapse/onDelete reuse the generic setChatCollapsed/removeNodes intents", () => {
-    const scene = baseScene({
-      nodes: [baseNode({ id: "pc-1", kind: "pycoder", isCollapsed: false })],
-      edges: [],
-    });
-    const store = makeStore();
-    const collapseSpy = vi.spyOn(store, "setChatCollapsed");
-    const removeSpy = vi.spyOn(store, "removeNodes");
-
-    const flowNodes = toFlowNodes(scene, store);
-    const pcFlowNode = flowNodes.find((n) => n.id === "pc-1");
-
-    (pcFlowNode!.data as { onToggleCollapse: () => void }).onToggleCollapse();
-    expect(collapseSpy).toHaveBeenCalledWith("pc-1", true);
-
-    (pcFlowNode!.data as { onDelete: () => void }).onDelete();
-    expect(removeSpy).toHaveBeenCalledWith(["pc-1"]);
   });
 });
 
@@ -2697,7 +2545,7 @@ describe("isOrthogonalEligible (R7.5b-2 orthogonal routing node-kind classificat
     },
   );
 
-  it.each(["web_research", "artifact", "gitlink", "pycoder", "code_sandbox", "frame", "container", "chart", "note"])(
+  it.each(["web_research", "artifact", "gitlink", "code_sandbox", "frame", "container", "chart", "note"])(
     "defaults to NOT eligible for %s targets - no legacy connection-type precedent exists for these kinds",
     (targetKind) => {
       expect(isOrthogonalEligible("chat", targetKind)).toBe(false);

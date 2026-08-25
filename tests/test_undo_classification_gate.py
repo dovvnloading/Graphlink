@@ -265,10 +265,14 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # (PLAN-2026-08-24 H1: harness/start, harness/send, harness/cancel).
     # 171 -> 172 when scene/reportNodeSizes was added (the frontend's own
     # rendered-size report, without which frame/container bounds fall back
-    # to a flat 220x120 estimate per member and do not enclose them).
+    # to a flat 220x120 estimate per member and do not enclose them), and
+    # 179 -> 176 when PLAN-2026-08-24 H5 retired Py-Coder and removed
+    # scene/setPyCoderMode, scene/runPyCoder, and scene/cancelPyCoderRequest
+    # (approveCodeExecution/denyCodeExecution stayed registered - they
+    # relocated to backend/api/intents_code_sandbox.py, not deleted).
     real = _collect_real_registrations()
-    assert len(real) == 179, (
-        f"expected exactly 179 real registered intents, found {len(real)} - "
+    assert len(real) == 176, (
+        f"expected exactly 176 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

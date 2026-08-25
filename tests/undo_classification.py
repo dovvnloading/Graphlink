@@ -99,7 +99,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-chat-library", "loadGraphAndFocusNode", "B", "whole-session: load - same clear_for_load/command_log-clear shape as loadChat, just also replies with the focused node's coordinates"),
 
     # -- backend/plugins.py (app-plugins) ------------------------------------
-    Classified("app-plugins", "executePlugin", "A", "content: creates a new node (Web Research/Gitlink/PyCoder/Sandbox/Artifact/System-Prompt note/Conversation/HTML) - every branch wraps its own pluginX command_type"),
+    Classified("app-plugins", "executePlugin", "A", "content: creates a new node (Web Research/Gitlink/Sandbox/Artifact/System-Prompt note/Conversation/HTML) - every branch wraps its own pluginX command_type"),
     # ADR-014 stage 14.4:
     Classified("app-plugins", "invokePluginIntent", "B", "run-lifecycle: dispatches to a plugin's own custom intent handler defined outside backend/ (invisible to this same-file AST walk) - if that handler mutates the document it must call record_command itself, same posture as register_builtin_plugin's own escape-hatch handler"),
     Classified("app-plugins", "setPluginGrant", "B", "preference: plugin install-time consent grant is settings-store configuration, not document content, same posture as setMcpServers"),
@@ -236,16 +236,16 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "runCodeSandbox", "B", "run-lifecycle: start/complete/fail an agent run"),
     Classified("scene", "cancelCodeSandboxRequest", "B", "run-lifecycle: cancel"),
 
-    # -- backend/api/intents_pycoder.py (scene) ------------------------------
-    Classified("scene", "setPyCoderMode", "A", "content: mode is document state"),
-    Classified("scene", "runPyCoder", "B", "run-lifecycle: start/complete/fail an agent run"),
-    Classified("scene", "cancelPyCoderRequest", "B", "run-lifecycle: cancel"),
+    # The shared approve/deny code-execution gate (retired Py-Coder plugin
+    # used to share this request_id namespace too; Execution Sandbox is now
+    # its sole owner).
     Classified("scene", "approveCodeExecution", "B", "security: code-execution approval gate"),
     Classified("scene", "denyCodeExecution", "B", "security: code-execution approval gate"),
 
     # -- backend/api/intents_builder.py (builder + scene) --------------------
-    # ADR-008 stage 8.3. Run-lifecycle intents are B exactly like runPyCoder:
-    # the CONTENT a build produces is undoable through its own
+    # ADR-008 stage 8.3. Run-lifecycle intents are B exactly like
+    # runCodeSandbox above: the CONTENT a build produces is undoable
+    # through its own
     # run_id-stamped commands (and reversible wholesale via scene/undoRun);
     # starting/steering/stopping the run is not itself a document mutation.
     Classified("builder", "start", "A", "content: creates the plan node (the run it then starts is separate lifecycle; the build's own mutations are run_id-stamped commands)"),

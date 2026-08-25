@@ -460,64 +460,6 @@ class GitlinkState(NodeState):
     gitlink_error: str = ""
 
 
-@dataclass
-class PycoderState(NodeState):
-    """Relocated verbatim from SceneNode's nine pycoder fields (former
-    backend/domain/model.py fields, R5.4) - the Py-Coder node's real
-    persisted shape: reads a natural-language ask (ai_driven mode) or
-    hand-typed code (manual mode), runs it in a persistent REPL
-    subprocess, and reports the AI's analysis of the result.
-    SceneNode's own pending_request_id field (core, not duplicated here)
-    is reused unchanged as the busy marker for the ENTIRE span from
-    Run-click through generation, through the human-approval pause,
-    through execution, through analysis - same posture as Gitlink's
-    Run/Apply.
-
-    - pycoder_mode: "ai_driven" | "manual".
-    - pycoder_prompt: last natural-language ask (ai_driven only).
-    - pycoder_code: current/last code - the thing that actually executes.
-    - pycoder_output: last REPL stdout.
-    - pycoder_analysis: AI's analysis of the last output.
-    - pycoder_approved_fingerprint: ADR-002 P0 - a fingerprint (see
-      graphlink_plugins.gitlink.agent's _fingerprint_changes, reused here
-      rather than reinvented) of exactly what the CURRENT
-      pycoder_awaiting_approval gate is asking about - {"code":
-      pycoder_code}. Set the instant the gate opens (mirrors
-      gitlink_change_fingerprint's own timing), checked immediately
-      before the code it covers actually executes
-      (AgentDispatcher.start_pycoder_run), and cleared everywhere
-      pycoder_awaiting_approval itself is cleared, so a
-      resolved/denied/superseded approval can never be replayed.
-      Internal bookkeeping only - EXCLUDED from scene_payload(), same
-      posture as CodeSandboxState's own sandbox_id.
-    - pycoder_repl_id: ADR-005 stage 5.3 (review-fix) - minted ONCE, at
-      node-creation time (see add_pycoder_node), mirroring
-      CodeSandboxState.code_sandbox_sandbox_id exactly: a stable,
-      internal directory-naming key for PythonREPL's own scratch cwd,
-      independent of this node's own `id`. Needed because SceneNode.id is
-      NOT durable - session_load.py's register_restored_node reassigns a
-      fresh sequential id, purely by array position, on every session
-      load - so keying the on-disk REPL directory by node.id let a reload
-      silently swap which directory a node's REPL resolved to (one node
-      could lose its own accumulated files, or inherit a different node's
-      leftovers) any time a node ahead of it in save order was deleted
-      before the next load. code_sandbox_sandbox_id never had this
-      problem because it was already a separate, stable field; pycoder
-      had no equivalent until this field was added. Internal bookkeeping
-      only - EXCLUDED from scene_payload(), same posture as
-      code_sandbox_sandbox_id."""
-
-    pycoder_mode: str = "ai_driven"
-    pycoder_prompt: str = ""
-    pycoder_code: str = ""
-    pycoder_output: str = ""
-    pycoder_analysis: str = ""
-    pycoder_last_run_failed: bool = False
-    pycoder_awaiting_approval: bool = False
-    pycoder_approved_fingerprint: str | None = None
-    pycoder_error: str = ""
-    pycoder_repl_id: str = ""
-
 
 @dataclass
 class CodeSandboxState(NodeState):
@@ -568,10 +510,13 @@ class CodeSandboxState(NodeState):
       cleared: inline in start_code_sandbox_run immediately after the
       approval future resolves, and in complete_code_sandbox_run/
       fail_code_sandbox_run.
-    - code_sandbox_approved_fingerprint: ADR-002 P0 - same mechanism as
-      pycoder_approved_fingerprint, fingerprinting {"code":
-      code_sandbox_code, "manifest": code_sandbox_approval_requirements}
-      instead - see that field's own reasoning above. Internal
+    - code_sandbox_approved_fingerprint: ADR-002 P0 - fingerprints exactly
+      what the open gate is asking about ({"code": code_sandbox_code,
+      "manifest": code_sandbox_approval_requirements}), frozen at the same
+      already-correct moment as code_sandbox_approval_requirements above,
+      for the identical staleness-avoidance reason: approve_code_execution
+      must confirm the human approved THIS disclosed code/manifest pair,
+      not whatever is live on the node when the approval lands. Internal
       bookkeeping only, EXCLUDED from scene_payload().
     - code_sandbox_approval_allow_source_builds: ADR-005 stage 5.5's
       "source-build escalation" - the user's live opt-in, made WHILE this
@@ -851,7 +796,7 @@ class PlanState(NodeState):
     builder_spent_steps: int = 0
     builder_spent_tokens: int = 0
     builder_spent_wall_seconds: int = 0
-    # Live approval surface (copilot): mirrors the pycoder/code_sandbox
+    # Live approval surface (copilot): mirrors code_sandbox's own
     # *AwaitingApproval + frozen-requirements pattern - the panel renders
     # from these; approve/deny resolve the run's approval_future.
     builder_awaiting_tool_approval: bool = False
@@ -876,7 +821,7 @@ class HarnessState(NodeState):
     content bloats session.dat.
 
     `harness_workspace_id` is minted once at node creation (uuid hex, the
-    pycoder_repl_id precedent exactly) - node ids are reassigned by array
+    same posture code_sandbox_sandbox_id already established) - node ids are reassigned by array
     position on session reload, so the on-disk workspace needs its own
     durable identity.
 

@@ -43,8 +43,8 @@ import { NodeMarkdown } from "./NodeMarkdown";
  *    time" registry - correct for app-chrome overlays like Settings/Search,
  *    which really are mutually exclusive, but WRONG for per-node approval
  *    dialogs: two different nodes can legitimately need review at the same
- *    time (a user starting Py-Coder runs on two different nodes a few
- *    seconds apart is a completely ordinary sequence, not a hypothetical).
+ *    time (a user starting Execution Sandbox runs on two different nodes a
+ *    few seconds apart is a completely ordinary sequence, not a hypothetical).
  *    Under the old design, the second node's overlays.open() call would
  *    silently steal the visible slot from the first, and the losing node's
  *    dialog would never come back (same "reopening effect only fires once"
@@ -89,9 +89,9 @@ import { NodeMarkdown } from "./NodeMarkdown";
  * this is the security-critical human-approval gate for code about to run
  * with the full privileges of the user's own account, and NodeMarkdown's
  * own SafeAnchor override is exactly the guard that matters here - the
- * pending code being reviewed is itself LLM-generated (Py-Coder's
- * AI-driven mode / Code-Sandbox's own generation step), and a fenced code
- * block can be broken out of early by an embedded ``` line (toPythonFence
+ * pending code being reviewed is itself LLM-generated (Code-Sandbox's own
+ * generation step), and a fenced code block can be broken out of early by
+ * an embedded ``` line (toPythonFence
  * does no backtick-escaping, matching every sibling fence helper), letting
  * a crafted comment/string smuggle a real markdown link past the fence -
  * without SafeAnchor, a javascript: href in that smuggled link would have
@@ -323,10 +323,11 @@ export function CodeExecutionApprovalPanel({
   // it is hidden entirely rather than rendered as an inert control a user
   // could mistake for a live decision. See isRepairApproval's own doc.
   const showAllowSourceBuildsCheckbox = showRequirements && !isRepairApproval;
-  const resourceLimitsText =
-    kind === "code_sandbox"
-      ? executionLimits.codeSandboxResourceLimitsText
-      : executionLimits.pycoderResourceLimitsText;
+  // PLAN-2026-08-24 H5: Py-Coder retired - this component's own "pycoder"
+  // kind arm has no live caller left, so the resource-limits sentence no
+  // longer varies by kind. The backend wire payload dropped its matching
+  // pycoderResourceLimitsText field to match.
+  const resourceLimitsText = executionLimits.codeSandboxResourceLimitsText;
 
   return (
     // Deliberately NO onClick/onPointerDown handler on this scrim - clicking

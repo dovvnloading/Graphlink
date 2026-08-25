@@ -22,6 +22,5 @@ from dataclasses import dataclass
 class ExecutionLimitsStatePayload:
     schemaVersion: int
     revision: int
-    pycoderResourceLimitsText: str
     codeSandboxResourceLimitsText: str
     minCompatibleSchemaVersion: int | None = None

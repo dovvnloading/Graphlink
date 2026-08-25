@@ -999,35 +999,10 @@ export class SceneStore {
     this.transport.fireIntent("scene", "applyGitlinkChanges", [nodeId, fingerprint]);
   }
 
-  // R5.4: Py-Coder node - setPyCoderMode/runPyCoder/cancelPyCoderRequest
-  // mirror backend/canvas.py's registered intent names 1:1, same convention
-  // as every scene intent above. mode is a plain string ("ai_driven" |
-  // "manual") - the backend (SceneDocument.set_pycoder_mode) is the one and
-  // only validator of that value; this store has no opinion on it, same
-  // posture as applyGitlinkChanges's fingerprint passthrough above.
-  setPyCoderMode(nodeId: string, mode: string): void {
-    this.transport.fireIntent("scene", "setPyCoderMode", [nodeId, mode], undefined, true);
-  }
-
-  // inputText's meaning (a natural-language prompt vs hand-typed code) is
-  // entirely a function of the node's CURRENT server-side pycoder_mode -
-  // this store (and the WS intent itself) is mode-agnostic, matching
-  // backend/canvas.py's own start_pycoder_run docstring ("stores input_text
-  // into the field the CURRENT mode actually reads at dispatch time").
-  runPyCoder(nodeId: string, inputText: string): void {
-    this.transport.fireIntent("scene", "runPyCoder", [nodeId, inputText]);
-  }
-
-  // Same requestId-not-nodeId shape cancelConversationRequest/
-  // cancelWebResearchRequest/cancelArtifactRequest/cancelGitlinkRequest above
-  // already established for their own per-node cancel.
-  cancelPyCoderRequest(requestId: string): void {
-    this.transport.fireIntent("scene", "cancelPyCoderRequest", [requestId]);
-  }
-
-  // R5.4: Execution Sandbox node - same three-intent shape as Py-Coder above
-  // (setCodeSandboxRequirements/runCodeSandbox/cancelCodeSandboxRequest),
-  // minus a mode toggle - backend/canvas.py's start_code_sandbox_run has no
+  // R5.4: Execution Sandbox node - setCodeSandboxRequirements/
+  // runCodeSandbox/cancelCodeSandboxRequest mirror backend/canvas.py's
+  // registered intent names 1:1, same convention as every scene intent
+  // above. backend/canvas.py's start_code_sandbox_run has no
   // mode-dependent field split (see its own docstring); a run's input_text
   // always lands in code_sandbox_prompt, and an empty prompt is a legitimate
   // "re-run the existing code_sandbox_code" request, not an error, at the
@@ -1052,10 +1027,10 @@ export class SceneStore {
     this.transport.fireIntent("scene", "cancelCodeSandboxRequest", [requestId]);
   }
 
-  // R5.4: the shared human-approval gate - ONE request_id namespace across
-  // both Py-Coder and Execution Sandbox (backend/agents.py's
-  // AgentDispatcher._resolve_approval looks the id up across both request
-  // dicts), so these two intents are not duplicated per-kind. Both take
+  // R5.4: the shared human-approval gate for Execution Sandbox
+  // (backend/agents.py's AgentDispatcher._resolve_approval - the same
+  // primitive the harness's own approveTool/denyTool intents reuse, on the
+  // separate "harness" topic rather than duplicating these two here). Both take
   // ONLY a requestId - never a node id, never the code itself - mirroring
   // applyGitlinkChanges's own "this store method has no opinion on the
   // content, it just forwards the caller's requestId" posture; the caller

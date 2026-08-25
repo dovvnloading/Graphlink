@@ -15,7 +15,7 @@ import { rehypeHighlightSearchMatches } from "./documentViewSearchHighlight";
 /**
  * Shared markdown renderer for scene NODE cards (node redesign, stage 1 of 4
  * - "shared node markdown renderer"). Every text-bearing node kind (Chat,
- * Note, Conversation, Artifact, Code, CodeSandbox, Gitlink, PyCoder,
+ * Note, Conversation, Artifact, Code, CodeSandbox, Gitlink,
  * Thinking, WebResearch - confirmed via grep, not assumed) rendered a bare
  * `<ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>`
  * with none of Document View's content-rendering upgrades (code-block copy/

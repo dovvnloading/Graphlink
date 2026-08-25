@@ -73,17 +73,17 @@ def test_artifact_agent_imports_qt_free():
     _assert_import_is_qt_free("graphlink_artifact_agent")
 
 
-def test_pycoder_domain_imports_qt_free():
-    # R5.4 prerequisite: graphlink_agents_pycoder.py (home of PythonREPL/
-    # PyCoderReplManager/PyCoderExecutionAgent/PyCoderRepairAgent/
-    # PyCoderAnalysisAgent before this split) has its own unconditional
-    # `from PySide6.QtCore import QThread, Signal` at module level, needed
-    # only by its CodeExecutionWorker/PyCoderExecutionWorker/
-    # PyCoderAgentWorker classes - importing anything from it, including
-    # these Qt-free symbols, pulled Qt in regardless. This is the
-    # machine-checked fact that the real Py-Coder dispatch path backend/
-    # needs (backend/agents.py's start_pycoder_run) no longer does.
-    _assert_import_is_qt_free("graphlink_plugins.pycoder.domain")
+def test_python_repl_common_imports_qt_free():
+    # R5.4 prerequisite (PLAN-2026-08-24 H5: relocated from the now-retired
+    # graphlink_plugins.pycoder.domain to graphlink_plugins.common.python_repl,
+    # its shared home): PythonREPL/CodeAnalysisAgent's original Qt-coupled
+    # ancestor module had its own unconditional `from PySide6.QtCore import
+    # QThread, Signal` at module level, needed only by worker classes that
+    # never made this split - importing anything from it, including these
+    # Qt-free symbols, pulled Qt in regardless. This is the machine-checked
+    # fact that the real Execution Sandbox dispatch path backend/agents.py
+    # needs (start_code_sandbox_run's own analysis step) no longer does.
+    _assert_import_is_qt_free("graphlink_plugins.common.python_repl")
 
 
 def test_note_agent_imports_qt_free():

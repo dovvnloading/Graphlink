@@ -10,14 +10,12 @@ SandboxRepairAgent, VirtualEnvSandbox - all of these were already pure/Qt-free
 in the legacy file (confirmed by reading it directly before this split: zero
 Qt references anywhere in this block). The venv-creation/pip-install/
 script-execution timeout numbers inside VirtualEnvSandbox (180s / 600s / 240s)
-are carried forward completely unchanged - see backend/agents.py's own
-PYCODER_EXECUTE_TIMEOUT_SECONDS comment for why 240 is reused there rather
-than reinvented.
+are carried forward completely unchanged.
 
 The ONLY change from the legacy source is the config import:
 `graphlink_config` (which transitively imports Qt's GUI/widget modules at
 module scope) becomes `graphlink_task_config`, mirroring the exact same swap
-graphlink_plugins/gitlink/agent.py and graphlink_plugins/pycoder/domain.py
+graphlink_plugins/gitlink/agent.py and graphlink_plugins/common/python_repl.py
 already made for the same reason.
 
 What did NOT move here (stays in graphlink_agents_code_sandbox.py, unchanged):

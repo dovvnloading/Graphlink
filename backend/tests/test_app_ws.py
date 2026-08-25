@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from backend import BACKEND_VERSION, crash_recovery
 from backend.app import create_app
 from backend.session_context import get_session_context
-from backend.tests.conftest import chat_slots, pycoder_slots
+from backend.tests.conftest import chat_slots, code_sandbox_slots
 
 # R7.2: api_provider/graphlink_task_config sit at the repo root, a sibling
 # of backend/ - already importable, no ordering constraint.
@@ -667,22 +667,22 @@ def test_disconnect_cancels_any_in_flight_chat_request(monkeypatch):
     assert cancel_event.is_set()
 
 
-def test_disconnect_auto_denies_any_pending_pycoder_approval(monkeypatch):
+def test_disconnect_auto_denies_any_pending_code_sandbox_approval(monkeypatch):
     # R5.4: an approval pause has NO timeout by design (the whole point is
     # "wait for a human, however long that takes") - so a client that starts
-    # a Py-Coder run, sees the approval gate, then closes its tab WITHOUT
-    # ever approving or denying must not leave that request parked forever,
-    # permanently locking node.pending_request_id. ws_endpoint's disconnect
-    # handler must resolve the pending approval_future to False (auto-deny)
-    # once the session's last connection drops - this exercises that through
-    # the real ASGI app end to end, not just AgentDispatcher.
+    # an Execution Sandbox run, sees the approval gate, then closes its tab
+    # WITHOUT ever approving or denying must not leave that request parked
+    # forever, permanently locking node.pending_request_id. ws_endpoint's
+    # disconnect handler must resolve the pending approval_future to False
+    # (auto-deny) once the session's last connection drops - this exercises
+    # that through the real ASGI app end to end, not just AgentDispatcher.
     # cancel_all_pending_approvals in isolation (test_agents.py already
     # covers that unit-level).
-    import graphlink_plugins.pycoder.domain as pycoder_domain
+    import backend.agents as agents_module
 
     monkeypatch.setattr(
-        pycoder_domain.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
+        agents_module.SandboxGenerationAgent, "get_response",
+        lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
     )
 
     client = make_client()
@@ -703,18 +703,21 @@ def test_disconnect_auto_denies_any_pending_pycoder_approval(monkeypatch):
         parent_id = nodes_after_add[0]["id"]
 
         ws.send_json(
-            {"kind": "intent", "topic": "app-plugins", "intent": "executePlugin", "args": ["Py-Coder", parent_id]}
+            {
+                "kind": "intent", "topic": "app-plugins", "intent": "executePlugin",
+                "args": ["Virtual Environment Runner", parent_id],
+            }
         )
         nodes_after_plugin = scene_nodes_from(ws.receive_json(), nodes_after_add)
-        node_id = next(n["id"] for n in nodes_after_plugin if n["kind"] == "pycoder")
+        node_id = next(n["id"] for n in nodes_after_plugin if n["kind"] == "code_sandbox")
 
         ws.send_json(
-            {"kind": "intent", "topic": "scene", "intent": "runPyCoder", "args": [node_id, "add 1"]}
+            {"kind": "intent", "topic": "scene", "intent": "runCodeSandbox", "args": [node_id, "add 1"]}
         )
         # Exactly two scene republishes land before the pipeline genuinely
-        # pauses: (1) run_pycoder's own synchronous busy-claim publish, (2)
-        # the background task's publish right after it sets
-        # pycoder_awaiting_approval=True and parks on `await
+        # pauses: (1) run_code_sandbox's own synchronous busy-claim publish,
+        # (2) the background task's publish right after it sets
+        # code_sandbox_awaiting_approval=True and parks on `await
         # approval_future` - nothing more arrives until approve/deny or
         # disconnect.
         ws.receive_json()  # (1) busy-claim publish
@@ -722,8 +725,8 @@ def test_disconnect_auto_denies_any_pending_pycoder_approval(monkeypatch):
 
         session = client.app.state.bus.session("default")
         agent_dispatcher = get_session_context(session).agent_dispatcher
-        assert pycoder_slots(agent_dispatcher), "runPyCoder never created a request entry"
-        entry = next(iter(pycoder_slots(agent_dispatcher).values()))
+        assert code_sandbox_slots(agent_dispatcher), "runCodeSandbox never created a request entry"
+        entry = next(iter(code_sandbox_slots(agent_dispatcher).values()))
         approval_future = entry["approval_future"]
         assert not approval_future.done(), "the pipeline must genuinely be parked on the gate here"
     # Exiting the `with` block closes the websocket, running ws_endpoint's

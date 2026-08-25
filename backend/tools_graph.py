@@ -48,7 +48,6 @@ from backend.domain.node_states import (
     ChatState,
     CodeState,
     NoteState,
-    PycoderState,
 )
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import GRAPH_MUTATE, GRAPH_READ, RunContext, ToolRegistry, ToolResult
@@ -95,13 +94,13 @@ _LIST_MAX_NODES = 40
 # creation path. Group/plan kinds stay out for the same reason
 # graph.delete_node refuses them.
 _CREATABLE_KINDS = (
-    "chat", "note", "code", "document", "pycoder", "web_research",
+    "chat", "note", "code", "document", "web_research",
     "html", "artifact", "conversation",
 )
 # Kinds whose domain factory requires a parent - the handler rejects a
 # parentless create for these before touching the document.
 _PARENT_REQUIRED_KINDS = (
-    "document", "pycoder", "web_research", "html", "artifact", "conversation",
+    "document", "web_research", "html", "artifact", "conversation",
 )
 
 
@@ -111,9 +110,7 @@ GRAPH_CREATE_NODE_SPEC = ToolSpec(
         "Create a new node on the canvas. kind must be one of: chat (a "
         "message bubble; set is_user false for assistant content), note (a "
         "free-floating sticky note), code (a code block with a language), "
-        "document (a text attachment; parent required), pycoder (an "
-        "executable Python node; parent required; set its code via "
-        "graph.set_node_content, run it via run_node), web_research (a "
+        "document (a text attachment; parent required), web_research (a "
         "research node; parent required; run it via run_node), html (a "
         "rendered HTML page; parent required; content is the raw source), "
         "artifact (a long-form Markdown drafting node; parent required; "
@@ -128,7 +125,7 @@ GRAPH_CREATE_NODE_SPEC = ToolSpec(
             "kind": {"type": "string", "enum": list(_CREATABLE_KINDS)},
             "parent_id": {
                 "type": "string",
-                "description": "Existing node to attach under. Required for document/pycoder/web_research/html/artifact/conversation; optional for chat/code; ignored for note.",
+                "description": "Existing node to attach under. Required for document/web_research/html/artifact/conversation; optional for chat/code; ignored for note.",
             },
             "title": {"type": "string", "description": "Optional title (document kind requires one)."},
             "content": {"type": "string", "description": "Initial content/text/code for the node."},
@@ -159,12 +156,12 @@ GRAPH_SET_NODE_CONTENT_SPEC = ToolSpec(
     name="graph.set_node_content",
     description=(
         "Replace an existing node's content. Supported kinds: chat (the "
-        "message text), note (the note text), pycoder (the Python code that "
-        "run_node will execute), code (the source text), document (the "
-        "document body), html (the raw HTML source), artifact (the whole "
-        "Markdown document). Kinds whose content IS a run's output - chart, "
-        "image, thinking, web_research - are read-only through this tool: "
-        "re-run them instead. A node's title is not changed."
+        "message text), note (the note text), code (the source text), "
+        "document (the document body), html (the raw HTML source), "
+        "artifact (the whole Markdown document). Kinds whose content IS a "
+        "run's output - chart, image, thinking, web_research - are "
+        "read-only through this tool: re-run them instead. A node's title "
+        "is not changed."
     ),
     input_schema={
         "type": "object",
@@ -216,7 +213,7 @@ GRAPH_LIST_NODES_SPEC = ToolSpec(
     input_schema={
         "type": "object",
         "properties": {
-            "kind": {"type": "string", "description": "Only nodes of this exact kind (e.g. chat, code, pycoder, note)."},
+            "kind": {"type": "string", "description": "Only nodes of this exact kind (e.g. chat, code, note, web_research)."},
             "query": {"type": "string", "description": "Case-insensitive substring match against title and content."},
             "offset": {"type": "integer", "minimum": 0, "description": "Skip this many matches (for paging; default 0)."},
         },
@@ -243,35 +240,11 @@ def run_node_effective_scope(document: SceneDocument, call: ToolCall) -> str | N
     return _RUN_NODE_ACTION_SCOPES.get(action)
 
 
-def run_node_pending_code(document: SceneDocument, call: ToolCall) -> str | None:
-    """REVIEW-FIX: the code a run_node(action="execute") call is about to
-    hand to PythonREPL.execute() - or None if `call` is not such a call.
-    Exists so the approval prompt shown to a human (builder.py's
-    _approval_summary) can disclose the CODE, not just the call's own
-    arguments ({"node_id": ..., "action": "execute"}). The code itself
-    lives on the TARGET node's state (set by an earlier, separately-
-    approved graph.set_node_content call), not in this call - a human
-    approving from arguments alone would be blessing a black box, unlike
-    every other run_node action where the arguments already say what will
-    happen. Mirrors run_node_effective_scope's "derive what the call will
-    actually do before it's invoked" shape."""
-    if call.name != "run_node":
-        return None
-    node = document.nodes.get(str(call.arguments.get("node_id") or ""))
-    if node is None or node.kind != "pycoder":
-        return None
-    action = str(call.arguments.get("action") or "") or _RUN_NODE_DEFAULT_ACTIONS.get(node.kind, "")
-    if action != "execute":
-        return None
-    return node.state.pycoder_code
-
-
 def run_node_pending_disclosure(document: SceneDocument, call: ToolCall) -> str | None:
     """SECURITY-FIX: the human-readable thing a run_node call is about to DO
     that its own arguments ({node_id, action}) don't reveal - so the
-    approval prompt can disclose it. Two cases today:
+    approval prompt can disclose it.
 
-    - execute: the pycoder code (delegated to run_node_pending_code).
     - research: the web_research node's content IS the search query that
       gets sent to the external search/fetch provider (net.fetch, which
       always prompts even in autopilot). The query lived only on the node,
@@ -282,9 +255,6 @@ def run_node_pending_disclosure(document: SceneDocument, call: ToolCall) -> str 
       channel the human had no chance to catch.
 
     Returns None for any other call, leaving the plain-arguments summary."""
-    code = run_node_pending_code(document, call)
-    if code is not None:
-        return "will run this code:\n" + code
     if call.name != "run_node":
         return None
     node = document.nodes.get(str(call.arguments.get("node_id") or ""))
@@ -399,11 +369,6 @@ def make_create_node_handler(document: SceneDocument):
                 return document.add_code_node(x, y, content, str(args.get("language") or "python"), parent_id)
             if kind == "document":
                 return document.add_document_node(x, y, title, content, "document", parent_id)
-            if kind == "pycoder":
-                node = document.add_pycoder_node(x, y, parent_id)
-                if content and isinstance(node.state, PycoderState):
-                    node.state.pycoder_code = content
-                return node
             if kind == "html":
                 # add_html_node takes the raw source positionally and derives
                 # its own title from it; the backend never parses or
@@ -467,34 +432,6 @@ def make_set_node_content_handler(document: SceneDocument):
             mutator = lambda: document.update_chat_node_content(node_id, content)
         elif node.kind == "note" and isinstance(node.state, NoteState):
             mutator = lambda: document.set_note_content(node_id, content)
-        elif node.kind == "pycoder" and isinstance(node.state, PycoderState):
-            # SECURITY-FIX (PYC-1): a Py-Coder node parked at its human-
-            # approval gate (node.pending_request_id set while
-            # AgentDispatcher.start_pycoder_run awaits approval_future) has
-            # already committed to executing a SPECIFIC program - the
-            # approval panel renders node.state.pycoder_code reactively,
-            # but what actually runs after approval is the coroutine-local
-            # `current_code` captured when the gate opened, and the
-            # defense-in-depth fingerprint check compares that SAME local
-            # against pycoder_approved_fingerprint, never this field. This
-            # branch had no guard at all (unlike run_node/delete_node just
-            # above), so a SEPARATE, auto-approved tool call - e.g. an
-            # autopilot Builder run's own graph.set_node_content, needing
-            # no human click - could silently swap what the panel shows
-            # while the human approves what they SEE, not what runs: a
-            # genuine display/execute divergence at the one gate that
-            # exists specifically so a human can review code before it
-            # executes. Refused the same way delete_node already refuses a
-            # write against a node with a run in flight.
-            if getattr(node, "pending_request_id", None):
-                return _error(
-                    f"Node {node_id!r} has a run in flight - wait for it to "
-                    "finish or stop it before changing its code."
-                )
-
-            def mutator():
-                node.state.pycoder_code = content
-                return node
         elif node.kind == "code" and isinstance(node.state, CodeState):
             # CodeState.code is what the wire actually publishes for a code
             # node (graph.py's _node_wire), not SceneNode.content.
@@ -515,8 +452,8 @@ def make_set_node_content_handler(document: SceneDocument):
         else:
             return _error(
                 f"Node {node_id!r} is kind {node.kind!r} - not writable via "
-                "graph.set_node_content (supported: chat, note, pycoder, "
-                "code, document, html, artifact). A kind whose content is a "
+                "graph.set_node_content (supported: chat, note, code, "
+                "document, html, artifact). A kind whose content is a "
                 "run's own output is changed by re-running it, not by "
                 "writing to it."
             )
@@ -710,11 +647,11 @@ def make_delete_node_handler(document: SceneDocument, dispatcher):
 
     Live-resource teardown reuses backend/api/intents_nodes.py's own
     _capture_live_run_teardown + disposal sequence rather than reimplementing
-    it: a deleted Py-Coder node's REPL subprocess and a deleted sandbox
-    node's venv must not outlive the node whichever surface deleted it. The
-    refusals above mean plan_cancels is always empty on this path, but the
-    loop is kept so this stays a faithful mirror of the intent rather than a
-    subset that silently drifts from it."""
+    it: a deleted sandbox node's venv or a deleted harness node's workspace
+    must not outlive the node whichever surface deleted it. The refusals
+    above mean plan_cancels is always empty on this path, but the loop is
+    kept so this stays a faithful mirror of the intent rather than a subset
+    that silently drifts from it."""
 
     async def handler(call: ToolCall, ctx: RunContext) -> ToolResult:
         from backend.api.intents_nodes import _capture_live_run_teardown
@@ -741,26 +678,19 @@ def make_delete_node_handler(document: SceneDocument, dispatcher):
             )
 
         ids = [node_id]
-        pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels, harness_workspace_ids, harness_cancels = (
+        sandbox_ids, code_sandbox_cancels, plan_cancels, harness_workspace_ids, harness_cancels = (
             _capture_live_run_teardown(document, ids)
         )
         document.record_command(
             "builderDeleteNode", "agent", lambda: document.remove_nodes(ids),
             node_ids=ids, run_id=_run_id_of(ctx),
         )
-        for kind, request_id in code_exec_cancels:
-            if kind == "pycoder":
-                dispatcher.cancel_pycoder(request_id)
-            else:
-                dispatcher.cancel_code_sandbox(request_id)
+        for request_id in code_sandbox_cancels:
+            dispatcher.cancel_code_sandbox(request_id)
         for request_id in plan_cancels:
             dispatcher.cancel_builder(request_id)
         for request_id in harness_cancels:
             dispatcher.cancel_harness(request_id)
-        for disposed_id, repl_id in pycoder_ids:
-            await dispatcher.dispose_pycoder_repl(
-                disposed_id, repl_id=repl_id, remove_scratch_dir=True,
-            )
         for sandbox_id in sandbox_ids:
             await dispatcher.remove_code_sandbox_scratch_dir(sandbox_id)
         for workspace_id in harness_workspace_ids:
@@ -777,10 +707,7 @@ def make_delete_node_handler(document: SceneDocument, dispatcher):
 RUN_NODE_SPEC = ToolSpec(
     name="run_node",
     description=(
-        "Run a node's action and return its result. Actions: execute (a "
-        "pycoder node's default - runs its current code in its Python REPL; "
-        "requires the code.execute scope; always prompts for human "
-        "approval showing the code, even in autopilot), reply (a chat "
+        "Run a node's action and return its result. Actions: reply (a chat "
         "generates an assistant reply as a new child node from its branch "
         "history; requires provider.call), chart (explicit action on any "
         "content node - chat/note/document/code - generates a chart node "
@@ -794,7 +721,7 @@ RUN_NODE_SPEC = ToolSpec(
         "type": "object",
         "properties": {
             "node_id": {"type": "string"},
-            "action": {"type": "string", "enum": ["execute", "reply", "chart", "research"]},
+            "action": {"type": "string", "enum": ["reply", "chart", "research"]},
             "chart_type": {
                 "type": "string",
                 "description": "chart action only: bar, line, pie, scatter... (default bar).",
@@ -811,7 +738,6 @@ RUN_NODE_SPEC = ToolSpec(
 # message mirrors the registry's own scope-denial wording so the model sees
 # one consistent shape for both static and dynamic denials.
 _RUN_NODE_ACTION_SCOPES = {
-    "execute": "code.execute",
     "reply": "provider.call",
     "chart": "provider.call",
     # ADR-008 stage 8.5: research is THE net.fetch action - in autopilot it
@@ -826,9 +752,8 @@ _RUN_NODE_ACTION_SCOPES = {
 # never a default: it runs ON a content node (the UI's own "Generate chart"
 # is an action offered on content nodes, not a node kind's own run), so it
 # must be asked for by name.
-_RUN_NODE_DEFAULT_ACTIONS = {"pycoder": "execute", "chat": "reply", "web_research": "research"}
+_RUN_NODE_DEFAULT_ACTIONS = {"chat": "reply", "web_research": "research"}
 _RUN_NODE_ACTION_KINDS = {
-    "execute": ("pycoder",),
     "reply": ("chat",),
     "chart": ("chat", "note", "document", "code"),
     "research": ("web_research",),
@@ -840,30 +765,13 @@ _RUN_REPLY_EXCERPT_CHARS = 2000
 
 def make_run_node_handler(document: SceneDocument, dispatcher):
     """`dispatcher` is the session's AgentDispatcher - run_node reuses its
-    REPL registry (get_pycoder_repl - same REPL a manual Run would use, so
-    builder runs and manual runs share one kernel per node) and its branch
-    System-Prompt resolution. Execution results land on nodes through the
-    SAME domain methods the dedicated surfaces call (complete_pycoder_run /
-    fail_pycoder_run, add_chart_node, add_chat_node) - deliberately NOT
-    re-entering the fire-and-forget AgentDispatcher surfaces themselves:
-    those claim their own busy kinds, wire callbacks to intents, and offer
+    branch System-Prompt resolution. Results land on nodes through the SAME
+    domain methods the dedicated surfaces call (add_chart_node,
+    add_chat_node) - deliberately NOT re-entering the fire-and-forget
+    AgentDispatcher surfaces themselves: those claim their own busy kinds,
+    wire callbacks to intents, and offer
     no awaitable completion; this runs inline under the BUILDER's run and
-    cancel event instead (the design doc's D9).
-
-    REVIEW-FIX: the execute action does NOT reuse start_pycoder_run's own
-    dedicated approval_future/pycoder_awaiting_approval gate (that surface
-    is fire-and-forget, as above) - it relies entirely on run_node's own
-    registry-level approval ("once", registered below) instead. That gate
-    used to be silently satisfied in autopilot (code.execute was in
-    builder.py's _AUTOPILOT_AUTO_SCOPES) and, in copilot, disclosed only
-    the call's own arguments (node_id/action, not the code) - the code
-    lives on the target node's state, written by an earlier, separately-
-    approved graph.set_node_content call the human may not connect to
-    this one. Fixed at the source: _AUTOPILOT_AUTO_SCOPES no longer
-    auto-approves code.execute (builder.py), and _approval_summary there
-    now shows the actual code for this call via run_node_pending_code
-    above - so BOTH modes now require a human to see and approve the
-    code immediately before it runs, not just the tool-call shape."""
+    cancel event instead (the design doc's D9)."""
 
     async def handler(call: ToolCall, ctx: RunContext) -> ToolResult:
         from backend import agents as _agents  # late import + late binding (test seam)
@@ -876,7 +784,7 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         if action not in _RUN_NODE_ACTION_SCOPES:
             return _error(
                 f"Node {node_id!r} is kind {node.kind!r} with no default run "
-                "action - pass an explicit `action` (execute, reply, chart)."
+                "action - pass an explicit `action` (reply, chart, research)."
             )
         if node.kind not in _RUN_NODE_ACTION_KINDS[action]:
             return _error(
@@ -900,8 +808,6 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         # three things it provides every dedicated surface.
         node.pending_request_id = claim
         try:
-            if action == "execute":
-                return await _run_pycoder(document, dispatcher, node, node_id, cancel_event)
             if action == "reply":
                 return await _run_chat(document, dispatcher, node_id, run_id, cancel_event, ctx)
             if action == "research":
@@ -910,36 +816,6 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         finally:
             if node.pending_request_id == claim:
                 node.pending_request_id = None
-
-    async def _run_pycoder(document, dispatcher, node, node_id, cancel_event):
-        code = node.state.pycoder_code
-        if not str(code).strip():
-            return _error(
-                f"Node {node_id!r} has no code to execute - set it first via "
-                "graph.set_node_content."
-            )
-        repl = dispatcher.get_pycoder_repl(node_id, node.state.pycoder_repl_id)
-        try:
-            output = await asyncio.wait_for(
-                asyncio.to_thread(repl.execute, code),
-                timeout=_agents_const("PYCODER_EXECUTE_TIMEOUT_SECONDS"),
-            )
-            failed = bool(getattr(repl, "last_run_failed", False))
-        except asyncio.TimeoutError:
-            await dispatcher.dispose_pycoder_repl(node_id)
-            document.fail_pycoder_run(node_id, "Execution timed out and was terminated.")
-            return _error(f"Execution of node {node_id!r} timed out and was terminated.")
-        output_text = output if output else "[No output produced]"
-        # No analysis turn: the BUILDER model is the analyst here - it reads
-        # the output itself in this same loop, so a second model call to
-        # summarize it would be spend with no reader.
-        document.complete_pycoder_run(node_id, code, output_text, "", failed)
-        return ToolResult(content=json.dumps({
-            "node_id": node_id,
-            "failed": failed,
-            "output": output_text[:_RUN_OUTPUT_EXCERPT_CHARS],
-            "truncated": len(output_text) > _RUN_OUTPUT_EXCERPT_CHARS,
-        }))
 
     async def _run_chat(document, dispatcher, node_id, run_id, cancel_event, ctx):
         source = document.nodes[node_id]
@@ -960,14 +836,13 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         )
         # REVIEW-FIX: an ordinary user can delete node_id while the await
         # above was in flight (remove_nodes has no special-casing for a
-        # chat node just because run_node has a pending request on it - see
-        # run_node_pending_code's own neighbourhood for the analogous
-        # pycoder case). add_chat_node below raises SceneError for a
-        # missing parent BY DESIGN (its own docstring) - uncaught, that
-        # would propagate out of handler() into ToolRegistry.invoke's
-        # generic `except Exception`, discarding a reply the model already
-        # paid for. Land it as a clean, expected tool error instead - the
-        # same graceful-no-op posture fail_pycoder_run's own silent no-op
+        # chat node just because run_node has a pending request on it).
+        # add_chat_node below raises SceneError for a missing parent BY
+        # DESIGN (its own docstring) - uncaught, that would propagate out
+        # of handler() into ToolRegistry.invoke's generic `except
+        # Exception`, discarding a reply the model already paid for. Land
+        # it as a clean, expected tool error instead - the same
+        # graceful-no-op posture fail_web_research_run's own silent no-op
         # and intents_web_research.py's `if node_id not in document.nodes:
         # return` already give the sibling cases of this identical race.
         if node_id not in document.nodes:
@@ -1087,10 +962,10 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         # above, on the success path. Unlike the chat/chart branches below
         # (which CREATE a new node parented on node_id and so have nothing
         # useful to return if that parent is gone), the research answer
-        # itself is already fully formed here - mirror _run_pycoder's own
-        # posture (complete_pycoder_run's silent no-op) rather than
-        # discarding a completed result the model already paid for: skip
-        # the landing call but still return it.
+        # itself is already fully formed here - a deleted-node landing call
+        # is a silent no-op elsewhere in this codebase too (e.g.
+        # fail_web_research_run), so skip the landing call but still return
+        # the result rather than discarding what the model already paid for.
         if node_id in document.nodes:
             document.complete_web_research_run(node_id, _research_result_wire(result))
         return ToolResult(content=json.dumps({

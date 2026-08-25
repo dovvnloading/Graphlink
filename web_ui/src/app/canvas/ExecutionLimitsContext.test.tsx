@@ -21,7 +21,6 @@ function validPayload(overrides: Record<string, unknown> = {}) {
     schemaVersion: 1,
     minCompatibleSchemaVersion: 1,
     revision: 1,
-    pycoderResourceLimitsText: "Execution is capped at approximately 2 GB of memory.",
     codeSandboxResourceLimitsText: "Execution is capped at approximately 2 GB of memory. Binary only.",
     ...overrides,
   };
@@ -29,12 +28,7 @@ function validPayload(overrides: Record<string, unknown> = {}) {
 
 function Consumer() {
   const state = useExecutionLimits();
-  return (
-    <>
-      <span data-testid="pycoder">{state.pycoderResourceLimitsText}</span>
-      <span data-testid="code-sandbox">{state.codeSandboxResourceLimitsText}</span>
-    </>
-  );
+  return <span data-testid="code-sandbox">{state.codeSandboxResourceLimitsText}</span>;
 }
 
 describe("ExecutionLimitsProvider / useExecutionLimits", () => {
@@ -56,7 +50,6 @@ describe("ExecutionLimitsProvider / useExecutionLimits", () => {
         <Consumer />
       </ExecutionLimitsProvider>,
     );
-    expect(screen.getByTestId("pycoder")).toHaveTextContent("");
     expect(screen.getByTestId("code-sandbox")).toHaveTextContent("");
   });
 
@@ -68,9 +61,6 @@ describe("ExecutionLimitsProvider / useExecutionLimits", () => {
       </ExecutionLimitsProvider>,
     );
     act(() => listeners.get("execution-limits")!(validPayload()));
-    expect(screen.getByTestId("pycoder")).toHaveTextContent(
-      "Execution is capped at approximately 2 GB of memory.",
-    );
     expect(screen.getByTestId("code-sandbox")).toHaveTextContent(
       "Execution is capped at approximately 2 GB of memory. Binary only.",
     );
@@ -85,12 +75,12 @@ describe("ExecutionLimitsProvider / useExecutionLimits", () => {
       </ExecutionLimitsProvider>,
     );
     act(() => listeners.get("execution-limits")!(validPayload()));
-    // Missing the required pycoderResourceLimitsText field entirely.
-    const { pycoderResourceLimitsText: _omit, ...malformed } = validPayload();
+    // Missing the required codeSandboxResourceLimitsText field entirely.
+    const { codeSandboxResourceLimitsText: _omit, ...malformed } = validPayload();
     act(() => listeners.get("execution-limits")!(malformed));
 
-    expect(screen.getByTestId("pycoder")).toHaveTextContent(
-      "Execution is capped at approximately 2 GB of memory.",
+    expect(screen.getByTestId("code-sandbox")).toHaveTextContent(
+      "Execution is capped at approximately 2 GB of memory. Binary only.",
     );
     expect(errorSpy).toHaveBeenCalledWith(
       "[execution-limits] rejected snapshot:",
@@ -103,7 +93,6 @@ describe("ExecutionLimitsProvider / useExecutionLimits", () => {
     // No ExecutionLimitsProvider ancestor at all - mirrors
     // CodeExecutionApprovalPanel.test.tsx's own standalone render style.
     render(<Consumer />);
-    expect(screen.getByTestId("pycoder")).toHaveTextContent("");
     expect(screen.getByTestId("code-sandbox")).toHaveTextContent("");
   });
 });

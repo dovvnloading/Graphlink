@@ -1,8 +1,8 @@
-"""ADR-014 stage 14.3 pinning tests: migrating the 8 built-in plugin picker
+"""ADR-014 stage 14.3 pinning tests: migrating the 7 built-in plugin picker
 actions (backend/plugins.py's old hardcoded if-chain) onto
-HostContext.register_builtin_plugin (backend/plugin_sdk.py), backed by 8
+HostContext.register_builtin_plugin (backend/plugin_sdk.py), backed by 7
 real packages under plugins/ (plugins/web_research/, plugins/gitlink/,
-plugins/pycoder/, plugins/code_sandbox/, plugins/artifact/,
+plugins/code_sandbox/, plugins/artifact/,
 plugins/system_prompt/, plugins/conversation_node/,
 plugins/html_renderer/).
 
@@ -82,16 +82,6 @@ _BUILTIN_CASES = [
         "Please select a valid node to branch from before adding a Gitlink node.",
         "Gitlink",
         id="gitlink",
-    ),
-    pytest.param(
-        "Py-Coder",
-        "Opens a Python execution environment to run code and get AI analysis.",
-        "Build & Execution",
-        "pluginPyCoder",
-        "pycoder",
-        "Please select a valid node to branch from before adding a Py-Coder node.",
-        "Py-Coder",
-        id="pycoder",
     ),
     pytest.param(
         "Virtual Environment Runner",

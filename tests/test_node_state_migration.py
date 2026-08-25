@@ -32,9 +32,11 @@ at all.
 test_scene_payload_key_set_is_unchanged_by_the_migration is the wire-
 compat tripwire this whole stage's backend-only constraint depends on:
 scene_payload() is one flat dict literal (backend/domain/graph.py) that
-emits the SAME 89 keys for every node regardless of kind - a golden,
-hardcoded snapshot of that sorted key list, captured pre-migration. As
-long as this test keeps passing, no migration PR has silently added,
+emits the SAME set of keys for every node regardless of kind - a golden,
+hardcoded snapshot of that sorted key list (121 as of PLAN-2026-08-24
+H5's Py-Coder retirement), updated deliberately whenever a kind's own
+fields are added, renamed, or removed. As long as this test keeps
+passing between such updates, no migration PR has silently added,
 renamed, or dropped a wire key while moving where a field lives in
 memory.
 """
@@ -90,11 +92,6 @@ MIGRATED_KIND_FIELDS = {
         "gitlink_context_summary", "gitlink_context_version", "gitlink_proposal_markdown",
         "gitlink_pending_changes", "gitlink_preview_text", "gitlink_change_fingerprint",
         "gitlink_change_local_root", "gitlink_change_state", "gitlink_error",
-    ],
-    "pycoder": [
-        "pycoder_mode", "pycoder_prompt", "pycoder_code", "pycoder_output", "pycoder_analysis",
-        "pycoder_last_run_failed", "pycoder_awaiting_approval", "pycoder_approved_fingerprint",
-        "pycoder_error", "pycoder_repl_id",
     ],
     "code_sandbox": [
         "code_sandbox_sandbox_id", "code_sandbox_requirements", "code_sandbox_prompt",
@@ -152,7 +149,7 @@ def _root_name(expr: ast.expr) -> str | None:
 # PR4's "code" kind reuses two field names ("code", "language") common
 # enough to collide with unrelated attributes on genuinely different
 # types elsewhere in this codebase - unlike every other kind's
-# distinctively-prefixed field names (gitlink_*, pycoder_*, etc.), which
+# distinctively-prefixed field names (gitlink_*, code_sandbox_*, etc.), which
 # need no such allowance. Listed by exact SHAPE (and, where the shape
 # alone isn't distinctive enough, the one file that shape's real usage is
 # confined to), not by line number (which would rot on the next unrelated
@@ -346,9 +343,7 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "isDocked", "isFinalDeliverable", "isLocked", "isSummaryNote",
     "isSystemPrompt", "isUser", "itemIds", "kind", "language", "mimeType",
     "model", "overrideModelId", "overrideProvider",
-    "pendingRequestId", "pluginState", "previewLabel", "provider", "pycoderAnalysis",
-    "pycoderAwaitingApproval", "pycoderCode", "pycoderError",
-    "pycoderLastRunFailed", "pycoderMode", "pycoderOutput", "pycoderPrompt",
+    "pendingRequestId", "pluginState", "previewLabel", "provider",
     "researchActiveSourceId", "researchCompleted", "researchError",
     "completionTokens", "promptTokens",
     "researchResult", "researchRetainToKnowledge", "researchStage", "researchTotal",
@@ -472,25 +467,11 @@ _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
     "gitlinkChangeFingerprint": None,
     "gitlinkChangeState": "draft",
     "gitlinkError": "",
-    # ADR-002 stage 2.5 PR9a: pycoder's 8 wire keys (pycoder_approved_
-    # fingerprint is excluded from scene_payload(), same posture as
-    # gitlink_context_xml), moved onto PycoderState behind the same
-    # transitional property shim as gitlink - "pycoder" is likewise
-    # deliberately NOT yet added to MIGRATED_KIND_FIELDS above, for the
-    # identical AST-gate-can't-tell-shim-from-bare-access reason.
-    "pycoderMode": "ai_driven",
-    "pycoderPrompt": "",
-    "pycoderCode": "",
-    "pycoderOutput": "",
-    "pycoderAnalysis": "",
-    "pycoderLastRunFailed": False,
-    "pycoderAwaitingApproval": False,
-    "pycoderError": "",
     # ADR-002 stage 2.5 PR10a: code_sandbox's 8 wire keys (code_sandbox_
     # sandbox_id/code_sandbox_approved_fingerprint are excluded from
     # scene_payload(), same posture as gitlink_context_xml), moved onto
     # CodeSandboxState behind the same transitional property shim as
-    # gitlink/pycoder - "code_sandbox" is likewise deliberately NOT yet
+    # gitlink - "code_sandbox" is likewise deliberately NOT yet
     # added to MIGRATED_KIND_FIELDS above, for the identical AST-gate
     # reason.
     "codeSandboxRequirements": "",

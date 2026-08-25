@@ -46,12 +46,6 @@ class LoopDispatcher:
     def __init__(self):
         self._runs = RunRegistry()
 
-    def get_pycoder_repl(self, node_id, repl_id):  # pragma: no cover - unused here
-        raise AssertionError("no pycoder in these tests")
-
-    async def dispose_pycoder_repl(self, node_id, **kwargs):  # pragma: no cover
-        pass
-
     def _resolve_branch_system_prompt(self, document, node_id):
         return None
 
@@ -394,90 +388,12 @@ class TestAutopilotNetworkGate:
         )
 
 
-class TestRunNodeExecuteApprovalGate:
-    """REVIEW-FIX regression: run_node(action="execute") on a pycoder node
-    used to bypass human review entirely - executing Builder-authored
-    Python straight through PythonREPL.execute() with no approval_future,
-    no pycoder_awaiting_approval, and (in autopilot, since code.execute
-    was in _AUTOPILOT_AUTO_SCOPES) no prompt at all. Mirrors
-    TestAutopilotNetworkGate's own shape for the identical class of gap,
-    now closed the same way: code.execute is no longer auto-approved, and
-    the prompt shown discloses the code itself (run_node_pending_code /
-    _approval_summary), not just the call's {node_id, action} arguments."""
-
-    def test_run_node_execute_prompts_in_autopilot_despite_the_registered_code_execute_scope(self, monkeypatch):
-        document, dispatcher, registry, bus = make_harness()
-        parent = document.add_chat_node(0, 0, "ctx", True)
-        pycoder = document.add_pycoder_node(0, 200, parent.id)
-        pycoder.state.pycoder_code = "print('should not run without review')"
-        node = seed_plan(document, ["run the code"], mode="autopilot")
-        scripted_turns(monkeypatch, [
-            {"tool_calls": [call("c1", "run_node", node_id=pycoder.id)]},
-            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
-        ], [])
-
-        approvals, denials = asyncio.run(
-            drive_build(document, dispatcher, registry, bus, node, deny_first=True)
-        )
-
-        assert approvals == ["run_node"], (
-            "code.execute must prompt even in autopilot - a Builder-written "
-            "pycoder node is arbitrary code execution, the same risk class "
-            "net.fetch already never auto-approves"
-        )
-        assert denials == 1
-        # Denied means invoke() never called the handler - LoopDispatcher.
-        # get_pycoder_repl raises if it's ever reached, so a passing build
-        # here (rather than an AssertionError bubbling out of the task) is
-        # itself proof the code never reached the REPL unapproved.
-        assert node.state.builder_status == "done"
-
-    def test_run_node_execute_approval_discloses_the_code_not_just_the_call_arguments(self, monkeypatch):
-        document, dispatcher, registry, bus = make_harness()
-        parent = document.add_chat_node(0, 0, "ctx", True)
-        pycoder = document.add_pycoder_node(0, 200, parent.id)
-        pycoder.state.pycoder_code = "import os\nos.system('echo hi')"
-        node = seed_plan(document, ["run the code"])  # copilot: already prompted pre-fix
-        scripted_turns(monkeypatch, [
-            {"tool_calls": [call("c1", "run_node", node_id=pycoder.id)]},
-            {"tool_calls": [call("c2", "builder.complete_step", summary="done")]},
-        ], [])
-        summaries: list = []
-
-        approvals, denials = asyncio.run(
-            drive_build(document, dispatcher, registry, bus, node, deny_first=True, summaries=summaries)
-        )
-
-        assert approvals == ["run_node"]
-        assert len(summaries) == 1
-        # The old summary was just the call's own arguments - node_id/action,
-        # never the code. The fix must show the code that will actually run.
-        assert pycoder.state.pycoder_code in summaries[0]
-        assert summaries[0] == builder_module._approval_summary(
-            call("c1", "run_node", node_id=pycoder.id), document,
-        )
-        assert node.state.builder_status == "done"
-
-    def test_run_node_execute_approval_discloses_the_whole_code_not_a_400_char_prefix(self):
-        """SECURITY-FIX: the disclosure above was capped at
-        _APPROVAL_SUMMARY_CAP (400) characters - a prompt-injected model
-        pads a benign prologue past the cap and everything after it runs
-        without ever being shown. The approver must see the exact bytes
-        PythonREPL.execute() will run."""
-        document = SceneDocument()
-        parent = document.add_chat_node(0, 0, "ctx", True)
-        pycoder = document.add_pycoder_node(0, 200, parent.id)
-        prologue = "# " + ("harmless comment " * 40) + "\n"  # well past 400 chars
-        payload = "import os; os.system('the part that used to be hidden')"
-        pycoder.state.pycoder_code = prologue + payload
-        assert len(prologue) > builder_module._APPROVAL_SUMMARY_CAP
-
-        summary = builder_module._approval_summary(
-            call("c1", "run_node", node_id=pycoder.id), document,
-        )
-
-        assert payload in summary, "code past the old 400-char cap must be disclosed"
-        assert summary.endswith(payload), "no truncation marker may replace the tail"
+class TestAutopilotScopeRouterBypassRegressions:
+    """REVIEW-FIX/SECURITY-FIX regressions: autopilot's auto-approval router
+    only consults a tool's registered/derived SCOPE, which is not by itself
+    a trust signal - these prove two distinct ways a scope match alone used
+    to slip a mutation past human review, and that both are now closed by
+    also consulting the tool's own approval= registration."""
 
     def test_autopilot_still_prompts_for_a_tool_registered_approval_always(self, monkeypatch):
         """SECURITY-FIX: graph.delete_node registers approval="always"
@@ -1235,8 +1151,8 @@ class TestActivityLog:
         scripted_turns(monkeypatch, [
             {"tool_calls": [
                 call("c1", "graph.create_node", kind="note", content="x"),
-                # pycoder requires parent_id - this call errors.
-                call("c2", "graph.create_node", kind="pycoder"),
+                # code_sandbox requires parent_id - this call errors.
+                call("c2", "graph.create_node", kind="code_sandbox"),
             ]},
             {"tool_calls": [call("c3", "builder.complete_step", summary="done")]},
         ], [])

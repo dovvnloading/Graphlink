@@ -347,35 +347,45 @@ class TestGcStaleByAge:
 
 
 class TestSweepStaleScratchDirsOnLaunch:
-    def test_sweeps_both_roots(self, tmp_path, monkeypatch):
-        pycoder_root = tmp_path / "pycoder"
+    def test_sweeps_all_three_roots(self, tmp_path, monkeypatch):
+        repl_root = tmp_path / "repl"
         sandbox_root = tmp_path / "sandbox"
-        old_pycoder_dir = _touch_dir_with_age(pycoder_root, "old-node", age_seconds=1000)
+        harness_root = tmp_path / "harness"
+        old_repl_dir = _touch_dir_with_age(repl_root, "old-node", age_seconds=1000)
         old_sandbox_dir = _touch_dir_with_age(sandbox_root, "old-sandbox", age_seconds=1000)
-        monkeypatch.setattr(scratch_dirs, "PYCODER_REPL_ROOT", pycoder_root)
+        old_harness_dir = _touch_dir_with_age(harness_root, "old-workspace", age_seconds=1000)
+        monkeypatch.setattr(scratch_dirs, "PYTHON_REPL_ROOT", repl_root)
         monkeypatch.setattr(scratch_dirs, "EXECUTION_SANDBOX_ROOT", sandbox_root)
+        monkeypatch.setattr(scratch_dirs, "HARNESS_WORKSPACE_ROOT", harness_root)
 
         scratch_dirs.sweep_stale_scratch_dirs_on_launch(max_age_seconds=100)
 
-        assert not old_pycoder_dir.exists()
+        assert not old_repl_dir.exists()
         assert not old_sandbox_dir.exists()
+        assert not old_harness_dir.exists()
 
-    def test_a_failure_sweeping_one_root_does_not_stop_the_other(self, tmp_path, monkeypatch):
-        pycoder_root = tmp_path / "pycoder"
+    def test_a_failure_sweeping_one_root_does_not_stop_the_others(self, tmp_path, monkeypatch):
+        repl_root = tmp_path / "repl"
         sandbox_root = tmp_path / "sandbox"
+        harness_root = tmp_path / "harness"
         old_sandbox_dir = _touch_dir_with_age(sandbox_root, "old-sandbox", age_seconds=1000)
-        monkeypatch.setattr(scratch_dirs, "PYCODER_REPL_ROOT", pycoder_root)
+        old_harness_dir = _touch_dir_with_age(harness_root, "old-workspace", age_seconds=1000)
+        monkeypatch.setattr(scratch_dirs, "PYTHON_REPL_ROOT", repl_root)
         monkeypatch.setattr(scratch_dirs, "EXECUTION_SANDBOX_ROOT", sandbox_root)
+        monkeypatch.setattr(scratch_dirs, "HARNESS_WORKSPACE_ROOT", harness_root)
 
         real_gc = scratch_dirs.gc_stale_by_age
 
         def _flaky_gc(root, max_age_seconds=scratch_dirs.DEFAULT_MAX_AGE_SECONDS):
-            if root == pycoder_root:
+            if root == repl_root:
                 raise OSError("network share unavailable")
             return real_gc(root, max_age_seconds)
 
         monkeypatch.setattr(scratch_dirs, "gc_stale_by_age", _flaky_gc)
 
         scratch_dirs.sweep_stale_scratch_dirs_on_launch(max_age_seconds=100)  # must not raise
+
+        assert not old_sandbox_dir.exists()
+        assert not old_harness_dir.exists()
 
         assert not old_sandbox_dir.exists(), "the second root must still be swept despite the first raising"

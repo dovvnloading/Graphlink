@@ -1,6 +1,7 @@
 """ADR-005 stage 5.2: the Windows Job Object resource guard
-(graphlink_execution_guard.py) and its wiring into Py-Coder's PythonREPL
-and the Code Sandbox's VirtualEnvSandbox.
+(graphlink_execution_guard.py) and its wiring into the shared PythonREPL
+(graphlink_plugins/common/python_repl.py) and the Code Sandbox's
+VirtualEnvSandbox.
 
 The stage's own exit criterion is "Memory bomb killed at cap; orphan test:
 stop kills the whole tree" - TestJobObjectMechanism below proves both,
@@ -27,7 +28,7 @@ import pytest
 import graphlink_execution_guard as guard_module
 from graphlink_execution_guard import ExecutionResourceGuard, create_execution_guard
 from graphlink_plugins.code_sandbox.domain import VirtualEnvSandbox
-from graphlink_plugins.pycoder.domain import PythonREPL
+from graphlink_plugins.common.python_repl import PythonREPL
 
 WINDOWS_ONLY = pytest.mark.skipif(
     sys.platform != "win32", reason="Job Object mechanism is Windows-only in this stage (POSIX is ADR-005 5.3)"
@@ -177,7 +178,7 @@ class TestNullGuardNeverRaises:
 class TestPythonReplUsesTheGuard:
     def test_starting_the_repl_assigns_it_to_a_guard(self):
         fake = _FakeGuard()
-        with patch("graphlink_plugins.pycoder.domain.create_execution_guard", return_value=fake):
+        with patch("graphlink_plugins.common.python_repl.create_execution_guard", return_value=fake):
             repl = PythonREPL(repl_id="guard-assign-test")
             try:
                 repl.start()
@@ -188,7 +189,7 @@ class TestPythonReplUsesTheGuard:
 
     def test_stopping_the_repl_closes_the_guard(self):
         fake = _FakeGuard()
-        with patch("graphlink_plugins.pycoder.domain.create_execution_guard", return_value=fake):
+        with patch("graphlink_plugins.common.python_repl.create_execution_guard", return_value=fake):
             repl = PythonREPL(repl_id="guard-close-test")
             repl.start()
             repl.stop()
@@ -369,7 +370,7 @@ class TestPythonReplRestartDoesNotLeakTheOldGuard:
             guards_created.append(fake)
             return fake
 
-        with patch("graphlink_plugins.pycoder.domain.create_execution_guard", side_effect=factory):
+        with patch("graphlink_plugins.common.python_repl.create_execution_guard", side_effect=factory):
             repl = PythonREPL(repl_id="restart-leak-test")
             repl.execute("1 + 1")
             assert len(guards_created) == 1
@@ -529,8 +530,8 @@ class TestRealDefaultsReachTheWin32Api:
 # -- ADR-005 stage 5.3 (review-fix): the 0700/touch-on-use wiring, proven at
 # the REAL call sites -------------------------------------------------------
 #
-# An adversarial review found that reverting graphlink_plugins/pycoder/
-# domain.py's and graphlink_plugins/code_sandbox/domain.py's own
+# An adversarial review found that reverting graphlink_plugins/common/
+# python_repl.py's and graphlink_plugins/code_sandbox/domain.py's own
 # prepare_scratch_dir(...) call sites back to a bare .mkdir(...) passed the
 # entire pre-existing test suite with zero failures - the only coverage that
 # existed was of prepare_scratch_dir/touch_scratch_dir_usage in isolation
@@ -542,7 +543,7 @@ class TestRealDefaultsReachTheWin32Api:
 POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="0700 has no POSIX meaning on Windows")
 
 
-class TestPycoderScratchDirWiring:
+class TestPythonReplScratchDirWiring:
     def test_starting_the_repl_calls_prepare_scratch_dir_on_its_own_cwd(self):
         calls = []
         repl = PythonREPL(repl_id="wiring-prepare-test")
@@ -551,7 +552,7 @@ class TestPycoderScratchDirWiring:
         repl.cwd.mkdir(parents=True, exist_ok=True)
         try:
             with patch(
-                "graphlink_plugins.pycoder.domain.prepare_scratch_dir",
+                "graphlink_plugins.common.python_repl.prepare_scratch_dir",
                 side_effect=calls.append,
             ):
                 repl.start()
@@ -562,7 +563,7 @@ class TestPycoderScratchDirWiring:
     def test_executing_code_calls_touch_scratch_dir_usage_on_its_own_cwd(self):
         calls = []
         with patch(
-            "graphlink_plugins.pycoder.domain.touch_scratch_dir_usage",
+            "graphlink_plugins.common.python_repl.touch_scratch_dir_usage",
             side_effect=calls.append,
         ):
             repl = PythonREPL(repl_id="wiring-touch-test")

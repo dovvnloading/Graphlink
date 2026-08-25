@@ -1,5 +1,5 @@
 """ADR-005 stage 5.2: Windows Job Object resource guard for executed code
-(Py-Coder's persistent REPL and the Code Sandbox's venv/pip/script children).
+(the shared PythonREPL and the Code Sandbox's venv/pip/script children).
 
 THE THREAT (audit finding H2). Neither execution surface enforced any
 memory, process-count, or lifecycle limit beyond wall-clock timeouts and a
@@ -59,7 +59,7 @@ import sys
 logger = logging.getLogger(__name__)
 
 # ADR-005 Decision #2's own example figure ("up to 2 GB RAM"). A generous
-# default: real Py-Coder/Sandbox workloads (pandas, matplotlib, a venv's own
+# default: real execution-sandbox workloads (pandas, matplotlib, a venv's own
 # interpreter + pip's dependency resolver) comfortably fit under it; a true
 # memory bomb still dies well before threatening the host.
 DEFAULT_MEMORY_LIMIT_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
@@ -437,7 +437,7 @@ def create_execution_guard(
     memory_limit_bytes: int = DEFAULT_MEMORY_LIMIT_BYTES,
     active_process_limit: int = DEFAULT_ACTIVE_PROCESS_LIMIT,
 ) -> ExecutionResourceGuard:
-    """One guard per subprocess-management lifecycle (a Py-Coder REPL's
+    """One guard per subprocess-management lifecycle (a PythonREPL's
     single long-lived child; one Code Sandbox subprocess invocation).
 
     Call order matters, and is the same on every platform:
