@@ -22,8 +22,6 @@ from __future__ import annotations
 from typing import Any
 
 from backend.domain.model import (
-    BRANCH_HORIZONTAL_SPACING,
-    MESSAGE_VERTICAL_SPACING,
     SceneEdge,
     SceneEmptyPromptError,
     SceneError,
@@ -373,10 +371,11 @@ class BranchOps:
     ) -> SceneNode:
         """The Composer's real Send action (R3.3): create a real user
         ChatNode continuing the current branch (last_chat_node_id), or
-        start a fresh root if none exists yet. Positioning is a simple
-        deterministic stack, not the legacy find_branch_position packing
-        algorithm - real auto-layout is a later refinement; "Organize
-        Nodes" already exists as a fallback.
+        start a fresh root if none exists yet. Positioning goes through
+        place_child/place_root (backend/domain/layout.py): below the
+        parent's real measured bottom edge, fanning right past any
+        occupied slot - the rebuilt equivalent of the legacy
+        find_branch_position packing.
 
         R8a: content_parts carries real attachments (image/audio) staged in
         the composer - optional, additive, threaded straight to
@@ -394,11 +393,11 @@ class BranchOps:
         already uses for an unknown id.
 
         When branching onto a parent that already has one or more chat-kind
-        children (a genuine divergence, not a fresh continuation), the new
-        sibling fans out horizontally by BRANCH_HORIZONTAL_SPACING per
-        existing child instead of landing on the exact same (x, y) as an
-        existing branch - which would render as one node silently hiding
-        another.
+        children (a genuine divergence, not a fresh continuation),
+        place_child's collision resolution fans the new sibling right past
+        the existing children instead of landing on the exact same (x, y)
+        as an existing branch - which would render as one node silently
+        hiding another.
 
         last_chat_node_id is updated to the new node afterward exactly as
         an ordinary send would be, override or not - so the branch just
@@ -406,22 +405,14 @@ class BranchOps:
         the same continue-from-here behavior as always."""
         if branch_from_node_id is not None and branch_from_node_id in self.nodes:
             parent_id: str | None = branch_from_node_id
-            parent = self.nodes[parent_id]
-            sibling_count = sum(
-                1
-                for e in self.edges.values()
-                if e.source == parent_id and (target := self.nodes.get(e.target)) is not None and target.kind == "chat"
-            )
-            x, y = parent.x + sibling_count * BRANCH_HORIZONTAL_SPACING, parent.y + MESSAGE_VERTICAL_SPACING
         else:
             parent_id = self.last_chat_node_id
-            if parent_id is not None and parent_id in self.nodes:
-                parent = self.nodes[parent_id]
-                x, y = parent.x, parent.y + MESSAGE_VERTICAL_SPACING
-            else:
+            if parent_id is not None and parent_id not in self.nodes:
                 parent_id = None
-                chat_node_count = sum(1 for n in self.nodes.values() if n.kind == "chat")
-                x, y = 0.0, chat_node_count * MESSAGE_VERTICAL_SPACING
+        if parent_id is not None:
+            x, y = self.place_child(parent_id, "chat")
+        else:
+            x, y = self.place_root("chat")
         node = self.add_chat_node(x, y, text, True, parent_id=parent_id, content_parts=content_parts)
         self.last_chat_node_id = node.id
         return node

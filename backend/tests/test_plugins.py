@@ -519,10 +519,10 @@ def test_execute_plugin_system_prompt_creates_a_note_attached_to_the_branch_root
     note = canvas_document.nodes[result]
     assert note.kind == "note"
     assert note.state.is_system_prompt is True
-    # Positioned above the ROOT (not `mid`), roughly matching legacy's
-    # "200px above" placement.
+    # Positioned above the ROOT (not `mid`), clear of the root's top edge
+    # by the note's own footprint plus the standard gap.
     assert note.x == root.x
-    assert note.y == root.y - 150
+    assert note.y + canvas_document.node_footprint(note)[1] <= root.y
     # note -> root, the exact direction _resolve_branch_system_prompt looks
     # for - NOT root -> note (the child plugins' own direction) and NOT
     # note -> mid (the selected node, not the resolved root).

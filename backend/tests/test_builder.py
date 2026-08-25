@@ -18,11 +18,10 @@ import time
 
 import api_provider
 from backend import builder as builder_module
-from backend import tools_graph as tools_graph_module
 from backend.api import intents_builder as intents_builder_module
 from backend.builder import run_build
 from backend.domain.graph import SceneDocument
-from backend.domain.model import MESSAGE_VERTICAL_SPACING
+from backend.domain.layout import NODE_GAP_X, NODE_GAP_Y
 from backend.notifications import NotificationState
 from backend.providers.base import ToolCall
 from backend.run_lifecycle import RunRegistry
@@ -1446,7 +1445,7 @@ class TestAnchoredPlacement:
 
         created = next(n for n in document.nodes.values() if n.kind == "note")
         assert created.x == node.x
-        assert created.y == node.y + MESSAGE_VERTICAL_SPACING
+        assert created.y == node.y + document.node_footprint(node)[1] + NODE_GAP_Y
 
     def test_multiple_parentless_creates_fan_out_along_the_anchor_row(self, monkeypatch):
         document, dispatcher, registry, bus = make_harness()
@@ -1465,12 +1464,12 @@ class TestAnchoredPlacement:
         notes = sorted((n for n in document.nodes.values() if n.kind == "note"), key=lambda n: n.x)
         assert len(notes) == 2
         assert notes[0].x == node.x
-        assert notes[1].x == node.x + tools_graph_module._SIBLING_HORIZONTAL_SPACING
-        assert notes[0].y == notes[1].y == node.y + MESSAGE_VERTICAL_SPACING
+        assert notes[1].x >= notes[0].x + document.node_footprint(notes[0])[0] + NODE_GAP_X
+        assert notes[0].y == notes[1].y == node.y + document.node_footprint(node)[1] + NODE_GAP_Y
 
     def test_no_anchor_falls_back_to_the_origin_drop(self):
         document = SceneDocument()
-        assert _place_child(document, None, None) == (80.0, 80.0)
+        assert _place_child(document, None, None) == (0.0, 0.0)
 
     def test_review_fix_an_explicit_parent_id_equal_to_the_anchor_does_not_overlap_an_anchor_placed_sibling(self):
         """The executor prompt tells the model the plan node's own id
@@ -1487,7 +1486,9 @@ class TestAnchoredPlacement:
         x2, y2 = _place_child(document, plan.id, plan.id)  # parent_id IS the anchor
 
         assert (x2, y2) != (x1, y1), "must not collide with the anchor-placed sibling"
-        assert (x2, y2) == (x1 + tools_graph_module._SIBLING_HORIZONTAL_SPACING, y1)
+        note = next(n for n in document.nodes.values() if n.kind == "note")
+        assert y2 == y1
+        assert x2 >= x1 + document.node_footprint(note)[0] + NODE_GAP_X
 
     def test_review_fix_a_real_parent_distinct_from_the_anchor_keeps_its_own_edge_based_counting(self):
         """The unification fix must be scoped to parent_id == anchor_id
@@ -1499,7 +1500,7 @@ class TestAnchoredPlacement:
 
         x, y = _place_child(document, parent.id, plan.id)
 
-        assert (x, y) == (parent.x, parent.y + MESSAGE_VERTICAL_SPACING)
+        assert (x, y) == (parent.x, parent.y + document.node_footprint(parent)[1] + NODE_GAP_Y)
 
 
 class TestDeleteRecipe:

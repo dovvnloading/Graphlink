@@ -29,13 +29,10 @@ _MESSAGE_CAP = 20_000
 
 
 def _place_harness_node(document: SceneDocument) -> tuple[float, float]:
-    """Right of the current scene's extent - the builder-plan placement
-    exactly (no canvas anchor exists for a fresh agent either)."""
-    if not document.nodes:
-        return 120.0, 120.0
-    max_x = max(n.x for n in document.nodes.values())
-    min_y = min(n.y for n in document.nodes.values())
-    return max_x + 420.0, max(min_y, 120.0)
+    """Right of the current scene's real extent - the builder-plan
+    placement exactly (no canvas anchor exists for a fresh agent either).
+    See place_at_scene_right (backend/domain/layout.py)."""
+    return document.place_at_scene_right("harness")
 
 
 def register_harness_intents(

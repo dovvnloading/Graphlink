@@ -3146,6 +3146,21 @@ function CanvasInner({
         // RF's default dblclick-zoom would consume it before it ever bubbles.
         zoomOnDoubleClick={false}
         fitView
+        // The initial fitView's OWN zoom ceiling, independent of maxZoom
+        // below (which only bounds interactive/manual zoom). Without this,
+        // fitView on a canvas holding just one small node (a fresh
+        // placeholder, or a lone note) zooms in tight to fill the viewport
+        // with it - up to maxZoom itself, since nothing else stops it. The
+        // real-footprint placement engine (backend/domain/layout.py) can
+        // then legitimately place that node's first child 200-400+ px
+        // below/right of it, landing outside a viewport that was already
+        // zoomed in that tight - the child renders correctly in the scene
+        // graph but is invisible until the user manually zooms out, with
+        // no visual cue anything was even created. Capping the AUTOMATIC
+        // fit at 1x leaves realistic headroom around a small starting
+        // scene; fitting genuinely large content still zooms out below 1x
+        // as needed; a user's own scroll-zoom is still free to go to 2.5x.
+        fitViewOptions={{ maxZoom: 1 }}
         minZoom={0.1}
         maxZoom={2.5}
         deleteKeyCode={DELETE_KEY_CODES}

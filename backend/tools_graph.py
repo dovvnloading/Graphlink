@@ -25,13 +25,13 @@ user commands into the builder's undo entry. Every handler's
 record_command call is one synchronous stretch - atomic w.r.t. the event
 loop - so per-call stamping has no such window.
 
-Placement: the model never picks coordinates. New nodes land relative to
-their parent using the same MESSAGE_VERTICAL_SPACING convention
-send_message's own reply placement uses (backend/domain/model.py), with a
-horizontal fan-out for siblings so parallel children don't stack. A
-parentless create (stage 8.7) instead anchors near the run's plan node, if
-one exists, so a build's output lands where the user just looked rather
-than at the canvas origin - see _place_child's own doc.
+Placement: the model never picks coordinates. New nodes land via
+SceneDocument.place_child (backend/domain/layout.py) - the same
+collision-resolved, measured-footprint placement every other spawn path
+uses, which fans parallel children of one parent side by side instead of
+stacking them. A parentless create (stage 8.7) instead anchors near the
+run's plan node, if one exists, so a build's output lands where the user
+just looked rather than at the canvas origin - see _place_child's own doc.
 """
 
 from __future__ import annotations
@@ -41,7 +41,6 @@ import json
 from typing import Any
 
 from backend.domain.graph import SceneDocument, SceneError
-from backend.domain.model import MESSAGE_VERTICAL_SPACING
 from graphlink_scratch_dirs import HARNESS_WORKSPACE_ROOT, remove_scratch_dir_for_id
 from backend.domain.node_states import (
     ArtifactState,
@@ -51,11 +50,6 @@ from backend.domain.node_states import (
 )
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import GRAPH_MUTATE, GRAPH_READ, RunContext, ToolRegistry, ToolResult
-
-# Sibling fan-out: the second/third/... child of the same parent shifts right
-# so a builder creating parallel children produces a readable fan, not a
-# stack. Value matches the vertical rhythm rather than inventing a new one.
-_SIBLING_HORIZONTAL_SPACING = 360
 
 # read_subgraph excerpt cap: full content stays on the node (the canvas is
 # the artifact); the tool result feeds the MODEL, where an unbounded excerpt
@@ -286,52 +280,22 @@ def _anchor_id_of(ctx: RunContext) -> str | None:
 
 
 def _place_child(
-    document: SceneDocument, parent_id: str | None, anchor_id: str | None = None,
+    document: SceneDocument,
+    parent_id: str | None,
+    anchor_id: str | None = None,
+    kind: str = "chat",
 ) -> tuple[float, float]:
-    """Parent-relative placement, model-free: directly below the parent,
-    fanning right one slot per existing child so parallel children of the
-    same parent land side by side instead of stacked.
-
-    review-fix (stage 8.7): the plan node can be reached by EITHER path -
-    as an explicit parent_id (the executor prompt tells the model the plan
-    node's own id, and nothing stops it passing that id back as parent_id
-    for a chat/code node) or as the implicit anchor for a parentless create.
-    The two branches below used to count siblings differently (edges vs.
-    position), so a parentless create landing via the anchor branch was
-    invisible to the parent branch's edge count and vice versa - two nodes
-    from the two different paths could land on the exact same coordinates.
-    `parent_id != anchor_id` routes that one specific case (parent_id IS the
-    anchor) into the position-based branch below, which sees every node in
-    the row regardless of which path placed it. A normal parent - anything
-    other than the anchor - is completely unaffected."""
-    if parent_id is not None and parent_id in document.nodes and parent_id != anchor_id:
-        parent = document.nodes[parent_id]
-        existing_children = sum(1 for e in document.edges.values() if e.source == parent_id)
-        return (
-            parent.x + existing_children * _SIBLING_HORIZONTAL_SPACING,
-            parent.y + MESSAGE_VERTICAL_SPACING,
-        )
-    reference_id = parent_id or anchor_id
-    if reference_id is not None and reference_id in document.nodes:
-        # The anchor (a plan node) never gains an EDGE to what it builds -
-        # it is a placement reference only - so there is no edge count to
-        # read a sibling index off. A node already sitting on the
-        # reference's own placement row is this same reference's own
-        # earlier creation (nothing else places there), so counting THOSE
-        # stands in for "existing children" without needing a persisted
-        # counter - and, per the docstring above, catches siblings placed
-        # via EITHER path.
-        reference = document.nodes[reference_id]
-        row_y = reference.y + MESSAGE_VERTICAL_SPACING
-        row_siblings = sum(
-            1 for n in document.nodes.values() if n.x >= reference.x and abs(n.y - row_y) < 1.0
-        )
-        return reference.x + row_siblings * _SIBLING_HORIZONTAL_SPACING, row_y
-    # Free-floating with no anchor either (a bare RunContext, e.g. a future
-    # non-builder caller): drop near the origin offset by node count so
-    # repeated creations don't perfectly overlap.
-    n = len(document.nodes)
-    return 80.0 + (n % 5) * 40.0, 80.0 + (n % 7) * 40.0
+    """Parent-relative placement, model-free, via SceneDocument.place_child
+    (backend/domain/layout.py): directly below the reference node's real
+    measured bottom edge, fanning right past any occupied slot - so
+    parallel children of the same parent land side by side regardless of
+    which path (explicit parent_id or the stage-8.7 plan-node anchor)
+    placed the earlier ones; collision resolution sees actual node rects,
+    not a per-path sibling counter. A parentless create with no anchor
+    either (a bare RunContext, e.g. a future non-builder caller) falls
+    through to place_root's below-the-scene drop."""
+    reference_id = parent_id if parent_id in document.nodes else anchor_id
+    return document.place_child(reference_id, kind)
 
 
 def _error(message: str) -> ToolResult:
@@ -354,7 +318,7 @@ def make_create_node_handler(document: SceneDocument):
         if kind == "document" and not title:
             return _error("kind 'document' requires a title.")
 
-        x, y = _place_child(document, parent_id, _anchor_id_of(ctx))
+        x, y = _place_child(document, parent_id, _anchor_id_of(ctx), kind)
         run_id = _run_id_of(ctx)
 
         def mutator():
@@ -1024,7 +988,7 @@ def make_run_node_handler(document: SceneDocument, dispatcher):
         # letting that SceneError propagate out of handler() uncaught.
         if node_id not in document.nodes:
             return _error(f"Node {node_id!r} no longer exists - the chart was discarded.")
-        x, y = _place_child(document, node_id)
+        x, y = _place_child(document, node_id, kind="chart")
         chart_node, _command = document.record_command(
             "builderRunChart", "agent",
             lambda: document.add_chart_node(x, y, node_id, chart_type, chart_data),

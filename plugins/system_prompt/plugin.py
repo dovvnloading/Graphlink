@@ -1,8 +1,8 @@
 """ADR-014 stage 14.3: first-party migration of the pre-SDK "System Prompt"
 picker action. A byte-faithful relocation of backend/plugins.py's old
 hardcoded `if name == "System Prompt":` branch - the one built-in whose
-shape genuinely differs from the other 7 (a branch-point CHILD of
-parent_node_id, one MESSAGE_VERTICAL_SPACING below it):
+shape genuinely differs from the other 7 (a note placed ABOVE the branch
+root, not a child fanned below the selected node):
 
 - Resolves parent_node_id's BRANCH ROOT (SceneDocument.get_branch_root),
   the same parent-edge walk backend/agents.py's
@@ -53,7 +53,8 @@ def _execute(
         return existing.id
 
     def _create_system_prompt_note():
-        created = document.add_note(root.x, root.y - 150, is_system_prompt=True)
+        nx, ny = document.place_child(root.id, "note", prefer="above")
+        created = document.add_note(nx, ny, is_system_prompt=True)
         document.connect(created.id, root.id)
         return created
 
