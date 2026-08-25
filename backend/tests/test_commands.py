@@ -1106,3 +1106,37 @@ def test_undo_never_resurrects_a_snapshotted_run_owned_builder_status():
     assert document.nodes[node.id].state.builder_status == "interrupted", (
         "redo must not resurrect it either"
     )
+
+
+def test_undo_never_resurrects_a_snapshotted_run_owned_harness_status():
+    """Technical-debt audit finding: HarnessState's own docstring documents
+    the IDENTICAL "non-terminal status describes a RunHandle that cannot
+    survive a restart" contract as PlanState.builder_status above, but the
+    _restore normalization was PlanState-only until this fix - so an
+    ordinary, unrelated edit (e.g. dragging the node) recorded while a
+    harness agent was running left the SAME phantom-status hazard: undo
+    resurrected "running" forever, with no live run behind it and no
+    button (Stop only fires if pending_request_id is set, and that is
+    already correctly cleared) that could ever advance it."""
+    document = SceneDocument()
+    node = document.add_harness_node(0, 0, "goal", max_turns=5)
+    node.state.harness_status = "running"  # mid-run when this command was recorded
+
+    document.record_command(
+        "moveNode", "user", lambda: document.move_node(node.id, 50, 50),
+        node_ids=[node.id],
+    )
+    node.state.harness_status = "done"  # the run landed for real after recording
+
+    command = document.command_log[-1]
+    command.invert(document)
+    assert document.nodes[node.id].x == 0.0
+    assert document.nodes[node.id].state.harness_status == "interrupted", (
+        "undo must not resurrect a run-owned status no live run backs"
+    )
+
+    command.apply(document)
+    assert document.nodes[node.id].x == 50.0
+    assert document.nodes[node.id].state.harness_status == "interrupted", (
+        "redo must not resurrect it either"
+    )

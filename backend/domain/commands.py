@@ -79,7 +79,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterable, TypeVar
 
-from backend.domain.node_states import PlanState
+from backend.domain.node_states import HarnessState, PlanState
 
 if TYPE_CHECKING:
     from backend.domain.model import SceneEdge, SceneNode
@@ -236,6 +236,29 @@ def _restore(live: dict, snapshot: dict) -> None:
                 restored.state.builder_awaiting_tool_approval = False
                 restored.state.builder_approval_tool_name = ""
                 restored.state.builder_approval_summary = ""
+            # Technical-debt audit finding: HarnessState's own docstring
+            # documents the IDENTICAL "non-terminal status describes a
+            # RunHandle that cannot survive a restart" contract as
+            # PlanState's builder_status (session_load.py's own load-time
+            # normalization already treats them the same way), but this
+            # PlanState-only branch was never mirrored for harness nodes -
+            # so undoing/redoing an unrelated edit made while a harness
+            # agent was running restored a snapshotted "running" status
+            # forever, with pending_request_id already cleared above and
+            # therefore no live run left that could ever advance it past
+            # that state. Same _guard_live_runs guarantee applies: a REAL
+            # run on this node would already have refused the undo/redo,
+            # so any snapshotted "running" reaching here is provably stale.
+            if isinstance(getattr(restored, "state", None), HarnessState) and restored.state.harness_status == "running":
+                restored.state.harness_status = "interrupted"
+                restored.state.harness_status_detail = (
+                    "Restored from undo/redo history - resume to continue."
+                )
+                restored.state.harness_awaiting_approval = False
+                restored.state.harness_approval_tool_name = ""
+                restored.state.harness_approval_summary = ""
+                restored.state.harness_awaiting_question = False
+                restored.state.harness_question = ""
             # review-fix (stage 8.7): builder_activity is documented as run
             # TELEMETRY, not reversible document content (PlanState's own
             # docstring: "deliberately left untouched by an undo, so the
@@ -255,12 +278,17 @@ def _restore(live: dict, snapshot: dict) -> None:
             # before it is replaced. A node that does not currently exist
             # (this restore is recreating a deleted one) has no "current" to
             # preserve, so the snapshot's own activity is used as-is - the
-            # only case where trusting the snapshot is correct.
+            # only case where trusting the snapshot is correct. Mirrored
+            # below for HarnessState.harness_activity, same rationale.
             current = live.get(key)
             if isinstance(getattr(restored, "state", None), PlanState) and isinstance(
                 getattr(current, "state", None), PlanState,
             ):
                 restored.state.builder_activity = current.state.builder_activity
+            if isinstance(getattr(restored, "state", None), HarnessState) and isinstance(
+                getattr(current, "state", None), HarnessState,
+            ):
+                restored.state.harness_activity = current.state.harness_activity
             live[key] = restored
 
 

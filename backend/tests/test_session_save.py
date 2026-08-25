@@ -74,6 +74,26 @@ def test_web_node_kind_translates_to_legacy_web_node_type():
     assert web_payload is not None
 
 
+def test_harness_node_survives_a_real_save_load_round_trip():
+    # Technical-debt audit finding: "harness" was never added to
+    # _REGULAR_KINDS, so every harness node was silently dropped from
+    # `all_nodes` and never appeared in the saved payload at all - not a
+    # missing field, the entire node. _serialize_harness_node/
+    # _restore_harness_payload were both already correct; they were simply
+    # never reached. Uses the real round trip, not a hand-built payload,
+    # as the strongest possible signal.
+    doc = SceneDocument()
+    doc.add_harness_node(0, 0, "investigate the flaky test", max_turns=9)
+
+    doc2 = _round_trip(doc)
+
+    restored = [n for n in doc2.nodes.values() if n.kind == "harness"]
+    assert len(restored) == 1, "the harness node must survive save/load, not vanish"
+    node = restored[0]
+    assert node.state.harness_goal == "investigate the flaky test"
+    assert node.state.harness_max_turns == 9
+
+
 def test_code_sandbox_sandbox_id_survives_a_real_save_load_round_trip():
     # ADR-005 stage 5.3 (review-fix): the whole point of
     # code_sandbox_sandbox_id - a scratch-dir key stable ACROSS a reload -
