@@ -6,7 +6,7 @@ import { CustomSelect } from "./CustomSelect";
 
 // ADR-012 stage 12.5: display labels for FILTERABLE_NODE_KINDS' own raw
 // kind strings - most already read fine title-cased, but "web_research"/
-// "code_sandbox"/"pycoder" need a human label. Kept local to this file (not
+// "code_sandbox" need a human label. Kept local to this file (not
 // exported from SceneCanvas.tsx) since nothing else needs a display label
 // for a node kind today.
 const FILTER_KIND_LABELS: Record<string, string> = {
@@ -21,10 +21,10 @@ const FILTER_KIND_LABELS: Record<string, string> = {
   plan: "Plan",
   artifact: "Artifact",
   gitlink: "Gitlink",
-  pycoder: "Py-Coder",
   code_sandbox: "Code Sandbox",
   note: "Note",
   chart: "Chart",
+  harness: "Agent",
 };
 
 // ADR-012 stage 12.5: mirrors backend/domain/branches.py's own

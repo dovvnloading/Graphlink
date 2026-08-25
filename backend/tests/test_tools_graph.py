@@ -108,27 +108,12 @@ class TestCreateNode:
         assert node.content == "remember this"
         assert not document.edges, "notes are free-floating - no parent edge"
 
-    def test_creates_a_pycoder_node_with_initial_code(self):
-        document = SceneDocument()
-        parent = seed_parent(document)
-        registry = make_registry(document)
-        ctx, _ = make_ctx()
-
-        result = invoke(registry, ctx, "graph.create_node", {
-            "kind": "pycoder", "parent_id": parent.id, "content": "print('hi')",
-        })
-
-        payload = json.loads(result.content)
-        node = document.nodes[payload["node_id"]]
-        assert node.kind == "pycoder"
-        assert node.state.pycoder_code == "print('hi')"
-
     def test_parent_required_kinds_error_without_one(self):
         document = SceneDocument()
         registry = make_registry(document)
         ctx, _ = make_ctx()
 
-        for kind in ("pycoder", "web_research", "document"):
+        for kind in ("web_research", "document"):
             result = invoke(registry, ctx, "graph.create_node", {"kind": kind, "title": "t"})
             assert result.is_error, kind
             assert "parent_id" in result.content
@@ -186,12 +171,10 @@ class TestConnect:
 
 
 class TestSetNodeContent:
-    def test_updates_chat_note_and_pycoder_content(self):
+    def test_updates_chat_and_note_content(self):
         document = SceneDocument()
         chat = document.add_chat_node(0, 0, "old", False)
         note = document.add_note(50, 50)
-        parent = document.add_chat_node(0, 200, "p", True)
-        pycoder = document.add_pycoder_node(0, 400, parent.id)
         registry = make_registry(document)
         ctx, _ = make_ctx()
 
@@ -201,49 +184,9 @@ class TestSetNodeContent:
         assert not invoke(registry, ctx, "graph.set_node_content", {
             "node_id": note.id, "content": "note text",
         }).is_error
-        assert not invoke(registry, ctx, "graph.set_node_content", {
-            "node_id": pycoder.id, "content": "x = 1",
-        }).is_error
 
         assert document.nodes[chat.id].content == "new text"
         assert document.nodes[note.id].content == "note text"
-        assert document.nodes[pycoder.id].state.pycoder_code == "x = 1"
-
-    def test_a_pycoder_node_with_a_run_in_flight_refuses_a_code_rewrite(self):
-        # SECURITY-FIX (PYC-1): a node parked at its human-approval gate
-        # (pending_request_id set) must not have its displayed code
-        # silently swapped out from under the approval - see
-        # make_set_node_content_handler's own comment on the pycoder
-        # branch for the exact display/execute divergence this closes.
-        document = SceneDocument()
-        parent = document.add_chat_node(0, 0, "p", True)
-        pycoder = document.add_pycoder_node(0, 400, parent.id)
-        pycoder.state.pycoder_code = "original_approved_code()"
-        pycoder.pending_request_id = "req-live"
-        registry = make_registry(document)
-        ctx, _ = make_ctx()
-
-        result = invoke(registry, ctx, "graph.set_node_content", {
-            "node_id": pycoder.id, "content": "malicious_swapped_code()",
-        })
-
-        assert result.is_error
-        assert "in flight" in result.content
-        assert document.nodes[pycoder.id].state.pycoder_code == "original_approved_code()"
-
-    def test_a_pycoder_node_with_no_run_in_flight_is_still_writable(self):
-        document = SceneDocument()
-        parent = document.add_chat_node(0, 0, "p", True)
-        pycoder = document.add_pycoder_node(0, 400, parent.id)
-        registry = make_registry(document)
-        ctx, _ = make_ctx()
-
-        result = invoke(registry, ctx, "graph.set_node_content", {
-            "node_id": pycoder.id, "content": "x = 1",
-        })
-
-        assert not result.is_error
-        assert document.nodes[pycoder.id].state.pycoder_code == "x = 1"
 
     def test_unsupported_kind_is_a_clear_error(self):
         """ADR-021 stage 21.2 widened this tool to code/document/html/
@@ -378,24 +321,20 @@ class RecordingDispatcher:
     node's live resources are actually released, not silently leaked."""
 
     def __init__(self):
-        self.disposed_repls: list[tuple] = []
         self.removed_sandboxes: list[str] = []
         self.cancelled: list[tuple] = []
 
-    async def dispose_pycoder_repl(self, node_id, *, repl_id=None, remove_scratch_dir=False):
-        self.disposed_repls.append((node_id, repl_id, remove_scratch_dir))
-
     async def remove_code_sandbox_scratch_dir(self, sandbox_id):
         self.removed_sandboxes.append(sandbox_id)
-
-    def cancel_pycoder(self, request_id):
-        self.cancelled.append(("pycoder", request_id))
 
     def cancel_code_sandbox(self, request_id):
         self.cancelled.append(("code_sandbox", request_id))
 
     def cancel_builder(self, request_id):
         self.cancelled.append(("builder", request_id))
+
+    def cancel_harness(self, request_id):
+        self.cancelled.append(("harness", request_id))
 
 
 def make_registry_with_delete(document: SceneDocument):
@@ -478,33 +417,32 @@ class TestDeleteNode:
     def test_a_node_with_a_run_in_flight_is_refused(self):
         document = SceneDocument()
         parent = seed_parent(document)
-        pycoder = document.add_pycoder_node(0, 200, parent.id)
-        pycoder.pending_request_id = "req-live"
+        sandbox = document.add_code_sandbox_node(0, 200, parent.id)
+        sandbox.pending_request_id = "req-live"
         registry, _ = make_registry_with_delete(document)
         ctx, _ = make_ctx()
 
-        result = invoke(registry, ctx, "graph.delete_node", {"node_id": pycoder.id})
+        result = invoke(registry, ctx, "graph.delete_node", {"node_id": sandbox.id})
 
         assert result.is_error
         assert "in flight" in result.content
-        assert pycoder.id in document.nodes
+        assert sandbox.id in document.nodes
 
-    def test_deleting_a_pycoder_node_tears_down_its_repl(self):
-        """A deleted Py-Coder node's REPL subprocess must not outlive it,
-        whichever surface deleted it - so this reuses the same teardown
+    def test_deleting_a_code_sandbox_node_removes_its_scratch_dir(self):
+        """A deleted Execution Sandbox node's on-disk venv must not outlive
+        it, whichever surface deleted it - so this reuses the same teardown
         capture the removeNodes intent uses rather than a subset."""
         document = SceneDocument()
         parent = seed_parent(document)
-        pycoder = document.add_pycoder_node(0, 200, parent.id)
+        sandbox = document.add_code_sandbox_node(0, 200, parent.id)
         registry, dispatcher = make_registry_with_delete(document)
         ctx, _ = make_ctx()
 
-        result = invoke(registry, ctx, "graph.delete_node", {"node_id": pycoder.id})
+        result = invoke(registry, ctx, "graph.delete_node", {"node_id": sandbox.id})
 
         assert not result.is_error
-        assert pycoder.id not in document.nodes
-        assert [d[0] for d in dispatcher.disposed_repls] == [pycoder.id]
-        assert dispatcher.disposed_repls[0][2] is True, "real deletion removes the scratch dir"
+        assert sandbox.id not in document.nodes
+        assert dispatcher.removed_sandboxes == [sandbox.state.code_sandbox_sandbox_id]
 
     def test_delete_is_undoable_and_run_stamped(self):
         document = SceneDocument()

@@ -136,7 +136,7 @@ Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `ses
 - `backend/settings.py`
   - `SettingsManager`-backed `register_settings()`: the `app-settings` topic and every settings intent (General, Ollama, Llama.cpp, API Endpoint, Integrations, GitHub token). Reads defaults from `graphlink_task_config.py`'s task-keyed model dict.
 - `backend/agents.py` (now the largest file in the repo, ~156KB)
-  - `AgentDispatcher` (one instance per session, never a module-level singleton) - owns in-flight request tracking/cancellation across its 13 dispatch surfaces, `bootstrap_provider_state()` (process-global `api_provider` state, set up once per process from the shared `SettingsManager`), and `register_agents()`. As of ADR-002 stage 2.4 (complete), all 12 in-flight-request dicts are gone - every dispatch surface (chat/conversation, image, artifact, web research, gitlink run, gitlink apply, pycoder, code sandbox, chart, note, branch comparison, branch synthesis) claims into one shared `self._runs` (a `backend/run_lifecycle.py` `RunRegistry`), closing audit finding C3 structurally: `cancel_all()` now walks every in-flight run in the session regardless of kind. Chat/artifact/gitlink_run/pycoder/code_sandbox are `cancel_event`-bearing; web research uses `RunHandle.on_cancel` (a `CancellationToken`, not a `threading.Event`); gitlink run/apply/pycoder/code_sandbox's real busy guard is `node.pending_request_id` (a per-SceneNode field), not the registry's own `is_busy()` - the registry there is pure task/cancel_event/approval_future bookkeeping; pycoder/code_sandbox are the only two kinds carrying `RunHandle.approval_future` (Py-Coder/Execution Sandbox's human-approval-pause mechanism), mutated in place on every repair-loop iteration.
+  - `AgentDispatcher` (one instance per session, never a module-level singleton) - owns in-flight request tracking/cancellation across its dispatch surfaces, `bootstrap_provider_state()` (process-global `api_provider` state, set up once per process from the shared `SettingsManager`), and `register_agents()`. As of ADR-002 stage 2.4 (complete), all in-flight-request dicts are gone - every dispatch surface (chat/conversation, image, artifact, web research, gitlink run, gitlink apply, code sandbox, chart, note, branch comparison, branch synthesis, builder, harness) claims into one shared `self._runs` (a `backend/run_lifecycle.py` `RunRegistry`), closing audit finding C3 structurally: `cancel_all()` now walks every in-flight run in the session regardless of kind. Chat/artifact/gitlink_run/code_sandbox are `cancel_event`-bearing; web research uses `RunHandle.on_cancel` (a `CancellationToken`, not a `threading.Event`); gitlink run/apply/code_sandbox's real busy guard is `node.pending_request_id` (a per-SceneNode field), not the registry's own `is_busy()` - the registry there is pure task/cancel_event/approval_future bookkeeping; code_sandbox/builder/harness are the kinds carrying `RunHandle.approval_future` (Execution Sandbox/Builder/Harness's human-approval-pause mechanism), mutated in place on every repair-loop iteration.
 - `backend/run_lifecycle.py`
   - `RunHandle`/`RunRegistry` (claim/release/cancel/cancel_all/is_busy) and `run_single_shot()` - the ADR-002 stage 2.3 primitive `backend/agents.py`'s pilot surfaces claim into, see that module's own docstring. Stage 2.4b extended `RunHandle` with `on_cancel` (a generic cancellation hook for kinds whose cancellation primitive isn't a `threading.Event`, e.g. web research's `CancellationToken`) and `approval_future` (Py-Coder/Execution Sandbox's human-approval pause) plus `RunRegistry.cancel_all_pending_approvals()` and a `kind=` filter on `cancel()`, ahead of migrating the remaining 7 fire-and-forget dispatch surfaces.
 - `backend/response_parsing.py`
@@ -169,7 +169,6 @@ Several `backend/` modules (`composer.py`, `chat_library.py`, `plugins.py`, `ses
 | `web_research` | Web Research | `WebResearchNodeView.tsx` |
 | `artifact` | Artifact / Drafter | `ArtifactNodeView.tsx` |
 | `gitlink` | Gitlink | `GitlinkNodeView.tsx` |
-| `pycoder` | Py-Coder | `PyCoderNodeView.tsx` |
 | `code_sandbox` | Virtual Environment Runner | `CodeSandboxNodeView.tsx` |
 | `note` | (System Prompt picker entry creates one) | `NoteNodeView.tsx` |
 | `frame` | (Create Frame command) | `GroupNodeView.tsx` (shared with `container`, distinguished by `data.groupKind`) |
@@ -248,7 +247,6 @@ This is the live registration order in `backend/plugins.py::_PLUGINS` / `_CATEGO
 ### Build & Execution
 
 - `Gitlink` - creates a `gitlink` node.
-- `Py-Coder` - creates a `pycoder` node.
 - `Virtual Environment Runner` - creates a `code_sandbox` node.
 - `HTML Renderer` - creates an `html` node (starts with empty content).
 
@@ -309,9 +307,8 @@ This is the practical lookup map for where code actually lives today.
 
 - `web_research/` - `domain.py`, `ports.py`, `fetch_policy.py`, `providers.py`, `service.py` (no `worker.py` - that was the Qt-coupled file deleted at the cutover).
 - `gitlink/` - `agent.py`, `repository.py`.
-- `pycoder/` - `domain.py`.
 - `code_sandbox/` - `domain.py`.
-- `common/` - `github_client.py`, `llm_json.py` (shared helpers).
+- `common/` - `github_client.py`, `llm_json.py`, `python_repl.py` (`PythonREPL`/`CodeAnalysisAgent`, relocated here from the retired Py-Coder plugin) (shared helpers).
 
 ### Loose top-level modules that matter most
 

@@ -22,7 +22,7 @@ const snapshot = {
     {
       name: "Build & Execution",
       description: "Code generation and execution.",
-      plugins: [{ name: "Py-Coder", description: "Python workspace." }],
+      plugins: [{ name: "Virtual Environment Runner", description: "Python workspace." }],
     },
   ],
   // ADR-014 stage 14.4: now a required field on the "app-plugins" contract
@@ -92,7 +92,7 @@ describe("PluginPicker", () => {
     expect(screen.getByText("System Prompt")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /Build & Execution/ }));
-    expect(screen.getByText("Py-Coder")).toBeInTheDocument();
+    expect(screen.getByText("Virtual Environment Runner")).toBeInTheDocument();
   });
 
   it("selecting a plugin fires executePlugin with [name, null] when nothing is selected, and closes the popover", async () => {
@@ -123,7 +123,7 @@ describe("PluginPicker", () => {
     await user.click(screen.getByText("open plugins"));
     await user.click(screen.getByRole("button", { name: /Build & Execution/ }));
 
-    await user.click(screen.getByText("Py-Coder"));
-    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["Py-Coder", "node-7"]]);
+    await user.click(screen.getByText("Virtual Environment Runner"));
+    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["Virtual Environment Runner", "node-7"]]);
   });
 });

@@ -126,16 +126,6 @@ def test_conversation_node_uses_parent_node_index_not_parent_content_node_index(
     assert conv.history == [{"role": "user", "content": "hi"}]
 
 
-def test_pycoder_mode_translates_enum_member_name_to_lowercase():
-    document = _restore(nodes=[
-        _chat("parent"),
-        {"node_type": "pycoder", "mode": "MANUAL", "prompt": "do x", "code": "x=1",
-         "output": "1", "analysis": "ok", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
-    ])
-    node = next(n for n in document.nodes.values() if n.kind == "pycoder")
-    assert node.state.pycoder_mode == "manual"
-
-
 def test_code_sandbox_field_mapping():
     document = _restore(nodes=[
         _chat("parent"),
@@ -147,46 +137,57 @@ def test_code_sandbox_field_mapping():
     assert node.state.code_sandbox_requirements == "numpy" and node.state.code_sandbox_sandbox_id == "sbx-1"
 
 
-def test_pycoder_repl_id_round_trips_when_present_in_the_payload():
-    # ADR-005 stage 5.3 (review-fix): pycoder_repl_id is the stable
-    # scratch-dir key - a saved payload that already has one must restore
-    # it verbatim, not mint a new one (that would orphan the node's
-    # existing REPL scratch directory on every single load).
+def test_legacy_pycoder_ai_driven_payload_migrates_to_a_done_harness_node():
+    # PLAN-2026-08-24 H5: Py-Coder is retired - a saved "pycoder" payload
+    # can no longer restore as a pycoder node at all. An ai_driven-mode
+    # payload's prompt becomes the harness goal and its analysis becomes
+    # the reply, landed at a terminal "done" status so nothing renders a
+    # stale spinner.
     document = _restore(nodes=[
         _chat("parent"),
-        {"node_type": "pycoder", "mode": "MANUAL", "prompt": "", "code": "x=1",
-         "output": "1", "analysis": "ok", "pycoder_repl_id": "repl-abc123",
-         "position": {"x": 0, "y": 0}, "parent_node_index": 0},
+        {"node_type": "pycoder", "mode": "AI_DRIVEN", "prompt": "sort this list", "code": "x=1",
+         "output": "1", "analysis": "sorted it", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
     ])
-    node = next(n for n in document.nodes.values() if n.kind == "pycoder")
-    assert node.state.pycoder_repl_id == "repl-abc123"
+    node = next(n for n in document.nodes.values() if n.kind == "harness")
+    assert node.state.harness_goal == "sort this list"
+    assert node.state.harness_reply == "sorted it"
+    assert node.state.harness_status == "done"
+    assert node.state.harness_workspace_id
 
 
-def test_pycoder_repl_id_self_heals_when_missing_from_a_legacy_payload():
-    # A payload predating this field (or otherwise malformed) must NOT
-    # fall back to a blank id - see graphlink_scratch_dirs.
-    # remove_scratch_dir_for_id's own docstring for why a blank id is
-    # actively dangerous, not just untidy: it resolves to a shared
-    # "default" bucket every such node would collide on.
+def test_legacy_pycoder_manual_mode_payload_migrates_with_the_code_in_the_goal():
     document = _restore(nodes=[
         _chat("parent"),
-        {"node_type": "pycoder", "mode": "MANUAL", "prompt": "", "code": "x=1",
+        {"node_type": "pycoder", "mode": "MANUAL", "prompt": "", "code": "print(6*7)",
          "output": "", "analysis": "", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
     ])
-    node = next(n for n in document.nodes.values() if n.kind == "pycoder")
-    assert node.state.pycoder_repl_id, "a missing pycoder_repl_id must self-heal to a fresh non-blank id"
+    node = next(n for n in document.nodes.values() if n.kind == "harness")
+    assert "print(6*7)" in node.state.harness_goal
+    assert node.state.harness_reply == ""
+    assert node.state.harness_status == "idle", "no reply means nothing has actually completed"
 
 
-def test_two_legacy_pycoder_payloads_missing_repl_id_do_not_collide():
+def test_legacy_pycoder_payload_reply_falls_back_to_output_when_analysis_is_blank():
     document = _restore(nodes=[
         _chat("parent"),
-        {"node_type": "pycoder", "mode": "MANUAL", "code": "a", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
-        {"node_type": "pycoder", "mode": "MANUAL", "code": "b", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
+        {"node_type": "pycoder", "mode": "AI_DRIVEN", "prompt": "run it", "code": "x=1",
+         "output": "1", "analysis": "", "position": {"x": 0, "y": 0}, "parent_node_index": 0},
     ])
-    pycoder_nodes = [n for n in document.nodes.values() if n.kind == "pycoder"]
-    assert len(pycoder_nodes) == 2
-    first, second = pycoder_nodes
-    assert first.state.pycoder_repl_id != second.state.pycoder_repl_id
+    node = next(n for n in document.nodes.values() if n.kind == "harness")
+    assert node.state.harness_reply == "1"
+
+
+def test_a_blank_legacy_pycoder_payload_migrates_to_a_safe_idle_harness_node():
+    document = _restore(nodes=[
+        _chat("parent"),
+        {"node_type": "pycoder", "mode": "MANUAL", "prompt": "", "code": "",
+         "position": {"x": 0, "y": 0}, "parent_node_index": 0},
+    ])
+    node = next(n for n in document.nodes.values() if n.kind == "harness")
+    assert node.state.harness_goal == ""
+    assert node.state.harness_reply == ""
+    assert node.state.harness_status == "idle"
+    assert node.title == "Agent"
 
 
 def test_artifact_node_reuses_instruction_as_content_and_content_as_artifact_content():

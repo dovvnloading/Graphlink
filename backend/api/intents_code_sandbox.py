@@ -4,9 +4,12 @@ Relocated VERBATIM from backend/canvas.py's former register_canvas
 (closures at lines 967-1012; registration calls from the former tail block
 at lines 1014-1016) - pure code motion, no behavior change.
 
-approveCodeExecution/denyCodeExecution (the shared approve/deny pair this
-kind also depends on) live in backend/api/intents_pycoder.py instead - see
-that module's own docstring for why.
+approveCodeExecution/denyCodeExecution originally lived here alongside a
+sibling intents_pycoder.py module, sharing one request_id namespace across
+both kinds (Py-Coder being the older of the two approval-gated features).
+PLAN-2026-08-24 H5 retired Py-Coder; the two shared intents relocate here
+(their only remaining owner) rather than being deleted, since Execution
+Sandbox still depends on them.
 """
 
 from __future__ import annotations
@@ -40,10 +43,9 @@ def register_code_sandbox_intents(
         await publish_scene()
 
     async def run_code_sandbox(node_id, input_text):
-        # Same busy-claim-placeholder pattern as run_pycoder (backend/api/
-        # intents_pycoder.py, and run_gitlink_change_set before it,
-        # backend/api/intents_gitlink.py) - see that function's own comment
-        # for the exact race this closes.
+        # Same busy-claim-placeholder pattern as run_gitlink_change_set
+        # (backend/api/intents_gitlink.py) - see that function's own
+        # comment for the exact race this closes.
         node_for_check = document.nodes.get(node_id)
         if node_for_check is not None and node_for_check.pending_request_id:
             notifications.show("Virtual Environment Runner is already busy for this node.", "info")
@@ -89,3 +91,15 @@ def register_code_sandbox_intents(
     )
     bus.register_intent("scene", "runCodeSandbox", run_code_sandbox)
     bus.register_intent("scene", "cancelCodeSandboxRequest", cancel_code_sandbox_request)
+
+    # -- the shared approve/deny code-execution gate (see this module's own
+    # docstring for why these live here now)
+
+    async def approve_code_execution(request_id):
+        agent_dispatcher.approve_code_execution(request_id)
+
+    async def deny_code_execution(request_id):
+        agent_dispatcher.deny_code_execution(request_id)
+
+    bus.register_intent("scene", "approveCodeExecution", approve_code_execution)
+    bus.register_intent("scene", "denyCodeExecution", deny_code_execution)

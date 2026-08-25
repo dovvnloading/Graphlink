@@ -45,7 +45,6 @@ from backend.tests.conftest import (
     drain_runs,
     gitlink_run_slots,
     image_slots,
-    pycoder_slots,
     web_research_slots,
 )
 
@@ -579,7 +578,6 @@ def test_deleting_one_node_of_every_kind_does_not_raise():
         doc.add_web_research_node(0, 0, parent.id),
         doc.add_artifact_node(0, 0, parent.id),
         doc.add_gitlink_node(0, 0, parent.id),
-        doc.add_pycoder_node(0, 0, parent.id),
         doc.add_code_sandbox_node(0, 0, parent.id),
         doc.add_note(0, 0),
         doc.add_chart_node(0, 0, parent.id, "bar", {"labels": ["a"], "values": [1.0]}),
@@ -3940,115 +3938,6 @@ def test_two_concurrent_run_gitlink_change_set_calls_for_the_same_node_only_one_
     asyncio.run(run())
 
 
-# -- R5.4: Py-Coder node ------------------------------------------------------
-
-
-def test_add_pycoder_node_creates_child_with_defaults():
-    doc = SceneDocument()
-    parent = doc.add_chat_node(0, 0, "wire up pycoder", True)
-    node = doc.add_pycoder_node(10, 20, parent.id)
-    assert node.kind == "pycoder"
-    assert node.title == "Py-Coder"
-    assert node.state.pycoder_mode == "ai_driven"
-    assert node.state.pycoder_prompt == ""
-    assert node.state.pycoder_code == ""
-    assert node.state.pycoder_output == ""
-    assert node.state.pycoder_analysis == ""
-    assert node.state.pycoder_last_run_failed is False
-    assert node.state.pycoder_awaiting_approval is False
-    assert node.state.pycoder_error == ""
-    assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
-
-
-def test_set_pycoder_mode_sets_the_field():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_pycoder_node(0, 0, parent.id)
-    returned = doc.set_pycoder_mode(node.id, "manual")
-    assert returned is node
-    assert node.state.pycoder_mode == "manual"
-
-
-def test_set_pycoder_mode_rejects_unknown_mode():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_pycoder_node(0, 0, parent.id)
-    with pytest.raises(SceneError):
-        doc.set_pycoder_mode(node.id, "turbo")
-
-
-def test_start_pycoder_run_ai_driven_stores_prompt_and_clears_error():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_pycoder_node(0, 0, parent.id)
-    node.state.pycoder_error = "a previous error"
-
-    returned = doc.start_pycoder_run(node.id, "sort this list")
-
-    assert returned is node
-    assert node.state.pycoder_prompt == "sort this list"
-    assert node.state.pycoder_error == ""
-
-
-def test_start_pycoder_run_manual_stores_code_not_prompt():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_pycoder_node(0, 0, parent.id)
-    doc.set_pycoder_mode(node.id, "manual")
-
-    doc.start_pycoder_run(node.id, "print('hi')")
-
-    assert node.state.pycoder_code == "print('hi')"
-    assert node.state.pycoder_prompt == ""
-
-
-def test_complete_pycoder_run_sets_all_fields_and_clears_approval_and_error():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_pycoder_node(0, 0, parent.id)
-    node.state.pycoder_awaiting_approval = True
-    node.state.pycoder_error = "stale error"
-
-    returned = doc.complete_pycoder_run(node.id, "print(1)", "1", "analysis text", False)
-
-    assert returned is node
-    assert node.state.pycoder_code == "print(1)"
-    assert node.state.pycoder_output == "1"
-    assert node.state.pycoder_analysis == "analysis text"
-    assert node.state.pycoder_last_run_failed is False
-    assert node.state.pycoder_awaiting_approval is False
-    assert node.state.pycoder_error == ""
-
-
-def test_complete_pycoder_run_is_a_silent_noop_for_a_deleted_node():
-    assert SceneDocument().complete_pycoder_run("ghost", "c", "o", "a", False) is None
-
-
-def test_fail_pycoder_run_sets_error_clears_approval_but_preserves_output():
-    doc = SceneDocument()
-    parent = doc.add_node(0, 0, "parent")
-    node = doc.add_pycoder_node(0, 0, parent.id)
-    node.state.pycoder_code = "print(1)"
-    node.state.pycoder_output = "1"
-    node.state.pycoder_analysis = "old analysis"
-    node.state.pycoder_awaiting_approval = True
-
-    returned = doc.fail_pycoder_run(node.id, "execution timed out")
-
-    assert returned is node
-    assert node.state.pycoder_error == "execution timed out"
-    assert node.state.pycoder_awaiting_approval is False
-    # stale-while-revalidate: a failed run must not wipe out a previously
-    # completed result.
-    assert node.state.pycoder_code == "print(1)"
-    assert node.state.pycoder_output == "1"
-    assert node.state.pycoder_analysis == "old analysis"
-
-
-def test_fail_pycoder_run_is_a_silent_noop_for_a_deleted_node():
-    assert SceneDocument().fail_pycoder_run("ghost", "x") is None
-
-
 # -- R5.4: Execution Sandbox node ---------------------------------------------
 
 
@@ -4186,20 +4075,7 @@ def test_scene_payload_code_sandbox_fields_default_correctly_and_excludes_sandbo
     assert row["codeSandboxError"] == ""
 
 
-# -- R5.4: Py-Coder / Execution Sandbox - WS-intent level ---------------------
-
-
-def test_set_pycoder_mode_intent_publishes_scene():
-    async def run():
-        bus, document, recorder, _dispatcher = make_bus_with_dispatcher()
-        parent = document.add_node(0, 0, "parent")
-        node = document.add_pycoder_node(0, 0, parent.id)
-
-        await bus.dispatch_intent("scene", "setPyCoderMode", [node.id, "manual"])
-
-        assert document.nodes[node.id].state.pycoder_mode == "manual"
-
-    asyncio.run(run())
+# -- R5.4: Execution Sandbox - WS-intent level ---------------------------------
 
 
 def test_set_code_sandbox_allow_source_builds_intent_publishes_scene():
@@ -4235,95 +4111,6 @@ def test_set_code_sandbox_allow_source_builds_intent_reaches_the_real_outgoing_s
         assert scene_publishes, "the intent must republish scene"
         row = {n["id"]: n for n in scene_publishes[-1]["payload"]["nodes"]}[node.id]
         assert row["codeSandboxApprovalAllowSourceBuilds"] is True
-
-    asyncio.run(run())
-
-
-def test_run_pycoder_intent_busy_node_refuses_without_calling_dispatcher():
-    class _FakeDispatcher:
-        def __init__(self):
-            self.called = False
-
-        async def start_pycoder_run(self, **kwargs):
-            self.called = True
-
-    async def run():
-        bus = SessionBus("pycoder-busy-test")
-        notifications = NotificationState()
-        bus.register_topic("notification", notifications.payload)
-        composer_document = ComposerDocument()
-        bus.register_topic("app-composer", composer_document.payload)
-        fake_dispatcher = _FakeDispatcher()
-        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
-        parent = document.add_node(0, 0, "parent")
-        node = document.add_pycoder_node(0, 0, parent.id)
-        node.pending_request_id = "already-busy"
-
-        result = await bus.dispatch_intent("scene", "runPyCoder", [node.id, "sort this"])
-
-        assert result is None
-        assert fake_dispatcher.called is False
-        assert notifications.visible is True
-        assert notifications.msg_type == "info"
-
-    asyncio.run(run())
-
-
-def test_run_pycoder_intent_dispatches_with_correct_node_fields():
-    class _FakeDispatcher:
-        def __init__(self):
-            self.calls = []
-
-        async def start_pycoder_run(self, **kwargs):
-            self.calls.append(kwargs)
-
-    async def run():
-        bus = SessionBus("pycoder-run-intent-test")
-        notifications = NotificationState()
-        bus.register_topic("notification", notifications.payload)
-        composer_document = ComposerDocument()
-        bus.register_topic("app-composer", composer_document.payload)
-        fake_dispatcher = _FakeDispatcher()
-        document = register_canvas(bus, notifications, fake_dispatcher, composer_document)
-        parent = document.add_node(0, 0, "parent")
-        node = document.add_pycoder_node(0, 0, parent.id)
-
-        result = await bus.dispatch_intent("scene", "runPyCoder", [node.id, "sort this list"])
-
-        assert result == node.id
-        assert document.nodes[node.id].state.pycoder_prompt == "sort this list"
-        assert len(fake_dispatcher.calls) == 1
-        call = fake_dispatcher.calls[0]
-        assert call["mode"] == "ai_driven"
-        assert call["prompt"] == "sort this list"
-        assert callable(call["on_success"])
-        assert callable(call["on_failure"])
-
-    asyncio.run(run())
-
-
-def test_cancel_pycoder_request_intent_calls_agent_dispatcher_cancel_pycoder():
-    class _FakeDispatcher:
-        def __init__(self):
-            self.cancel_calls = []
-
-        def cancel_pycoder(self, request_id):
-            self.cancel_calls.append(request_id)
-            return True
-
-    async def run():
-        bus = SessionBus("cancel-pycoder-request-intent-test")
-        notifications = NotificationState()
-        bus.register_topic("notification", notifications.payload)
-        composer_document = ComposerDocument()
-        bus.register_topic("app-composer", composer_document.payload)
-        fake_dispatcher = _FakeDispatcher()
-        register_canvas(bus, notifications, fake_dispatcher, composer_document)
-
-        result = await bus.dispatch_intent("scene", "cancelPyCoderRequest", ["req-789"])
-
-        assert result is None
-        assert fake_dispatcher.cancel_calls == ["req-789"]
 
     asyncio.run(run())
 
@@ -4470,55 +4257,10 @@ def test_deny_code_execution_intent_calls_agent_dispatcher_deny():
     asyncio.run(run())
 
 
-def test_remove_nodes_disposes_the_repl_for_every_deleted_pycoder_node():
-    """R5.4: a deleted Py-Coder node's REPL subprocess must not outlive it -
-    uses the REAL AgentDispatcher (make_bus_with_dispatcher) so this proves
-    the actual dispose_pycoder_repl wiring, not a mocked stand-in."""
-    async def run():
-        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
-        parent = document.add_node(0, 0, "parent")
-        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
-        other_node = document.add_gitlink_node(0, 0, parent.id)
-        # Populate a REPL for this node id, so there is something real to
-        # tear down.
-        dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
-        assert pycoder_node.id in dispatcher._pycoder_repls
-
-        await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id, other_node.id]])
-
-        assert pycoder_node.id not in document.nodes
-        assert other_node.id not in document.nodes
-        assert pycoder_node.id not in dispatcher._pycoder_repls, (
-            "the REPL must be disposed once its owning pycoder node is deleted"
-        )
-
-    asyncio.run(run())
-
-
-def test_remove_nodes_does_not_touch_the_repl_dict_when_no_pycoder_node_is_deleted():
-    async def run():
-        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
-        parent = document.add_node(0, 0, "parent")
-        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
-        other_node = document.add_gitlink_node(0, 0, parent.id)
-        dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
-
-        await bus.dispatch_intent("scene", "removeNodes", [[other_node.id]])
-
-        assert other_node.id not in document.nodes
-        assert pycoder_node.id in document.nodes
-        assert pycoder_node.id in dispatcher._pycoder_repls, (
-            "a still-live pycoder node's REPL must not be disposed just "
-            "because a DIFFERENT node was deleted"
-        )
-
-    asyncio.run(run())
-
-
 def test_remove_nodes_cancels_a_live_builder_run_on_the_deleted_plan_node():
     """review-fix: a plan node's own live Builder run has no timeout on
     its approval pause either (the same "wait for a human, however long
-    that takes" design as pycoder/code_sandbox above) - deleting the node
+    that takes" design as code_sandbox above) - deleting the node
     without cancelling first stranded the run forever: RunRegistry stayed
     busy for kind="builder" for the whole session (locking out every
     other build), and undo could not recover it either since commands.py
@@ -4546,88 +4288,14 @@ def test_remove_nodes_cancels_a_live_builder_run_on_the_deleted_plan_node():
     asyncio.run(run())
 
 
-def test_remove_nodes_deletes_the_pycoder_scratch_dir_for_every_deleted_pycoder_node():
-    """ADR-005 stage 5.3: node delete must GC the REPL's on-disk cwd, not
-    just the in-memory PythonREPL/subprocess (proven above). The directory
-    is created here directly (not via repl.start(), which would spawn a
-    real subprocess) to simulate files a prior run already left behind -
-    dispose_pycoder_repl's remove_scratch_dir=True path doesn't care how
-    the directory came to exist."""
-    async def run():
-        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
-        parent = document.add_node(0, 0, "parent")
-        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
-        repl = dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
-        repl.cwd.mkdir(parents=True, exist_ok=True)
-        (repl.cwd / "leftover.txt").write_text("data", encoding="utf-8")
-        assert repl.cwd.is_dir()
-
-        await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id]])
-
-        assert not repl.cwd.exists(), "the REPL's scratch dir must not outlive its deleted node"
-
-    asyncio.run(run())
-
-
-def test_remove_nodes_leaves_the_pycoder_scratch_dir_when_a_different_node_is_deleted():
-    async def run():
-        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
-        parent = document.add_node(0, 0, "parent")
-        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
-        other_node = document.add_gitlink_node(0, 0, parent.id)
-        repl = dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
-        repl.cwd.mkdir(parents=True, exist_ok=True)
-
-        await bus.dispatch_intent("scene", "removeNodes", [[other_node.id]])
-
-        assert repl.cwd.is_dir(), (
-            "a still-live pycoder node's scratch dir must not be removed just "
-            "because a DIFFERENT node was deleted"
-        )
-
-    asyncio.run(run())
-
-
-def test_remove_nodes_deletes_the_pycoder_scratch_dir_even_if_the_repl_was_already_disposed():
-    """ADR-005 stage 5.3 (review-fix): the exact bug an adversarial review
-    caught. dispose_pycoder_repl's remove_scratch_dir=True path used to
-    silently no-op if _pycoder_repls.pop(node_id) returned None (e.g.
-    because an earlier execute() timeout had already popped and disposed
-    it - AgentDispatcher.dispose_pycoder_repl's own execute-timeout caller,
-    exercised by test_agents.py's
-    test_pycoder_manual_mode_execute_timeout_disposes_the_repl_and_calls_on_failure).
-    Fixed by recomputing the scratch path deterministically from repl_id
-    rather than depending on a live tracked REPL object - this test proves
-    the fix by making sure the dict entry is ALREADY gone before delete."""
-    async def run():
-        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
-        parent = document.add_node(0, 0, "parent")
-        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
-        repl = dispatcher.get_pycoder_repl(pycoder_node.id, pycoder_node.state.pycoder_repl_id)
-        repl.cwd.mkdir(parents=True, exist_ok=True)
-        (repl.cwd / "leftover.txt").write_text("data", encoding="utf-8")
-        # Simulate the prior-timeout scenario: the dict entry is gone, but
-        # the on-disk directory (and its files) are still there.
-        del dispatcher._pycoder_repls[pycoder_node.id]
-        assert pycoder_node.id not in dispatcher._pycoder_repls
-        assert repl.cwd.is_dir()
-
-        await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id]])
-
-        assert not repl.cwd.exists(), (
-            "the scratch dir must still be removed even with no live REPL tracked for this node"
-        )
-
-    asyncio.run(run())
-
-
 def test_remove_nodes_deletes_the_code_sandbox_scratch_dir_for_every_deleted_sandbox_node():
-    """ADR-005 stage 5.3's Execution Sandbox twin. Unlike pycoder, there is
-    no live VirtualEnvSandbox/REPL object on the dispatcher for a
-    code_sandbox node (see AgentDispatcher.remove_code_sandbox_scratch_dir's
-    own docstring) - the directory is created directly here to simulate a
-    venv a prior run already built, and the path is recomputed the same
-    deterministic way VirtualEnvSandbox itself would."""
+    """ADR-005 stage 5.3: node delete must GC a deleted sandbox node's
+    on-disk venv. There is no live VirtualEnvSandbox object cached on the
+    dispatcher for a code_sandbox node (see AgentDispatcher.
+    remove_code_sandbox_scratch_dir's own docstring) - the directory is
+    created directly here to simulate a venv a prior run already built,
+    and the path is recomputed the same deterministic way VirtualEnvSandbox
+    itself would."""
     async def run():
         bus, document, _recorder, _dispatcher = make_bus_with_dispatcher()
         parent = document.add_node(0, 0, "parent")
@@ -4661,58 +4329,18 @@ def test_remove_nodes_leaves_the_code_sandbox_scratch_dir_when_a_different_node_
     asyncio.run(run())
 
 
-def test_remove_nodes_cancels_the_dispatchers_pycoder_request_when_deleted_mid_approval_pause(monkeypatch):
-    """R5.4 post-review FIX 2: dispose_pycoder_repl (proven above) only tears
-    down the REPL subprocess - it does nothing about a request genuinely
-    parked on `await approval_future` on AgentDispatcher's own self._runs registry ("pycoder" kind),
-    which has NO timeout by design (the whole point is "wait for a human,
-    however long that takes"). Deleting the node mid-pause must ALSO
-    resolve/cancel that dispatcher-side request (mirrors a manual Cancel
-    exactly - see AgentDispatcher.cancel_pycoder), closing the orphan window
-    completely rather than leaving the future - and the asyncio.Task awaiting
-    it - alive forever."""
-    monkeypatch.setattr(
-        agents_module.PyCoderExecutionAgent, "get_response",
-        lambda self, history, prompt: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
-    )
-
-    async def run():
-        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
-        parent = document.add_node(0, 0, "parent")
-        pycoder_node = document.add_pycoder_node(0, 0, parent.id)
-
-        await bus.dispatch_intent("scene", "runPyCoder", [pycoder_node.id, "do something"])
-        request_id, entry = next(iter(pycoder_slots(dispatcher).items()))
-
-        # Let the pipeline genuinely reach the approval gate (a real
-        # asyncio.to_thread hop for PyCoderExecutionAgent.get_response, then a
-        # real `await approval_future` with nothing else ever resolving it) -
-        # same polling idiom test_agents.py's own
-        # test_code_sandbox_blank_prompt_with_existing_code_reuses_it_...
-        # uses for the equivalent code_sandbox gate.
-        for _ in range(200):
-            if pycoder_node.state.pycoder_awaiting_approval or entry["task"].done():
-                break
-            await asyncio.sleep(0.005)
-        assert pycoder_node.state.pycoder_awaiting_approval is True, "must genuinely be parked on the approval gate"
-        assert request_id in pycoder_slots(dispatcher)
-
-        await bus.dispatch_intent("scene", "removeNodes", [[pycoder_node.id]])
-        await entry["task"]
-
-        assert pycoder_node.id not in document.nodes
-        assert pycoder_slots(dispatcher) == {}, (
-            "the orphaned dispatcher-side request must be resolved and popped - "
-            "not left parked on approval_future forever"
-        )
-        assert entry["task"].done(), "the background task must actually complete, not hang"
-
-    asyncio.run(run())
-
-
 def test_remove_nodes_cancels_the_dispatchers_code_sandbox_request_when_deleted_mid_approval_pause(monkeypatch):
-    """R5.4 post-review FIX 2's Execution Sandbox twin - mirrors the pycoder
-    test above exactly (same race, same fix, same asserted outcome)."""
+    """R5.4 post-review FIX 2: dispose_pycoder_repl's Execution Sandbox
+    equivalent (remove_code_sandbox_scratch_dir, proven above) only tears
+    down the on-disk venv - it does nothing about a request genuinely
+    parked on `await approval_future` on AgentDispatcher's own self._runs
+    registry ("code_sandbox" kind), which has NO timeout by design (the
+    whole point is "wait for a human, however long that takes"). Deleting
+    the node mid-pause must ALSO resolve/cancel that dispatcher-side
+    request (mirrors a manual Cancel exactly - see
+    AgentDispatcher.cancel_code_sandbox), closing the orphan window
+    completely rather than leaving the future - and the asyncio.Task
+    awaiting it - alive forever."""
     monkeypatch.setattr(
         agents_module.SandboxGenerationAgent, "get_response",
         lambda self, history, prompt, manifest: "[TOOL:PYTHON]\nprint(1)\n[/TOOL]",
@@ -4906,7 +4534,7 @@ def test_code_sandbox_installs_the_frozen_manifest_not_a_live_edit_made_during_g
         agents_module.SandboxGenerationAgent, "get_response", _blocking_get_response,
     )
     monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
+        agents_module.CodeAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "ok",
     )
 
@@ -5022,7 +4650,7 @@ def test_code_sandbox_repair_gate_rediscloses_the_frozen_manifest_not_a_live_edi
 
     monkeypatch.setattr(agents_module.SandboxRepairAgent, "get_response", _blocking_repair)
     monkeypatch.setattr(
-        agents_module.PyCoderAnalysisAgent, "get_response",
+        agents_module.CodeAnalysisAgent, "get_response",
         lambda self, original_prompt, code, code_output: "ok",
     )
 

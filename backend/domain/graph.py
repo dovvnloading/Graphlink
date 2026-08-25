@@ -93,7 +93,6 @@ from backend.domain.node_states import (
     NodeState,
     NoteState,
     PlanState,
-    PycoderState,
     WebResearchState,
 )
 
@@ -1295,130 +1294,10 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         node.state.gitlink_error = str(message)
         return node
 
-    # -- R5.4: Py-Coder node --------------------------------------------------
-    #
-    # canvas.py imports NOTHING from graphlink_plugins.pycoder - every method
-    # below is pure state mutation on plain fields, same posture as the
-    # Gitlink section above (apply_web_research_progress's own duck-typed
-    # mutation is the original precedent). The actual REPL/agent dispatch
-    # lives in backend/agents.py, which DOES import from
-    # graphlink_plugins.pycoder.domain.
-    #
-    # R5.4 post-review FIX 3: request_pycoder_approval (and its Execution
-    # Sandbox twin, request_code_sandbox_approval, below) were DELETED here -
-    # confirmed genuinely dead code (grepped the whole repo: their only
-    # references were this definition and their own dedicated unit tests,
-    # zero real call sites). The human-approval gate that actually runs
-    # mutates node.state.pycoder_code/pycoder_awaiting_approval directly inline
-    # inside AgentDispatcher.start_pycoder_run (backend/agents.py) - these two
-    # SceneDocument methods were a second, never-wired copy of that same
-    # mutation, built ahead of the live dispatch path and then never rewired
-    # to it. Removing dead code is the correct fix here, not building a
-    # redundant call site just to keep them alive.
-
-    def add_pycoder_node(self, x: float, y: float, parent_id: str) -> SceneNode:
-        """The Py-Coder node's creation primitive - same required-parent
-        posture as every R5 sibling (Web Research/Artifact/Gitlink): never
-        exists unparented. Title is always the fixed literal "Py-Coder"
-        (matches backend/plugins.py's own plugin display name).
-        pycoder_repl_id is minted here, ONCE, exactly like
-        code_sandbox_sandbox_id below - see PycoderState's own docstring
-        for why node.id itself is not durable enough for this."""
-        if parent_id not in self.nodes:
-            raise SceneError(f"unknown parent node: {parent_id}")
-        node_id = f"n{next(self._counter)}"
-        node = SceneNode(
-            id=node_id,
-            x=float(x),
-            y=float(y),
-            title="Py-Coder",
-            kind="pycoder",
-            state=PycoderState(pycoder_repl_id=uuid.uuid4().hex[:12]),
-        )
-        self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
-        return node
-
-    def set_pycoder_mode(self, node_id: str, mode: str) -> SceneNode:
-        """The mode toggle (ai_driven <-> manual). Raises SceneError on an
-        unrecognized mode string - mirrors set_font's own unknown-value
-        rejection shape (raise, don't silently coerce)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "pycoder":
-            raise SceneError(f"node is not a pycoder node: {node_id}")
-        if mode not in ("ai_driven", "manual"):
-            raise SceneError(f"unknown pycoder mode: {mode}")
-        node.state.pycoder_mode = str(mode)
-        return node
-
-    def start_pycoder_run(self, node_id: str, input_text: str) -> SceneNode:
-        """Begin one Run: stores input_text into the field the CURRENT mode
-        actually reads at dispatch time - pycoder_prompt for ai_driven (the
-        natural-language ask), pycoder_code for manual (the hand-typed code
-        that will execute verbatim) - and clears any previous error. Mirrors
-        start_gitlink_run's own "store the input, clear the error, leave
-        everything else stale-while-revalidate" posture."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "pycoder":
-            raise SceneError(f"node is not a pycoder node: {node_id}")
-        if node.state.pycoder_mode == "manual":
-            node.state.pycoder_code = str(input_text)
-        else:
-            node.state.pycoder_prompt = str(input_text)
-        node.state.pycoder_error = ""
-        return node
-
-    def complete_pycoder_run(
-        self, node_id: str, code: str, output: str, analysis: str, last_run_failed: bool
-    ) -> SceneNode | None:
-        """Land a successful (or exhausted-repair-loop) run: code/output/
-        analysis/last_run_failed are always set verbatim, awaiting_approval
-        is cleared (the gate this run was paused on, if any, is resolved by
-        definition once a result lands), and any stale error banner is
-        cleared. Silent no-op if the node is gone - same posture as
-        fail_web_research_run's own liveness handling for a background
-        result landing after deletion. Not kind-guarded: only ever reached
-        via run_pycoder's own on_success closure (backend/api/
-        intents_pycoder.py), whose node_id was already validated by
-        start_pycoder_run's own guard earlier in the same request - same
-        posture as complete_gitlink_run/complete_gitlink_apply."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            return None
-        node.state.pycoder_code = str(code)
-        node.state.pycoder_output = str(output)
-        node.state.pycoder_analysis = str(analysis)
-        node.state.pycoder_last_run_failed = bool(last_run_failed)
-        node.state.pycoder_awaiting_approval = False
-        node.state.pycoder_approved_fingerprint = None
-        node.state.pycoder_error = ""
-        return node
-
-    def fail_pycoder_run(self, node_id: str, message: str) -> SceneNode | None:
-        """Land a failed (or denied-approval, or cancelled) run.
-        awaiting_approval is ALWAYS cleared here too - a denied/cancelled
-        approval must not leave the node stuck showing the approval prompt
-        forever. Deliberately does NOT clear pycoder_code/pycoder_output/
-        pycoder_analysis - a failed re-run must never wipe out a previously
-        completed result, only the error banner reflects the new failure
-        (stale-while-revalidate, same posture as fail_gitlink_run). Not
-        kind-guarded - see complete_pycoder_run's own comment."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            return None
-        node.state.pycoder_awaiting_approval = False
-        node.state.pycoder_approved_fingerprint = None
-        node.state.pycoder_error = str(message)
-        return node
-
     # -- R5.4: Execution Sandbox node ------------------------------------------
     #
-    # Same import posture as the Py-Coder section above: canvas.py imports
-    # NOTHING from graphlink_plugins.code_sandbox.
+    # Same import posture as every other plugin-backed kind's domain methods:
+    # canvas.py imports NOTHING from graphlink_plugins.code_sandbox.
 
     def add_code_sandbox_node(self, x: float, y: float, parent_id: str) -> SceneNode:
         """The Virtual Environment Runner node's creation primitive - same
@@ -1488,10 +1367,9 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         return node
 
     def start_code_sandbox_run(self, node_id: str, input_text: str) -> SceneNode:
-        """Begin one Run: stores input_text into code_sandbox_prompt (there is
-        no mode-dependent field split here, unlike Py-Coder - see this
-        section's own header comment for why) and clears any previous error.
-        Deliberately does NOT touch code_sandbox_code here - the dispatch
+        """Begin one Run: stores input_text into code_sandbox_prompt and
+        clears any previous error. Deliberately does NOT touch
+        code_sandbox_code here - the dispatch
         method decides generate-vs-reuse by reading the EXISTING
         code_sandbox_code value at call time, so this must not overwrite it
         before that decision is made."""
@@ -1505,16 +1383,15 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         return node
 
     def complete_code_sandbox_run(self, node_id: str, code: str, output: str, analysis: str) -> SceneNode | None:
-        """Land a successful run - mirrors complete_pycoder_run exactly,
-        minus the last_run_failed flag (Execution Sandbox has no such field;
-        an unrecovered failure after exhausting its own repair attempts
-        surfaces as a failed run, see AgentDispatcher.start_code_sandbox_run,
-        not as a "succeeded but flagged" result the way Py-Coder's repair
-        loop does). Not kind-guarded: only ever reached via run_code_
+        """Land a successful run. Execution Sandbox has no last_run_failed
+        flag: an unrecovered failure after exhausting its own repair
+        attempts surfaces as a failed run (see
+        AgentDispatcher.start_code_sandbox_run), never as a "succeeded but
+        flagged" result. Not kind-guarded: only ever reached via run_code_
         sandbox's own on_success closure (backend/api/
         intents_code_sandbox.py), whose node_id was already validated by
         start_code_sandbox_run's own guard earlier in the same request -
-        same posture as complete_pycoder_run/complete_gitlink_run."""
+        same posture as complete_gitlink_run."""
         node = self.nodes.get(node_id)
         if node is None:
             return None
@@ -1530,9 +1407,11 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         return node
 
     def fail_code_sandbox_run(self, node_id: str, message: str) -> SceneNode | None:
-        """Land a failed (or denied-approval, or cancelled) run - mirrors
-        fail_pycoder_run exactly (same stale-while-revalidate posture, same
-        unconditional awaiting_approval clear). Not kind-guarded - see
+        """Land a failed (or denied-approval, or cancelled) run - the
+        awaiting_approval flag is ALWAYS cleared here too, unconditionally,
+        so a denied/cancelled approval never leaves the node stuck showing
+        the approval prompt forever (stale-while-revalidate: existing
+        code/output/analysis survive untouched). Not kind-guarded - see
         complete_code_sandbox_run's own comment."""
         node = self.nodes.get(node_id)
         if node is None:
@@ -1636,10 +1515,10 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
     def add_harness_node(self, x: float, y: float, goal: str, *, max_turns: int = 16) -> SceneNode:
         """The harness node's creation primitive. Free-floating like a plan
         node (a task starts from a prompt, it does not continue an existing
-        branch); harness_workspace_id is minted here, ONCE - the
-        pycoder_repl_id/code_sandbox_sandbox_id precedent exactly, see
-        HarnessState's own docstring for why node.id is not durable enough
-        to name the on-disk workspace."""
+        branch); harness_workspace_id is minted here, ONCE - the same
+        code_sandbox_sandbox_id precedent, see HarnessState's own docstring
+        for why node.id is not durable enough to name the on-disk
+        workspace."""
         node_id = f"n{next(self._counter)}"
         node = SceneNode(
             id=node_id,
@@ -1664,8 +1543,8 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
         through record_command (a user editing the checklist, or the
         model's replan tool): step CONTENT is document state a Ctrl+Z must
         reach, unlike the run-lifecycle fields (builder_status/spent_*/
-        awaiting_*) which the loop writes directly, exactly as pycoder's
-        run pipeline writes its own awaiting/progress fields.
+        awaiting_*) which the loop writes directly, exactly as Execution
+        Sandbox's own run pipeline writes its awaiting/progress fields.
 
         Steps whose status is not "pending" are immutable history - a
         replacement must carry every non-pending step through unchanged
@@ -1721,7 +1600,7 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
     ) -> SceneNode:
         """The Chart node's creation primitive - same required-parent
         posture as every other branch-point-child kind (web_research/
-        artifact/gitlink/pycoder/code_sandbox above) for every NEW chart:
+        artifact/gitlink/code_sandbox above) for every NEW chart:
         the UI-driven generateChart intent always passes a real parent_id,
         since a chart is always generated FROM some other node's content in
         that flow. chart_type MUST be one of SUPPORTED_CHART_TYPES
@@ -2382,18 +2261,6 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
                 n.state.gitlink_change_state if isinstance(n.state, GitlinkState) else "draft"
             ),
             "gitlinkError": n.state.gitlink_error if isinstance(n.state, GitlinkState) else "",
-            "pycoderMode": n.state.pycoder_mode if isinstance(n.state, PycoderState) else "ai_driven",
-            "pycoderPrompt": n.state.pycoder_prompt if isinstance(n.state, PycoderState) else "",
-            "pycoderCode": n.state.pycoder_code if isinstance(n.state, PycoderState) else "",
-            "pycoderOutput": n.state.pycoder_output if isinstance(n.state, PycoderState) else "",
-            "pycoderAnalysis": n.state.pycoder_analysis if isinstance(n.state, PycoderState) else "",
-            "pycoderLastRunFailed": (
-                n.state.pycoder_last_run_failed if isinstance(n.state, PycoderState) else False
-            ),
-            "pycoderAwaitingApproval": (
-                n.state.pycoder_awaiting_approval if isinstance(n.state, PycoderState) else False
-            ),
-            "pycoderError": n.state.pycoder_error if isinstance(n.state, PycoderState) else "",
             # codeSandboxSandboxId is DELIBERATELY OMITTED - see
             # CodeSandboxState's own comment (pure internal
             # directory-naming key, mirrors gitlink_imported_root's

@@ -1,9 +1,10 @@
 """Tests for graphlink_process_env's explicit-allowlist subprocess
 environment builder (ADR-002 P0).
 
-Regression coverage for the confirmed gap: Py-Coder's REPL subprocess and
-the Virtual Environment Runner's venv-create/pip-install/script-run trio
-used to call subprocess.Popen(...) with no `env=` argument, silently
+Regression coverage for the confirmed gap: the shared PythonREPL's
+subprocess (graphlink_plugins/common/python_repl.py) and the Virtual
+Environment Runner's venv-create/pip-install/script-run trio used to call
+subprocess.Popen(...) with no `env=` argument, silently
 inheriting the backend's FULL environment - including any provider API key
 configured as an environment variable. safe_subprocess_env() replaces that
 with an explicit allowlist; these tests pin down that it (1) actually

@@ -3,7 +3,7 @@
  * announcements (streaming start/finish, run status). Deliberately NOT a
  * method on composerStore or sceneStore - both need to call into it
  * (composerStore for the main assistant reply, sceneStore for per-node runs:
- * pycoder/code_sandbox/gitlink/builder/etc.), and neither store imports the
+ * code_sandbox/gitlink/builder/harness/etc.), and neither store imports the
  * other, so a shared home outside both is what keeps this a one-line addition
  * at each call site instead of a new cross-store dependency.
  *

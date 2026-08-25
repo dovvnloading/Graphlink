@@ -217,9 +217,9 @@ describe("WsTransport", () => {
       t.connect();
       const socket = FakeSocket.instances[0];
       socket.open();
-      t.fireIntent("scene", "setPyCoderMode", ["n1", "manual"]);
+      t.fireIntent("scene", "setCodeSandboxRequirements", ["n1", "manual"]);
       const sent = socket.lastSent();
-      expect(sent).toEqual({ kind: "intent", topic: "scene", intent: "setPyCoderMode", args: ["n1", "manual"], id: sent.id });
+      expect(sent).toEqual({ kind: "intent", topic: "scene", intent: "setCodeSandboxRequirements", args: ["n1", "manual"], id: sent.id });
       expect(sent.id).toBeDefined();
     });
 
@@ -248,7 +248,7 @@ describe("WsTransport", () => {
       t.connect();
       const socket = FakeSocket.instances[0];
       socket.open();
-      t.fireIntent("scene", "setPyCoderMode", ["n1", "manual"]);
+      t.fireIntent("scene", "setCodeSandboxRequirements", ["n1", "manual"]);
       const sent = socket.lastSent();
       socket.receive({ kind: "result", id: sent.id, value: null });
       await Promise.resolve();
@@ -264,7 +264,7 @@ describe("WsTransport", () => {
       // review-fixed catch still swallows, so it must not attempt a
       // showError round trip that could not reach the server anyway.
       const t = makeTransport();
-      expect(() => t.fireIntent("scene", "setPyCoderMode", ["n1", "manual"])).not.toThrow();
+      expect(() => t.fireIntent("scene", "setCodeSandboxRequirements", ["n1", "manual"])).not.toThrow();
       await Promise.resolve();
       await Promise.resolve();
       expect(FakeSocket.instances).toHaveLength(0);
@@ -282,7 +282,7 @@ describe("WsTransport", () => {
       t.connect();
       const socket = FakeSocket.instances[0];
       socket.open();
-      t.fireIntent("scene", "setPyCoderMode", ["n1", "manual"]);
+      t.fireIntent("scene", "setCodeSandboxRequirements", ["n1", "manual"]);
       vi.advanceTimersByTime(150);
       await Promise.resolve();
       await Promise.resolve();
@@ -291,7 +291,7 @@ describe("WsTransport", () => {
         kind: "intent",
         topic: "notification",
         intent: "showError",
-        args: ["request timed out: scene/setPyCoderMode"],
+        args: ["request timed out: scene/setCodeSandboxRequirements"],
       });
     });
 

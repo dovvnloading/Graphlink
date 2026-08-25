@@ -168,7 +168,7 @@ def test_claim_captures_approval_future():
     async def run():
         registry = RunRegistry()
         future = asyncio.get_running_loop().create_future()
-        handle = registry.claim("pycoder", approval_future=future)
+        handle = registry.claim("harness", approval_future=future)
         assert handle.approval_future is future
         assert handle.cancel_event is None
         assert handle.on_cancel is None
@@ -237,17 +237,17 @@ def test_cancel_all_pending_approvals_resolves_only_listed_kinds_with_false():
     async def run():
         registry = RunRegistry()
         loop = asyncio.get_running_loop()
-        pycoder_future = loop.create_future()
+        harness_future = loop.create_future()
         sandbox_future = loop.create_future()
         chat_future_stray = loop.create_future()  # a kind NOT in the listed set
 
-        registry.claim("pycoder", approval_future=pycoder_future)
+        registry.claim("harness", approval_future=harness_future)
         registry.claim("code_sandbox", approval_future=sandbox_future)
         registry.claim("chat", approval_future=chat_future_stray)
 
-        registry.cancel_all_pending_approvals(("pycoder", "code_sandbox"))
+        registry.cancel_all_pending_approvals(("harness", "code_sandbox"))
 
-        assert pycoder_future.done() and pycoder_future.result() is False
+        assert harness_future.done() and harness_future.result() is False
         assert sandbox_future.done() and sandbox_future.result() is False
         assert not chat_future_stray.done(), "a kind outside the listed set must not be touched"
 
@@ -261,8 +261,8 @@ def test_cancel_all_pending_approvals_never_clobbers_an_already_resolved_future(
         future = loop.create_future()
         future.set_result(True)  # a human approved it a moment before disconnect
 
-        registry.claim("pycoder", approval_future=future)
-        registry.cancel_all_pending_approvals(("pycoder", "code_sandbox"))
+        registry.claim("harness", approval_future=future)
+        registry.cancel_all_pending_approvals(("harness", "code_sandbox"))
 
         assert future.result() is True, "an already-resolved future must never be clobbered"
 
@@ -271,8 +271,8 @@ def test_cancel_all_pending_approvals_never_clobbers_an_already_resolved_future(
 
 def test_cancel_all_pending_approvals_on_a_handle_with_no_approval_future_is_a_safe_noop():
     registry = RunRegistry()
-    registry.claim("pycoder")  # no approval_future passed
-    registry.cancel_all_pending_approvals(("pycoder", "code_sandbox"))  # must not raise
+    registry.claim("harness")  # no approval_future passed
+    registry.cancel_all_pending_approvals(("harness", "code_sandbox"))  # must not raise
 
 
 def test_approval_future_can_be_replaced_in_place_on_the_same_handle():
@@ -283,7 +283,7 @@ def test_approval_future_can_be_replaced_in_place_on_the_same_handle():
         registry = RunRegistry()
         loop = asyncio.get_running_loop()
         first = loop.create_future()
-        handle = registry.claim("pycoder", approval_future=first)
+        handle = registry.claim("harness", approval_future=first)
 
         second = loop.create_future()
         handle.approval_future = second
@@ -325,7 +325,7 @@ def test_cancel_auto_denies_an_unresolved_approval_future():
         loop = asyncio.get_running_loop()
         future = loop.create_future()
         handle = registry.claim(
-            "pycoder", cancel_event=threading.Event(), approval_future=future
+            "harness", cancel_event=threading.Event(), approval_future=future
         )
         assert registry.cancel(handle.request_id) is True
         assert future.done() and future.result() is False, "cancel must auto-deny, never approve"
@@ -343,7 +343,7 @@ def test_cancel_never_clobbers_an_already_resolved_approval_future():
         future = loop.create_future()
         future.set_result(True)  # a human approved it just before the cancel
         handle = registry.claim(
-            "pycoder", cancel_event=threading.Event(), approval_future=future
+            "harness", cancel_event=threading.Event(), approval_future=future
         )
         assert registry.cancel(handle.request_id) is True  # must not raise InvalidStateError
         assert future.result() is True, "an already-resolved future must never be clobbered"

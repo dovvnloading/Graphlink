@@ -62,7 +62,6 @@ import asyncio
 import difflib
 import inspect
 import logging
-import re
 import threading
 import uuid
 from pathlib import Path
@@ -84,12 +83,7 @@ from graphlink_plugins.gitlink.repository import (
     read_local_repo_file,
     validate_pending_changes,
 )
-from graphlink_plugins.pycoder.domain import (
-    PyCoderAnalysisAgent,
-    PyCoderExecutionAgent,
-    PyCoderRepairAgent,
-    PythonREPL,
-)
+from graphlink_plugins.common.python_repl import CodeAnalysisAgent
 from graphlink_plugins.code_sandbox.domain import (
     SandboxGenerationAgent,
     SandboxRepairAgent,
@@ -97,7 +91,7 @@ from graphlink_plugins.code_sandbox.domain import (
     _extract_python_block,
     _normalize_requirements,
 )
-from graphlink_scratch_dirs import EXECUTION_SANDBOX_ROOT, PYCODER_REPL_ROOT
+from graphlink_scratch_dirs import EXECUTION_SANDBOX_ROOT
 from graphlink_scratch_dirs import remove_scratch_dir_for_id
 # ADR-020 stage 20.3: the workspace-default rung of resolve_model_ref's
 # chain, wired into _resolve_model_ref_for_dispatch below - safe as a
@@ -174,28 +168,14 @@ GITLINK_CONTEXT_TIMEOUT_SECONDS = 300
 # rejected exactly as before.
 _GITLINK_RUN_CLAIM_PLACEHOLDER = "pending"
 
-# R5.4: the security-boundary section's own minimal, genuinely free
-# mitigation - a hard wall-clock timeout on Py-Coder's REPL execute() call,
-# closing the one real asymmetry recon found: Execution Sandbox already
-# times out its own subprocess internally (VirtualEnvSandbox.execute_code's
-# baked-in timeout_seconds=240, unchanged by this increment), but Py-Coder's
-# REPL had NONE before this - an AI-generated infinite loop ran forever until
-# a human clicked Stop. 240 is not an independently-derived number for THIS
-# constant - it is deliberately the exact same value as Execution Sandbox's
-# own existing ceiling, for cross-kind consistency. This is a hang guard, not
-# a security control - see the module-level PyCoderNode/CodeSandboxNode
-# security-boundary comment on AgentDispatcher.start_pycoder_run below for
-# the full, unsoftened statement of what this boundary actually is.
-PYCODER_EXECUTE_TIMEOUT_SECONDS = 240
-
-# R5.4: shared by both start_pycoder_run and start_code_sandbox_run - same
-# exact mechanism and reasoning as _GITLINK_RUN_CLAIM_PLACEHOLDER above (see
-# that constant's own comment for the full race this closes), just named for
-# this pair of new kinds rather than reusing the Gitlink-specific name. Both
-# kinds' WS-intent wrappers in backend/canvas.py (run_pycoder/
-# run_code_sandbox) claim node.pending_request_id with this exact sentinel,
-# synchronously, before any await - and both
-# AgentDispatcher.start_pycoder_run/start_code_sandbox_run below recognize
+# R5.4: shared by both start_pycoder_run (retired, PLAN-2026-08-24 H5) and
+# start_code_sandbox_run - same exact mechanism and reasoning as
+# _GITLINK_RUN_CLAIM_PLACEHOLDER above (see that constant's own comment for
+# the full race this closes), just named for this pair of kinds rather than
+# reusing the Gitlink-specific name. code_sandbox's WS-intent wrapper in
+# backend/api/intents_code_sandbox.py (run_code_sandbox) claims
+# node.pending_request_id with this exact sentinel, synchronously, before
+# any await - and AgentDispatcher.start_code_sandbox_run below recognizes
 # ONLY this exact value as "already claimed by my own caller, safe to
 # overwrite".
 _CODE_EXEC_RUN_CLAIM_PLACEHOLDER = "pending"
@@ -363,25 +343,25 @@ class AgentDispatcher:
         # simultaneously, which self._runs's own kind-scoped is_busy() alone
         # could never distinguish (it has no per-node concept - see
         # RunHandle's own docstring in backend/run_lifecycle.py).
-        # R5.4/ADR-002 stage 2.4g: Py-Coder Run ("pycoder" kind) and
-        # Execution Sandbox Run ("code_sandbox" kind), also sharing
-        # self._runs now, must be able to run concurrently with any of the
-        # kinds above, same reasoning as every prior independent kind. Same
-        # per-node busy-guard shape as gitlink_run/gitlink_apply above
-        # (node.pending_request_id via _CODE_EXEC_RUN_CLAIM_PLACEHOLDER,
-        # this registry pure task/cancel_event/approval_future bookkeeping,
-        # never the busy gate) - and the FIRST two kinds to use RunHandle.
-        # approval_future, the ENTIRE "waiting for human approval"
-        # mechanism (see start_pycoder_run's own docstring), created
-        # eagerly at claim time, before the background task even starts,
-        # so cancel_pycoder/cancel_all_pending_approvals can always resolve
-        # it even if the pipeline has not reached its own `await
-        # approval_future` yet. Mutated IN PLACE on handle (a plain,
-        # non-frozen dataclass) on every repair-loop iteration - a fresh
-        # Future replaces the old one on the SAME handle object, never a
-        # new claim - see start_pycoder_run's/start_code_sandbox_run's own
-        # repair-loop comments for why callers must always re-read this
-        # field fresh, never cache a captured reference.
+        # R5.4/ADR-002 stage 2.4g: Execution Sandbox Run ("code_sandbox"
+        # kind), sharing self._runs, must be able to run concurrently with
+        # any of the kinds above, same reasoning as every prior independent
+        # kind. Same per-node busy-guard shape as gitlink_run/gitlink_apply
+        # above (node.pending_request_id via
+        # _CODE_EXEC_RUN_CLAIM_PLACEHOLDER, this registry pure task/
+        # cancel_event/approval_future bookkeeping, never the busy gate) -
+        # and the first kind to use RunHandle.approval_future, the ENTIRE
+        # "waiting for human approval" mechanism (see start_code_sandbox_
+        # run's own docstring), created eagerly at claim time, before the
+        # background task even starts, so cancel_code_sandbox/
+        # cancel_all_pending_approvals can always resolve it even if the
+        # pipeline has not reached its own `await approval_future` yet.
+        # Mutated IN PLACE on handle (a plain, non-frozen dataclass) on
+        # every repair-loop iteration - a fresh Future replaces the old one
+        # on the SAME handle object, never a new claim - see
+        # start_code_sandbox_run's own repair-loop comments for why callers
+        # must always re-read this field fresh, never cache a captured
+        # reference.
         # R6.2/R8a/ADR-002 Workstream 1, migrated to self._runs by ADR-002
         # stage 2.3 (chart, note) and stage 2.4 (branch_comparison, branch_
         # synthesis): chart generation, Key Takeaway/Explainer Note
@@ -402,20 +382,14 @@ class AgentDispatcher:
         # separate kinds from each other and from note, not folded into
         # one - they are unrelated user gestures over possibly-overlapping
         # selections, so one running must never block another.
-        # R5.4: Py-Coder's REPL subprocess outlives any single run (state
-        # persists between calls, same as legacy's own PyCoderReplManager -
-        # see that class's own docstring in graphlink_plugins/pycoder/domain.py
-        # for why its weakref.WeakKeyDictionary keying strategy does not
-        # survive the port). Keyed by node_id (a plain string) instead:
-        # explicit teardown via dispose_pycoder_repl, not GC. Execution
-        # Sandbox needs NO equivalent manager - VirtualEnvSandbox is
-        # request-scoped by design, constructed fresh per run inside
-        # start_code_sandbox_run's own asyncio.to_thread-wrapped worker
-        # function (exactly like _call_gitlink_agent constructs a fresh
-        # GitlinkAgent per call) - the only state that must survive between
-        # runs is the plain string node.state.code_sandbox_sandbox_id, real
-        # SceneNode state, not a live object.
-        self._pycoder_repls: dict[str, PythonREPL] = {}
+        # Execution Sandbox needs no persistent-process manager of its own -
+        # VirtualEnvSandbox is request-scoped by design, constructed fresh
+        # per run inside start_code_sandbox_run's own
+        # asyncio.to_thread-wrapped worker function (exactly like
+        # _call_gitlink_agent constructs a fresh GitlinkAgent per call) -
+        # the only state that must survive between runs is the plain string
+        # node.state.code_sandbox_sandbox_id, real SceneNode state, not a
+        # live object.
 
     def _runtime_kwargs(self) -> dict:
         """ADR-006 stage 6.5: `{"runtime": self._provider_runtime}` for a
@@ -685,10 +659,21 @@ class AgentDispatcher:
 
     def cancel_builder(self, request_id: str) -> None:
         """Stop for the Builder: deny any parked approval first (cancel
-        means deny - the pycoder precedent), then the standard
-        release-on-cancel."""
+        means deny - the code_sandbox precedent), then the standard
+        release-on-cancel.
+
+        The `handle.kind == "builder"` check is load-bearing, not defensive
+        fluff: without it, a stale or foreign request_id belonging to a
+        DIFFERENT approval-gated kind (code_sandbox, harness) currently
+        parked mid-gate would have its approval_future wrongly resolved to
+        False here, before self._runs.cancel's own kind check below ever
+        runs - silently denying a human approval that was never meant for
+        this method at all."""
         handle = self._runs.get(request_id)
-        if handle is not None and handle.approval_future is not None and not handle.approval_future.done():
+        if (
+            handle is not None and handle.kind == "builder"
+            and handle.approval_future is not None and not handle.approval_future.done()
+        ):
             handle.approval_future.set_result(False)
         self._runs.cancel(request_id, kind="builder")
 
@@ -782,120 +767,32 @@ class AgentDispatcher:
 
     def cancel_harness(self, request_id: str) -> None:
         """Stop for a harness run: deny any parked approval first (cancel
-        means deny - the pycoder/builder precedent), then the standard
-        release-on-cancel."""
+        means deny - the code_sandbox/builder precedent), then the standard
+        release-on-cancel.
+
+        The `handle.kind == "harness"` check is load-bearing - see
+        cancel_builder's own docstring for the exact foreign-kind
+        approval-denial race this closes."""
         handle = self._runs.get(request_id)
-        if handle is not None and handle.approval_future is not None and not handle.approval_future.done():
+        if (
+            handle is not None and handle.kind == "harness"
+            and handle.approval_future is not None and not handle.approval_future.done()
+        ):
             handle.approval_future.set_result(False)
         self._runs.cancel(request_id, kind="harness")
 
-    def get_pycoder_repl(self, node_id: str, repl_id: str) -> PythonREPL:
-        """Lazy-create-or-reuse - mirrors PyCoderReplManager.get_repl's own
-        shape, keyed by node_id (transient, session-scoped: this dict and
-        node_id are both rebuilt from scratch together on every session
-        reload, so reusing node_id here is safe even though it is not
-        durable across reloads - see PythonREPL.cwd's own docstring for
-        why the ON-DISK directory needs a different, stable identity
-        instead). repl_id is node.state.pycoder_repl_id, minted once at
-        node creation (ADR-005 stage 5.3 review-fix) - passed through to
-        PythonREPL so its scratch cwd survives a reload even though this
-        node's own id would not."""
-        repl = self._pycoder_repls.get(node_id)
-        if repl is None:
-            repl = PythonREPL(repl_id=repl_id)
-            self._pycoder_repls[node_id] = repl
-        return repl
-
-    async def dispose_pycoder_repl(
-        self, node_id: str, *, repl_id: str | None = None, remove_scratch_dir: bool = False
-    ) -> None:
-        """Explicit teardown of one node's REPL subprocess. Tolerates a
-        missing node_id silently (pop with a default) - called from exactly
-        two places: backend/api/intents_nodes.py's remove_nodes WS-intent
-        wrapper (for every deleted pycoder node), and start_pycoder_run's
-        own execute-timeout guard below (a hung REPL must not be left
-        alive). NOT called on disconnect/session-end - the REPL persists
-        across disconnects exactly like every other piece of node state in
-        SceneDocument already does; only explicit node deletion (or process
-        shutdown) ends it. stop() does a blocking kill()+wait(), so it runs
-        inside asyncio.to_thread rather than directly on the event loop.
-
-        ADR-005 stage 5.3: remove_scratch_dir=True additionally deletes the
-        REPL's scratch directory from disk - correct ONLY for the real
-        node-deletion caller, where the node is gone for good. The
-        execute-timeout guard passes the default False: a timeout means
-        this one run misbehaved, not that the node's accumulated scratch
-        files should be thrown away.
-
-        Review-fix: removal is keyed off the passed-in repl_id (recomputed
-        via remove_scratch_dir_for_id), NOT off whatever `repl` this pop
-        happened to find - the two are NOT reliably the same thing. A REPL
-        already popped by an earlier execute timeout (this method's OTHER
-        caller, which never repopulates the dict - only a fresh
-        get_pycoder_repl call does, i.e. running Py-Coder again) leaves
-        node_id absent from _pycoder_repls; a subsequent real delete used
-        to make this pop return None and silently skip the directory
-        removal entirely; with a deterministic recompute the removal still
-        happens even though there is no live object left to ask. Callers
-        that pass remove_scratch_dir=True must also pass repl_id (the
-        node's stable pycoder_repl_id, not its node_id)."""
-        repl = self._pycoder_repls.pop(node_id, None)
-        if repl is not None:
-            await asyncio.to_thread(repl.stop)
-        if remove_scratch_dir and repl_id:
-            await asyncio.to_thread(remove_scratch_dir_for_id, PYCODER_REPL_ROOT, repl_id)
-
-    def dispose_all_pycoder_repls(self) -> None:
-        """Bulk, non-blocking teardown for every currently-tracked REPL
-        subprocess - called from backend/app.py's _evict_idle_session right
-        before the SessionBus itself is dropped from EventBus._sessions.
-        Its one caller (_evict_idle_session, via EventBus's own
-        synchronous sweep_idle_sessions/_eviction_loop chain) runs on the
-        live asyncio event loop, so - review-fix - each repl.stop() (a
-        documented-blocking kill()+wait(), possibly a Windows Job-Object
-        guard.close() too) is fired on its own daemon thread rather than
-        called inline: this method's async sibling dispose_pycoder_repl
-        explicitly offloads the identical call via asyncio.to_thread for
-        exactly this reason, and calling it directly here would stall
-        every other connected client's WS/HTTP handling for however long
-        the OS takes to kill+reap each process. Not awaited/joined - unlike
-        the delete path, nothing here needs the stop to have completed
-        before returning (this method deliberately never removes any
-        directory afterward, see below), so there is nothing to wait for.
-        PythonREPL.stop()'s own RLock already makes firing these
-        concurrently (with each other, and with any other in-flight
-        start()/stop() on the same instance) safe (the stage 5.2
-        concurrent-stop() fix covers exactly that race).
-
-        Deliberately does NOT remove each REPL's scratch directory, unlike
-        the node-delete path above: eviction means "no one is currently
-        connected", not "this node's work should be discarded" - the
-        directory is exactly the kind of state a REPL restart already
-        preserves across process restarts by design (see PythonREPL's own
-        cwd docstring), and a reconnecting user may expect their files
-        still there. What eviction genuinely leaks if left alone is the
-        subprocess itself: once this SessionBus is gone from
-        EventBus._sessions, nothing else holds a reference that could ever
-        call stop() on it again."""
-        for node_id in list(self._pycoder_repls.keys()):
-            repl = self._pycoder_repls.pop(node_id, None)
-            if repl is not None:
-                threading.Thread(target=repl.stop, daemon=True).start()
-
     async def remove_code_sandbox_scratch_dir(self, sandbox_id: str) -> None:
-        """ADR-005 stage 5.3: node-delete counterpart of
-        dispose_pycoder_repl's remove_scratch_dir=True, for Execution
-        Sandbox. Unlike Py-Coder's REPL, VirtualEnvSandbox is never cached
-        on this dispatcher (see this class's own __init__ docstring) - the
-        only state that survives a run is the plain sandbox_id string on
-        the node itself - so there is no live object to ask for its
-        base_dir; the path is recomputed the same deterministic way
-        VirtualEnvSandbox.__init__ builds it (remove_scratch_dir_for_id
-        also refuses to act on a blank sandbox_id, rather than rmtree-ing
-        the shared "default" bucket a blank id resolves to - see that
-        function's own docstring). A venv tree can be large, so the
-        removal runs in a thread, same reasoning as dispose_pycoder_repl's
-        own stop()/rmtree calls.
+        """ADR-005 stage 5.3: node-delete teardown for Execution Sandbox.
+        VirtualEnvSandbox is never cached on this dispatcher (see this
+        class's own __init__ docstring) - the only state that survives a
+        run is the plain sandbox_id string on the node itself - so there is
+        no live object to ask for its base_dir; the path is recomputed the
+        same deterministic way VirtualEnvSandbox.__init__ builds it
+        (remove_scratch_dir_for_id also refuses to act on a blank
+        sandbox_id, rather than rmtree-ing the shared "default" bucket a
+        blank id resolves to - see that function's own docstring). A venv
+        tree can be large, so the removal runs in a thread rather than
+        blocking the event loop.
 
         Best-effort: an in-flight run for this node may still be exiting
         when a delete races it (cancelled moments earlier by remove_nodes'
@@ -905,38 +802,12 @@ class AgentDispatcher:
         here."""
         await asyncio.to_thread(remove_scratch_dir_for_id, EXECUTION_SANDBOX_ROOT, sandbox_id)
 
-    def cancel_pycoder(self, request_id: str) -> bool:
+    def cancel_code_sandbox(self, request_id: str) -> bool:
         """Cooperative cancel, same honestly-documented limitation as every
         other dispatch surface (the checkpoint is a cancel_event check
-        between stages, not a true mid-call interrupt - EXCEPT for the
+        between stages, not a true mid-call interrupt) EXCEPT for the
         approval pause itself, which this DOES immediately and definitely
-        unblock by resolving approval_future - see start_pycoder_run's own
-        docstring). Mirrors legacy's own stop() calling
-        self._approval_event.set() to unblock a parked worker - otherwise
-        Cancel would only work pre- or post-pause, never during it.
-
-        ADR-002 stage 2.4g: kind="pycoder" is checked explicitly (unlike
-        _resolve_approval below, which needs no such check) because this
-        method unconditionally calls handle.cancel_event.set() - a foreign
-        kind's handle could have cancel_event=None (chart/note/...) and
-        AttributeError. Before this migration each kind's own private dict
-        gave this isolation for free; self._runs sharing one namespace
-        across every kind means it must be checked explicitly now - same
-        reasoning as cancel_artifact's own kind= filter (stage 2.4d)."""
-        handle = self._runs.get(request_id)
-        if handle is None or handle.kind != "pycoder":
-            return False
-        # ADR-006 stage 6.2: the approval future is resolved BEFORE routing
-        # through RunRegistry.cancel(), because cancel() now pops the handle
-        # (release-on-cancel) and the future lives on it. cancel() then sets
-        # the cancel_event and frees the slot immediately.
-        future = handle.approval_future
-        if future is not None and not future.done():
-            future.set_result(False)
-        return self._runs.cancel(request_id, kind="pycoder")
-
-    def cancel_code_sandbox(self, request_id: str) -> bool:
-        """Mirrors cancel_pycoder exactly (same shape, same reasoning)."""
+        unblock by resolving approval_future."""
         handle = self._runs.get(request_id)
         if handle is None or handle.kind != "code_sandbox":
             return False
@@ -948,20 +819,19 @@ class AgentDispatcher:
     def _resolve_approval(self, request_id: str, approved: bool) -> bool:
         """The shared approve/deny primitive backing approve_code_execution/
         deny_code_execution below - looks up request_id directly in
-        self._runs (a shared uuid4 namespace across every migrated kind,
-        not just pycoder/code_sandbox), mirroring the WS intent layer's own
+        self._runs (a shared uuid4 namespace across every migrated kind, not
+        just code_sandbox), mirroring the WS intent layer's own
         two-shared-intents design (approveCodeExecution/denyCodeExecution,
-        not four separate per-kind intents). No explicit kind check needed
-        here (unlike cancel_pycoder/cancel_code_sandbox above): handle.
-        approval_future is None for every kind except pycoder/code_sandbox
-        (only those two ever pass one to claim()), so that field alone is
-        already the correct discriminator - a chat/chart/.../gitlink
-        request_id is naturally rejected by the `is None` check below,
-        exactly as it was naturally absent from the old two-dict lookup.
+        not one intent per kind). No explicit kind check needed here (unlike
+        cancel_code_sandbox above): handle.approval_future is None for every
+        kind except code_sandbox (only that kind ever passes one to
+        claim()), so that field alone is already the correct discriminator -
+        a chat/chart/.../gitlink request_id is naturally rejected by the
+        `is None` check below.
 
         Guarding with `future.done()` is LOAD-BEARING, not defensive fluff -
         a duplicate/stale approve-or-deny message (e.g. a double-click, or a
-        message that arrives after cancel_pycoder/cancel_code_sandbox/
+        message that arrives after cancel_code_sandbox/
         cancel_all_pending_approvals already resolved this same future)
         would otherwise raise asyncio.InvalidStateError.
 
@@ -1012,16 +882,16 @@ class AgentDispatcher:
         the same reason (a request that already resolved, e.g. because a
         human approved it a moment before the last tab closed, must not be
         clobbered). backend/app.py's ws_endpoint calls this AFTER cancel_all()
-        - by then cancel_all() has already tripped these two kinds'
-        cancel_event too (now that they share self._runs with every other
-        cancellable kind), closing a real pre-existing gap: a disconnect
-        mid-EXECUTION (past the approval gate) previously left pycoder/
-        code_sandbox's cancel_event untripped entirely, since neither
-        lived in the dict cancel_all() used to walk."""
-        # H2: "harness" joins for the same reason the original two are
-        # here - its approval pause has no timeout by design, so a
-        # last-tab disconnect would otherwise park it forever.
-        self._runs.cancel_all_pending_approvals(("pycoder", "code_sandbox", "harness"))
+        - by then cancel_all() has already tripped these kinds' cancel_event
+        too (now that they share self._runs with every other cancellable
+        kind), closing a real pre-existing gap: a disconnect mid-EXECUTION
+        (past the approval gate) previously left code_sandbox's cancel_event
+        untripped entirely, since it did not live in the dict cancel_all()
+        used to walk."""
+        # H2: "harness" joins for the same reason "code_sandbox" is here -
+        # its approval pause has no timeout by design, so a last-tab
+        # disconnect would otherwise park it forever.
+        self._runs.cancel_all_pending_approvals(("code_sandbox", "harness"))
 
     def cancel_gitlink(self, request_id: str) -> bool:
         """kind="gitlink_run": ADR-002 stage 2.4f - see RunRegistry.cancel's
@@ -2092,7 +1962,7 @@ class AgentDispatcher:
         use. node.pending_request_id below is set inside _run() itself,
         AFTER the claim already landed in this outer coroutine - it is a
         UI-bookkeeping side channel only (never consulted for the busy
-        guard, unlike gitlink_run/pycoder/code_sandbox's use of the same
+        guard, unlike gitlink_run/code_sandbox's use of the same
         field), so it needs no claim-ordering treatment of its own."""
         if self._runs.is_busy("artifact"):
             notifications_state.show("An artifact request is already running.", "info")
@@ -2146,7 +2016,7 @@ class AgentDispatcher:
                 self._runs.release(request_id)
                 # 6.2 review fix (reproduced live): only clear if this task's
                 # OWN request_id is still the one recorded - the same
-                # stale-task guard every gitlink/pycoder/sandbox finally has.
+                # stale-task guard every gitlink/sandbox finally has.
                 # Release-on-cancel frees the "artifact" slot the instant a
                 # cancel lands, so a NEW artifact run can claim and stamp
                 # this same node before this old worker unwinds; the old
@@ -2623,375 +2493,27 @@ class AgentDispatcher:
 
         self._runs.attach_task(handle, asyncio.create_task(_run()))
 
-    # -- R5.4: Py-Coder / Execution Sandbox -----------------------------------
+    # -- R5.4: Execution Sandbox -----------------------------------------------
     #
-    # SECURITY BOUNDARY (stated plainly, not softened): PyCoderNode and
-    # CodeSandboxNode execute code with the full privileges of the user's
-    # account. The only two protections are the WS-Origin handshake check
-    # and a mandatory human-approval step. There is no code-level sandbox -
-    # no container, VM, or OS-level resource/permission restriction - for
-    # either kind. Py-Coder's new execution timeout is a hang guard, not a
-    # security control: it does not stop a malicious script from reading
-    # files, exfiltrating data, or (for Execution Sandbox specifically)
-    # running arbitrary code during pip install via a hostile package's
-    # build backend, before the approved script itself ever runs.
+    # SECURITY BOUNDARY (stated plainly, not softened): CodeSandboxNode
+    # executes code with the full privileges of the user's account. The only
+    # two protections are the WS-Origin handshake check and a mandatory
+    # human-approval step. There is no code-level sandbox - no container,
+    # VM, or OS-level resource/permission restriction. Execution Sandbox's
+    # own timeout (VirtualEnvSandbox.execute_code's built-in limit) is a
+    # hang guard, not a security control: it does not stop a malicious
+    # script from reading files, exfiltrating data, or running arbitrary
+    # code during pip install via a hostile package's build backend, before
+    # the approved script itself ever runs.
     #
-    # Both methods below run their entire pipeline as ONE coroutine on the
-    # event loop - the blocking LLM/REPL/subprocess calls are wrapped in
+    # The method below runs its entire pipeline as ONE coroutine on the
+    # event loop - the blocking LLM/subprocess calls are wrapped in
     # asyncio.to_thread, but the PAUSE between them (waiting for a human to
     # approve or deny the candidate code) needs no thread-crossing at all: it
-    # collapses into a plain `asyncio.Future[bool]`
-    # (self._runs's "pycoder"/"code_sandbox" handle's own approval_future
-    # field), created BEFORE the background task even starts. `approved = await
-    # approval_future` IS the entire "waiting for approval" state - nothing
-    # else is needed. This replaces legacy's two independently-blocking
-    # mechanisms on two different threads (a QThread worker parked on a
-    # threading.Event, the GUI thread parked inside a modal
-    # QMessageBox.exec()), coordinated only through the shared worker object.
-
-    async def start_pycoder_run(
-        self,
-        *,
-        bus: SessionBus,
-        notifications_state,
-        node,
-        node_id: str,
-        mode: str,
-        prompt: str,
-        code: str,
-        conversation_history: list,
-        on_success,  # on_success(code, output, analysis, last_run_failed)
-        on_failure,  # on_failure(message)
-    ) -> None:
-        """R5.4: Py-Coder's Run action.
-
-        ai_driven mode mirrors legacy's PyCoderExecutionWorker: generate code
-        via PyCoderExecutionAgent -> human-approval pause -> execute in the
-        persistent REPL with up to 4 attempts, repairing via
-        PyCoderRepairAgent between failures -> analyze the final result via
-        PyCoderAnalysisAgent. A successful run through the repair loop AND a
-        run that exhausts every retry both call on_success (never
-        on_failure) - exactly mirroring legacy's own `finished.emit(result)`
-        for both cases, distinguished only by the `last_run_failed` flag and
-        a "**PROCESS FAILED**" analysis prefix.
-
-        manual mode mirrors legacy's CodeExecutionWorker + PyCoderAgentWorker
-        pair: execute the hand-typed code once (no repair loop), then
-        analyze the result. Deliberately ungated - no approval_future is
-        awaited on this path at all, mirroring legacy's own documented
-        posture exactly ("MANUAL mode is deliberately ungated - there the
-        user authored the code themselves and clicking Run *is* the
-        approval").
-
-        Every execute() call, on both paths, is wrapped in
-        asyncio.wait_for(..., timeout=PYCODER_EXECUTE_TIMEOUT_SECONDS) - the
-        one real asymmetry recon found versus Execution Sandbox (which
-        already self-limits via VirtualEnvSandbox.execute_code's own baked-in
-        timeout). On timeout, the REPL is torn down via dispose_pycoder_repl
-        rather than left alive as a runaway subprocess.
-
-        Cooperative cancellation only for the EXECUTE stage itself (same
-        honestly-documented limitation as gitlink/artifact/web_research: the
-        checkpoint is a cancel_event check between stages, not a true
-        mid-call interrupt on an in-flight REPL execute() - the REPL has no
-        polling hook the way Execution Sandbox's subprocess does) - but the
-        approval PAUSE itself is genuinely, immediately interruptible by
-        Cancel, since cancel_pycoder resolves this same approval_future.
-
-        ADR-002 stage 2.4g: self._runs.claim() now happens in the SAME
-        synchronous stretch as node.pending_request_id's own claim - same
-        pattern as gitlink_run/gitlink_apply (stage 2.4f): node.pending_
-        request_id remains the sole real busy guard, this registry claim
-        is task/cancel_event/approval_future bookkeeping.
-
-        REVIEW-FIX: ...plus `finalize` (see _finalize below), which used to
-        be omitted here. Without it, node.pending_request_id - the one
-        field runPyCoder's own busy pre-check and the frontend's spinner
-        both key off - was cleared ONLY by _run's own late `finally`, which
-        cannot run until the blocking repl.execute() call above actually
-        returns. RunRegistry.cancel() (cancel_pycoder, on every Cancel
-        click, node delete, and session disconnect) pops this handle and
-        frees is_busy("pycoder") immediately regardless, so a Cancel during
-        the EXECUTE stage used to leave the node showing busy - with zero
-        feedback - for up to PYCODER_EXECUTE_TIMEOUT_SECONDS after the run
-        was already gone from this registry. Every other cancellable kind
-        in this module either wires finalize (start_builder_run/_dispatch)
-        or gets near-instant natural cancellation anyway (code_sandbox's
-        should_continue() polling); this closes the one real gap."""
-        if node.pending_request_id and node.pending_request_id != _CODE_EXEC_RUN_CLAIM_PLACEHOLDER:
-            notifications_state.show("Py-Coder is already busy for this node.", "info")
-            await bus.publish("notification")
-            return
-
-        cancel_event = threading.Event()
-        approval_future: asyncio.Future = asyncio.get_running_loop().create_future()
-
-        async def _finalize() -> None:
-            """REVIEW-FIX: see this method's own docstring above - mirrors
-            start_builder_run's/_dispatch's identically-shaped _finalize.
-            Run by RunRegistry.cancel() the instant Cancel/Stop lands
-            (Cancel click, node delete, or session disconnect), well
-            before _run's own late `finally` can react to a blocking
-            repl.execute() call. `handle` is captured by reference to the
-            enclosing scope - safe even though this closure is defined
-            before `handle` itself is assigned below, since the body only
-            runs after claim() has returned."""
-            node.state.pycoder_awaiting_approval = False
-            node.state.pycoder_approved_fingerprint = None
-            node.state.pycoder_error = "Py-Coder execution cancelled."
-            if node.pending_request_id == handle.request_id:
-                node.pending_request_id = None
-            await bus.publish("scene")
-
-        handle = self._runs.claim(
-            "pycoder", node_id=node_id, cancel_event=cancel_event,
-            approval_future=approval_future, finalize=_finalize,
-        )
-        request_id = handle.request_id
-        node.pending_request_id = request_id
-        await bus.publish("scene")
-
-        async def _run():
-            try:
-                if mode == "manual":
-                    manual_code = code or ""
-                    if not manual_code.strip():
-                        # Guard-rail message, routed through pycoder_error
-                        # (not pycoder_analysis, unlike legacy's own
-                        # `set_ai_analysis`) - see the R5.4 report's own note
-                        # on unifying every guard-rail message through the
-                        # one error field this port actually has.
-                        on_failure("Add Python code before running Py-Coder.")
-                        await bus.publish("scene")
-                        return
-
-                    repl = self.get_pycoder_repl(node_id, node.state.pycoder_repl_id)
-                    try:
-                        output = await asyncio.wait_for(
-                            asyncio.to_thread(repl.execute, manual_code),
-                            timeout=PYCODER_EXECUTE_TIMEOUT_SECONDS,
-                        )
-                    except asyncio.TimeoutError:
-                        await self.dispose_pycoder_repl(node_id)
-                        message = (
-                            "Py-Coder execution stopped responding before the request "
-                            "completed and was terminated. Please try again."
-                        )
-                        on_failure(message)
-                        notifications_state.show(message, "error")
-                        await bus.publish("notification")
-                        return
-
-                    if cancel_event.is_set():
-                        notifications_state.show("Py-Coder execution cancelled.", "info")
-                        await bus.publish("notification")
-                        return
-
-                    last_run_failed = getattr(repl, "last_run_failed", False)
-                    output_text = output if output else "[No output produced]"
-                    analysis = await asyncio.to_thread(
-                        _call_pycoder_analysis_agent, None, manual_code, output_text
-                    )
-                    on_success(manual_code, output_text, analysis, last_run_failed)
-                    await bus.publish("scene")
-                    return
-
-                # ai_driven mode
-                prompt_text = (prompt or "").strip()
-                if not prompt_text:
-                    on_failure("Please enter a prompt.")
-                    await bus.publish("scene")
-                    return
-
-                initial_response = await asyncio.to_thread(
-                    _call_pycoder_execution_agent, conversation_history, prompt_text
-                )
-                if cancel_event.is_set():
-                    notifications_state.show("Py-Coder run cancelled.", "info")
-                    await bus.publish("notification")
-                    return
-
-                code_match = re.search(r"\[TOOL:PYTHON\](.*?)\[/TOOL\]", initial_response, re.DOTALL)
-                if not code_match:
-                    # No code needed for this prompt - a real completed run
-                    # (never executed the REPL, never gated on approval),
-                    # exactly mirroring legacy's own `finished.emit(result)`
-                    # for this branch.
-                    on_success(
-                        "# No code was generated for this prompt.",
-                        "[Not applicable]",
-                        initial_response,
-                        False,
-                    )
-                    await bus.publish("scene")
-                    return
-
-                current_code = code_match.group(1).strip()
-
-                # -- human-approval gate --------------------------------------
-                node.state.pycoder_code = current_code
-                node.state.pycoder_approved_fingerprint = _fingerprint_changes({"code": current_code})
-                node.state.pycoder_awaiting_approval = True
-                await bus.publish("scene")
-                approved = await approval_future
-                node.state.pycoder_awaiting_approval = False
-                # REVIEW-FIX: without this publish, a REPAIR round's own
-                # re-gate further down (node.state.pycoder_awaiting_approval
-                # = True again, after the REPL execute + repair-agent
-                # latency) writes False then True with no scene broadcast
-                # for the False in between. The frontend's own
-                # CodeExecutionApprovalPanel busy flag (PyCoderNodeView.tsx)
-                # only resets on an OBSERVED false->true transition, so it
-                # never sees a transition at all across that whole window
-                # (True -> [invisible False] -> True) - every repair
-                # round's approval dialog renders with both Approve and
-                # Deny permanently disabled, and that panel has no other
-                # dismissal affordance by design. This publish is what
-                # makes the intermediate state real on the wire, not just
-                # in memory - see the identical fix on the repair gate's
-                # own False assignment further down, and
-                # start_code_sandbox_run's matching pair.
-                await bus.publish("scene")
-
-                if not approved:
-                    on_failure("Py-Coder run cancelled: execution was not approved.")
-                    await bus.publish("scene")
-                    return
-
-                repl = self.get_pycoder_repl(node_id, node.state.pycoder_repl_id)
-                retry_count = 0
-                max_retries = 4
-                last_error = None
-
-                while retry_count < max_retries:
-                    if cancel_event.is_set():
-                        notifications_state.show("Py-Coder execution cancelled.", "info")
-                        await bus.publish("notification")
-                        return
-
-                    # ADR-002 P0: defense-in-depth, not the primary fix (the
-                    # repair re-gate below is) - the code about to execute
-                    # must be EXACTLY what the most recently resolved
-                    # approval gate covered. Always true today (nothing
-                    # mutates current_code between a gate and its matching
-                    # execute call); this exists to fail loudly rather than
-                    # silently execute unapproved content if a future change
-                    # ever breaks that invariant.
-                    if _fingerprint_changes({"code": current_code}) != node.state.pycoder_approved_fingerprint:
-                        on_failure(
-                            "Py-Coder execution blocked: the approved code no longer matches what is about to run."
-                        )
-                        await bus.publish("scene")
-                        return
-
-                    try:
-                        execution_output = await asyncio.wait_for(
-                            asyncio.to_thread(repl.execute, current_code),
-                            timeout=PYCODER_EXECUTE_TIMEOUT_SECONDS,
-                        )
-                        execution_failed = getattr(repl, "last_run_failed", False)
-                    except asyncio.TimeoutError:
-                        await self.dispose_pycoder_repl(node_id)
-                        message = (
-                            "Py-Coder execution stopped responding before the request "
-                            "completed and was terminated. Please try again."
-                        )
-                        on_failure(message)
-                        notifications_state.show(message, "error")
-                        await bus.publish("notification")
-                        return
-                    except Exception as exc:
-                        execution_output = f"\n--- EXECUTION FAILED ---\n{type(exc).__name__}: {exc}"
-                        execution_failed = True
-
-                    if not execution_failed:
-                        output_text = execution_output if execution_output else "[No output produced]"
-                        analysis = await asyncio.to_thread(
-                            _call_pycoder_analysis_agent, prompt_text, current_code, execution_output
-                        )
-                        on_success(current_code, output_text, analysis, False)
-                        await bus.publish("scene")
-                        return
-
-                    last_error = execution_output
-                    retry_count += 1
-                    if retry_count < max_retries:
-                        is_final = retry_count == max_retries - 1
-                        current_code = await asyncio.to_thread(
-                            _call_pycoder_repair_agent, current_code, last_error, is_final
-                        )
-                        if cancel_event.is_set():
-                            notifications_state.show("Py-Coder execution cancelled.", "info")
-                            await bus.publish("notification")
-                            return
-
-                        # ADR-002 P0: the repair agent just produced code the
-                        # user has never seen. The prior design let this run
-                        # automatically under the FIRST Approve click - the
-                        # confirmed gap the ADR-002 security review named
-                        # explicitly ("approval is not bound to what was
-                        # shown"; the old warning copy even disclosed this:
-                        # "automatically repaired versions of this code may
-                        # run under this same approval"). Every repaired
-                        # variant now goes through its own fresh gate, with a
-                        # NEW Future replacing the resolved one on this same
-                        # handle so cancel_pycoder/approve_code_execution/
-                        # deny_code_execution keep targeting whichever gate
-                        # is actually still open (see _resolve_approval's own
-                        # docstring - it always re-reads this field fresh,
-                        # never caches the future). The liveness re-check
-                        # (self._runs.get(request_id) is None) mirrors the
-                        # pre-migration dict-membership check exactly - see
-                        # start_web_research's own _guarded_progress for the
-                        # same "was this released out from under me" pattern.
-                        if self._runs.get(request_id) is None:
-                            return
-                        repair_future: asyncio.Future = asyncio.get_running_loop().create_future()
-                        handle.approval_future = repair_future
-                        node.state.pycoder_code = current_code
-                        node.state.pycoder_approved_fingerprint = _fingerprint_changes({"code": current_code})
-                        node.state.pycoder_awaiting_approval = True
-                        await bus.publish("scene")
-                        approved = await repair_future
-                        node.state.pycoder_awaiting_approval = False
-                        # REVIEW-FIX: see the initial gate's own identical
-                        # publish above for why - this loop can run more
-                        # than once (up to max_retries repair rounds), so
-                        # every False here needs its own broadcast too.
-                        await bus.publish("scene")
-                        if not approved:
-                            on_failure("Py-Coder run cancelled: repaired code was not approved.")
-                            await bus.publish("scene")
-                            return
-
-                # Every retry exhausted - still a real completed run (never
-                # on_failure), matching legacy's own `finished.emit(result)`
-                # for the exhausted-repair-loop case, flagged via
-                # last_run_failed=True and a "**PROCESS FAILED**" prefix.
-                final_failure_analysis = await asyncio.to_thread(
-                    _call_pycoder_analysis_agent,
-                    prompt_text,
-                    current_code,
-                    f"The code failed to execute after {max_retries} attempts. The final error was:\n{last_error}",
-                )
-                combined_analysis = (
-                    f"**PROCESS FAILED**\n\nAfter {max_retries} attempts, the code could not "
-                    f"be successfully executed.\n\n{final_failure_analysis}"
-                )
-                on_success(current_code, last_error, combined_analysis, True)
-                await bus.publish("scene")
-            except Exception as exc:
-                logger.exception("pycoder dispatch failed")
-                on_failure(f"Py-Coder execution failed: {exc}")
-                notifications_state.show(f"Py-Coder execution failed: {exc}", "error")
-                await bus.publish("notification")
-            finally:
-                self._runs.release(request_id)
-                if node.pending_request_id == request_id:
-                    node.pending_request_id = None
-                await bus.publish("scene")
-
-        self._runs.attach_task(handle, asyncio.create_task(_run()))
+    # collapses into a plain `asyncio.Future[bool]` (self._runs's
+    # "code_sandbox" handle's own approval_future field), created BEFORE the
+    # background task even starts. `approved = await approval_future` IS the
+    # entire "waiting for approval" state - nothing else is needed.
 
     async def start_code_sandbox_run(
         self,
@@ -3011,12 +2533,14 @@ class AgentDispatcher:
         """R5.4: Execution Sandbox's Run action - mirrors legacy's
         CodeSandboxExecutionWorker (generate-or-reuse -> human-approval pause
         -> prepare venv -> install requirements -> execute-with-repair-loop
-        -> analyze), collapsed into one coroutine via the same
-        asyncio.Future approval-pause mechanism as start_pycoder_run above
-        (see that method's own docstring).
+        -> analyze), collapsed into one coroutine via a plain
+        asyncio.Future[bool] approval-pause: `approved = await
+        approval_future` IS the entire "waiting for a human" state, created
+        BEFORE the background task even starts so cancel_code_sandbox can
+        always resolve it even before the pipeline reaches its own await.
 
-        UNLIKE Py-Coder, there is no persisted mode field - the real branch
-        is resolved HERE, at call time: a non-blank prompt always means
+        There is no persisted mode field - the real branch is resolved
+        HERE, at call time: a non-blank prompt always means
         "generate" (regenerating ignores any existing code, mirrors
         legacy's own `existing_code = code if run_mode == "manual" else
         ""`); a blank prompt with existing code means "reuse the existing
@@ -3040,9 +2564,7 @@ class AgentDispatcher:
         introduced by this port. VirtualEnvSandbox.execute_code's own
         baked-in 240s timeout (unchanged - see graphlink_plugins/
         code_sandbox/domain.py) is what actually bounds a hung subprocess
-        that never checks should_continue on its own; PYCODER_EXECUTE_
-        TIMEOUT_SECONDS reuses that same number for Py-Coder's own,
-        previously-missing equivalent.
+        that never checks should_continue on its own.
 
         R5.4 post-review FIX 1: live output streaming. VirtualEnvSandbox's
         `ensure_base_environment`/`sync_requirements`/`execute_code` each
@@ -3068,9 +2590,8 @@ class AgentDispatcher:
         Composer-specific topic): CodeSandboxNode state is scene state, same
         as every other plugin node kind's own dispatch surface.
 
-        ADR-002 stage 2.4g: shares the same self._runs claim pattern as
-        start_pycoder_run above - node.pending_request_id remains the sole
-        real busy guard, this registry claim is pure task/cancel_event/
+        ADR-002 stage 2.4g: node.pending_request_id remains the sole real
+        busy guard - this registry claim is pure task/cancel_event/
         approval_future bookkeeping."""
         if node.pending_request_id and node.pending_request_id != _CODE_EXEC_RUN_CLAIM_PLACEHOLDER:
             notifications_state.show("Virtual Environment Runner is already busy for this node.", "info")
@@ -3221,8 +2742,7 @@ class AgentDispatcher:
                 # re-gate further down writes these fields back (True/
                 # non-empty) after the venv-create/pip-install/execute
                 # latency with no scene broadcast for THIS cleared state in
-                # between - see start_pycoder_run's identical fix for the
-                # full reasoning: CodeSandboxNodeView.tsx's busy flag only
+                # between: CodeSandboxNodeView.tsx's busy flag only
                 # resets on an OBSERVED awaiting-approval false->true
                 # transition, so every repair round's approval dialog
                 # renders with both Approve and Deny permanently disabled
@@ -3261,9 +2781,12 @@ class AgentDispatcher:
                 try:
                     for attempt_index in range(max_attempts):
                         # ADR-002 P0: defense-in-depth, not the primary fix
-                        # (the repair re-gate below is) - see
-                        # start_pycoder_run's identical check for the full
-                        # reasoning.
+                        # (the repair re-gate below is) - compares the code/
+                        # manifest about to run against the fingerprint
+                        # taken at the moment the approval gate opened, so a
+                        # tool call that mutated the node's code out from
+                        # under an already-approved run is caught here even
+                        # if it slipped past the re-gate.
                         if _fingerprint_changes(
                             {"code": current_code, "manifest": manifest}
                         ) != node.state.code_sandbox_approved_fingerprint:
@@ -3288,16 +2811,18 @@ class AgentDispatcher:
                             await bus.publish("notification")
                             return
 
-                        # ADR-002 P0: same reasoning as start_pycoder_run's
-                        # identical repair re-gate - the repair agent just
-                        # produced code the user has never seen, so it must
-                        # not run under the approval that only ever covered
-                        # the FIRST version. Re-disclose the (unchanged)
-                        # manifest alongside it, since code_sandbox_approval_
+                        # ADR-002 P0: the repair agent just produced code
+                        # the user has never seen, so it must not run under
+                        # the approval that only ever covered the FIRST
+                        # version - a fresh gate opens for every repaired
+                        # attempt. Re-disclose the (unchanged) manifest
+                        # alongside it, since code_sandbox_approval_
                         # requirements was already cleared once the initial
-                        # gate resolved above. Liveness re-check mirrors
-                        # start_pycoder_run's own (self._runs.get(request_id)
-                        # is None) - see that method's own comment.
+                        # gate resolved above. The liveness re-check (a
+                        # cancel/delete may have popped this run's handle
+                        # while the repair agent call above was in flight)
+                        # must happen before parking a fresh approval_future
+                        # on it.
                         if self._runs.get(request_id) is None:
                             return
                         repair_future: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -3362,7 +2887,7 @@ class AgentDispatcher:
 
                 output_text = final_output if final_output else "[No output produced]"
                 analysis = await asyncio.to_thread(
-                    _call_pycoder_analysis_agent, prompt_text or None, current_code, output_text
+                    _call_code_analysis_agent, prompt_text or None, current_code, output_text
                 )
                 on_success(current_code, output_text, analysis)
                 await bus.publish("scene")
@@ -3676,26 +3201,12 @@ def _call_branch_synthesis_agent(source_text: str, instructions: str) -> str:
     return BranchSynthesisAgent().get_response(source_text, instructions)
 
 
-def _call_pycoder_execution_agent(conversation_history, user_prompt) -> str:
-    """Runs inside asyncio.to_thread. Reuses PyCoderExecutionAgent.get_response
-    verbatim - a fresh instance per call, same posture as _call_gitlink_agent/
-    _call_artifact_agent constructing their own agent fresh each time."""
-    return PyCoderExecutionAgent().get_response(conversation_history, user_prompt)
-
-
-def _call_pycoder_repair_agent(code, error, is_final_attempt) -> str:
-    """Runs inside asyncio.to_thread. Reuses PyCoderRepairAgent.get_response
-    verbatim."""
-    return PyCoderRepairAgent().get_response(code, error, is_final_attempt)
-
-
-def _call_pycoder_analysis_agent(original_prompt, code, code_output) -> str:
-    """Runs inside asyncio.to_thread. Reuses PyCoderAnalysisAgent.get_response
-    verbatim - shared by both Py-Coder's and Execution Sandbox's own final
-    analysis step, exactly like legacy's CodeSandboxExecutionWorker
-    constructing its own PyCoderAnalysisAgent instance directly rather than
-    duplicating that agent's logic."""
-    return PyCoderAnalysisAgent().get_response(original_prompt, code, code_output)
+def _call_code_analysis_agent(original_prompt, code, code_output) -> str:
+    """Runs inside asyncio.to_thread. Reuses CodeAnalysisAgent.get_response
+    verbatim - Execution Sandbox's own final analysis step (originally
+    written for, and shared with, the now-retired Py-Coder plugin - see
+    graphlink_plugins/common/python_repl.py)."""
+    return CodeAnalysisAgent().get_response(original_prompt, code, code_output)
 
 
 def _call_sandbox_generation_agent(conversation_history, user_prompt, requirements_manifest) -> str:

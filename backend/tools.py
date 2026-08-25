@@ -16,14 +16,14 @@ gates named in the ADR's own §2:
   RunContext.request_approval - the caller's job to route that to whatever
   UI/approval surface a real run uses (this module owns the GATE, not the
   human-facing panel, mirroring how RunHandle.approval_future in backend/
-  agents.py is itself just a bookkeeping primitive that start_pycoder_run/
-  start_code_sandbox_run route to the approval panel). `always` additionally
+  agents.py is itself just a bookkeeping primitive that
+  start_code_sandbox_run routes to the approval panel). `always` additionally
   remembers a fingerprint of (name, arguments) for the lifetime of the
   RunContext, so a repeated IDENTICAL call in the same run does not re-prompt
   - reusing _fingerprint_changes (graphlink_plugins/gitlink/agent.py, sha256
-  of canonical sort_keys JSON) exactly as backend/agents.py's own pycoder/
-  code_sandbox approval gates already do ("reused here rather than
-  reinvented" - node_states.py's own PycoderState docstring), not a
+  of canonical sort_keys JSON) exactly as backend/agents.py's own
+  code_sandbox approval gate already does ("reused here rather than
+  reinvented" - node_states.py's own CodeSandboxState docstring), not a
   reinvented hash. Because the fingerprint is computed fresh from THIS call's
   own arguments at invoke() time (never a separately-stored snapshot checked
   again later), there is no TOCTOU window to guard against the way gitlink's
@@ -230,8 +230,8 @@ class ToolRegistry:
                 # The approval prompt is the one place this function can be
                 # awaiting for a genuinely long time (a human deciding) -
                 # re-check cancellation on return, same cooperative-
-                # checkpoint posture cancel_pycoder/cancel_code_sandbox
-                # already document (backend/agents.py): not a true
+                # checkpoint posture cancel_code_sandbox already documents
+                # (backend/agents.py): not a true
                 # mid-await interrupt, but the run must not silently execute
                 # a handler after the user cancelled while this was pending.
                 _raise_if_cancelled(ctx.cancel.event if ctx.cancel is not None else None)

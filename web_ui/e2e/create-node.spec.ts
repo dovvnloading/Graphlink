@@ -14,14 +14,14 @@ import { gotoApp } from "./helpers";
  *    already-selected parent node, so there is no other real entry point
  *    for node #1.
  * 2. The Plugins popover (AppBar.tsx's `[data-overlay-trigger="plugins"]`)
- *    -> "Conversation Node" - one of the 8 first-party plugins migrated
+ *    -> "Conversation Node" - one of the 7 first-party plugins migrated
  *    onto ADR-014's `register_builtin_plugin` escape hatch
  *    (plugins/conversation_node/plugin.py). Picked over every other
  *    picker entry specifically because its handler
  *    (SceneDocument.add_conversation_node) does nothing but create and
- *    connect a node - unlike, say, Web Research or Py-Coder, it never
- *    calls out to a provider or a subprocess, so this stays exactly as
- *    deterministic and offline as the double-click gesture above.
+ *    connect a node - unlike, say, Web Research or the Virtual Environment
+ *    Runner, it never calls out to a provider or a subprocess, so this
+ *    stays exactly as deterministic and offline as the double-click gesture above.
  *    Built-in plugins also bypass the install-time consent/grant gate
  *    entirely (see backend/plugins.py's own module docstring on
  *    `builtin_actions` vs `picker_entries`), so there is no extra Settings

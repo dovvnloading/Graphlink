@@ -35,7 +35,6 @@ import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
 import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
 import { NoteNodeView, type NoteFlowNode } from "./NoteNodeView";
 import { OrthogonalEdge } from "./OrthogonalEdge";
-import { PyCoderNodeView, type PyCoderFlowNode } from "./PyCoderNodeView";
 import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
 import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNodeView";
 import { PlanNodeView, type PlanFlowNode, type PlanStepData } from "./PlanNodeView";
@@ -82,7 +81,6 @@ export type SceneFlowNode =
   | WebResearchFlowNode
   | ArtifactFlowNode
   | GitlinkFlowNode
-  | PyCoderFlowNode
   | CodeSandboxFlowNode
   | NoteFlowNode
   | GroupFlowNode
@@ -121,7 +119,6 @@ const NODE_TYPES = {
   web_research: WebResearchNodeView,
   artifact: ArtifactNodeView,
   gitlink: GitlinkNodeView,
-  pycoder: PyCoderNodeView,
   code_sandbox: CodeSandboxNodeView,
   note: NoteNodeView,
   // R6.1: one shared component backs both "frame" and "container" NODE_TYPES
@@ -429,10 +426,10 @@ export const FILTERABLE_NODE_KINDS = [
   "plan",
   "artifact",
   "gitlink",
-  "pycoder",
   "code_sandbox",
   "note",
   "chart",
+  "harness",
 ] as const;
 
 /**
@@ -909,34 +906,6 @@ function makeGitlinkFns(id: string, liveRef: { current: DispatcherLive }) {
   };
 }
 
-function makePyCoderFns(id: string, liveRef: { current: DispatcherLive }) {
-  return {
-    onToggleCollapse: () => {
-      const { n, store } = liveRef.current;
-      store.setChatCollapsed(id, !n.isCollapsed);
-    },
-    onDelete: () => liveRef.current.store.removeNodes([id]),
-    onSetMode: (mode: string) => liveRef.current.store.setPyCoderMode(id, mode),
-    onRun: (inputText: string) => liveRef.current.store.runPyCoder(id, inputText),
-    onCancel: () => {
-      const { n, store } = liveRef.current;
-      if (n.pendingRequestId) store.cancelPyCoderRequest(n.pendingRequestId);
-    },
-    // CRITICAL (see CodeExecutionApprovalPanel.tsx's own module doc): these
-    // read n.pendingRequestId - the CURRENT scene snapshot's own value for
-    // THIS node via liveRef, never anything the UI layer could supply as a
-    // distinct argument.
-    onApprove: () => {
-      const { n, store } = liveRef.current;
-      if (n.pendingRequestId) store.approveCodeExecution(n.pendingRequestId);
-    },
-    onDeny: () => {
-      const { n, store } = liveRef.current;
-      if (n.pendingRequestId) store.denyCodeExecution(n.pendingRequestId);
-    },
-  };
-}
-
 function makeCodeSandboxFns(id: string, liveRef: { current: DispatcherLive }) {
   return {
     onToggleCollapse: () => {
@@ -952,7 +921,10 @@ function makeCodeSandboxFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.cancelCodeSandboxRequest(n.pendingRequestId);
     },
-    // CRITICAL - same posture as the pycoder branch's own onApprove/onDeny.
+    // CRITICAL (see CodeExecutionApprovalPanel.tsx's own module doc): these
+    // read n.pendingRequestId - the CURRENT scene snapshot's own value for
+    // THIS node via liveRef, never anything the UI layer could supply as a
+    // distinct argument.
     onApprove: () => {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.approveCodeExecution(n.pendingRequestId);
@@ -1633,45 +1605,6 @@ export function toFlowNodes(
       flowNodes.push(flowNode);
       continue;
     }
-    if (n.kind === "pycoder") {
-      // No onDock here either (same reasoning as every non-dockable R5
-      // plugin-node branch above) - PyCoderNodeView never offers a
-      // dock-into-parent action; the generic `if (n.isDocked) continue`
-      // guard above still covers it correctly if it were ever docked via a
-      // direct WS call. No isBranchFocusActive here either. isDimmed IS
-      // wired below as of ADR-012 stage 12.5 - see the html branch's own
-      // comment for why that's safe.
-      const dimmedVal = isDimmed(n.id);
-      const extraSig = dimmedVal ? "1" : "0";
-      const cached = cache.flowNodes.get(n);
-      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makePyCoderFns);
-      if (cached && cached.extraSig === extraSig) {
-        flowNodes.push(cached.flowNode);
-        continue;
-      }
-      const flowNode: SceneFlowNode = {
-        id: n.id,
-        type: "pycoder" as const,
-        position: { x: n.x, y: n.y },
-        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
-        data: {
-          pycoderMode: n.pycoderMode,
-          pycoderPrompt: n.pycoderPrompt,
-          pycoderCode: n.pycoderCode,
-          pycoderOutput: n.pycoderOutput,
-          pycoderAnalysis: n.pycoderAnalysis,
-          pycoderLastRunFailed: n.pycoderLastRunFailed,
-          pycoderAwaitingApproval: n.pycoderAwaitingApproval,
-          pycoderError: n.pycoderError,
-          isCollapsed: n.isCollapsed,
-          pendingRequestId: n.pendingRequestId ?? null,
-          ...fns,
-        },
-      };
-      cache.flowNodes.set(n, { extraSig, flowNode });
-      flowNodes.push(flowNode);
-      continue;
-    }
     if (n.kind === "code_sandbox") {
       // No onDock here either (same reasoning as every non-dockable R5
       // plugin-node branch above) - CodeSandboxNodeView never offers a
@@ -2036,7 +1969,7 @@ const FADED_CONNECTION_OPACITY = 0.08;
 // - target kind in {chat, conversation, html} -> eligible (legacy
 //   ConnectionItem/ConversationConnectionItem/HtmlConnectionItem, which all
 //   share the ortho-gated update_path).
-// - anything else (web_research/artifact/gitlink/pycoder/code_sandbox/frame/
+// - anything else (web_research/artifact/gitlink/code_sandbox/harness/frame/
 //   container/chart/note-as-target) -> defaulted NOT eligible - these node
 //   kinds didn't exist as distinct connection types in the legacy app, so
 //   there is no research-backed mapping for them (an explicit, documented

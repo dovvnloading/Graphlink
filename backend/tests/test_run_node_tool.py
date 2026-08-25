@@ -1,11 +1,11 @@
 """ADR-008 stage 8.2: run_node - invoking a node's own action inline.
 
 The dispatcher is faked at exactly the seams run_node consumes
-(get_pycoder_repl / _resolve_branch_system_prompt / active_provider_model /
-dispose_pycoder_repl) and the agent drivers are monkeypatched at the same
-module attributes the real code binds late (_call_chat_agent /
-_call_chart_agent) - everything else is real: the real SceneDocument, real
-record_command underneath, real registry gating in front.
+(_resolve_branch_system_prompt / active_provider_model) and the agent
+drivers are monkeypatched at the same module attributes the real code binds
+late (_call_chat_agent / _call_chart_agent) - everything else is real: the
+real SceneDocument, real record_command underneath, real registry gating in
+front.
 """
 
 from __future__ import annotations
@@ -31,33 +31,7 @@ from backend.tools_graph import register_run_node_tool
 ALL_SCOPES = frozenset({GRAPH_READ, GRAPH_MUTATE, CODE_EXECUTE, PROVIDER_CALL})
 
 
-class FakeRepl:
-    def __init__(self, output: str = "42\n", fails: bool = False, hang_seconds: float = 0.0):
-        self.output = output
-        self.last_run_failed = fails
-        self.hang_seconds = hang_seconds
-        self.executed: list[str] = []
-
-    def execute(self, code: str) -> str:
-        import time
-
-        self.executed.append(code)
-        if self.hang_seconds:
-            time.sleep(self.hang_seconds)
-        return self.output
-
-
 class FakeDispatcher:
-    def __init__(self, repl: FakeRepl | None = None):
-        self.repl = repl or FakeRepl()
-        self.disposed: list[str] = []
-
-    def get_pycoder_repl(self, node_id: str, repl_id: str) -> FakeRepl:
-        return self.repl
-
-    async def dispose_pycoder_repl(self, node_id: str, **kwargs) -> None:
-        self.disposed.append(node_id)
-
     def _resolve_branch_system_prompt(self, document, node_id):
         return None
 
@@ -65,9 +39,9 @@ class FakeDispatcher:
         return ("ollama", "fake-model")
 
 
-def make_setup(repl: FakeRepl | None = None):
+def make_setup():
     document = SceneDocument()
-    dispatcher = FakeDispatcher(repl)
+    dispatcher = FakeDispatcher()
     registry = ToolRegistry()
     register_run_node_tool(registry, document, dispatcher)
     return document, dispatcher, registry
@@ -86,64 +60,6 @@ def make_ctx(*, scopes=ALL_SCOPES, run_id: str | None = None) -> RunContext:
 def run_node(registry, ctx, node_id, **extra):
     call = ToolCall(id="c1", name="run_node", arguments={"node_id": node_id, **extra})
     return asyncio.run(registry.invoke(call, ctx))
-
-
-def seed_pycoder(document: SceneDocument, code: str = "print(6*7)"):
-    parent = document.add_chat_node(0, 0, "root", True)
-    node = document.add_pycoder_node(0, 200, parent.id)
-    node.state.pycoder_code = code
-    return parent, node
-
-
-class TestRunPycoder:
-    def test_executes_the_nodes_code_and_lands_results_on_the_node(self):
-        repl = FakeRepl(output="42\n")
-        document, dispatcher, registry = make_setup(repl)
-        _, node = seed_pycoder(document)
-
-        result = run_node(registry, make_ctx(), node.id)
-
-        assert not result.is_error
-        payload = json.loads(result.content)
-        assert payload["failed"] is False
-        assert payload["output"] == "42\n"
-        assert repl.executed == ["print(6*7)"]
-        # Results landed through the same domain method the manual surface
-        # uses - the node renders identically to a manual run.
-        assert node.state.pycoder_output == "42\n"
-        assert node.pending_request_id is None, "the pending stamp must clear"
-
-    def test_a_failed_execution_reports_failed_true_but_is_not_a_tool_error(self):
-        repl = FakeRepl(output="Traceback ...", fails=True)
-        document, dispatcher, registry = make_setup(repl)
-        _, node = seed_pycoder(document)
-
-        result = run_node(registry, make_ctx(), node.id)
-
-        assert not result.is_error, "the TOOL worked; the CODE failed - the model reads `failed`"
-        assert json.loads(result.content)["failed"] is True
-
-    def test_empty_code_is_a_clear_error(self):
-        document, dispatcher, registry = make_setup()
-        _, node = seed_pycoder(document, code="   ")
-
-        result = run_node(registry, make_ctx(), node.id)
-
-        assert result.is_error
-        assert "no code" in result.content
-
-    def test_a_timeout_disposes_the_repl_and_fails_the_run(self, monkeypatch):
-        repl = FakeRepl(hang_seconds=0.5)
-        document, dispatcher, registry = make_setup(repl)
-        _, node = seed_pycoder(document)
-        monkeypatch.setattr(agents_module, "PYCODER_EXECUTE_TIMEOUT_SECONDS", 0.05)
-
-        result = run_node(registry, make_ctx(), node.id)
-
-        assert result.is_error
-        assert "timed out" in result.content
-        assert dispatcher.disposed == [node.id]
-        assert node.pending_request_id is None
 
 
 class TestRunChat:
@@ -418,8 +334,8 @@ class TestRunResearch:
         gone), a completed research answer is already fully formed here -
         complete_web_research_run raises SceneError for a missing node by
         design, but the model should still get the answer it already paid
-        for, mirroring _run_pycoder's own posture (complete_pycoder_run's
-        silent no-op for a deleted node)."""
+        for - the handler guards the landing call with a membership check
+        and skips it for a deleted node, rather than discarding the result."""
         from graphlink_plugins.web_research import service as wr_service
         from graphlink_plugins.web_research.domain import ResearchResult
 
@@ -517,20 +433,9 @@ class TestRunNodeSchema:
 
 
 class TestGuards:
-    def test_kind_scope_is_enforced_dynamically(self):
-        document, dispatcher, registry = make_setup()
-        _, node = seed_pycoder(document)
-        ctx = make_ctx(scopes=frozenset({GRAPH_READ, PROVIDER_CALL}))  # no code.execute
-
-        result = run_node(registry, ctx, node.id)
-
-        assert result.is_error
-        assert "code.execute" in result.content
-        assert dispatcher.repl.executed == []
-
     def test_a_busy_node_is_refused(self):
         document, dispatcher, registry = make_setup()
-        _, node = seed_pycoder(document)
+        node = document.add_chat_node(0, 0, "q", True)
         node.pending_request_id = "someone-else"
 
         result = run_node(registry, make_ctx(), node.id)
@@ -566,28 +471,3 @@ class TestGuards:
                 ToolCall(id="c1", name="run_node", arguments={"node_id": root.id}), ctx,
             ))
         assert root.pending_request_id is None, "the pending stamp must clear on cancel too"
-
-
-class TestStageExitCriterion:
-    """8.2 exit: 'Agent runs a code node and reads its result within one
-    loop' - the harness plays the loop: the model's scripted turn asks to
-    run the pycoder node, the registry executes it for real (fake REPL),
-    and the RESULT text is exactly what would be appended as the tool
-    message the next model turn reads."""
-
-    def test_agent_runs_a_code_node_and_reads_its_result(self):
-        repl = FakeRepl(output="the answer is 42\n")
-        document, dispatcher, registry = make_setup(repl)
-        _, node = seed_pycoder(document, code="print('the answer is', 6*7)")
-        ctx = make_ctx(run_id="build-exit-8-2")
-
-        result = run_node(registry, ctx, node.id)
-
-        assert not result.is_error
-        tool_message = {
-            "role": "tool", "tool_call_id": "c1", "name": "run_node",
-            "content": result.content,
-        }
-        readable = json.loads(tool_message["content"])
-        assert "the answer is 42" in readable["output"]
-        assert node.state.pycoder_output == "the answer is 42\n"

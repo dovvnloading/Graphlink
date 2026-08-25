@@ -6,7 +6,7 @@ tail block at lines 1151-1153 and 1160-1161) - pure code motion, no
 behavior change.
 
 Unlike every branch-point-child kind (Web Research/Artifact/Gitlink/
-Py-Coder/Execution Sandbox), Chart has no separate "create an empty node,
+Execution Sandbox), Chart has no separate "create an empty node,
 then run generation on it" split - generateChart is a single combined
 create+generate action, so there is no addChartNode intent at all: the
 SceneNode is only ever created (by document.add_chart_node, in

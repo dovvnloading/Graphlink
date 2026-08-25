@@ -328,7 +328,7 @@ BUILT_IN_RECIPES: tuple = (
         "description": "Write a small Python script for the goal, execute it, and note the result.",
         "goal": "Write a small Python script that accomplishes the task below, run it, and record the output in a note.",
         "steps": [
-            "Create a Py-Coder node and write the script into it",
+            "Create a Virtual Environment Runner node and write the script into it",
             "Run the script and check the output",
             "Record the result and any caveats in a note",
         ],

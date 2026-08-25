@@ -6,7 +6,7 @@ of two kinds:
 
 - a MANAGED scratch directory under graphlink_scratch_dirs.
   HARNESS_WORKSPACE_ROOT, keyed by the node's durable harness_workspace_id
-  (the pycoder_repl_id precedent: node ids are reassigned by array
+  (the code_sandbox_sandbox_id precedent: node ids are reassigned by array
   position on reload, so they cannot name an on-disk directory). Created
   via prepare_scratch_dir so the 0700 chmod and private-root ownership
   check apply; usage bumps its mtime so the launch age-sweep never treats

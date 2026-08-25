@@ -117,20 +117,21 @@ class RunHandle:
     cancellation primitive is behind it.
 
     `approval_future` (ADR-002 stage 2.4b) is unrelated to cancellation -
-    it is Py-Coder/Execution Sandbox's "waiting for a human to approve or
-    deny" mechanism (see AgentDispatcher.start_pycoder_run's own
-    docstring). Deliberately NOT read or resolved by RunRegistry.cancel()/
-    cancel_all() below - those two kinds' own cancel_pycoder/
-    cancel_code_sandbox methods resolve it directly (an immediate,
-    definite unblock, not the cooperative-flag semantics cancel_event
-    represents), and only a full-session-disconnect auto-denies every
-    still-pending approval, via cancel_all_pending_approvals below - a
-    THIRD, deliberately separate cleanup mechanism from cancel()/
-    cancel_all(), mirroring the one it replaces (AgentDispatcher's own
-    pre-migration cancel_all_pending_approvals). Mutated in place after
-    claim() on both kinds (a fresh Future replaces the old one on every
-    repair-loop iteration) - callers must always read
-    handle.approval_future fresh, never cache a reference to it.
+    it is Execution Sandbox/Builder/Harness's "waiting for a human to
+    approve or deny" mechanism (see AgentDispatcher.start_code_sandbox_run's
+    own docstring). Deliberately NOT read or resolved by
+    RunRegistry.cancel()/cancel_all() below - those kinds' own
+    cancel_code_sandbox/cancel_builder/cancel_harness methods resolve it
+    directly (an immediate, definite unblock, not the cooperative-flag
+    semantics cancel_event represents), and only a full-session-disconnect
+    auto-denies every still-pending approval, via
+    cancel_all_pending_approvals below - a THIRD, deliberately separate
+    cleanup mechanism from cancel()/cancel_all(), mirroring the one it
+    replaces (AgentDispatcher's own pre-migration
+    cancel_all_pending_approvals). Mutated in place after claim() on any of
+    these kinds (a fresh Future replaces the old one on every repair-loop
+    iteration) - callers must always read handle.approval_future fresh,
+    never cache a reference to it.
 
     `approval_snapshot_fn`/`approval_snapshot` (ADR-005 stage 5.5): closes a
     real race a 4-lens adversarial review found in the source-build
@@ -274,7 +275,8 @@ class RunRegistry:
             # release-on-cancel that ordering was harmless because cancel
             # never popped. Denial (False), never approval: popping means the
             # run was cancelled or torn down, and cancel-means-deny is the
-            # semantic cancel_pycoder/cancel_code_sandbox already had.
+            # semantic cancel_code_sandbox/cancel_builder/cancel_harness
+            # already have.
             future = handle.approval_future
             if future is not None and not future.done():
                 future.set_result(False)

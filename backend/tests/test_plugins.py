@@ -57,7 +57,7 @@ def test_get_plugin_categories_groups_in_category_order_and_skips_empty():
         assert category["plugins"]
 
 
-def test_get_plugin_categories_pins_the_original_curated_within_category_order_for_the_8_builtins():
+def test_get_plugin_categories_pins_the_original_curated_within_category_order_for_the_7_builtins():
     # ADR-014 review-fix (finding 7): discover_plugins()'s sorted(glob(...))
     # (backend/plugin_sdk.py) walks plugin DIRECTORIES alphabetically - an
     # axis unrelated to the original hand-ordered _PLUGINS tuple literal
@@ -76,7 +76,7 @@ def test_get_plugin_categories_pins_the_original_curated_within_category_order_f
     assert by_category["Branch Foundations"] == ["System Prompt", "Conversation Node"]
     assert by_category["Reasoning & Research"] == ["Web Research"]
     assert by_category["Build & Execution"] == [
-        "Gitlink", "Py-Coder", "Virtual Environment Runner", "HTML Renderer",
+        "Gitlink", "Virtual Environment Runner", "HTML Renderer",
     ]
     assert by_category["Workflow & Drafting"] == ["Artifact / Drafter"]
 
@@ -387,66 +387,6 @@ def test_execute_plugin_gitlink_creates_node():
     assert "scene" in recorder.topics_seen()
 
 
-# -- R5.4: "Py-Coder" - the fourth real node-creation plugin ------------------
-
-
-def test_execute_plugin_pycoder_requires_parent():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Py-Coder"]))
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert notifications.message == (
-        "Please select a valid node to branch from before adding a Py-Coder node."
-    )
-    assert not any(n.kind == "pycoder" for n in canvas_document.nodes.values())
-
-
-def test_execute_plugin_pycoder_rejects_unknown_parent_id():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(
-        bus.dispatch_intent("app-plugins", "executePlugin", ["Py-Coder", "ghost-node-id"])
-    )
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert not any(n.kind == "pycoder" for n in canvas_document.nodes.values())
-
-
-def test_execute_plugin_pycoder_creates_a_real_pycoder_node():
-    bus, notifications, canvas_document = _make_plugins_bus()
-    parent = canvas_document.add_node(10, 20, "parent")
-
-    class Recorder:
-        def __init__(self):
-            self.messages = []
-
-        async def send_json(self, data):
-            self.messages.append(data)
-
-        def topics_seen(self):
-            return [m["topic"] for m in self.messages if m["kind"] == "state"]
-
-    recorder = Recorder()
-    bus.attach(recorder)
-
-    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Py-Coder", parent.id]))
-
-    assert result is not None
-    node = canvas_document.nodes[result]
-    assert node.kind == "pycoder"
-    assert node.title == "Py-Coder"
-    assert any(
-        e.source == parent.id and e.target == node.id for e in canvas_document.edges.values()
-    )
-    assert notifications.visible is False, "success is not a deferral - no notification fires"
-    assert "scene" in recorder.topics_seen()
-
-
 # -- R5.4: "Execution Sandbox" - the fifth real node-creation plugin ----------
 
 
@@ -512,7 +452,7 @@ def test_execute_plugin_execution_sandbox_creates_a_real_code_sandbox_node():
 
 # -- R6.1: "System Prompt" - the sixth real node-creation plugin -------------
 #
-# Unlike Web Research/Artifact/Gitlink/Py-Coder/Execution Sandbox above (each
+# Unlike Web Research/Artifact/Gitlink/Execution Sandbox above (each
 # a branch-point CHILD of parent_node_id), a System Prompt note attaches to
 # parent_node_id's BRANCH ROOT (SceneDocument.get_branch_root) and connects
 # note -> root (reversed from the child plugins' root -> child edges) - see
@@ -761,12 +701,12 @@ def test_every_builtin_now_has_a_real_builtin_action_registration():
     # ADR-014 stage 14.3: R7.5a's old "every _PLUGINS entry has moved off
     # the generic deferred notice" claim is now expressed differently -
     # there is no more `_PLUGINS` list to compare against. Confirms
-    # instead that all 8 migrated built-ins are real
+    # instead that all 7 migrated built-ins are real
     # `plugin_registry.builtin_actions` entries (the ADR-014 stage 14.3
     # escape hatch), not `picker_entries` (the generic PluginNodeSeed
     # path reserved for third-party plugins and the demo plugins).
     handled = {
-        "Web Research", "Artifact / Drafter", "Gitlink", "Py-Coder", "Virtual Environment Runner",
+        "Web Research", "Artifact / Drafter", "Gitlink", "Virtual Environment Runner",
         "System Prompt", "Conversation Node", "HTML Renderer",
     }
     registry = discover_plugins()

@@ -5,7 +5,7 @@ import type { SceneNodeRow } from "../../lib/bridge-core/generated/scene-state";
 function row(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
   return {
     id: "n1",
-    kind: "pycoder",
+    kind: "code_sandbox",
     title: "",
     pendingRequestId: null,
     ...overrides,
@@ -20,25 +20,13 @@ describe("describeNodeRunTransition (ADR-012 stage 12.3)", () => {
   it("announces a run starting", () => {
     const prev = row({ pendingRequestId: null });
     const next = row({ pendingRequestId: "r1" });
-    expect(describeNodeRunTransition(prev, next)).toBe("Python run started");
+    expect(describeNodeRunTransition(prev, next)).toBe("Code sandbox run started");
   });
 
   it("announces a plain run completing", () => {
     const prev = row({ pendingRequestId: "r1" });
     const next = row({ pendingRequestId: null });
-    expect(describeNodeRunTransition(prev, next)).toBe("Python run completed");
-  });
-
-  it("announces a pycoder run failing via pycoderError", () => {
-    const prev = row({ pendingRequestId: "r1" });
-    const next = row({ pendingRequestId: null, pycoderError: "boom" });
-    expect(describeNodeRunTransition(prev, next)).toBe("Python run failed");
-  });
-
-  it("announces a pycoder run failing via pycoderLastRunFailed with no error text", () => {
-    const prev = row({ pendingRequestId: "r1" });
-    const next = row({ pendingRequestId: null, pycoderLastRunFailed: true });
-    expect(describeNodeRunTransition(prev, next)).toBe("Python run failed");
+    expect(describeNodeRunTransition(prev, next)).toBe("Code sandbox run completed");
   });
 
   it("announces a code_sandbox run failing via codeSandboxError", () => {
@@ -53,13 +41,19 @@ describe("describeNodeRunTransition (ADR-012 stage 12.3)", () => {
     expect(describeNodeRunTransition(prev, next)).toBe("Git operation failed");
   });
 
-  it("does not treat a pycoderError on an UNRELATED node kind as a failure signal", () => {
-    // pycoderError living on a non-pycoder row would be a wire-shape bug
-    // elsewhere, not something this function should paper over by treating
-    // it as a real transition - only the matching kind's own error field
-    // counts, per its own KIND_LABELS-keyed branch.
+  it("announces a harness run failing via harnessStatus", () => {
+    const prev = row({ kind: "harness", pendingRequestId: "r1" });
+    const next = row({ kind: "harness", pendingRequestId: null, harnessStatus: "failed" });
+    expect(describeNodeRunTransition(prev, next)).toBe("Agent run failed");
+  });
+
+  it("does not treat a codeSandboxError on an UNRELATED node kind as a failure signal", () => {
+    // codeSandboxError living on a non-code_sandbox row would be a wire-shape
+    // bug elsewhere, not something this function should paper over by
+    // treating it as a real transition - only the matching kind's own error
+    // field counts, per its own KIND_LABELS-keyed branch.
     const prev = row({ kind: "chat", pendingRequestId: "r1" });
-    const next = row({ kind: "chat", pendingRequestId: null, pycoderError: "leftover" });
+    const next = row({ kind: "chat", pendingRequestId: null, codeSandboxError: "leftover" });
     expect(describeNodeRunTransition(prev, next)).toBe("Chat response completed");
   });
 

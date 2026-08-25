@@ -145,24 +145,9 @@ def _resolve_web_research_summary() -> str:
     return ApiResearchModel.SUMMARY_SYSTEM
 
 
-def _resolve_pycoder_execution() -> str:
-    from graphlink_plugins.pycoder.domain import PyCoderExecutionAgent
-    return PyCoderExecutionAgent().system_prompt
-
-
-def _resolve_pycoder_repair() -> str:
-    from graphlink_plugins.pycoder.domain import PyCoderRepairAgent
-    return PyCoderRepairAgent().system_prompt
-
-
-def _resolve_pycoder_repair_retry() -> str:
-    from graphlink_plugins.pycoder.domain import PyCoderRepairAgent
-    return PyCoderRepairAgent().retry_prompt
-
-
-def _resolve_pycoder_analysis() -> str:
-    from graphlink_plugins.pycoder.domain import PyCoderAnalysisAgent
-    return PyCoderAnalysisAgent().system_prompt
+def _resolve_code_analysis() -> str:
+    from graphlink_plugins.common.python_repl import CodeAnalysisAgent
+    return CodeAnalysisAgent().system_prompt
 
 
 def _resolve_code_sandbox_generation() -> str:
@@ -216,10 +201,7 @@ _PROMPT_RESOLVERS = {
     "web-research-query": _resolve_web_research_query,
     "web-research-validation": _resolve_web_research_validation,
     "web-research-summary": _resolve_web_research_summary,
-    "pycoder-execution": _resolve_pycoder_execution,
-    "pycoder-repair": _resolve_pycoder_repair,
-    "pycoder-repair-retry": _resolve_pycoder_repair_retry,
-    "pycoder-analysis": _resolve_pycoder_analysis,
+    "code-analysis": _resolve_code_analysis,
     "code-sandbox-generation": _resolve_code_sandbox_generation,
     "code-sandbox-repair": _resolve_code_sandbox_repair,
     "gitlink-system": _resolve_gitlink_system,
@@ -260,10 +242,11 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         ("web-research-query", 1, "8ac34972ab12b8574177839d28f1b0a3adcadee56af06d9039b3ce9639b8bd67"),
         ("web-research-validation", 1, "6736a24ac6b339cac2268fd1b81ced90185b5537f53406ec2a811a8b8615a3d0"),
         ("web-research-summary", 1, "134042eb24b70209e74f886bc991b4a34dd150f13d2817e1e91b67adf35250ea"),
-        ("pycoder-execution", 1, "0921bf0a1bd76e023aa69f66aa7fff93143f70e28364d96bc8c8e870ca2ef578"),
-        ("pycoder-repair", 1, "9cf1cee625ed4dacc41db048447bd14e5d7118543bd24346ba1fff9776467d8e"),
-        ("pycoder-repair-retry", 1, "493c899b9982ab1236e043d87e4dc1dd7e447e3d4e98af5fd9e6026bd2757734"),
-        ("pycoder-analysis", 1, "7b96bab67600f57df004e702c42854dfc25d84f32769236d28bb5cdcb74bc8e5"),
+        # PLAN-2026-08-24 H5: was "pycoder-analysis" (Py-Coder retired,
+        # class renamed PyCoderAnalysisAgent -> CodeAnalysisAgent, moved to
+        # graphlink_plugins/common/python_repl.py) - text and hash both
+        # unchanged, only the id/resolver renamed.
+        ("code-analysis", 1, "7b96bab67600f57df004e702c42854dfc25d84f32769236d28bb5cdcb74bc8e5"),
         ("code-sandbox-generation", 1, "04cc4084d03cc840cefeadb59571d9f9b69635f4a1dab05b7ae49a01d36414b6"),
         ("code-sandbox-repair", 1, "8056b58c18a8d48d332669a81edcf83906f70a4161a77ae651aa211531223bd3"),
         ("gitlink-system", 1, "6b0afb63bdc521da5437f1f3a44efba031bf003992fb85f7c570b96ee9813689"),

@@ -96,7 +96,6 @@ from backend.domain.node_states import (
     HtmlState,
     ImageState,
     PlanState,
-    PycoderState,
     WebResearchState,
 )
 
@@ -171,7 +170,7 @@ def _history_token_text(history: list[dict]) -> str:
 
 def _chart_source_text(branch_history: list[dict]) -> str:
     """R6.2: flattens chat_branch_history's own {"role","content"} list (the
-    SAME branch walk web_research/pycoder/gitlink already reuse via
+    SAME branch walk web_research/code_sandbox/gitlink already reuse via
     document.chat_branch_history - see this module's own docstring
     convention) into the single plain-text string backend/agents.py's
     _call_chart_agent (ADR-013 stage 13.3: respond_json-based, replacing the
@@ -273,7 +272,6 @@ from backend.api.intents_onboarding import register_onboarding_intents  # noqa: 
 from backend.api.intents_pins import register_pins_intents  # noqa: E402
 from backend.api.intents_builder import register_builder_intents  # noqa: E402
 from backend.api.intents_harness import register_harness_intents  # noqa: E402
-from backend.api.intents_pycoder import register_pycoder_intents  # noqa: E402
 from backend.api.intents_view import register_view_intents  # noqa: E402
 from backend.api.intents_undo import register_undo_intents  # noqa: E402
 from backend.api.intents_web_research import register_web_research_intents  # noqa: E402
@@ -367,7 +365,6 @@ def register_canvas(
     register_chart_intents(bus, document, notifications, agent_dispatcher)
     register_branches_intents(bus, document, notifications, agent_dispatcher, composer_document)
     register_gitlink_intents(bus, document, notifications, agent_dispatcher)
-    register_pycoder_intents(bus, document, notifications, agent_dispatcher)
     register_code_sandbox_intents(bus, document, notifications, agent_dispatcher)
     register_builder_intents(bus, document, notifications, agent_dispatcher)
     register_harness_intents(bus, document, notifications, agent_dispatcher)

@@ -27,18 +27,9 @@ def _capture_live_run_teardown(document: SceneDocument, ids: list[str]):
     register_node_intents to keep it under the 300-line register*
     function cap (ADR-002 stage 2.6/2.7's own exit gate).
 
-    Returns (pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels,
+    Returns (sandbox_ids, code_sandbox_cancels, plan_cancels,
     harness_workspace_ids, harness_cancels):
 
-    - pycoder_ids: (node_id, repl_id) pairs - R5.4: a deleted Py-Coder
-      node's REPL subprocess must not outlive it. ADR-005 stage 5.3
-      (review-fix): repl_id rides alongside node_id, not derived from it -
-      the on-disk scratch dir is keyed by the node's STABLE repl id, not
-      its (reload-volatile) node id, so dispose_pycoder_repl needs both:
-      node_id to find/pop any live in-memory REPL, repl_id to
-      deterministically locate and remove the directory even if no live
-      REPL is currently tracked (e.g. a prior execute timeout already
-      popped it) - see that method's own docstring.
     - sandbox_ids: ADR-005 stage 5.3 - a deleted Execution Sandbox node's
       on-disk venv must not outlive it either. sandbox_id is minted once
       at node creation (graph.py's add_code_sandbox_node) or self-healed
@@ -47,44 +38,37 @@ def _capture_live_run_teardown(document: SceneDocument, ids: list[str]):
       non-blank for a real code_sandbox node reached through this app's
       own code paths - remove_code_sandbox_scratch_dir additionally
       refuses to act on a blank id anyway, as defense in depth.
-    - code_exec_cancels: (kind, request_id) pairs - R5.4 post-review FIX
-      2: a deleted pycoder/code_sandbox node's DISPATCHER-SIDE in-flight
-      request must not outlive it either. dispose_pycoder_repl alone only
-      tears down the REPL subprocess; it does nothing about a request
-      parked on `await approval_future` on AgentDispatcher's own
-      self._runs registry, which has NO timeout by design (the whole
-      point is "wait for a human, however long that takes"). Without
-      this, deleting a node mid-approval-pause would leave that future -
-      and the asyncio.Task awaiting it - alive forever, and a stale/
-      duplicate approve-or-deny message arriving later could still
-      resolve it, lazily recreating a REPL or spinning up a fresh sandbox
+    - code_sandbox_cancels: request_ids - R5.4 post-review FIX 2: a
+      deleted code_sandbox node's DISPATCHER-SIDE in-flight request must
+      not outlive it either - a request parked on `await approval_future`
+      on AgentDispatcher's own self._runs registry has NO timeout by
+      design (the whole point is "wait for a human, however long that
+      takes"). Without this, deleting a node mid-approval-pause would
+      leave that future - and the asyncio.Task awaiting it - alive
+      forever, and a stale/duplicate approve-or-deny message arriving
+      later could still resolve it, spinning up a fresh sandbox
       subprocess for a node_id no longer present anywhere in the scene.
     - plan_cancels: request_ids - review-fix: a plan node's own live
       Builder run has NO timeout on its approval pause either (same
-      "wait for a human, however long that takes" design as pycoder/
-      code_sandbox above) - deleting the node without cancelling first
-      stranded the run forever: RunRegistry stayed busy for kind=
+      "wait for a human, however long that takes" design as code_sandbox
+      above) - deleting the node without cancelling first stranded the
+      run forever: RunRegistry stayed busy for kind=
       "builder" (locking out every other build for the whole session)
       and undo could not recover it either (commands.py's restore
       deliberately nulls pending_request_id, so a restored node's
       Approve/Deny/Stop buttons all no-op with nothing left to call
       them on).
     """
-    pycoder_ids = [
-        (node_id, document.nodes[node_id].state.pycoder_repl_id)
-        for node_id in ids
-        if document.nodes.get(node_id) is not None and document.nodes[node_id].kind == "pycoder"
-    ]
     sandbox_ids = [
         document.nodes[node_id].state.code_sandbox_sandbox_id
         for node_id in ids
         if document.nodes.get(node_id) is not None and document.nodes[node_id].kind == "code_sandbox"
     ]
-    code_exec_cancels = [
-        (document.nodes[node_id].kind, document.nodes[node_id].pending_request_id)
+    code_sandbox_cancels = [
+        document.nodes[node_id].pending_request_id
         for node_id in ids
         if document.nodes.get(node_id) is not None
-        and document.nodes[node_id].kind in ("pycoder", "code_sandbox")
+        and document.nodes[node_id].kind == "code_sandbox"
         and document.nodes[node_id].pending_request_id
     ]
     plan_cancels = [
@@ -96,7 +80,7 @@ def _capture_live_run_teardown(document: SceneDocument, ids: list[str]):
     ]
     # PLAN-2026-08-24 H1: a deleted harness node's workspace (files AND
     # transcript - one unit by design) is removed via the same
-    # recompute-from-durable-id path the pycoder/sandbox dirs use, and its
+    # recompute-from-durable-id path the sandbox dirs use, and its
     # live run cancelled like a plan node's.
     harness_workspace_ids = [
         document.nodes[node_id].state.harness_workspace_id
@@ -110,7 +94,7 @@ def _capture_live_run_teardown(document: SceneDocument, ids: list[str]):
         and document.nodes[node_id].kind == "harness"
         and document.nodes[node_id].pending_request_id
     ]
-    return pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels, harness_workspace_ids, harness_cancels
+    return sandbox_ids, code_sandbox_cancels, plan_cancels, harness_workspace_ids, harness_cancels
 
 
 def register_node_intents(
@@ -257,62 +241,42 @@ def register_node_intents(
 
     async def remove_nodes(node_ids):
         ids = list(node_ids)
-        pycoder_ids, sandbox_ids, code_exec_cancels, plan_cancels, harness_workspace_ids, harness_cancels = (
+        sandbox_ids, code_sandbox_cancels, plan_cancels, harness_workspace_ids, harness_cancels = (
             _capture_live_run_teardown(document, ids)
         )
         # ADR-010 stage 10.1: the delete itself is recorded. Only the
-        # DOCUMENT half is invertible - the subprocess teardown and
-        # scratch-dir removal below are deliberately outside the command,
-        # since killing a REPL and rmtree-ing a venv are not reversible by
-        # restoring a dict entry. Undoing a pycoder/code_sandbox delete
-        # therefore restores the node and its state but NOT a live REPL,
-        # which is the honest boundary; stage 10.4's live-run refusal is
-        # where that interaction gets a real policy.
+        # DOCUMENT half is invertible - the scratch-dir removal below is
+        # deliberately outside the command, since rmtree-ing a venv is not
+        # reversible by restoring a dict entry. Undoing a code_sandbox
+        # delete therefore restores the node and its state but not any
+        # on-disk artifacts, which is the honest boundary; stage 10.4's
+        # live-run refusal is where that interaction gets a real policy.
         document.record_command(
             "removeNodes", "user", lambda: document.remove_nodes(ids),
             node_ids=ids,
         )
-        for kind, request_id in code_exec_cancels:
-            # cancel_pycoder/cancel_code_sandbox resolve any pending
-            # approval_future with False (exactly like a manual Cancel/Deny)
-            # and trip the run's cancel_event - a safe no-op if request_id
-            # does not name a live registry entry of the matching kind (e.g.
-            # it was only ever the synchronous busy-claim placeholder, never
-            # a real dispatcher request_id, or the request already finished
-            # on its own between the capture above and here).
-            #
-            # Review-fix: done BEFORE the scratch-dir removal below, but be
-            # precise about what that ordering actually buys - it differs
-            # by kind. For code_sandbox, VirtualEnvSandbox._run_subprocess
-            # polls should_continue() roughly every 100ms, so tripping
+        for request_id in code_sandbox_cancels:
+            # cancel_code_sandbox resolves any pending approval_future with
+            # False (exactly like a manual Cancel/Deny) and trips the run's
+            # cancel_event - a safe no-op if request_id does not name a
+            # live registry entry (e.g. it was only ever the synchronous
+            # busy-claim placeholder, never a real dispatcher request_id,
+            # or the request already finished on its own between the
+            # capture above and here). Done BEFORE the scratch-dir removal
+            # below: VirtualEnvSandbox._run_subprocess polls
+            # should_continue() roughly every 100ms, so tripping
             # cancel_event here gives a real, if brief, head start before
             # remove_code_sandbox_scratch_dir's rmtree runs (removal is
             # still best-effort regardless - see that method's own
-            # docstring - this only improves the odds). For pycoder,
-            # PythonREPL.execute() blocks on a plain readline() with no
-            # polling hook at all, so cancel_pycoder has NO effect on a
-            # call already in flight - what actually stops that subprocess
-            # is dispose_pycoder_repl's own kill()+wait() a moment later,
-            # which happens regardless of this ordering. Kept first anyway
-            # because it IS the only thing that matters for a run still
-            # parked on the approval gate (resolving approval_future(False)
-            # before it can even start), which is what code_exec_cancels
-            # exists for in the first place.
-            if kind == "pycoder":
-                agent_dispatcher.cancel_pycoder(request_id)
-            else:
-                agent_dispatcher.cancel_code_sandbox(request_id)
+            # docstring - this only improves the odds).
+            agent_dispatcher.cancel_code_sandbox(request_id)
         for request_id in plan_cancels:
             # cancel_builder denies any parked tool-approval future first
-            # (same "cancel means deny" contract as the code-exec kinds
-            # above), then releases the "builder" RunRegistry slot - a
-            # safe no-op if the run already finished on its own between
-            # the capture above and here.
+            # (same "cancel means deny" contract as code_sandbox above),
+            # then releases the "builder" RunRegistry slot - a safe no-op
+            # if the run already finished on its own between the capture
+            # above and here.
             agent_dispatcher.cancel_builder(request_id)
-        for node_id, repl_id in pycoder_ids:
-            # ADR-005 stage 5.3: remove_scratch_dir=True - this IS real node
-            # deletion, unlike the execute-timeout caller of the same method.
-            await agent_dispatcher.dispose_pycoder_repl(node_id, repl_id=repl_id, remove_scratch_dir=True)
         for sandbox_id in sandbox_ids:
             await agent_dispatcher.remove_code_sandbox_scratch_dir(sandbox_id)
         for request_id in harness_cancels:

@@ -19,7 +19,6 @@ function renderPanelWithExecutionLimits(
     schemaVersion: 1,
     minCompatibleSchemaVersion: 1,
     revision: 1,
-    pycoderResourceLimitsText: "Execution is capped at approximately 2 GB of memory and 64 concurrent processes.",
     codeSandboxResourceLimitsText:
       "Execution is capped at approximately 2 GB of memory and 64 concurrent processes. Binary packages only.",
   },
@@ -218,23 +217,16 @@ describe("CodeExecutionApprovalPanel", () => {
 
   // -- ADR-005 stage 5.4: backend-computed resource-limits addendum ---------
 
-  it("shows the pycoder-specific resource-limits text from the execution-limits topic", () => {
-    renderPanelWithExecutionLimits({ kind: "pycoder" });
-    expect(
-      screen.getByText("Execution is capped at approximately 2 GB of memory and 64 concurrent processes."),
-    ).toBeInTheDocument();
-  });
-
-  it("shows the code_sandbox-specific resource-limits text, not the pycoder one", () => {
+  it("shows the resource-limits text from the execution-limits topic regardless of kind", () => {
+    // PLAN-2026-08-24 H5: Py-Coder retired - this component's own "pycoder"
+    // kind arm has no live caller left, so the resource-limits sentence no
+    // longer varies by kind; both fixtures below render the same text.
     renderPanelWithExecutionLimits({ kind: "code_sandbox" });
     expect(
       screen.getByText(
         "Execution is capped at approximately 2 GB of memory and 64 concurrent processes. Binary packages only.",
       ),
     ).toBeInTheDocument();
-    expect(
-      screen.queryByText("Execution is capped at approximately 2 GB of memory and 64 concurrent processes."),
-    ).toBeNull();
   });
 
   it("renders no resource-limits paragraph when no ExecutionLimitsProvider is present (existing standalone renderPanel helper)", () => {
@@ -252,7 +244,6 @@ describe("CodeExecutionApprovalPanel", () => {
         schemaVersion: 1,
         minCompatibleSchemaVersion: 1,
         revision: 1,
-        pycoderResourceLimitsText: "",
         codeSandboxResourceLimitsText: "",
       },
     );

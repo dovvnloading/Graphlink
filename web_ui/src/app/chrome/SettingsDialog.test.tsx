@@ -875,7 +875,7 @@ describe("SettingsDialog", () => {
     expect(intents).toContainEqual(["app-settings", "setActiveSection", ["resource limits"]]);
   });
 
-  it("Resource Limits page renders both the Py-Coder and Virtual Environment Runner disclosure text", async () => {
+  it("Resource Limits page renders the Virtual Environment Runner disclosure text", async () => {
     const { user, push, pushExecutionLimits } = setup();
     await goToResourceLimits(user, push);
     act(() =>
@@ -883,15 +883,11 @@ describe("SettingsDialog", () => {
         schemaVersion: 1,
         minCompatibleSchemaVersion: 1,
         revision: 1,
-        pycoderResourceLimitsText: "Execution is capped at approximately 2 GB of memory and 64 concurrent processes.",
         codeSandboxResourceLimitsText:
           "Execution is capped at approximately 2 GB of memory and 64 concurrent processes. Binary packages only.",
       }),
     );
 
-    expect(
-      screen.getByText("Execution is capped at approximately 2 GB of memory and 64 concurrent processes."),
-    ).toBeInTheDocument();
     expect(
       screen.getByText(
         "Execution is capped at approximately 2 GB of memory and 64 concurrent processes. Binary packages only.",

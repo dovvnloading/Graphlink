@@ -180,10 +180,6 @@ def gitlink_apply_slots(dispatcher):
     return _run_slots(dispatcher, "gitlink_apply")
 
 
-def pycoder_slots(dispatcher):
-    return _run_slots(dispatcher, "pycoder")
-
-
 def code_sandbox_slots(dispatcher):
     return _run_slots(dispatcher, "code_sandbox")
 

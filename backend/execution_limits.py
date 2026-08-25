@@ -113,13 +113,13 @@ def _resource_limits_sentence() -> str:
 
 
 def execution_limits_payload() -> dict[str, Any]:
-    resource_limits = _resource_limits_sentence()
+    # PLAN-2026-08-24 H5: Py-Coder retired - CodeExecutionApprovalPanel.tsx
+    # has one remaining caller (Execution Sandbox), so only one variant of
+    # the disclosure sentence is needed now. ADR-005 stage 5.5: code_sandbox
+    # runs pip installs, so it gets the --only-binary disclosure on top of
+    # the shared resource-cap sentence.
     return {
-        "pycoderResourceLimitsText": resource_limits,
-        # ADR-005 stage 5.5: code_sandbox alone runs pip installs, so it
-        # alone gets the --only-binary disclosure on top of the shared
-        # resource-cap sentence.
-        "codeSandboxResourceLimitsText": resource_limits + _DEPENDENCY_INSTALL_NOTE,
+        "codeSandboxResourceLimitsText": _resource_limits_sentence() + _DEPENDENCY_INSTALL_NOTE,
     }
 
 

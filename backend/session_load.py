@@ -199,7 +199,6 @@ from backend.canvas import (
     HtmlState,
     ImageState,
     PlanState,
-    PycoderState,
     SceneDocument,
     SceneNode,
     SUPPORTED_CHART_TYPES,
@@ -678,31 +677,51 @@ def _restore_gitlink_payload(payload: dict[str, Any]) -> SceneNode:
     )
 
 
-def _restore_pycoder_payload(payload: dict[str, Any]) -> SceneNode:
+def _migrate_legacy_pycoder_payload(payload: dict[str, Any]) -> SceneNode:
+    """PLAN-2026-08-24 H5: Py-Coder is retired - a saved "pycoder" payload
+    (this backend's own R5.4 shape, or the truly-legacy Qt app's) can no
+    longer restore as a PycoderState node at all, since nothing can create,
+    run, or render one any more. Converting it into an ordinary "chat" node
+    (this app's most universally-supported, forever-safe fallback) would
+    silently throw away the one thing a saved pycoder node actually carries
+    - its prompt/code and, if it ever ran, its output/analysis.
+
+    Instead it becomes a harness node, seeded as a single completed
+    exchange: the old prompt (ai_driven) or hand-typed code (manual) as the
+    goal, the old analysis/output as the reply, landed at a terminal status
+    so nothing renders a stale spinner. This is DELIBERATELY a static
+    snapshot, not a resumed conversation: unlike every other restorer in
+    this file, seeding a harness node's REAL history would mean writing
+    into its workspace transcript.jsonl (backend/harness/transcript.py) -
+    a filesystem side effect no other restore function has or should
+    need. A user who sends a follow-up message here starts a genuine new
+    transcript from scratch, same as any other fresh harness node; the
+    migrated goal/reply are what they see until then."""
     x, y = _position(payload)
-    raw_mode = str(payload.get("mode", "AI_DRIVEN") or "AI_DRIVEN")
+    prompt = str(payload.get("prompt", "") or "")
+    code = str(payload.get("code", "") or "")
+    analysis = str(payload.get("analysis", "") or "")
+    output = str(payload.get("output", "") or "")
+    if prompt:
+        goal = prompt
+    elif code:
+        goal = f"(Migrated from a Py-Coder node in manual mode.)\n\nCode:\n{code}"
+    else:
+        goal = ""
+    reply = analysis or output
+    status = "done" if reply else "idle"
     return SceneNode(
-        id="", x=x, y=y, title="Py-Coder", kind="pycoder",
-        state=PycoderState(
-            # R6.4 translation: legacy persists the enum MEMBER NAME
-            # ("AI_DRIVEN"/"MANUAL", uppercase, via node.mode.name); backend
-            # wants "ai_driven"/"manual" (lowercase).
-            pycoder_mode=raw_mode.lower(),
-            pycoder_prompt=str(payload.get("prompt", "")),
-            pycoder_code=str(payload.get("code", "")),
-            pycoder_output=str(payload.get("output", "")),
-            pycoder_analysis=str(payload.get("analysis", "")),
-            # ADR-005 stage 5.3 (review-fix): self-healing, not a blank
-            # fallback - a payload missing this field (predates this fix,
-            # or is otherwise malformed) mints a FRESH stable id here
-            # rather than defaulting to "", which would route every such
-            # node's REPL scratch dir to the same shared "default" bucket
-            # (see graphlink_scratch_dirs.remove_scratch_dir_for_id's own
-            # docstring for why that is actively dangerous, not just an
-            # untidy fallback, once node-delete GC can rmtree it).
-            pycoder_repl_id=str(payload.get("pycoder_repl_id") or uuid.uuid4().hex[:12]),
+        id="", x=x, y=y,
+        title=f"Agent: {goal[:40]}" if goal else "Agent",
+        kind="harness",
+        content=goal,
+        state=HarnessState(
+            harness_goal=goal,
+            harness_reply=reply,
+            harness_status=status,
+            harness_status_detail="Migrated from a retired Py-Coder node.",
+            harness_workspace_id=uuid.uuid4().hex[:12],
         ),
-        history=_restore_history(payload.get("conversation_history")),
         is_collapsed=bool(payload.get("is_collapsed", False)),
     )
 
@@ -717,11 +736,11 @@ def _restore_code_sandbox_payload(payload: dict[str, Any]) -> SceneNode:
             code_sandbox_code=str(payload.get("code", "")),
             code_sandbox_output=str(payload.get("output", "")),
             code_sandbox_analysis=str(payload.get("analysis", "")),
-            # ADR-005 stage 5.3 (review-fix): self-healing, same reasoning
-            # as pycoder_repl_id above - a blank/missing sandbox_id used to
-            # fall back to "" (routing to the shared "default" bucket);
-            # minting a fresh id here instead means two nodes can no
-            # longer collide on load, even from a malformed payload.
+            # ADR-005 stage 5.3 (review-fix): self-healing - a blank/missing
+            # sandbox_id used to fall back to "" (routing to the shared
+            # "default" bucket); minting a fresh id here instead means two
+            # nodes can no longer collide on load, even from a malformed
+            # payload.
             code_sandbox_sandbox_id=str(payload.get("sandbox_id") or uuid.uuid4().hex[:12]),
         ),
         history=_restore_history(payload.get("conversation_history")),
@@ -813,9 +832,9 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
     non-terminal harness_status describes a RunHandle that cannot survive a
     restart, so it lands as "interrupted" (a follow-up message resumes
     against the workspace transcript). A missing/blank workspace_id is
-    self-healed with a fresh mint - the pycoder_repl_id precedent at line
-    ~700 above, closing the shared-"default"-bucket collision the scratch
-    GC refuses to delete through."""
+    self-healed with a fresh mint - the same code_sandbox_sandbox_id
+    precedent above, closing the shared-"default"-bucket collision the
+    scratch GC refuses to delete through."""
     x, y = _position(payload)
     goal = str(payload.get("goal", ""))
     raw_status = str(payload.get("harness_status", "idle") or "idle")
@@ -938,7 +957,7 @@ _NODE_RESTORERS = {
     "web": lambda payload, document: _restore_web_payload(payload),
     "artifact": lambda payload, document: _restore_artifact_payload(payload),
     "gitlink": lambda payload, document: _restore_gitlink_payload(payload),
-    "pycoder": lambda payload, document: _restore_pycoder_payload(payload),
+    "pycoder": lambda payload, document: _migrate_legacy_pycoder_payload(payload),
     "code_sandbox": lambda payload, document: _restore_code_sandbox_payload(payload),
     "plan": lambda payload, document: _restore_plan_payload(payload),
     "harness": lambda payload, document: _restore_harness_payload(payload),

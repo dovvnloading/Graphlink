@@ -310,12 +310,8 @@ export const HELP_SECTIONS: HelpSection[] = [
             "description": "Adds a branch-scoped system prompt note that changes assistant behavior only for that conversation path. This is ideal when you want a role, tone, or instruction change without affecting the rest of the project."
           },
           {
-            "action": "Py-Coder",
-            "description": "A coding workspace with AI-driven and manual modes, generated code, terminal output, and final analysis tabs. Use it for fast implementation, debugging, code generation, and lightweight computation."
-          },
-          {
             "action": "Virtual Environment Runner",
-            "description": "Runs Python in a per-node virtualenv with declared dependencies - the venv isolates installed packages, not the operating system; code still runs with your full account privileges. Choose this over Py-Coder when you need dependency-aware execution or a cleaner reproducible runtime."
+            "description": "Runs Python in a per-node virtualenv with declared dependencies - the venv isolates installed packages, not the operating system; code still runs with your full account privileges. Use it for implementation, debugging, code generation, and dependency-aware, reproducible execution."
           },
           {
             "action": "Artifact / Drafter",
@@ -474,7 +470,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           },
           {
             "action": "Coding and Debugging",
-            "description": "Ask for code on the main canvas, move promising results into Py-Coder for iteration, and switch to Virtual Environment Runner when dependencies or reproducibility matter. This keeps ideation and execution connected."
+            "description": "Ask for code on the main canvas, then move promising results into a Virtual Environment Runner node to iterate, install dependencies, and run it for real. This keeps ideation and execution connected."
           },
           {
             "action": "Planning and Execution",

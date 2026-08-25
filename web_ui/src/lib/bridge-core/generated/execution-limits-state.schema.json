@@ -8,9 +8,6 @@
     "minCompatibleSchemaVersion": {
       "type": "integer"
     },
-    "pycoderResourceLimitsText": {
-      "type": "string"
-    },
     "revision": {
       "type": "integer"
     },
@@ -21,7 +18,6 @@
   "required": [
     "schemaVersion",
     "revision",
-    "pycoderResourceLimitsText",
     "codeSandboxResourceLimitsText"
   ],
   "title": "ExecutionLimitsState",

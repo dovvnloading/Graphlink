@@ -446,8 +446,8 @@ def register_chat_intents(
         # text; counting it again here would inflate payload()'s total).
         # Rooted at node's own parent, the same "history before this node"
         # walk every specialized agent flow below (web research/artifact/
-        # gitlink/pycoder/sandbox) already uses via _branch_parent_edge -
-        # applied to the plain-chat path for the first time here.
+        # gitlink/sandbox) already uses via _branch_parent_edge - applied
+        # to the plain-chat path for the first time here.
         context_parent_edge = document._branch_parent_edge(node.id)
         context_history = (
             document.chat_branch_history(context_parent_edge.source) if context_parent_edge else []

@@ -465,16 +465,6 @@ class SceneNodeRow:
     gitlinkChangeFingerprint: str | None = None
     gitlinkChangeState: str = "draft"
     gitlinkError: str = ""
-    # R5.4: the Py-Coder node's real persisted shape - populated for
-    # kind=="pycoder" rows, defaulted for every other kind.
-    pycoderMode: str = "ai_driven"
-    pycoderPrompt: str = ""
-    pycoderCode: str = ""
-    pycoderOutput: str = ""
-    pycoderAnalysis: str = ""
-    pycoderLastRunFailed: bool = False
-    pycoderAwaitingApproval: bool = False
-    pycoderError: str = ""
     # R5.4: the Execution Sandbox node's real persisted shape - populated for
     # kind=="code_sandbox" rows, defaulted for every other kind.
     # codeSandboxSandboxId is DELIBERATELY NOT one of these fields - see

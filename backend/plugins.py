@@ -1,15 +1,15 @@
 """Plugin picker listing for the new architecture (Qt-removal plan R2.5,
 migrated onto the ADR-014 Plugin SDK at stage 14.3).
 
-ADR-014 stage 14.3: the 8 built-in picker actions that used to be a
+ADR-014 stage 14.3: the 7 built-in picker actions that used to be a
 hardcoded if-chain here (System Prompt, Conversation Node, Web Research,
-Gitlink, Py-Coder, Virtual Environment Runner, HTML Renderer, Artifact /
+Gitlink, Virtual Environment Runner, HTML Renderer, Artifact /
 Drafter) are now real discovered plugin packages under plugins/ - see
-plugins/web_research/plugin.py (and its 7 siblings) for the migrated
+plugins/web_research/plugin.py (and its 6 siblings) for the migrated
 handler bodies. Each registers via
 `backend.plugin_sdk.HostContext.register_builtin_plugin` rather than
 `register_node_kind`/`register_picker_entry`: their kind strings
-(web_research, gitlink, pycoder, code_sandbox, html, artifact,
+(web_research, gitlink, code_sandbox, html, artifact,
 conversation, note) are already baked into web_ui's NODE_TYPES map, the
 wire contract, and session_save.py/session_load.py's hand-written per-kind
 serializers - routing them through the generic, auto-namespaced
@@ -138,18 +138,19 @@ _CATEGORY_META = [
 # this curated, hand-picked display sequence. Without this, get_plugin_
 # categories below inherited raw discovery order, and Build & Execution
 # silently reflowed to alphabetical-by-directory-name (Virtual Environment
-# Runner/code_sandbox, Gitlink, HTML Renderer, Py-Coder) instead of the
-# original Gitlink, Py-Coder, Virtual Environment Runner, HTML Renderer -
+# Runner/code_sandbox, Gitlink, HTML Renderer) instead of the
+# original Gitlink, Virtual Environment Runner, HTML Renderer -
 # a real, user-visible regression for a migration meant to be a
-# byte-faithful relocation. Only these 8 pre-SDK built-ins get a curated
-# slot; every other plugin (a third-party or demo plugin, none of which
-# shipped before this stage existed) sorts AFTER every curated entry
-# within its own category, in whatever order discovery naturally produced
-# - see _builtin_picker_sort_key's own docstring for the stable-sort
-# mechanics that guarantee that.
+# byte-faithful relocation. Only these 7 pre-SDK built-ins get a curated
+# slot (PLAN-2026-08-24 H5 retired the 8th, Py-Coder); every other plugin
+# (a third-party or demo plugin, none of which shipped before this stage
+# existed) sorts AFTER every curated entry within its own category, in
+# whatever order discovery naturally produced - see
+# _builtin_picker_sort_key's own docstring for the stable-sort mechanics
+# that guarantee that.
 _BUILTIN_PICKER_ORDER = (
     "System Prompt", "Conversation Node", "Web Research", "Gitlink",
-    "Py-Coder", "Virtual Environment Runner", "HTML Renderer", "Artifact / Drafter",
+    "Virtual Environment Runner", "HTML Renderer", "Artifact / Drafter",
 )
 
 
@@ -158,7 +159,7 @@ def _builtin_picker_sort_key(name: str) -> int:
     the last curated index) for anything not in that list. Used as a
     sort() key, never a comparator - Python's sort is STABLE, so every
     non-curated name (all sharing the identical fallback key) keeps its
-    original relative order among itself; only the 8 curated names get
+    original relative order among itself; only the 7 curated names get
     reordered, into their exact curated sequence."""
     try:
         return _BUILTIN_PICKER_ORDER.index(name)
@@ -169,7 +170,7 @@ def _builtin_picker_sort_key(name: str) -> int:
 def get_plugin_categories(plugin_registry: "PluginRegistry | None" = None) -> list[dict[str, Any]]:
     """Groups every discovered picker entry (both `picker_entries` - the
     generic PluginNodeSeed path - and `builtin_actions` - the ADR-014 stage
-    14.3 first-party escape hatch the 8 migrated built-ins use) by
+    14.3 first-party escape hatch the 7 migrated built-ins use) by
     _CATEGORY_META, in that fixed order, skipping any category with zero
     entries; anything uncategorized (including every entry whose category
     doesn't match a _CATEGORY_META name) falls into a synthetic "More
@@ -236,7 +237,7 @@ def _plugin_grants_payload(
     walks `plugin_registry.picker_entries` (the generic PluginNodeSeed path
     every third-party plugin, and the two demo plugins, register through),
     never `plugin_registry.builtin_actions` (the ADR-014 stage 14.3 escape
-    hatch the 8 first-party built-ins use) - the same distinction backend/
+    hatch the 7 first-party built-ins use) - the same distinction backend/
     plugins.py's own module docstring draws between the two dispatch
     mechanisms. `settings_manager=None` (a bare plugins_payload() call with
     no manager available) yields every discovered plugin as ungranted -
@@ -292,7 +293,7 @@ async def _execute_discovered_plugin(
        SYNC and does its own record_command/parent-validation internally,
        exactly like the pre-migration hardcoded branch it replaces - this
        uniform post-handler publish rule ("scene" if the handler returned a
-       real id, else "notification") matches every one of the 8 migrated
+       real id, else "notification") matches every one of the 7 migrated
        branches, including System Prompt's dedup path, which publishes
        "scene" and returns an EXISTING id without creating anything new.
        ADR-014 stage 14.4 deliberately does NOT gate this branch on any

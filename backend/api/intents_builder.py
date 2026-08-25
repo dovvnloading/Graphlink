@@ -3,7 +3,7 @@ editor.
 
 Run-lifecycle intents (start/startExecution/cancel/approve/deny) are
 B-classified: they start/steer/stop a run, and the CONTENT a run produces
-is undoable through its own run_id-stamped commands (the runPyCoder
+is undoable through its own run_id-stamped commands (the runCodeSandbox
 precedent exactly). `scene/setPlanSteps` is the one A-classified intent
 here - a human editing the checklist is document content a Ctrl+Z must
 reach.

@@ -168,14 +168,6 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         gitlinkPreviewText: "",
         gitlinkChangeState: "",
         gitlinkError: "",
-        pycoderMode: "ai_driven",
-        pycoderPrompt: "",
-        pycoderCode: "",
-        pycoderOutput: "",
-        pycoderAnalysis: "",
-        pycoderLastRunFailed: false,
-        pycoderAwaitingApproval: false,
-        pycoderError: "",
         codeSandboxRequirements: "",
         codeSandboxApprovalRequirements: "",
         codeSandboxApprovalAllowSourceBuilds: false,
@@ -1074,29 +1066,6 @@ describe("SceneStore", () => {
     expect(intents).toEqual([
       { topic: "scene", intent: "applyGitlinkChanges", args: ["n1", "fingerprint-abc123"] },
     ]);
-  });
-
-  it("setPyCoderMode sends the scene-topic setPyCoderMode intent with [nodeId, mode]", () => {
-    const { transport, intents } = makeFakeTransport();
-    const store = new SceneStore(transport);
-    store.setPyCoderMode("n1", "manual");
-    expect(intents).toEqual([{ topic: "scene", intent: "setPyCoderMode", args: ["n1", "manual"] }]);
-  });
-
-  it("runPyCoder sends the scene-topic runPyCoder intent with [nodeId, inputText]", () => {
-    const { transport, intents } = makeFakeTransport();
-    const store = new SceneStore(transport);
-    store.runPyCoder("n1", "write a fibonacci function");
-    expect(intents).toEqual([
-      { topic: "scene", intent: "runPyCoder", args: ["n1", "write a fibonacci function"] },
-    ]);
-  });
-
-  it("cancelPyCoderRequest sends the scene-topic cancelPyCoderRequest intent with the requestId", () => {
-    const { transport, intents } = makeFakeTransport();
-    const store = new SceneStore(transport);
-    store.cancelPyCoderRequest("req-1");
-    expect(intents).toEqual([{ topic: "scene", intent: "cancelPyCoderRequest", args: ["req-1"] }]);
   });
 
   it("setCodeSandboxRequirements sends the scene-topic setCodeSandboxRequirements intent with [nodeId, requirementsText]", () => {

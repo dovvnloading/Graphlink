@@ -14,21 +14,18 @@ from backend.execution_limits import execution_limits_payload, register_executio
 
 def test_execution_limits_payload_matches_generated_validator_shape():
     payload = execution_limits_payload()
-    assert set(payload) == {
-        "pycoderResourceLimitsText",
-        "codeSandboxResourceLimitsText",
-    }
-    assert isinstance(payload["pycoderResourceLimitsText"], str)
+    assert set(payload) == {"codeSandboxResourceLimitsText"}
     assert isinstance(payload["codeSandboxResourceLimitsText"], str)
-    assert payload["pycoderResourceLimitsText"]
     assert payload["codeSandboxResourceLimitsText"]
 
 
-def test_code_sandbox_text_is_the_pycoder_text_plus_the_dependency_install_note():
+def test_code_sandbox_text_is_the_base_sentence_plus_the_dependency_install_note():
+    from backend.execution_limits import _resource_limits_sentence
+
     payload = execution_limits_payload()
-    assert payload["codeSandboxResourceLimitsText"].startswith(payload["pycoderResourceLimitsText"])
+    assert payload["codeSandboxResourceLimitsText"].startswith(_resource_limits_sentence())
     assert "pre-built binary" in payload["codeSandboxResourceLimitsText"]
-    assert "pre-built binary" not in payload["pycoderResourceLimitsText"]
+    assert "pre-built binary" not in _resource_limits_sentence()
 
 
 def test_dependency_install_note_does_not_overclaim_given_the_stage_5_5_escalation():
@@ -130,5 +127,4 @@ def test_register_execution_limits_publishes_on_the_execution_limits_topic():
     bus.attach(recorder)
     asyncio.run(bus.publish("execution-limits"))
     assert recorder.messages[0]["topic"] == "execution-limits"
-    assert recorder.messages[0]["payload"]["pycoderResourceLimitsText"]
     assert recorder.messages[0]["payload"]["codeSandboxResourceLimitsText"]
