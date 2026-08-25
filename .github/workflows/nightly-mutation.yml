@@ -1,0 +1,82 @@
+name: Nightly mutation testing
+
+# ADR-022 stage 22.6: mutation testing for the property-tested modules from
+# stages 22.2/22.3 (mutmut for the 4 Python files in pyproject.toml's own
+# [tool.mutmut], Stryker for the 5 TS files in web_ui/stryker.conf.mjs).
+# Mirrors nightly-perf.yml's own pattern (single-purpose scheduled
+# workflow, read-only permissions, workflow_dispatch for on-demand runs)
+# but differs on two axes, each justified independently:
+#
+# - ubuntu-latest, not windows-latest: mutmut 3.x calls os.fork() directly
+#   and refuses to run on native Windows at all ("please use the WSL" -
+#   its own error message, confirmed locally) - not a cost optimization,
+#   a hard requirement. Stryker/vitest have no Windows dependency either.
+#   This also happens to keep this recurring job off the 2x-billed Windows
+#   runner tier, consistent with this repo's own CI-minutes economy notes
+#   elsewhere in this file's siblings.
+# - Weekly (Monday 09:00 UTC), not daily: mutation score drifts far slower
+#   per-commit than wall-clock perf does - daily cadence would spend
+#   Actions minutes on a signal that doesn't meaningfully change day to
+#   day. workflow_dispatch covers "run it now" (e.g. right after touching
+#   one of the 9 scoped files).
+#
+# First landing reports score only, no hard floor - same "measure a real
+# baseline before setting a threshold" precedent as ADR-019 stage 19.1.
+# This needs no wrapper script to achieve: mutmut only exits non-zero on a
+# genuine tooling failure (a clean run failing, its own sanity check
+# failing) - a run with only "survived" mutants exits 0 and prints a score
+# summary to the job log, the same "trend visible via job log history, not
+# a dashboard" model nightly-perf.yml already established. Stryker's
+# default behavior with no `thresholds` block in stryker.conf.mjs is the
+# same: report, don't gate. A later ADR-022 stage sets numeric floors once
+# a few real weekly runs establish what's normal - not guessed here.
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  nightly-mutation:
+    name: Mutation score (mutmut + Stryker, scoped modules)
+    runs-on: ubuntu-latest
+    # Generous, not tuned: a local --dryRunOnly run (just the initial test
+    # pass, before any of the 405 real mutants across the 5 TS files) alone
+    # took ~2m40s, dominated by process-spawn overhead, not test time. This
+    # job is nightly and non-blocking, so a wide timeout costs nothing but
+    # runner-minutes if unused.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install Python dependencies (prod lockfile + dev extra)
+        run: pip install -r requirements.txt && pip install -e .[dev]
+
+      - name: Run mutmut (Python, scoped to 4 files - see pyproject.toml's own [tool.mutmut])
+        run: python -m mutmut run
+
+      - name: mutmut results (job-log score summary)
+        if: always()
+        run: python -m mutmut results
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: web_ui/.nvmrc
+          cache: npm
+          cache-dependency-path: web_ui/package-lock.json
+
+      - name: Install npm dependencies
+        working-directory: web_ui
+        run: npm ci
+
+      - name: Run Stryker (TS, scoped to 5 files - see web_ui/stryker.conf.mjs)
+        working-directory: web_ui
+        run: npx stryker run

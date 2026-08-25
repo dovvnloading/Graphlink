@@ -54,7 +54,7 @@ llamacpp = ["llama-cpp-python"]
 # (the prod lockfile). CI installs them ad hoc (see .github/workflows/ci.yml),
 # same pattern ruff already used before this stage; this extra exists so a
 # contributor gets the identical set via one `pip install -e .[dev]`.
-dev = ["pytest", "pytest-cov", "pytest-xdist", "ruff", "mypy"]
+dev = ["pytest", "pytest-cov", "pytest-xdist", "ruff", "mypy", "hypothesis", "mutmut"]
 
 [tool.pytest.ini_options]
 # ADR-015 stage 15.3: --strict-markers rejects a typo'd/unregistered
@@ -136,6 +136,39 @@ omit = ["*/tests/*", "*/__pycache__/*"]
 [tool.coverage.report]
 show_missing = true
 fail_under = 85
+
+# ADR-022 stage 22.4: scoped to 4 pure, platform-independent modules only -
+# not the whole codebase. Mutation testing cost scales with mutant count x
+# test-suite runtime; a curated, already-property-tested slice keeps a first
+# run tractable and its score meaningful rather than noisy. Deliberately
+# excludes graphlink_secrets.py (DPAPI is Windows-only - see backend/tests/
+# test_backend_secrets_at_rest_properties.py's own comment) so the nightly
+# job that runs this (.github/workflows/nightly-mutation.yml) can stay on
+# ubuntu-latest - not a cost optimization alone: mutmut 3.x calls
+# os.fork() directly and cannot execute on Windows at all.
+[tool.mutmut]
+source_paths = [
+    "graphlink_wire_schema.py",
+    "graphlink_migrations.py",
+    "graphlink_chart_data.py",
+    "backend/secret_scrub.py",
+]
+# mutation_tests/ is this ADR's own property-test suite, deliberately
+# self-contained (no conftest.py importing backend/api_provider) so it
+# doubles as mutmut's kill-suite without dragging the app's heavy import
+# chain into every forked mutant's sandbox. backend/__init__.py is copied
+# alongside it only because `from backend import secret_scrub` needs the
+# package marker to exist in the sandbox - it is itself trivial (a
+# docstring + one constant, no submodule imports), confirmed by reading it,
+# not assumed.
+also_copy = ["mutation_tests/", "backend/__init__.py"]
+pytest_add_cli_args_test_selection = ["mutation_tests/"]
+# Disables per-mutant xdist: pyproject.toml's own `-n auto --dist worksteal`
+# addopts apply inside every forked mutant too (the sandbox copies this
+# file), and mutmut's own --max-children fan-out is the only parallelism
+# dimension this needs - stacking both multiplies process count for no
+# benefit.
+pytest_add_cli_args = ["-n0"]
 
 [project.gui-scripts]
 # R7.6b: was `graphlink_app:main`, the Qt entry point, deleted at the cutover.
