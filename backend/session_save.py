@@ -118,19 +118,28 @@ _ACTIVE_SAVE_ASSET_STORE: contextvars.ContextVar = contextvars.ContextVar(
     "graphlink_active_save_asset_store", default=None
 )
 
-# The 12 "regular" node kinds - everything that is NOT note/frame/container/
+# The 13 "regular" node kinds - everything that is NOT note/frame/container/
 # chart. Mirrors scene_index.py's own NODE_LIST_NAMES (7 kinds, the current,
-# post-R5-closeout surviving set) PLUS the 5 kinds R5-closeout deleted from
+# post-R5-closeout surviving set) PLUS the 6 kinds R5-closeout deleted from
 # the legacy app's own lists but which this backend still fully supports
 # (see this module's own docstring: a NEW-app save containing one of these
-# 5 will simply have that one node silently skipped if ever loaded back into
+# 6 will simply have that one node silently skipped if ever loaded back into
 # the CURRENT legacy app, matching legacy's own tolerant unrecognized-
 # node_type behavior - not a regression, since the legacy app's own load
-# path already lost the ability to restore these 5 kinds when R5-closeout
+# path already lost the ability to restore these 6 kinds when R5-closeout
 # deleted their deserializer branches).
+#
+# "harness" (PLAN-2026-08-24) was missing from this tuple entirely until a
+# technical-debt audit caught it: _serialize_harness_node/_restore_harness_
+# payload (both below/in session_load.py) were fully implemented and wired
+# into their own dispatch tables from the day the feature shipped, but
+# `all_nodes` (below) never included a harness node in the first place - so
+# every harness node a user created was silently dropped on the very next
+# autosave or manual Save, with no error anywhere. Restoring it here is the
+# entire fix; both serializer and restorer already existed and are correct.
 _REGULAR_KINDS = (
     "chat", "code", "document", "image", "thinking", "conversation", "html",
-    "web_research", "artifact", "gitlink", "code_sandbox", "plan",
+    "web_research", "artifact", "gitlink", "code_sandbox", "plan", "harness",
 )
 
 
