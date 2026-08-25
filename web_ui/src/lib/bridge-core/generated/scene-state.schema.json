@@ -390,6 +390,9 @@
             },
             "type": "array"
           },
+          "harnessApprovalSessionOffered": {
+            "type": "boolean"
+          },
           "harnessApprovalSummary": {
             "type": "string"
           },
@@ -397,6 +400,9 @@
             "type": "string"
           },
           "harnessAwaitingApproval": {
+            "type": "boolean"
+          },
+          "harnessAwaitingQuestion": {
             "type": "boolean"
           },
           "harnessCompactions": {
@@ -413,6 +419,28 @@
           },
           "harnessMaxTurns": {
             "type": "integer"
+          },
+          "harnessPlan": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "status"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "harnessQuestion": {
+            "type": "string"
           },
           "harnessReply": {
             "type": "string"
@@ -873,6 +901,10 @@
           "harnessAwaitingApproval",
           "harnessApprovalToolName",
           "harnessApprovalSummary",
+          "harnessApprovalSessionOffered",
+          "harnessPlan",
+          "harnessAwaitingQuestion",
+          "harnessQuestion",
           "harnessWorkspacePath",
           "harnessWorkspaceActive",
           "harnessMaxTurns",

@@ -905,6 +905,20 @@ export class SceneStore {
     this.transport.fireIntent("harness", "denyTool", [requestId]);
   }
 
+  // PLAN §2.4 graded consent: approve AND stop asking for this tool for the
+  // rest of the agent's session. A separate intent from approveHarnessTool
+  // by design - two decisions with different blast radii should not share
+  // one call shape a UI could send by accident.
+  approveHarnessToolForSession(requestId: string): void {
+    this.transport.fireIntent("harness", "approveToolForSession", [requestId]);
+  }
+
+  // §2.3's user.ask resolution. A blank answer is a deliberate dismissal,
+  // which the tool reports to the model as "declined to answer".
+  answerHarnessQuestion(requestId: string, answer: string): void {
+    this.transport.fireIntent("harness", "answer", [requestId, answer]);
+  }
+
   pickHarnessWorkspace(nodeId: string): void {
     this.transport.fireIntent("harness", "pickWorkspace", [nodeId]);
   }

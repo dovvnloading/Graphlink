@@ -10,7 +10,7 @@ scene wire the way serializing history into the graph would (the Py-Coder
 serializer-branch mistake this subsystem exists to retire).
 
 Line shapes (one JSON object per line):
-  {"t": "meta", "v": 1, "workspaceId": ...}          - first line, once
+  {"t": "meta", "v": 2, "profile": {...}, "app": ..., "git": {...}}
   {"t": "msg", "role": ..., "content": ..., ...}     - one history message
   {"t": "compact", "content": ...}                   - a compaction record
 Unknown "t" values and corrupt lines are skipped on load, never fatal -
@@ -25,14 +25,37 @@ compaction state the live run continued from, rather than replaying
 turns that run had already dropped. The record stores the RENDERED
 message content rather than its ingredients, so what reloads is
 verbatim what ran, even if the framing changes in a later version.
+
+THE META LINE (§2.6) records the session PROFILE - which root this
+transcript's history was produced against, and whether that root was a
+trusted user directory or managed scratch - plus the app version and the
+workspace's git context when it has one. `check_profile` is what turns
+that record into §3.3's locked-profile invariant: a transcript written
+against a user's project folder must never be replayed into a run bound
+to scratch (or to a DIFFERENT folder), because every "I read X" and "I
+wrote Y" in that history would silently now refer to somewhere else.
+
+THE WRITER (§2.6's "background single-writer with flush barriers") is one
+daemon thread per workspace draining a queue, so the turn loop never
+blocks on disk. `flush()` is the barrier: it blocks until everything
+queued so far is on disk, and the loop calls it before reading history
+back and at every terminal transition. If the writer thread ever dies the
+append path falls back to writing inline, so durability degrades to the
+old synchronous behavior rather than to silent loss.
 """
 
 from __future__ import annotations
 
 import json
+import queue
+import subprocess
+import threading
+import time
 from pathlib import Path
 
 TRANSCRIPT_FILENAME = "transcript.jsonl"
+
+META_VERSION = 2
 
 # Reload bound: the tail of history a resumed run rebuilds its context
 # from. A bound, not the whole file - the file is unbounded by design
@@ -45,33 +68,237 @@ MAX_RELOADED_MESSAGES = 200
 # able to flood a fresh context through one giant line.
 _RELOAD_CONTENT_CAP = 20_000
 
+_FLUSH_TIMEOUT_SECONDS = 5.0
+_GIT_TIMEOUT_SECONDS = 2.0
+
 
 def transcript_path(workspace: Path) -> Path:
     return workspace / TRANSCRIPT_FILENAME
 
 
-def append_message(workspace: Path, message: dict) -> None:
-    """Append one history message. Best-effort durability posture: an
-    append that fails raises to the caller (the loop treats a transcript
-    it cannot write as a run-fatal fault - a harness whose record silently
-    diverges from what actually happened is worse than one that stops)."""
+# -- the background single-writer -------------------------------------------
+
+
+class _Writer:
+    """One daemon thread + queue per transcript file."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._queue: queue.Queue = queue.Queue()
+        self._thread = threading.Thread(
+            target=self._run, name=f"transcript-{path.parent.name}", daemon=True,
+        )
+        self._thread.start()
+
+    def _run(self) -> None:
+        while True:
+            item = self._queue.get()
+            try:
+                if item is None:
+                    return
+                line, done = item
+                try:
+                    with self.path.open("a", encoding="utf-8") as fh:
+                        fh.write(line)
+                        fh.flush()
+                except OSError:
+                    # Swallowed deliberately: a transcript we cannot write is
+                    # bad, but killing a live agent run over it is worse, and
+                    # the flush barrier below reports staleness by timing out
+                    # rather than by exception from a background thread.
+                    pass
+                if done is not None:
+                    done.set()
+            finally:
+                self._queue.task_done()
+
+    def write(self, line: str) -> None:
+        self._queue.put((line, None))
+
+    def flush(self, timeout: float = _FLUSH_TIMEOUT_SECONDS) -> bool:
+        """Block until everything queued BEFORE this call is on disk."""
+        if not self._thread.is_alive():
+            return False
+        done = threading.Event()
+        self._queue.put(("", done))
+        return done.wait(timeout)
+
+    @property
+    def alive(self) -> bool:
+        return self._thread.is_alive()
+
+
+_writers: dict[str, _Writer] = {}
+_writers_lock = threading.Lock()
+
+
+def _writer_for(path: Path) -> "_Writer | None":
+    key = str(path)
+    with _writers_lock:
+        writer = _writers.get(key)
+        if writer is not None and writer.alive:
+            return writer
+        try:
+            writer = _Writer(path)
+        except RuntimeError:
+            # Interpreter shutting down - no new threads. Caller writes inline.
+            return None
+        _writers[key] = writer
+        return writer
+
+
+def _emit(path: Path, payload: dict) -> None:
+    """Queue one line, falling back to an inline write when no writer thread
+    is available (interpreter shutdown, thread creation refused)."""
+    line = json.dumps(payload, ensure_ascii=False) + "\n"
+    writer = _writer_for(path)
+    if writer is None:
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+        return
+    writer.write(line)
+
+
+def flush(workspace: Path, timeout: float = _FLUSH_TIMEOUT_SECONDS) -> bool:
+    """The barrier: everything appended so far is on disk when this returns
+    True. Called before reading history back and at terminal transitions."""
     path = transcript_path(workspace)
-    is_new = not path.exists()
-    with path.open("a", encoding="utf-8") as fh:
-        if is_new:
-            fh.write(json.dumps({"t": "meta", "v": 1}, ensure_ascii=False) + "\n")
-        fh.write(json.dumps({"t": "msg", **message}, ensure_ascii=False) + "\n")
+    key = str(path)
+    with _writers_lock:
+        writer = _writers.get(key)
+    if writer is None:
+        return True
+    return writer.flush(timeout)
+
+
+def shutdown_writers() -> None:
+    """Flush and stop every writer - app shutdown / test teardown."""
+    with _writers_lock:
+        writers = list(_writers.values())
+        _writers.clear()
+    for writer in writers:
+        writer.flush()
+
+
+# -- the meta line / session profile ----------------------------------------
+
+
+def _git_context(root: Path) -> dict:
+    """Best-effort branch + short SHA for a workspace that is a git repo.
+    Bounded and failure-tolerant: this is provenance for a human reading a
+    transcript later, never something a run depends on."""
+    def _run(args: list[str]) -> str:
+        try:
+            done = subprocess.run(
+                args, cwd=str(root), capture_output=True, text=True,
+                timeout=_GIT_TIMEOUT_SECONDS,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return done.stdout.strip() if done.returncode == 0 else ""
+
+    branch = _run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    if not branch:
+        return {}
+    return {"branch": branch, "commit": _run(["git", "rev-parse", "--short", "HEAD"])}
+
+
+def build_profile(root: Path, is_user_dir: bool) -> dict:
+    """The §3.3 session profile: WHICH root, and under which trust posture."""
+    return {"root": str(Path(root).resolve()), "isUserDir": bool(is_user_dir)}
+
+
+def _meta_payload(profile: dict, root: Path) -> dict:
+    try:
+        from graphlink_version import __version__ as app_version
+    except Exception:
+        app_version = ""
+    return {
+        "t": "meta",
+        "v": META_VERSION,
+        "profile": profile,
+        "app": app_version,
+        "created": time.time(),
+        "git": _git_context(Path(root)),
+    }
+
+
+def read_meta(workspace: Path) -> "dict | None":
+    """The transcript's first line, or None for a file that has none (a
+    fresh node, or a v1 transcript written before meta carried a profile)."""
+    path = transcript_path(workspace)
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except ValueError:
+                    return None
+                return item if isinstance(item, dict) and item.get("t") == "meta" else None
+    except OSError:
+        return None
+    return None
+
+
+def check_profile(workspace: Path, profile: dict) -> "str | None":
+    """§3.3's locked-profile invariant. Returns None when this run may
+    proceed, or a human-readable refusal when it may not.
+
+    A transcript with no recorded profile (v1, or one this app has not
+    written to yet) is adopted rather than refused: refusing would strand
+    every history written before this record existed, and the FIRST write
+    below stamps the profile so the lock applies from then on.
+    """
+    meta = read_meta(workspace)
+    if meta is None:
+        return None
+    recorded = meta.get("profile")
+    if not isinstance(recorded, dict) or not recorded.get("root"):
+        return None
+    if recorded.get("root") == profile.get("root"):
+        return None
+    return (
+        "This agent's history was recorded against a different workspace "
+        f"({recorded.get('root')}), and is now bound to {profile.get('root')}. "
+        "Everything it previously read or wrote refers to the old location, so "
+        "resuming here would be misleading. Re-grant the original folder to "
+        "continue this history, or delete this node and start a fresh agent."
+    )
+
+
+def _ensure_meta(path: Path, profile: "dict | None", root: "Path | None") -> None:
+    if path.exists():
+        return
+    payload = (
+        _meta_payload(profile, root)
+        if profile is not None and root is not None
+        else {"t": "meta", "v": META_VERSION}
+    )
+    _emit(path, payload)
+
+
+def append_message(
+    workspace: Path, message: dict, *, profile: "dict | None" = None, root: "Path | None" = None,
+) -> None:
+    """Append one history message through the background writer. `profile`/
+    `root` are used only when this is the file's first line, to stamp the
+    meta record check_profile later reads."""
+    path = transcript_path(workspace)
+    _ensure_meta(path, profile, root)
+    _emit(path, {"t": "msg", **message})
 
 
 def append_compaction(workspace: Path, content: str) -> None:
     """Record that a compaction happened, carrying the exact replacement
     message the live run continued with - see this module's docstring."""
     path = transcript_path(workspace)
-    is_new = not path.exists()
-    with path.open("a", encoding="utf-8") as fh:
-        if is_new:
-            fh.write(json.dumps({"t": "meta", "v": 1}, ensure_ascii=False) + "\n")
-        fh.write(json.dumps({"t": "compact", "content": content}, ensure_ascii=False) + "\n")
+    _ensure_meta(path, None, None)
+    _emit(path, {"t": "compact", "content": content})
 
 
 def drop_leading_orphan_tools(messages: list[dict]) -> list[dict]:
@@ -88,7 +315,13 @@ def drop_leading_orphan_tools(messages: list[dict]) -> list[dict]:
 def load_messages(workspace: Path) -> list[dict]:
     """The reload path: the last MAX_RELOADED_MESSAGES message lines, each
     content-capped, in file order. A missing file is an empty history (a
-    fresh node), not an error."""
+    fresh node), not an error.
+
+    Flushes first: a background writer means "what is on disk" and "what
+    has been appended" can differ by milliseconds, and reading a history
+    that is missing its own last turn would silently re-ask the model
+    something it already answered."""
+    flush(workspace)
     path = transcript_path(workspace)
     if not path.exists():
         return []

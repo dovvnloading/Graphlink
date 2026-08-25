@@ -323,6 +323,18 @@ class HarnessActivityRow:
 
 
 @dataclass
+class HarnessPlanStepRow:
+    """PLAN-2026-08-24 §2.3: one row of the agent's own checklist, written
+    by the `plan.update` tool - the typed wire shape of HarnessState.
+    harness_plan's {"text","status"} dicts. `status` is
+    pending|active|done, a plain string for the same additive-evolution
+    reason HarnessActivityRow.outcome is."""
+
+    text: str
+    status: str = "pending"
+
+
+@dataclass
 class ChartFlowRow:
     """One Sankey flow - the shape canonicalize_chart_data() (graphlink_
     chart_data.py) always builds every item of its "flows" list from, for
@@ -607,6 +619,16 @@ class SceneNodeRow:
     harnessAwaitingApproval: bool = False
     harnessApprovalToolName: str = ""
     harnessApprovalSummary: str = ""
+    # PLAN-2026-08-24 §2.4's graded consent: whether the panel may offer
+    # "approve for this session" alongside once/deny. False for a dangerous
+    # command, which is only ever once-or-deny.
+    harnessApprovalSessionOffered: bool = False
+    # §2.3's todo surface (plan.update) - rows are {"text","status"} with
+    # status in pending|active|done.
+    harnessPlan: list[HarnessPlanStepRow] = field(default_factory=list)
+    # §2.3's ask-user surface (user.ask): a question the run is blocked on.
+    harnessAwaitingQuestion: bool = False
+    harnessQuestion: str = ""
     harnessWorkspacePath: str = ""
     harnessWorkspaceActive: str = ""
     harnessMaxTurns: int = 0

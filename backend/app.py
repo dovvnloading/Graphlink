@@ -360,6 +360,13 @@ def _evict_idle_session(bus: SessionBus) -> bool:
         return False
     context.agent_dispatcher.cancel_all()
     context.agent_dispatcher.cancel_all_pending_approvals()
+    # PLAN-2026-08-24 §2.3: cancelling RUNS does not stop the harness's
+    # long-lived processes - a shell.session dev server and a python.exec
+    # interpreter are deliberately decoupled from any single run, so an
+    # evicted session would otherwise leave them alive with nothing left
+    # holding a reference able to stop them (the dispose_all_pycoder_repls
+    # gap this mirrors, for the surfaces that replaced it).
+    context.agent_dispatcher.dispose_all_harness_processes()
 
     # ADR-009 stage 9.2 / ADR-004 stage 4.3 interaction: flush a dirty
     # session's chat BEFORE cancelling its autosave task - see

@@ -862,6 +862,17 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.denyHarnessTool(n.pendingRequestId);
     },
+    onApproveToolForSession: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.approveHarnessToolForSession(n.pendingRequestId);
+    },
+    // Same current-snapshot posture as approve/deny: the run being answered
+    // is whichever one this node currently has parked, never an id the view
+    // captured earlier and might replay against a newer run.
+    onAnswerQuestion: (answer: string) => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.answerHarnessQuestion(n.pendingRequestId, answer);
+    },
     onPickWorkspace: () => liveRef.current.store.pickHarnessWorkspace(id),
     onUseScratch: () => liveRef.current.store.useHarnessScratch(id),
   };
@@ -1510,6 +1521,10 @@ export function toFlowNodes(
           harnessAwaitingApproval: n.harnessAwaitingApproval,
           harnessApprovalToolName: n.harnessApprovalToolName,
           harnessApprovalSummary: n.harnessApprovalSummary,
+          harnessApprovalSessionOffered: n.harnessApprovalSessionOffered,
+          harnessPlan: n.harnessPlan,
+          harnessAwaitingQuestion: n.harnessAwaitingQuestion,
+          harnessQuestion: n.harnessQuestion,
           harnessMaxTurns: n.harnessMaxTurns,
           harnessSpentTurns: n.harnessSpentTurns,
           harnessSpentTokens: n.harnessSpentTokens,

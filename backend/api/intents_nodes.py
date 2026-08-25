@@ -284,6 +284,15 @@ def register_node_intents(
             # here - the plan-cancel contract exactly.
             agent_dispatcher.cancel_harness(request_id)
         for workspace_id in harness_workspace_ids:
+            # Live processes FIRST: a shell.session dev server or a
+            # python.exec interpreter holds the workspace open, and on
+            # Windows an rmtree over a directory a running process has as
+            # its cwd fails outright. Killing them also closes the real gap
+            # the scratch-dir removal alone never covered - a deleted node
+            # must not leave a server running for the rest of the session.
+            await asyncio.to_thread(
+                agent_dispatcher.dispose_harness_workspace, workspace_id,
+            )
             # Blank ids are refused inside remove_scratch_dir_for_id (the
             # shared-"default"-bucket guard); rmtree runs off-loop like the
             # sandbox removal's own to_thread posture.

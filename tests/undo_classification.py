@@ -267,6 +267,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "cancel", "B", "run-lifecycle: cancel"),
     Classified("harness", "approveTool", "B", "security: harness tool-call approval gate"),
     Classified("harness", "denyTool", "B", "security: harness tool-call approval gate"),
+    Classified("harness", "approveToolForSession", "B", "security: harness tool-call approval gate, session-scoped grant (PLAN §2.4 graded consent)"),
+    Classified("harness", "answer", "B", "run-lifecycle: resolves a run parked on user.ask with the user's typed answer; the answer enters the workspace transcript, not the document"),
     Classified("harness", "pickWorkspace", "B", "run-config: binds the node to a trusted user dir and writes the settings trust grant, not document content"),
     Classified("harness", "useScratch", "B", "run-config: reverts the node to the scratch workspace"),
 
