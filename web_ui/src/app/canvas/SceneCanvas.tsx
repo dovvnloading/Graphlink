@@ -40,6 +40,7 @@ import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNode
 import { PlanNodeView, type PlanFlowNode, type PlanStepData } from "./PlanNodeView";
 import { HarnessNodeView, type HarnessFlowNode } from "./HarnessNodeView";
 import {
+  FIT_VIEW_MAX_ZOOM,
   GROUP_FALLBACK_HEIGHT,
   GROUP_FALLBACK_WIDTH,
   NODE_SIZE_REPORT_DEBOUNCE_MS,
@@ -3147,20 +3148,12 @@ function CanvasInner({
         zoomOnDoubleClick={false}
         fitView
         // The initial fitView's OWN zoom ceiling, independent of maxZoom
-        // below (which only bounds interactive/manual zoom). Without this,
-        // fitView on a canvas holding just one small node (a fresh
-        // placeholder, or a lone note) zooms in tight to fill the viewport
-        // with it - up to maxZoom itself, since nothing else stops it. The
-        // real-footprint placement engine (backend/domain/layout.py) can
-        // then legitimately place that node's first child 200-400+ px
-        // below/right of it, landing outside a viewport that was already
-        // zoomed in that tight - the child renders correctly in the scene
-        // graph but is invisible until the user manually zooms out, with
-        // no visual cue anything was even created. Capping the AUTOMATIC
-        // fit at 1x leaves realistic headroom around a small starting
-        // scene; fitting genuinely large content still zooms out below 1x
-        // as needed; a user's own scroll-zoom is still free to go to 2.5x.
-        fitViewOptions={{ maxZoom: 1 }}
+        // below (which only bounds interactive/manual zoom) - see
+        // FIT_VIEW_MAX_ZOOM's own doc (canvasConstants.ts) for the bug this
+        // prevents and why every OTHER "fit to content" trigger (AppBar's
+        // Fit All button/overflow duplicate, the command-palette twin)
+        // must share this exact constant, not just this one call site.
+        fitViewOptions={{ maxZoom: FIT_VIEW_MAX_ZOOM }}
         minZoom={0.1}
         maxZoom={2.5}
         deleteKeyCode={DELETE_KEY_CODES}

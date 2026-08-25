@@ -52,7 +52,20 @@ class GroupOps:
 
         Non-positive values from any source fall through to the next one,
         so a zero-size measurement (a node mid-mount, or one React Flow
-        never measured) can never collapse a group's box."""
+        never measured) can never collapse a group's box.
+
+        A collapsed frame/container member is the one exception to the
+        measured-wins priority above it: the pill size wins unconditionally,
+        the same fast path backend/domain/layout.py's node_footprint uses
+        and for the same reason - the client only re-reports a size on the
+        next dimensions change, so measured_sizes can still hold the
+        member's pre-collapse EXPANDED size for arbitrarily long after it
+        collapses. Without this, an outer group wrapping a just-collapsed
+        inner frame/container keeps sizing itself to that stale expanded
+        reading forever (confirmed via _recompute_group_bounds, which this
+        helper feeds through _bbox_of_members)."""
+        if member.kind in ("frame", "container") and member.is_collapsed:
+            return GROUP_COLLAPSED_WIDTH, GROUP_COLLAPSED_HEIGHT
         measured = self.measured_sizes.get(member.id)
         width, height = measured if measured is not None else (None, None)
         if not (width and width > 0 and height and height > 0):
@@ -281,8 +294,22 @@ class GroupOps:
         _detach_from_existing_group). is_locked defaults True (the legacy
         frame default - locked). Initial x/y/width/height come from the
         padded bbox-of-members, computed immediately via
-        _recompute_group_bounds right after construction."""
+        _recompute_group_bounds right after construction.
+
+        Requires at least one member: the frontend's own create-frame
+        command already gates on 2+ selected nodes (web_ui/src/app/chrome/
+        commands.ts), but that is a UI-layer convenience, not an invariant
+        this layer enforced - any other caller (a plugin, the Builder tool,
+        a malformed WS message) could construct a zero-member frame with
+        nothing to catch it. A frame/container with no members has no
+        content to derive a position from, so _bbox_of_members([]) falls
+        back to the SAME fixed default rect regardless of which group asked
+        for it - two independently-created empty groups would land exactly
+        on top of each other, and organize()'s new group-recompute pass
+        (backend/domain/layout.py) would keep them there on every run."""
         ids = list(item_ids)
+        if not ids:
+            raise SceneError("a frame needs at least one member")
         for member_id in ids:
             member = self.nodes.get(member_id)
             if member is None:
@@ -320,8 +347,13 @@ class GroupOps:
         nest (a container may hold another container or a frame as one of
         its members). ContainerState has no is_locked concept at all (see
         that class's own docstring, backend/domain/node_states.py) - no
-        toggle_container_lock exists and none should be added."""
+        toggle_container_lock exists and none should be added.
+
+        Requires at least one member - same domain-layer invariant and
+        rationale as create_frame's own guard just above."""
         ids = list(item_ids)
+        if not ids:
+            raise SceneError("a container needs at least one member")
         for member_id in ids:
             if member_id not in self.nodes:
                 raise SceneError(f"unknown member node: {member_id}")

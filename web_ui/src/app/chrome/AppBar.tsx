@@ -1,5 +1,6 @@
 import { useReactFlow } from "@xyflow/react";
 import { useSyncExternalStore } from "react";
+import { FIT_VIEW_MAX_ZOOM } from "../canvas/canvasConstants";
 import { exportCanvasAsPng } from "../canvas/exportCanvasPng";
 import { motionDuration } from "../reducedMotion";
 import type { SceneStore } from "../canvas/sceneStore";
@@ -244,7 +245,7 @@ export function AppBar({ store }: { store: SceneStore }) {
           icon="fit"
           label="Fit All"
           className="appbar-btn"
-          onClick={() => fitView({ duration: motionDuration(200) })}
+          onClick={() => fitView({ duration: motionDuration(200), maxZoom: FIT_VIEW_MAX_ZOOM })}
         />
       </div>
 
@@ -372,7 +373,7 @@ export function AppBar({ store }: { store: SceneStore }) {
           className="appbar-overflow-item"
           data-tier="1"
           onClick={() => {
-            fitView({ duration: motionDuration(200) });
+            fitView({ duration: motionDuration(200), maxZoom: FIT_VIEW_MAX_ZOOM });
             closeOverflow();
           }}
         >
