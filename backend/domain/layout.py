@@ -68,9 +68,12 @@ KIND_FALLBACK_FOOTPRINTS: dict[str, tuple[float, float]] = {
 }
 DEFAULT_FALLBACK_FOOTPRINT = (360.0, 240.0)
 
-# find_free_position's loop bound - purely defensive; each step strictly
-# advances past an obstacle edge, so a real scene converges in a handful.
-_MAX_PLACEMENT_STEPS = 300
+# find_free_position's hard defensive ceiling on top of the obstacle-count
+# bound it actually uses (see that function's own comment) - a scene would
+# need this many DISTINCT nodes staggered along one sweep line before this
+# ever kicks in, at which point returning a possibly-imperfect position
+# beats hanging the event loop on a pathological/corrupted scene.
+_MAX_PLACEMENT_STEPS_CEILING = 5000
 
 
 def _rects_clear(
@@ -159,9 +162,21 @@ class LayoutOps:
         proposed spot and advancing past each blocking node ("right" or
         "down"). Deterministic: always steps past the blocking obstacle
         whose far edge is nearest, so repeated spawns fan out compactly in
-        a stable order."""
+        a stable order.
+
+        Each step strictly clears at least the one obstacle that produced
+        the advance (the new x/y is set to exactly that obstacle's far edge
+        plus the gap, which is the boundary _rects_clear needs) and the
+        proposal coordinate only ever increases - so a once-cleared
+        obstacle can never block again. That makes the number of steps
+        needed bounded by the number of DISTINCT obstacles, not a fixed
+        constant: `len(obstacles) + 1` is a proven-sufficient loop bound,
+        capped by _MAX_PLACEMENT_STEPS_CEILING only as a defensive backstop
+        against a future change to this invariant, or an implausibly large
+        scene."""
         obstacles = self._placement_obstacles(exclude_ids)
-        for _ in range(_MAX_PLACEMENT_STEPS):
+        steps = min(len(obstacles) + 1, _MAX_PLACEMENT_STEPS_CEILING)
+        for _ in range(steps):
             blockers = [
                 r for r in obstacles
                 if not _rects_clear(x, y, width, height, *r)
@@ -294,10 +309,21 @@ class LayoutOps:
         children: dict[str, list[str]] = {}
         for child, parent in parent_of.items():
             children.setdefault(parent, []).append(child)
-        # Stable, spatial-intent-preserving order: current x, then id.
-        def order_key(node_id: str) -> tuple[float, str]:
+        # Stable, spatial-intent-preserving order: current x, then creation
+        # order. NOT node.id itself - ids are "n<counter>" strings, so a
+        # lexicographic tie-break would put "n11" before "n7" (the same
+        # pitfall the edge-parent walk above avoids by iterating self.edges
+        # in insertion order rather than sorting by id). Ties on x are a
+        # real condition, not just theoretical: a legacy/partial saved
+        # session restores any node missing position data at literal
+        # (0.0, 0.0) - see session_load.py's _position(). self.nodes
+        # preserves creation/restore order regardless of what the id
+        # strings look like, so an index into that iteration order is a
+        # robust tie-break no id-format assumption can invalidate.
+        insertion_index = {nid: i for i, nid in enumerate(self.nodes)}
+        def order_key(node_id: str) -> tuple[float, int]:
             node = layout_nodes[node_id]
-            return (node.x, node.id)
+            return (node.x, insertion_index[node_id])
         for child_list in children.values():
             child_list.sort(key=order_key)
         roots = sorted(
@@ -308,12 +334,66 @@ class LayoutOps:
         # members sitting interleaved between its own. Stable sort: within
         # one owner (and among the un-owned) the spatial x-order above is
         # preserved; owner blocks line up in owner-id order.
-        owner_of: dict[str, str] = {}
+        # Frame and container membership tracked SEPARATELY (not merged
+        # into one "owner" map) - a node can legally belong to one frame
+        # AND one container simultaneously (item_ids's own field comment),
+        # and both memberships need to influence clustering, not just
+        # whichever kind happens to be scanned first.
+        frame_of: dict[str, str] = {}
+        container_of: dict[str, str] = {}
         for group in self.nodes.values():
-            if group.kind in ("frame", "container"):
+            if group.kind == "frame":
                 for member_id in group.item_ids:
-                    owner_of.setdefault(member_id, group.id)
-        roots.sort(key=lambda nid: owner_of.get(nid, ""))
+                    frame_of[member_id] = group.id
+            elif group.kind == "container":
+                for member_id in group.item_ids:
+                    container_of[member_id] = group.id
+        # Union-find over GROUP ids: a member in both a frame and a
+        # container links those two groups into one cluster, so ALL of
+        # their combined roots stay contiguous on the row - without this,
+        # a naive single-owner bucketing (whichever group's node happened
+        # to be created first) strands the OTHER group's non-shared
+        # members in a separate block, and that group's re-wrapped bbox
+        # ends up stretching across whatever unrelated root landed between
+        # them. A member appearing in only one kind never merges anything,
+        # so a scene with no dual-membership nodes behaves exactly as
+        # before. (A member can belong to at most one frame and one
+        # container each, so a CHAIN of dual-membership members can in
+        # principle bridge 3+ groups into one cluster - union-find still
+        # clusters that correctly; only the finer hinge ordering just below
+        # is tuned for the common single-hinge, two-group case.)
+        cluster_parent: dict[str, str] = {}
+        def find_cluster(group_id: str) -> str:
+            while cluster_parent.get(group_id, group_id) != group_id:
+                group_id = cluster_parent[group_id]
+            return group_id
+        for member_id, fid in frame_of.items():
+            cluster_parent.setdefault(fid, fid)
+            cid = container_of.get(member_id)
+            if cid is not None:
+                cluster_parent.setdefault(cid, cid)
+                root_f, root_c = find_cluster(fid), find_cluster(cid)
+                if root_f != root_c:
+                    cluster_parent[root_c] = root_f
+        for cid in container_of.values():
+            cluster_parent.setdefault(cid, cid)
+
+        def root_owner_key(nid: str) -> tuple[str, int]:
+            fid, cid = frame_of.get(nid), container_of.get(nid)
+            if fid is None and cid is None:
+                return "", 0
+            cluster = find_cluster(fid if fid is not None else cid)
+            # Within one cluster: container-only members first, the hinge
+            # (dual membership) in the middle, frame-only members last -
+            # for the common two-group cluster this puts each group's own
+            # members on one contiguous side of the hinge, so container's
+            # bbox (container-only members + hinge) and frame's bbox (hinge
+            # + frame-only members) each wrap only their own members
+            # without crossing into the other's exclusive span.
+            bucket = 1 if (fid is not None and cid is not None) else (0 if cid is not None else 2)
+            return cluster, bucket
+
+        roots.sort(key=root_owner_key)
 
         # Subtree widths, iterative post-order (chat chains can be deep).
         # packed_width is the children row's own span (0 for a leaf) -

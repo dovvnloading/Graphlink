@@ -1,5 +1,6 @@
 import type { ReactFlowInstance } from "@xyflow/react";
 import { applyCompareBranches, applySynthesizeBranches } from "../canvas/branchActions";
+import { FIT_VIEW_MAX_ZOOM } from "../canvas/canvasConstants";
 import { exportCanvasAsPng } from "../canvas/exportCanvasPng";
 import type { SceneStore } from "../canvas/sceneStore";
 import type { OverlayContextValue } from "../overlays/overlays";
@@ -84,7 +85,7 @@ export function buildCommands(
       id: "fit-all",
       name: "Fit All to View",
       aliases: ["fit screen", "zoom fit"],
-      run: () => rf.fitView({ duration: 200 }),
+      run: () => rf.fitView({ duration: 200, maxZoom: FIT_VIEW_MAX_ZOOM }),
       enabled: hasNodes,
     },
     {
