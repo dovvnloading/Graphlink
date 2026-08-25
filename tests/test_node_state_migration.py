@@ -363,6 +363,10 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "harnessSpentTokens", "harnessAwaitingApproval", "harnessApprovalToolName",
     "harnessApprovalSummary", "harnessContextTokens", "harnessMaxContextTokens",
     "harnessCompactions", "harnessWorkspacePath", "harnessWorkspaceActive",
+    # PLAN-2026-08-24 H6: graded consent (§2.4) plus the plan.update /
+    # user.ask interaction surfaces (§2.3).
+    "harnessApprovalSessionOffered", "harnessPlan",
+    "harnessAwaitingQuestion", "harnessQuestion",
 ])
 
 

@@ -2424,6 +2424,20 @@ class SceneDocument(BranchOps, GroupOps, CommandOps):
             "harnessApprovalSummary": (
                 n.state.harness_approval_summary if isinstance(n.state, HarnessState) else ""
             ),
+            "harnessApprovalSessionOffered": (
+                n.state.harness_approval_session_offered
+                if isinstance(n.state, HarnessState) else False
+            ),
+            "harnessPlan": (
+                [{"text": s["text"], "status": s["status"]} for s in n.state.harness_plan]
+                if isinstance(n.state, HarnessState) else []
+            ),
+            "harnessAwaitingQuestion": (
+                n.state.harness_awaiting_question if isinstance(n.state, HarnessState) else False
+            ),
+            "harnessQuestion": (
+                n.state.harness_question if isinstance(n.state, HarnessState) else ""
+            ),
             "harnessContextTokens": (
                 n.state.harness_context_tokens if isinstance(n.state, HarnessState) else 0
             ),

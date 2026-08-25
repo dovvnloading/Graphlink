@@ -7478,6 +7478,40 @@ mark.document-view-search-match-current {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* PLAN-2026-08-24 §2.3's plan.update checklist. Reuses the surrounding
+   node's own type/color tokens rather than introducing any of its own -
+   the same shared-token convention every sibling node section follows. */
+.harness-node-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+}
+.harness-node-plan-step {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--gl-surface-text-primary);
+}
+.harness-node-plan-marker {
+  flex: none;
+  width: 1em;
+  color: var(--gl-surface-text-muted);
+}
+.harness-node-plan-step-done .harness-node-plan-text {
+  color: var(--gl-surface-text-muted);
+  text-decoration: line-through;
+}
+.harness-node-plan-step-active { font-weight: 600; }
+.harness-node-plan-step-active .harness-node-plan-marker {
+  color: var(--gl-surface-text-primary);
+}
+
 .harness-node-composer { display: flex; align-items: flex-end; gap: 8px; }
 .harness-node-input {
   box-sizing: border-box;

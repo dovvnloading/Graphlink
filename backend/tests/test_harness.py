@@ -17,6 +17,7 @@ import pytest
 import api_provider
 from backend.domain.graph import SceneDocument
 from backend.harness import context as context_module
+from backend.harness import retry as retry_module
 from backend.harness import transcript as transcript_module
 from backend.harness import workspace as workspace_module
 from backend.harness.loop import HarnessRunContext, run_harness
@@ -117,6 +118,10 @@ class TestTranscript:
         ws = ensure_workspace("ws1")
         append_message(ws, {"role": "user", "content": "hello"})
         append_message(ws, {"role": "assistant", "content": "hi"})
+        # Appends go through the background single-writer (§2.6), so a
+        # reader touching the FILE rather than load_messages() must cross
+        # the flush barrier first - load_messages does this itself.
+        assert transcript_module.flush(ws)
         lines = transcript_path(ws).read_text(encoding="utf-8").splitlines()
         assert json.loads(lines[0])["t"] == "meta"
         assert load_messages(ws) == [
@@ -127,6 +132,7 @@ class TestTranscript:
     def test_corrupt_lines_are_skipped_not_fatal(self, workspace_root):
         ws = ensure_workspace("ws1")
         append_message(ws, {"role": "user", "content": "kept"})
+        assert transcript_module.flush(ws)  # see the barrier note above
         with transcript_path(ws).open("a", encoding="utf-8") as fh:
             fh.write("{not json\n")
             fh.write(json.dumps({"t": "msg", "role": "bogus-role", "content": "dropped"}) + "\n")
@@ -253,14 +259,22 @@ class TestLoop:
 
     def test_provider_fault_lands_failed_not_crashed(self, workspace_root, monkeypatch):
         document, dispatcher, registry, bus, node = self._make(workspace_root)
+        # §2.2: a rate-limit fault is now RETRIED once before it lands, so
+        # this drives the retry to exhaustion. Backoff zeroed - the guard
+        # under test is the one-shot count, not the wall clock.
+        monkeypatch.setattr(retry_module, "RATE_LIMIT_BACKOFF_SECONDS", 0.0)
+        attempts = []
 
         def exploding_turn(task, messages, tools=(), **kwargs):
+            attempts.append(1)
             raise RuntimeError("rate limited")
 
         monkeypatch.setattr(api_provider, "chat_turn_with_tools", exploding_turn)
         asyncio.run(drive(document, dispatcher, registry, bus, node, "hello"))
         assert node.state.harness_status == "failed"
-        assert "rate limited" in node.state.harness_status_detail
+        assert len(attempts) == 2, "a rate-limit fault gets exactly one retry"
+        assert "Rate limited twice" in node.state.harness_status_detail
+        assert "follow-up" in node.state.harness_status_detail
 
     def test_offered_specs_stay_inside_the_grant_set(self, workspace_root, monkeypatch):
         """A net.fetch-scoped tool in the shared registry must never reach

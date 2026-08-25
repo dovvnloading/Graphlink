@@ -22,6 +22,7 @@ import subprocess
 import sys
 import threading
 import uuid
+from pathlib import Path
 
 import api_provider
 import graphlink_task_config as config
@@ -67,8 +68,17 @@ class PythonREPL:
     silently swap which on-disk directory a REPL resolved to. A caller that
     wants stable, reload-independent scratch space should mint its own id
     once and round-trip it through whatever persistence it owns.
+
+    PLAN-2026-08-24 §3.2.6 (`python.exec`): `cwd`/`manage_cwd` let the
+    harness point a REPL at its own bound workspace instead of a
+    repl_id-derived scratch dir. `manage_cwd=False` is what makes that safe
+    for a USER's project folder: prepare_scratch_dir's 0700 chmod and
+    touch_scratch_dir_usage's mtime bump are correct for a directory this
+    app owns and age-sweeps, and wrong for one the person owns - we neither
+    created it nor may we re-permission it. The caller that supplies a cwd
+    is asserting it already exists and is already governed.
     """
-    def __init__(self, repl_id=None):
+    def __init__(self, repl_id=None, cwd=None, manage_cwd=True):
         self.process = None
         self.last_run_failed = False
         self._boundary_prefix = ""
@@ -92,7 +102,8 @@ class PythonREPL:
         # self.process.kill() call) and could double-close the same real OS
         # job handle.
         self._lock = threading.RLock()
-        self.cwd = PYTHON_REPL_ROOT / safe_scratch_id(repl_id)
+        self._manage_cwd = bool(manage_cwd) and cwd is None
+        self.cwd = Path(cwd) if cwd is not None else PYTHON_REPL_ROOT / safe_scratch_id(repl_id)
 
     def start(self):
         with self._lock:
@@ -146,7 +157,8 @@ while True:
             # never touches the filesystem. ADR-005 stage 5.3: chmod 0700
             # on POSIX - see graphlink_scratch_dirs.prepare_scratch_dir's
             # own docstring for why.
-            prepare_scratch_dir(self.cwd)
+            if self._manage_cwd:
+                prepare_scratch_dir(self.cwd)
 
             # ADR-005 stage 5.2/5.3: the guard is created BEFORE Popen so
             # its popen_kwargs() can reach the spawn itself. On Windows
@@ -183,7 +195,8 @@ while True:
         # see touch_scratch_dir_usage's own docstring for why the age
         # sweep would otherwise treat a REPL run daily for months exactly
         # like one abandoned the day after creation.
-        touch_scratch_dir_usage(self.cwd)
+        if self._manage_cwd:
+            touch_scratch_dir_usage(self.cwd)
 
         encoded_code = base64.b64encode(code.encode('utf-8')).decode('utf-8')
         try:

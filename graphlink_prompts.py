@@ -264,7 +264,9 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         # v2 (H2): teaches the write/shell tools and the approval-denial
         # contract.
         # v3 (H4): teaches subagent.spawn.
-        ("harness-core", 3, "73e9a2cb889e61c952f464845977ac0c6d7f99be8f3286306734b0677abe1b4d"),
+        # v4 (H6): teaches python.exec, shell.session, the graph.* canvas
+        # tools, and the plan.update/user.ask interaction pair.
+        ("harness-core", 4, "9b630827fd4d7696712ffb940ee8642469bb37a7442326bacaef175ff8217089"),
         ("reasoning-hint-low", 1, "87d4a1d2e09416005d656faaca77fa2fb2305f0c4b52940f0dbaf0d234669552"),
         ("reasoning-hint-high", 1, "7a004877f0362c73208a61bdd81103d22d5b1eaafe998e82138d970273919d9b"),
     ]

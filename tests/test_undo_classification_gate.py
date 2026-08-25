@@ -269,10 +269,12 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 179 -> 176 when PLAN-2026-08-24 H5 retired Py-Coder and removed
     # scene/setPyCoderMode, scene/runPyCoder, and scene/cancelPyCoderRequest
     # (approveCodeExecution/denyCodeExecution stayed registered - they
-    # relocated to backend/api/intents_code_sandbox.py, not deleted).
+    # relocated to backend/api/intents_code_sandbox.py, not deleted), and
+    # 176 -> 178 when H6 added harness/approveToolForSession (§2.4's
+    # graded consent) and harness/answer (§2.3's user.ask resolution).
     real = _collect_real_registrations()
-    assert len(real) == 176, (
-        f"expected exactly 176 real registered intents, found {len(real)} - "
+    assert len(real) == 178, (
+        f"expected exactly 178 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

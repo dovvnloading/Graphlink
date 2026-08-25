@@ -121,8 +121,18 @@ class RunContext:
       external code has no reason to read or seed it directly."""
 
     granted_scopes: frozenset[str]
-    request_approval: Callable[[ToolCall], Awaitable[bool]]
+    # Returns False/None to deny, the string "session" to approve AND
+    # remember for the agent session, or any other truthy value to approve
+    # this call only (PLAN-2026-08-24 §2.4's graded consent). A plain bool -
+    # what every pre-graded caller returns - behaves exactly as before.
+    request_approval: Callable[[ToolCall], Awaitable["bool | str"]]
     cancel: CancelToken | None = None
+    # Session-scoped grants: tool NAMES the user approved for the whole
+    # agent session. Owned by the caller (the harness dispatcher keeps one
+    # set per workspace, so it outlives any single run) and passed in here;
+    # None means this run offers no session-scoped option at all, which is
+    # the case for every non-harness surface today.
+    session_grants: set[str] | None = None
     _approved_fingerprints: set[str] = field(default_factory=set)
 
 
@@ -132,6 +142,13 @@ class _Registration:
     handler: ToolHandler
     scopes: frozenset[str]
     approval: str
+    # PLAN-2026-08-24 §2.4: an optional per-call predicate that forces a
+    # FRESH prompt even when this exact (name, arguments) pair was already
+    # approved in this run - "a dangerous-command list always re-prompts and
+    # defeats remembered grants". None (the default, and every tool but
+    # shell.exec today) leaves the fingerprint memo behaving exactly as it
+    # always has.
+    always_reprompt: "Callable[[ToolCall], bool] | None" = None
 
 
 def _tool_call_fingerprint(call: ToolCall) -> str:
@@ -158,6 +175,7 @@ class ToolRegistry:
         *,
         scopes: set[str] | frozenset[str],
         approval: str,
+        always_reprompt: "Callable[[ToolCall], bool] | None" = None,
     ) -> None:
         if approval not in _KNOWN_APPROVAL_POLICIES:
             raise ValueError(
@@ -173,7 +191,9 @@ class ToolRegistry:
             )
         if spec.name in self._registrations:
             raise ValueError(f"Tool {spec.name!r} is already registered.")
-        self._registrations[spec.name] = _Registration(spec, handler, scope_set, approval)
+        self._registrations[spec.name] = _Registration(
+            spec, handler, scope_set, approval, always_reprompt,
+        )
 
     def scopes_for(self, name: str) -> frozenset[str] | None:
         """The scope set `name` was registered with, or None for an unknown
@@ -224,9 +244,41 @@ class ToolRegistry:
 
         if registration.approval != "auto":
             fingerprint = _tool_call_fingerprint(call) if registration.approval == "always" else None
-            already_approved = fingerprint is not None and fingerprint in ctx._approved_fingerprints
+            # §2.4's dangerous-command rule: a predicate that says "always
+            # ask" wins over the memo AND declines to write a new memo entry
+            # below, so a second identical dangerous call asks again too.
+            forced = False
+            if registration.always_reprompt is not None:
+                try:
+                    forced = bool(registration.always_reprompt(call))
+                except Exception:
+                    # A predicate that blows up must fail CLOSED (ask), never
+                    # silently reuse a grant it was supposed to veto.
+                    forced = True
+            if forced:
+                fingerprint = None
+            # PLAN-2026-08-24 §2.4's graded consent: a SESSION-scoped grant
+            # covers this tool for the rest of the agent session, not just
+            # this run - checked before the per-run fingerprint memo because
+            # it is the broader of the two. `forced` (the dangerous list)
+            # defeats it exactly as it defeats the fingerprint: "deny always
+            # wins", and a remembered grant is not consent for `rm -rf`.
+            session_granted = (
+                not forced
+                and ctx.session_grants is not None
+                and call.name in ctx.session_grants
+            )
+            already_approved = session_granted or (
+                fingerprint is not None and fingerprint in ctx._approved_fingerprints
+            )
             if not already_approved:
-                approved = await ctx.request_approval(call)
+                # §2.4: the decision is now GRADED, not binary. False/None
+                # denies; the string "session" approves AND remembers for the
+                # session; anything else truthy approves this call only. Every
+                # pre-existing caller returns a plain bool, which lands on the
+                # once-only branch exactly as it always did.
+                decision = await ctx.request_approval(call)
+                approved = bool(decision)
                 # The approval prompt is the one place this function can be
                 # awaiting for a genuinely long time (a human deciding) -
                 # re-check cancellation on return, same cooperative-
@@ -237,7 +289,9 @@ class ToolRegistry:
                 _raise_if_cancelled(ctx.cancel.event if ctx.cancel is not None else None)
                 if not approved:
                     return ToolResult(content=f"Tool call {call.name!r} was denied approval.", is_error=True)
-                if fingerprint is not None:
+                if decision == "session" and ctx.session_grants is not None and not forced:
+                    ctx.session_grants.add(call.name)
+                elif fingerprint is not None:
                     ctx._approved_fingerprints.add(fingerprint)
 
         try:

@@ -145,10 +145,28 @@ def register_harness_intents(
     async def deny_tool(request_id):
         agent_dispatcher.deny_code_execution(request_id)
 
+    async def approve_tool_for_session(request_id):
+        """§2.4's graded consent - approve and stop asking for this tool for
+        the rest of this agent's session. Deliberately a SEPARATE intent
+        rather than a flag on approveTool: the two are different decisions
+        with different blast radii, and a UI that can accidentally send the
+        broader one in place of the narrower one is a UI that will."""
+        agent_dispatcher.approve_harness_tool_for_session(request_id)
+
+    async def answer_question(request_id, answer):
+        """Resolve a run parked on user.ask (§2.3). Distinct from
+        approveTool because the payload is the user's TEXT, not a boolean -
+        the run needs what they said, not merely that they responded. An
+        empty/blank answer is a dismissal, which the tool reports to the
+        model as "declined to answer" rather than as an error."""
+        agent_dispatcher.answer_harness_question(request_id, answer)
+
     bus.register_intent("harness", "start", start)
     bus.register_intent("harness", "send", send)
     bus.register_intent("harness", "cancel", cancel)
     bus.register_intent("harness", "approveTool", approve_tool)
     bus.register_intent("harness", "denyTool", deny_tool)
+    bus.register_intent("harness", "approveToolForSession", approve_tool_for_session)
+    bus.register_intent("harness", "answer", answer_question)
     bus.register_intent("harness", "pickWorkspace", pick_workspace)
     bus.register_intent("harness", "useScratch", use_scratch)

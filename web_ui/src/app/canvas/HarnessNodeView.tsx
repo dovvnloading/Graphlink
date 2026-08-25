@@ -24,6 +24,11 @@ export interface HarnessActivityRowData {
   elapsedMs: number;
 }
 
+export interface HarnessPlanStepData {
+  text: string;
+  status: string;
+}
+
 export interface HarnessNodeData extends Record<string, unknown> {
   harnessGoal: string;
   harnessReply: string;
@@ -34,6 +39,10 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessAwaitingApproval: boolean;
   harnessApprovalToolName: string;
   harnessApprovalSummary: string;
+  harnessApprovalSessionOffered: boolean;
+  harnessPlan: HarnessPlanStepData[];
+  harnessAwaitingQuestion: boolean;
+  harnessQuestion: string;
   harnessContextTokens: number;
   harnessMaxContextTokens: number;
   harnessCompactions: number;
@@ -49,7 +58,9 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onSend: (text: string) => void;
   onCancel: () => void;
   onApproveTool: () => void;
+  onApproveToolForSession: () => void;
   onDenyTool: () => void;
+  onAnswerQuestion: (answer: string) => void;
   onPickWorkspace: () => void;
   onUseScratch: () => void;
 }
@@ -76,6 +87,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const collapsed = useLodVisibility() || data.isCollapsed;
   const running = data.harnessStatus === "running";
   const [draft, setDraft] = useState("");
+  const [answerDraft, setAnswerDraft] = useState("");
   const denyButtonRef = useRef<HTMLButtonElement>(null);
   const activityDetailsRef = useRef<HTMLDetailsElement>(null);
   const activityListRef = useRef<HTMLDivElement>(null);
@@ -103,6 +115,13 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
     if (!text || !acceptsInput(data.harnessStatus)) return;
     data.onSend(text);
     setDraft("");
+  }
+
+  function sendAnswer(): void {
+    const text = answerDraft.trim();
+    if (!text) return;
+    data.onAnswerQuestion(text);
+    setAnswerDraft("");
   }
 
   return (
@@ -192,6 +211,27 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
         )}
       </div>
 
+      {/* §2.3's plan.update surface. Always expanded, unlike the activity
+          log below: the checklist is the thing a person watching a long run
+          actually wants visible, and it is short by construction (capped at
+          20 rows backend-side). */}
+      {data.harnessPlan.length > 0 && (
+        <div className="harness-node-plan" role="list" aria-label="Agent checklist">
+          {data.harnessPlan.map((step, index) => (
+            <div
+              key={`${index}-${step.text}`}
+              role="listitem"
+              className={`harness-node-plan-step harness-node-plan-step-${step.status}`}
+            >
+              <span className="harness-node-plan-marker" aria-hidden="true">
+                {step.status === "done" ? "✓" : step.status === "active" ? "▸" : "○"}
+              </span>
+              <span className="harness-node-plan-text">{step.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {data.harnessActivity.length > 0 && (
         <details className="chat-node-tool-invocations plan-node-activity" ref={activityDetailsRef}>
           <summary>
@@ -226,8 +266,22 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           <pre className="plan-node-approval-summary">{data.harnessApprovalSummary}</pre>
           <div className="plan-node-approval-actions">
             <button type="button" className="plan-node-button nodrag" onClick={data.onApproveTool}>
-              Approve
+              Approve once
             </button>
+            {/* PLAN §2.4 graded consent. Absent - not merely disabled - for a
+                dangerous command: the backend decides that (shell_policy) and
+                says so via harnessApprovalSessionOffered, so the broader
+                grant is never a button someone can reach for `rm -rf`. */}
+            {data.harnessApprovalSessionOffered && (
+              <button
+                type="button"
+                className="plan-node-button nodrag"
+                onClick={data.onApproveToolForSession}
+                title="Stop asking for this tool for the rest of this agent's session"
+              >
+                Always allow this tool
+              </button>
+            )}
             <button
               type="button"
               className="plan-node-button plan-node-button-deny nodrag"
@@ -236,6 +290,52 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             >
               Deny
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* §2.3's user.ask: the run is parked on a human answer. Rendered as
+          its own surface rather than reusing the composer below, which is
+          for starting the NEXT task - answering is not sending. */}
+      {data.harnessAwaitingQuestion && (
+        <div className="plan-node-approval" role="group" aria-label="Agent question">
+          <div className="plan-node-approval-title">The agent is asking:</div>
+          <pre className="plan-node-approval-summary">{data.harnessQuestion}</pre>
+          <div className="harness-node-composer">
+            <textarea
+              className="harness-node-input nodrag nowheel"
+              placeholder="Type your answer…"
+              value={answerDraft}
+              rows={2}
+              aria-label="Answer to the agent's question"
+              onChange={(event) => setAnswerDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  sendAnswer();
+                }
+              }}
+            />
+            <div className="plan-node-approval-actions">
+              <button
+                type="button"
+                className="plan-node-button plan-node-button-start nodrag"
+                disabled={!answerDraft.trim()}
+                onClick={sendAnswer}
+              >
+                Answer
+              </button>
+              <button
+                type="button"
+                className="plan-node-button plan-node-button-deny nodrag"
+                onClick={() => {
+                  setAnswerDraft("");
+                  data.onAnswerQuestion("");
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         </div>
       )}

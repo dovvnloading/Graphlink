@@ -869,6 +869,10 @@ class HarnessState(NodeState):
     harness_awaiting_approval: bool = False
     harness_approval_tool_name: str = ""
     harness_approval_summary: str = ""
+    # §2.4's graded consent: whether the panel may offer "approve for this
+    # session" alongside once/deny. False for a dangerous command, which is
+    # only ever once-or-deny - see backend/harness/shell_policy.py.
+    harness_approval_session_offered: bool = False
     # H3 context accounting. `context_tokens` is the live estimate of the
     # reloaded history the NEXT model call would carry (not a cumulative
     # spend counter - spent_tokens above is that); it drives the node's
@@ -878,3 +882,15 @@ class HarnessState(NodeState):
     harness_context_tokens: int = 0
     harness_max_context_tokens: int = 48_000
     harness_compactions: int = 0
+    # PLAN-2026-08-24 §2.3's todo/plan surface, written by the `plan.update`
+    # tool. Rows are {"text", "status"} where status is pending|active|done;
+    # this is the model's OWN externalized checklist for a long task, not a
+    # Builder-style approved plan it must execute step by step - nothing
+    # gates on it, it exists so a person watching a 15-turn run can see the
+    # shape of the work rather than a wall of tool calls.
+    harness_plan: list[dict[str, Any]] = field(default_factory=list)
+    # §2.3's ask-user surface. The mirror of the approval trio above: a
+    # parked question the run is blocked on, resolved by the harness/answer
+    # intent. Also deliberately NOT persisted - it describes a live future.
+    harness_awaiting_question: bool = False
+    harness_question: str = ""

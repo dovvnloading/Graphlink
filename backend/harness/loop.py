@@ -36,13 +36,29 @@ from dataclasses import dataclass
 import graphlink_task_config as config
 from backend.domain.node_states import HarnessState
 from backend.harness import context as context_module
-from backend.harness.transcript import append_compaction, append_message, load_messages
+from backend.harness import shell_policy
+from backend.harness.retry import (
+    ACTION_COMPACT_AND_RETRY,
+    ACTION_FAIL,
+    TurnRetryState,
+    classify_fault,
+)
+from backend.harness.transcript import (
+    append_compaction,
+    append_message,
+    build_profile,
+    check_profile,
+    flush as flush_transcript,
+    load_messages,
+)
 from backend.harness.workspace import bound_root, ensure_workspace
 from backend.providers.base import CancelToken, ToolCall
 from backend.tools import (
     CODE_EXECUTE,
     FS_READ,
     FS_WRITE,
+    GRAPH_MUTATE,
+    GRAPH_READ,
     KNOWLEDGE_READ,
     PROVIDER_CALL,
     RunContext,
@@ -57,7 +73,27 @@ from backend.tools import (
 # shell "always", subagent/read "auto") through the real approval panel
 # run_harness wires up - the scope-model split ADR-007 names and the
 # builder already follows.
-HARNESS_GRANTED_SCOPES = frozenset({FS_READ, FS_WRITE, CODE_EXECUTE, KNOWLEDGE_READ, PROVIDER_CALL})
+HARNESS_GRANTED_SCOPES = frozenset({
+    FS_READ, FS_WRITE, CODE_EXECUTE, KNOWLEDGE_READ, PROVIDER_CALL,
+    # §3.2.6: "existing graph.* ... tools compose in unchanged", and §3.3's
+    # invariant that run_id is stamped on all canvas mutations so undo-by-run
+    # works across harness runs (HarnessRunContext carries run_id, which
+    # tools_graph's own _run_id_of reads). Without these the harness could
+    # not put its findings ON the canvas it lives in - it would be a
+    # workspace agent with no way to report into the graph, which is not
+    # what this app is for. graph.delete_node is registered approval=
+    # "always" and stays gated behind a human exactly as it is for the
+    # Builder; nothing here weakens that.
+    GRAPH_READ, GRAPH_MUTATE,
+})
+
+# Builder CONTROL tools ride graph.read (steering a plan costs nothing), so
+# granting that scope would otherwise offer the harness four tools that
+# only mean something inside a run_build checklist - builder.complete_step
+# on a harness node has no step to complete. Excluded by name because the
+# scope genuinely is the right one for them; this is the §2.3 "narrow
+# waist" rule applied at the point of exposure rather than registration.
+_HARNESS_TOOL_NAME_EXCLUSIONS = ("builder.",)
 
 # The approval prompt's cap applies ONLY to the generic JSON-arguments
 # fallback. A disclosed command or file body is NEVER truncated - the
@@ -86,9 +122,17 @@ HARNESS_SYSTEM_PROMPT = (
     "Rules:\n"
     "- Ground every claim in what tools actually returned. fs.list shows "
     "what exists; fs.read and fs.grep read it; fs.write and fs.edit "
-    "change it; shell.exec runs a command in the workspace; "
-    "knowledge.search reaches the user's ingested knowledge. Never "
+    "change it; shell.exec runs a command in the workspace; python.exec "
+    "runs Python in a persistent interpreter whose variables survive "
+    "between calls; shell.session holds a long-running process open (dev "
+    "server, watch build) that you start, read, write to, and stop; "
+    "knowledge.search reaches the user's ingested knowledge; the graph.* "
+    "tools read and build on the canvas this node lives in. Never "
     "invent file contents or command output.\n"
+    "- plan.update records your checklist for multi-step work so the user "
+    "can see where you are; revise it as you go. user.ask blocks the run "
+    "on a human answer - use it only for a decision that is genuinely "
+    "theirs, never to confirm work you could just do.\n"
     "- Mutating tools ask the user for approval before running. A denial "
     "is an answer, not an obstacle: adjust your approach or explain what "
     "you would have done - never re-submit the same call hoping for a "
@@ -123,6 +167,11 @@ class HarnessRunContext(RunContext):
     model_ref: object = None
     settings_manager: object = None
     runtime: object = None
+    # §2.3's plan/ask surfaces, handed down as callables rather than having
+    # the tools import the loop (which owns the node, bus, and RunHandle
+    # they need). set_plan(steps) -> None; ask_user(question) -> str | None.
+    set_plan: object = None
+    ask_user: object = None
 
 
 def _truncate(text: str, cap: int) -> str:
@@ -150,6 +199,32 @@ def _log_activity(node, *, tool: str, summary: str, outcome: str, elapsed_ms: in
         del activity[: len(activity) - _ACTIVITY_CAP]
 
 
+def _session_grants_of(dispatcher, workspace_id: str) -> "set | None":
+    """The dispatcher's session-grant set for this workspace, or None when
+    the dispatcher does not implement graded consent (see the call site)."""
+    accessor = getattr(dispatcher, "harness_session_grants", None)
+    if accessor is None:
+        return None
+    try:
+        return accessor(workspace_id)
+    except Exception:
+        return None
+
+
+def _is_dangerous_call(call: ToolCall) -> bool:
+    """Whether §2.4's dangerous list covers this call - the same predicate
+    the registry uses to defeat remembered grants, asked here so the panel
+    can withhold the session-grant option entirely."""
+    if call.name == "shell.exec":
+        return shell_policy.is_dangerous_command(str(call.arguments.get("command") or ""))
+    if call.name == "shell.session":
+        action = str(call.arguments.get("action") or "").strip().lower()
+        if action == "start":
+            return shell_policy.is_dangerous_command(str(call.arguments.get("command") or ""))
+        return action == "write"
+    return False
+
+
 def _approval_summary(call: ToolCall) -> str:
     """What the approval panel shows for one parked call. The mutating
     tools disclose their EFFECT verbatim (the command that will run, the
@@ -157,7 +232,18 @@ def _approval_summary(call: ToolCall) -> str:
     untruncated, per the cap comment above. Everything else falls back to
     capped sorted-JSON arguments, the builder's own default shape."""
     if call.name == "shell.exec":
-        return f"shell.exec\n{call.arguments.get('command') or ''}"
+        # §2.4: disclose one line per thing that will actually run, so a
+        # dangerous tail cannot hide behind a benign head in a chain.
+        return f"shell.exec\n{shell_policy.analyze(str(call.arguments.get('command') or '')).disclosure()}"
+    if call.name == "shell.session":
+        action = str(call.arguments.get("action") or "")
+        name = str(call.arguments.get("name") or "")
+        if action == "start":
+            plan = shell_policy.analyze(str(call.arguments.get("command") or ""))
+            return f"shell.session start {name}\n{plan.disclosure()}"
+        if action == "write":
+            return f"shell.session write {name}\n--- stdin\n{call.arguments.get('input') or ''}"
+        return f"shell.session {action} {name}".rstrip()
     if call.name == "fs.write":
         path = call.arguments.get("path") or ""
         content = call.arguments.get("content")
@@ -213,7 +299,19 @@ async def run_harness(
     def _alive() -> bool:
         return dispatcher._runs.get(request_id) is not None
 
+    # Set once the workspace resolves, below; _land flushes through it. None
+    # until then, so a failure BEFORE the workspace exists has nothing to
+    # flush and skips the barrier rather than erroring inside the error path.
+    workspace_for_flush = None
+
     async def _land(status: str, detail: str, *, reply: str | None = None) -> None:
+        # §2.6's flush barrier, placed HERE rather than at each call site so
+        # every terminal path (done, failed, stopped) is covered by
+        # construction: the transcript must be fully on disk before the node
+        # says the task is over, or a reload could reopen a "done" run whose
+        # last turns never landed. Runs in a thread - flush blocks.
+        if workspace_for_flush is not None:
+            await asyncio.to_thread(flush_transcript, workspace_for_flush)
         if not _alive():
             return
         node.state.harness_status = status
@@ -236,25 +334,62 @@ async def run_harness(
     # auto-deny all work unchanged), surfaces the call on the node's own
     # awaiting fields for the panel, and clears them in a finally so no
     # exit path leaves a phantom prompt on the canvas.
-    async def request_approval(call: ToolCall) -> bool:
+    async def request_approval(call: ToolCall) -> "bool | str":
         future: asyncio.Future = loop_handle.create_future()
         handle.approval_future = future
         node.state.harness_awaiting_approval = True
         node.state.harness_approval_tool_name = call.name
         node.state.harness_approval_summary = _approval_summary(call)
+        # §2.4: a dangerous command is offered ONLY once-or-deny. Telling the
+        # panel that here (rather than letting it guess from the tool name)
+        # keeps the policy in one place - shell_policy - and means the
+        # session-grant button is absent, not merely ignored, for `rm -rf`.
+        node.state.harness_approval_session_offered = not _is_dangerous_call(call)
         await bus.publish("scene")
         try:
-            approved = bool(await future)
+            approved = await future
         finally:
             node.state.harness_awaiting_approval = False
             node.state.harness_approval_tool_name = ""
             node.state.harness_approval_summary = ""
+            node.state.harness_approval_session_offered = False
         await bus.publish("scene")
         return approved
+
+    async def set_plan(steps: list) -> None:
+        node.state.harness_plan = list(steps)
+        await bus.publish("scene")
+
+    async def ask_user(question: str) -> "str | None":
+        """Park the run on a human answer. Deliberately the SAME shape as
+        request_approval above - a future on the RunHandle, cleared in a
+        finally - so cancel-means-resolve and the disconnect auto-resolve
+        both already cover it. A False/None resolution (Stop, disconnect,
+        or a dismissed prompt) reads as 'declined to answer'."""
+        future: asyncio.Future = loop_handle.create_future()
+        handle.approval_future = future
+        node.state.harness_awaiting_question = True
+        node.state.harness_question = question
+        await bus.publish("scene")
+        try:
+            answer = await future
+        finally:
+            node.state.harness_awaiting_question = False
+            node.state.harness_question = ""
+        await bus.publish("scene")
+        return answer if isinstance(answer, str) and answer.strip() else None
 
     ctx = HarnessRunContext(
         granted_scopes=HARNESS_GRANTED_SCOPES,
         request_approval=request_approval,
+        # §2.4: the dispatcher owns this set (one per workspace) so a
+        # session grant survives from one task to the next. Optional by
+        # design - a dispatcher that does not offer session grants yields
+        # None, which RunContext reads as "no session-scoped option exists",
+        # leaving every prompt once-or-deny.
+        session_grants=_session_grants_of(dispatcher, node.state.harness_workspace_id),
+        set_plan=set_plan,
+        ask_user=ask_user,
         cancel=CancelToken(cancel_event),
         run_id=request_id,
         harness_node_id=harness_node_id,
@@ -279,6 +414,7 @@ async def run_harness(
         # the trust gate - an untrusted/missing path silently falls back to
         # scratch (see workspace.bound_root).
         transcript_dir = ensure_workspace(node.state.harness_workspace_id)
+        workspace_for_flush = transcript_dir
         root, is_user_dir = bound_root(
             node.state.harness_workspace_id,
             node.state.harness_workspace_path,
@@ -287,19 +423,31 @@ async def run_harness(
         ctx.harness_workspace_dir = root
         node.state.harness_workspace_active = str(root) if is_user_dir else ""
 
+        # §3.3: the session profile is locked to the root its history was
+        # recorded against. Checked BEFORE anything is appended or any model
+        # is called - a run that must be refused should cost nothing.
+        profile = build_profile(root, is_user_dir)
+        refusal = check_profile(transcript_dir, profile)
+        if refusal is not None:
+            await _land("failed", refusal)
+            return
+
         # ADR-021 stage 21.1 posture: offer only tools this run could
         # actually pass the scope gate with - anything else spends context
         # per turn to buy a guaranteed denial.
         specs = tuple(
             spec for spec in registry.specs()
             if (registry.scopes_for(spec.name) or frozenset()) <= HARNESS_GRANTED_SCOPES
+            and not spec.name.startswith(_HARNESS_TOOL_NAME_EXCLUSIONS)
         )
         # H3: built ONCE, here, and never rebuilt inside the loop - the
         # byte-stable prefix a provider's prompt cache keys on (see
         # backend/harness/context.py's own docstring).
         system_prompt = context_module.build_system_prompt(root)
         user_message = {"role": "user", "content": user_text}
-        append_message(transcript_dir, user_message)
+        # profile/root stamp the meta line when this is the file's very
+        # first write; ignored on every later append.
+        append_message(transcript_dir, user_message, profile=profile, root=root)
         # `history` deliberately excludes the system prompt: it lives
         # outside history so compaction structurally cannot touch it (and
         # so the cacheable prefix is the same object every turn).
@@ -308,6 +456,51 @@ async def run_harness(
         turns = 0
         max_turns = max(1, int(node.state.harness_max_turns))
         budget = max(1_000, int(node.state.harness_max_context_tokens))
+        # §2.2: ONE state object per TASK, so the recovery budget bounds the
+        # whole task rather than resetting every turn (which would make the
+        # guards unbounded in aggregate). See backend/harness/retry.py.
+        retry_state = TurnRetryState()
+
+        async def _compact_now() -> bool:
+            """Summarize the middle of `history` in place. Returns whether it
+            actually happened - a failed summarizer degrades to the
+            uncompacted history (the chat agent's own catch-and-degrade
+            posture for this identical call) rather than killing a run that
+            is otherwise fine."""
+            nonlocal history
+            try:
+                compacted = await asyncio.to_thread(
+                    context_module.compact_history,
+                    history,
+                    goal=node.state.harness_goal,
+                    budget_tokens=budget,
+                    cancellation_event=cancel_event,
+                    settings_manager=settings_manager,
+                    runtime=runtime,
+                )
+            except api_provider.RequestCancelledError:
+                raise
+            except Exception:
+                return False
+            if compacted is None:
+                return False
+            history, _summary = compacted
+            append_compaction(transcript_dir, history[0]["content"])
+            node.state.harness_compactions += 1
+            node.state.harness_context_tokens = context_module.history_tokens(history)
+            await bus.publish("scene")
+            return True
+
+        async def _sleep_unless_cancelled(seconds: float) -> None:
+            """A backoff a Stop can interrupt: polls the same cancel event
+            every tool already cooperates on, so a user is never made to
+            wait out a retry delay for a run they abandoned."""
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                if cancel_event.is_set():
+                    raise api_provider.RequestCancelledError("stopped")
+                await asyncio.sleep(min(0.2, max(0.0, deadline - time.monotonic())))
+
         while True:
             if cancel_event.is_set():
                 raise api_provider.RequestCancelledError("stopped")
@@ -326,42 +519,46 @@ async def run_harness(
             # context this run already knows is too large.
             node.state.harness_context_tokens = context_module.history_tokens(history)
             if node.state.harness_context_tokens > budget:
+                await _compact_now()
+
+            # §2.2: the model call is the ONE retried operation. Each fault
+            # class gets at most its own one-shot recovery (see retry.py);
+            # anything the state object declines to recover from lands as a
+            # resumable "failed" carrying the reason, never a raw traceback.
+            turn = None
+            while turn is None:
+                if cancel_event.is_set():
+                    raise api_provider.RequestCancelledError("stopped")
                 try:
-                    compacted = await asyncio.to_thread(
-                        context_module.compact_history,
-                        history,
-                        goal=node.state.harness_goal,
-                        budget_tokens=budget,
-                        cancellation_event=cancel_event,
-                        settings_manager=settings_manager,
-                        runtime=runtime,
+                    turn = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            api_provider.chat_turn_with_tools,
+                            config.TASK_CHAT,
+                            [{"role": "system", "content": system_prompt}, *history], specs,
+                            model_ref=model_ref, cancellation_event=cancel_event,
+                            settings_manager=settings_manager, runtime=runtime,
+                        ),
+                        timeout=_agents.WATCHDOG_TIMEOUT_SECONDS,
                     )
                 except api_provider.RequestCancelledError:
                     raise
-                except Exception:
-                    # A failed summarizer call must not kill a run that is
-                    # otherwise fine - degrade to the uncompacted history
-                    # (the chat agent's own "catch and degrade" posture for
-                    # the identical call). If the context genuinely no
-                    # longer fits, the model call below reports that as its
-                    # own error, which is the honest failure to surface.
-                    compacted = None
-                if compacted is not None:
-                    history, _summary = compacted
-                    append_compaction(transcript_dir, history[0]["content"])
-                    node.state.harness_compactions += 1
-                    node.state.harness_context_tokens = context_module.history_tokens(history)
+                except Exception as exc:
+                    action, backoff, reason = retry_state.decide(classify_fault(exc))
+                    if action == ACTION_FAIL:
+                        await _land("failed", f"{reason} Send a follow-up to retry.")
+                        return
+                    node.state.harness_status_detail = reason
                     await bus.publish("scene")
-
-            turn = await asyncio.wait_for(
-                asyncio.to_thread(
-                    api_provider.chat_turn_with_tools,
-                    config.TASK_CHAT, [{"role": "system", "content": system_prompt}, *history], specs,
-                    model_ref=model_ref, cancellation_event=cancel_event,
-                    settings_manager=settings_manager, runtime=runtime,
-                ),
-                timeout=_agents.WATCHDOG_TIMEOUT_SECONDS,
-            )
+                    if action == ACTION_COMPACT_AND_RETRY and not await _compact_now():
+                        await _land(
+                            "failed",
+                            "Context overflowed and could not be compacted. "
+                            "Send a follow-up to retry.",
+                        )
+                        return
+                    if backoff:
+                        await _sleep_unless_cancelled(backoff)
+            node.state.harness_status_detail = ""
             assistant_text = turn["message"]["content"] or ""
             tool_calls: list[ToolCall] = turn["tool_calls"]
             node.state.harness_spent_tokens += _spend_from_turn(

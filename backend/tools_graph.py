@@ -694,6 +694,9 @@ def make_delete_node_handler(document: SceneDocument, dispatcher):
         for sandbox_id in sandbox_ids:
             await dispatcher.remove_code_sandbox_scratch_dir(sandbox_id)
         for workspace_id in harness_workspace_ids:
+            # Live processes first, then the directory - the same ordering
+            # (and the same reason) the removeNodes intent documents.
+            await asyncio.to_thread(dispatcher.dispose_harness_workspace, workspace_id)
             # The same recompute-from-durable-id removal the intent path
             # uses (blank ids are refused inside remove_scratch_dir_for_id).
             await asyncio.to_thread(

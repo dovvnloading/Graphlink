@@ -679,6 +679,100 @@ class AgentDispatcher:
 
     # -- PLAN-2026-08-24 H1: the agent harness -------------------------------
 
+    def answer_harness_question(self, request_id: str, answer) -> bool:
+        """Resolve a harness run parked on user.ask with the user's TEXT.
+
+        Sibling of _resolve_approval, deliberately separate: that one
+        resolves with a bool and is shared across every approval-gated kind,
+        while this resolves with a string and is meaningful only for a run
+        whose parked future came from user.ask. The kind check is the same
+        load-bearing guard cancel_harness documents - a foreign kind's
+        request_id must never have its own pending approval resolved with a
+        string it would then read as truthy consent."""
+        handle = self._runs.get(request_id)
+        if handle is None or handle.kind != "harness":
+            return False
+        future = handle.approval_future
+        if future is None or future.done():
+            return False
+        future.set_result(str(answer) if answer is not None else "")
+        return True
+
+    def approve_harness_tool_for_session(self, request_id: str) -> bool:
+        """§2.4's graded consent: approve this call AND remember the tool for
+        the rest of the agent session. Resolves the parked future with the
+        sentinel string "session" rather than True - ToolRegistry.invoke
+        reads that as "approve and add to ctx.session_grants". Kind-checked
+        for the same reason answer_harness_question is."""
+        handle = self._runs.get(request_id)
+        if handle is None or handle.kind != "harness":
+            return False
+        future = handle.approval_future
+        if future is None or future.done():
+            return False
+        future.set_result("session")
+        return True
+
+    def harness_session_grants(self, workspace_id: str) -> set:
+        """The session-scoped grant set for one harness node. Keyed by
+        workspace id (not node id, which is reassigned on every reload) and
+        held on the dispatcher so a grant made in one task still holds in
+        the next - that is what makes it SESSION-scoped rather than
+        run-scoped. Cleared with the rest of the node's live state."""
+        store = getattr(self, "_harness_session_grants", None)
+        if store is None:
+            store = {}
+            self._harness_session_grants = store
+        return store.setdefault(workspace_id, set())
+
+    def harness_shell_sessions(self):
+        """The session's long-running shell processes (PLAN §2.3). Held
+        HERE, not per-run, because a dev server started in one task must
+        still be alive in the next - and torn down on the same triggers
+        every other live resource is (node delete, session evict)."""
+        if getattr(self, "_harness_shell_sessions", None) is None:
+            from backend.harness.shell_sessions import ShellSessionRegistry
+
+            self._harness_shell_sessions = ShellSessionRegistry()
+        return self._harness_shell_sessions
+
+    def harness_python_repls(self):
+        """The session's python.exec interpreters - same per-session
+        lifetime and teardown triggers as the shell sessions above, for the
+        same reason (state surviving between calls IS the feature)."""
+        if getattr(self, "_harness_python_repls", None) is None:
+            from backend.harness.tools_python import PythonReplRegistry
+
+            self._harness_python_repls = PythonReplRegistry()
+        return self._harness_python_repls
+
+    def dispose_harness_workspace(self, workspace_id: str) -> None:
+        """Node-delete teardown for one harness workspace's live processes.
+        Best-effort and synchronous-safe: both registries no-op on a
+        workspace they never saw, so this is always callable."""
+        if not workspace_id:
+            return
+        grants = getattr(self, "_harness_session_grants", None)
+        if grants is not None:
+            grants.pop(workspace_id, None)
+        sessions = getattr(self, "_harness_shell_sessions", None)
+        if sessions is not None:
+            sessions.stop_workspace(workspace_id)
+        repls = getattr(self, "_harness_python_repls", None)
+        if repls is not None:
+            repls.stop_workspace(workspace_id)
+
+    def dispose_all_harness_processes(self) -> None:
+        """Session-evict/shutdown teardown: every live harness process this
+        dispatcher owns. Mirrors cancel_all's own "walk everything" posture
+        - an evicted session must not leave a dev server running forever."""
+        sessions = getattr(self, "_harness_shell_sessions", None)
+        if sessions is not None:
+            sessions.stop_all()
+        repls = getattr(self, "_harness_python_repls", None)
+        if repls is not None:
+            repls.stop_all()
+
     def harness_tool_registry(self, document) -> "object":
         """The harness rides the SAME per-session registry the Builder
         built (tools.py: one registry per session, RunContext is what's
@@ -692,10 +786,14 @@ class AgentDispatcher:
         if not getattr(self, "_harness_fs_registered", False):
             from backend.harness.subagents import register_subagent_tool
             from backend.harness.tools_fs import register_harness_fs_tools
+            from backend.harness.tools_interaction import register_harness_interaction_tools
+            from backend.harness.tools_python import register_harness_python_tool
             from backend.harness.tools_shell import register_harness_shell_tool
 
             register_harness_fs_tools(registry)
-            register_harness_shell_tool(registry)
+            register_harness_shell_tool(registry, self.harness_shell_sessions())
+            register_harness_python_tool(registry, self.harness_python_repls())
+            register_harness_interaction_tools(registry)
             register_subagent_tool(registry)
             self._harness_fs_registered = True
         return registry
