@@ -12,6 +12,8 @@
  * layout and behaviour only.
  */
 
+import { SearchIcon } from "./SearchIcon";
+
 export type AppBarIconName =
   | "undo"
   | "redo"
@@ -100,12 +102,7 @@ export function AppBarIcon({ name }: { name: AppBarIconName }) {
         </svg>
       );
     case "search":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <circle cx="10.5" cy="10.5" r="6.5" />
-          <path d="m20 20-4.8-4.8" />
-        </svg>
-      );
+      return <SearchIcon />;
     case "knowledge":
       // An open book: two facing pages around a visible spine. The earlier
       // single-outline version rendered as a plain rectangle at 15px.

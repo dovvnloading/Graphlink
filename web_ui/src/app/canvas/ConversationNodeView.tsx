@@ -1,5 +1,5 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
@@ -7,6 +7,7 @@ import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
+import { useStreamBuffer } from "./useStreamBuffer";
 
 /**
  * The conversation node (Qt-removal plan R3.25/R3.26) - ConversationNode's
@@ -383,81 +384,14 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [draft, setDraft] = useState("");
 
-  // ADR-006 stage 6.4: live reply streaming - the exact subscription/reset
-  // pattern CodeSandboxNodeView's live terminal established (derived-state
-  // reset during render so a new request never shows the previous reply's
-  // stale content, effect below left to do only transport synchronization;
-  // see that file's own comments for the full rationale).
-  const [streamedReply, setStreamedReply] = useState("");
-  const [subscribedRequestId, setSubscribedRequestId] = useState(data.pendingRequestId);
-  if (data.pendingRequestId !== subscribedRequestId) {
-    setSubscribedRequestId(data.pendingRequestId);
-    setStreamedReply("");
-  }
-
-  // ADR-011 stage 11.4 (extended here 2026-08-12): deltas accumulate into
-  // refs and only a rAF-scheduled flush ever calls setStreamedReply, so a
-  // fast burst of small deltas re-parses markdown at most once per frame
-  // instead of once per token.
-  //
-  // Stage 11.4 originally landed this throttle in ChatNodeView ONLY. An audit
-  // found this view had been left on the raw per-delta setState even though
-  // it renders its streamed reply through the very same <NodeMarkdown>
-  // component - i.e. the full unified/remark/rehype/KaTeX/highlight pipeline
-  // ran on every single token, exactly the cost stage 11.4 exists to remove.
-  // (CodeSandboxNodeView also streams unthrottled but renders into a plain
-  // <pre>, so it has no parse cost to amortize and is deliberately left as
-  // is.) The mechanism below is ChatNodeView's, deliberately kept identical
-  // rather than re-derived - see its own comment for the full rationale on
-  // why pendingResetRef defers `reset` semantics to flush time instead of
-  // applying them delta-by-delta.
-  const pendingBufferRef = useRef("");
-  const pendingResetRef = useRef(false);
-  const rafHandleRef = useRef<number | null>(null);
-
-  function flushStreamBuffer() {
-    if (rafHandleRef.current !== null) {
-      cancelAnimationFrame(rafHandleRef.current);
-      rafHandleRef.current = null;
-    }
-    const bufferedText = pendingBufferRef.current;
-    const shouldReset = pendingResetRef.current;
-    pendingBufferRef.current = "";
-    pendingResetRef.current = false;
-    if (!bufferedText && !shouldReset) return;
-    setStreamedReply((current) => (shouldReset ? bufferedText : current + bufferedText));
-  }
-
-  useEffect(() => {
-    const requestId = data.pendingRequestId;
-    if (!requestId) return;
-    const unsubscribe = data.subscribeStream(requestId, (delta, done, reset) => {
-      if (reset) {
-        pendingBufferRef.current = delta;
-        pendingResetRef.current = true;
-      } else {
-        pendingBufferRef.current += delta;
-      }
-      // Completion/reset flushes synchronously: the final chunk shouldn't
-      // wait an extra frame, and this is what guarantees a trailing chunk is
-      // never stranded in the buffer past the last render.
-      if (done || reset) {
-        flushStreamBuffer();
-      } else if (rafHandleRef.current === null) {
-        rafHandleRef.current = requestAnimationFrame(flushStreamBuffer);
-      }
-    });
-    return () => {
-      unsubscribe();
-      // Flush rather than silently drop, so no buffered byte is lost in the
-      // narrow window where the request id changes mid-stream.
-      flushStreamBuffer();
-    };
-    // data.subscribeStream is a fresh closure every render (see SceneCanvas's
-    // toFlowNodes) - depending on it would resubscribe on every unrelated
-    // re-render; data.pendingRequestId itself is the real re-subscribe key.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.pendingRequestId]);
+  // ADR-006 stage 6.4 / ADR-011 stage 11.4 (throttle extended here
+  // 2026-08-12): live reply streaming, throttled to at most one markdown
+  // re-parse per animation frame - see useStreamBuffer's own doc comment
+  // for the full rationale (dedup: this was duplicated inline here and in
+  // ChatNodeView until the tech-debt sweep extracted it). (CodeSandboxNodeView
+  // also streams unthrottled but renders into a plain <pre>, so it has no
+  // parse cost to amortize and is deliberately left as is.)
+  const streamedReply = useStreamBuffer(data.pendingRequestId, data.subscribeStream);
 
   function send() {
     const text = draft.trim();

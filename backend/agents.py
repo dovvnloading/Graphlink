@@ -657,25 +657,33 @@ class AgentDispatcher:
                 node.pending_request_id = None
             await bus.publish("scene")
 
-    def cancel_builder(self, request_id: str) -> None:
-        """Stop for the Builder: deny any parked approval first (cancel
-        means deny - the code_sandbox precedent), then the standard
-        release-on-cancel.
+    def _cancel_with_pending_approval_denied(self, request_id: str, kind: str) -> bool:
+        """Shared shape behind cancel_builder/cancel_harness/
+        cancel_code_sandbox: cancel means deny any parked approval FIRST
+        (before self._runs.cancel's own kind check below ever runs), then
+        the standard release-on-cancel.
 
-        The `handle.kind == "builder"` check is load-bearing, not defensive
+        The `handle.kind == kind` check is load-bearing, not defensive
         fluff: without it, a stale or foreign request_id belonging to a
-        DIFFERENT approval-gated kind (code_sandbox, harness) currently
-        parked mid-gate would have its approval_future wrongly resolved to
-        False here, before self._runs.cancel's own kind check below ever
-        runs - silently denying a human approval that was never meant for
-        this method at all."""
+        DIFFERENT approval-gated kind currently parked mid-gate would have
+        its approval_future wrongly resolved to False here - silently
+        denying a human approval that was never meant for this call at
+        all."""
         handle = self._runs.get(request_id)
         if (
-            handle is not None and handle.kind == "builder"
+            handle is not None and handle.kind == kind
             and handle.approval_future is not None and not handle.approval_future.done()
         ):
             handle.approval_future.set_result(False)
-        self._runs.cancel(request_id, kind="builder")
+        return self._runs.cancel(request_id, kind=kind)
+
+    def cancel_builder(self, request_id: str) -> None:
+        """Stop for the Builder: deny any parked approval first (cancel
+        means deny - the code_sandbox precedent), then the standard
+        release-on-cancel. See _cancel_with_pending_approval_denied for the
+        shared shape and its own docstring for why the kind check inside it
+        is load-bearing."""
+        self._cancel_with_pending_approval_denied(request_id, "builder")
 
     # -- PLAN-2026-08-24 H1: the agent harness -------------------------------
 
@@ -866,18 +874,10 @@ class AgentDispatcher:
     def cancel_harness(self, request_id: str) -> None:
         """Stop for a harness run: deny any parked approval first (cancel
         means deny - the code_sandbox/builder precedent), then the standard
-        release-on-cancel.
-
-        The `handle.kind == "harness"` check is load-bearing - see
-        cancel_builder's own docstring for the exact foreign-kind
-        approval-denial race this closes."""
-        handle = self._runs.get(request_id)
-        if (
-            handle is not None and handle.kind == "harness"
-            and handle.approval_future is not None and not handle.approval_future.done()
-        ):
-            handle.approval_future.set_result(False)
-        self._runs.cancel(request_id, kind="harness")
+        release-on-cancel. See _cancel_with_pending_approval_denied for the
+        shared shape - its own docstring covers the exact foreign-kind
+        approval-denial race the kind check inside it closes."""
+        self._cancel_with_pending_approval_denied(request_id, "harness")
 
     async def remove_code_sandbox_scratch_dir(self, sandbox_id: str) -> None:
         """ADR-005 stage 5.3: node-delete teardown for Execution Sandbox.
@@ -905,14 +905,9 @@ class AgentDispatcher:
         other dispatch surface (the checkpoint is a cancel_event check
         between stages, not a true mid-call interrupt) EXCEPT for the
         approval pause itself, which this DOES immediately and definitely
-        unblock by resolving approval_future."""
-        handle = self._runs.get(request_id)
-        if handle is None or handle.kind != "code_sandbox":
-            return False
-        future = handle.approval_future
-        if future is not None and not future.done():
-            future.set_result(False)
-        return self._runs.cancel(request_id, kind="code_sandbox")
+        unblock by resolving approval_future. See
+        _cancel_with_pending_approval_denied for the shared shape."""
+        return self._cancel_with_pending_approval_denied(request_id, "code_sandbox")
 
     def _resolve_approval(self, request_id: str, approved: bool) -> bool:
         """The shared approve/deny primitive backing approve_code_execution/
@@ -2141,128 +2136,144 @@ class AgentDispatcher:
     # why every Gitlink action - including these four - shares that one
     # field); it is set/cleared inline here rather than via a background task.
 
-    async def fetch_gitlink_repositories(self, *, bus: SessionBus, notifications_state, node) -> list[str]:
+    async def _run_gitlink_blocking_action(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        node,
+        action,
+        timeout: float,
+        timeout_message: str,
+        error_log_message: str,
+        error_notify_prefix: str,
+        default=None,
+    ):
+        """Shared skeleton behind the four PLAIN gitlink async methods below
+        (fetch_gitlink_repositories/load_gitlink_repo_tree/
+        import_gitlink_snapshot/build_gitlink_context) - see the comment
+        above `fetch_gitlink_repositories` for why these four (unlike
+        start_gitlink_run/start_gitlink_apply) claim node.pending_request_id
+        inline and are awaited directly by the caller, with no
+        RunRegistry/cancel_event involvement. `action` is a zero-arg async
+        callable doing the actual blocking work (already wrapped in
+        asyncio.to_thread by the caller, including any success-path
+        transform of the thread result); everything around it - the busy
+        marker claim/release, the "scene" publishes bracketing it, and the
+        timeout/exception -> notification handling - was identical across
+        all four before this extraction."""
         request_id = uuid.uuid4().hex
         node.pending_request_id = request_id
         await bus.publish("scene")
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_list_github_repositories, self._settings_manager),
-                timeout=GITLINK_REPO_LIST_TIMEOUT_SECONDS,
-            )
+            return await asyncio.wait_for(action(), timeout=timeout)
         except asyncio.TimeoutError:
-            notifications_state.show(
-                "Loading GitHub repositories stopped responding before the request completed. "
-                "Please try again.",
-                "error",
-            )
+            notifications_state.show(timeout_message, "error")
             await bus.publish("notification")
-            return []
+            return default
         except Exception as exc:
-            logger.exception("gitlink repository listing failed")
-            notifications_state.show(f"Failed to load GitHub repositories: {exc}", "error")
+            logger.exception(error_log_message)
+            notifications_state.show(f"{error_notify_prefix}: {exc}", "error")
             await bus.publish("notification")
-            return []
+            return default
         finally:
             node.pending_request_id = None
             await bus.publish("scene")
 
+    async def fetch_gitlink_repositories(self, *, bus: SessionBus, notifications_state, node) -> list[str]:
+        async def _action():
+            return await asyncio.to_thread(_list_github_repositories, self._settings_manager)
+
+        return await self._run_gitlink_blocking_action(
+            bus=bus,
+            notifications_state=notifications_state,
+            node=node,
+            action=_action,
+            timeout=GITLINK_REPO_LIST_TIMEOUT_SECONDS,
+            timeout_message=(
+                "Loading GitHub repositories stopped responding before the request completed. "
+                "Please try again."
+            ),
+            error_log_message="gitlink repository listing failed",
+            error_notify_prefix="Failed to load GitHub repositories",
+            default=[],
+        )
+
     async def load_gitlink_repo_tree(self, *, bus: SessionBus, notifications_state, node, repo: str, branch: str):
-        request_id = uuid.uuid4().hex
-        node.pending_request_id = request_id
-        await bus.publish("scene")
-        try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(_load_gitlink_tree, self._settings_manager, repo, branch),
-                timeout=GITLINK_TREE_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            notifications_state.show(
+        async def _action():
+            return await asyncio.to_thread(_load_gitlink_tree, self._settings_manager, repo, branch)
+
+        return await self._run_gitlink_blocking_action(
+            bus=bus,
+            notifications_state=notifications_state,
+            node=node,
+            action=_action,
+            timeout=GITLINK_TREE_TIMEOUT_SECONDS,
+            timeout_message=(
                 "Loading the repository file tree stopped responding before the request "
-                "completed. Please try again.",
-                "error",
-            )
-            await bus.publish("notification")
-            return None
-        except Exception as exc:
-            logger.exception("gitlink repo tree load failed")
-            notifications_state.show(f"Failed to load the repository file tree: {exc}", "error")
-            await bus.publish("notification")
-            return None
-        finally:
-            node.pending_request_id = None
-            await bus.publish("scene")
+                "completed. Please try again."
+            ),
+            error_log_message="gitlink repo tree load failed",
+            error_notify_prefix="Failed to load the repository file tree",
+            default=None,
+        )
 
     async def import_gitlink_snapshot(
         self, *, bus: SessionBus, notifications_state, node, repo: str, branch: str,
         local_root_hint: str, imported_root_hint: str,
     ):
-        request_id = uuid.uuid4().hex
-        node.pending_request_id = request_id
-        await bus.publish("scene")
-        try:
-            resolved_repo, resolved_branch, local_root_path = await asyncio.wait_for(
-                asyncio.to_thread(
-                    _ensure_gitlink_snapshot, self._settings_manager, repo, branch,
-                    local_root_hint, imported_root_hint,
-                ),
-                timeout=GITLINK_IMPORT_TIMEOUT_SECONDS,
+        async def _action():
+            resolved_repo, resolved_branch, local_root_path = await asyncio.to_thread(
+                _ensure_gitlink_snapshot, self._settings_manager, repo, branch,
+                local_root_hint, imported_root_hint,
             )
             return resolved_repo, resolved_branch, str(local_root_path)
-        except asyncio.TimeoutError:
-            notifications_state.show(
+
+        return await self._run_gitlink_blocking_action(
+            bus=bus,
+            notifications_state=notifications_state,
+            node=node,
+            action=_action,
+            timeout=GITLINK_IMPORT_TIMEOUT_SECONDS,
+            timeout_message=(
                 "Importing the repository snapshot stopped responding before the request "
-                "completed. Please try again.",
-                "error",
-            )
-            await bus.publish("notification")
-            return None
-        except Exception as exc:
-            logger.exception("gitlink snapshot import failed")
-            notifications_state.show(f"Failed to import the repository snapshot: {exc}", "error")
-            await bus.publish("notification")
-            return None
-        finally:
-            node.pending_request_id = None
-            await bus.publish("scene")
+                "completed. Please try again."
+            ),
+            error_log_message="gitlink snapshot import failed",
+            error_notify_prefix="Failed to import the repository snapshot",
+            default=None,
+        )
 
     async def build_gitlink_context(
         self, *, bus: SessionBus, notifications_state, node, scope_mode: str, selected_paths: list[str],
     ):
-        request_id = uuid.uuid4().hex
-        node.pending_request_id = request_id
-        await bus.publish("scene")
-        try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(
-                    _build_gitlink_context_bundle,
-                    self._settings_manager,
-                    repo=node.state.gitlink_repo,
-                    branch=node.state.gitlink_branch,
-                    scope_mode=scope_mode,
-                    selected_paths=selected_paths,
-                    repo_file_paths=list(node.state.gitlink_repo_file_paths),
-                    local_root_hint=node.state.gitlink_local_root,
-                    imported_root_hint=node.state.gitlink_imported_root,
-                ),
-                timeout=GITLINK_CONTEXT_TIMEOUT_SECONDS,
+        async def _action():
+            return await asyncio.to_thread(
+                _build_gitlink_context_bundle,
+                self._settings_manager,
+                repo=node.state.gitlink_repo,
+                branch=node.state.gitlink_branch,
+                scope_mode=scope_mode,
+                selected_paths=selected_paths,
+                repo_file_paths=list(node.state.gitlink_repo_file_paths),
+                local_root_hint=node.state.gitlink_local_root,
+                imported_root_hint=node.state.gitlink_imported_root,
             )
-        except asyncio.TimeoutError:
-            notifications_state.show(
+
+        return await self._run_gitlink_blocking_action(
+            bus=bus,
+            notifications_state=notifications_state,
+            node=node,
+            action=_action,
+            timeout=GITLINK_CONTEXT_TIMEOUT_SECONDS,
+            timeout_message=(
                 "Building the repository context stopped responding before the request "
-                "completed. Please try again.",
-                "error",
-            )
-            await bus.publish("notification")
-            return None
-        except Exception as exc:
-            logger.exception("gitlink context build failed")
-            notifications_state.show(f"Failed to build the repository context: {exc}", "error")
-            await bus.publish("notification")
-            return None
-        finally:
-            node.pending_request_id = None
-            await bus.publish("scene")
+                "completed. Please try again."
+            ),
+            error_log_message="gitlink context build failed",
+            error_notify_prefix="Failed to build the repository context",
+            default=None,
+        )
 
     async def start_gitlink_run(
         self,

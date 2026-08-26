@@ -5,6 +5,7 @@ import type { AppChatLibraryRow, AppChatLibraryState, AppWorkspaceRow } from "..
 import type { AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { CustomSelect } from "./CustomSelect";
+import { SearchIcon } from "./SearchIcon";
 import { initialComposerState } from "./composerStore";
 
 /**
@@ -142,12 +143,7 @@ function Icon({
 }) {
   switch (name) {
     case "search":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <circle cx="10.5" cy="10.5" r="6.5" />
-          <path d="m20 20-4.8-4.8" />
-        </svg>
-      );
+      return <SearchIcon />;
     case "pencil":
       return (
         <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">

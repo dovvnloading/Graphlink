@@ -9,7 +9,6 @@ change.
 from __future__ import annotations
 
 import asyncio
-import os
 
 import ollama
 
@@ -17,12 +16,12 @@ import api_provider
 import graphlink_task_config as config
 from graphlink_model_catalog import AUTO_MODEL, INHERIT_MODEL
 
-from backend import native_dialogs
 from backend.api._settings_shared import (
     OLLAMA_TASK_KEYS,
     REASONING_LEVELS,
     SettingsSessionState,
     apply_ollama_reasoning_level,
+    pick_scan_folder_and_run,
     republish_composer_reasoning,
     run_locked,
 )
@@ -183,30 +182,21 @@ def register_settings_ollama_intents(
         # (blocking, potentially long-lived-until-the-user-decides) native
         # dialog opens, not after - two near-simultaneous clicks must not
         # both reach a native file-dialog call.
-        if state.ollama_scan_status == "running":
-            return
-        state.ollama_scan_status = "running"
-        await bus.publish("app-settings")
-        directory = manager.get_ollama_model_scan_path() or os.path.expanduser("~")
-        try:
-            # Adversarial-review finding: the native dialog call itself can
-            # raise (a per-platform GTK/COM/file-type-parsing failure inside
-            # pywebview's create_file_dialog - confirmed reachable via its
-            # own source, not theoretical). Uncaught, this would strand the
-            # reentrancy gate at "running" forever - the exact class of bug
-            # already fixed twice in this file for the SCAN/PERSIST steps,
-            # reintroduced here via the dialog call that precedes them.
-            folder = await native_dialogs.pick_folder(directory=directory)
-        except Exception as exc:  # noqa: BLE001 - a local folder path, not a credential
-            state.ollama_scan_status = "error"
-            state.ollama_notice = f"Could not open the folder picker: {exc}"
-            await bus.publish("app-settings")
-            return
-        if not folder:
-            state.ollama_scan_status = "idle"
-            await bus.publish("app-settings")
-            return
-        await _run_ollama_scan(folder)
+        #
+        # R8b: this guard/dialog/error-mapping sequence is shared with
+        # intents_settings_llama_cpp.py's own pickLlamaCppScanFolder - see
+        # pick_scan_folder_and_run's own docstring
+        # (backend/api/_settings_shared.py). The Adversarial-review finding
+        # that motivated the try/except here (the native dialog call itself
+        # can raise - a per-platform GTK/COM/file-type-parsing failure
+        # inside pywebview's create_file_dialog, confirmed reachable via its
+        # own source, not theoretical) now lives in that shared function.
+        await pick_scan_folder_and_run(
+            bus, state,
+            status_field="ollama_scan_status", notice_field="ollama_notice",
+            saved_scan_path=manager.get_ollama_model_scan_path(),
+            run_scan=_run_ollama_scan,
+        )
 
     async def pull_ollama_model(model_name: str):
         model_name = str(model_name).strip()

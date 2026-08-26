@@ -19,9 +19,8 @@ import os
 
 from backend import native_dialogs
 from backend.agents import _GITLINK_RUN_CLAIM_PLACEHOLDER, AgentDispatcher
-from backend.api._shared import make_publish_scene
+from backend.api._shared import claim_busy_node_or_notify, make_publish_scene
 from backend.domain.graph import SceneDocument
-from backend.domain.model import SceneError
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -136,32 +135,18 @@ def register_gitlink_intents(
         return document.fetch_gitlink_context_xml(node_id)
 
     async def run_gitlink_change_set(node_id, task_prompt):
-        node_for_check = document.nodes.get(node_id)
-        if node_for_check is not None and node_for_check.pending_request_id:
-            notifications.show("Gitlink is already busy for this node.", "info")
-            await bus.publish("notification")
-            return None
-        # R5.3 post-review FIX 4(b): claim the busy slot with a placeholder
-        # SYNCHRONOUSLY, in the same stretch as the busy pre-check just
-        # above - before document.start_gitlink_run or any await - so a
-        # second concurrent call for this SAME node_id can never pass that
-        # same pre-check during the `await publish_scene()` gap below.
-        # agent_dispatcher.start_gitlink_run (the ONLY caller of this dict
-        # entry for this node_id, invoked just below) recognizes this exact
-        # placeholder and overwrites it with the real request_id, still
-        # synchronously - see that method's own docstring.
-        if node_for_check is not None:
-            node_for_check.pending_request_id = _GITLINK_RUN_CLAIM_PLACEHOLDER
-        try:
-            node = document.start_gitlink_run(node_id, task_prompt)
-        except SceneError:
-            # Node deleted (or wrong-kind) concurrently with the claim above -
-            # the placeholder must not linger on a node this handler is
-            # about to give up on.
-            if node_for_check is not None:
-                node_for_check.pending_request_id = None
-            notifications.show("This node no longer exists.", "warning")
-            await bus.publish("notification")
+        # R5.3 post-review FIX 4(b) / R8b: the busy pre-check, synchronous
+        # placeholder claim, and SceneError recovery are shared with
+        # Execution Sandbox's runCodeSandbox - see claim_busy_node_or_notify's
+        # own docstring (backend/api/_shared.py) for exactly why the claim
+        # must land in the same synchronous stretch as the pre-check.
+        node = await claim_busy_node_or_notify(
+            bus, document, notifications, node_id,
+            busy_message="Gitlink is already busy for this node.",
+            placeholder=_GITLINK_RUN_CLAIM_PLACEHOLDER,
+            start_run=lambda: document.start_gitlink_run(node_id, task_prompt),
+        )
+        if node is None:
             return None
         await publish_scene()
 

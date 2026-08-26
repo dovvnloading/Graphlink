@@ -15,9 +15,8 @@ Sandbox still depends on them.
 from __future__ import annotations
 
 from backend.agents import _CODE_EXEC_RUN_CLAIM_PLACEHOLDER, AgentDispatcher
-from backend.api._shared import make_publish_scene
+from backend.api._shared import claim_busy_node_or_notify, make_publish_scene
 from backend.domain.graph import SceneDocument
-from backend.domain.model import SceneError
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -44,22 +43,16 @@ def register_code_sandbox_intents(
 
     async def run_code_sandbox(node_id, input_text):
         # Same busy-claim-placeholder pattern as run_gitlink_change_set
-        # (backend/api/intents_gitlink.py) - see that function's own
-        # comment for the exact race this closes.
-        node_for_check = document.nodes.get(node_id)
-        if node_for_check is not None and node_for_check.pending_request_id:
-            notifications.show("Virtual Environment Runner is already busy for this node.", "info")
-            await bus.publish("notification")
-            return None
-        if node_for_check is not None:
-            node_for_check.pending_request_id = _CODE_EXEC_RUN_CLAIM_PLACEHOLDER
-        try:
-            node = document.start_code_sandbox_run(node_id, input_text)
-        except SceneError:
-            if node_for_check is not None:
-                node_for_check.pending_request_id = None
-            notifications.show("This node no longer exists.", "warning")
-            await bus.publish("notification")
+        # (backend/api/intents_gitlink.py) - shared via
+        # claim_busy_node_or_notify (backend/api/_shared.py), which owns
+        # the exact race that placeholder claim closes.
+        node = await claim_busy_node_or_notify(
+            bus, document, notifications, node_id,
+            busy_message="Virtual Environment Runner is already busy for this node.",
+            placeholder=_CODE_EXEC_RUN_CLAIM_PLACEHOLDER,
+            start_run=lambda: document.start_code_sandbox_run(node_id, input_text),
+        )
+        if node is None:
             return None
         await publish_scene()
 

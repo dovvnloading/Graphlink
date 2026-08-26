@@ -34,6 +34,41 @@ def register_branches_intents(
     # module-level import here.
     from backend.canvas import _format_branches_for_comparison
 
+    async def _dedupe_and_require_two_branches(node_ids, verb: str):
+        """Shared first step of compare_branches/synthesize_branches: de-dupe
+        the selected ids (preserving order) and require at least 2. `verb`
+        is the action word ("compare"/"synthesize") - the only thing that
+        differs between the two callers' equivalent checks. Returns the
+        de-duped ids, or None (after already publishing the notification)
+        when the caller should stop."""
+        ids = list(dict.fromkeys(str(i) for i in (node_ids or [])))  # de-dupe, preserve order
+        if len(ids) < 2:
+            notifications.show(f"Select at least 2 branches to {verb}.", "warning")
+            await bus.publish("notification")
+            return None
+        return ids
+
+    async def _resolve_chat_sources(ids, verb: str):
+        """Shared second step: resolve every id to a real chat node and
+        format each source's branch history for the agent. Returns
+        (sources, formatted_text), or None (after already publishing the
+        notification) if any id isn't a real chat node."""
+        sources = []
+        for node_id in ids:
+            node = document.nodes.get(node_id)
+            if node is None or node.kind != "chat":
+                notifications.show(f"Every selected node must be a real chat message to {verb}.", "warning")
+                await bus.publish("notification")
+                return None
+            sources.append(node)
+
+        branches = [
+            (f"Branch {index + 1}", document.chat_branch_history(node.id))
+            for index, node in enumerate(sources)
+        ]
+        formatted = _format_branches_for_comparison(branches)
+        return sources, formatted
+
     async def _generate_note_from_node(source_node_id, note_kind):
         """R8a: shared path for generateKeyTakeaway and generateExplainerNote.
 
@@ -133,26 +168,13 @@ def register_branches_intents(
         must supply 2+ real ids up front, the same "the frontend already
         gathered React Flow's own multi-selection" contract create_frame/
         create_container already use."""
-        ids = list(dict.fromkeys(str(i) for i in (node_ids or [])))  # de-dupe, preserve order
-        if len(ids) < 2:
-            notifications.show("Select at least 2 branches to compare.", "warning")
-            await bus.publish("notification")
+        ids = await _dedupe_and_require_two_branches(node_ids, "compare")
+        if ids is None:
             return None
-
-        sources = []
-        for node_id in ids:
-            node = document.nodes.get(node_id)
-            if node is None or node.kind != "chat":
-                notifications.show("Every selected node must be a real chat message to compare.", "warning")
-                await bus.publish("notification")
-                return None
-            sources.append(node)
-
-        branches = [
-            (f"Branch {index + 1}", document.chat_branch_history(node.id))
-            for index, node in enumerate(sources)
-        ]
-        formatted = _format_branches_for_comparison(branches)
+        resolved = await _resolve_chat_sources(ids, "compare")
+        if resolved is None:
+            return None
+        sources, formatted = resolved
 
         # Positioned beside the bottom-most source branch, the same
         # "offset to the side" convention _generate_note_from_node uses for
@@ -216,10 +238,8 @@ def register_branches_intents(
         composer_document.route() - the same route a plain send would
         actually use - onto the result node (see ChatState's own comment,
         backend/domain/node_states.py)."""
-        ids = list(dict.fromkeys(str(i) for i in (node_ids or [])))  # de-dupe, preserve order
-        if len(ids) < 2:
-            notifications.show("Select at least 2 branches to synthesize.", "warning")
-            await bus.publish("notification")
+        ids = await _dedupe_and_require_two_branches(node_ids, "synthesize")
+        if ids is None:
             return None
 
         clean_instructions = str(instructions or "").strip()
@@ -228,20 +248,10 @@ def register_branches_intents(
             await bus.publish("notification")
             return None
 
-        sources = []
-        for node_id in ids:
-            node = document.nodes.get(node_id)
-            if node is None or node.kind != "chat":
-                notifications.show("Every selected node must be a real chat message to synthesize.", "warning")
-                await bus.publish("notification")
-                return None
-            sources.append(node)
-
-        branches = [
-            (f"Branch {index + 1}", document.chat_branch_history(node.id))
-            for index, node in enumerate(sources)
-        ]
-        formatted = _format_branches_for_comparison(branches)
+        resolved = await _resolve_chat_sources(ids, "synthesize")
+        if resolved is None:
+            return None
+        sources, formatted = resolved
 
         parent = sources[0]
         route = composer_document.route()

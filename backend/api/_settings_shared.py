@@ -28,6 +28,15 @@ would create the same cycle if left in backend/settings.py.
 backend/settings.py re-exports all six verbatim so composer.py's existing
 import keeps working unchanged.
 
+pick_scan_folder_and_run factors out the busy-guarded native folder-pick
+step behind Settings' two "Scan Folder..." buttons
+(intents_settings_ollama.py's pickOllamaScanFolder / intents_settings_
+llama_cpp.py's pickLlamaCppScanFolder) - identical control flow (busy
+pre-check, open the native dialog, map a raised exception or a cancelled
+dialog to a state update, otherwise hand the picked folder to the page's
+own scan runner), differing only in which SettingsSessionState fields each
+page uses and which manager getter seeds the dialog's starting directory.
+
 run_locked/locked_llama_cpp_settings/republish_composer_reasoning/
 redact_secret were private (leading-underscore) helpers before this split,
 each now crossing a real module boundary for the first time - renamed
@@ -46,14 +55,16 @@ unrenamed.
 from __future__ import annotations
 
 import asyncio
+import os
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 import api_provider
 import graphlink_task_config as config
 from graphlink_settings_store import SettingsManager
 
+from backend import native_dialogs
 from backend.events import SessionBus
 
 # The six per-task model-assignment slots the API-provider page exposes,
@@ -241,6 +252,46 @@ async def apply_gemini_reasoning_level(manager: SettingsManager, level: str) -> 
 async def apply_openai_reasoning_level(manager: SettingsManager, level: str) -> None:
     await asyncio.to_thread(run_locked, manager.set_openai_reasoning_level, level)
     await asyncio.to_thread(api_provider.set_openai_reasoning_level, level)
+
+
+async def pick_scan_folder_and_run(
+    bus: SessionBus,
+    state: SettingsSessionState,
+    *,
+    status_field: str,
+    notice_field: str,
+    saved_scan_path: str,
+    run_scan: Callable[[str], Awaitable[None]],
+) -> None:
+    """Shared body of pickOllamaScanFolder/pickLlamaCppScanFolder: guard on
+    the page's own "already running" reentrancy flag, open the native
+    folder dialog seeded at `saved_scan_path` (or home), and hand the picked
+    folder to `run_scan`. A cancelled dialog is a quiet no-op (state goes
+    back to "idle"); a dialog-open failure reports an error - matches both
+    callers' pre-extraction behavior exactly.
+
+    `status_field`/`notice_field` name the two SettingsSessionState fields
+    this manages (getattr/setattr, since Ollama and Llama.cpp each have
+    their own distinct fields for this - `ollama_scan_status`/
+    `ollama_notice` vs `llama_scan_status`/`llama_notice` - not indirection
+    for its own sake)."""
+    if getattr(state, status_field) == "running":
+        return
+    setattr(state, status_field, "running")
+    await bus.publish("app-settings")
+    directory = saved_scan_path or os.path.expanduser("~")
+    try:
+        folder = await native_dialogs.pick_folder(directory=directory)
+    except Exception as exc:  # noqa: BLE001 - a local folder path, not a credential
+        setattr(state, status_field, "error")
+        setattr(state, notice_field, f"Could not open the folder picker: {exc}")
+        await bus.publish("app-settings")
+        return
+    if not folder:
+        setattr(state, status_field, "idle")
+        await bus.publish("app-settings")
+        return
+    await run_scan(folder)
 
 
 def redact_secret(text: str, secret: Any) -> str:

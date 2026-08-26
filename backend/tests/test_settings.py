@@ -1826,6 +1826,54 @@ def test_scan_llama_cpp_system_reports_truncated_scans(manager, monkeypatch):
     assert "stopped early" in payload["llamaCppNotice"]
 
 
+def test_pick_llama_cpp_scan_folder_scans_the_picked_folder(manager, monkeypatch):
+    # R8b: pickLlamaCppScanFolder now shares pick_scan_folder_and_run with
+    # pickOllamaScanFolder (see test_pick_ollama_scan_folder_scans_the_picked_folder
+    # above) - this covers the Llama.cpp-specific wiring (llama_scan_status/
+    # llama_notice, get_llama_cpp_model_scan_path) that had no direct
+    # intent-level test before the extraction.
+    async def _fake_pick_folder(directory=""):
+        return "C:/models/llama"
+
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+    monkeypatch.setattr(
+        api_provider,
+        "scan_local_llama_cpp_models",
+        lambda scan_path: {
+            "models": ["C:/models/llama/a.gguf"], "scan_mode": "folder", "scan_path": scan_path,
+            "locations": [scan_path], "truncated": False,
+        },
+    )
+    bus = SessionBus("settings-pick-llama-cpp-scan-folder-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pickLlamaCppScanFolder", []))
+
+    assert manager.get_llama_cpp_scanned_models() == ["C:/models/llama/a.gguf"]
+    payload = recorder.messages[-1]["payload"]
+    assert payload["llamaCppScanStatus"] == "done"
+
+
+def test_pick_llama_cpp_scan_folder_is_a_no_op_when_cancelled(manager, monkeypatch):
+    async def _fake_pick_folder(directory=""):
+        return None
+
+    calls = []
+    monkeypatch.setattr(native_dialogs, "pick_folder", _fake_pick_folder)
+    monkeypatch.setattr(api_provider, "scan_local_llama_cpp_models", lambda scan_path: calls.append(1) or {"models": []})
+    bus = SessionBus("settings-pick-llama-cpp-scan-folder-cancel-test")
+    register_settings(bus, manager)
+    recorder = Recorder()
+    bus.attach(recorder)
+
+    asyncio.run(bus.dispatch_intent("app-settings", "pickLlamaCppScanFolder", []))
+
+    assert calls == []
+    assert recorder.messages[-1]["payload"]["llamaCppScanStatus"] == "idle"
+
+
 def test_save_llama_cpp_settings_rejects_missing_chat_path(manager):
     bus = SessionBus("settings-llama-cpp-save-missing-chat-test")
     register_settings(bus, manager)

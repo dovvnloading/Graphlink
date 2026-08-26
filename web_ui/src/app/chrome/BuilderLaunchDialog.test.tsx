@@ -35,26 +35,11 @@ vi.mock("@xyflow/react", async (importOriginal) => {
 
 import { BuilderLaunchDialog } from "./BuilderLaunchDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
-import type { WsTransport } from "../../lib/ws/transport";
-
-function makeTransport() {
-  const intents: unknown[][] = [];
-  const request = vi.fn<(topic: string, intent: string, args?: unknown[]) => Promise<unknown>>();
-  const transport = {
-    subscribe: () => () => {},
-    intent: () => {},
-    fireIntent: () => {},
-    request: (topic: string, intent: string, args: unknown[] = []) => {
-      intents.push([topic, intent, args]);
-      return request(topic, intent, args);
-    },
-  } as unknown as WsTransport;
-  return { transport, intents, request };
-}
+import { makeRequestOnlyTransport as makeTransport } from "../../lib/ws/transport.testUtils";
 
 // Only getScene() is exercised (reading the newly-created node's position
 // for the post-launch setCenter call) - a minimal fake, the same posture
-// makeTransport() takes for WsTransport above.
+// makeRequestOnlyTransport() takes for WsTransport.
 function makeStore(nodes: Array<{ id: string; x: number; y: number }> = []) {
   return {
     getScene: () => ({ nodes }),

@@ -372,8 +372,7 @@ export class WsTransport {
       // pairing a load-bearing invariant with nothing enforcing it.
       const topics = [...new Set([...this.stateListeners.keys(), ...this.patchListeners.keys()])];
       if (topics.length > 0) {
-        socket.send(JSON.stringify({ kind: "subscribe", topics }));
-        for (const topic of topics) this.snapshotRequestsPending.add(topic);
+        this.sendSubscribe(socket, topics);
       }
       // ADR-003 stage 3.6: AFTER re-subscribing, so a replayed intent
       // (e.g. moveNodes) applies against fresh server state rather than
@@ -383,8 +382,7 @@ export class WsTransport {
       // but before its correlated response arrives. Reissue those fences
       // after ordinary subscriptions and queued writes on the new socket.
       for (const [id, request] of this.resubscribeListeners) {
-        socket.send(JSON.stringify({ kind: "subscribe", topics: [request.topic], id }));
-        this.snapshotRequestsPending.add(request.topic);
+        this.sendSubscribe(socket, [request.topic], id);
       }
     };
     socket.onmessage = (event) => {
@@ -450,8 +448,7 @@ export class WsTransport {
       this.socket &&
       !this.snapshotRequestsPending.has(topic)
     ) {
-      this.socket.send(JSON.stringify({ kind: "subscribe", topics: [topic] }));
-      this.snapshotRequestsPending.add(topic);
+      this.sendSubscribe(this.socket, [topic]);
     }
     return () => {
       set.delete(listener);
@@ -476,12 +473,7 @@ export class WsTransport {
       id = this.nextId++;
       this.resubscribeListeners.set(id, { topic, listener: onSnapshot });
     }
-    this.socket.send(JSON.stringify({
-      kind: "subscribe",
-      topics: [topic],
-      ...(id === undefined ? {} : { id }),
-    }));
-    this.snapshotRequestsPending.add(topic);
+    this.sendSubscribe(this.socket, [topic], id);
     return true;
   }
 
@@ -616,7 +608,7 @@ export class WsTransport {
   intent(topic: string, intent: string, args: unknown[] = []): void {
     if (this.blockedTopics.has(topic)) return;
     if (this.status !== "open" || !this.socket) return;
-    this.socket.send(JSON.stringify({ kind: "intent", topic, intent, args }));
+    this.sendIntent(this.socket, topic, intent, args);
   }
 
   /** Intent with a reply (result or error), for request/response flows.
@@ -643,7 +635,7 @@ export class WsTransport {
         reject(new WsTimeoutError(`request timed out: ${topic}/${intent}`));
       }, timeoutMs ?? this.requestTimeout);
       this.pending.set(id, { resolve, reject, timer });
-      socket.send(JSON.stringify({ kind: "intent", topic, intent, args, id }));
+      this.sendIntent(socket, topic, intent, args, id);
     });
   }
 
@@ -913,16 +905,22 @@ export class WsTransport {
       // mean two outages inside the 3s window that each lost one change
       // report "1 change..." once and swallow the second - under-reporting
       // real data loss, which is precisely what this stage exists to stop.
-      this.intent(
-        "notification",
-        "showError",
-        [
-          n === 1
-            ? "1 change could not be sent while disconnected."
-            : `${n} changes could not be sent while disconnected.`,
-        ],
+      this.notifyError(
+        n === 1
+          ? "1 change could not be sent while disconnected."
+          : `${n} changes could not be sent while disconnected.`,
       );
     }
+  }
+
+  /** The one destination every client-surfaced error message goes through:
+   * the server-authoritative "notification"/"showError" intent (see
+   * fireIntent()'s own doc for why this reuses that channel rather than a
+   * second, client-local notification UI). Both call sites - the offline-
+   * queue summary above and showErrorDeduped below - used to spell out
+   * `this.intent("notification", "showError", [message])` themselves. */
+  private notifyError(message: string): void {
+    this.intent("notification", "showError", [message]);
   }
 
   /** ADR-003 stage 3.1 review-fix: the last showError message this transport
@@ -943,10 +941,31 @@ export class WsTransport {
       return;
     }
     this.lastShowError = { message, at: now };
-    this.intent("notification", "showError", [message]);
+    this.notifyError(message);
   }
 
   // -- internals ---------------------------------------------------------
+
+  /** Sends a `kind:"subscribe"` frame for one or more topics and marks each
+   * one as awaiting its snapshot. The single place that builds this frame -
+   * onopen's reconnect resubscribe-all, its resubscribeListeners fence
+   * replay, subscribe()'s own on-demand request, and resubscribe() itself
+   * each used to spell out an equivalent `socket.send(JSON.stringify({
+   * kind: "subscribe", ... }))` plus its own `snapshotRequestsPending.add`
+   * bookkeeping. `id` is omitted from the frame when undefined (JSON.stringify
+   * already drops an `undefined`-valued property on its own). */
+  private sendSubscribe(socket: WsLike, topics: string[], id?: number): void {
+    socket.send(JSON.stringify({ kind: "subscribe", topics, id }));
+    for (const topic of topics) this.snapshotRequestsPending.add(topic);
+  }
+
+  /** Sends a `kind:"intent"` frame - intent()'s fire-and-forget send and
+   * request()'s id-correlated send used to each spell out their own
+   * equivalent `socket.send(JSON.stringify({ kind: "intent", ... }))`. `id`
+   * is omitted from the frame when undefined, same as sendSubscribe above. */
+  private sendIntent(socket: WsLike, topic: string, intent: string, args: unknown[], id?: number): void {
+    socket.send(JSON.stringify({ kind: "intent", topic, intent, args, id }));
+  }
 
   private handleMessage(raw: string): void {
     let message: Record<string, unknown>;

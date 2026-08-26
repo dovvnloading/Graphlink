@@ -329,7 +329,7 @@ async def _execute_discovered_plugin(
         return None
     kind_spec, picker_entry = resolved
 
-    if not settings_manager.get_plugin_grants().get(kind_spec.plugin_id, False):
+    if not _is_plugin_granted(settings_manager, kind_spec.plugin_id):
         notifications.show(
             f'"{picker_entry.name}" needs your approval before it can create nodes - '
             f'grant it in Settings > Plugins.', "warning",
@@ -418,7 +418,7 @@ async def _invoke_discovered_plugin_intent(
         await bus.publish("notification")
         return None
 
-    if not settings_manager.get_plugin_grants().get(plugin_id, False):
+    if not _is_plugin_granted(settings_manager, plugin_id):
         notifications.show(
             f'"{plugin_id}" needs your approval before it can run this action - '
             f'grant it in Settings > Plugins.', "warning",
@@ -547,7 +547,7 @@ def _make_plugin_tool_handler(
     NotificationState through, for a plugin author who needs one."""
 
     async def _handler(call: ToolCall, ctx: RunContext) -> ToolResult:
-        if not settings_manager.get_plugin_grants().get(plugin_id, False):
+        if not _is_plugin_granted(settings_manager, plugin_id):
             return ToolResult(
                 content=f'Plugin "{plugin_id}" needs your approval in Settings > Plugins before '
                 f'this action can run.',
@@ -585,12 +585,25 @@ def _make_plugin_tool_handler(
     return _handler
 
 
+def _is_plugin_granted(settings_manager: SettingsManager, plugin_id: str) -> bool:
+    """The one grant-check predicate every install-time consent gate in this
+    module resolves to: _execute_discovered_plugin (node creation),
+    _invoke_discovered_plugin_intent, _make_plugin_tool_handler's Builder-
+    tool handler, and _grant_gated_serialize below all gate on this exact
+    settings_manager.get_plugin_grants().get(plugin_id, False) lookup -
+    previously each hand-rolled it inline instead of sharing one helper.
+    Checked fresh on every call (never cached), same as before this
+    extraction - a grant flip in Settings takes effect on the very next
+    check at any of those call sites."""
+    return bool(settings_manager.get_plugin_grants().get(plugin_id, False))
+
+
 def _grant_gated_serialize(plugin_id: str, serialize, settings_manager: SettingsManager):
     """ADR-014 review-fix: wraps a plugin's own HostContext.register_node_
     kind(..., serialize=...) hook so a revoked Settings > Plugins grant
     actually stops it from running, rather than merely hiding the plugin's
     PICKER entry while its serializer keeps firing on every scene publish
-    forever after. The SAME settings_manager.get_plugin_grants() check
+    forever after. The SAME _is_plugin_granted check
     _execute_discovered_plugin/_invoke_discovered_plugin_intent/
     register_plugin_tools' own handler already apply before calling into a
     plugin's code, extended to this fourth call site.
@@ -613,7 +626,7 @@ def _grant_gated_serialize(plugin_id: str, serialize, settings_manager: Settings
     session's live SceneDocument)."""
 
     def _serialize(node):
-        if not settings_manager.get_plugin_grants().get(plugin_id, False):
+        if not _is_plugin_granted(settings_manager, plugin_id):
             return None
         return serialize(node)
 
