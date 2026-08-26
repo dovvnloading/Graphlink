@@ -225,6 +225,7 @@ where = ["."]
 include = [
     "backend*",
     "graphlink_plugins*",
+    "settings_store*",
 ]
 # Auto-discovery here is namespace-aware (PEP 420), so backend/tests/ and
 # backend/evals/ are picked up as real packages even without __init__.py in
