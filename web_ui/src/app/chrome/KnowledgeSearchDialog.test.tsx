@@ -1,27 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { KnowledgeSearchDialog } from "./KnowledgeSearchDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
-import type { WsTransport } from "../../lib/ws/transport";
-
-// Matches DiagnosticsDialog.test.tsx's own makeTransport() shape exactly -
-// KnowledgeSearchDialog only ever calls transport.request() (the "I need
-// the actual return value" primitive), never fireIntent/intent.
-function makeTransport() {
-  const intents: unknown[][] = [];
-  const request = vi.fn<(topic: string, intent: string, args?: unknown[]) => Promise<unknown>>();
-  const transport = {
-    subscribe: () => () => {},
-    intent: () => {},
-    fireIntent: () => {},
-    request: (topic: string, intent: string, args: unknown[] = []) => {
-      intents.push([topic, intent, args]);
-      return request(topic, intent, args);
-    },
-  } as unknown as WsTransport;
-  return { transport, intents, request };
-}
+import { makeRequestOnlyTransport as makeTransport } from "../../lib/ws/transport.testUtils";
 
 function OpenKnowledgeButton() {
   const overlays = useOverlays();

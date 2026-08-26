@@ -25,6 +25,7 @@ from backend.api._settings_shared import (
     SettingsSessionState,
     apply_llama_cpp_reasoning_level,
     locked_llama_cpp_settings,
+    pick_scan_folder_and_run,
     republish_composer_reasoning,
     run_locked,
 )
@@ -211,24 +212,15 @@ def register_settings_llama_cpp_intents(
         await _run_llama_cpp_scan(None)
 
     async def pick_llama_cpp_scan_folder():
-        if state.llama_scan_status == "running":
-            return
-        state.llama_scan_status = "running"
-        await bus.publish("app-settings")
-        directory = manager.get_llama_cpp_model_scan_path() or os.path.expanduser("~")
-        try:
-            # Same reentrancy-gate hazard fixed above for pick_ollama_scan_folder.
-            folder = await native_dialogs.pick_folder(directory=directory)
-        except Exception as exc:  # noqa: BLE001 - a local folder path, not a credential
-            state.llama_scan_status = "error"
-            state.llama_notice = f"Could not open the folder picker: {exc}"
-            await bus.publish("app-settings")
-            return
-        if not folder:
-            state.llama_scan_status = "idle"
-            await bus.publish("app-settings")
-            return
-        await _run_llama_cpp_scan(folder)
+        # R8b: same reentrancy-gate hazard fixed for pick_ollama_scan_folder
+        # (intents_settings_ollama.py) - both now share
+        # pick_scan_folder_and_run (backend/api/_settings_shared.py).
+        await pick_scan_folder_and_run(
+            bus, state,
+            status_field="llama_scan_status", notice_field="llama_notice",
+            saved_scan_path=manager.get_llama_cpp_model_scan_path(),
+            run_scan=_run_llama_cpp_scan,
+        )
 
     async def save_llama_cpp_settings():
         # Sequencing matches legacy's saveLlamaCppSettings() exactly:

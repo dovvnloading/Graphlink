@@ -10,6 +10,7 @@ import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
+import { useStreamBuffer } from "./useStreamBuffer";
 
 /**
  * The chat node (Qt-removal plan R3.1/R3.2) - ChatNode's React successor:
@@ -817,85 +818,12 @@ export const ChatNodeView = memo(function ChatNodeView({
   const [contentExpanded, setContentExpanded] = useState(false);
   const [contentOverflows, setContentOverflows] = useState(false);
 
-  // ADR-006 stage 6.4: live Regenerate streaming - the exact
-  // subscription/reset pattern CodeSandboxNodeView's live terminal
-  // established (derived-state reset during render so a new request never
-  // shows the previous run's stale content, effect below left to do only
-  // transport synchronization; see that file's own comments for the full
-  // rationale).
-  const [streamedContent, setStreamedContent] = useState("");
-  const [subscribedRequestId, setSubscribedRequestId] = useState(data.pendingRequestId);
-  if (data.pendingRequestId !== subscribedRequestId) {
-    setSubscribedRequestId(data.pendingRequestId);
-    setStreamedContent("");
-  }
-
-  // ADR-011 stage 11.4: deltas accumulate into these refs (not React state)
-  // as they arrive - only the rAF-scheduled flush below ever calls
-  // setStreamedContent, so a fast burst of many small deltas within one
-  // frame re-parses markdown (NodeMarkdown's full unified/remark/rehype/
-  // KaTeX/highlight pipeline) at most once per frame, not once per delta.
-  // Every byte still lands in streamedContent, in order - only the RE-PARSE
-  // cadence changes, never the data: pendingBufferRef always holds the full,
-  // in-order text accumulated since the last flush, and flushStreamBuffer
-  // moves the whole thing into state atomically. pendingResetRef tracks
-  // whether the buffered text should REPLACE streamedContent at the next
-  // flush (a `reset` frame) rather than append to it, mirroring the
-  // original un-throttled `reset ? delta : current + delta` semantics
-  // exactly - just deferred to flush time instead of applied delta-by-delta.
-  const pendingBufferRef = useRef("");
-  const pendingResetRef = useRef(false);
-  const rafHandleRef = useRef<number | null>(null);
-
-  function flushStreamBuffer() {
-    if (rafHandleRef.current !== null) {
-      cancelAnimationFrame(rafHandleRef.current);
-      rafHandleRef.current = null;
-    }
-    const bufferedText = pendingBufferRef.current;
-    const shouldReset = pendingResetRef.current;
-    pendingBufferRef.current = "";
-    pendingResetRef.current = false;
-    if (!bufferedText && !shouldReset) return;
-    setStreamedContent((current) => (shouldReset ? bufferedText : current + bufferedText));
-  }
-
-  useEffect(() => {
-    const requestId = data.pendingRequestId;
-    if (!requestId) return;
-    const unsubscribe = data.subscribeStream(requestId, (delta, done, reset) => {
-      if (reset) {
-        pendingBufferRef.current = delta;
-        pendingResetRef.current = true;
-      } else {
-        pendingBufferRef.current += delta;
-      }
-      // Stream completion/reset flushes synchronously - the final chunk (or
-      // a fresh restart) shouldn't wait an extra frame, and this is also
-      // what guarantees a trailing chunk never gets stranded in the buffer
-      // past the last render.
-      if (done || reset) {
-        flushStreamBuffer();
-      } else if (rafHandleRef.current === null) {
-        rafHandleRef.current = requestAnimationFrame(flushStreamBuffer);
-      }
-    });
-    return () => {
-      unsubscribe();
-      // A requestId change (new run, or this run finished) makes any
-      // content still sitting in the buffer for the OLD request moot - the
-      // render-time subscribedRequestId reset above already clears
-      // streamedContent to "" for a new id, and data.content is the source
-      // of truth once pendingRequestId returns to null - but flush (rather
-      // than silently drop) here too, so no buffered byte is ever lost even
-      // in that narrow window.
-      flushStreamBuffer();
-    };
-    // data.subscribeStream is a fresh closure every render (see SceneCanvas's
-    // toFlowNodes) - depending on it would resubscribe on every unrelated
-    // re-render; data.pendingRequestId itself is the real re-subscribe key.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.pendingRequestId]);
+  // ADR-006 stage 6.4 / ADR-011 stage 11.4: live Regenerate streaming,
+  // throttled to at most one markdown re-parse per animation frame - see
+  // useStreamBuffer's own doc comment for the full rationale (dedup: this
+  // was duplicated inline here and in ConversationNodeView until the tech-
+  // debt sweep extracted it).
+  const streamedContent = useStreamBuffer(data.pendingRequestId, data.subscribeStream);
 
   useEffect(() => {
     const contentEl = contentRef.current;

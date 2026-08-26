@@ -5,31 +5,21 @@ command_type string ("pluginConversationNode"), same parent-validation
 warning text, same factory call (SceneDocument.add_conversation_node),
 same undo/parent-validation behavior. See plugins/web_research/plugin.py's
 own docstring for the shared register_builtin_plugin escape-hatch
-rationale."""
+rationale. _execute itself is backend/plugin_sdk.py's
+make_simple_child_node_handler - see that factory's own docstring for the
+shared validate/record_command/return-id shape it replaces here."""
 
 from __future__ import annotations
 
-from backend.canvas import SceneDocument
-from backend.plugin_sdk import HostContext, PluginRunContext
+from backend.plugin_sdk import HostContext, make_simple_child_node_handler
 
-
-def _execute(
-    document: SceneDocument, run_ctx: PluginRunContext, parent_node_id: "str | None",
-) -> "str | None":
-    if not parent_node_id or parent_node_id not in document.nodes:
-        run_ctx.notifications.show(
-            "Please select a valid node to branch from before adding a Conversation Node.",
-            "warning",
-        )
-        return None
-    node, _command = document.record_command(
-        "pluginConversationNode", "user",
-        lambda: document.add_conversation_node(
-            *document.place_child(parent_node_id, "conversation"), parent_node_id
-        ),
-        node_ids=[parent_node_id],
-    )
-    return node.id
+_execute = make_simple_child_node_handler(
+    command_type="pluginConversationNode",
+    warning_suffix="a Conversation Node",
+    create=lambda document, parent_node_id: document.add_conversation_node(
+        *document.place_child(parent_node_id, "conversation"), parent_node_id
+    ),
+)
 
 
 def register(host: HostContext) -> None:

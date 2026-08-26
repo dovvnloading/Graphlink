@@ -397,6 +397,50 @@ class PluginIntentSpec:
 BuiltinActionHandler = Callable[[SceneDocument, PluginRunContext, "str | None"], "str | None"]
 
 
+def make_simple_child_node_handler(
+    *, command_type: str, warning_suffix: str, create: Callable[[SceneDocument, str], SceneNode],
+) -> BuiltinActionHandler:
+    """Factory for the one BuiltinActionHandler shape shared, byte-for-byte
+    apart from three call-site-specific values, by 6 of the 7 register_
+    builtin_plugin migrations (plugins/artifact, code_sandbox,
+    conversation_node, gitlink, html_renderer, web_research - every one
+    EXCEPT plugins/system_prompt, whose branch-root-walk/dedup/reversed-edge
+    shape is genuinely its own, per that plugin's own docstring): validate
+    parent_node_id against document.nodes, show a warning and return None if
+    it's missing/stale, otherwise run 'create' inside one record_command
+    call and return the created node's id.
+
+    'command_type' is the record_command command_type string (e.g.
+    "pluginArtifact"). 'warning_suffix' completes "Please select a valid
+    node to branch from before adding {warning_suffix}." - each call site's
+    original wording (e.g. "an Artifact node", "a Web Node") is preserved
+    verbatim, not derived from 'name', since at least one (Web Research's
+    "a Web Node") intentionally does not match its picker label. 'create' is
+    called as create(document, parent_node_id) INSIDE record_command's
+    zero-arg closure and must return the created SceneNode - callers close
+    over document.place_child(...)'s own kind string and any extra
+    positional args their add_*_node factory needs (e.g. html_renderer's
+    empty initial html_content)."""
+
+    def _execute(
+        document: SceneDocument, run_ctx: PluginRunContext, parent_node_id: "str | None",
+    ) -> "str | None":
+        if not parent_node_id or parent_node_id not in document.nodes:
+            run_ctx.notifications.show(
+                f"Please select a valid node to branch from before adding {warning_suffix}.",
+                "warning",
+            )
+            return None
+        node, _command = document.record_command(
+            command_type, "user",
+            lambda: create(document, parent_node_id),
+            node_ids=[parent_node_id],
+        )
+        return node.id
+
+    return _execute
+
+
 @dataclass(frozen=True)
 class BuiltinActionSpec:
     plugin_id: str

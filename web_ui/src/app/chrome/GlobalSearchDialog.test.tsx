@@ -35,23 +35,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
 
 import { GlobalSearchDialog } from "./GlobalSearchDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
-import type { WsTransport } from "../../lib/ws/transport";
-
-// Matches KnowledgeSearchDialog.test.tsx's own makeTransport() shape exactly.
-function makeTransport() {
-  const intents: unknown[][] = [];
-  const request = vi.fn<(topic: string, intent: string, args?: unknown[]) => Promise<unknown>>();
-  const transport = {
-    subscribe: () => () => {},
-    intent: () => {},
-    fireIntent: () => {},
-    request: (topic: string, intent: string, args: unknown[] = []) => {
-      intents.push([topic, intent, args]);
-      return request(topic, intent, args);
-    },
-  } as unknown as WsTransport;
-  return { transport, intents, request };
-}
+import { makeRequestOnlyTransport as makeTransport } from "../../lib/ws/transport.testUtils";
 
 function OpenGlobalSearchButton() {
   const overlays = useOverlays();

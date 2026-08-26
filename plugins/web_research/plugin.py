@@ -10,31 +10,22 @@ session_save.py/session_load.py's hand-written serializer - renaming it to
 a namespaced "web_research.web_research" via the generic PluginNodeSeed
 path would be an invasive, unnecessary breaking change. See
 HostContext.register_builtin_plugin's own docstring (backend/plugin_sdk.py)
-for the full escape-hatch rationale."""
+for the full escape-hatch rationale. _execute itself is
+backend/plugin_sdk.py's make_simple_child_node_handler - see that
+factory's own docstring for the shared validate/record_command/
+return-id shape it replaces here."""
 
 from __future__ import annotations
 
-from backend.canvas import SceneDocument
-from backend.plugin_sdk import HostContext, PluginRunContext
+from backend.plugin_sdk import HostContext, make_simple_child_node_handler
 
-
-def _execute(
-    document: SceneDocument, run_ctx: PluginRunContext, parent_node_id: "str | None",
-) -> "str | None":
-    if not parent_node_id or parent_node_id not in document.nodes:
-        run_ctx.notifications.show(
-            "Please select a valid node to branch from before adding a Web Node.",
-            "warning",
-        )
-        return None
-    node, _command = document.record_command(
-        "pluginWebResearch", "user",
-        lambda: document.add_web_research_node(
-            *document.place_child(parent_node_id, "web_research"), parent_node_id
-        ),
-        node_ids=[parent_node_id],
-    )
-    return node.id
+_execute = make_simple_child_node_handler(
+    command_type="pluginWebResearch",
+    warning_suffix="a Web Node",
+    create=lambda document, parent_node_id: document.add_web_research_node(
+        *document.place_child(parent_node_id, "web_research"), parent_node_id
+    ),
+)
 
 
 def register(host: HostContext) -> None:
