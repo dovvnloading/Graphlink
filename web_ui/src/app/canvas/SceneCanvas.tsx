@@ -2171,10 +2171,24 @@ export function computeSmartGuideFrame(
  * benefit. A node the backend actually removed is simply absent from
  * `rebuilt`, so a stale id can never resurrect one; a genuinely NEW node
  * has no prior state to carry and measures normally on first mount.
+ *
+ * POSITION (BUG FIX, found investigating a reported "node hasn't caught up"
+ * sputter after a fast drag+release): `pendingSettledIds` names nodes whose
+ * drag was JUST committed via store.moveNodes but whose backend echo has not
+ * landed in `scene` yet - see useNodeDragAndSizeSync's own doc on
+ * pendingSettledIdsRef for the exact race. Ordinarily `rebuilt`'s
+ * scene-derived position is trusted unconditionally (a remote client's own
+ * move must win), but for exactly these ids `current`'s (this drag's real,
+ * just-dropped) position is carried over instead, the same "prefer current
+ * over a still-stale rebuild" pattern as selection/measured above. The
+ * caller (CanvasInner's scene-sync effect) clears an id out of the set the
+ * next time `scene` itself actually changes - not here, since this function
+ * has no way to tell a stale rebuild from a fresh one.
  */
 export function withPreservedFlowState(
   rebuilt: SceneFlowNode[],
   current: SceneFlowNode[],
+  pendingSettledIds?: ReadonlySet<string>,
 ): SceneFlowNode[] {
   if (current.length === 0) return rebuilt;
   const currentById = new Map(current.map((n) => [n.id, n]));
@@ -2184,11 +2198,13 @@ export function withPreservedFlowState(
     if (!prev || prev === n) return n;
     const selected = prev.selected === true;
     const measured = n.measured === undefined ? prev.measured : undefined;
-    if (!selected && measured === undefined) return n;
+    const preservePosition = pendingSettledIds?.has(n.id) === true;
+    if (!selected && measured === undefined && !preservePosition) return n;
     changed = true;
     const clone: SceneFlowNode = { ...n };
     if (selected) clone.selected = true;
     if (measured !== undefined) clone.measured = measured;
+    if (preservePosition) clone.position = prev.position;
     return clone;
   });
   return changed ? merged : rebuilt;
@@ -2383,11 +2399,14 @@ function CanvasInner({
   // reporting back to the backend - one cohesive, already-interdependent
   // subsystem, and the most safety-critical piece of this canvas. See the
   // hook's own module doc for why it moved as a single unit.
-  const { nodesRef, draggingRef, dragActive, smartGuideLines, onNodesChange, onDelete } = useNodeDragAndSizeSync(
-    scene,
-    reactFlow,
-    store,
-  );
+  const { nodesRef, draggingRef, dragActive, smartGuideLines, onNodesChange, onDelete, pendingSettledIdsRef } =
+    useNodeDragAndSizeSync(scene, reactFlow, store);
+  // BUG FIX (node position reverting after a fast drag+release): the LAST
+  // `scene` reference the sync effect below actually reconciled against -
+  // see that effect's own doc for why this, not pendingSettledIdsRef.current
+  // being non-empty, is what decides whether a settled drag's ids are still
+  // owed a real echo.
+  const lastSyncedSceneRef = useRef<SceneState | null>(null);
   const visibleGuideLines = scene.smartGuides ? smartGuideLines : [];
 
   // R8a (UI/UX issue list finding #11): the View popover's FONT section
@@ -2425,6 +2444,10 @@ function CanvasInner({
         filterStatuses,
       ),
       nodesRef.current,
+      // BUG FIX: see withPreservedFlowState's own POSITION doc and
+      // pendingSettledIdsRef's doc (useNodeDragAndSizeSync.ts) for the full
+      // race this closes. Read, never mutated, here.
+      pendingSettledIdsRef.current,
     );
     // Mirror advances with the state it describes - see nodesRef's comment.
     nodesRef.current = next;
@@ -2432,15 +2455,32 @@ function CanvasInner({
     // this is the same setter React Flow's internal prop-sync would call, so
     // the renderer is updated in this effect instead of one commit later.
     storeApi.getState().setNodes(next);
+    // BUG FIX: only a genuinely NEW `scene` reference means "the backend has
+    // moved past where it was when this drag settled" - this effect can also
+    // re-run with the SAME `scene` (e.g. `dragActive` flipping false is
+    // itself a dependency below, precisely so a mid-drag publish isn't lost -
+    // see the REVIEW-FIX comment just below), and clearing on every run
+    // would drop the position pin on that very re-run, before any echo could
+    // possibly have arrived. Once `scene` does change, every id pinned above
+    // has been applied to this render's own merge already, so it's safe to
+    // stop pinning them from here on - the ordinary case is that a `scene`
+    // change immediately after a settle IS that drag's own echo; the same
+    // per-session ordering that makes moveNodes' "last write wins" claim true
+    // (backend/run_lifecycle's single-actor-per-session processing) means any
+    // publish arriving after it was sent already reflects it, mid-drag
+    // publish or not.
+    if (scene !== lastSyncedSceneRef.current) pendingSettledIdsRef.current.clear();
+    lastSyncedSceneRef.current = scene;
   }, [
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
     getComposerRoute, filterKinds, filterStatuses,
-    // nodesRef/draggingRef/storeApi are all stable ref/store-api identities
-    // (useNodeDragAndSizeSync's/useStoreApi's own refs never change across
-    // renders) - listed here only because they now cross a hook boundary,
-    // which stops react-hooks/exhaustive-deps from inferring that stability
-    // on its own; behaviorally a no-op, same as before this extraction.
-    nodesRef, draggingRef, storeApi,
+    // nodesRef/draggingRef/storeApi/pendingSettledIdsRef/lastSyncedSceneRef
+    // are all stable ref/store-api identities (useNodeDragAndSizeSync's/
+    // useStoreApi's own refs never change across renders) - listed here only
+    // because they now cross a hook boundary, which stops react-hooks/
+    // exhaustive-deps from inferring that stability on its own; behaviorally
+    // a no-op, same as before this extraction.
+    nodesRef, draggingRef, storeApi, pendingSettledIdsRef, lastSyncedSceneRef,
     // REVIEW-FIX: a scene publish that lands while draggingRef.current is
     // true bails out of this effect ABOVE and is discarded entirely, not
     // queued - and draggingRef is a plain ref, so nothing here re-ran when

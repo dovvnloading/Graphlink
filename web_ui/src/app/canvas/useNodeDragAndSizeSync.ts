@@ -63,6 +63,12 @@ export function useNodeDragAndSizeSync(
   smartGuideLines: GuideLine[];
   onNodesChange: (changes: NodeChange<SceneFlowNode>[]) => void;
   onDelete: (payload: { nodes: Node[]; edges: Edge[] }) => void;
+  // BUG FIX (node position reverting after a fast drag+release): ids just
+  // committed via store.moveNodes below, whose real position CanvasInner's
+  // scene-sync effect must keep trusting from `nodesRef` rather than from
+  // `scene` - see that effect's own doc for why `scene` is stale at exactly
+  // this moment and what clears an id back out of this set.
+  pendingSettledIdsRef: MutableRefObject<Set<string>>;
 } {
   // Local node state exists so dragging is fluid; backend snapshots are the
   // truth and reconcile in whenever nothing is being dragged. dragStartRef
@@ -88,6 +94,19 @@ export function useNodeDragAndSizeSync(
   // plain ref (not state) since a rebuild must never itself trigger a
   // re-render - it only matters to onNodesChange's own closure.
   const dragSizeCacheRef = useRef<Map<string, { width: number; height: number }>>(new Map());
+  // BUG FIX (node position reverting after a fast drag+release): store
+  // .moveNodes below is fire-and-forget (SceneStore.moveNodes just calls
+  // transport.fireIntent, no local optimistic scene update) - the backend
+  // echo carrying the new position back into `scene` has not landed yet by
+  // the time this drag's own settle runs. CanvasInner's scene-sync effect
+  // reconciles the instant `dragActive` flips false (see that effect's own
+  // dependency-array comment, added in #REVIEW-FIX round 3 to stop losing an
+  // UNRELATED mid-drag scene update) - which, without this set, rebuilds
+  // straight from that still-stale `scene` and snaps the just-dropped node
+  // back to where it started, only to jump forward again once the real echo
+  // arrives moments later. See withPreservedFlowState's own doc for the read
+  // side of this ref.
+  const pendingSettledIdsRef = useRef<Set<string>>(new Set());
 
   // R7.5b-3: the smart-guide lines currently visible during a drag - local
   // component state only, never scene state, matching legacy's non-persisted
@@ -392,7 +411,12 @@ export function useNodeDragAndSizeSync(
       // being briefly stale - a real glitch on every group drag, not a
       // cosmetic footnote. moveNodes commits every position in one pass
       // server-side and publishes exactly once.
-      if (settledMoveIntents.length > 0) store.moveNodes(settledMoveIntents);
+      if (settledMoveIntents.length > 0) {
+        store.moveNodes(settledMoveIntents);
+        // See pendingSettledIdsRef's own doc above - cleared once a genuinely
+        // fresh scene arrives (CanvasInner's scene-sync effect), not here.
+        for (const intent of settledMoveIntents) pendingSettledIdsRef.current.add(intent.id);
+      }
       // Guides re-derive every drag frame (legacy cleared + re-added its
       // QGraphicsLineItems per recompute); drag end always clears. The
       // values come from the middleware's own most recent frame.
@@ -448,5 +472,5 @@ export function useNodeDragAndSizeSync(
     [store],
   );
 
-  return { nodesRef, draggingRef, dragActive, smartGuideLines, onNodesChange, onDelete };
+  return { nodesRef, draggingRef, dragActive, smartGuideLines, onNodesChange, onDelete, pendingSettledIdsRef };
 }
