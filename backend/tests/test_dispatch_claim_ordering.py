@@ -34,7 +34,15 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-AGENTS_PY = Path(__file__).resolve().parents[1] / "agents.py"
+# AgentDispatcher's methods live in the backend/agent_dispatch/ mixin files
+# since the god-file decomposition split them out of backend/agents.py
+# (which now holds only the composed class plus module-level helpers) -
+# scan the whole set, since which mixin a given method lands in is an
+# implementation detail this gate has no reason to pin.
+_BACKEND_DIR = Path(__file__).resolve().parents[1]
+DISPATCHER_SOURCES = tuple(
+    [_BACKEND_DIR / "agents.py"] + sorted((_BACKEND_DIR / "agent_dispatch").glob("*.py"))
+)
 
 # (method_name, busy-check kind literal used only for the failure message)
 MIGRATED_METHODS = [
@@ -46,12 +54,13 @@ MIGRATED_METHODS = [
 
 
 def _find_method(method_name: str):
-    tree = ast.parse(AGENTS_PY.read_text(encoding="utf-8"), filename=str(AGENTS_PY))
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef) and node.name == "AgentDispatcher":
-            for item in node.body:
-                if isinstance(item, ast.AsyncFunctionDef) and item.name == method_name:
-                    return item
+    for source in DISPATCHER_SOURCES:
+        tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef):
+                for item in node.body:
+                    if isinstance(item, ast.AsyncFunctionDef) and item.name == method_name:
+                        return item
     raise AssertionError(f"AgentDispatcher.{method_name} not found - did it move or get renamed?")
 
 
