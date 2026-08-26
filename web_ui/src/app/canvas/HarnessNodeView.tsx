@@ -1,5 +1,8 @@
 import { memo, useEffect, useRef, useState } from "react";
 import type { Node, NodeProps } from "@xyflow/react";
+import { CollapseToggleButton } from "./CollapseToggleButton";
+import type { MenuPosition } from "./menuPosition";
+import { NodeMenu } from "./NodeMenu";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -67,6 +70,50 @@ export interface HarnessNodeData extends Record<string, unknown> {
 
 export type HarnessFlowNode = Node<HarnessNodeData, "harness">;
 
+/** Same outside-click/Escape dismiss pattern every sibling node menu uses
+ * (ChatNodeMenu/ArtifactNodeMenu/CodeSandboxNodeMenu/PlanNodeMenu/...). */
+// -- card-level menu -------------------------------------------------------
+
+function HarnessNodeMenu({
+  position,
+  isCollapsed,
+  onToggleCollapse,
+  onDelete,
+  onClose,
+}: {
+  position: MenuPosition;
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => {
+          onToggleCollapse();
+          onClose();
+        }}
+      >
+        {isCollapsed ? "Expand" : "Collapse"}
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="chat-node-menu-danger"
+        onClick={() => {
+          onDelete();
+          onClose();
+        }}
+      >
+        Delete Node
+      </button>
+    </NodeMenu>
+  );
+}
+
 const STATUS_LABELS: Record<string, string> = {
   idle: "Ready",
   running: "Working…",
@@ -92,6 +139,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const activityDetailsRef = useRef<HTMLDetailsElement>(null);
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.harnessActivity.filter((row) => row.outcome !== "ok").length;
+  const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
 
   // Deny is the safe default, so focus lands there the moment the panel
   // appears - same effect (and same `collapsed` dependency reasoning) as
@@ -129,13 +177,29 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
       kindClassName="harness-node"
       selected={!!selected}
       collapsed={collapsed}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        setMenuPosition({ x: event.clientX, y: event.clientY });
+      }}
       header={
         <div className="scene-node-title plan-node-title">
           <span className="plan-node-badge">Agent</span>
           <span className="plan-node-goal">{data.harnessGoal || "Untitled task"}</span>
+          <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </div>
       }
       bodyClassName="plan-node-body"
+      menu={
+        menuPosition && (
+          <HarnessNodeMenu
+            position={menuPosition}
+            isCollapsed={data.isCollapsed}
+            onToggleCollapse={data.onToggleCollapse}
+            onDelete={data.onDelete}
+            onClose={() => setMenuPosition(null)}
+          />
+        )
+      }
     >
       <div className={`plan-node-status harness-node-status-${data.harnessStatus}`}>
         {STATUS_LABELS[data.harnessStatus] ?? data.harnessStatus}

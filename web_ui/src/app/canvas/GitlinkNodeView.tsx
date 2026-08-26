@@ -1,6 +1,7 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
 import { Dialog, useOverlays } from "../overlays/overlays";
+import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
@@ -371,14 +372,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
       header={
         <div className="scene-node-title chat-node-role">
           <span>Gitlink</span>
-          <button
-            type="button"
-            className="chat-node-collapse-btn"
-            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-            onClick={data.onToggleCollapse}
-          >
-            {data.isCollapsed ? "▸" : "▾"}
-          </button>
+          <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </div>
       }
       bodyClassName="gitlink-node-content"

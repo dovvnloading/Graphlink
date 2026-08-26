@@ -66,7 +66,7 @@ function composerSnapshot(overrides: Record<string, unknown> = {}) {
     schemaVersion: 1,
     minCompatibleSchemaVersion: 1,
     revision: 1,
-    draft: { id: "", text: "", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+    draft: { id: "", text: "", contextMode: "branch", sendMode: "enter_to_send" },
     context: { anchor: null, items: [], totalTokens: 0, reviewAvailable: false },
     route: {
       mode: "ollama",

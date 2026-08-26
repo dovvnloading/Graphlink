@@ -1,15 +1,12 @@
 """Qt-free task/provider/model configuration (Qt-removal plan R4.1).
 
-The agent layer's half of what used to live in graphlink_config.py: task
-identifiers, provider/mode names, and the runtime model-selection state
-(OLLAMA_MODELS/CURRENT_MODEL). Split out so api_provider and the new
-backend can import all of it without pulling PySide6 into the process -
-graphlink_config.py's module-level Qt imports made every consumer a Qt
-process even when it only needed these plain constants.
-
-graphlink_config.py re-exports everything here for the legacy Qt call
-sites, so nothing legacy changes behavior; new code (backend/) imports
-this module directly and must never import graphlink_config.
+The agent layer's half of what used to live in graphlink_config.py (deleted
+along with the rest of graphlink_app/ at the R7.6b Qt-removal cutover -
+commit 6c919f6): task identifiers, provider/mode names, and the runtime
+model-selection state (OLLAMA_MODELS/CURRENT_MODEL). Split out so
+api_provider and the backend could import all of it without pulling PySide6
+into the process - graphlink_config.py's module-level Qt imports made every
+consumer a Qt process even when it only needed these plain constants.
 
 This file must stay Qt-free forever - it exists to be importable from
 backend/, which test_no_qt_anywhere.py holds to zero tolerance.

@@ -367,6 +367,36 @@ def test_reloaded_frame_keeps_its_position_when_a_member_later_moves():
     assert (restored.x, restored.y) == position_after_load
 
 
+def test_a_manually_resized_frames_size_survives_being_saved_while_collapsed():
+    """Technical-debt audit finding: group_width/group_height is the
+    frame's CURRENT effective size - temporarily overwritten with the
+    fixed collapsed-pill size while is_collapsed - but group_manual_width/
+    height (the real, stable source of truth for a manual resize) is
+    NEVER touched by collapse. _serialize_frame used to read group_width/
+    height unconditionally, so autosave running while a manually-resized
+    frame happened to be collapsed wrote the tiny pill size into "rect",
+    which session_load.py's _restore_frames then applied as the frame's
+    new PERMANENT manual size - destroying the real size the moment the
+    user next expanded it."""
+    doc = SceneDocument()
+    a = doc.add_chat_node(0, 0, "a", is_user=True)
+    doc.set_measured_node_sizes([(a.id, 400.0, 300.0)])
+    frame = doc.create_frame([a.id])
+    doc.resize_frame(frame.id, 900.0, 700.0)  # user manually resizes bigger than auto-fit
+    doc.toggle_group_collapsed(frame.id)  # collapsed at save time - the failure trigger
+    assert frame.state.group_width == 260.0, "fixture invalid: must actually be collapsed to the pill"
+
+    reloaded = _round_trip(doc)
+
+    restored = next(n for n in reloaded.nodes.values() if n.kind == "frame")
+    assert restored.is_collapsed is True
+    reloaded.toggle_group_collapsed(restored.id)  # expand it back - the real test
+    assert (restored.state.group_width, restored.state.group_height) == (900.0, 700.0), (
+        "the user's real manual size must survive a save/load round trip "
+        "made while the frame was collapsed, not be replaced by the pill size"
+    )
+
+
 def test_container_item_indices_reference_the_full_combined_offset_space():
     doc = SceneDocument()
     a = doc.add_chat_node(0, 0, "a", is_user=True)

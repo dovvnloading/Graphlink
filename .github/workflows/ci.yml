@@ -38,11 +38,13 @@ name: CI
 #
 # The pytest/compileall steps run from the repo root, never a subdirectory:
 # pinning working-directory scopes collection to that directory's tests and
-# silently skips the rest. Collection today is backend/tests/, contracts/tests/
-# and tests/ (the permanent Qt-removal gate) - the exact set
-# `python -m pytest -q` from the repo root runs locally, so a green local run
-# and a green CI run mean the same thing. Verify with that command, not a
-# narrowed path.
+# silently skips the rest. Collection today (2026-08-25) is backend/tests/,
+# contracts/tests/, tests/ (the permanent Qt-removal gate), and mutation_tests/
+# (property-based tests added after this comment was first written) - the
+# exact set `python -m pytest -q` from the repo root runs locally, so a green
+# local run and a green CI run mean the same thing. Verify with that command,
+# not a narrowed path - and re-check this directory list occasionally, since
+# it has drifted before.
 #
 # R7.6b: graphlink_app/tests/ is gone from this list because graphlink_app/
 # itself was deleted at the Qt-removal cutover.

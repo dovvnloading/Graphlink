@@ -16,7 +16,8 @@
  * the actual return value, not just a fire-and-track.
  */
 
-import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
+import { TOPIC_VALIDATORS, type TopicName } from "../../lib/api-contract/topics";
+import { bindTopic } from "../../lib/api-contract/bindTopic";
 import type { SceneEdgeRow, SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { GridControlState } from "../../lib/bridge-core/generated/grid-control-state";
 import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-state";
@@ -217,16 +218,8 @@ export class SceneStore {
 
   constructor(private readonly transport: WsTransport) {}
 
-  private bind<T>(topic: keyof typeof TOPIC_VALIDATORS, assign: (value: T) => void): () => void {
-    return this.transport.subscribe(topic, (payload) => {
-      const validated = TOPIC_VALIDATORS[topic](payload);
-      if (validated.ok) {
-        assign(validated.value as T);
-        this.emit();
-      } else {
-        console.error(`[${topic}] rejected snapshot:`, validated.errors);
-      }
-    });
+  private bind<T>(topic: TopicName, assign: (value: T) => void): () => void {
+    return bindTopic(this.transport, topic, assign, () => this.emit());
   }
 
   /** ADR-003 stage 3.4: apply one `kind:"patch"` frame's ops on top of the

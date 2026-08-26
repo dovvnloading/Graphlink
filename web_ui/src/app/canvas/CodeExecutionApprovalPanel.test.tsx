@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { WsTransport } from "../../lib/ws/transport";
-import { CodeExecutionApprovalPanel, type CodeExecutionKind } from "./CodeExecutionApprovalPanel";
+import { CodeExecutionApprovalPanel } from "./CodeExecutionApprovalPanel";
 import { ExecutionLimitsProvider } from "./ExecutionLimitsContext";
 
 type StateListener = (payload: Record<string, unknown>) => void;
@@ -27,7 +27,7 @@ function renderPanelWithExecutionLimits(
   const onDeny = vi.fn();
   const props = {
     nodeId: "n0",
-    kind: "pycoder" as CodeExecutionKind,
+    kind: "code_sandbox" as const,
     code: "print('hello')",
     awaitingApproval: true,
     busy: false,
@@ -60,7 +60,7 @@ function renderPanel(overrides: Partial<Parameters<typeof CodeExecutionApprovalP
   const onDeny = vi.fn();
   const props = {
     nodeId: "n0",
-    kind: "pycoder" as CodeExecutionKind,
+    kind: "code_sandbox" as const,
     code: "print('hello')",
     awaitingApproval: true,
     busy: false,
@@ -147,7 +147,7 @@ describe("CodeExecutionApprovalPanel", () => {
       <>
         <CodeExecutionApprovalPanel
           nodeId="node-a"
-          kind="pycoder"
+          kind="code_sandbox"
           code="print('a')"
           awaitingApproval
           busy={false}
@@ -186,17 +186,7 @@ describe("CodeExecutionApprovalPanel", () => {
     expect(screen.getAllByRole("dialog")).toHaveLength(2);
   });
 
-  // -- kind-specific warning copy (regression guard against softening it) ---
-
-  it("SECURITY-COPY: PyCoder shows the exact legacy phrase 'there is no sandboxing'", () => {
-    renderPanel({ kind: "pycoder" });
-    expect(screen.getByText(/there is no sandboxing/)).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        /This will run AI-generated Python code in a persistent local session with the full privileges of your user account \(there is no sandboxing\)\. If execution fails, you will be asked to approve each automatically repaired version before it runs\./,
-      ),
-    ).toBeInTheDocument();
-  });
+  // -- warning copy (regression guard against softening it) -----------------
 
   it("SECURITY-COPY: Code-Sandbox shows the exact legacy phrase 'isolates installed packages, not the operating system'", () => {
     renderPanel({ kind: "code_sandbox" });
@@ -210,18 +200,10 @@ describe("CodeExecutionApprovalPanel", () => {
     ).toBeInTheDocument();
   });
 
-  it("does not show the other kind's warning sentence", () => {
-    renderPanel({ kind: "pycoder" });
-    expect(screen.queryByText(/isolates installed packages/)).toBeNull();
-  });
-
   // -- ADR-005 stage 5.4: backend-computed resource-limits addendum ---------
 
-  it("shows the resource-limits text from the execution-limits topic regardless of kind", () => {
-    // PLAN-2026-08-24 H5: Py-Coder retired - this component's own "pycoder"
-    // kind arm has no live caller left, so the resource-limits sentence no
-    // longer varies by kind; both fixtures below render the same text.
-    renderPanelWithExecutionLimits({ kind: "code_sandbox" });
+  it("shows the resource-limits text from the execution-limits topic", () => {
+    renderPanelWithExecutionLimits();
     expect(
       screen.getByText(
         "Execution is capped at approximately 2 GB of memory and 64 concurrent processes. Binary packages only.",
@@ -233,13 +215,13 @@ describe("CodeExecutionApprovalPanel", () => {
     // Every other test in this file uses the plain renderPanel() helper with
     // no Provider ancestor at all - confirms that degrades gracefully to
     // "no addendum shown", not a crash or a blank/misleading paragraph.
-    renderPanel({ kind: "pycoder" });
+    renderPanel();
     expect(screen.queryByText(/Execution is capped/)).toBeNull();
   });
 
   it("renders no resource-limits paragraph when the topic's snapshot has blank text", () => {
     renderPanelWithExecutionLimits(
-      { kind: "pycoder" },
+      {},
       {
         schemaVersion: 1,
         minCompatibleSchemaVersion: 1,
@@ -263,7 +245,7 @@ describe("CodeExecutionApprovalPanel", () => {
     // panel renders via createPortal(..., document.body) (see the
     // component's own module doc), so its DOM nodes live outside the
     // container render() normally mounts into.
-    renderPanelWithExecutionLimits({ kind: "pycoder" });
+    renderPanelWithExecutionLimits();
     const resourceLimitsP = document.body.querySelector(".code-exec-approval-resource-limits");
     const warningP = document.body.querySelector(".code-exec-approval-warning");
     expect(resourceLimitsP).not.toBeNull();
@@ -271,7 +253,7 @@ describe("CodeExecutionApprovalPanel", () => {
     expect(resourceLimitsP).toHaveTextContent(/Execution is capped/);
     expect(resourceLimitsP!.className).not.toContain("code-exec-approval-warning");
     expect(warningP!.className).not.toContain("code-exec-approval-resource-limits");
-    expect(warningP).toHaveTextContent(/there is no sandboxing/);
+    expect(warningP).toHaveTextContent(/isolates installed packages, not the operating system/);
   });
 
   // -- FIX C regression guard: code_sandbox requirements/repair disclosure --
@@ -297,14 +279,6 @@ describe("CodeExecutionApprovalPanel", () => {
     expect(screen.queryByText("Packages to be installed")).toBeNull();
   });
 
-  it("FIX C: never renders the Packages block for pycoder, even if a requirements value were somehow supplied", () => {
-    renderPanel({
-      kind: "pycoder",
-      ...({ requirements: "numpy" } as Partial<Parameters<typeof CodeExecutionApprovalPanel>[0]>),
-    });
-    expect(screen.queryByText("Packages to be installed")).toBeNull();
-  });
-
   // -- ADR-005 stage 5.5: source-build escalation checkbox --------------------
 
   it("renders the source-build checkbox for code_sandbox alongside a non-blank Packages block", () => {
@@ -318,14 +292,6 @@ describe("CodeExecutionApprovalPanel", () => {
     renderPanel({ kind: "code_sandbox", requirements: "" });
     expect(screen.queryByRole("checkbox")).toBeNull();
     renderPanel({ kind: "code_sandbox", requirements: undefined });
-    expect(screen.queryByRole("checkbox")).toBeNull();
-  });
-
-  it("never renders the source-build checkbox for pycoder, even if requirements were somehow supplied", () => {
-    renderPanel({
-      kind: "pycoder",
-      ...({ requirements: "numpy" } as Partial<Parameters<typeof CodeExecutionApprovalPanel>[0]>),
-    });
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
 

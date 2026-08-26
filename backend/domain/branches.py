@@ -19,7 +19,7 @@ backend/session_load.py) both resolve through the MRO unchanged.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from backend.domain.model import (
     SceneEdge,
@@ -27,6 +27,9 @@ from backend.domain.model import (
     SceneError,
     SceneNode,
 )
+
+if TYPE_CHECKING:
+    from graphlink_model_catalog import ModelRef
 
 
 class BranchOps:
@@ -170,7 +173,9 @@ class BranchOps:
             raise SceneError(f"node is not a chat node: {node_id}")
         node.state.index_into_knowledge = bool(enabled)
 
-    def resolve_model_for_node(self, node_id: str | None):
+    def resolve_model_for_node(
+        self, node_id: str | None,
+    ) -> "tuple[ModelRef | None, ModelRef | None]":
         """ADR-018 stage 18.2: the node-override -> branch-override half of
         graphlink_model_catalog.resolve_model_ref's chain - returns
         (node_ref, branch_ref), both `ModelRef | None`, for the caller

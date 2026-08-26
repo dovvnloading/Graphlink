@@ -9,6 +9,7 @@ import {
   CHART_MIN_WIDTH,
   CHART_RESIZE_DEBOUNCE_MS,
 } from "./canvasConstants";
+import { downloadBlob } from "./downloadTextFile";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -113,33 +114,28 @@ export function chartExportUrl(nodeId: string, format: "png" | "svg" = "png"): s
   return `/api/assets/chart/${nodeId}/export?session=default&fmt=${format}`;
 }
 
-/** Fetches a chart export with the capability token in a header and saves the
- * resulting bytes as a file. Mirrors downloadTextFile.ts's blob -> object URL
- * -> temporary anchor pattern (and ImageNodeView's own image export before
- * it); the only difference is that the bytes come from an authenticated
- * request rather than from memory. REVIEW-FIX: both call sites below invoke
- * this fire-and-forget (`void downloadChartExport(...)`), so a rejected
- * promise - a non-OK response, a network failure - used to surface as an
- * unhandled promise rejection instead of anything the user could see. Now
- * swallowed with a console.error, the same best-effort posture
- * ImageNodeView's handleExportImage already uses for the identical export
- * button pattern. */
+/** Fetches a chart export with the capability token in a header and saves
+ * the resulting bytes as a file via downloadTextFile.ts's shared
+ * downloadBlob; the only difference from a plain text/image export is that
+ * the bytes come from an authenticated request rather than from memory.
+ * REVIEW-FIX: both call sites below invoke this fire-and-forget (`void
+ * downloadChartExport(...)`), so a rejected promise - a non-OK response, a
+ * network failure - used to surface as an unhandled promise rejection
+ * instead of anything the user could see. Now swallowed with a
+ * console.error, the same best-effort posture ImageNodeView's
+ * handleExportImage already uses for the identical export button pattern. */
 export async function downloadChartExport(nodeId: string, format: "png" | "svg"): Promise<void> {
   try {
     const response = await fetch(chartExportUrl(nodeId, format), { headers: authHeaders() });
     if (!response.ok) throw new Error(`Chart export failed (${response.status})`);
     const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = objectUrl;
     // The server names the file from the chart's own title
     // (backend/assets.py's _sanitize_chart_filename) and sends it in
     // Content-Disposition - the same header the old navigated link relied on,
     // so honoring it here keeps the downloaded filename identical.
-    anchor.download = filenameFromContentDisposition(response.headers.get("content-disposition"))
+    const filename = filenameFromContentDisposition(response.headers.get("content-disposition"))
       || `chart.${format}`;
-    anchor.click();
-    URL.revokeObjectURL(objectUrl);
+    downloadBlob(blob, filename);
   } catch (error) {
     console.error("[chart-node] Chart export failed:", error);
   }

@@ -7,7 +7,6 @@ export interface AppComposerDraft {
   text: string;
   contextMode: string;
   sendMode: "enter_to_send" | "ctrl_enter_to_send";
-  restored: boolean;
 }
 
 export interface AppComposerContext {
@@ -128,11 +127,6 @@ function checkAppComposerDraft(value: unknown, path: string, errors: string[]): 
     const fieldValue = value["sendMode"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.sendMode: missing required field`);
     else { if (!["enter_to_send", "ctrl_enter_to_send"].includes(fieldValue as string)) errors.push(`${path}.sendMode` + `: ${JSON.stringify(fieldValue)} is not one of [` + "enter_to_send, ctrl_enter_to_send" + `]`); }
-  }
-  {
-    const fieldValue = value["restored"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.restored: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.restored` + ": expected boolean"); }
   }
 }
 

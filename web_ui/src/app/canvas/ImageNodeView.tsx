@@ -1,6 +1,7 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import { withAuthToken } from "../../lib/auth/token";
+import { downloadBlob } from "./downloadTextFile";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
 import { NodeShell } from "./NodeShell";
@@ -98,22 +99,13 @@ async function handleCopyImage(imageAssetId: string): Promise<void> {
   }
 }
 
-/** Fetch the asset, wrap it in an object URL, and drive a temporary,
- * never-attached-to-view anchor's download through a programmatic click -
- * the standard "save this blob as a file" browser pattern. The object URL is
- * revoked immediately after the click to avoid leaking it (the click itself
- * is synchronous, so the browser has already captured what it needs from the
- * URL by the time revokeObjectURL runs on the next line). */
+/** Fetches the asset and saves it as a file via downloadTextFile.ts's shared
+ * downloadBlob. */
 async function handleExportImage(imageAssetId: string, filename: string): Promise<void> {
   try {
     const response = await fetch(assetUrl(imageAssetId));
     const blob = await response.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = objectUrl;
-    anchor.download = filename;
-    anchor.click();
-    URL.revokeObjectURL(objectUrl);
+    downloadBlob(blob, filename);
   } catch (error) {
     console.error("[image-node] Export Image failed:", error);
   }

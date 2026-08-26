@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
@@ -51,6 +52,9 @@ from backend.asset_store import ALLOWED_IMAGE_MIME_TYPES, extension_for_mime
 from backend.events import EventBus, UnknownSessionError
 from backend.session_context import get_session_context
 from graphlink_chart_rendering import render_chart_png, render_chart_svg
+
+if TYPE_CHECKING:
+    from backend.domain.graph import SceneDocument
 
 # Fallback Content-Type for a stored mime_type that is not one of this app's
 # own real image types (ALLOWED_IMAGE_MIME_TYPES). octet-stream rather than
@@ -81,6 +85,23 @@ def _sanitize_chart_filename(title: str) -> str:
     return safe or "chart"
 
 
+def _get_canvas_document(bus: EventBus, session: str) -> "SceneDocument | None":
+    """Resolves `session` to the SAME SceneDocument instance register_canvas()
+    built for it (bus.session(session) -> get_session_context(...).
+    canvas_document, per this module's own docstring above), or None for an
+    unknown session id. ADR-004 stage 4.3: `None` here is the same
+    observable "unknown resource" 404 a bogus session already produced
+    before this stage (bus.session() used to silently CREATE a fresh, empty
+    document for any string - see backend/events.py's own docstring - which
+    would have looked up the requested resource in that empty document and
+    hit the exact same 404 anyway). Each caller supplies its own
+    resource-specific error message for the None case."""
+    try:
+        return get_session_context(bus.session(session)).canvas_document
+    except UnknownSessionError:
+        return None
+
+
 def register_assets(app: FastAPI, bus: EventBus) -> None:
     """Give the app its asset routes: GET /api/assets/{asset_id} (cached
     display bytes, any image-kind or chart-kind node) and GET /api/assets/
@@ -88,16 +109,8 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
 
     @app.get("/api/assets/{asset_id}")
     async def get_asset(asset_id: str, session: str = "default") -> Response:
-        try:
-            document = get_session_context(bus.session(session)).canvas_document
-        except UnknownSessionError:
-            # ADR-004 stage 4.3: same observable shape a bogus session
-            # already produced before this stage (bus.session() used to
-            # silently CREATE a fresh, empty document for any string - see
-            # backend/events.py's own docstring - which would have looked
-            # up asset_id in that empty document and hit this exact
-            # "unknown asset" 404 anyway). Preserves the external response
-            # contract; only the internal resource leak this closes.
+        document = _get_canvas_document(bus, session)
+        if document is None:
             return JSONResponse({"error": "unknown asset"}, status_code=404)
         asset = document.get_image_asset(asset_id)
         if asset is None:
@@ -132,10 +145,8 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
 
     @app.get("/api/assets/chart/{node_id}/export")
     async def export_chart(node_id: str, session: str = "default", fmt: str = "png") -> Response:
-        try:
-            document = get_session_context(bus.session(session)).canvas_document
-        except UnknownSessionError:
-            # Same reasoning as get_asset above.
+        document = _get_canvas_document(bus, session)
+        if document is None:
             return JSONResponse({"error": "unknown chart"}, status_code=404)
         node = document.nodes.get(node_id)
         if node is None or node.kind != "chart":

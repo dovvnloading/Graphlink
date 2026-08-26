@@ -62,7 +62,7 @@ def test_default_payload_matches_generated_validator_shape(monkeypatch):
     monkeypatch.setattr(api_provider, "ollama_supports_reasoning", lambda model: True)
     payload = ComposerDocument().payload()
     assert set(payload) == {"draft", "context", "route", "request", "capabilities"}
-    assert set(payload["draft"]) == {"id", "text", "contextMode", "sendMode", "restored"}
+    assert set(payload["draft"]) == {"id", "text", "contextMode", "sendMode"}
     assert payload["capabilities"]["reasoningSelection"] is True
     # R8a: attachment staging is real now (backend/attachments.py + the
     # attachFile/removeAttachment intents), so this asserts the OPPOSITE of

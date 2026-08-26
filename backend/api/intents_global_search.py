@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
+from backend.api.intents_knowledge import format_search_result_row
 from backend.events import SessionBus
 from backend.knowledge_retrieval import hybrid_search
 from backend.knowledge_store import DEFAULT_DB_PATH, get_or_create_workspace_collection
@@ -67,30 +68,24 @@ def _graph_id_from_source_uri(source_uri: str) -> int | None:
 
 
 def _format_global_search_results(results: list[dict]) -> list[dict]:
-    """Mirrors backend/api/intents_knowledge.py's own _format_search_results
-    field-for-field, PLUS `sourceNodeId`/`graphId` - what tells the
-    frontend which of the two jump actions a given result row needs
-    (loadGraphAndFocusNode for a graph/node hit, "knowledge"'s own document-
-    source_uri external-link for a real ingested-document hit): `chunks.
-    source_node_id IS NOT NULL` is a real node id (see backend.
-    knowledge_store's own migration "5"); `graphId` is derived from that
-    SAME row's own `source_uri` ONLY when source_node_id is present - never
-    computed independently, so a real document whose source_uri happens to
-    start with "graph:" (not producible by any real ingestion path today,
-    but not worth trusting blindly either) can never be misread as a graph
-    hit."""
+    """Builds on backend/api/intents_knowledge.py's own
+    format_search_result_row (the same 7 citation fields, shared verbatim),
+    PLUS `sourceNodeId`/`graphId` - what tells the frontend which of the two
+    jump actions a given result row needs (loadGraphAndFocusNode for a
+    graph/node hit, "knowledge"'s own document-source_uri external-link for
+    a real ingested-document hit): `chunks.source_node_id IS NOT NULL` is a
+    real node id (see backend.knowledge_store's own migration "5");
+    `graphId` is derived from that SAME row's own `source_uri` ONLY when
+    source_node_id is present - never computed independently, so a real
+    document whose source_uri happens to start with "graph:" (not
+    producible by any real ingestion path today, but not worth trusting
+    blindly either) can never be misread as a graph hit."""
     formatted = []
     for result in results:
         source_node_id = result.get("source_node_id")
         graph_id = _graph_id_from_source_uri(result["source_uri"]) if source_node_id is not None else None
         formatted.append({
-            "chunkId": result["chunk_id"],
-            "documentId": result["document_id"],
-            "documentTitle": result["document_title"],
-            "sourceUri": result["source_uri"],
-            "text": result["text"],
-            "offsetStart": result["offset_start"],
-            "offsetEnd": result["offset_end"],
+            **format_search_result_row(result),
             "sourceNodeId": source_node_id,
             "graphId": graph_id,
         })

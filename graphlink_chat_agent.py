@@ -376,7 +376,11 @@ class ChatAgent:
 
         Args:
             conversation_history (list): The list of messages in the conversation.
-            current_node (QGraphicsItem): The current node context.
+            current_node: Kept for signature compatibility with every real caller
+                (backend/agents.py) - forwarded unchanged to ChatWorker.run
+                (this same file, above), which no longer reads it either
+                (ADR-002 stage 2.1: its only use was the deleted Qt-era
+                fallback branch; see that method's own docstring).
             resolved_system_prompt (str, optional): Branch system prompt already resolved
                 on the GUI thread; passed straight through so the worker never walks the
                 scene itself (#20).

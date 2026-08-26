@@ -325,9 +325,13 @@ class RunRegistry:
         stale or mismatched request_id can never trip an unrelated
         in-flight run of a different kind instead of being safely
         rejected. Returns True if either cancellation mechanism present
-        on the handle actually fired - False for a kind with neither
-        (e.g. chart/note today), matching every pre-existing dict-based
-        cancel_* method's own "kind that cannot be cancelled" contract."""
+        on the handle actually fired - False only for an unknown/mismatched
+        request_id. As of ADR-006 stage 6.2 (see this module's own doc,
+        above) every kind claimed through run_single_shot carries a real
+        cancel_event, so chart/note/branch_comparison/branch_synthesis are
+        no longer the "kind that cannot be cancelled" exception this
+        docstring used to describe - that gap was closed here, this
+        comment just wasn't updated to say so at the time."""
         handle = self._handles.get(request_id)
         if handle is None or (kind is not None and handle.kind != kind):
             return False

@@ -502,7 +502,7 @@ function ApiProviderPage({
           type="password"
           className="settings-select"
           placeholder={
-            (state.apiKeyConfigured as Record<string, boolean>)[viewingProviderKey]
+            state.apiKeyConfigured[viewingProviderKey]
               ? "A key is configured - enter a new one to replace it"
               : "Enter your API key..."
           }
@@ -520,7 +520,7 @@ function ApiProviderPage({
             see backend/settings.py's own _api_key_source). Saving a key
             here will switch this to "stored" on the next snapshot, same as
             apiKeyConfigured already does. */}
-        {(state.apiKeySource as Record<string, string>)[viewingProviderKey] === "environment" && (
+        {state.apiKeySource[viewingProviderKey] === "environment" && (
           <span className="settings-field-hint">
             Key provided by an environment variable, not Settings.
           </span>

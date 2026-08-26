@@ -56,8 +56,8 @@ from backend.plugin_sdk import (
 # dependencies - ToolSpec is the SAME provider-neutral shape every other
 # tool family (backend/tools_graph.py, backend/mcp_client.py) builds its
 # specs from; ToolResult is what a handler must return.
-from backend.providers.base import ToolSpec
-from backend.tools import ToolResult
+from backend.providers.base import ToolCall, ToolSpec
+from backend.tools import RunContext, ToolResult
 
 logger = logging.getLogger(__name__)
 from graphlink_settings_store import SettingsManager
@@ -315,7 +315,7 @@ async def _execute_discovered_plugin(
 
     A name matching neither shows the same "Unknown plugin" warning
     regardless of which mechanism a real match would have used."""
-    builtin_spec = plugin_registry.builtin_actions.get(name)
+    builtin_spec = plugin_registry.resolve_builtin_action(name)
     if builtin_spec is not None:
         run_ctx = PluginRunContext(plugin_id=builtin_spec.plugin_id, notifications=notifications)
         result = builtin_spec.handler(canvas_document, run_ctx, parent_node_id)
@@ -546,7 +546,7 @@ def _make_plugin_tool_handler(
     _invoke_discovered_plugin_intent) is what threads a REAL, observed
     NotificationState through, for a plugin author who needs one."""
 
-    async def _handler(call, ctx) -> ToolResult:
+    async def _handler(call: ToolCall, ctx: RunContext) -> ToolResult:
         if not settings_manager.get_plugin_grants().get(plugin_id, False):
             return ToolResult(
                 content=f'Plugin "{plugin_id}" needs your approval in Settings > Plugins before '

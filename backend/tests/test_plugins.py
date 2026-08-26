@@ -122,10 +122,15 @@ def test_plugins_payload_shape_matches_generated_validator_shape():
 def test_plugins_never_imports_qt():
     # A plain `assert "PySide6" not in sys.modules` is only meaningful in a
     # process where nothing else has imported PySide6 - running under the
-    # full repo-wide pytest suite (alongside graphlink_app/tests' real Qt
-    # widget tests), sys.modules is already contaminated regardless of what
-    # this module itself imports. Only a fresh subprocess importing ONLY
-    # backend.plugins actually answers "does this transitively pull in Qt".
+    # full repo-wide pytest suite, sys.modules could otherwise already be
+    # contaminated by an unrelated test collected earlier in the same
+    # process, regardless of what this module itself imports (graphlink_app/
+    # 's own Qt widget tests were one such source before that package was
+    # deleted outright in the Qt-removal cutover; a fresh subprocess is the
+    # only check immune to whatever else the process has imported by then,
+    # not just to that one retired source). Only a fresh subprocess importing
+    # ONLY backend.plugins actually answers "does this transitively pull in
+    # Qt".
     import subprocess
     import sys as _sys
     from pathlib import Path

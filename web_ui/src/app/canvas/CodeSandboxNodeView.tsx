@@ -2,6 +2,7 @@ import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useState } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CodeExecutionApprovalPanel } from "./CodeExecutionApprovalPanel";
+import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
@@ -271,14 +272,7 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
       header={
         <div className="scene-node-title chat-node-role">
           <span>Virtual Environment Runner</span>
-          <button
-            type="button"
-            className="chat-node-collapse-btn"
-            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-            onClick={data.onToggleCollapse}
-          >
-            {data.isCollapsed ? "▸" : "▾"}
-          </button>
+          <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </div>
       }
       bodyClassName="code-sandbox-node-content"
