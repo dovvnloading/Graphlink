@@ -53,6 +53,7 @@ import { useCanvasFontVars } from "./useCanvasFontVars";
 import { useBranchFocus } from "./useBranchFocus";
 import { useViewportReporting } from "./useViewportReporting";
 import { useCanvasPan } from "./useCanvasPan";
+import { motionDuration } from "../reducedMotion";
 import { useNodeDragAndSizeSync } from "./useNodeDragAndSizeSync";
 
 /**
@@ -2548,7 +2549,25 @@ function CanvasInner({
   );
   const snapGrid = useMemo<[number, number]>(() => [grid.gridSize, grid.gridSize], [grid.gridSize]);
 
-  const { screenToFlowPosition } = reactFlow;
+  const { screenToFlowPosition, setCenter } = reactFlow;
+
+  // Navigation pins (R2.4/R6.3) render only in PinOverlay.tsx's own list -
+  // jump-to and rename/note editing, never a marker on the canvas itself.
+  // The legacy Qt app's pins WERE real QGraphicsItems living in the same
+  // scene as the nodes (NavigationPinsController.focus() called
+  // pin.setSelected(True) on one) - that half of the port was never
+  // carried forward. Same ViewportPortal technique the smart-guide lines
+  // below already use for exactly the same reason (children render inside
+  // the same CSS-transformed layer, in flow coordinates, panning/zooming
+  // for free). Click jumps to the pin, matching PinOverlay's own "Pin
+  // title" jump button (setCenter(pin.x, pin.y, ...)) exactly, so the two
+  // affordances behave identically.
+  const onJumpToPin = useCallback(
+    (pin: SceneState["pins"][number]) => {
+      setCenter(pin.x, pin.y, { zoom: 1, duration: motionDuration(300) });
+    },
+    [setCenter],
+  );
 
   // Factor-scaled canvas panning (the drag-speed setting's REAL job) plus
   // fade-connections hover - see the hook's own doc for why these two
@@ -2759,6 +2778,36 @@ function CanvasInner({
                       }
                 }
               />
+            ))}
+          </ViewportPortal>
+        )}
+        {/* R2.4/R6.3 fix: navigation pins had no on-canvas presence at all -
+            see this component's own doc comment on onJumpToPin above. One
+            marker per pin, anchored at its real scene (x, y) - the SAME
+            ViewportPortal technique as the smart-guide lines just above,
+            for the same "pan/zoom for free, flow coordinates" reason. The
+            marker's own tip (not its center) sits at (x, y), matching how
+            a map pin visually points AT a location rather than covering
+            it. pointerEvents stays enabled here (unlike the guide lines)
+            since a pin must be clickable to jump, mirroring PinOverlay's
+            own jump button. */}
+        {scene.pins.length > 0 && (
+          <ViewportPortal>
+            {scene.pins.map((pin) => (
+              <button
+                key={pin.id}
+                type="button"
+                className="scene-pin-marker"
+                style={{ position: "absolute", left: pin.x, top: pin.y }}
+                title={pin.note || pin.title}
+                aria-label={`Jump to pin ${pin.title}`}
+                onClick={() => onJumpToPin(pin)}
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="scene-pin-marker-icon">
+                  <path d="M9 4h6l-1 6 3 3H7l3-3Z" />
+                  <path d="M12 13v7" />
+                </svg>
+              </button>
             ))}
           </ViewportPortal>
         )}
