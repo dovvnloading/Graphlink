@@ -6,7 +6,6 @@ import {
   Position,
   ReactFlow,
   ViewportPortal,
-  experimental_useOnNodesChangeMiddleware,
   useReactFlow,
   useStoreApi,
   type Connection,
@@ -14,8 +13,6 @@ import {
   type Node,
   type NodeChange,
   type NodeProps,
-  type OnMove,
-  applyNodeChanges,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -43,7 +40,6 @@ import {
   FIT_VIEW_MAX_ZOOM,
   GROUP_FALLBACK_HEIGHT,
   GROUP_FALLBACK_WIDTH,
-  NODE_SIZE_REPORT_DEBOUNCE_MS,
   VIEWPORT_REPORT_DEBOUNCE_MS,
 } from "./canvasConstants";
 import { handleKeyboardContextMenu } from "./keyboardContextMenu";
@@ -53,6 +49,11 @@ import { ConnectionCanvas, type ConnectionSpec } from "./connections/ConnectionC
 import type { ConnectionPath } from "./connections/connectionGeometry";
 import { isPointOnConnection } from "./connections/connectionGeometry";
 import { useLodVisibility } from "./useLodVisibility";
+import { useCanvasFontVars } from "./useCanvasFontVars";
+import { useBranchFocus } from "./useBranchFocus";
+import { useViewportReporting } from "./useViewportReporting";
+import { useCanvasPan } from "./useCanvasPan";
+import { useNodeDragAndSizeSync } from "./useNodeDragAndSizeSync";
 
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
@@ -1947,7 +1948,10 @@ function collectGroupMemberDeltaChanges(
 // this, a nested group's own members would visually follow the drag but
 // snap back the moment the scene re-syncs, since their moved position was
 // never actually committed).
-function collectTransitiveMemberIds(
+// Exported (Qt-removal decomposition, hook extraction): read directly by
+// useNodeDragAndSizeSync.ts's onNodesChange, which used to be a closure in
+// this same module - see that hook's own doc.
+export function collectTransitiveMemberIds(
   nodes: SceneFlowNode[],
   groupNode: SceneFlowNode,
   visited: Set<string> = new Set(),
@@ -2349,30 +2353,12 @@ function CanvasInner({
   const reactFlow = useReactFlow();
 
   // Local node state exists so dragging is fluid; backend snapshots are the
-  // truth and reconcile in whenever nothing is being dragged. dragStartRef
-  // records where each gesture began (see the middleware's bookkeeping).
-  // React Flow owns the rendered node collection (see the <ReactFlow>
-  // element's own defaultNodes comment). This component keeps only a mirror
-  // ref for its own logic - drag corrections, delete routing, scene merge -
-  // so a drag frame never has to travel through React state to reach the
-  // renderer.
+  // truth and reconcile in whenever nothing is being dragged. React Flow
+  // owns the rendered node collection (see the <ReactFlow> element's own
+  // defaultNodes comment). This component keeps only a mirror ref for its
+  // own logic - drag corrections, delete routing, scene merge - so a drag
+  // frame never has to travel through React state to reach the renderer.
   const storeApi = useStoreApi();
-  // Which nodes the current gesture is carrying. Membership is all this
-  // needs to record: it exists so the drag-STOP change (which arrives
-  // without the dragging flag) can still be recognised as part of the
-  // gesture. It held start POSITIONS while the drag-speed factor scaled
-  // node motion from its origin; that factor now applies to canvas panning
-  // instead, so the positions were dead weight.
-  const dragStartRef = useRef<Set<string>>(new Set());
-  const draggingRef = useRef(false);
-  // ADR-011 stage 11.3: the smart-guide size cache - populated ONCE per drag
-  // gesture (see the `startingNewDrag` check inside onNodesChange below,
-  // keyed off draggingRef's value from BEFORE that call) via
-  // buildDragSizeCache, then read back by computeSmartGuideFrame for every
-  // remaining frame of that SAME gesture instead of re-querying the DOM. A
-  // plain ref (not state) since a rebuild must never itself trigger a
-  // re-render - it only matters to onNodesChange's own closure.
-  const dragSizeCacheRef = useRef<Map<string, { width: number; height: number }>>(new Map());
 
   // ADR-011 stage 11.1: ONE ToFlowNodesCache for this canvas's whole
   // lifetime, threaded into every toFlowNodes call below - this is what
@@ -2391,116 +2377,32 @@ function CanvasInner({
   // flag.
   const [hoveredEdgeId, setHoveredEdgeId] = useState<string | null>(null);
 
-  // R7.5b-3: the smart-guide lines currently visible during a drag - local
-  // component state only, never scene state, matching legacy's non-persisted
-  // ChatScene.smart_guide_lines. Set per drag frame in onNodesChange, cleared
-  // on drag end; the render-time gate below (not an effect) hides any stale
-  // lines instantly if the toggle flips off mid-drag.
-  const [smartGuideLines, setSmartGuideLines] = useState<GuideLine[]>([]);
+  // DRAG-SYNC REBUILD: node-drag position correction (smart guides + the
+  // group-member cascade), drag/active-gesture tracking, and node-size
+  // reporting back to the backend - one cohesive, already-interdependent
+  // subsystem, and the most safety-critical piece of this canvas. See the
+  // hook's own module doc for why it moved as a single unit.
+  const { nodesRef, draggingRef, dragActive, smartGuideLines, onNodesChange, onDelete } = useNodeDragAndSizeSync(
+    scene,
+    reactFlow,
+    store,
+  );
   const visibleGuideLines = scene.smartGuides ? smartGuideLines : [];
 
-  // True for exactly the duration of an active node-drag gesture, mirrored
-  // from onNodesChange's own dragging/drag-end changes (state, unlike
-  // draggingRef, because it must re-render <ReactFlow> with a different
-  // onlyRenderVisibleElements value below). Why it exists: with
-  // off-viewport culling active, React Flow removes any node whose rect
-  // leaves the viewport - INCLUDING the node currently being dragged.
-  // Measured on a real scene: dragging a connected node across the
-  // viewport boundary unmounted it mid-gesture for 49 straight frames (the
-  // node simply vanished under the cursor) while its edge stayed rendered,
-  // pointing at nothing. Auto-pan during a drag makes this worse: every
-  // node the pan pushes across the boundary pops in or out mid-gesture.
-  // Suspending culling for the duration of the drag (same suspension
-  // mechanism exportInProgress already uses) keeps everything mounted while
-  // anything is moving; culling resumes the moment the drag ends.
-  const [dragActive, setDragActive] = useState(false);
-
   // R8a (UI/UX issue list finding #11): the View popover's FONT section
-  // (family/size/color) already round-trips real intents into scene state -
-  // nothing ever consumed them. Written as CSS custom properties on the
-  // canvas wrapper (not per-node inline styles) so every current AND future
-  // node inherits them for free through .scene-node's own rules in
-  // styles.css, the same way .scene-canvas already carries grid state down
-  // via React Flow's own Background props.
+  // (family/size/color), round-tripped into CSS custom properties on the
+  // canvas wrapper - see the hook's own doc for why.
   const canvasWrapperRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    const el = canvasWrapperRef.current;
-    if (!el) return;
-    el.style.setProperty("--gl-node-font-family", scene.fontFamily);
-    // fontSizePt is POINTS (backend field: font_size_pt, default 9 -> the
-    // FONT_SIZE_MIN/MAX range of 8-16 only makes sense as points, not
-    // pixels: 16px node text would be barely a size change from the 12px/
-    // 11px base, while 16pt is a real, visible jump). `pt` is a real CSS
-    // unit (1pt = 1/72in = 4/3px), not print-only, so this needs no
-    // conversion - just the right unit suffix.
-    el.style.setProperty("--gl-node-font-size", `${scene.fontSizePt}pt`);
-    el.style.setProperty("--gl-node-font-color", scene.fontColor);
-  }, [scene.fontFamily, scene.fontSizePt, scene.fontColor]);
+  useCanvasFontVars(canvasWrapperRef, scene.fontFamily, scene.fontSizePt, scene.fontColor);
 
-  // R8a: Open Document View - the read-only markdown panel a chat/
-  // conversation node's card menu opens (see toFlowNodes' own
-  // onOpenDocumentView field on each of those two branches). Lives in App
-  // now, not here: the panel is a real docked layout sibling of this WHOLE
-  // canvas region (composer/token-counter/search/etc included), not just
-  // this component's own canvas div, so its open/closed state has to live
-  // above all of them (see App.tsx).
-  //
   // R8a: "Hide Other Branches" - which node id branch focus is currently
-  // anchored to, or null when off. Also local-only state (never scene
-  // state), same posture as documentViewContent above - it is a pure
-  // display concern, not something that needs to survive a reload or be
-  // shared with a hypothetical second viewer.
-  const [branchFocusOriginId, setBranchFocusOriginId] = useState<string | null>(null);
-  // Derived, not stored: raw state alone can go stale the moment its origin
-  // node is deleted while focus is active, and "is this state still
-  // meaningful" is exactly the kind of derivation React's own guidance says
-  // to compute during render rather than reconcile via a setState-in-effect
-  // (the first version of this self-heal DID use such an effect, and the
-  // react-hooks/set-state-in-effect rule correctly flagged it as the
-  // cascading-render anti-pattern it is - this replaces it, not suppresses
-  // it). Every consumer below reads this derived value, never the raw
-  // state directly, so a deleted origin self-heals within the SAME render
-  // instead of flashing "Show All Branches" for one extra frame first.
-  const isBranchFocusOriginValid =
-    branchFocusOriginId !== null && scene.nodes.some((n) => n.id === branchFocusOriginId);
-  const effectiveBranchFocusOriginId = isBranchFocusOriginValid ? branchFocusOriginId : null;
-  const onToggleBranchFocus = useCallback(
-    (nodeId: string) => {
-      // Mirrors graphlink_scene.py's own toggle_branch_visibility exactly:
-      // if focus is already active (from ANY origin), any click anywhere
-      // clears it - the menu label is "Show All Branches" scene-wide once
-      // active, not "focus a different branch". Only when focus is OFF -
-      // including "was on, but its origin has since been deleted", which
-      // reads as off per isBranchFocusOriginValid above - does the clicked
-      // node become the new origin.
-      setBranchFocusOriginId((current) => {
-        const currentIsValid = current !== null && scene.nodes.some((n) => n.id === current);
-        return currentIsValid ? null : nodeId;
-      });
-    },
-    [scene.nodes],
-  );
+  // anchored to, or null when off. Local-only state (never scene state),
+  // same posture as App.tsx's documentViewContent - a pure display concern.
+  const { effectiveBranchFocusOriginId, onToggleBranchFocus } = useBranchFocus(scene.nodes);
 
-  // R6.3: viewport (pan/zoom) reporting - see makeDebouncedViewportReport's
-  // own doc above. onMove fires on every frame of a pan/zoom gesture (never
-  // just once at the end, unlike NodeResizer's onResizeEnd), so the debounce
-  // here is load-bearing, not just a burst guard: without it, setViewState
-  // would fire a WS intent every animation frame of every pan/zoom gesture.
-  const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
-    },
-    [],
-  );
-  const onMove: OnMove = useCallback(
-    (_event, viewport) => {
-      makeDebouncedViewportReport(viewportTimerRef, (zoomFactor, scrollX, scrollY) =>
-        store.setViewState(zoomFactor, scrollX, scrollY),
-      )(viewport.zoom, viewport.x, viewport.y);
-    },
-    [store],
-  );
+  // R6.3: viewport (pan/zoom) reporting - see the hook's own doc and
+  // makeDebouncedViewportReport's for why the debounce is load-bearing.
+  const { onMove, viewportTimerRef } = useViewportReporting(store);
 
   useEffect(() => {
     if (draggingRef.current) return;
@@ -2532,6 +2434,12 @@ function CanvasInner({
   }, [
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
     getComposerRoute, filterKinds, filterStatuses,
+    // nodesRef/draggingRef/storeApi are all stable ref/store-api identities
+    // (useNodeDragAndSizeSync's/useStoreApi's own refs never change across
+    // renders) - listed here only because they now cross a hook boundary,
+    // which stops react-hooks/exhaustive-deps from inferring that stability
+    // on its own; behaviorally a no-op, same as before this extraction.
+    nodesRef, draggingRef, storeApi,
     // REVIEW-FIX: a scene publish that lands while draggingRef.current is
     // true bails out of this effect ABOVE and is discarded entirely, not
     // queued - and draggingRef is a plain ref, so nothing here re-ran when
@@ -2625,349 +2533,11 @@ function CanvasInner({
     [minimapNodeColor, minimapSelectedColor],
   );
 
-  // ADR-011 follow-up / drag-sync rebuild: the CURRENT local flow nodes,
-  // readable from the change middleware below without making it a
-  // dependency (a middleware that re-registers on every node change would
-  // thrash the store's middleware map every frame of a drag).
-  // Kept in step with `nodes` by the two places that ever produce a new
-  // array (the scene-sync effect and onNodesChange below), never by a
-  // write during render: a drag can deliver several frames before React
-  // commits, and each frame must build on the previous frame's result
-  // rather than on whatever the last commit happened to hold.
-  const nodesRef = useRef<SceneFlowNode[]>([]);
-  // Guides produced by the middleware's most recent drag frame, handed to
-  // onNodesChange below to publish as state. The middleware itself must
-  // stay side-effect-free with respect to React state: it executes INSIDE
-  // React Flow's own store update, where a setState call would be a
-  // render-phase update.
-  const pendingGuidesRef = useRef<GuideLine[]>([]);
-  // Node-size reporting: the backend fits frames/containers around their
-  // members but cannot measure a rendered node itself, so the canvas tells
-  // it what it actually laid out. Debounced for the same reason onMove is
-  // (a streaming reply re-measures its node on nearly every token) and
-  // diffed against what was last sent, so a settled canvas reports nothing.
-  const nodeSizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const reportedSizesRef = useRef<Map<string, string>>(new Map());
-  // REVIEW-FIX: which node ids were unmeasurable as of the last flush - a
-  // node genuinely unmounted under onlyRenderVisibleElements (off-viewport)
-  // has no DOM to measure, so measuredNodeSize returns null for it and
-  // collectChangedNodeSizes correctly skips it rather than reporting a
-  // false zero. If that node's content grows while it sits off-viewport
-  // (e.g. a streaming member inside a frame), the growth produces no
-  // dimensions change at all until the node remounts - so the backend's
-  // frame/container bbox keeps computing against the member's last known
-  // (smaller) size, and the member can render visibly outside its frame's
-  // box for a moment once it scrolls back in. Tracked here so onNodesChange
-  // below can recognise exactly that "remount of a previously-unmeasurable
-  // node" transition and flush its real size immediately instead of behind
-  // the standard debounce, which exists to coalesce a busy streaming
-  // node's continuous resizes - not to delay a one-off catch-up report that
-  // is already late by definition. Rebuilt wholesale on every flush (below)
-  // rather than mutated incrementally, so it always reflects that flush's
-  // own measurements.
-  const unmeasurableIdsRef = useRef<Set<string>>(new Set());
-  useEffect(
-    () => () => {
-      if (nodeSizeTimerRef.current) clearTimeout(nodeSizeTimerRef.current);
-    },
-    [],
-  );
-  // The actual measure-diff-send pass, factored out so it can run either
-  // debounced (reportNodeSizesSoon, the common streaming-resize case) or
-  // immediately (the remount catch-up case in onNodesChange below).
-  const flushNodeSizes = useCallback(() => {
-    const currentlyUnmeasurable = new Set<string>();
-    const changed = collectChangedNodeSizes(
-      nodesRef.current.map((n) => n.id),
-      (id) => {
-        const size = measuredNodeSize(reactFlow, id);
-        if (size === null) currentlyUnmeasurable.add(id);
-        return size;
-      },
-      reportedSizesRef.current,
-    );
-    unmeasurableIdsRef.current = currentlyUnmeasurable;
-    store.reportNodeSizes(changed);
-  }, [reactFlow, store]);
-  const reportNodeSizesSoon = useCallback(() => {
-    if (nodeSizeTimerRef.current) clearTimeout(nodeSizeTimerRef.current);
-    nodeSizeTimerRef.current = setTimeout(() => {
-      nodeSizeTimerRef.current = null;
-      flushNodeSizes();
-    }, NODE_SIZE_REPORT_DEBOUNCE_MS);
-  }, [flushNodeSizes]);
-
-
-  /**
-   * DRAG-SYNC REBUILD: the drag-position corrections this canvas applies -
-   * smart-guide snapping and
-   * the group-member cascade - now run as a React Flow CHANGE MIDDLEWARE
-   * (experimental_useOnNodesChangeMiddleware), i.e. INSIDE React Flow's own
-   * updateNodePositions, before it commits anything.
-   *
-   * Why this is an architecture change and not a tweak: these corrections
-   * used to run in onNodesChange, which is downstream of React Flow's own
-   * bookkeeping. The consequence was documented in this file's own drag-end
-   * comment - "the drag-factor/smart-guide corrections applied per frame
-   * never feed back into RF's drag state" - so on every frame of every
-   * drag, React Flow's internal position for a node and the position this
-   * app actually rendered it at were two different numbers. Node cards are
-   * positioned from the app's corrected value while EDGE geometry is
-   * computed by React Flow itself (getEdgePosition, off its own node
-   * records), so the two ends of that disagreement are exactly the node and
-   * the line attached to it. That is the connection-not-tracking-the-node
-   * artifact, and no amount of downstream re-render tuning can close it,
-   * because the two values are computed from different inputs.
-   *
-   * Running the corrections here makes the corrected position the ONLY
-   * position: React Flow's own change pipeline carries it, so the node
-   * transform and the edge endpoints are derived from one number in one
-   * commit. Group-member changes are appended to the same batch for the
-   * same reason they always were - a member must move in lockstep with its
-   * group, and now that lockstep is inside React Flow's update rather than
-   * bolted onto the side of it.
-   */
-  const dragCorrectionMiddleware = useCallback(
-    (changes: NodeChange<SceneFlowNode>[]): NodeChange<SceneFlowNode>[] => {
-      const currentNodes = nodesRef.current;
-      // Rebuild the smart-guide size cache exactly ONCE per gesture, on its
-      // first frame - draggingRef still holds the PREVIOUS call's value here
-      // (onNodesChange below is what advances it), so this is true only when
-      // nothing was already dragging coming into this batch. A multi-select
-      // drag's first frame reports several dragging changes in ONE batch and
-      // still rebuilds once, not once per change.
-      const startingGesture = !draggingRef.current && changes.some((c) => c.type === "position" && c.dragging);
-      if (startingGesture && scene.smartGuides) {
-        dragSizeCacheRef.current = buildDragSizeCache(reactFlow, currentNodes);
-      }
-      const memberChanges: NodeChange<SceneFlowNode>[] = [];
-      // R7.5b-3: guides re-derive every drag frame. DELIBERATE deviation for
-      // multi-select drags (review-confirmed): legacy cleared guides
-      // per-item, so only the LAST-processed item's guides survived each
-      // frame - an artifact of Qt's per-item itemChange ordering, not a
-      // design choice. Accumulating every co-mover's guides shows all live
-      // alignments instead of an arbitrary one.
-      const frameGuides: GuideLine[] = [];
-      let sawGestureFrame = false;
-
-      const corrected = changes.map((change) => {
-        if (change.type !== "position" || !change.position) return change;
-        // A gesture frame is any position change that is either flagged
-        // dragging, or belongs to a node whose drag start this gesture has
-        // already recorded - the latter catches React Flow's own drag-STOP
-        // change, which must receive the identical correction so the value
-        // React Flow settles on is the value the user actually saw. Passing
-        // that one through raw is what used to make a released node jump off
-        // its corrected position and then reconcile after the backend echo.
-        if (!change.dragging && !dragStartRef.current.has(change.id)) return change;
-        sawGestureFrame = true;
-        // Gesture membership only - see dragStartRef's own comment. The
-        // drag-speed factor deliberately does NOT touch node motion: the
-        // legacy feature it ports scaled canvas PANNING, never item
-        // movement (graphlink_view.py: "For controlling pan speed", whose
-        // pan handler multiplied each mouse delta by the factor). The
-        // straight port mis-wired it to node dragging; the factor now
-        // applies in the wrapper's own pan handler below.
-        dragStartRef.current.add(change.id);
-        let finalPosition = { ...change.position };
-        // R7.5b-3: smart-guide snap, as a LAYERED PASS on top of React
-        // Flow's native grid-snap (which, when enabled, already ran inside
-        // RF before this change was emitted) - the recorded design
-        // decision, chosen over re-implementing grid-snap manually. Smart
-        // guides win per-axis when both would apply, reproducing legacy
-        // snap_position's own per-axis priority. Runs BEFORE
-        // applyGroupDragDelta below so carried group members ride the
-        // corrected delta. Legacy's !isSelected() candidate exclusion is
-        // translated as !n.selected (every co-mover in a multi-select drag
-        // reports its own dragging change with selected=true); a dragged
-        // group's own members are additionally excluded - they move in
-        // lockstep with the group, so "aligning" against them is always
-        // trivially true and would freeze the drag (a gap legacy never had
-        // to answer: this canvas carries members via synthetic deltas, not
-        // Qt child-item parenting - per the recorded design decision, only
-        // the group's own rect snaps and members ride the delta).
-        // ADR-011 stage 11.3: reads dragSizeCacheRef (populated ONCE at
-        // this gesture's own drag-start, above) instead of calling
-        // measuredNodeSize directly here - see computeSmartGuideFrame's
-        // own doc for why this is now a pure, cache-only lookup with zero
-        // DOM access per frame.
-        if (scene.smartGuides) {
-          const frame = computeSmartGuideFrame(currentNodes, change.id, finalPosition, dragSizeCacheRef.current);
-          finalPosition = frame.position;
-          frameGuides.push(...frame.guides);
-        }
-        memberChanges.push(...applyGroupDragDelta(currentNodes, change.id, finalPosition));
-        return { ...change, position: finalPosition };
-      });
-
-      if (!sawGestureFrame) return changes;
-      pendingGuidesRef.current = frameGuides;
-
-      // Group members ride in the SAME batch as the node that carries them,
-      // so React Flow commits the group and its members together.
-      return memberChanges.length > 0 ? [...corrected, ...memberChanges] : corrected;
-    },
-    [scene.dragFactor, scene.smartGuides, reactFlow],
-  );
-
-  // Registers the correction above inside React Flow's own change pipeline.
-  // The hook is experimental in @xyflow/react 12.11 - it is nonetheless the
-  // library's only sanctioned point for transforming changes BEFORE they are
-  // committed, which is precisely what this canvas needs (see the
-  // middleware's own doc comment). If a future version renames it, the
-  // fallback is to move the same function back into onNodesChange and
-  // accept the position divergence it exists to remove.
-  // react-hooks/refs cannot see through this hook: it only STORES the
-  // function (in React Flow's middleware map) and the stored function is
-  // invoked later from inside a pointer-driven store update, never during
-  // render - so the ref reads inside it are ordinary event-time reads, which
-  // is exactly what that rule exists to require.
-  // eslint-disable-next-line react-hooks/refs
-  experimental_useOnNodesChangeMiddleware<SceneFlowNode>(dragCorrectionMiddleware);
-
-  const onNodesChange = useCallback(
-    (changes: NodeChange<SceneFlowNode>[]) => {
-      // Every change reaching this point has already been corrected by the
-      // middleware above, so this handler no longer computes positions at
-      // all - it applies the batch to local state and runs the side effects
-      // a settled gesture owes the rest of the app.
-      const currentNodes = nodesRef.current;
-      const settledMoveIntents: Array<{ id: string; x: number; y: number }> = [];
-      let sawDragging = false;
-      let sawDragEnd = false;
-      // React Flow's own "this node was (re)measured" signal - the trigger
-      // for reporting sizes back to the backend's group-bounds math. Only
-      // schedules the debounced flush; the flush itself re-reads every
-      // node and sends just the diffs.
-      //
-      // REVIEW-FIX: if any measured id was unmeasurable as of the last
-      // flush (unmeasurableIdsRef, populated by flushNodeSizes), this is a
-      // node that just remounted after being off-viewport - see that ref's
-      // own doc for why its content may have grown while unmounted, with
-      // no dimensions change able to fire during that whole window. That
-      // catch-up is flushed immediately, bypassing the debounce meant for
-      // coalescing an actively-streaming node's continuous resizes - a
-      // remount is a discrete one-off event, not a flurry, so there is no
-      // reason to make the frame's now-stale bbox wait out a debounce
-      // window it was never the cause of. Any pending debounced flush is
-      // cleared first so it doesn't fire again a moment later.
-      if (changes.some((change) => change.type === "dimensions")) {
-        const remountedFromUnmeasurable = changes.some(
-          (change) => change.type === "dimensions" && unmeasurableIdsRef.current.has(change.id),
-        );
-        if (remountedFromUnmeasurable) {
-          if (nodeSizeTimerRef.current) {
-            clearTimeout(nodeSizeTimerRef.current);
-            nodeSizeTimerRef.current = null;
-          }
-          flushNodeSizes();
-        } else {
-          reportNodeSizesSoon();
-        }
-      }
-
-      for (const change of changes) {
-        if (change.type !== "position") continue;
-        if (change.dragging) {
-          draggingRef.current = true;
-          sawDragging = true;
-          continue;
-        }
-        if (!dragStartRef.current.has(change.id)) continue;
-        // Drag end for a node this gesture actually carried.
-        draggingRef.current = false;
-        sawDragEnd = true;
-        dragStartRef.current.delete(change.id);
-        const settled = currentNodes.find((n) => n.id === change.id);
-        if (!settled) continue;
-        // R6.1 follow-up: collected, not committed here directly - see the
-        // single store.moveNodes call below for why a group drag's whole
-        // commit (the group's own node plus every cascaded member) must land
-        // as ONE atomic batch, not N individual moveNode calls.
-        settledMoveIntents.push({ id: change.id, x: settled.position.x, y: settled.position.y });
-        if (groupDragKindOf(settled)) {
-          for (const memberId of collectTransitiveMemberIds(currentNodes, settled)) {
-            const member = currentNodes.find((n) => n.id === memberId);
-            if (member) settledMoveIntents.push({ id: memberId, x: member.position.x, y: member.position.y });
-          }
-        }
-      }
-
-      // R6.1 follow-up: ONE atomic batch for the WHOLE drag-end (the dragged
-      // node's own settled position plus every cascaded member), not the
-      // group's own moveNode call followed by N separate member moveNode
-      // calls. Each individual moveNode intent publishes its own scene
-      // snapshot the instant it lands - calling it once per node in a group
-      // drag meant the frontend rendered N genuinely inconsistent
-      // intermediate states (some members caught up, some not) in rapid
-      // succession right after release, and since a frame/container's bounds
-      // correctly grow to enclose whatever the CURRENT member bbox is, those
-      // intermediate states visibly stretched and resettled instead of just
-      // being briefly stale - a real glitch on every group drag, not a
-      // cosmetic footnote. moveNodes commits every position in one pass
-      // server-side and publishes exactly once.
-      if (settledMoveIntents.length > 0) store.moveNodes(settledMoveIntents);
-      // Guides re-derive every drag frame (legacy cleared + re-added its
-      // QGraphicsLineItems per recompute); drag end always clears. The
-      // values come from the middleware's own most recent frame.
-      if (sawDragging) {
-        const frameGuides = pendingGuidesRef.current;
-        setSmartGuideLines((current) => (current.length === 0 && frameGuides.length === 0 ? current : frameGuides));
-      } else if (sawDragEnd) {
-        pendingGuidesRef.current = [];
-        setSmartGuideLines((current) => (current.length === 0 ? current : []));
-      }
-      // Suspend off-viewport culling while a drag is in flight - see
-      // dragActive's own doc comment above. Same-value setState calls (every
-      // frame after the first) bail out without a re-render.
-      if (sawDragging) setDragActive(true);
-      else if (sawDragEnd) setDragActive(false);
-      // Built off nodesRef (not the setNodes updater form) so the mirror
-      // advances in this same event: a drag can deliver several frames
-      // before React commits, and each must build on the previous frame's
-      // result - see nodesRef's own comment above.
-      // React Flow has ALREADY applied this batch to its own store by the
-      // time this handler runs (that is what uncontrolled node state buys:
-      // the renderer is updated synchronously inside the pointer event, the
-      // way working node editors do it, instead of waiting for React state
-      // and a post-paint sync). All that remains here is keeping this
-      // component's mirror in step for its own logic.
-      // eslint-disable-next-line react-hooks/immutability
-      nodesRef.current = applyNodeChanges(changes, currentNodes);
-    },
-    [store, reportNodeSizesSoon, flushNodeSizes],
-  );
-
   const onConnect = useCallback(
     (connection: Connection) => {
       if (connection.source && connection.target) {
         store.connectNodes(connection.source, connection.target);
       }
-    },
-    [store],
-  );
-
-  const onDelete = useCallback(
-    ({ nodes: deletedNodes, edges: deletedEdges }: { nodes: Node[]; edges: Edge[] }) => {
-      // Chat nodes delete through their own reparent-preserving intent
-      // (backend/canvas.py's delete_chat_node) so the Delete key matches the
-      // context menu's "Delete Node" exactly - a plain cascade-delete would
-      // orphan every child branch instead of splicing it back to the
-      // grandparent. Every other kind still uses the generic cascade-delete.
-      const chatNodeIds: string[] = [];
-      const otherNodeIds: string[] = [];
-      for (const deleted of deletedNodes) {
-        const flowNode = nodesRef.current.find((n) => n.id === deleted.id);
-        (flowNode?.type === "chat" ? chatNodeIds : otherNodeIds).push(deleted.id);
-      }
-      for (const id of chatNodeIds) store.deleteChatNode(id);
-      store.removeNodes(otherNodeIds);
-      // Skip edges an already-deleted node takes with it server-side
-      // (cascade-delete or the chat reparent both manage their own edges).
-      const dying = new Set(deletedNodes.map((n) => n.id));
-      store.removeEdges(
-        deletedEdges.filter((e) => !dying.has(e.source) && !dying.has(e.target)).map((e) => e.id),
-      );
     },
     [store],
   );
@@ -2979,78 +2549,24 @@ function CanvasInner({
   const snapGrid = useMemo<[number, number]>(() => [grid.gridSize, grid.gridSize], [grid.gridSize]);
 
   const { screenToFlowPosition } = reactFlow;
-  // Hover is only meaningful while the fade-connections lens is on; testing
-  // otherwise would cost a pointer-move hit test for no visible effect.
-  const onCanvasMouseMove = useCallback(
-    (event: PointerEvent) => {
-      if (!scene.fadeConnectionsEnabled) return;
-      if (draggingRef.current) return;
-      const id = connectionAt(event.clientX, event.clientY);
-      setHoveredEdgeId((current) => (current === id ? current : id));
-    },
-    [connectionAt, scene.fadeConnectionsEnabled],
-  );
 
-  // Factor-scaled canvas panning - the drag-speed setting's REAL job. The
-  // legacy view multiplied each pan delta by the factor
-  // (graphlink_view.py: "self._drag_factor = 1.0  # For controlling pan
-  // speed." and `delta *= self._drag_factor` in its pan handler); the
-  // straight port mis-wired the factor to node motion instead, which read
-  // as the setting doing nothing. React Flow's own panOnDrag has no speed
-  // input, so it is disabled on the element below and the gesture is owned
-  // here, applying the exact legacy contract: viewport moves by
-  // pointer-delta times factor, incrementally per event.
-  const panStateRef = useRef<{ lastX: number; lastY: number } | null>(null);
-  const onCanvasMouseDown = useCallback(
-    (event: PointerEvent) => {
-      if ((event.target as HTMLElement).closest(".react-flow__node")) return;
-      const id = connectionAt(event.clientX, event.clientY);
-      setSelectedConnectionId(id);
-      // Begin a pan on a background press (left or middle button), unless
-      // Shift is held - that remains React Flow's selection-box gesture.
-      const onPane = (event.target as HTMLElement).closest(".react-flow__pane");
-      if (onPane && !event.shiftKey && (event.button === 0 || event.button === 1) && id === null) {
-        panStateRef.current = { lastX: event.clientX, lastY: event.clientY };
-        canvasWrapperRef.current?.classList.add("panning");
-      }
-    },
-    [connectionAt],
+  // Factor-scaled canvas panning (the drag-speed setting's REAL job) plus
+  // fade-connections hover - see the hook's own doc for why these two
+  // pointer-driven concerns live together (both resolve against the same
+  // connectionAt hit test and the same canvasWrapperRef target).
+  useCanvasPan(
+    canvasWrapperRef,
+    sceneRef,
+    storeApi,
+    reactFlow,
+    store,
+    connectionAt,
+    scene.fadeConnectionsEnabled,
+    viewportTimerRef,
+    draggingRef,
+    setHoveredEdgeId,
+    setSelectedConnectionId,
   );
-  useEffect(() => {
-    const onWindowMouseMove = (event: PointerEvent) => {
-      const pan = panStateRef.current;
-      if (!pan) return;
-      const factor = sceneRef.current.dragFactor;
-      const dx = (event.clientX - pan.lastX) * factor;
-      const dy = (event.clientY - pan.lastY) * factor;
-      pan.lastX = event.clientX;
-      pan.lastY = event.clientY;
-      const { transform } = storeApi.getState();
-      reactFlow.setViewport({ x: transform[0] + dx, y: transform[1] + dy, zoom: transform[2] });
-    };
-    const onWindowMouseUp = () => {
-      if (!panStateRef.current) return;
-      panStateRef.current = null;
-      canvasWrapperRef.current?.classList.remove("panning");
-      // Persist the settled viewport the same way onMove does for zooming -
-      // programmatic setViewport does not raise React Flow's own onMove.
-      const [x, y, zoom] = storeApi.getState().transform;
-      makeDebouncedViewportReport(viewportTimerRef, (zoomFactor, scrollX, scrollY) =>
-        store.setViewState(zoomFactor, scrollX, scrollY),
-      )(zoom, x, y);
-    };
-    // Pointer events, not mouse events: React Flow's own pan (disabled
-    // here so the speed factor can apply) was pointer-based, so handling
-    // only mouse would have left touch and pen unable to pan at all.
-    window.addEventListener("pointermove", onWindowMouseMove);
-    window.addEventListener("pointerup", onWindowMouseUp);
-    window.addEventListener("pointercancel", onWindowMouseUp);
-    return () => {
-      window.removeEventListener("pointermove", onWindowMouseMove);
-      window.removeEventListener("pointerup", onWindowMouseUp);
-      window.removeEventListener("pointercancel", onWindowMouseUp);
-    };
-  }, [reactFlow, store, storeApi]);
 
   // Delete removes the selected connection. React Flow used to report edge
   // deletions through onDelete; it no longer renders connections, so this
@@ -3068,23 +2584,6 @@ function CanvasInner({
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [selectedConnectionId, store]);
-
-  // Attached to the wrapper element directly rather than through JSX props:
-  // these are pointer affordances on a drawing surface, not interactions on
-  // a semantic control, and binding them here keeps the element free of
-  // handler props that would misrepresent it to assistive technology.
-  useEffect(() => {
-    const el = canvasWrapperRef.current;
-    if (!el) return;
-    const move = (event: PointerEvent) => onCanvasMouseMove(event);
-    const down = (event: PointerEvent) => onCanvasMouseDown(event);
-    el.addEventListener("pointermove", move);
-    el.addEventListener("pointerdown", down);
-    return () => {
-      el.removeEventListener("pointermove", move);
-      el.removeEventListener("pointerdown", down);
-    };
-  }, [onCanvasMouseMove, onCanvasMouseDown]);
 
   const onDoubleClick = useCallback(
     (event: React.MouseEvent) => {
