@@ -416,6 +416,51 @@ describe("SceneCanvas <ReactFlow> wiring (ADR-011 stages 11.2/11.3)", () => {
         "b",
         "c",
       ]);
+      const settledA = capturedStoreApiRef
+        .current!.getState()
+        .nodes.find((n: { id: string }) => n.id === "a") as { position: { x: number; y: number } };
+      expect(settledA.position).toEqual({ x: 10, y: 0 });
+    });
+
+    // BUG FIX: found investigating a reported "node hasn't caught up" sputter
+    // on a fast drag+release - see withPreservedFlowState's own POSITION doc
+    // and pendingSettledIdsRef's doc (useNodeDragAndSizeSync.ts) for the
+    // mechanism. This is the plain case with no mid-drag publish at all: the
+    // scene-sync effect above still re-runs the instant `dragActive` flips
+    // false (that is the whole point of the REVIEW-FIX round 3 fix just
+    // above), and store.moveNodes is fire-and-forget - `scene` has not
+    // caught up to the drop yet, so without the pin this rebuilds "a" straight
+    // from the still-pre-drag scene and snaps it back to x=0.
+    it("keeps the dropped node at its real position instead of snapping back to the stale pre-drag scene", () => {
+      const { stateListeners } = mount();
+      publish(stateListeners, { nodes: [chatRow("a", 0), chatRow("b", 200)], edges: [] });
+
+      const drag = (change: Partial<NodeChange> & { id: string }) =>
+        act(() => {
+          const raw = [{ type: "position", ...change } as NodeChange];
+          lastProps().onNodesChange(capturedMiddleware ? capturedMiddleware(raw) : raw);
+        });
+
+      drag({ id: "a", dragging: true, position: { x: 50, y: 0 } });
+      drag({ id: "a", dragging: true, position: { x: 300, y: 0 } });
+      drag({ id: "a", dragging: false, position: { x: 300, y: 0 } });
+
+      const settledA = capturedStoreApiRef
+        .current!.getState()
+        .nodes.find((n: { id: string }) => n.id === "a") as { position: { x: number; y: number } };
+      expect(settledA.position).toEqual({ x: 300, y: 0 });
+
+      // The pin must not be permanent: once the backend's real echo for this
+      // move actually arrives (a genuinely new `scene`), ordinary
+      // reconciliation must resume trusting it - including for a LATER,
+      // unrelated remote move of the same node, which must not get stuck
+      // pinned to this drag's now-stale value forever.
+      publish(stateListeners, { nodes: [chatRow("a", 300), chatRow("b", 200)], edges: [] });
+      publish(stateListeners, { nodes: [chatRow("a", 999), chatRow("b", 200)], edges: [] });
+      const remoteMovedA = capturedStoreApiRef
+        .current!.getState()
+        .nodes.find((n: { id: string }) => n.id === "a") as { position: { x: number; y: number } };
+      expect(remoteMovedA.position).toEqual({ x: 999, y: 0 });
     });
   });
 
