@@ -2,12 +2,14 @@ import type { BridgeRejection } from "../bridge-core/islandState";
 
 /**
  * The visible replacement for a rejected bridge payload - the shared shape
- * every island renders INSTEAD of its normal controls when parseIslandState()
- * rejects a payload, not as a dismissible banner alongside them. Once a
- * payload has been rejected, whatever was on screen is stale by definition,
- * and leaving a working-looking surface up next to a warning invites the
- * user to interact with state the desktop side no longer agrees with.
- * Replacing the surface makes the failure honest.
+ * a surface renders INSTEAD of its normal controls once its payload has been
+ * rejected (see bridge-core/islandState.ts's BridgeRejection, and lib/ws/
+ * transport.ts's onVersionRejection() for the real rejection path this
+ * renders today), not as a dismissible banner alongside them. Once a payload
+ * has been rejected, whatever was on screen is stale by definition, and
+ * leaving a working-looking surface up next to a warning invites the user to
+ * interact with state the desktop side no longer agrees with. Replacing the
+ * surface makes the failure honest.
  *
  * Extracted here (lib/ui/'s first real component - see the master plan's
  * Phase 1 lib/ui/ checklist entry) once 4 islands had independently grown

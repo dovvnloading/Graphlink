@@ -108,6 +108,8 @@ from backend.canvas import SceneDocument, SceneNode, _content_codec
 from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_settings_store import SettingsManager
 
+logger = logging.getLogger(__name__)
+
 # ADR-009 stage 9.5: the asset store in effect for the CURRENT save. Same
 # contextvar rationale as session_load.py's own _ACTIVE_ASSET_STORE - the
 # per-kind serializer dispatch below is a table of (node, document)
@@ -554,7 +556,7 @@ def _serialize_plugin_node(
                 # graph.py's _plugin_state_wire) - previously this dropped a
                 # raising plugin serializer with zero signal anywhere,
                 # unlike every other place a plugin's own code runs.
-                logging.warning(
+                logger.warning(
                     "plugin node %s (%s): serialize hook raised", node.id, node.kind, exc_info=True,
                 )
                 extra = None
@@ -634,8 +636,32 @@ def _serialize_pin(record) -> dict[str, Any]:
 
 def _serialize_frame(node: SceneNode, frame_source_index: dict[str, int]) -> dict[str, Any]:
     item_indices = [frame_source_index[i] for i in node.item_ids if i in frame_source_index]
-    width = node.state.group_width if node.state.group_width is not None else 0.0
-    height = node.state.group_height if node.state.group_height is not None else 0.0
+    # Technical-debt audit finding: group_width/group_height is the frame's
+    # CURRENT effective size, and reading it unconditionally is CORRECT
+    # while the frame is expanded - it already reflects the real union of
+    # any manual override with the live members' bbox, which is exactly
+    # what should be persisted. It is ONLY wrong while is_collapsed, when
+    # backend/domain/groups.py's _recompute_group_bounds has temporarily
+    # overwritten it with the fixed collapsed-pill size, discarding the
+    # real size entirely. group_manual_width/height is the SEPARATE, never-
+    # auto-populated field that survives a collapse/expand round-trip
+    # untouched (FrameState's own docstring) - the real, stable source of
+    # truth to fall back to ONLY in that one state. Saving while a
+    # manually-resized frame happened to be collapsed used to write the
+    # tiny pill size into "rect"/"size", which session_load.py's
+    # _restore_frames then applies via resize_frame() as the frame's new
+    # PERMANENT manual size - destroying the user's real size the moment
+    # they next expand it. An auto-fit frame (no manual override) is
+    # unaffected either way, since resize_frame's own bbox-minimum clamp
+    # already recovers a sane auto-fit size from a stale pill value.
+    if node.is_collapsed and node.state.group_manual_width is not None:
+        width = node.state.group_manual_width
+    else:
+        width = node.state.group_width if node.state.group_width is not None else 0.0
+    if node.is_collapsed and node.state.group_manual_height is not None:
+        height = node.state.group_manual_height
+    else:
+        height = node.state.group_height if node.state.group_height is not None else 0.0
     return {
         "id": node.id,
         "items": item_indices,

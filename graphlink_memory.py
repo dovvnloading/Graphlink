@@ -28,11 +28,6 @@ def append_history(history, additions):
     return combined
 
 
-def assign_history(target_node, history):
-    if hasattr(target_node, "conversation_history"):
-        target_node.conversation_history = clone_history(history)
-
-
 def trim_history(history, token_estimator, max_tokens=8000, system_prompt_estimate=500, reserve_tokens=0):
     normalized_history = clone_history(history)
     current_tokens = max(0, system_prompt_estimate) + max(0, reserve_tokens)

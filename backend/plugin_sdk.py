@@ -410,19 +410,21 @@ class BuiltinActionSpec:
 # SECURITY-FIX: register_builtin_plugin (below) attaches a picker action that
 # _execute_discovered_plugin runs UN-gated by any install-time grant and that
 # is INVISIBLE in Settings > Plugins - deliberately, because the docstring's
-# stated purpose is migrating the 8 pre-SDK first-party built-ins without
-# renaming their shipped kind strings. But the method is public on the same
-# HostContext every plugin's register() receives, and nothing restricted it
-# to first-party callers: a third-party plugin could call it and thereby run
-# its handler with the live SceneDocument on every picker click, with no
-# consent prompt and no row in the consent UI. The hatch is now restricted to
-# exactly the first-party plugin ids that legitimately use it (grep-confirmed:
-# these are the only plugins/ packages that call register_builtin_plugin); any
-# other plugin_id calling it is a discovery-time PluginRegistrationError, which
-# is caught and surfaced as a load error rather than run.
+# stated purpose is migrating the 7 pre-SDK first-party built-ins without
+# renaming their shipped kind strings (PLAN-2026-08-24 H5 retired the 8th,
+# Py-Coder - see backend/plugins.py's own _BUILTIN_PICKER_ORDER comment).
+# But the method is public on the same HostContext every plugin's register()
+# receives, and nothing restricted it to first-party callers: a third-party
+# plugin could call it and thereby run its handler with the live
+# SceneDocument on every picker click, with no consent prompt and no row in
+# the consent UI. The hatch is now restricted to exactly the first-party
+# plugin ids that legitimately use it (grep-confirmed: these are the only
+# plugins/ packages that call register_builtin_plugin); any other plugin_id
+# calling it is a discovery-time PluginRegistrationError, which is caught and
+# surfaced as a load error rather than run.
 _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS = frozenset({
     "artifact", "code_sandbox", "conversation_node", "gitlink",
-    "html_renderer", "pycoder", "system_prompt", "web_research",
+    "html_renderer", "system_prompt", "web_research",
 })
 
 
@@ -545,10 +547,10 @@ class HostContext:
         existing, already-rich SceneDocument mutator (e.g.
         add_web_research_node) rather than going through register_node_kind/
         PluginNodeSeed/add_plugin_node's generic, auto-namespaced wire
-        format. Exists ONLY to migrate the 8 pre-SDK built-in picker actions
+        format. Exists ONLY to migrate the 7 pre-SDK built-in picker actions
         onto real plugin packages under plugins/ without renaming their
         already-shipped, already-persisted kind strings (web_research,
-        gitlink, pycoder, code_sandbox, html, artifact, conversation, note) -
+        gitlink, code_sandbox, html, artifact, conversation, note) -
         renaming any of those would be an invasive, unnecessary breaking
         change across the frontend's NODE_TYPES map, the wire contract, and
         session_save.py/session_load.py's hand-written per-kind
@@ -562,14 +564,14 @@ class HostContext:
         return-None-on-failure/return-created-or-resolved-id-on-success
         contract.
 
-        'handler' is SYNC, not async - every one of the 8 branches this
+        'handler' is SYNC, not async - every one of the 7 branches this
         method replaces has a fully synchronous body (record_command's
         mutator is always a plain zero-arg closure); wrapping it in an
         async def would be needless ceremony this call path has no use for.
         The caller (backend/plugins.py's _execute_discovered_plugin) applies
         one uniform post-handler rule around every registered handler:
         publish "scene" if the handler returned a real id, else publish
-        "notification" - matching every one of the 8 migrated branches'
+        "notification" - matching every one of the 7 migrated branches'
         own "show warning, return None" vs "create/resolve, return id"
         shape, including System Prompt's dedup path (resolves an EXISTING
         note's id, creates nothing new, still publishes "scene").
@@ -1383,7 +1385,7 @@ def _merge_into_registry(
     checked here, raising rather than silently overwriting.
 
     ADR-014 stage 14.3: 'builtin_names' has no real caller-supplied argument
-    left in this repo (the 8 pre-SDK built-ins are now real discovered
+    left in this repo (the 7 pre-SDK built-ins are now real discovered
     plugins themselves, checked against every other plugin the same way any
     two plugins are), but stays a real, generic, tested SDK mechanism - any
     host embedding this SDK can still reserve a name that has no registry

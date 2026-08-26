@@ -1,5 +1,5 @@
 /** ADR-011 stage 11.6 dedup: this exact shape - `{ x: number; y: number }` -
- * was independently re-declared as a local `interface MenuPosition` in 11
+ * was independently re-declared as a local `interface MenuPosition` in 10
  * *NodeView.tsx files (ArtifactNodeView, ChatNodeView, CodeNodeView,
  * CodeSandboxNodeView, ConversationNodeView, DocumentNodeView,
  * GitlinkNodeView, ImageNodeView, ThinkingNodeView,

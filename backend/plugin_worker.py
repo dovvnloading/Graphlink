@@ -56,7 +56,9 @@ itself."""
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -251,7 +253,23 @@ def main() -> None:
                 )
                 if arg_errors:
                     raise ValueError("; ".join(arg_errors))
-                value = spec.handler(document, run_ctx, *extra_args)
+                # Technical-debt audit finding: PluginIntentHandler is
+                # documented as "sync or async" (plugin_sdk.py) - both
+                # host-side dispatchers (backend/plugins.py) already check
+                # inspect.iscoroutinefunction before calling a handler, but
+                # this worker-side dispatch called every handler as if it
+                # were sync. An async handler returned an un-awaited
+                # coroutine object, which json.dumps in _send cannot
+                # serialize - failing every call with a generic error. This
+                # loop is otherwise fully synchronous (one request at a
+                # time, no event loop of its own), so asyncio.run() is the
+                # correct way to drive a single async handler to completion
+                # here without restructuring the whole read loop to be
+                # async.
+                if inspect.iscoroutinefunction(spec.handler):
+                    value = asyncio.run(spec.handler(document, run_ctx, *extra_args))
+                else:
+                    value = spec.handler(document, run_ctx, *extra_args)
                 result = {"result": value}
             else:
                 _send({

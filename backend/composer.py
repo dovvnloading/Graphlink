@@ -74,7 +74,6 @@ class ComposerDraft:
     text: str = ""
     context_mode: str = "branch"
     send_mode: str = "enter_to_send"
-    restored: bool = False
 
 
 @dataclass
@@ -208,7 +207,6 @@ class ComposerDocument:
                 "text": self.draft.text,
                 "contextMode": self.draft.context_mode,
                 "sendMode": self.draft.send_mode,
-                "restored": self.draft.restored,
             },
             "context": {
                 # R8a: was 4 hardcoded literals, unconditionally, on every

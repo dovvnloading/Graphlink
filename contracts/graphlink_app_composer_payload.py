@@ -33,7 +33,6 @@ class AppComposerDraftPayload:
     text: str
     contextMode: str
     sendMode: SendMode
-    restored: bool
 
 
 @dataclass

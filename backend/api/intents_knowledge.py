@@ -18,6 +18,7 @@ actual knowledge-store write happens BEFORE that call, not inside it.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument, SceneError
@@ -29,6 +30,18 @@ from backend.notifications import NotificationState
 
 _DEFAULT_K = 5
 _MAX_K = 25
+
+
+@dataclass
+class SearchArgs:
+    query: str
+    k: int
+
+
+@dataclass
+class SetChatIndexIntoKnowledgeArgs:
+    nodeId: str
+    enabled: bool
 
 
 def _resolve_workspace_collection_id(document: SceneDocument, db_path=None) -> int:
@@ -91,19 +104,25 @@ def branch_history_to_text(history: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
+def format_search_result_row(result: dict) -> dict:
+    """The 7 citation fields every hybrid_search() result carries, shared
+    verbatim with backend/api/intents_global_search.py's own
+    _format_global_search_results (that one adds sourceNodeId/graphId on
+    top of exactly this shape) - kept in one place so the two callers can
+    never drift field-for-field."""
+    return {
+        "chunkId": result["chunk_id"],
+        "documentId": result["document_id"],
+        "documentTitle": result["document_title"],
+        "sourceUri": result["source_uri"],
+        "text": result["text"],
+        "offsetStart": result["offset_start"],
+        "offsetEnd": result["offset_end"],
+    }
+
+
 def _format_search_results(results: list[dict]) -> list[dict]:
-    return [
-        {
-            "chunkId": r["chunk_id"],
-            "documentId": r["document_id"],
-            "documentTitle": r["document_title"],
-            "sourceUri": r["source_uri"],
-            "text": r["text"],
-            "offsetStart": r["offset_start"],
-            "offsetEnd": r["offset_end"],
-        }
-        for r in results
-    ]
+    return [format_search_result_row(r) for r in results]
 
 
 def register_knowledge_intents(
@@ -187,5 +206,8 @@ def register_knowledge_intents(
         )
         await publish_scene()
 
-    bus.register_intent("knowledge", "search", search)
-    bus.register_intent("scene", "setChatIndexIntoKnowledge", set_chat_index_into_knowledge)
+    bus.register_intent("knowledge", "search", search, args_schema=SearchArgs)
+    bus.register_intent(
+        "scene", "setChatIndexIntoKnowledge", set_chat_index_into_knowledge,
+        args_schema=SetChatIndexIntoKnowledgeArgs,
+    )

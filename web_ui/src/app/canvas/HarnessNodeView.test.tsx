@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ReactFlowProvider } from "@xyflow/react";
 import { describe, expect, it, vi } from "vitest";
@@ -74,6 +74,46 @@ describe("HarnessNodeView", () => {
     expect(screen.getByText("Working…")).toBeInTheDocument();
     expect(screen.getByText("Turns 3 (max 16/task)")).toBeInTheDocument();
     expect(screen.getByText("Tokens 4,321")).toBeInTheDocument();
+  });
+
+  // -- collapse/delete wiring (previously declared on HarnessNodeData with
+  // no renderer in this view at all - the same gap PlanNodeView had, fixed
+  // by the same tech-debt sweep). -----------------------------------------
+
+  it("the inline collapse chevron calls onToggleCollapse", async () => {
+    const user = userEvent.setup();
+    const data = makeData();
+    renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Collapse" }));
+    expect(data.onToggleCollapse).toHaveBeenCalledOnce();
+  });
+
+  it("the node-level right-click menu shows exactly Collapse/Expand + Delete Node", async () => {
+    const user = userEvent.setup();
+    const data = makeData();
+    renderHarness(data);
+
+    fireEvent.contextMenu(screen.getByText("Summarize the workspace files"));
+    const menu = screen.getByRole("menu");
+    expect(menu).toBeInTheDocument();
+
+    const items = screen.getAllByRole("menuitem");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("Collapse");
+    expect(items[1]).toHaveTextContent("Delete Node");
+
+    await user.click(items[0]);
+    expect(data.onToggleCollapse).toHaveBeenCalledOnce();
+
+    fireEvent.contextMenu(screen.getByText("Summarize the workspace files"));
+    await user.click(screen.getByRole("menuitem", { name: "Delete Node" }));
+    expect(data.onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("the menu's Collapse/Expand label flips when isCollapsed is true", () => {
+    renderHarness(makeData({ isCollapsed: true }));
+    fireEvent.contextMenu(screen.getByText("Summarize the workspace files"));
+    expect(screen.getAllByRole("menuitem")[0]).toHaveTextContent("Expand");
   });
 
   it("shows Stop while running and fires the cancel callback; no composer", async () => {

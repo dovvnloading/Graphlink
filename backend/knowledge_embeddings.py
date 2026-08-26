@@ -18,6 +18,7 @@ neighbor machinery would be solving a problem this app doesn't have.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -26,6 +27,9 @@ from backend.knowledge_store import (
     list_embeddings_for_search,
     upsert_embeddings,
 )
+
+if TYPE_CHECKING:
+    from backend.providers.base import Provider
 
 DEFAULT_BATCH_SIZE = 32
 _VECTOR_DTYPE = "<f4"  # little-endian float32 - explicit, platform-independent
@@ -41,7 +45,7 @@ def _unpack_vector(blob: bytes) -> np.ndarray:
 
 def embed_pending_chunks(
     db_path: Path,
-    provider,
+    provider: "Provider",
     model_id: str,
     *,
     collection_id: int | None = None,
@@ -99,7 +103,7 @@ def embed_pending_chunks(
 
 def vector_search(
     db_path: Path,
-    provider,
+    provider: "Provider",
     query: str,
     *,
     model_id: str,

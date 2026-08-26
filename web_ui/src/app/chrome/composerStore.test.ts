@@ -74,7 +74,7 @@ function validComposerPayload(overrides: Record<string, unknown> = {}) {
     schemaVersion: 1,
     minCompatibleSchemaVersion: 1,
     revision: 1,
-    draft: { id: "d1", text: "hi", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+    draft: { id: "d1", text: "hi", contextMode: "branch", sendMode: "enter_to_send" },
     context: { anchor: null, items: [], totalTokens: 0, reviewAvailable: false },
     route: {
       mode: "ollama",
@@ -140,7 +140,7 @@ describe("ComposerStore", () => {
     listeners.get("app-composer")!(
       validComposerPayload({
         revision: 2,
-        draft: { id: "d1", text: "hia", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+        draft: { id: "d1", text: "hia", contextMode: "branch", sendMode: "enter_to_send" },
         request: { id: null, state: "idle", message: "updated", canSend: true, canCancel: false, canRetry: false },
       }),
     );
@@ -156,7 +156,7 @@ describe("ComposerStore", () => {
     expect(resubscribeListeners).toHaveLength(1);
     const authoritative = validComposerPayload({
       revision: 3,
-      draft: { id: "d1", text: "hiab", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+      draft: { id: "d1", text: "hiab", contextMode: "branch", sendMode: "enter_to_send" },
     });
     resubscribeListeners.shift()!(authoritative);
     listeners.get("app-composer")!(authoritative);
@@ -166,7 +166,7 @@ describe("ComposerStore", () => {
     listeners.get("app-composer")!(
       validComposerPayload({
         revision: 4,
-        draft: { id: "d1", text: "", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+        draft: { id: "d1", text: "", contextMode: "branch", sendMode: "enter_to_send" },
       }),
     );
     expect(store.getComposer().draft.text).toBe("");
@@ -186,7 +186,7 @@ describe("ComposerStore", () => {
       listeners.get("app-composer")!(
         validComposerPayload({
           revision,
-          draft: { id: "d1", text, contextMode: "branch", sendMode: "enter_to_send", restored: false },
+          draft: { id: "d1", text, contextMode: "branch", sendMode: "enter_to_send" },
         }),
       );
       expect(store.getComposer().draft.text).toBe("hia");
@@ -196,14 +196,14 @@ describe("ComposerStore", () => {
     expect(resubscribeListeners).toHaveLength(1);
     const authoritative = validComposerPayload({
       revision: 5,
-      draft: { id: "d1", text: "hia", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+      draft: { id: "d1", text: "hia", contextMode: "branch", sendMode: "enter_to_send" },
     });
     resubscribeListeners.shift()!(authoritative);
     listeners.get("app-composer")!(authoritative);
     listeners.get("app-composer")!(
       validComposerPayload({
         revision: 6,
-        draft: { id: "d1", text: "server value", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+        draft: { id: "d1", text: "server value", contextMode: "branch", sendMode: "enter_to_send" },
       }),
     );
     expect(store.getComposer().draft.text).toBe("server value");

@@ -1,5 +1,6 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
+import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
@@ -209,14 +210,7 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
       header={
         <div className="scene-node-title chat-node-role">
           <span>Web Research</span>
-          <button
-            type="button"
-            className="chat-node-collapse-btn"
-            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-            onClick={data.onToggleCollapse}
-          >
-            {data.isCollapsed ? "▸" : "▾"}
-          </button>
+          <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </div>
       }
       bodyClassName="web-research-node-content"

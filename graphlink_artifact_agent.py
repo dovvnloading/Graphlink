@@ -7,11 +7,10 @@ including this Qt-free class - pulled PySide6 into the process. That made it
 unimportable from backend/ despite containing zero Qt code itself, exactly
 the same problem R4.2 fixed for chat by splitting graphlink_chat_agent.py out
 of graphlink_agents_core.py (see that module's own docstring).
-
-graphlink_agents_artifact.py re-exports this class unchanged for its own
-ArtifactWorkerThread (which constructs one internally) and the legacy Qt call
-site (graphlink_window_actions.py's execute_artifact_node) - see its own
-import line.
+graphlink_agents_artifact.py and graphlink_window_actions.py were both
+deleted at the R7.6b Qt-removal cutover (commit 6c919f6) along with the
+rest of graphlink_app/; this class now has exactly one live consumer,
+backend/agents.py.
 
 This file must stay Qt-free forever - it exists to be importable from
 backend/, which test_no_qt_anywhere.py holds to zero tolerance.

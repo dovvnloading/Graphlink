@@ -2,6 +2,7 @@ import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState, type ReactNode } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CHAT_SCROLL_REPORT_DEBOUNCE_MS } from "./canvasConstants";
+import { CollapseToggleButton } from "./CollapseToggleButton";
 import { downloadTextFile } from "./downloadTextFile";
 import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
 import type { MenuPosition } from "./menuPosition";
@@ -1082,14 +1083,7 @@ export const ChatNodeView = memo(function ChatNodeView({
               </button>
             </span>
           )}
-          <button
-            type="button"
-            className="chat-node-collapse-btn"
-            aria-label={data.isCollapsed ? "Expand" : "Collapse"}
-            onClick={data.onToggleCollapse}
-          >
-            {data.isCollapsed ? "▸" : "▾"}
-          </button>
+          <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </span>
       </div>
       }

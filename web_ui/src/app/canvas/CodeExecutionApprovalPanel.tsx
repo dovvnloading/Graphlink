@@ -6,13 +6,13 @@ import { NodeMarkdown } from "./NodeMarkdown";
 
 /**
  * The mandatory human-approval gate (Qt-removal plan R5.4, corrected in the
- * R5.4 post-review fix pass) - rendered by BOTH PyCoderNodeView and
- * CodeSandboxNodeView whenever their own node-kind-specific
- * `*AwaitingApproval` flag is true. One component, not two copies, because
- * the gate itself (show the pending code, get an explicit yes/no, forward
- * ONLY a requestId never anything content-bearing) is identical across both
- * plugins - only the warning sentence (and, for code_sandbox, a requirements
- * disclosure) differs, and legacy's own sentences must survive VERBATIM (see
+ * R5.4 post-review fix pass) - rendered by CodeSandboxNodeView whenever its
+ * own `codeSandboxAwaitingApproval` flag is true. Originally shared with
+ * PyCoderNodeView (one component, not two copies, since the gate itself -
+ * show the pending code, get an explicit yes/no, forward ONLY a requestId
+ * never anything content-bearing - was identical across both plugins); Py-
+ * Coder was retired (PLAN-2026-08-24 H5), leaving code_sandbox as the one
+ * live caller. Legacy's own warning sentence must survive VERBATIM (see
  * WARNING_TEXT below) rather than be paraphrased into something friendlier
  * than what is actually true.
  *
@@ -106,9 +106,9 @@ import { NodeMarkdown } from "./NodeMarkdown";
  * (graphlink_window_actions.py) built and displayed a package-summary string
  * enumerating every declared package before asking Yes/No, and this omission
  * was a real security-relevant regression, not a cosmetic gap. `requirements`
- * is optional and is only ever rendered for kind="code_sandbox" (pycoder has
- * no such concept) - CodeSandboxNodeView passes data.codeSandboxRequirements
- * straight through, since that field already reflects the exact manifest
+ * is optional and rendered only when non-blank - CodeSandboxNodeView passes
+ * data.codeSandboxRequirements straight through, since that field already
+ * reflects the exact manifest
  * run_code_sandbox reads synchronously at the moment Run is dispatched (no
  * new backend wiring was needed for this).
  *
@@ -139,38 +139,35 @@ import { NodeMarkdown } from "./NodeMarkdown";
  * start_code_sandbox_run) so a prior run's opt-in never silently carries
  * forward. Rendered only alongside showRequirements (there is nothing to
  * install, and so nothing this checkbox could affect, when the manifest is
- * blank) and only for kind="code_sandbox" (pycoder never installs anything).
- * allowSourceBuilds/onToggleAllowSourceBuilds are optional props, not
- * required ones, purely so this component's own pycoder-kind call site and
- * existing tests are not forced to pass values that would never be read.
+ * blank). allowSourceBuilds/onToggleAllowSourceBuilds are optional props,
+ * not required ones, purely so call sites/tests that never show this
+ * checkbox (a blank manifest, or a repair-round re-gate) are not forced to
+ * pass values that would never be read.
  */
 
-export type CodeExecutionKind = "pycoder" | "code_sandbox";
+export type CodeExecutionKind = "code_sandbox";
 
-// Verbatim legacy sentences (graphlink_window_actions.py, confirmed during
+// Verbatim legacy sentence (graphlink_window_actions.py, confirmed during
 // the R5.4 design/recon pass and reused unchanged in backend/agents.py's own
-// module comment) - do NOT soften or paraphrase either of these. The
-// "there is no sandboxing" / "isolates installed packages, not the operating
-// system" substrings are the load-bearing honesty this copy exists for, and
-// are directly regression-tested in CodeExecutionApprovalPanel.test.tsx.
+// module comment) - do NOT soften or paraphrase this. The "there is no
+// sandboxing" / "isolates installed packages, not the operating system"
+// substring is the load-bearing honesty this copy exists for, and is
+// directly regression-tested in CodeExecutionApprovalPanel.test.tsx.
 //
-// ADR-002 P0 UPDATE: the second sentence used to read "...automatically
-// repaired versions of this code may run under this same approval" - that
-// was true of the old implementation and is NOT true anymore.
-// backend/agents.py's start_pycoder_run/start_code_sandbox_run now open a
-// FRESH approval gate (a new panel, this same component, re-rendered) for
-// every repaired variant before it runs - see either function's own "ADR-002
-// P0" comment at its repair-loop re-gate. The sentence below reflects that
-// corrected behavior; do not revert it to the old wording.
+// ADR-002 P0 UPDATE: this sentence used to read "...automatically repaired
+// versions of this code may run under this same approval" - that was true
+// of the old implementation and is NOT true anymore. backend/agents.py's
+// start_code_sandbox_run now opens a FRESH approval gate (a new panel, this
+// same component, re-rendered) for every repaired variant before it runs -
+// see that function's own "ADR-002 P0" comment at its repair-loop re-gate.
+// The sentence below reflects that corrected behavior; do not revert it to
+// the old wording.
 const WARNING_TEXT: Record<CodeExecutionKind, string> = {
-  pycoder:
-    "This will run AI-generated Python code in a persistent local session with the full privileges of your user account (there is no sandboxing). If execution fails, you will be asked to approve each automatically repaired version before it runs.",
   code_sandbox:
     "This will run Python code inside an isolated virtual environment with the full privileges of your user account (the environment isolates installed packages, not the operating system). If execution fails, you will be asked to approve each automatically repaired version before it runs.",
 };
 
 const DIALOG_TITLE: Record<CodeExecutionKind, string> = {
-  pycoder: "Approve Py-Coder Execution?",
   code_sandbox: "Approve Virtual Environment Runner Execution?",
 };
 
@@ -209,28 +206,25 @@ export interface CodeExecutionApprovalPanelProps {
   kind: CodeExecutionKind;
   code: string;
   awaitingApproval: boolean;
-  /** code_sandbox ONLY (post-review FIX C) - the pending requirements.txt-
-   * style manifest that will be pip-installed immediately after Approve,
-   * before the reviewed code itself ever runs. Ignored entirely for
-   * kind="pycoder" (no such concept there). Rendered only when non-blank. */
+  /** Post-review FIX C - the pending requirements.txt-style manifest that
+   * will be pip-installed immediately after Approve, before the reviewed
+   * code itself ever runs. Rendered only when non-blank. */
   requirements?: string;
-  /** code_sandbox ONLY (ADR-005 stage 5.5) - the CURRENT value of the
-   * source-build opt-in for this pending approval, reset server-side to
-   * false every time a new gate opens. Ignored for kind="pycoder". */
+  /** ADR-005 stage 5.5 - the CURRENT value of the source-build opt-in for
+   * this pending approval, reset server-side to false every time a new
+   * gate opens. */
   allowSourceBuilds?: boolean;
-  /** code_sandbox ONLY - fires immediately on toggle (not deferred to
-   * Approve), same posture as onSetRequirements elsewhere in this node's
-   * own view. Ignored for kind="pycoder". */
+  /** Fires immediately on toggle (not deferred to Approve), same posture as
+   * onSetRequirements elsewhere in this node's own view. */
   onToggleAllowSourceBuilds?: (allow: boolean) => void;
-  /** code_sandbox ONLY (ADR-005 stage 5.5 review-fix) - True while the
-   * CURRENT pending approval is a repair-loop re-gate rather than the
-   * initial gate. VirtualEnvSandbox.sync_requirements only ever runs once
-   * per run, before the repair loop starts (backend/agents.py's own
-   * start_code_sandbox_run), so the source-build checkbox has no
-   * dependency install left to affect on any repair round - rather than
-   * render an interactive control that silently does nothing, this panel
-   * hides it entirely when isRepairApproval is true. Ignored for
-   * kind="pycoder" (no repair-round concept relevant here either way). */
+  /** ADR-005 stage 5.5 review-fix - True while the CURRENT pending approval
+   * is a repair-loop re-gate rather than the initial gate.
+   * VirtualEnvSandbox.sync_requirements only ever runs once per run, before
+   * the repair loop starts (backend/agents.py's own start_code_sandbox_run),
+   * so the source-build checkbox has no dependency install left to affect
+   * on any repair round - rather than render an interactive control that
+   * silently does nothing, this panel hides it entirely when
+   * isRepairApproval is true. */
   isRepairApproval?: boolean;
   /** Disables both buttons while the caller's own click handler is waiting
    * out the brief window between a click and the next scene snapshot
@@ -316,17 +310,17 @@ export function CodeExecutionApprovalPanel({
 
   if (!awaitingApproval) return null;
 
-  const showRequirements = kind === "code_sandbox" && !!requirements?.trim();
+  const showRequirements = !!requirements?.trim();
   // ADR-005 stage 5.5 review-fix: sync_requirements only ever runs once per
   // run, before the repair loop starts (backend/agents.py) - a repair
   // round's checkbox would have no dependency install left to affect, so
   // it is hidden entirely rather than rendered as an inert control a user
   // could mistake for a live decision. See isRepairApproval's own doc.
   const showAllowSourceBuildsCheckbox = showRequirements && !isRepairApproval;
-  // PLAN-2026-08-24 H5: Py-Coder retired - this component's own "pycoder"
-  // kind arm has no live caller left, so the resource-limits sentence no
-  // longer varies by kind. The backend wire payload dropped its matching
-  // pycoderResourceLimitsText field to match.
+  // PLAN-2026-08-24 H5: Py-Coder retired - kind is now always
+  // "code_sandbox" (see CodeExecutionKind above), so the resource-limits
+  // sentence no longer needs to vary by kind. The backend wire payload
+  // dropped its matching pycoderResourceLimitsText field to match.
   const resourceLimitsText = executionLimits.codeSandboxResourceLimitsText;
 
   return (

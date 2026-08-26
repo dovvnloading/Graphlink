@@ -114,7 +114,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           },
           {
             "action": "Compare Alternatives",
-            "description": "Select two or more branch tips and run Compare Branches (Ctrl+Shift+C, or the command palette) to get a note explaining where their logic, direction, and intent diverge. Synthesize Branches (Ctrl+Shift+S) instead merges them into one reply, using instructions you type next in the composer."
+            "description": "Select two or more branch tips and run Compare Branches (Ctrl+Shift+C, or the command palette) to get a note explaining where their logic, direction, and intent diverge. Synthesize Branches (Ctrl+Shift+M) instead merges them into one reply, using instructions you type next in the composer."
           }
         ]
       }
@@ -185,7 +185,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           },
           {
             "action": "Zoom and Focus",
-            "description": "Use Ctrl + Mouse Wheel to zoom, or use the toolbar buttons when you want a fixed step. Q and E also zoom out and in from the keyboard."
+            "description": "Use Ctrl + Mouse Wheel to zoom, or use the toolbar buttons when you want a fixed step. The command palette (Ctrl + K) also has Zoom In, Zoom Out, and Reset View entries."
           },
           {
             "action": "Zoom to an Area",
@@ -205,8 +205,8 @@ export const HELP_SECTIONS: HelpSection[] = [
         "title": "Keyboard Workflow",
         "items": [
           {
-            "action": "WASD and Branch Navigation",
-            "description": "W, A, S, and D pan the view, while Ctrl + Arrow Keys move between parent, child, and sibling nodes in the current branch. This makes branch review much faster than constant mouse travel."
+            "action": "Branch Navigation",
+            "description": "Ctrl + Arrow Keys move between parent, child, and sibling nodes in the current branch. This makes branch review much faster than constant mouse travel."
           },
           {
             "action": "Command Palette",
@@ -230,12 +230,12 @@ export const HELP_SECTIONS: HelpSection[] = [
             "description": "Start a new chat, open the Library, or save the current project. These are the main project-level shortcuts you will use most often."
           },
           {
-            "action": "Ctrl + G / Ctrl + Shift + G / Ctrl + N",
-            "description": "Wrap the current selection in a Frame, create a Container, or add a new Note. These three actions cover most day-to-day organization work."
+            "action": "Ctrl + G / Ctrl + Shift + G",
+            "description": "Wrap the current selection in a Frame, or create a Container. A new Note has no dedicated shortcut - use the command palette (Ctrl + K) instead."
           },
           {
-            "action": "Ctrl + Left-Click / Ctrl + Right-Click",
-            "description": "Add a connection pin to reroute a line, or remove a pin that you no longer need. Connection pins are helpful when you want to untangle overlapping paths."
+            "action": "Ctrl + Z / Ctrl + Shift + Z / Ctrl + Y",
+            "description": "Undo, or redo (either Ctrl + Shift + Z or Ctrl + Y works - both are wired). These are gated while a text field has focus, so they never shadow ordinary in-field text undo."
           }
         ]
       }

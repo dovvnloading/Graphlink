@@ -257,7 +257,11 @@ version = { attr = "graphlink_version.APP_VERSION" }
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-exclude = ["graphlink_app", "web_ui"]
+# No `exclude` needed: web_ui/ is a JS/TS tree ruff's own .py/.pyi file
+# discovery already skips, and graphlink_app/ (once excluded here for its own
+# Qt-era .py sources) has held zero .py files since the R7.6b cutover deleted
+# them - both entries were excluding directories ruff would never have
+# scanned anyway.
 
 [tool.ruff.lint]
 # T201 (no `print`) added 2026-08-12. ADR-016 stage 16.1's own text claimed

@@ -40,9 +40,9 @@ export function NodeShell({
   kindClassName: string;
   selected: boolean;
   collapsed: boolean;
-  /** Omitted entirely for the kinds with no context menu (Chart/Html/Note/
-   * Plan) - `aria-haspopup="menu"` is only stamped when this is provided,
-   * matching every kind's own pre-shell behavior exactly. */
+  /** Omitted entirely for the kinds with no context menu (Chart/Html/Note) -
+   * `aria-haspopup="menu"` is only stamped when this is provided, matching
+   * every kind's own pre-shell behavior exactly. */
   onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
   /** The caller's own, fully-rendered `.scene-node-title` row - untouched by
    * this component, see the file's own doc for why. */

@@ -4,6 +4,7 @@ import { FIT_VIEW_MAX_ZOOM } from "../canvas/canvasConstants";
 import { exportCanvasAsPng } from "../canvas/exportCanvasPng";
 import type { SceneStore } from "../canvas/sceneStore";
 import type { OverlayContextValue } from "../overlays/overlays";
+import { motionDuration } from "../reducedMotion";
 
 /**
  * The command registry (Qt-removal plan R2.4) - command-palette's SPA
@@ -85,14 +86,14 @@ export function buildCommands(
       id: "fit-all",
       name: "Fit All to View",
       aliases: ["fit screen", "zoom fit"],
-      run: () => rf.fitView({ duration: 200, maxZoom: FIT_VIEW_MAX_ZOOM }),
+      run: () => rf.fitView({ duration: motionDuration(200), maxZoom: FIT_VIEW_MAX_ZOOM }),
       enabled: hasNodes,
     },
     {
       id: "reset-view",
       name: "Reset View",
       aliases: ["reset zoom", "default view"],
-      run: () => rf.setViewport({ ...rf.getViewport(), zoom: 1 }, { duration: 200 }),
+      run: () => rf.setViewport({ ...rf.getViewport(), zoom: 1 }, { duration: motionDuration(200) }),
       enabled: () => true,
     },
     {
@@ -106,14 +107,14 @@ export function buildCommands(
       id: "zoom-in",
       name: "Zoom In",
       aliases: ["zoom in"],
-      run: () => rf.zoomIn({ duration: 150 }),
+      run: () => rf.zoomIn({ duration: motionDuration(150) }),
       enabled: () => true,
     },
     {
       id: "zoom-out",
       name: "Zoom Out",
       aliases: ["zoom out"],
-      run: () => rf.zoomOut({ duration: 150 }),
+      run: () => rf.zoomOut({ duration: motionDuration(150) }),
       enabled: () => true,
     },
     {
@@ -292,7 +293,7 @@ export function buildCommands(
       id: "focus-selection",
       name: "Focus on Selection",
       aliases: ["zoom to selection", "frame selection view"],
-      run: () => rf.fitView({ nodes: selectedNodeIds().map((id) => ({ id })), duration: 200 }),
+      run: () => rf.fitView({ nodes: selectedNodeIds().map((id) => ({ id })), duration: motionDuration(200) }),
       enabled: hasSelection,
     },
     {

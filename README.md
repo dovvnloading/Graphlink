@@ -60,7 +60,7 @@ It is built with a Python (FastAPI) backend and a Vite/React/TypeScript single-p
 - **Diagnostics** — a token and cost counter, a command palette, and an exportable diagnostic bundle for troubleshooting.
 - **Export** — save the whole canvas as a PNG, or export individual nodes: Chat as Markdown, Code as a source file (extension inferred from language), Image as PNG.
 
-Built-in node kinds on the graph surface: **Chat**, **Code**, **Document**, **Thinking**, **HTML**, **Image**, **Conversation**, **Web Research**, **Plan** (the Builder's checklist), **Artifact**, **Gitlink**, **Py-Coder**, **Code Sandbox**, **Note**, and **Chart** — plus Frames, Containers, and Navigation Pins for organizing them.
+Built-in node kinds on the graph surface: **Chat**, **Code**, **Document**, **Thinking**, **HTML**, **Image**, **Conversation**, **Web Research**, **Plan** (the Builder's checklist), **Artifact**, **Gitlink**, **Code Sandbox**, **Note**, and **Chart** — plus Frames, Containers, and Navigation Pins for organizing them.
 
 ## Screenshots
 
@@ -72,7 +72,7 @@ Built-in node kinds on the graph surface: **Chat**, **Code**, **Document**, **Th
 
 <img alt="The Builder launch dialog showing a recipe with its steps previewed, co-pilot/autopilot oversight modes, and budget presets" src="assets/screenshots/builder-launcher.png" />
 
-**Code and charts inline.** Py-Coder runs Python in a persistent REPL; any node's content can become a chart.
+**Code and charts inline.** Code Sandbox runs Python in a per-node virtualenv with declared dependencies; any node's content can become a chart.
 
 <img alt="A chat question feeding a Py-Coder node with code and output, feeding a bar chart" src="assets/screenshots/code-and-charts.png" />
 
@@ -99,7 +99,6 @@ Attach these specialist nodes to a branch from the plugin picker:
 | Conversation Node | Branch Foundations | A self-contained linear chat inside a single node. |
 | Web Research | Reasoning & Research | Web retrieval, summarization, and source capture for real-time information. |
 | Gitlink | Build & Execution | Loads a GitHub repo into structured context, previews file-level changes, and writes only after approval. |
-| Py-Coder | Build & Execution | Runs Python with AI-assisted generation, execution, and analysis. |
 | Virtual Environment Runner | Build & Execution | Runs Python in a per-node virtualenv with declared dependencies (isolates installed packages, not the OS or filesystem/network access). |
 | HTML Renderer | Build & Execution | Renders HTML from a parent branch directly inside the app. |
 | Artifact / Drafter | Workflow & Drafting | A split-pane surface for drafting and refining long-form Markdown. |
@@ -109,7 +108,7 @@ Attach these specialist nodes to a branch from the plugin picker:
 ### Requirements
 
 - Python 3.10 or newer. Windows is the primary development target today.
-- Node.js 24 or newer, needed only to build the frontend once (`web_ui/.nvmrc` pins the exact version this project is developed against).
+- Node.js 22 or newer (`web_ui/.nvmrc` pins 24, the exact version this project is developed against), needed only to build the frontend once.
 - Internet access is optional, and only needed for API Endpoint mode, GitHub-backed plugins, and web research.
 
 ### Install and run
@@ -187,7 +186,7 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 - **Start** with a chat node or a starter prompt.
 - **Branch** by selecting a node and adding a plugin from the picker or controls; each new node begins a more specialized path (research, code, drafting, execution).
 - **Delegate** a multi-step task to the Builder — it plans a checklist, then constructs it on the canvas under your chosen level of oversight (see [The Builder](#the-builder)).
-- **Deliver** with build-oriented nodes — Gitlink for repo-aware change proposals, Py-Coder and Virtual Environment Runner for running code, Artifact / Drafter for documents.
+- **Deliver** with build-oriented nodes — Gitlink for repo-aware change proposals, Virtual Environment Runner for running code, Artifact / Drafter for documents.
 - **Attach** images, audio, or documents to a message from the composer; staged attachments are classified and extracted on the backend, and can be reviewed before sending.
 - **Ingest** documents into the local knowledge base, then search it from a node — or search across every workspace at once with Global Search.
 - **Undo** anything, including a whole agent run in one action.
@@ -201,7 +200,7 @@ Graphlink is a Python (FastAPI) backend paired with a Vite/React/TypeScript sing
 - **`backend/`** holds all real application and domain logic: the FastAPI app factory and a WebSocket pub/sub event bus, the node-graph/canvas model (every node kind, connections, autosave, crash recovery), an undoable command layer, LLM dispatch, the agent tool-use loop behind the Builder, the knowledge store and search, settings, chat-library/workspace management, and session load/save.
 - **`web_ui/`** is the React SPA (built with Vite) — the entire UI: the canvas surface, the app bar and composer chrome, and dialogs/overlays. It talks to the backend over the REST API and the WebSocket.
 - **`contracts/`** is build-time-only codegen that generates the TypeScript types and JSON Schemas for WebSocket payloads from the backend's Python dataclasses, keeping the two sides in sync.
-- **`graphlink_plugins/`** holds the domain logic behind the plugin nodes (web research, Gitlink, Py-Coder, Virtual Environment Runner) — no UI code, no Qt.
+- **`graphlink_plugins/`** holds the domain logic behind the plugin nodes (web research, Gitlink, Virtual Environment Runner) — no UI code, no Qt.
 - **`plugins/`** holds the plugin *packages* themselves — one directory per plugin with a `plugin.py` and a `plugin.toml`, discovered at startup. This is the extension point: the built-ins live here alongside the SDK's example plugins.
 
 Your data lives entirely on your machine:

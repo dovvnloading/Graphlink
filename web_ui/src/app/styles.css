@@ -7262,6 +7262,8 @@ mark.document-view-search-match-current {
   flex-shrink: 0;
 }
 .plan-node-goal {
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

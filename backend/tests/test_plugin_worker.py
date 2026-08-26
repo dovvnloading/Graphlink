@@ -578,6 +578,43 @@ def test_invoke_factory_with_an_unknown_kind_returns_a_clean_error_not_a_crash(t
         worker.close()
 
 
+_ASYNC_INTENT_PY_BODY = textwrap.dedent("""\
+    import asyncio
+
+    from backend.plugin_sdk import HostContext
+
+
+    async def _do_thing_async(document, run_ctx):
+        await asyncio.sleep(0)
+        return f"did-the-async-thing:{run_ctx.plugin_id}"
+
+
+    def register(host: HostContext) -> None:
+        host.register_intent("do_thing_async", _do_thing_async)
+""")
+
+
+def test_invoke_intent_awaits_an_async_handler_instead_of_returning_a_coroutine(tmp_path):
+    # Technical-debt audit finding: PluginIntentHandler is documented as
+    # "sync or async" (plugin_sdk.py), and both host-side dispatchers
+    # already check inspect.iscoroutinefunction before calling a handler -
+    # but this worker's own invoke_intent dispatch called every handler as
+    # if it were sync, so an async handler's un-awaited coroutine object
+    # failed to JSON-serialize and surfaced as a generic PluginWorkerError
+    # on every call, regardless of what the handler itself did.
+    plugin_dir = _write_out_of_process_plugin(
+        tmp_path / "plugins", "oop_async_intent", py_body=_ASYNC_INTENT_PY_BODY,
+    )
+    worker = PluginWorkerClient(plugin_id="oop_async_intent", source_dir=plugin_dir)
+    try:
+        worker.connect()
+        worker.call("get_registrations", {})
+        result = worker.call("invoke_intent", {"name": "do_thing_async", "args": {}})
+        assert result.get("result") == "did-the-async-thing:oop_async_intent"
+    finally:
+        worker.close()
+
+
 def test_calling_before_connect_raises_a_clean_plugin_worker_error(tmp_path):
     plugin_dir = _write_out_of_process_plugin(
         tmp_path / "plugins", "oop_not_connected", py_body=_SIMPLE_NODE_PY_BODY,

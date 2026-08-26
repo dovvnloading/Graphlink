@@ -119,9 +119,6 @@
         "id": {
           "type": "string"
         },
-        "restored": {
-          "type": "boolean"
-        },
         "sendMode": {
           "enum": [
             "enter_to_send",
@@ -137,8 +134,7 @@
         "id",
         "text",
         "contextMode",
-        "sendMode",
-        "restored"
+        "sendMode"
       ],
       "type": "object"
     },

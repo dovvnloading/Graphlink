@@ -49,8 +49,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from backend.providers.base import ToolSpec
-from backend.tools import RunContext, ToolResult
+from backend.providers.base import ToolCall, ToolSpec
+from backend.tools import RunContext, ToolRegistry, ToolResult
 from graphlink_process_env import safe_subprocess_env
 
 # The MCP spec's own date-versioned protocol string - the most recent
@@ -588,7 +588,9 @@ class McpStdioClient:
                 self._pending_id = None
 
 
-def register_mcp_server_tools(registry, client: McpStdioClient, config: McpServerConfig) -> tuple[str, ...]:
+def register_mcp_server_tools(
+    registry: ToolRegistry, client: McpStdioClient, config: McpServerConfig,
+) -> tuple[str, ...]:
     """Lists `client`'s tools and registers each into `registry` (a
     backend.tools.ToolRegistry) as `mcp:<config.name>:<tool name>`, scoped
     and approval-gated per `config` - see McpServerConfig's own docstring.
@@ -619,7 +621,7 @@ def _make_mcp_handler(client: McpStdioClient, real_tool_name: str) -> Callable[[
     which McpStdioClient.call_tool must never see (the server itself only
     knows its own un-namespaced tool names)."""
 
-    async def _handler(call, ctx) -> ToolResult:
+    async def _handler(call: ToolCall, ctx: RunContext) -> ToolResult:
         return await asyncio.to_thread(client.call_tool, real_tool_name, call.arguments)
 
     return _handler

@@ -1,10 +1,12 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
-// Separate from vite.config.ts on purpose: that config's root/outDir are
-// dynamically selected per-island (GRAPHLINK_ISLAND) for production builds,
-// which is meaningless for tests - vitest runs across the whole workspace
-// (every island + lib/) from a single, fixed root.
+// Separate from vite.config.ts on purpose: that config's root is scoped to
+// src/app (the SPA build - Qt-removal plan R7.6a retired the per-island
+// GRAPHLINK_ISLAND build switch it used to carry, see its own module doc),
+// while vitest runs across the whole workspace (src/app + lib/) from a
+// single, fixed root - the two configs' roots have never been the same
+// thing, so they stay separate files rather than one shared config.
 export default defineConfig({
   plugins: [react()],
   test: {

@@ -5,7 +5,8 @@
  * expose the backend's registered intent surface 1:1.
  */
 
-import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
+import { TOPIC_VALIDATORS, type TopicName } from "../../lib/api-contract/topics";
+import { bindTopic } from "../../lib/api-contract/bindTopic";
 import type { AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import type { TokenCounterState } from "../../lib/bridge-core/generated/token-counter-state";
 import type { NotificationState } from "../../lib/bridge-core/generated/notification-state";
@@ -22,7 +23,7 @@ export const initialComposerState: AppComposerState = {
   schemaVersion: 1,
   minCompatibleSchemaVersion: 1,
   revision: 0,
-  draft: { id: "", text: "", contextMode: "branch", sendMode: "enter_to_send", restored: false },
+  draft: { id: "", text: "", contextMode: "branch", sendMode: "enter_to_send" },
   context: { anchor: null, items: [], totalTokens: 0, reviewAvailable: false },
   route: {
     mode: "ollama",
@@ -99,16 +100,8 @@ export class ComposerStore {
 
   constructor(private readonly transport: WsTransport) {}
 
-  private bind<T>(topic: keyof typeof TOPIC_VALIDATORS, assign: (value: T) => void): () => void {
-    return this.transport.subscribe(topic, (payload) => {
-      const validated = TOPIC_VALIDATORS[topic](payload);
-      if (validated.ok) {
-        assign(validated.value as T);
-        this.emit();
-      } else {
-        console.error(`[${topic}] rejected snapshot:`, validated.errors);
-      }
-    });
+  private bind<T>(topic: TopicName, assign: (value: T) => void): () => void {
+    return bindTopic(this.transport, topic, assign, () => this.emit());
   }
 
   connect(): void {

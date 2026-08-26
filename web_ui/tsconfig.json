@@ -4,6 +4,10 @@
     "useDefineForClassFields": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "allowJs": false,
+    // Skips type-checking .d.ts files (our own code is still fully checked) -
+    // dependencies occasionally ship .d.ts files that don't type-check under
+    // every downstream tsconfig; this avoids a broken build over a type error
+    // in code we don't own and never see the source of.
     "skipLibCheck": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,

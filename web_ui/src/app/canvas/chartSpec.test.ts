@@ -106,4 +106,111 @@ describe("canonicalizeChartSpec", () => {
     canonicalizeChartSpec(input, "bar");
     expect(JSON.stringify(input)).toBe(snapshot);
   });
+
+  describe("legacy nested sankey shape", () => {
+    it("resolves a legacy nested payload with string node names", () => {
+      const canonical = canonicalizeChartSpec(
+        {
+          type: "sankey",
+          data: {
+            nodes: ["A", "B"],
+            links: [{ source: "A", target: "B", value: 5 }],
+          },
+        },
+        "sankey",
+      );
+      expect(canonical.flows).toEqual([{ source: "A", target: "B", value: 5 }]);
+    });
+
+    it("resolves a legacy nested payload with dict nodes (name field)", () => {
+      const canonical = canonicalizeChartSpec(
+        {
+          type: "sankey",
+          data: {
+            nodes: [{ name: "Alpha" }, { name: "Beta" }],
+            links: [{ source: "Alpha", target: "Beta", value: 3 }],
+          },
+        },
+        "sankey",
+      );
+      expect(canonical.flows).toEqual([{ source: "Alpha", target: "Beta", value: 3 }]);
+    });
+
+    it("falls back to 'Node {index}' for a dict node missing a name", () => {
+      const canonical = canonicalizeChartSpec(
+        {
+          type: "sankey",
+          data: {
+            nodes: [{}, { name: "Beta" }],
+            links: [{ source: 0, target: 1, value: 2 }],
+          },
+        },
+        "sankey",
+      );
+      expect(canonical.flows).toEqual([{ source: "Node 0", target: "Beta", value: 2 }]);
+    });
+
+    it("resolves integer link source/target indices via the names array", () => {
+      const canonical = canonicalizeChartSpec(
+        {
+          type: "sankey",
+          data: {
+            nodes: ["A", "B", "C"],
+            links: [
+              { source: 0, target: 2, value: 4 },
+              { source: 1, target: 2, value: 1 },
+            ],
+          },
+        },
+        "sankey",
+      );
+      expect(canonical.flows).toEqual([
+        { source: "A", target: "C", value: 4 },
+        { source: "B", target: "C", value: 1 },
+      ]);
+    });
+
+    it("rejects a legacy payload with too many links before any other processing", () => {
+      const hugeLinks = Array.from({ length: 301 }, () => ({ source: 0, target: 1, value: 1 }));
+      expect(() =>
+        canonicalizeChartSpec(
+          { type: "sankey", data: { nodes: [{ name: "A" }, { name: "B" }], links: hugeLinks } },
+          "sankey",
+        ),
+      ).toThrow(/at most 300 flows/);
+    });
+
+    it("rejects a legacy payload with too many nodes before any other processing", () => {
+      const hugeNodes = Array.from({ length: 302 }, (_, i) => ({ name: `n${i}` }));
+      expect(() =>
+        canonicalizeChartSpec(
+          { type: "sankey", data: { nodes: hugeNodes, links: [{ source: 0, target: 1, value: 1 }] } },
+          "sankey",
+        ),
+      ).toThrow(/at most 301 nodes/);
+    });
+
+    it("falls through to the 'at least one flow' error when there is no data key", () => {
+      expect(() => canonicalizeChartSpec({ type: "sankey" }, "sankey")).toThrow(/at least one flow/);
+    });
+
+    it("falls through to the 'at least one flow' error when data is not an object", () => {
+      expect(() => canonicalizeChartSpec({ type: "sankey", data: "not an object" }, "sankey")).toThrow(
+        /at least one flow/,
+      );
+    });
+
+    it("still rejects an explicitly-empty flows array without consulting the legacy shape", () => {
+      expect(() =>
+        canonicalizeChartSpec(
+          {
+            type: "sankey",
+            flows: [],
+            data: { nodes: ["A", "B"], links: [{ source: "A", target: "B", value: 1 }] },
+          },
+          "sankey",
+        ),
+      ).toThrow(/at least one flow/);
+    });
+  });
 });
