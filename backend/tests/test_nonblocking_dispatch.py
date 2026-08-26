@@ -29,6 +29,20 @@ from backend.tests.test_app_ws import make_client
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Every file whose claim() call sites the two static scans below must see:
+# AgentDispatcher's dispatch methods live in the backend/agent_dispatch/
+# mixin files since the god-file decomposition split them out of
+# backend/agents.py (which keeps only the composed class plus module-level
+# helpers) - globbed rather than listed, so a future mixin joins the scan
+# automatically instead of silently escaping it.
+_CLAIM_SCAN_FILES = tuple(
+    ["backend/agents.py", "backend/run_lifecycle.py"]
+    + sorted(
+        str(p.relative_to(REPO_ROOT)).replace("\\", "/")
+        for p in (REPO_ROOT / "backend" / "agent_dispatch").glob("*.py")
+    )
+)
+
 
 def _recv_until(ws, predicate, max_frames=50):
     for _ in range(max_frames):
@@ -165,7 +179,7 @@ def test_every_claim_site_passes_a_cancellation_mechanism():
     branch_synthesis, image, gitlink_apply) passed neither and were silently
     skipped by cancel_all() - a new kind reintroducing that gap fails here."""
     offenders = []
-    for rel in ("backend/agents.py", "backend/run_lifecycle.py"):
+    for rel in _CLAIM_SCAN_FILES:
         tree = ast.parse((REPO_ROOT / rel).read_text(encoding="utf-8"), filename=rel)
         for node in ast.walk(tree):
             if not (
@@ -189,7 +203,7 @@ def test_the_claim_scan_finds_the_real_population():
     # Guards the guard: the scan above must actually see the known claim
     # sites (9 as of stage 6.2), not silently match nothing.
     count = 0
-    for rel in ("backend/agents.py", "backend/run_lifecycle.py"):
+    for rel in _CLAIM_SCAN_FILES:
         tree = ast.parse((REPO_ROOT / rel).read_text(encoding="utf-8"), filename=rel)
         count += sum(
             1
