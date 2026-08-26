@@ -516,24 +516,47 @@ def test_api_provider_never_imports_the_providers_package_at_module_level():
     api_provider keeps its backend.providers imports function-local (the
     providers package imports api_provider's helpers at ITS module level).
     Pin the invariant so a future convenience refactor that hoists the import
-    to the top of api_provider.py fails here instead of at app boot."""
+    to the top of api_provider.py fails here instead of at app boot.
+
+    Phase 4d (the provider_runtime/ split) extended the scan to every
+    provider_runtime/*.py submodule: api_provider imports those modules at
+    ITS top, so a submodule importing backend.providers at module level is
+    the same cycle wearing a new coat. The split also added a second pinned
+    direction: no submodule may import api_provider at module level (they
+    late-bind it inside function bodies - the patch-seam pattern their
+    module docstrings describe); a module-top import there is both a real
+    circular import and a frozen-name seam break."""
     import ast
     from pathlib import Path
 
-    source = (Path(api_provider.__file__)).read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    offenders = [
-        node.lineno
-        for node in tree.body  # module level only - function-local imports are the sanctioned form
-        if isinstance(node, (ast.Import, ast.ImportFrom))
-        and "backend.providers" in ast.dump(node)
-    ]
+    api_provider_path = Path(api_provider.__file__)
+    scan_targets = [api_provider_path] + sorted(
+        api_provider_path.parent.joinpath("provider_runtime").glob("*.py")
+    )
+    offenders = []
+    seam_offenders = []
+    for path in scan_targets:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in tree.body:  # module level only - function-local imports are the sanctioned form
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            if "backend.providers" in ast.dump(node):
+                offenders.append(f"{path.name}:{node.lineno}")
+            if path.name != api_provider_path.name and "api_provider" in ast.dump(node):
+                seam_offenders.append(f"{path.name}:{node.lineno}")
     assert not offenders, (
-        "api_provider.py imports backend.providers at module level (lines "
-        f"{offenders}) - that direction must stay function-local; the providers "
+        "these modules import backend.providers at module level "
+        f"({offenders}) - that direction must stay function-local; the providers "
         "package imports api_provider's helpers at its own module level, so a "
         "top-level import here is a genuine import cycle."
     )
+    assert not seam_offenders, (
+        "these provider_runtime submodules import api_provider at module level "
+        f"({seam_offenders}) - api_provider imports them at ITS top, so that is a "
+        "circular import, and it freezes names that must stay late-bound for the "
+        "suite's monkeypatch.setattr(api_provider, ...) seams to keep working."
+    )
+    assert len(scan_targets) >= 9, scan_targets  # guard the guard: the glob must see the package
 
 
 # -- stage 6.3: the four remaining providers ---------------------------------

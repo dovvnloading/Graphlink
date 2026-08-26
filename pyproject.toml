@@ -225,6 +225,7 @@ where = ["."]
 include = [
     "backend*",
     "graphlink_plugins*",
+    "provider_runtime*",
     "settings_store*",
 ]
 # Auto-discovery here is namespace-aware (PEP 420), so backend/tests/ and
@@ -303,6 +304,14 @@ ignore_missing_imports = true
 # an actual leftover, so it's ignored for exactly this one file rather than
 # scattering 43 individual noqa comments across the import block.
 "backend/canvas.py" = ["F401"]
+
+# Same facade shape as backend/canvas.py above, from the Phase 4d
+# api_provider.py -> provider_runtime/ split: api_provider.py re-imports
+# every relocated name back into its own namespace so every existing
+# `api_provider.<name>` caller and monkeypatch seam keeps working. F401
+# can't tell that re-export block (or a module-top import now only used by
+# relocated code) from a leftover, so it's ignored for this one file.
+"api_provider.py" = ["F401"]
 
 # T201 exemptions: these five are command-line tools, not shipped runtime
 # code. printing IS their output contract - a developer runs them in a
