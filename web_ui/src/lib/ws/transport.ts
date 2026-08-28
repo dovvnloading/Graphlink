@@ -968,13 +968,24 @@ export class WsTransport {
   }
 
   private handleMessage(raw: string): void {
-    let message: Record<string, unknown>;
+    let parsed: unknown;
     try {
-      message = JSON.parse(raw);
+      parsed = JSON.parse(raw);
     } catch {
       console.error("[ws] non-JSON frame dropped");
       return;
     }
+    // JSON.parse accepts valid scalar values and arrays as top-level JSON,
+    // but every server frame in this protocol is an object. In particular,
+    // reading `.kind` from a parsed `null` would throw out of the WebSocket
+    // event handler and can strand the transport in a broken connection
+    // state. Treat all non-object frames like malformed JSON: log and drop
+    // them while leaving the socket and pending requests untouched.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      console.error("[ws] non-object frame dropped");
+      return;
+    }
+    const message = parsed as Record<string, unknown>;
     const kind = message.kind;
     if (kind === "state") {
       const topic = message.topic as string;

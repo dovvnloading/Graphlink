@@ -600,6 +600,28 @@ def test_a_non_list_args_field_for_an_unschemad_intent_gets_a_graceful_error_not
         assert snapshot["kind"] == "state"
 
 
+def test_a_falsey_non_list_args_field_is_not_treated_as_omitted():
+    """The wire contract requires ``args`` to be an array when present.
+
+    ``message.get("args") or []`` made a falsey scalar such as JSON ``false``
+    indistinguishable from an omitted field, so ``system/ping`` returned a
+    successful empty call instead of the same validation error used for a
+    truthy scalar or object.  This must be rejected without closing the
+    connection.
+    """
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"kind": "intent", "topic": "system", "intent": "ping", "args": False, "id": 2})
+        message = ws.receive_json()
+        assert message["kind"] == "error"
+        assert message["id"] == 2
+        assert message["error"] == "Invalid arguments: expected a list of arguments, got bool."
+
+        ws.send_json({"kind": "subscribe", "topics": ["system"]})
+        snapshot = ws.receive_json()
+        assert snapshot["kind"] == "state"
+
+
 def test_sessions_do_not_share_connections():
     # ADR-004 stage 4.3: tests EventBus's own generic cross-session
     # isolation mechanism, a scenario the real shipped app's restrictive

@@ -2407,6 +2407,12 @@ function CanvasInner({
   // being non-empty, is what decides whether a settled drag's ids are still
   // owed a real echo.
   const lastSyncedSceneRef = useRef<SceneState | null>(null);
+  // A scene publish that arrives while dragging is deliberately skipped by
+  // the sync effect and must still be reconciled when the gesture ends. Keep
+  // its identity separate from lastSyncedSceneRef so a genuinely NEW scene
+  // arriving after the drop cannot be mistaken for that skipped snapshot and
+  // have a stale local-position pin applied to it.
+  const skippedSceneWhileDraggingRef = useRef<SceneState | null>(null);
   const visibleGuideLines = scene.smartGuides ? smartGuideLines : [];
 
   // R8a (UI/UX issue list finding #11): the View popover's FONT section
@@ -2425,7 +2431,12 @@ function CanvasInner({
   const { onMove, viewportTimerRef } = useViewportReporting(store);
 
   useEffect(() => {
-    if (draggingRef.current) return;
+    if (draggingRef.current) {
+      skippedSceneWhileDraggingRef.current = scene;
+      return;
+    }
+    const preservePendingSettles =
+      scene === lastSyncedSceneRef.current || scene === skippedSceneWhileDraggingRef.current;
     const next = withPreservedFlowState(
       toFlowNodes(
         scene,
@@ -2447,7 +2458,7 @@ function CanvasInner({
       // BUG FIX: see withPreservedFlowState's own POSITION doc and
       // pendingSettledIdsRef's doc (useNodeDragAndSizeSync.ts) for the full
       // race this closes. Read, never mutated, here.
-      pendingSettledIdsRef.current,
+      preservePendingSettles ? pendingSettledIdsRef.current : undefined,
     );
     // Mirror advances with the state it describes - see nodesRef's comment.
     nodesRef.current = next;
@@ -2455,21 +2466,13 @@ function CanvasInner({
     // this is the same setter React Flow's internal prop-sync would call, so
     // the renderer is updated in this effect instead of one commit later.
     storeApi.getState().setNodes(next);
-    // BUG FIX: only a genuinely NEW `scene` reference means "the backend has
-    // moved past where it was when this drag settled" - this effect can also
-    // re-run with the SAME `scene` (e.g. `dragActive` flipping false is
-    // itself a dependency below, precisely so a mid-drag publish isn't lost -
-    // see the REVIEW-FIX comment just below), and clearing on every run
-    // would drop the position pin on that very re-run, before any echo could
-    // possibly have arrived. Once `scene` does change, every id pinned above
-    // has been applied to this render's own merge already, so it's safe to
-    // stop pinning them from here on - the ordinary case is that a `scene`
-    // change immediately after a settle IS that drag's own echo; the same
-    // per-session ordering that makes moveNodes' "last write wins" claim true
-    // (backend/run_lifecycle's single-actor-per-session processing) means any
-    // publish arriving after it was sent already reflects it, mid-drag
-    // publish or not.
+    // BUG FIX: only a scene that was already reconciled or was skipped during
+    // the active drag may use the local-position pin. A different scene is a
+    // fresh post-drop update (including a remote writer's move), so it must be
+    // trusted before the pin is cleared. This ordering matters when that
+    // remote update is the first scene frame observed after release.
     if (scene !== lastSyncedSceneRef.current) pendingSettledIdsRef.current.clear();
+    skippedSceneWhileDraggingRef.current = null;
     lastSyncedSceneRef.current = scene;
   }, [
     scene, store, onOpenDocumentView, effectiveBranchFocusOriginId, onToggleBranchFocus, focusAcceptedPaths,
@@ -2481,6 +2484,7 @@ function CanvasInner({
     // exhaustive-deps from inferring that stability on its own; behaviorally
     // a no-op, same as before this extraction.
     nodesRef, draggingRef, storeApi, pendingSettledIdsRef, lastSyncedSceneRef,
+    skippedSceneWhileDraggingRef,
     // REVIEW-FIX: a scene publish that lands while draggingRef.current is
     // true bails out of this effect ABOVE and is discarded entirely, not
     // queued - and draggingRef is a plain ref, so nothing here re-ran when

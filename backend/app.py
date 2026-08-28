@@ -845,7 +845,10 @@ async def _handle_message(session: SessionBus, websocket: WebSocket, message: di
     if kind == "intent":
         topic = message.get("topic", "")
         intent = message.get("intent", "")
-        args = message.get("args") or []
+        # An omitted args field means no positional arguments. Preserve an
+        # explicitly supplied falsey value so dispatch_intent can reject it
+        # as malformed instead of silently converting it to an empty list.
+        args = message.get("args", [])
         try:
             result = await session.dispatch_intent(topic, intent, args)
         except UnknownTopicError as exc:
