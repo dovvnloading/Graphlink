@@ -806,7 +806,10 @@ async def _handle_message(session: SessionBus, websocket: WebSocket, message: di
     msg_id = message.get("id")
 
     if kind == "subscribe":
-        topics = message.get("topics") or session.topic_names()
+        # Only an omitted topics field means "all topics". Preserve an
+        # explicitly supplied falsey value so the shape check below rejects
+        # it instead of broadening a malformed subscription request.
+        topics = message["topics"] if "topics" in message else session.topic_names()
         # REVIEW-FIX: same reasoning as the isinstance guard above, for the
         # one field this branch trusts without a shape check. A truthy
         # non-iterable "topics" (e.g. the JSON number 5) bypasses the `or`

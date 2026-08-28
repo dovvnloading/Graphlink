@@ -561,6 +561,26 @@ def test_a_non_list_topics_field_gets_a_graceful_error_not_a_dropped_connection(
         assert snapshot["kind"] == "state"
 
 
+def test_a_falsey_non_list_topics_field_is_not_treated_as_omitted():
+    """Only an omitted ``topics`` field requests every registered topic.
+
+    Treating explicit JSON ``false`` as omission makes malformed input change
+    the subscription scope unexpectedly. It should receive the same graceful
+    shape error as a truthy scalar and leave the connection usable.
+    """
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"kind": "subscribe", "topics": False, "id": 2})
+        message = ws.receive_json()
+        assert message["kind"] == "error"
+        assert message["id"] == 2
+        assert message["error"] == "malformed message: 'topics' must be a list"
+
+        ws.send_json({"kind": "subscribe", "topics": ["system"]})
+        snapshot = ws.receive_json()
+        assert snapshot["kind"] == "state"
+
+
 def test_a_non_string_topic_element_gets_a_graceful_error_not_a_dropped_connection():
     """SECURITY-FIX: `topics` was checked to be a list, but not that each
     ELEMENT is a string - {"topics": [{}]} passed the list check and
