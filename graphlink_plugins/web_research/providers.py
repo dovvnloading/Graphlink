@@ -56,7 +56,13 @@ def dependency_status() -> dict[str, bool]:
 
 def source_id_for_url(url: str, rank: int = 0) -> str:
     canonical = canonicalize_url(url) or str(url or "")
-    digest = hashlib.sha1(canonical.encode("utf-8", errors="replace")).hexdigest()[:10]
+    # This is a compact deterministic identifier, never an authentication or
+    # integrity token. Marking that contract explicitly keeps the helper
+    # usable in runtimes that distinguish security-sensitive hashing (for
+    # example, FIPS-configured Python builds).
+    digest = hashlib.sha1(
+        canonical.encode("utf-8", errors="replace"), usedforsecurity=False
+    ).hexdigest()[:10]
     return f"s{rank + 1}-{digest}"
 
 
