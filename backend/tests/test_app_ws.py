@@ -642,6 +642,31 @@ def test_a_falsey_non_list_args_field_is_not_treated_as_omitted():
         assert snapshot["kind"] == "state"
 
 
+def test_non_string_intent_routing_fields_get_a_graceful_error():
+    """Routing fields are protocol strings, not arbitrary JSON values.
+
+    A dict/list currently reaches the tuple lookup in ``dispatch_intent`` and
+    raises ``TypeError`` before the intended validation response is built.
+    Reject both malformed fields at the WebSocket boundary and keep the
+    connection available for a valid request afterward.
+    """
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        for field, value, message_id in (("topic", {}, 3), ("intent", [], 4)):
+            frame = {"kind": "intent", "topic": "system", "intent": "ping", "args": [], "id": message_id}
+            frame[field] = value
+            ws.send_json(frame)
+            message = ws.receive_json()
+            assert message["kind"] == "error"
+            assert message["id"] == message_id
+            assert message["error"] == "malformed message: 'topic' and 'intent' must be strings"
+
+        ws.send_json({"kind": "intent", "topic": "system", "intent": "ping", "args": ["ok"], "id": 5})
+        message = ws.receive_json()
+        assert message["kind"] == "result"
+        assert message["value"]["echo"] == ["ok"]
+
+
 def test_sessions_do_not_share_connections():
     # ADR-004 stage 4.3: tests EventBus's own generic cross-session
     # isolation mechanism, a scenario the real shipped app's restrictive

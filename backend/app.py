@@ -848,6 +848,15 @@ async def _handle_message(session: SessionBus, websocket: WebSocket, message: di
     if kind == "intent":
         topic = message.get("topic", "")
         intent = message.get("intent", "")
+        if not isinstance(topic, str) or not isinstance(intent, str):
+            await websocket.send_json(
+                {
+                    "kind": "error",
+                    "id": msg_id,
+                    "error": "malformed message: 'topic' and 'intent' must be strings",
+                }
+            )
+            return
         # An omitted args field means no positional arguments. Preserve an
         # explicitly supplied falsey value so dispatch_intent can reject it
         # as malformed instead of silently converting it to an empty list.
