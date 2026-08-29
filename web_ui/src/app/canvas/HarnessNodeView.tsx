@@ -212,9 +212,11 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
 
       {/* Workspace binding. harnessWorkspacePath is the REQUEST (what the
           node asks for); a run only honors it if the folder is trusted, and
-          reports the truth in harnessWorkspaceActive. So a bound path with
-          no matching active dir after a run means the grant did not apply on
-          this machine - shown as pending rather than as if it were live. */}
+          reports the root it actually bound in harnessWorkspaceActive. So a
+          NON-EMPTY active dir that does not match the request means a run
+          happened and the grant did not apply on this machine. An empty one
+          means no run has bound this node since the folder was picked -
+          nothing has been refused yet, so nothing is warned about. */}
       <div className="harness-node-workspace">
         {data.harnessWorkspacePath ? (
           <>
@@ -224,6 +226,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             >
               📁 {data.harnessWorkspacePath}
               {!running &&
+                data.harnessWorkspaceActive !== "" &&
                 data.harnessWorkspaceActive !== data.harnessWorkspacePath &&
                 " (not trusted on this machine — using scratch)"}
             </span>

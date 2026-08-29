@@ -421,7 +421,10 @@ async def run_harness(
             settings_manager=settings_manager,
         )
         ctx.harness_workspace_dir = root
-        node.state.harness_workspace_active = str(root) if is_user_dir else ""
+        # The root this run ACTUALLY bound, scratch included: a "" here
+        # means "no run yet", which is what lets the card distinguish a
+        # refused grant from a binding that has simply not run.
+        node.state.harness_workspace_active = str(root)
 
         # §3.3: the session profile is locked to the root its history was
         # recorded against. Checked BEFORE anything is appended or any model
@@ -445,13 +448,18 @@ async def run_harness(
         # backend/harness/context.py's own docstring).
         system_prompt = context_module.build_system_prompt(root)
         user_message = {"role": "user", "content": user_text}
-        # profile/root stamp the meta line when this is the file's very
-        # first write; ignored on every later append.
-        append_message(transcript_dir, user_message, profile=profile, root=root)
+        # Load the PRIOR history BEFORE appending this task's own message.
+        # load_messages crosses the flush barrier itself, so appending
+        # first means the new message is already on disk when the load
+        # runs and it enters `history` twice - the model would see the
+        # request duplicated on every turn of every task.
         # `history` deliberately excludes the system prompt: it lives
         # outside history so compaction structurally cannot touch it (and
         # so the cacheable prefix is the same object every turn).
         history: list = [*load_messages(transcript_dir), user_message]
+        # profile/root stamp the meta line when this is the file's very
+        # first write; ignored on every later append.
+        append_message(transcript_dir, user_message, profile=profile, root=root)
 
         turns = 0
         max_turns = max(1, int(node.state.harness_max_turns))

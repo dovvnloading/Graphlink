@@ -5,6 +5,7 @@ the end-to-end spawn through the parent loop."""
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -107,6 +108,44 @@ def test_turn_limit_returns_the_last_text_flagged(workspace_root, monkeypatch):
         run_subagent(registry=registry, workspace_dir=ensure_workspace("ws1"), task="loop", max_turns=2)
     )
     assert "turn limit" in answer
+
+
+def test_a_hung_model_call_trips_the_watchdog_instead_of_hanging_the_parent(
+    workspace_root, monkeypatch,
+):
+    """The parent is blocked inside registry.invoke while a subagent runs,
+    so the parent's own wait_for is not covering the child's model call. A
+    provider that accepts the connection and never answers would otherwise
+    hang the whole run with Stop as the only way out."""
+    from backend import agents as agents_module
+
+    ensure_workspace("ws1")
+    registry = full_registry()
+    monkeypatch.setattr(agents_module, "WATCHDOG_TIMEOUT_SECONDS", 0.2)
+
+    def never_answers(task, messages, tools=(), **kwargs):
+        # Sleeps well past the (shrunk) watchdog. It cannot be interrupted -
+        # to_thread has no cancellation - so the elapsed check below is taken
+        # INSIDE the loop, where the watchdog's own effect is visible;
+        # asyncio.run itself still joins this thread on the way out.
+        time.sleep(3)
+        raise AssertionError("the watchdog should have fired long before this")
+
+    monkeypatch.setattr(api_provider, "chat_turn_with_tools", never_answers)
+
+    async def go():
+        ctx = HarnessRunContext(
+            granted_scopes=frozenset({"provider.call"}),
+            request_approval=None,
+            harness_workspace_id="ws1",
+        )
+        started = time.monotonic()
+        result = await registry.invoke(call("1", "subagent.spawn", task="investigate"), ctx)
+        return result, time.monotonic() - started
+
+    result, elapsed = asyncio.run(go())
+    assert elapsed < 2, "the spawn returns on the watchdog, not on the hung call"
+    assert result.is_error and "timed out" in result.content
 
 
 def test_parent_loop_spawns_a_subagent_and_gets_its_summary(workspace_root, monkeypatch):

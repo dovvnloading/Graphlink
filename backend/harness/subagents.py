@@ -126,15 +126,26 @@ async def run_subagent(
         {"role": "user", "content": task},
     ]
 
+    # The watchdog the parent loop puts around its own model call, applied
+    # here too. Without it a provider that accepts the connection and then
+    # never answers hangs the PARENT run forever: the parent is blocked
+    # inside registry.invoke, so its own wait_for is not covering anything,
+    # and Stop is the only way out. Imported late off backend.agents so a
+    # test that shrinks the constant is honored.
+    from backend import agents as _agents
+
     last_text = ""
     for _turn in range(max(1, max_turns)):
         if cancel_event is not None and cancel_event.is_set():
             raise api_provider.RequestCancelledError("stopped")
-        turn = await asyncio.to_thread(
-            api_provider.chat_turn_with_tools,
-            config.TASK_CHAT, list(messages), specs,
-            model_ref=model_ref, cancellation_event=cancel_event,
-            settings_manager=settings_manager, runtime=runtime,
+        turn = await asyncio.wait_for(
+            asyncio.to_thread(
+                api_provider.chat_turn_with_tools,
+                config.TASK_CHAT, list(messages), specs,
+                model_ref=model_ref, cancellation_event=cancel_event,
+                settings_manager=settings_manager, runtime=runtime,
+            ),
+            timeout=_agents.WATCHDOG_TIMEOUT_SECONDS,
         )
         last_text = turn["message"]["content"] or ""
         tool_calls: list[ToolCall] = turn["tool_calls"]
@@ -184,6 +195,15 @@ def register_subagent_tool(registry: ToolRegistry) -> None:
                 settings_manager=getattr(ctx, "settings_manager", None),
                 runtime=getattr(ctx, "runtime", None),
                 cancel_event=ctx.cancel.event if ctx.cancel is not None else None,
+            )
+        except asyncio.TimeoutError:
+            # The watchdog fired. Reported as an ordinary tool error (the
+            # parent decides whether to retry, narrow the task, or do the
+            # work itself) rather than as a bare empty exception string,
+            # which is all str(TimeoutError()) would have produced.
+            return ToolResult(
+                content="The subagent timed out waiting for the model and was abandoned.",
+                is_error=True,
             )
         except Exception as exc:
             from api_provider import RequestCancelledError

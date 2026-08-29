@@ -118,6 +118,17 @@ class TestShellPolicy:
         assert plan.dangerous == ["rm -rf node_modules"]
         assert "rm -rf node_modules" in plan.disclosure()
 
+    def test_a_single_ampersand_chain_is_split_too(self):
+        """`&` chains on both shells this app spawns - it is cmd.exe's
+        ordinary sequential separator and POSIX sh's background operator -
+        so a command after it runs either way. Unsplit, its tail is neither
+        disclosed in the approval prompt nor dangerous-checked, which is
+        the exact hiding place segmentation exists to close."""
+        plan = analyze("echo building & rm -rf out")
+        assert plan.segments == ["echo building", "rm -rf out"]
+        assert plan.dangerous == ["rm -rf out"]
+        assert is_dangerous_command("echo building & rm -rf out")
+
     @pytest.mark.parametrize(
         "command",
         [
@@ -333,6 +344,30 @@ class TestPythonExec:
             assert not result.is_error
             assert "ZeroDivisionError" in result.content
             assert "[code raised]" in result.content
+        finally:
+            repls.stop_all()
+
+    def test_a_rebound_workspace_retires_the_old_interpreter(self, tmp_path):
+        """A REPL's cwd is fixed at spawn. Keeping one across a rebinding
+        (scratch <-> a user's project folder) would leave python.exec
+        executing in a different directory than fs.* and shell.exec, so
+        open('x') and fs.read('x') would silently mean different files."""
+        registry, repls, workspace = self._setup(tmp_path)
+        second = tmp_path / "other-ws"
+        second.mkdir()
+        try:
+            first_repl = repls.get("ws-h6", workspace, manage_cwd=True)
+            assert repls.get("ws-h6", workspace, manage_cwd=True) is first_repl, "same root reuses it"
+
+            rebound = repls.get("ws-h6", second, manage_cwd=False)
+            assert rebound is not first_repl
+
+            result = _invoke(
+                registry, "python.exec",
+                {"code": "import os; print(os.path.basename(os.getcwd()))"},
+                _tool_ctx(second),
+            )
+            assert result.content.strip() == "other-ws"
         finally:
             repls.stop_all()
 

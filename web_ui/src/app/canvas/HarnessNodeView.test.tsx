@@ -244,7 +244,26 @@ describe("HarnessNodeView", () => {
     expect(screen.getByText(/C:\/proj/)).toBeInTheDocument();
     expect(screen.queryByText(/not trusted/)).not.toBeInTheDocument();
 
-    // Bound but not trusted on this machine: pending warning shown.
+    // Bound but not trusted on this machine: the run bound the scratch dir
+    // instead, so the active root does not match the request - warning shown.
+    rerender(
+      <ReactFlowProvider>
+        <HarnessNodeView
+          id="n1" type="harness"
+          data={makeData({
+            harnessStatus: "done", pendingRequestId: null,
+            harnessWorkspacePath: "C:/proj",
+            harnessWorkspaceActive: "C:/scratch/harness/ws1",
+          })}
+          selected={false} isConnectable={false} positionAbsoluteX={0} positionAbsoluteY={0}
+          zIndex={0} dragging={false} deletable selectable draggable parentId={undefined}
+        />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByText(/not trusted on this machine/)).toBeInTheDocument();
+
+    // Just picked, nothing run yet: an empty active root means "no run has
+    // bound this node", not "the grant was refused". Warning would be a lie.
     rerender(
       <ReactFlowProvider>
         <HarnessNodeView
@@ -258,7 +277,8 @@ describe("HarnessNodeView", () => {
         />
       </ReactFlowProvider>,
     );
-    expect(screen.getByText(/not trusted on this machine/)).toBeInTheDocument();
+    expect(screen.getByText(/C:\/proj/)).toBeInTheDocument();
+    expect(screen.queryByText(/not trusted/)).not.toBeInTheDocument();
   });
 
   it("renders activity rows with error styling on failures", () => {

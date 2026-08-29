@@ -75,28 +75,47 @@ class PythonReplRegistry:
     """
 
     def __init__(self) -> None:
-        self._repls: dict[str, PythonREPL] = {}
+        # Value is (repl, cwd): the cwd is kept so a rebound workspace can
+        # be detected - see get().
+        self._repls: dict[str, tuple[PythonREPL, Path]] = {}
         self._lock = threading.RLock()
 
     def get(self, workspace_id: str, cwd: Path, *, manage_cwd: bool) -> PythonREPL:
+        """The workspace's interpreter, started on first use.
+
+        A REPL's cwd is fixed at spawn, so an interpreter kept across a
+        REBINDING (the node moves between scratch and a user's project
+        folder) would keep executing in the old directory while fs.read and
+        shell.exec had already moved to the new one - `open("data.csv")`
+        silently reading a different file than `fs.read("data.csv")`. The
+        cwd is therefore part of the cache key in effect: a changed root
+        retires the old interpreter rather than reusing it.
+        """
         with self._lock:
-            repl = self._repls.get(workspace_id)
-            if repl is None:
-                repl = PythonREPL(repl_id=workspace_id, cwd=cwd, manage_cwd=manage_cwd)
-                self._repls[workspace_id] = repl
-            return repl
+            stale = self._repls.get(workspace_id)
+            if stale is not None and stale[1] == cwd:
+                return stale[0]
+            # Replace the entry under the lock, so two callers can never
+            # race two interpreters into one workspace; the retired one is
+            # stopped outside it, since killing a process is slow and no
+            # other workspace should wait on it.
+            repl = PythonREPL(repl_id=workspace_id, cwd=cwd, manage_cwd=manage_cwd)
+            self._repls[workspace_id] = (repl, cwd)
+        if stale is not None:
+            stale[0].stop()
+        return repl
 
     def stop_workspace(self, workspace_id: str) -> None:
         with self._lock:
-            repl = self._repls.pop(workspace_id, None)
-        if repl is not None:
-            repl.stop()
+            entry = self._repls.pop(workspace_id, None)
+        if entry is not None:
+            entry[0].stop()
 
     def stop_all(self) -> None:
         with self._lock:
-            repls = list(self._repls.values())
+            entries = list(self._repls.values())
             self._repls.clear()
-        for repl in repls:
+        for repl, _cwd in entries:
             repl.stop()
 
 
