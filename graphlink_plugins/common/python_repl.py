@@ -239,6 +239,7 @@ while True:
         # nulling self.process out from under the other's later use of it).
         with self._lock:
             if self.process:
+                process = self.process
                 # ADR-005 stage 5.2: close the resource guard FIRST - on
                 # Windows this terminates the whole job (the REPL process
                 # AND anything it has itself spawned), closing the
@@ -252,9 +253,19 @@ while True:
                 if self.guard:
                     self.guard.close()
                     self.guard = None
-                self.process.kill()
-                self.process.wait()
-                self.process = None
+                try:
+                    process.kill()
+                    process.wait()
+                finally:
+                    # Popen owns real pipe objects for stdin/stdout even
+                    # after the child has been reaped. Close them here
+                    # rather than relying on Popen's finalizer, which
+                    # otherwise emits ResourceWarning and leaves cleanup
+                    # dependent on garbage collection.
+                    for stream in (process.stdin, process.stdout, process.stderr):
+                        if stream is not None:
+                            stream.close()
+                    self.process = None
 
 
 class CodeAnalysisAgent:
