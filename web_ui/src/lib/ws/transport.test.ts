@@ -111,6 +111,21 @@ describe("WsTransport", () => {
     expect(b).toHaveLength(0);
   });
 
+  it("drops a JSON null server frame without taking the transport down", () => {
+    const t = makeTransport();
+    const seen: unknown[] = [];
+    t.subscribe("system", (payload) => seen.push(payload));
+    t.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+
+    expect(() => socket.receive(null)).not.toThrow();
+
+    const payload = { schemaVersion: READER_SCHEMA_VERSION, app: "graphlink" };
+    socket.receive({ kind: "state", topic: "system", payload });
+    expect(seen).toEqual([payload]);
+  });
+
   it("replays the last compatible full snapshot to a late topic subscriber without another wire subscribe", () => {
     const t = makeTransport();
     const first: unknown[] = [];

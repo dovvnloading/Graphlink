@@ -173,7 +173,7 @@ def _validate_intent_args(args_schema: type, args: Any) -> list[str]:
     Review-fix: `args` is typed `list[Any]` by dispatch_intent's own
     signature, but that is a Python-side type hint, not a runtime guarantee -
     _handle_message (backend/app.py) builds it straight from
-    `message.get("args") or []` with no shape check, so a client sending a
+    `message.get("args", [])` with no shape check, so a client sending a
     JSON OBJECT for "args" reached here unchanged. zip(fields, a_dict) pairs
     each field with the dict's KEY strings (never its values), so validation
     could report zero errors while payload held only field-name echoes - and

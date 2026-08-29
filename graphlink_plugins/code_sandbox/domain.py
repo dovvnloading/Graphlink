@@ -331,18 +331,25 @@ class VirtualEnvSandbox:
         # the guard already killed it, and the only thing that actually
         # stops the direct child on non-Windows in this stage (the POSIX
         # process-group tier is ADR-005 stage 5.3).
+        process = self.current_process
         if self.guard:
             self.guard.close()
             self.guard = None
-        if self.current_process and self.current_process.poll() is None:
+        if process is not None:
             try:
-                self.current_process.terminate()
-                self.current_process.wait(timeout=3)
-            except Exception:
-                try:
-                    self.current_process.kill()
-                except Exception:
-                    pass
+                if process.poll() is None:
+                    try:
+                        process.terminate()
+                        process.wait(timeout=3)
+                    except Exception:
+                        try:
+                            process.kill()
+                        except Exception:
+                            pass
+            finally:
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
         self.current_process = None
 
     def _run_subprocess(self, args, should_continue, emit_line=None, cwd=None, timeout_seconds=None):
@@ -454,6 +461,9 @@ class VirtualEnvSandbox:
             if self.guard:
                 self.guard.close()
                 self.guard = None
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
             self.current_process = None
 
     def ensure_base_environment(self, should_continue, emit_line=None):

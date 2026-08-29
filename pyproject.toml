@@ -7,7 +7,7 @@ name = "graphlink"
 dynamic = ["version"]
 description = "A local-first, graph-based AI workspace for branching reasoning, tool use, and multi-provider workflows."
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "anthropic",

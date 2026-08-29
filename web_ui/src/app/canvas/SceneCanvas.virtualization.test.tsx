@@ -462,6 +462,30 @@ describe("SceneCanvas <ReactFlow> wiring (ADR-011 stages 11.2/11.3)", () => {
         .nodes.find((n: { id: string }) => n.id === "a") as { position: { x: number; y: number } };
       expect(remoteMovedA.position).toEqual({ x: 999, y: 0 });
     });
+
+    it("lets a remote position win when it is the first scene update after the drop", () => {
+      const { stateListeners } = mount();
+      publish(stateListeners, { nodes: [chatRow("a", 0), chatRow("b", 200)], edges: [] });
+
+      const drag = (change: Partial<NodeChange> & { id: string }) =>
+        act(() => {
+          const raw = [{ type: "position", ...change } as NodeChange];
+          lastProps().onNodesChange(capturedMiddleware ? capturedMiddleware(raw) : raw);
+        });
+
+      drag({ id: "a", dragging: true, position: { x: 300, y: 0 } });
+      drag({ id: "a", dragging: false, position: { x: 300, y: 0 } });
+
+      // A remote writer can be the first scene update observed after the
+      // local intent. It is already authoritative and must not be hidden by
+      // the local stale-scene pin.
+      publish(stateListeners, { nodes: [chatRow("a", 999), chatRow("b", 200)], edges: [] });
+
+      const remoteMovedA = capturedStoreApiRef
+        .current!.getState().nodes
+        .find((n: { id: string }) => n.id === "a") as { position: { x: number; y: number } };
+      expect(remoteMovedA.position).toEqual({ x: 999, y: 0 });
+    });
   });
 
   // REVIEW-FIX (round 3): a frame/container member that is off-viewport

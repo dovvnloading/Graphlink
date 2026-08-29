@@ -30,6 +30,19 @@ def test_state_persists_across_calls_and_reports_success():
         repl.stop()
 
 
+def test_stop_closes_the_subprocess_pipes_instead_of_leaving_them_to_gc():
+    repl = PythonREPL(repl_id="core-pipe-cleanup-test")
+    repl.execute("print('ready')")
+    process = repl.process
+    assert process is not None
+
+    repl.stop()
+
+    assert process.stdin is not None and process.stdin.closed
+    assert process.stdout is not None and process.stdout.closed
+    assert process.stderr is None
+
+
 def test_a_failed_execution_is_reported_without_killing_the_repl():
     repl = PythonREPL(repl_id="core-failure-test")
     try:

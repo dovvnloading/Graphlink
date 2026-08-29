@@ -279,7 +279,7 @@ def test_store_rejects_a_ref_that_is_not_a_content_digest(tmp_path):
     ref = store.put(b"real image bytes")
     assert store.get(ref) == b"real image bytes"
 
-    for crafted in ("../secret.txt", "../../secret.txt", "..\secret.txt", "", "x", ref.upper()):
+    for crafted in ("../secret.txt", "../../secret.txt", r"..\secret.txt", "", "x", ref.upper()):
         assert store.get(crafted) is None, crafted
         assert store.exists(crafted) is False, crafted
         assert store.verify(crafted) is False, crafted

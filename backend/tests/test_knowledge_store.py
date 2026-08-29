@@ -338,7 +338,10 @@ class TestCorruptDbRescue:
         try:
             with pytest.raises(sqlite3.OperationalError):
                 blocked = sqlite3.connect(db_path, timeout=0.2)
-                blocked.execute("BEGIN IMMEDIATE")
+                try:
+                    blocked.execute("BEGIN IMMEDIATE")
+                finally:
+                    blocked.close()
         finally:
             holder.rollback()
             holder.close()

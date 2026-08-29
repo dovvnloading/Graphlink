@@ -21,7 +21,8 @@
   "overrides": {
     "eslint-plugin-jsx-a11y": {
       "eslint": "$eslint"
-    }
+    },
+    "qs": "6.15.3"
   },
   "dependencies": {
     "@xyflow/react": "^12.11.2",

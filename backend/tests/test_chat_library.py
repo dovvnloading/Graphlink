@@ -2702,8 +2702,8 @@ class TestCorruptDbRescue:
             # the real busy_timeout - a fresh connect() with its own short
             # timeout is what actually raises "database is locked".
             with pytest.raises(sqlite3.OperationalError):
-                blocked = sqlite3.connect(db_path, timeout=0.2)
-                blocked.execute("BEGIN IMMEDIATE")
+                with contextlib.closing(sqlite3.connect(db_path, timeout=0.2)) as blocked:
+                    blocked.execute("BEGIN IMMEDIATE")
         finally:
             holder.rollback()
             holder.close()

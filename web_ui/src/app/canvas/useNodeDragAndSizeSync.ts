@@ -42,12 +42,10 @@ import {
  * that effect keeps reading/mutating the exact same ref identities.
  *
  * `scene` is threaded through (rather than destructuring just
- * `smartGuides`/`dragFactor`) to keep the middleware's own dependency
- * array reading `scene.dragFactor`/`scene.smartGuides` unchanged - see
- * that callback's own comment for why `scene.dragFactor` is listed there
- * even though the drag-speed factor no longer touches node motion at all
- * (it now scales canvas panning instead, in useCanvasPan.ts); this is
- * pre-existing behavior being relocated, not something to "fix" here.
+ * `smartGuides`) so the middleware can read the current guide setting in its
+ * event-time callback. The drag-speed factor no longer affects node motion;
+ * it scales canvas panning instead (useCanvasPan.ts), so it is intentionally
+ * absent from the middleware's dependency list.
  */
 export function useNodeDragAndSizeSync(
   scene: SceneState,
@@ -312,7 +310,7 @@ export function useNodeDragAndSizeSync(
       // so React Flow commits the group and its members together.
       return memberChanges.length > 0 ? [...corrected, ...memberChanges] : corrected;
     },
-    [scene.dragFactor, scene.smartGuides, reactFlow],
+    [scene.smartGuides, reactFlow],
   );
 
   // Registers the correction above inside React Flow's own change pipeline.

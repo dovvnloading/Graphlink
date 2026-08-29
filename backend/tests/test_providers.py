@@ -2780,8 +2780,11 @@ def test_rest_http_errors_preserve_status_and_retry_after(monkeypatch):
         raise http_error
 
     monkeypatch.setattr(api_provider.urllib.request, "urlopen", raising_urlopen)
-    with pytest.raises(RuntimeError, match="rate limited") as excinfo:
-        api_provider._anthropic_post_json("https://api.anthropic.com/v1/messages", {}, api_key="k")
-    assert excinfo.value.status_code == 429
-    assert excinfo.value.retry_after == 7.0
-    assert api_provider._is_transient_transport_error(excinfo.value) is True
+    try:
+        with pytest.raises(RuntimeError, match="rate limited") as excinfo:
+            api_provider._anthropic_post_json("https://api.anthropic.com/v1/messages", {}, api_key="k")
+        assert excinfo.value.status_code == 429
+        assert excinfo.value.retry_after == 7.0
+        assert api_provider._is_transient_transport_error(excinfo.value) is True
+    finally:
+        http_error.close()

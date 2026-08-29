@@ -131,6 +131,7 @@ DEV_WS_ORIGIN_ENV = "GRAPHLINK_DEV_WS_ORIGIN"
 # that cannot be verified without a real browser - deliberately scoped to
 # just the directive this finding is actually about.
 CONTENT_SECURITY_POLICY = "img-src 'self' data:"
+_WS_SEND_AFTER_CLOSE_ERROR = 'Cannot call "send" once a close message has been sent.'
 
 
 def _is_allowed_ws_origin(origin: str | None, host_header: str | None, dev_proxy_origin: str | None = None) -> bool:
@@ -705,13 +706,25 @@ def create_app(
                 # kind:error reply and the loop simply continues instead of
                 # tearing down the session.
                 try:
-                    message = await websocket.receive_json()
-                except json.JSONDecodeError:
-                    await websocket.send_json(
-                        {"kind": "error", "id": None, "error": "malformed message: invalid JSON"}
-                    )
-                    continue
-                await _handle_message(session, websocket, message)
+                    try:
+                        message = await websocket.receive_json()
+                    except json.JSONDecodeError:
+                        await websocket.send_json(
+                            {"kind": "error", "id": None, "error": "malformed message: invalid JSON"}
+                        )
+                        continue
+                    await _handle_message(session, websocket, message)
+                except RuntimeError as exc:
+                    # A client can close while an intent is still running;
+                    # Starlette then raises this exact error when the
+                    # handler tries to deliver its late result. That is a
+                    # normal disconnect race, not an application failure,
+                    # so end this socket cleanly while preserving unrelated
+                    # RuntimeErrors for the outer error machinery.
+                    if str(exc) != _WS_SEND_AFTER_CLOSE_ERROR:
+                        raise
+                    logger.debug("client disconnected while handling a websocket message")
+                    break
         except WebSocketDisconnect:
             pass
         finally:
@@ -806,7 +819,10 @@ async def _handle_message(session: SessionBus, websocket: WebSocket, message: di
     msg_id = message.get("id")
 
     if kind == "subscribe":
-        topics = message.get("topics") or session.topic_names()
+        # Only an omitted topics field means "all topics". Preserve an
+        # explicitly supplied falsey value so the shape check below rejects
+        # it instead of broadening a malformed subscription request.
+        topics = message["topics"] if "topics" in message else session.topic_names()
         # REVIEW-FIX: same reasoning as the isinstance guard above, for the
         # one field this branch trusts without a shape check. A truthy
         # non-iterable "topics" (e.g. the JSON number 5) bypasses the `or`
@@ -845,7 +861,19 @@ async def _handle_message(session: SessionBus, websocket: WebSocket, message: di
     if kind == "intent":
         topic = message.get("topic", "")
         intent = message.get("intent", "")
-        args = message.get("args") or []
+        if not isinstance(topic, str) or not isinstance(intent, str):
+            await websocket.send_json(
+                {
+                    "kind": "error",
+                    "id": msg_id,
+                    "error": "malformed message: 'topic' and 'intent' must be strings",
+                }
+            )
+            return
+        # An omitted args field means no positional arguments. Preserve an
+        # explicitly supplied falsey value so dispatch_intent can reject it
+        # as malformed instead of silently converting it to an empty list.
+        args = message.get("args", [])
         try:
             result = await session.dispatch_intent(topic, intent, args)
         except UnknownTopicError as exc:
