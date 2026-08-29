@@ -295,3 +295,78 @@ describe("HarnessNodeView", () => {
     expect(screen.getByText("Invalid regular expression")).toBeInTheDocument();
   });
 });
+
+describe("HarnessNodeView — the run is parked on a human", () => {
+  it("says so in the status band instead of claiming to be working", () => {
+    // A parked run is still `running` on the wire, so the band used to read
+    // "Working…" while the only thing standing between it and progress was
+    // the person reading that word.
+    const { rerender } = renderHarness(
+      makeData({
+        harnessStatus: "running",
+        harnessAwaitingApproval: true,
+        harnessApprovalToolName: "shell.exec",
+        harnessApprovalSummary: "shell.exec\n  npm test",
+      }),
+    );
+    expect(screen.getByText("Waiting for your approval")).toBeInTheDocument();
+    expect(screen.queryByText("Working…")).not.toBeInTheDocument();
+
+    rerender(
+      <ReactFlowProvider>
+        <HarnessNodeView
+          id="n1" type="harness"
+          data={makeData({
+            harnessStatus: "running",
+            harnessAwaitingQuestion: true,
+            harnessQuestion: "Which database should I target?",
+          })}
+          selected={false} isConnectable={false} positionAbsoluteX={0} positionAbsoluteY={0}
+          zIndex={0} dragging={false} deletable selectable draggable parentId={undefined}
+        />
+      </ReactFlowProvider>,
+    );
+    expect(screen.getByText("Waiting for your answer")).toBeInTheDocument();
+  });
+
+  it("still reads as working when it really is", () => {
+    renderHarness(makeData({ harnessStatus: "running" }));
+    expect(screen.getByText("Working…")).toBeInTheDocument();
+  });
+});
+
+describe("HarnessNodeView — activity visibility", () => {
+  const activity = [{ tool: "fs.list", summary: "{}", outcome: "ok", elapsedMs: 4 }];
+
+  it("opens the activity log on a run's first tool call", () => {
+    // "What is it doing?" is the question a running agent raises; the answer
+    // was behind a closed <details> nobody thought to click.
+    const { container } = renderHarness(
+      makeData({ harnessStatus: "running", harnessActivity: activity }),
+    );
+    expect(container.querySelector("details.plan-node-activity")).toHaveProperty("open", true);
+  });
+
+  it("does not spring back open after the user collapses it mid-run", () => {
+    const { container, rerender } = renderHarness(
+      makeData({ harnessStatus: "running", harnessActivity: activity }),
+    );
+    const details = container.querySelector("details.plan-node-activity") as HTMLDetailsElement;
+    details.open = false;
+
+    rerender(
+      <ReactFlowProvider>
+        <HarnessNodeView
+          id="n1" type="harness"
+          data={makeData({
+            harnessStatus: "running",
+            harnessActivity: [...activity, { tool: "fs.read", summary: "{}", outcome: "ok", elapsedMs: 9 }],
+          })}
+          selected={false} isConnectable={false} positionAbsoluteX={0} positionAbsoluteY={0}
+          zIndex={0} dragging={false} deletable selectable draggable parentId={undefined}
+        />
+      </ReactFlowProvider>,
+    );
+    expect(details.open).toBe(false);
+  });
+});

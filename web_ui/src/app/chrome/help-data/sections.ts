@@ -374,6 +374,54 @@ export const HELP_SECTIONS: HelpSection[] = [
     ]
   },
   {
+    "name": "Agent",
+    "description": "An agent that works inside a folder - reading, writing, running commands - over as many steps as the task needs, and answers on the canvas.",
+    "subsections": [
+      {
+        "title": "Starting One",
+        "items": [
+          {
+            "action": "Task and Workspace",
+            "description": "Open Agent, describe the task, and choose the folder it should work in. Choosing the folder in the launcher is what grants access to it - pick nothing and the agent gets a private scratch folder of its own instead."
+          },
+          {
+            "action": "What It Can Do",
+            "description": "Read, write, and search files in its workspace; run shell commands and Python there; keep long-running processes open; search your knowledge base; delegate read-only lookups to subagents; and build on the canvas it lives in."
+          },
+          {
+            "action": "Turn Budget",
+            "description": "Max turns is a hard limit on model turns for one task. Hitting it stops the task with everything it did intact - send a follow-up to continue from there."
+          },
+          {
+            "action": "AGENTS.md",
+            "description": "A file named AGENTS.md at the workspace root joins the agent's instructions, so a folder can carry its own conventions. It is reference material only: it cannot grant a capability or waive an approval."
+          }
+        ]
+      },
+      {
+        "title": "Working With One",
+        "items": [
+          {
+            "action": "Approvals",
+            "description": "Anything that changes your machine asks first, showing the exact command or file content. Approve once, or allow that tool for the rest of the session - except for commands that cannot be undone, which always ask again."
+          },
+          {
+            "action": "Watch It Work",
+            "description": "The card shows a live checklist when the agent keeps one, an activity log of every tool call, and how much of its context budget the conversation fills. When it needs you, the status says so."
+          },
+          {
+            "action": "Answer, Follow Up, and Stop",
+            "description": "The agent can stop and ask you a question mid-run. Once a task ends - done, stopped, or failed - send a follow-up to keep the same conversation going; its history lives with its workspace, so it survives a restart."
+          },
+          {
+            "action": "The Agent vs. the Builder",
+            "description": "The Builder constructs nodes on the canvas from a plan you approve. The Agent works in a real folder on disk and reports back. Reach for the Agent when the work is files and commands, not canvas structure."
+          }
+        ]
+      }
+    ]
+  },
+  {
     "name": "Settings & Models",
     "description": "How runtime modes, providers, model routing, and quality-of-life settings shape the behavior of the application.",
     "subsections": [

@@ -38,6 +38,16 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
+// Same gap, same posture: jsdom implements no Element.scrollTo either, so a
+// follow-the-log effect (PlanNodeView/HarnessNodeView pin their activity
+// list to the newest row) throws the moment a test actually renders with
+// that list open. It never did before the agent card started opening its own
+// activity log, which is exactly the kind of "worked only because the branch
+// was unreachable" gap a stub here closes for good.
+if (!Element.prototype.scrollTo) {
+  Element.prototype.scrollTo = () => {};
+}
+
 // ADR-012 stage 12.4: jsdom implements no window.matchMedia at all (not even
 // a no-op stub) - reducedMotion.ts's own prefersReducedMotion() throws
 // "matchMedia is not a function" in any test that exercises a component

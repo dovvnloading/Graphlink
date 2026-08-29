@@ -123,6 +123,35 @@ const STATUS_LABELS: Record<string, string> = {
   interrupted: "Interrupted",
 };
 
+/**
+ * What the status band says. A parked run is still `running` on the wire -
+ * correctly, since the run owns its slot and Stop still applies - but
+ * "Working…" is the wrong thing to tell someone whose answer is the only
+ * reason it is not working. Nothing is happening until they act, and the
+ * one line they are already watching should be what says so.
+ */
+function statusLabel(data: HarnessNodeData): string {
+  if (data.harnessStatus === "running") {
+    if (data.harnessAwaitingApproval) return "Waiting for your approval";
+    if (data.harnessAwaitingQuestion) return "Waiting for your answer";
+  }
+  return STATUS_LABELS[data.harnessStatus] ?? data.harnessStatus;
+}
+
+/** Parked reads as a warning, not as progress - the same semantic the
+ * approval panel's own border already uses. */
+function statusClass(data: HarnessNodeData): string {
+  const parked = data.harnessAwaitingApproval || data.harnessAwaitingQuestion;
+  return parked && data.harnessStatus === "running"
+    ? "harness-node-status-waiting"
+    : `harness-node-status-${data.harnessStatus}`;
+}
+
+// A run binds its root once, at the start, and every tool in it is
+// confined to that root - so rebinding mid-run is not a thing that can
+// mean anything. The controls say that rather than being inertly grey.
+const WORKSPACE_LOCKED_HINT = "The workspace is fixed while the agent is working - stop it first";
+
 // Every non-running status accepts a follow-up: the transcript is the
 // resume point, so done/failed/stopped/interrupted/idle all continue the
 // same conversation (intents_harness.send refuses only a busy node).
@@ -149,6 +178,20 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
       denyButtonRef.current?.focus();
     }
   }, [data.harnessAwaitingApproval, collapsed]);
+
+  // "What is it doing?" is the question a running agent raises, and the
+  // answer was one click away behind a closed <details>. Opened once, on
+  // the first activity of a run - once only, so a deliberate collapse
+  // stays collapsed for the rest of that run instead of springing back
+  // open on the next tool call.
+  const autoOpenedForRun = useRef<string | null>(null);
+  useEffect(() => {
+    const details = activityDetailsRef.current;
+    if (!details || !running || data.harnessActivity.length === 0) return;
+    if (autoOpenedForRun.current === data.harnessRunId) return;
+    autoOpenedForRun.current = data.harnessRunId;
+    details.open = true;
+  }, [data.harnessActivity.length, data.harnessRunId, running]);
 
   // Same follow-the-log behavior as PlanNodeView's activity list: pinned
   // to the newest row only while running and only while open.
@@ -201,9 +244,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
         )
       }
     >
-      <div className={`plan-node-status harness-node-status-${data.harnessStatus}`}>
-        {STATUS_LABELS[data.harnessStatus] ?? data.harnessStatus}
-      </div>
+      <div className={`plan-node-status ${statusClass(data)}`}>{statusLabel(data)}</div>
       {data.harnessStatusDetail && (
         <p className="plan-node-detail" role={data.harnessStatus === "failed" ? "alert" : undefined}>
           {data.harnessStatusDetail}
@@ -235,6 +276,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
               className="plan-node-button nodrag"
               onClick={data.onUseScratch}
               disabled={running}
+              title={running ? WORKSPACE_LOCKED_HINT : undefined}
             >
               Use scratch
             </button>
@@ -247,6 +289,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
               className="plan-node-button nodrag"
               onClick={data.onPickWorkspace}
               disabled={running}
+              title={running ? WORKSPACE_LOCKED_HINT : undefined}
             >
               Choose folder…
             </button>

@@ -26,6 +26,10 @@ _DEFAULT_TURNS = 16
 # One user message's own bound - the same wire-input-is-untrusted posture
 # every other intent that accepts free text takes.
 _MESSAGE_CAP = 20_000
+# A filesystem path's own bound. Same posture as _MESSAGE_CAP: the launcher
+# hands this across the wire, so it is untrusted length as well as untrusted
+# content (the trust list is what settles the content, at run time).
+_PATH_CAP = 4_000
 
 
 def _place_harness_node(document: SceneDocument) -> tuple[float, float]:
@@ -43,7 +47,7 @@ def register_harness_intents(
 ) -> None:
     publish_scene = make_publish_scene(bus)
 
-    async def start(goal, max_turns=None):
+    async def start(goal, max_turns=None, workspace_path=None):
         goal_text = str(goal or "").strip()[:_MESSAGE_CAP]
         if not goal_text:
             notifications.show("Give the agent a task first.", "info")
@@ -61,6 +65,16 @@ def register_harness_intents(
             "harnessCreate", "agent",
             lambda: document.add_harness_node(x, y, goal_text, max_turns=clamp(max_turns)),
         )
+        # The launcher's folder choice, bound BEFORE the run starts so the
+        # first task already works where the person meant it to - without
+        # this they had to let a scratch run finish, rebind the node, and
+        # re-send the same task. Wire input is a REQUEST, never a grant:
+        # bound_root re-checks the trust list at run time and silently
+        # falls back to scratch, so a path that was never picked here
+        # (a hand-edited session file, a replayed intent) buys nothing.
+        requested_workspace = str(workspace_path or "").strip()[:_PATH_CAP]
+        if requested_workspace:
+            node.state.harness_workspace_path = requested_workspace
         await publish_scene()
 
         request_id = await agent_dispatcher.start_harness_run(
@@ -97,6 +111,43 @@ def register_harness_intents(
     async def cancel(request_id):
         agent_dispatcher.cancel_harness(request_id)
 
+    async def _pick_and_grant(start_in: str) -> "str | None":
+        """Open the folder picker and, on a real choice, grant that folder.
+
+        The pick IS the consent (the gitlink local-root precedent), so the
+        two steps are one operation and live in one place - both the
+        per-node binding and the launcher below call this rather than each
+        implementing "picker, then trust list" their own way.
+        """
+        try:
+            folder = await native_dialogs.pick_folder(directory=start_in)
+        except Exception as exc:  # noqa: BLE001 - a local folder path, not a credential
+            notifications.show(f"Could not open the folder picker: {exc}", "error")
+            await bus.publish("notification")
+            return None
+        if not folder:
+            return None
+        resolved = str(Path(folder).resolve())
+        settings = agent_dispatcher._settings_manager
+        if settings is not None:
+            # The grant write goes through the same locked writer every
+            # other settings mutation uses (save_recipe's precedent), so it
+            # cannot land mid-write against a concurrent settings save.
+            await asyncio.to_thread(run_locked, lambda: settings.add_harness_trusted_dir(resolved))
+        return resolved
+
+    async def pick_launch_workspace():
+        """The launcher's folder choice, before any node exists.
+
+        Same picker and same grant as pick_workspace below; it just has no
+        node to write to, so it ANSWERS with the folder and lets `start`
+        carry it in. Split from pick_workspace rather than made to accept a
+        null node id: "which folder should the new agent use" and "rebind
+        this existing agent" are different operations, and one of them
+        must not silently become the other on a stale node id.
+        """
+        return await _pick_and_grant(os.path.expanduser("~"))
+
     async def pick_workspace(node_id):
         """Bind this agent node to a real project directory. The pick IS
         the consent (the gitlink local-root precedent): on success we add
@@ -108,21 +159,9 @@ def register_harness_intents(
         if node is None or not isinstance(node.state, HarnessState):
             return
         directory = node.state.harness_workspace_path or os.path.expanduser("~")
-        try:
-            folder = await native_dialogs.pick_folder(directory=directory)
-        except Exception as exc:  # noqa: BLE001 - a local folder path, not a credential
-            notifications.show(f"Could not open the folder picker: {exc}", "error")
-            await bus.publish("notification")
+        resolved = await _pick_and_grant(directory)
+        if resolved is None:
             return
-        if not folder:
-            return
-        resolved = str(Path(folder).resolve())
-        settings = agent_dispatcher._settings_manager
-        if settings is not None:
-            # The grant write goes through the same locked writer every
-            # other settings mutation uses (save_recipe's precedent), so it
-            # cannot land mid-write against a concurrent settings save.
-            await asyncio.to_thread(run_locked, lambda: settings.add_harness_trusted_dir(resolved))
         node.state.harness_workspace_path = resolved
         # The previous run's bound root says nothing about THIS binding -
         # left in place it reads as "the grant did not apply", which is
@@ -170,5 +209,6 @@ def register_harness_intents(
     bus.register_intent("harness", "denyTool", deny_tool)
     bus.register_intent("harness", "approveToolForSession", approve_tool_for_session)
     bus.register_intent("harness", "answer", answer_question)
+    bus.register_intent("harness", "pickLaunchWorkspace", pick_launch_workspace)
     bus.register_intent("harness", "pickWorkspace", pick_workspace)
     bus.register_intent("harness", "useScratch", use_scratch)
