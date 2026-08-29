@@ -220,6 +220,17 @@ export function buildCommands(
       enabled: () => true,
     },
     {
+      // ADR-012's "register every new surface in the palette" rule - the
+      // agent launcher was reachable only by clicking its AppBar icon,
+      // while every sibling dialog here has had a palette twin since it
+      // shipped.
+      id: "open-agent",
+      name: "Open Agent",
+      aliases: ["workspace agent", "harness", "new agent"],
+      run: () => overlays.open("harness-launch", "dialog"),
+      enabled: () => true,
+    },
+    {
       id: "open-plugins",
       name: "Open Plugins",
       aliases: ["plugin picker", "add node"],

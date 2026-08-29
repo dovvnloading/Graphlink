@@ -271,10 +271,14 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # (approveCodeExecution/denyCodeExecution stayed registered - they
     # relocated to backend/api/intents_code_sandbox.py, not deleted), and
     # 176 -> 178 when H6 added harness/approveToolForSession (§2.4's
-    # graded consent) and harness/answer (§2.3's user.ask resolution).
+    # graded consent) and harness/answer (§2.3's user.ask resolution), and
+    # 178 -> 179 when the agent launcher grew its own workspace pick
+    # (harness/pickLaunchWorkspace - the node-less sibling of
+    # harness/pickWorkspace, so the first run can already be bound to the
+    # right folder instead of spending itself in scratch).
     real = _collect_real_registrations()
-    assert len(real) == 178, (
-        f"expected exactly 178 real registered intents, found {len(real)} - "
+    assert len(real) == 179, (
+        f"expected exactly 179 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

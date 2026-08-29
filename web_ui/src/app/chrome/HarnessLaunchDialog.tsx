@@ -14,8 +14,16 @@ import { Dialog, useOverlays } from "../overlays/overlays";
  * center is approximate).
  *
  * Deliberately smaller than the Builder's launcher: no recipes, no
- * oversight modes (H1 runs read-only tools under a fixed grant - there is
- * nothing to choose an oversight level ABOUT yet), one budget number.
+ * oversight modes (the grant set is fixed and every mutating tool asks
+ * for approval individually, so there is no oversight LEVEL to choose),
+ * one budget number and one workspace choice.
+ *
+ * The workspace is chosen HERE rather than only on the node afterwards:
+ * binding a folder after the fact meant letting a scratch run finish,
+ * rebinding, and re-sending the same task, so the first run of every
+ * real piece of work was wasted. The pick itself is the grant (the
+ * backend adds the folder to the trust list when the picker returns),
+ * and the run re-checks that list when it binds.
  */
 
 const DEFAULT_MAX_TURNS = 16;
@@ -34,9 +42,23 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
   const reactFlow = useReactFlow();
   const [task, setTask] = useState("");
   const [maxTurns, setMaxTurns] = useState<number>(DEFAULT_MAX_TURNS);
+  const [workspace, setWorkspace] = useState("");
+  const [picking, setPicking] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const latestRequestId = useRef(0);
+
+  function pickWorkspace() {
+    if (picking || starting) return;
+    setPicking(true);
+    transport
+      .request("harness", "pickLaunchWorkspace", [])
+      .then((folder) => {
+        if (typeof folder === "string" && folder) setWorkspace(folder);
+      })
+      .catch(() => setError("Could not open the folder picker."))
+      .finally(() => setPicking(false));
+  }
 
   function startAgent() {
     const trimmed = task.trim();
@@ -45,11 +67,12 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
     setStarting(true);
     setError(null);
     transport
-      .request("harness", "start", [trimmed, maxTurns])
+      .request("harness", "start", [trimmed, maxTurns, workspace])
       .then((nodeId) => {
         if (requestId !== latestRequestId.current) return;
         if (nodeId != null) {
           setTask("");
+          setWorkspace("");
           overlays.close();
           const node = store.getScene().nodes.find((n) => n.id === nodeId);
           if (node) {
@@ -80,13 +103,54 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
           placeholder="e.g. Read the files in the workspace and summarize what they contain"
           value={task}
           onChange={(event) => setTask(event.target.value)}
+          onKeyDown={(event) => {
+            // Enter sends, Shift+Enter breaks the line - the same contract
+            // the agent card's own follow-up composer uses, so the habit
+            // formed in one place works in the other.
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              startAgent();
+            }
+          }}
           rows={3}
         />
         <p className="builder-launch-hint">
-          The agent works in its own private scratch workspace with read-only
-          file tools and knowledge search, and replies on the canvas.
+          The agent reads and writes files in its workspace, runs shell and
+          Python there, and searches your knowledge. It asks before anything
+          that changes your machine, and replies on the canvas.
         </p>
       </div>
+
+      <fieldset className="builder-launch-fieldset">
+        <legend>Workspace</legend>
+        <p className="builder-launch-hint">
+          Where the agent works. A private scratch folder unless you choose
+          one of your own - choosing it here is what grants access to it.
+        </p>
+        <div className="harness-launch-workspace">
+          <span className="harness-launch-workspace-dir" title={workspace || undefined}>
+            {workspace || "Private scratch folder"}
+          </span>
+          <button
+            type="button"
+            className="builder-launch-secondary"
+            onClick={pickWorkspace}
+            disabled={picking || starting}
+          >
+            {picking ? "Choosing…" : "Choose folder…"}
+          </button>
+          {workspace && (
+            <button
+              type="button"
+              className="builder-launch-secondary"
+              onClick={() => setWorkspace("")}
+              disabled={starting}
+            >
+              Use scratch
+            </button>
+          )}
+        </div>
+      </fieldset>
 
       <fieldset className="builder-launch-fieldset">
         <legend>Budget</legend>

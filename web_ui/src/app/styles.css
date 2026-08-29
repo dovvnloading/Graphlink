@@ -7488,6 +7488,9 @@ mark.document-view-search-match-current {
 .harness-node-status-failed { color: var(--gl-semantic-status-error); }
 .harness-node-status-done { color: var(--gl-semantic-status-success); }
 .harness-node-status-interrupted { color: var(--gl-semantic-status-warning); }
+/* Parked on a human: the same warning token the approval panel's own
+   border uses, so "this is on you now" reads the same in both places. */
+.harness-node-status-waiting { color: var(--gl-semantic-status-warning); }
 .harness-node-reply {
   font-size: 12px;
   line-height: 1.5;
@@ -7632,7 +7635,12 @@ mark.document-view-search-match-current {
   flex-direction: column;
   gap: 3px;
 }
-.builder-launch-delete-recipe {
+/* One small-secondary-button idiom for this dialog family, two names: the
+   recipe delete (destructive, red on hover) and the neutral secondary the
+   workspace row uses. Shared declarations rather than a second lookalike
+   block, so the two can never drift into two slightly different buttons. */
+.builder-launch-delete-recipe,
+.builder-launch-secondary {
   align-self: flex-start;
   font-size: 11px;
   font-family: inherit;
@@ -7647,7 +7655,30 @@ mark.document-view-search-match-current {
   color: var(--gl-semantic-status-error);
   border-color: var(--gl-semantic-status-error);
 }
-.builder-launch-delete-recipe:disabled { opacity: 0.5; cursor: default; }
+.builder-launch-secondary:hover:not(:disabled) {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+.builder-launch-delete-recipe:disabled,
+.builder-launch-secondary:disabled { opacity: 0.5; cursor: default; }
+
+/* The launcher's workspace row - same "path, ellipsized, with its buttons
+   beside it" shape as the agent card's own .harness-node-workspace, at the
+   dialog's type size rather than the node's. */
+.harness-launch-workspace {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.harness-launch-workspace-dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+}
 
 /* Same disclosure posture as .plan-node-activity/.chat-node-tool-invocations
    - a native <details>, cursor-pointer bold summary - here hiding the exact
