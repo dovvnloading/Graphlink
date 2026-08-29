@@ -2425,8 +2425,15 @@ def test_the_yield_still_works_on_a_LATER_autosave_tick_not_just_the_first(db_pa
             document.add_chat_node(300, 0, "a second message", is_user=True)
             assert await _await_owner(AUTOSAVE_OWNER), "no second tick"
 
+            # Generously above chat_library.AUTOSAVE_YIELD_TIMEOUT_SECONDS
+            # (2.0s), which is exactly the wait this intent may legitimately
+            # sit through: a bound TIGHTER than the production wait fails on
+            # correct behavior whenever a loaded runner is slow to schedule
+            # the release - which is how this flaked in CI. The bound exists
+            # to fail instead of hanging, not to assert a latency.
             await asyncio.wait_for(
-                bus.dispatch_intent("app-chat-library", "saveChat", []), timeout=1.0
+                bus.dispatch_intent("app-chat-library", "saveChat", []),
+                timeout=chat_library_module.AUTOSAVE_YIELD_TIMEOUT_SECONDS * 5,
             )
         finally:
             bus.autosave_task.cancel()
