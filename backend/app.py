@@ -131,6 +131,7 @@ DEV_WS_ORIGIN_ENV = "GRAPHLINK_DEV_WS_ORIGIN"
 # that cannot be verified without a real browser - deliberately scoped to
 # just the directive this finding is actually about.
 CONTENT_SECURITY_POLICY = "img-src 'self' data:"
+_WS_SEND_AFTER_CLOSE_ERROR = 'Cannot call "send" once a close message has been sent.'
 
 
 def _is_allowed_ws_origin(origin: str | None, host_header: str | None, dev_proxy_origin: str | None = None) -> bool:
@@ -705,13 +706,25 @@ def create_app(
                 # kind:error reply and the loop simply continues instead of
                 # tearing down the session.
                 try:
-                    message = await websocket.receive_json()
-                except json.JSONDecodeError:
-                    await websocket.send_json(
-                        {"kind": "error", "id": None, "error": "malformed message: invalid JSON"}
-                    )
-                    continue
-                await _handle_message(session, websocket, message)
+                    try:
+                        message = await websocket.receive_json()
+                    except json.JSONDecodeError:
+                        await websocket.send_json(
+                            {"kind": "error", "id": None, "error": "malformed message: invalid JSON"}
+                        )
+                        continue
+                    await _handle_message(session, websocket, message)
+                except RuntimeError as exc:
+                    # A client can close while an intent is still running;
+                    # Starlette then raises this exact error when the
+                    # handler tries to deliver its late result. That is a
+                    # normal disconnect race, not an application failure,
+                    # so end this socket cleanly while preserving unrelated
+                    # RuntimeErrors for the outer error machinery.
+                    if str(exc) != _WS_SEND_AFTER_CLOSE_ERROR:
+                        raise
+                    logger.debug("client disconnected while handling a websocket message")
+                    break
         except WebSocketDisconnect:
             pass
         finally:

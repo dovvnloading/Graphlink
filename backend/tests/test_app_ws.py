@@ -9,7 +9,9 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from backend import BACKEND_VERSION, crash_recovery
 from backend.app import create_app
@@ -193,6 +195,19 @@ def test_ping_round_trip_returns_echo_and_server_time():
         assert message["id"] == 1
         assert message["value"]["echo"] == ["hello"]
         assert message["value"]["serverTime"] > 0
+
+
+def test_a_late_result_after_client_close_is_treated_as_a_disconnect(monkeypatch):
+    async def send_after_close(session, websocket, message):
+        await websocket.close()
+        raise RuntimeError('Cannot call "send" once a close message has been sent.')
+
+    monkeypatch.setattr("backend.app._handle_message", send_after_close)
+    client = make_client()
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"kind": "intent", "topic": "system", "intent": "ping", "args": []})
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
 
 
 def test_unknown_intent_and_topic_return_error_not_disconnect():
