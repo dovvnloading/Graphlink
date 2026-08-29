@@ -43,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import sys
+import threading
 import time
 
 from pathlib import Path
@@ -60,6 +61,10 @@ SHELL_EXEC_TIMEOUT_SECONDS = 120
 _OUTPUT_CAP_CHARS = 20_000
 _COMMAND_CAP_CHARS = 4_000
 _POLL_SECONDS = 0.2
+# How long the exit path waits for the reader thread to finish the tail
+# already in the pipe. Short: the process has already exited, so the pipe
+# is closed and the read is draining a buffer, not waiting on anyone.
+_READER_JOIN_SECONDS = 2.0
 
 SHELL_EXEC_SPEC = ToolSpec(
     name="shell.exec",
@@ -82,7 +87,16 @@ SHELL_EXEC_SPEC = ToolSpec(
 def _run_command(command: str, cwd, cancel_event) -> tuple[str, "int | None", str]:
     """Blocking worker (called via to_thread): returns (output, exit_code,
     ended) where ended is "ok" | "timeout" | "cancelled". guard-then-Popen,
-    then a poll loop so cancel/timeout kill the whole tree promptly."""
+    then a poll loop so cancel/timeout kill the whole tree promptly.
+
+    Output is drained CONCURRENTLY by a reader thread (the shell_sessions
+    posture) rather than read once after exit: an OS pipe buffer is ~64KB,
+    so a command that writes more than that blocks forever on write with
+    nobody reading, and the poll loop below then reports a timeout for a
+    command that had in fact done its work - `npm ci`, a test run, any
+    real build. The reader also means the timeout path can hand back what
+    the command managed to say before it was killed, which is the whole
+    diagnostic value of a hung command."""
     kwargs = {"env": safe_subprocess_env()}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -106,19 +120,39 @@ def _run_command(command: str, cwd, cancel_event) -> tuple[str, "int | None", st
             **kwargs,
         )
         guard.assign(process.pid)
+        chunks: list[str] = []
+        stream = process.stdout
+
+        def _drain() -> None:
+            """Reader thread: keeps the pipe empty so the child never
+            blocks on write. Buffering stops just past the caller's own
+            display cap - reading CONTINUES past it (a discarded read
+            still unblocks the writer), so a chatty command is bounded in
+            memory without being bounded in progress."""
+            if stream is None:
+                return
+            buffered = 0
+            try:
+                for line in stream:
+                    if buffered <= _OUTPUT_CAP_CHARS:
+                        chunks.append(line)
+                        buffered += len(line)
+            except (ValueError, OSError):
+                return
+
+        reader = threading.Thread(target=_drain, name="shell-exec-reader", daemon=True)
+        reader.start()
         deadline = time.monotonic() + SHELL_EXEC_TIMEOUT_SECONDS
-        # communicate() in a nested thread would be a second thread per
-        # call; polling with a bounded read at the end is enough because
-        # the pipe buffer is drained once the process exits, and a child
-        # that fills the pipe and blocks still hits the timeout kill.
         while True:
             if process.poll() is not None:
-                output = process.stdout.read() if process.stdout else ""
-                return output, process.returncode, "ok"
+                # The process is gone; give the reader a moment to finish
+                # the tail already sitting in the pipe before joining it.
+                reader.join(timeout=_READER_JOIN_SECONDS)
+                return "".join(chunks), process.returncode, "ok"
             if cancel_event is not None and cancel_event.is_set():
                 return "", None, "cancelled"
             if time.monotonic() > deadline:
-                return "", None, "timeout"
+                return "".join(chunks), None, "timeout"
             time.sleep(_POLL_SECONDS)
     finally:
         # Kills the whole tree for the cancelled/timeout paths; a no-op
@@ -302,13 +336,17 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
             # The one exception invoke() propagates - cancellation is the
             # loop's mechanism, never a tool "error" fed to the model.
             raise RequestCancelledError("stopped")
-        if ended == "timeout":
-            return ToolResult(
-                content=f"Command timed out after {SHELL_EXEC_TIMEOUT_SECONDS}s and was killed.",
-                is_error=True,
-            )
         if len(output) > _OUTPUT_CAP_CHARS:
             output = output[:_OUTPUT_CAP_CHARS] + f"\n…[truncated at {_OUTPUT_CAP_CHARS} characters]"
+        if ended == "timeout":
+            # Whatever it printed before it was killed is the diagnostic -
+            # a build that hung after 300 lines of progress is a different
+            # problem from one that hung with nothing to say.
+            killed = f"Command timed out after {SHELL_EXEC_TIMEOUT_SECONDS}s and was killed."
+            return ToolResult(
+                content=f"{killed}\n{output}" if output else killed,
+                is_error=True,
+            )
         return ToolResult(
             content=f"exit code {exit_code}\n{output}" if output else f"exit code {exit_code} (no output)",
             is_error=bool(exit_code),

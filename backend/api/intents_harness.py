@@ -124,6 +124,10 @@ def register_harness_intents(
             # cannot land mid-write against a concurrent settings save.
             await asyncio.to_thread(run_locked, lambda: settings.add_harness_trusted_dir(resolved))
         node.state.harness_workspace_path = resolved
+        # The previous run's bound root says nothing about THIS binding -
+        # left in place it reads as "the grant did not apply", which is
+        # exactly the warning the card shows for a refused folder.
+        node.state.harness_workspace_active = ""
         await publish_scene()
 
     async def use_scratch(node_id):
@@ -134,6 +138,7 @@ def register_harness_intents(
         if node is None or not isinstance(node.state, HarnessState):
             return
         node.state.harness_workspace_path = ""
+        node.state.harness_workspace_active = ""
         await publish_scene()
 
     async def approve_tool(request_id):

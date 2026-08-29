@@ -37,8 +37,15 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-# Top-level separators, longest-first so `&&` is never read as two `&`.
-_SEPARATOR_RE = re.compile(r"(\|\||&&|;|\||\n)")
+# Top-level separators, longest-first so `&&` is never read as two `&`
+# and `||` is never read as two `|`. The bare `&` is in the list because
+# it chains on BOTH shells this app spawns: it is cmd.exe's ordinary
+# sequential separator (`build & rm -rf out`) and POSIX sh's background
+# operator, so a command after it runs either way - and a separator this
+# module does not know about is a segment whose contents are never
+# disclosed and never dangerous-checked, which is exactly the "dangerous
+# tail hiding behind a benign head" this module exists to prevent.
+_SEPARATOR_RE = re.compile(r"(\|\||&&|;|\||&|\n)")
 
 # Constructs whose contents we decline to parse - see the module docstring.
 _UNSPLITTABLE_MARKERS = ("$(", "`", "<(", ">(")

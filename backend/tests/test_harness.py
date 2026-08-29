@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 
 import pytest
 
@@ -247,6 +248,26 @@ class TestLoop:
         assert "first question" in contents and "first answer" in contents
         assert node.state.harness_reply == "second answer"
 
+    def test_the_task_message_enters_history_exactly_once(self, workspace_root, monkeypatch):
+        """load_messages crosses the flush barrier itself, so a task message
+        appended BEFORE the reload comes back in it. Appending after the
+        load is what keeps the model from seeing the request twice on every
+        turn of every task."""
+        document, dispatcher, registry, bus, node = self._make(workspace_root)
+        seen: list[list] = []
+
+        def recording_turn(task, messages, tools=(), **kwargs):
+            seen.append(list(messages))
+            return {"message": {"content": "answer", "role": "assistant"}, "tool_calls": [], "usage": None}
+
+        monkeypatch.setattr(api_provider, "chat_turn_with_tools", recording_turn)
+        asyncio.run(drive(document, dispatcher, registry, bus, node, "only ask me once"))
+
+        sent = [m.get("content") for m in seen[0]]
+        assert sent.count("only ask me once") == 1
+        ws = ensure_workspace(node.state.harness_workspace_id)
+        assert [m["content"] for m in load_messages(ws)].count("only ask me once") == 1
+
     def test_turn_cap_lands_failed_and_resumable(self, workspace_root, monkeypatch):
         document, dispatcher, registry, bus, node = self._make(workspace_root)
         node.state.harness_max_turns = 2
@@ -420,6 +441,29 @@ class TestShellTool:
 
         result = asyncio.run(go())
         assert "ABSENT" in result.content and "sk-secret" not in result.content
+
+    def test_large_output_comes_back_instead_of_filling_the_pipe(self, workspace_root):
+        """An OS pipe buffer is ~64KB. Without a concurrent reader the child
+        blocks on write once it is full, and a command that had in fact
+        finished its work reports as a timeout with no output at all - the
+        shape of every real build or test run."""
+        ensure_workspace("ws1")
+        registry, ctx = self._setup()
+        emit = (
+            "python -c \"import sys; "
+            "sys.stdout.write(('y'*200 + chr(10))*1000)\""
+        )
+
+        async def go():
+            return await registry.invoke(call("1", "shell.exec", command=emit), ctx)
+
+        started = time.monotonic()
+        result = asyncio.run(go())
+        elapsed = time.monotonic() - started
+        assert "timed out" not in result.content
+        assert "exit code 0" in result.content
+        assert "yyy" in result.content
+        assert elapsed < 30, "a drained pipe finishes at the command's own speed"
 
     def test_denied_command_never_spawns(self, workspace_root):
         ws = ensure_workspace("ws1")

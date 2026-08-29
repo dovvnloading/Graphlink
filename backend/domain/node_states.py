@@ -852,9 +852,13 @@ class HarnessState(NodeState):
     # is honored at run time only if it is in the settings trust list (see
     # backend/harness/workspace.bound_root); otherwise the run silently
     # uses scratch. harness_workspace_active is the RESULT the last run
-    # actually bound - the resolved user dir when the trust check passed,
-    # else "" - so the UI can show "working in <dir>" vs "scratch" honestly
-    # rather than echoing the unverified request.
+    # actually bound - the resolved root itself, whether that is the
+    # requested user dir or the scratch dir it fell back to - so the UI can
+    # tell "the grant did not apply here" apart from "no run has bound this
+    # node yet", which is the ONLY reading of a "" active. Rebinding the
+    # node (pick a folder / use scratch) clears it back to "" for exactly
+    # that reason: a stale result must never be read as a verdict on a
+    # binding it predates.
     harness_workspace_path: str = ""
     harness_workspace_active: str = ""
     harness_activity: list[dict[str, Any]] = field(default_factory=list)
