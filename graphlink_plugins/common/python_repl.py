@@ -123,6 +123,17 @@ class PythonREPL:
             if self.guard:
                 self.guard.close()
                 self.guard = None
+            old_process = self.process
+            self.process = None
+            if old_process is not None:
+                try:
+                    if old_process.poll() is None:
+                        old_process.kill()
+                        old_process.wait()
+                finally:
+                    for stream in (old_process.stdin, old_process.stdout, old_process.stderr):
+                        if stream is not None:
+                            stream.close()
             nonce = uuid.uuid4().hex
             self._boundary_prefix = f"---GRAPHLINK_EXEC_BOUNDARY:{nonce}:"
             script = f"""

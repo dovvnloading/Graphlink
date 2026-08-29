@@ -101,6 +101,7 @@ class TestJobObjectMechanism:
             assert count < 200, f"active-process cap of 5 did not stop the fork bomb - {count} processes ran"
         finally:
             guard.close()
+            proc.wait(timeout=5)
 
     def test_closing_the_guard_kills_a_grandchild_process_too(self, tmp_path):
         marker = tmp_path / "marker.txt"
@@ -131,6 +132,7 @@ class TestJobObjectMechanism:
         assert marker.stat().st_size > size_before, "grandchild isn't actively writing before close()"
 
         guard.close()  # the actual mechanism PythonREPL.stop()/VirtualEnvSandbox.stop() use
+        proc.wait(timeout=5)
         time.sleep(1.5)
         size_after_close = marker.stat().st_size
         time.sleep(1.5)
@@ -382,10 +384,14 @@ class TestPythonReplRestartDoesNotLeakTheOldGuard:
             # memory cap) the OS terminating it for exceeding
             # JobMemoryLimit sometime after the previous execute() call
             # already returned.
-            repl.process.kill()
-            repl.process.wait()
+            old_process = repl.process
+            assert old_process is not None
+            old_process.kill()
+            old_process.wait()
 
             repl.execute("2 + 2")  # execute()'s poll()-based restart path
+            assert old_process.stdin is not None and old_process.stdin.closed
+            assert old_process.stdout is not None and old_process.stdout.closed
             assert len(guards_created) == 2
             assert first_guard.closed is True, (
                 "start() must close any pre-existing guard before "

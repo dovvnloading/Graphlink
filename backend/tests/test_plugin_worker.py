@@ -630,8 +630,13 @@ def test_worker_client_close_is_idempotent(tmp_path):
     )
     worker = PluginWorkerClient(plugin_id="oop_close_twice", source_dir=plugin_dir)
     worker.connect()
+    process = worker._process
+    assert process is not None
     worker.close()
     worker.close()  # must not raise
+    assert process.stdin is not None and process.stdin.closed
+    assert process.stdout is not None and process.stdout.closed
+    assert process.stderr is not None and process.stderr.closed
 
 
 # -- F: register_plugin_tools() flows plugin intents to the ToolRegistry ----

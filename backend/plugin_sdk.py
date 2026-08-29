@@ -967,15 +967,23 @@ class PluginWorkerClient:
                     process.stdin.close()
             except Exception:
                 pass
-            process.terminate()
             try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
+                process.terminate()
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    pass
+                    process.kill()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+            finally:
+                for thread in (self._reader_thread, self._stderr_thread):
+                    if thread is not None and thread is not threading.current_thread():
+                        thread.join(timeout=1)
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None:
+                        stream.close()
         # Exactly-once close, whether or not a process was ever spawned -
         # create_execution_guard()'s own close() is itself idempotent
         # (double-close-safe, see graphlink_execution_guard.py's own

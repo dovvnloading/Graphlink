@@ -310,15 +310,23 @@ class McpStdioClient:
                 process.stdin.close()
         except Exception:
             pass
-        process.terminate()
         try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
+            process.terminate()
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                pass
+                process.kill()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+        finally:
+            for thread in (self._reader_thread, self._stderr_thread):
+                if thread is not None and thread is not threading.current_thread():
+                    thread.join(timeout=1)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
 
     def list_tools(self) -> tuple[ToolSpec, ...]:
         response = self._call("tools/list", {})

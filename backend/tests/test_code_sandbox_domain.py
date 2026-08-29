@@ -376,6 +376,18 @@ class TestStop:
         sandbox.stop()  # must not raise
         assert sandbox.current_process is None
 
+    def test_stop_closes_all_subprocess_streams(self):
+        sandbox = VirtualEnvSandbox("stop-closes-streams-test")
+        fake_process = MagicMock()
+        fake_process.poll.return_value = None
+        sandbox.current_process = fake_process
+
+        sandbox.stop()
+
+        fake_process.stdin.close.assert_called_once()
+        fake_process.stdout.close.assert_called_once()
+        fake_process.stderr.close.assert_called_once()
+
     def test_the_guard_is_closed_before_the_process_is_terminated(self):
         # Pins the ordering ADR-005 stage 5.2's own comment on stop()
         # requires: on Windows, closing the guard first is what actually

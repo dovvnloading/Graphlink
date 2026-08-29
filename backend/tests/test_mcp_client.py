@@ -184,8 +184,13 @@ def test_call_before_connect_raises_mcp_error(fake_fs_server):
 def test_close_is_idempotent(fake_fs_server):
     client = McpStdioClient(command=sys.executable, args=(fake_fs_server,))
     client.connect()
+    process = client._process
+    assert process is not None
     client.close()
     client.close()  # must not raise
+    assert process.stdin is not None and process.stdin.closed
+    assert process.stdout is not None and process.stdout.closed
+    assert process.stderr is not None and process.stderr.closed
 
 
 # -- register_mcp_server_tools: namespacing + enabled_tools filter ----------
