@@ -30,3 +30,14 @@
 assets/*/** -text
 web_ui/src/lib/bridge-core/generated/** -text
 web_ui/src/lib/tokens/gl-theme.css -text
+
+# Source is source, even when it briefly contains a byte git would call
+# binary. PlanNodeView.tsx carried literal U+0000/U+0001 separators in a
+# template literal, which flipped git's own binary heuristic and left the
+# whole module undiffable and unblameable on every host that reads it -
+# a 500-line component nobody could review a line of. Those two characters
+# are escapes now, but marking the source extensions `diff` means the next
+# one costs a confusing diff rather than a silent hole in the history.
+*.ts diff
+*.tsx diff
+*.css diff
