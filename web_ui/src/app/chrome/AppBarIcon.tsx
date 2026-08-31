@@ -6,6 +6,16 @@
  * fills) so toolbar glyphs sit on the identical visual footing as the rest
  * of the app's chrome rather than introducing a second icon language.
  *
+ * DRAWING CONTRACT. Every glyph here renders at 16px (.appbar-btn .icon),
+ * i.e. a 24-unit view box scaled to 0.67 - so a stroke that crosses another
+ * stroke inside a ~4-unit span merges into a blob at the size it actually
+ * ships at. Two rules follow, and both are load-bearing rather than
+ * stylistic: keep interior detail at least 3 view-box units clear of any
+ * other stroke, and prefer one recognisable silhouette over an accurate
+ * miniature. `knowledge` and `builder` were both redrawn against exactly
+ * this rule after rendering as an anonymous rectangle and an anonymous
+ * diagonal respectively.
+ *
  * Its own module rather than a local in AppBar.tsx: `react-refresh/
  * only-export-components` flags a component file that exports more than
  * components, and keeping the glyph table separate leaves AppBar.tsx as
@@ -19,7 +29,6 @@ export type AppBarIconName =
   | "redo"
   | "zoom-in"
   | "zoom-out"
-  | "zoom-reset"
   | "fit"
   | "organize"
   | "pin"
@@ -32,6 +41,7 @@ export type AppBarIconName =
   | "settings"
   | "help"
   | "about"
+  | "chevron"
   | "more";
 
 export function AppBarIcon({ name }: { name: AppBarIconName }) {
@@ -62,13 +72,6 @@ export function AppBarIcon({ name }: { name: AppBarIconName }) {
         <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
           <circle cx="10.5" cy="10.5" r="6.5" />
           <path d="m20 20-4.8-4.8M7.5 10.5h6" />
-        </svg>
-      );
-    case "zoom-reset":
-      return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <circle cx="12" cy="12" r="7.5" />
-          <circle cx="12" cy="12" r="2" />
         </svg>
       );
     case "fit":
@@ -114,10 +117,17 @@ export function AppBarIcon({ name }: { name: AppBarIconName }) {
         </svg>
       );
     case "builder":
+      // A wand with one spark - the Builder writes a whole graph from a
+      // prompt (ADR-008), which is a "generate this for me" affordance, not
+      // a "tighten this bolt" one. The wrench it replaces collapsed into a
+      // single anonymous diagonal at 16px because its jaw was a 4-unit
+      // detail; a shaft plus a detached spark keeps two clearly separated
+      // marks at any size.
       return (
         <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <path d="M14 4a4 4 0 0 0-4 5l-6 6 3 3 6-6a4 4 0 0 0 5-4Z" />
-          <path d="m14.5 9.5 4 4" />
+          <path d="M4.5 19.5 14 10" />
+          <path d="m12.5 8.5 3 3 4-4-3-3z" />
+          <path d="M6 3.5v3M4.5 5h3" />
         </svg>
       );
     case "agent":
@@ -126,9 +136,9 @@ export function AppBarIcon({ name }: { name: AppBarIconName }) {
       // shorthand for that kind of surface.
       return (
         <svg aria-hidden="true" viewBox="0 0 24 24" className="icon">
-          <rect x="3" y="5" width="18" height="14" rx="2" />
-          <path d="m7 10 3 2.5L7 15" />
-          <path d="M12.5 15H17" />
+          <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+          <path d="m7 9.5 3.5 2.5L7 14.5" />
+          <path d="M13 15h4" />
         </svg>
       );
     case "diagnostics":
@@ -164,6 +174,17 @@ export function AppBarIcon({ name }: { name: AppBarIconName }) {
           <circle cx="12" cy="12" r="8.5" />
           <path d="M12 11v5.5" />
           <path d="M12 7.8v.01" />
+        </svg>
+      );
+    case "chevron":
+      // The disclosure mark on View/Plugins/Help. Previously a literal
+      // "&#9662;" text glyph, which took its weight from the font rather
+      // than from the icon set and therefore sat visibly heavier and lower
+      // than every stroke next to it. As an <svg class="icon"> it inherits
+      // the same 1.7 stroke and the same currentColor as its own label.
+      return (
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="icon icon-chevron">
+          <path d="m7 10 5 5 5-5" />
         </svg>
       );
     case "more":
