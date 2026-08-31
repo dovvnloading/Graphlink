@@ -1998,22 +1998,68 @@ body,
   text-align: center;
 }
 
-/* -- View popover -------------------------------------------------------- */
+/* -- View popover ---------------------------------------------------------
+
+   A settings PANEL that opens as a popover, which is what its layout has to
+   admit: five sections and roughly twenty-five controls, taller than the
+   popover can be at any window size. So it is built as a fixed shell - a
+   scrolling body with a pinned footer - rather than as one long scrolling
+   block with the reset button stranded at the end of it.
+
+   ONE SPACING SCALE, and only one, because the absence of one is most of
+   what read as sloppy here: 6px inside a field (its label to its control),
+   12px between fields, 16px plus a rule between sections. Every element
+   used to carry its own margin - 10 above a field row, 4 below a slider, 6
+   above a segment, 10 above a toggle - so nothing lined up with anything
+   and no gap meant the same thing twice. The rhythm is now a single owl
+   rule on .view-section with two documented exceptions. */
 
 .view-popover {
   width: 300px;
   max-height: min(72vh, 720px);
+  display: flex;
+  flex-direction: column;
+  /* Padding moves to the scroller and the footer so the footer's rule can
+     span the full panel width, and overflow moves to the scroller so the
+     footer stays put. Both override .overlay-popover's own defaults, which
+     they can: this rule is later in the file. */
+  padding: 0;
+  overflow: hidden;
+}
+
+.view-scroll {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  padding: 12px 14px;
 }
 
 .view-section + .view-section {
-  margin-top: 14px;
-  padding-top: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
   border-top: 1px solid var(--gl-surface-border);
 }
 
+/* The one rhythm rule. Fields, toggles and rows all inherit it; the two
+   exceptions below are places where a tighter pairing is the point.
+
+   The margin RESET is half the rule and has to live here rather than on
+   each child: `.view-section > * + *` and a bare `.view-subsection-title`
+   have identical specificity, so a `margin: 0` written on the child
+   silently cancelled the 12px for that child alone - which is exactly what
+   happened to the filter sub-headings, leaving them jammed against the
+   toggle above them while every other gap was correct. Zeroing every
+   child's UA margin up front, in the same rule that then adds the gap back,
+   removes the whole class of tie. */
+.view-section > * {
+  margin: 0;
+}
+
+.view-section > * + * {
+  margin-top: 12px;
+}
+
 .view-section-title {
-  margin: 0 0 8px;
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.14em;
@@ -2024,28 +2070,39 @@ body,
 /* Section header that also carries an action (the filter Clear button). */
 .view-section-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
+  gap: 8px;
 }
 
 .view-subsection-title {
-  margin: 10px 0 4px;
   font-size: 10px;
   font-weight: 600;
+  letter-spacing: 0.04em;
   color: var(--gl-surface-text-label);
 }
 
-/* Label + live value readout above every slider - the redesign's core
-   idiom: no control without a name and a current value. */
+/* Exception 1: a sub-heading belongs to the row under it, not to the gap
+   above it. */
+.view-subsection-title + .view-row {
+  margin-top: 6px;
+}
+
+/* A field is one setting: its header, its control, and any scale marks
+   belonging to that control. Grouping them in an element is what lets the
+   rhythm rule above treat a whole setting as one unit. */
+.view-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Label + live value readout above a control. */
 .view-field-row {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  margin-top: 10px;
-}
-
-.view-field-row:first-of-type {
-  margin-top: 0;
+  gap: 8px;
 }
 
 .view-field-label {
@@ -2053,15 +2110,19 @@ body,
   color: var(--gl-surface-text-secondary);
 }
 
+/* Exception 2: plain text, deliberately. This was a bordered, inset-filled
+   999px pill - pixel for pixel the shape of .view-chip, which is a BUTTON.
+   A read-only number that looks clickable is worse than an unstyled one, so
+   the readout now carries only what a readout needs: alignment, tabular
+   figures so it stops jittering as a slider moves, and enough contrast to
+   be the answer to "what is this set to". */
 .view-field-value {
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  padding: 1px 6px;
+  letter-spacing: 0.02em;
   color: var(--gl-surface-text-primary);
-  background-color: var(--gl-surface-inset);
-  border: 1px solid var(--gl-surface-border);
-  border-radius: 999px;
+  white-space: nowrap;
 }
 
 /* Sliders: styled track/thumb rather than the engine default, which reads
@@ -2071,31 +2132,43 @@ body,
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 18px;
-  margin: 4px 0 2px;
+  height: 14px;
+  margin: 0;
   background: transparent;
   cursor: pointer;
 }
 
+/* The track is FILLED to the current value. It used to be one flat bar, so
+   the only cue for where a setting sat was the thumb's position against
+   nothing - fine for one slider, unreadable for a column of them. The fill
+   width arrives as --view-slider-fill, set inline on the input by
+   SliderField: a custom property set on the input inherits into this
+   pseudo-element, which is the only way to paint progress on a range input
+   in this engine. */
 .view-slider::-webkit-slider-runnable-track {
   height: 4px;
-  border-radius: 2px;
-  background-color: var(--gl-neutral-button-border);
+  border-radius: 999px;
+  background-image: linear-gradient(
+    to right,
+    var(--gl-surface-text-secondary) 0 var(--view-slider-fill, 0%),
+    var(--gl-neutral-button-border) var(--view-slider-fill, 0%) 100%
+  );
 }
 
 .view-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 14px;
-  height: 14px;
-  margin-top: -5px;
+  width: 12px;
+  height: 12px;
+  margin-top: -4px;
   border-radius: 50%;
   background-color: var(--gl-surface-text-primary);
   border: 1px solid var(--gl-surface-border-strong);
   transition: transform var(--gl-motion-fast) var(--gl-motion-ease);
 }
 
-.view-slider::-webkit-slider-thumb:hover {
+.view-slider:hover::-webkit-slider-thumb,
+.view-slider:focus-visible::-webkit-slider-thumb {
   transform: scale(1.15);
 }
 
@@ -2105,8 +2178,47 @@ body,
   border-radius: 4px;
 }
 
-/* Segmented control: one connected group for mutually-exclusive choices
-   (grid style, spacing presets, drag presets), replacing loose buttons. */
+/* The landmark values the backend publishes for a slider, drawn as marks on
+   that slider's own scale. They were a four-button segmented control
+   underneath the slider - a second, differently-shaped widget bound to the
+   same number, which is what made pan speed and grid spacing read as three
+   controls for one setting. As text marks they still set the value on
+   click, at a third of the height, and they read as part of the slider
+   rather than as a rival to it. */
+.view-ticks {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.view-tick {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: 0;
+  color: var(--gl-surface-text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.view-tick:hover {
+  color: var(--gl-surface-text-primary);
+}
+
+.view-tick.active {
+  color: var(--gl-surface-text-bright);
+}
+
+.view-tick:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 /* A segmented control: a recessed track with one raised, selected segment.
    The track is what makes the selection readable - previously every segment
    carried the same --gl-neutral-button-background fill and the selected one
@@ -2117,7 +2229,6 @@ body,
    track -> hover -> selected. */
 .view-segment {
   display: flex;
-  margin-top: 6px;
   background-color: var(--gl-surface-inset);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 6px;
@@ -2162,7 +2273,6 @@ body,
 .view-row {
   display: flex;
   gap: 4px;
-  margin-top: 6px;
   flex-wrap: wrap;
 }
 
@@ -2173,27 +2283,42 @@ body,
    (grid style, preset values) and is drawn as one connected control.
    Chips carry no single/multi-select meaning of their own: the filters
    are multi-select, the workspace tabs single-select, and both read
-   correctly because an active chip simply means "this one is on". */
+   correctly because an active chip simply means "this one is on".
+
+   Same inverted scale the segmented control had, and the same fix: active
+   was --gl-neutral-button-pressed, a step DARKER than the idle fill, so a
+   selected chip was the dimmest chip in the row and hovering an unselected
+   one lit it brighter than the selection. Idle -> hover -> active now steps
+   one way on both palettes. */
 .view-chip {
   font-size: 10px;
   font-weight: 600;
   font-family: inherit;
   padding: 3px 9px;
   color: var(--gl-surface-text-secondary);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
+  background-color: transparent;
+  border: 1px solid var(--gl-surface-border);
   border-radius: 999px;
   cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    border-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
 }
 
 .view-chip:hover {
-  background-color: var(--gl-neutral-button-hover);
+  background-color: var(--gl-neutral-button-background);
   color: var(--gl-surface-text-primary);
 }
 
+.view-chip:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
+
 .view-chip.active {
-  background-color: var(--gl-neutral-button-pressed, var(--gl-neutral-button-hover));
-  border-color: var(--gl-surface-text-muted);
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-neutral-button-border);
   color: var(--gl-surface-text-bright);
 }
 
@@ -2201,17 +2326,23 @@ body,
   font-size: 10px;
   font-weight: 600;
   font-family: inherit;
-  padding: 1px 8px;
+  padding: 2px 8px;
   color: var(--gl-surface-text-secondary);
   background: none;
-  border: 1px solid var(--gl-neutral-button-border);
+  border: 1px solid var(--gl-surface-border);
   border-radius: 999px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .view-clear-btn:hover {
   color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-hover);
+  background-color: var(--gl-neutral-button-background);
+}
+
+.view-clear-btn:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
 }
 
 .view-color-swatch {
@@ -2229,6 +2360,11 @@ body,
    state. */
 .view-color-swatch:hover {
   border-color: var(--gl-surface-text-muted);
+}
+
+.view-color-swatch:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
 }
 
 .view-color-swatch.active {
@@ -2282,21 +2418,63 @@ body,
 .view-toggle-row {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  margin-top: 10px;
+  gap: 9px;
   cursor: pointer;
 }
 
+/* A drawn checkbox. These were the last engine-drawn controls in the panel:
+   an OS checkbox sitting beside a custom slider, a custom segmented control
+   and a custom swatch row, with `accent-color` doing what it could. The
+   native input stays - every bit of its keyboard and screen-reader
+   behaviour with it - and only the paint job is replaced. */
 .view-toggle-row input[type="checkbox"] {
+  appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
   margin: 1px 0 0;
-  accent-color: var(--gl-surface-text-primary);
+  background: transparent;
+  border: 1px solid var(--gl-surface-border-strong);
+  border-radius: 4px;
   cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    border-color var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.view-toggle-row:hover input[type="checkbox"]:not(:checked) {
+  border-color: var(--gl-surface-text-muted);
+}
+
+.view-toggle-row input[type="checkbox"]:checked {
+  background-color: var(--gl-surface-text-primary);
+  border-color: var(--gl-surface-text-primary);
+}
+
+/* The tick, drawn from two borders on a rotated box - no glyph, so it
+   cannot pick up a fallback font's own idea of what a checkmark is. */
+.view-toggle-row input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 3px;
+  height: 7px;
+  border: solid var(--gl-surface-window);
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(45deg);
+}
+
+.view-toggle-row input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
 }
 
 .view-toggle-text {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
 }
 
 .view-toggle-label {
@@ -2306,6 +2484,7 @@ body,
 
 .view-toggle-hint {
   font-size: 10px;
+  line-height: 1.4;
   color: var(--gl-surface-text-muted);
 }
 
@@ -2313,7 +2492,6 @@ body,
    the node card's own tokens so the sample sits on the same background the
    text will actually be read against. */
 .view-font-preview {
-  margin-top: 8px;
   padding: 8px 10px;
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
@@ -2323,10 +2501,14 @@ body,
   white-space: nowrap;
 }
 
+/* Pinned, not trailing. This panel is taller than the popover at every
+   window size, so a footer inside the scroller meant scrolling past all
+   twenty-five controls to reach the one button that undoes them. */
 .view-footer {
-  margin-top: 14px;
-  padding-top: 12px;
+  flex-shrink: 0;
+  padding: 10px 14px;
   border-top: 1px solid var(--gl-surface-border);
+  background-color: var(--gl-surface-node-body);
 }
 
 .view-reset-btn {
@@ -2336,15 +2518,23 @@ body,
   font-family: inherit;
   padding: 6px 0;
   color: var(--gl-surface-text-secondary);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
+  background-color: transparent;
+  border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
   cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
 }
 
 .view-reset-btn:hover {
-  background-color: var(--gl-neutral-button-hover);
+  background-color: var(--gl-neutral-button-background);
   color: var(--gl-surface-text-primary);
+}
+
+.view-reset-btn:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
 }
 
 /* -- R2.3 composer + token counter + notification ------------------------ */
