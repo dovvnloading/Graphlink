@@ -6,6 +6,13 @@
 *.txt text eol=crlf
 *.md text eol=crlf
 
+# Shell scripts must check out with LF on every platform. A CRLF shebang
+# line is a syntax error to the interpreter ("bad interpreter: no such file
+# or directory"), so a script normalized to CRLF on a Windows checkout is
+# broken for anyone who runs it under bash - including the SPA staleness
+# guard in tools/.
+*.sh text eol=lf
+
 *.png binary
 *.ico binary
 *.wav binary

@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/tools/rebuild-spa-if-stale.sh\"",
+            "timeout": 180,
+            "statusMessage": "Checking the SPA bundle is current..."
+          }
+        ]
+      }
+    ]
+  }
+}
