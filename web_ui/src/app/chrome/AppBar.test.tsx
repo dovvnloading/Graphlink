@@ -9,15 +9,27 @@ import type { WsTransport } from "../../lib/ws/transport";
 
 // R8a (UI/UX issue list findings #5 and #8): this is the first dedicated
 // test file for AppBar.tsx. jsdom does not implement CSS @container queries
-// (or any layout at all), so it cannot verify the RESPONSIVE half of finding
-// #5's fix - which of the two copies of a button is actually visible at a
-// given width is a live-browser-only concern, verified separately. What
+// (or any layout at all), so it cannot verify the WIDTH half of finding #5's
+// fix - which of the two copies of a button is actually visible once the bar
+// has folded is a live-browser-only concern, verified separately. What
 // these tests cover instead: the dead provider-mode <select> from finding #8
 // is genuinely gone; every real button (both the inline copy and its
 // overflow-menu duplicate) is present and calls the correct handler; the
-// overflow menu opens/closes correctly; and every duplicated pair carries
-// the same data-tier value, since a mismatch there would silently break the
-// CSS wiring in a way no visual glance at one window size would catch.
+// overflow menu opens/closes correctly; and the two sets stay in step -
+// every collapsible action has a duplicate and every non-collapsible one
+// does not, which is the invariant that silently breaks the CSS wiring in a
+// way no visual glance at one window size would catch.
+//
+// The toolbar redesign added three more contracts worth pinning here,
+// because each is a behavioural claim rather than a visual one:
+//   - Help/Diagnostics/About moved off the bar into a Help MENU, so the
+//     bar must no longer expose them as top-level buttons, and the menu
+//     must actually reach all three;
+//   - the zoom control is a live readout whose accessible name still says
+//     what clicking it does, not just what it currently shows;
+//   - keyboard hints live in `title` and nowhere else - putting them in the
+//     accessible name would make a screen reader recite "Undo Ctrl+Z" and
+//     would break every by-name query in this file.
 
 function makeStore(): SceneStore {
   // ADR-003 stage 3.1: fireIntent is the transport method SceneStore's own
@@ -46,15 +58,17 @@ describe("AppBar", () => {
     expect(screen.queryByTitle("Switching provider modes isn't available yet")).toBeNull();
   });
 
-  it("Library, Save and Settings are present as plain toolbar buttons (the tier that never collapses)", () => {
+  it("Library, Save and Settings are present as plain toolbar buttons (the three that never collapse)", () => {
     renderAppBar();
     expect(screen.getByRole("button", { name: "Library" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
-    // None of the three ever has a data-tier - confirmed by absence, not a
-    // positive class check, since "never collapses" IS "has no tier".
+    // None of the three sits in a collapsible group - confirmed by absence
+    // of the marker class, since "never collapses" IS "has no .appbar-tier".
     for (const label of ["Library", "Save", "Settings"]) {
-      expect(screen.getByRole("button", { name: label })).not.toHaveAttribute("data-tier");
+      expect(
+        screen.getByRole("button", { name: label }).closest(".appbar-group")?.className,
+      ).not.toContain("appbar-tier");
     }
   });
 
@@ -163,16 +177,18 @@ describe("AppBar", () => {
       expect(organizeSpy).toHaveBeenCalledOnce();
     });
 
-    it("clicking an overlay-opening item (About) opens that overlay and closes the menu", async () => {
+    it("clicking an overlay-opening item (Pins) opens that overlay and closes the menu", async () => {
       const user = userEvent.setup();
       renderAppBar();
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "About" }));
+      await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pins" }));
 
       expect(screen.queryByRole("dialog")).toBeNull();
-      // The inline About chip (still in the DOM, jsdom does not evaluate
-      // the CSS that would visually hide it) now reads real open state.
-      expect(screen.getByRole("button", { name: "About" }).className).toContain("checked");
+      // The inline Pins chip (still in the DOM, jsdom does not evaluate the
+      // CSS that would visually hide it) now reads real open state. Pins
+      // rather than About because About no longer HAS an inline copy - see
+      // the Help menu block below.
+      expect(screen.getByRole("button", { name: "Pins" }).className).toContain("checked");
     });
 
     it("the six overlay-opening overflow items (Pins/View/Plugins/About/Help/Diagnostics) carry aria-pressed, matching their inline copies' real-state contract", async () => {
@@ -191,54 +207,158 @@ describe("AppBar", () => {
       }
     });
 
-    it("every overflow-menu item shares its data-tier with the matching inline button, and only the always-visible three (Library/Save/Settings) have no overflow duplicate at all", async () => {
+    it("the overflow menu holds a copy of every collapsible action and of nothing else", async () => {
       const user = userEvent.setup();
       renderAppBar();
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
-      const menu = screen.getByRole("dialog");
+      const menu = screen.getByRole("dialog", { name: "More toolbar actions" });
 
-      // Tiers live on the GROUP wrapper, not the individual button: the
-      // bar collapses whole clusters so related actions stay together at
-      // every width instead of leaving fragments behind (see AppBar.tsx).
-      // The contract this pins is unchanged though - an inline action and
-      // its overflow duplicate must always collapse at the same tier.
-      const pairs: [string, string][] = [
-        ["Undo", "1"],
-        ["Redo", "1"],
-        ["Zoom In", "1"],
-        ["Zoom Out", "1"],
-        ["Reset", "1"],
-        ["Fit All", "1"],
-        ["Organize", "2"],
-        ["Pins", "2"],
-        ["Export PNG", "2"],
-        ["View", "3"],
-        ["Plugins", "3"],
-        ["Global Search", "4"],
-        ["Knowledge", "4"],
-        ["Builder", "4"],
-        ["Diagnostics", "4"],
-        ["Help", "4"],
-        ["About", "4"],
+      // Groups collapse whole and all at once, so an inline action and its
+      // menu copy have to appear and disappear together (styles.css, the
+      // single @container rule). Matched by substring rather than exact
+      // string because one pair deliberately differs: the inline zoom
+      // control is a live readout named "Reset zoom to 100%" while its menu
+      // copy is plain "Reset". Disambiguating the two hits by DOM position
+      // rather than by string stays correct for every label uniformly
+      // instead of special-casing the one that needs it.
+      const collapsible = [
+        "Undo",
+        "Redo",
+        "Zoom In",
+        "Zoom Out",
+        "Reset",
+        "Fit All",
+        "Organize",
+        "Pins",
+        "Export PNG",
+        "View",
+        "Plugins",
+        "Global Search",
+        "Knowledge",
+        "Builder",
+        "Agent",
       ];
-      for (const [label, tier] of pairs) {
-        // Every duplicated pair shares its exact label except Plugins (the
-        // inline button's accessible name includes its chevron span,
-        // "Plugins ▼", while its overflow duplicate is plain "Plugins" - a
-        // real, intentional difference, see AppBar.tsx) - so match by
-        // substring, then disambiguate the two hits by DOM position rather
-        // than by string, which stays correct for every label uniformly
-        // rather than special-casing the one that needs it.
+      for (const label of collapsible) {
         const matches = screen.getAllByRole("button", { name: new RegExp(label) });
         const inline = matches.find((el) => !menu.contains(el));
-        const overflowItem = matches.find((el) => menu.contains(el));
-        expect(inline?.closest(".appbar-group")).toHaveAttribute("data-tier", tier);
-        expect(overflowItem).toHaveAttribute("data-tier", tier);
+        const copy = matches.find((el) => menu.contains(el));
+        expect(inline, `${label} has no inline copy`).toBeDefined();
+        expect(copy, `${label} has no overflow copy`).toBeDefined();
+        // The inline copy always sits in a group that CAN collapse.
+        expect(inline?.closest(".appbar-group")?.className).toContain("appbar-tier");
       }
 
+      // Help/Diagnostics/About have no inline copy at all any more - they
+      // are reached from the Help menu at a normal desktop width. They still
+      // need their own entry here, because the tools cluster that hosts that
+      // menu is itself collapsible.
+      for (const label of ["Diagnostics", "Help", "About"]) {
+        expect(within(menu).getByRole("button", { name: label })).toBeInTheDocument();
+      }
+
+      // The three controls that never collapse have no duplicate, and their
+      // groups carry no .appbar-tier for the CSS to act on.
       for (const label of ["Library", "Save", "Settings"]) {
         expect(within(menu).queryByRole("button", { name: label })).toBeNull();
+        expect(
+          screen.getByRole("button", { name: label }).closest(".appbar-group")?.className,
+        ).not.toContain("appbar-tier");
       }
+    });
+  });
+  // -- Toolbar redesign ----------------------------------------------------
+
+  describe("Help menu", () => {
+    it("Help, Diagnostics and About are no longer top-level toolbar buttons", () => {
+      renderAppBar();
+      for (const label of ["Help", "Diagnostics", "About"]) {
+        expect(screen.queryByRole("button", { name: label })).toBeNull();
+      }
+      // The one control that replaced all three. Icon-only, so its
+      // accessible name has to come from aria-label or it is nameless.
+      expect(screen.getByRole("button", { name: "Help and diagnostics" })).toBeInTheDocument();
+    });
+
+    it("opens a menu that reaches all three destinations", async () => {
+      const user = userEvent.setup();
+      renderAppBar();
+      const trigger = screen.getByRole("button", { name: "Help and diagnostics" });
+      expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
+      expect(trigger).toHaveAttribute("aria-expanded", "false");
+
+      await user.click(trigger);
+      expect(trigger).toHaveAttribute("aria-expanded", "true");
+      const menu = within(screen.getByRole("dialog", { name: "Help and diagnostics" }));
+      for (const label of ["Help", "Diagnostics", "About"]) {
+        expect(menu.getByRole("button", { name: label })).toBeInTheDocument();
+      }
+    });
+
+    it("choosing a destination replaces the menu with that surface", async () => {
+      const user = userEvent.setup();
+      renderAppBar();
+      await user.click(screen.getByRole("button", { name: "Help and diagnostics" }));
+      await user.click(
+        within(screen.getByRole("dialog", { name: "Help and diagnostics" })).getByRole("button", {
+          name: "About",
+        }),
+      );
+      // OverlayProvider is single-open: opening "about" IS what closes this
+      // menu, so an assertion that the menu is gone is the observable proof
+      // the item dispatched - AppBar does not render AboutDialog itself.
+      expect(screen.queryByRole("dialog", { name: "Help and diagnostics" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Help and diagnostics" })).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
+    });
+
+    it("the trigger reads real open state, like every other chip on the bar", async () => {
+      const user = userEvent.setup();
+      renderAppBar();
+      const trigger = screen.getByRole("button", { name: "Help and diagnostics" });
+      expect(trigger.className).not.toContain("checked");
+      await user.click(trigger);
+      expect(trigger.className).toContain("checked");
+      await user.click(trigger);
+      expect(trigger.className).not.toContain("checked");
+    });
+  });
+
+  describe("zoom readout", () => {
+    it("shows the live zoom level and names its action, not its value", () => {
+      renderAppBar();
+      // React Flow's default transform is [0, 0, 1] before any viewport
+      // interaction, so 100% is the honest initial reading here.
+      const zoom = screen.getByRole("button", { name: "Reset zoom to 100%" });
+      expect(zoom).toHaveTextContent("100%");
+      // The accessible name is the ACTION. A control named "100%" would
+      // announce its current state and never say what activating it does.
+      expect(zoom).toHaveAttribute("aria-label", "Reset zoom to 100%");
+    });
+
+    it("replaced the concentric-circles reset icon rather than adding to it", () => {
+      renderAppBar();
+      // Exactly one inline control resets the zoom; the other "Reset" in the
+      // DOM belongs to the overflow menu, which is closed here.
+      expect(screen.getAllByRole("button", { name: /Reset/ })).toHaveLength(1);
+    });
+  });
+
+  describe("keyboard hints", () => {
+    // Hints belong in the tooltip and nowhere else: an aria-label of
+    // "Undo (Ctrl+Z)" makes a screen reader recite the binding on every
+    // focus, and would break every by-name query in this file.
+    it.each([
+      ["Library", "Library (Ctrl+L)"],
+      ["Save", "Save (Ctrl+S)"],
+      ["Undo", "Undo (Ctrl+Z)"],
+      ["Redo", "Redo (Ctrl+Shift+Z)"],
+      ["Global Search", "Global Search (Ctrl+F)"],
+    ])("%s names its binding in the tooltip only", (name, title) => {
+      renderAppBar();
+      const button = screen.getByRole("button", { name });
+      expect(button).toHaveAttribute("title", title);
     });
   });
 });

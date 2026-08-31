@@ -1,4 +1,4 @@
-import { useReactFlow } from "@xyflow/react";
+import { useReactFlow, useStore } from "@xyflow/react";
 import { useSyncExternalStore } from "react";
 import { FIT_VIEW_MAX_ZOOM } from "../canvas/canvasConstants";
 import { exportCanvasAsPng } from "../canvas/exportCanvasPng";
@@ -22,18 +22,58 @@ import { AppBarIcon, type AppBarIconName } from "./AppBarIcon";
  *   button instead of anchored to the window edge.
  * - The row has a FIXED height and every control a fixed height, so the bar
  *   never changes size with its contents.
- * - Related actions live in `.appbar-group` containers with uniform inner
- *   spacing and a shared surface. Grouping is what carries the visual
- *   organisation; the old bar was one undifferentiated run of twenty text
- *   buttons separated by ad-hoc 1px rules.
+ * - Related actions live in `.appbar-group` containers. Grouping is what
+ *   carries the visual organisation; the bar this replaced was one
+ *   undifferentiated run of twenty text buttons separated by ad-hoc rules.
  *
- * ICONS vs LABELS. Frequent, app-specific verbs (Library, Save, Organize,
- * View, Plugins) keep text - they are the vocabulary of the product and
- * nothing draws them unambiguously. Universally-recognised mechanics (undo,
- * redo, the four viewport controls) and the utility surfaces on the right
- * become icons with `title` + `aria-label` carrying the exact same wording
- * they had as text, which is what keeps them findable by keyboard, by
- * screen reader, and by every existing test.
+ * GROUPING, and why it is drawn the way it is. Each group used to be its
+ * own filled, bordered, padded box. Nine such boxes sat in a 44px strip, so
+ * the loudest marks in the bar were its containers rather than its
+ * controls, and a two-button cluster like Library/Save read as a segmented
+ * control - one widget with two states - rather than as two unrelated
+ * commands. Groups are flat now: 2px inside a group, 12px between groups,
+ * and a single hairline rule between adjacent groups (styles.css,
+ * `.appbar-group + .appbar-group::before`). Proximity plus one hairline is
+ * the standard toolbar-grouping treatment - PatternFly's toolbar guidance
+ * calls for exactly this once a bar carries enough items to need it - and
+ * it spends far less ink than a box per cluster.
+ *
+ * The separator is a pseudo-element on the FOLLOWING group rather than a
+ * real element between two groups, because groups collapse (see the spill
+ * guard below) and a standalone separator element would be left behind as a
+ * stray rule floating in the gap where its neighbours used to be.
+ * Attached to the group, a separator disappears exactly when the thing it
+ * separates does. `+` adjacency is DOM-based, not layout-based, so a
+ * display:none group does not break the chain for the groups after it.
+ *
+ * ICONS vs LABELS. Frequent, app-specific verbs (Library, Save, View,
+ * Plugins) keep text - they are the vocabulary of the product and nothing
+ * draws them unambiguously. Universally-recognised mechanics (undo, redo,
+ * the viewport controls) and the utility surfaces on the right are icons
+ * with `title` + `aria-label` carrying the exact same wording they had as
+ * text, which is what keeps them findable by keyboard, by screen reader,
+ * and by every existing test. Where an action has a global keybinding
+ * (shortcuts.ts) the tooltip - and ONLY the tooltip - names it; the
+ * accessible name stays the bare verb, so a screen reader announces the
+ * control rather than reciting its shortcut.
+ *
+ * ZOOM READOUT. The viewport group's middle control is the live zoom
+ * percentage, and clicking it resets to 100%. It replaces an icon button
+ * whose glyph (two concentric circles) named neither its action nor the
+ * current state - it read as a record button. Every canvas tool this app
+ * is measured against shows the zoom level as text for the same reason:
+ * the number is the one part of viewport state that cannot be inferred by
+ * looking at the canvas. It subscribes to the React Flow transform in its
+ * OWN component so a wheel-zoom re-renders one <button> rather than all
+ * twenty controls in this bar (ADR-011).
+ *
+ * HELP MENU. Help, Diagnostics and About are three low-frequency
+ * destinations that were three permanent icons in the right-hand cluster,
+ * carrying the same visual weight as Search and the Builder. They are one
+ * menu now, which is where a rarely-used destination belongs, and which
+ * takes the right-hand run of icons from seven down to five. Nothing became
+ * unreachable: each is still its own command in the palette (commands.ts,
+ * `open-help`/`open-about`) and still its own item in the overflow menu.
  *
  * Intent routing, surface by surface, against the ToolbarBridge @Slot list:
  * - zoomIn/zoomOut/resetZoom/fitAll -> React Flow viewport ops (they were
@@ -60,28 +100,36 @@ import { AppBarIcon, type AppBarIconName } from "./AppBarIcon";
  * and Settings' own per-mode pages already give that switch a home
  * co-located with the configuration it affects.
  *
- * R8a (finding #5): below a narrow width this toolbar's buttons had no
- * shrink/wrap/overflow behavior at all, so its right end ran off the window
- * edge, dragging a horizontal scrollbar across the WHOLE document with it.
- * Fixed with a real overflow menu: `.appbar` declares `container-type:
- * inline-size` (styles.css) so its descendants can query how much room THIS
- * toolbar - not the window - actually has, and whole GROUPS collapse in
- * tiers (least-used first). Collapsing by group rather than by button keeps
- * related actions together at every width instead of leaving fragments of a
- * cluster behind. Every collapsible action is rendered twice - once inline,
- * once inside the overflow menu, tagged with the same data-tier - and pure
- * CSS decides which copy is visible. No ResizeObserver or width measurement
- * anywhere; container queries are declarative and this app targets one
- * engine (WebView2).
+ * SPILL GUARD, not a responsive layout. Graphlink is desktop-only software
+ * and this bar is laid out for a desktop window; there is no mobile
+ * breakpoint ladder here and none is wanted. What there is is a single
+ * floor. R8a (finding #5): dragged narrower than its own contents, this
+ * toolbar had no shrink, wrap or overflow behaviour at all, so its right
+ * end ran off the window edge and dragged a horizontal scrollbar across the
+ * WHOLE document with it. Below one width, therefore, every group that is
+ * not Library/Save or Settings moves into an overflow menu in one step -
+ * not four graded stages, which would be a phone layout wearing a desk.
  *
- * The overflow menu is the shared `Popover` (overlays.tsx), NOT `NodeMenu`
- * (canvas/NodeMenu.tsx) - tried first, reverted after live testing caught a
- * real bug: NodeMenu portals to document.body, and a portaled element is no
- * longer a DESCENDANT of `.appbar`, so it falls OUTSIDE the `@container
- * appbar` scope entirely and every item in it would have silently stayed
- * hidden forever. `.appbar` therefore does NOT get `overflow: hidden`
- * either; the horizontal-spill backstop is the tier breakpoints being
- * correctly tuned, plus the grid track above that cannot be overrun.
+ * `.appbar` declares `container-type: inline-size` (styles.css) so the rule
+ * measures how much room THIS toolbar has rather than how wide the window
+ * is, which is the honest question given the brand and status regions
+ * either side of it. Whole GROUPS move, never individual buttons, so a
+ * cluster is never left as a fragment of itself. Every collapsible action
+ * is rendered twice - once inline, once in the overflow menu - and pure CSS
+ * picks the visible copy. No ResizeObserver and no width measurement
+ * anywhere.
+ *
+ * The overflow menu is the shared `Popover` (overlays.tsx) in its
+ * NON-anchored form, unlike the Help menu right next to it, and that
+ * difference is forced rather than chosen: an anchored Popover portals to
+ * document.body, and a portaled element is no longer a DESCENDANT of
+ * `.appbar`, so it falls OUTSIDE the `@container appbar` scope entirely and
+ * every gated item in it would silently stay hidden forever. The Help menu
+ * has no gated contents, so it takes the anchored form and gets the
+ * viewport flip/clamp every other anchored popover gets. `.appbar`
+ * therefore does NOT get `overflow: hidden` either; the horizontal-spill
+ * backstop is that one breakpoint, plus the grid track above it that cannot
+ * be overrun.
  *
  * Both copies of a collapsible action call the exact same handler - the
  * handler is the single source of truth for BEHAVIOR, only the label markup
@@ -92,7 +140,7 @@ import { AppBarIcon, type AppBarIconName } from "./AppBarIcon";
 function BarButton({
   label,
   className,
-  title,
+  hint,
   disabled,
   trigger,
   pressed,
@@ -100,7 +148,8 @@ function BarButton({
 }: {
   label: string;
   className: string;
-  title?: string;
+  /** Keybinding, shown in the tooltip only - never in the accessible name. */
+  hint?: string;
   disabled?: boolean;
   trigger?: string;
   pressed?: boolean;
@@ -110,7 +159,7 @@ function BarButton({
     <button
       type="button"
       className={className}
-      title={title}
+      title={hint ? `${label} (${hint})` : undefined}
       disabled={disabled}
       data-overlay-trigger={trigger}
       aria-pressed={pressed}
@@ -122,7 +171,7 @@ function BarButton({
 }
 
 /**
- * Icon button. `label` is the accessible name AND the tooltip, so an
+ * Icon button. `label` is the accessible name AND the base tooltip, so an
  * icon-only control is never nameless - it reads identically to the text
  * button it replaced for anything that is not a pair of eyes.
  */
@@ -130,6 +179,7 @@ function BarIconButton({
   icon,
   label,
   className,
+  hint,
   disabled,
   trigger,
   pressed,
@@ -138,6 +188,7 @@ function BarIconButton({
   icon: AppBarIconName;
   label: string;
   className: string;
+  hint?: string;
   disabled?: boolean;
   trigger?: string;
   pressed?: boolean;
@@ -147,7 +198,7 @@ function BarIconButton({
     <button
       type="button"
       className={`${className} appbar-btn-icon`}
-      title={label}
+      title={hint ? `${label} (${hint})` : label}
       aria-label={label}
       disabled={disabled}
       data-overlay-trigger={trigger}
@@ -155,6 +206,75 @@ function BarIconButton({
       onClick={onClick}
     >
       <AppBarIcon name={icon} />
+    </button>
+  );
+}
+
+/**
+ * A control that opens a menu or panel rather than performing an action,
+ * and says so with a chevron. Distinct from BarButton/BarIconButton by
+ * `aria-haspopup="dialog"` + `aria-expanded` - Popover renders
+ * role="dialog", not role="menu", so those are the honest values.
+ */
+function BarMenuButton({
+  label,
+  icon,
+  surface,
+  isOpen,
+  labelled,
+  onClick,
+}: {
+  label: string;
+  icon?: AppBarIconName;
+  surface: string;
+  isOpen: boolean;
+  /** false => icon-only, so `label` becomes the accessible name instead. */
+  labelled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={
+        "appbar-btn appbar-btn-checkable appbar-btn-menu" +
+        (labelled ? "" : " appbar-btn-icon") +
+        (isOpen ? " checked" : "")
+      }
+      title={label}
+      aria-label={labelled ? undefined : label}
+      data-overlay-trigger={surface}
+      aria-haspopup="dialog"
+      aria-expanded={isOpen}
+      onClick={onClick}
+    >
+      {icon && <AppBarIcon name={icon} />}
+      {labelled ? label : null}
+      <AppBarIcon name="chevron" />
+    </button>
+  );
+}
+
+/**
+ * The live zoom readout and the reset-to-100% control, in one.
+ *
+ * Its own component purely so the transform subscription is scoped: a
+ * wheel-zoom pushes a new transform every animation frame, and reading it
+ * in AppBar itself would re-render the whole bar at that rate for a
+ * three-character label - ADR-011's entire subject. Tabular figures and a
+ * fixed min-width (styles.css) keep the controls either side of it from
+ * shifting as the number changes width.
+ */
+function ZoomLevelButton({ onReset }: { onReset: () => void }) {
+  const zoom = useStore((s) => s.transform[2]);
+  return (
+    <button
+      type="button"
+      className="appbar-btn appbar-btn-zoom"
+      title="Reset zoom to 100%"
+      aria-label="Reset zoom to 100%"
+      onClick={onReset}
+    >
+      {Math.round(zoom * 100)}%
     </button>
   );
 }
@@ -181,14 +301,15 @@ export function AppBar({ store }: { store: SceneStore }) {
       (value) => store.setExportInProgress(value),
     );
 
-  // Overlay-opening actions (Pins/View/Plugins/About/Help) close this popover
-  // for free via OverlayProvider's own single-open policy - opening any
+  // Overlay-opening actions (Pins/View/Plugins/About/Help) close the open
+  // menu for free via OverlayProvider's own single-open policy - opening any
   // surface replaces whatever else was open, "toolbar-overflow" included.
   // Plain actions (Organize/Zoom/Fit/Export) never touch the overlay
-  // registry at all, so their overflow copies close it explicitly.
-  const closeOverflow = () => overlays.close();
-  const overflowItem = (surface: string) =>
-    "appbar-overflow-item" + (overlays.isOpen(surface) ? " checked" : "");
+  // registry at all, so their menu copies close it explicitly.
+  const closeMenu = () => overlays.close();
+  const menuItem = (surface: string) =>
+    "appbar-menu-item" + (overlays.isOpen(surface) ? " checked" : "");
+  const overflowItem = (surface: string) => `${menuItem(surface)} appbar-overflow-item`;
 
   return (
     <div className="appbar" role="toolbar" aria-label="Application bar">
@@ -198,20 +319,27 @@ export function AppBar({ store }: { store: SceneStore }) {
       <div className="appbar-group">
         <BarButton
           label="Library"
+          hint="Ctrl+L"
           className={chip("library")}
           trigger="library"
           pressed={overlays.isOpen("library")}
           onClick={() => overlays.toggle("library", "dialog")}
         />
-        <BarButton label="Save" className="appbar-btn" onClick={() => store.saveChat()} />
+        <BarButton
+          label="Save"
+          hint="Ctrl+S"
+          className="appbar-btn"
+          onClick={() => store.saveChat()}
+        />
       </div>
 
       {/* HISTORY - keyboard equivalents exist (Ctrl+Z / Ctrl+Shift+Z), so
           this is the first group to fold away. */}
-      <div className="appbar-group appbar-tier" data-tier="1">
+      <div className="appbar-group appbar-tier">
         <BarIconButton
           icon="undo"
           label="Undo"
+          hint="Ctrl+Z"
           className="appbar-btn"
           disabled={!scene.canUndo}
           onClick={() => store.undo()}
@@ -219,6 +347,7 @@ export function AppBar({ store }: { store: SceneStore }) {
         <BarIconButton
           icon="redo"
           label="Redo"
+          hint="Ctrl+Shift+Z"
           className="appbar-btn"
           disabled={!scene.canRedo}
           onClick={() => store.redo()}
@@ -226,21 +355,22 @@ export function AppBar({ store }: { store: SceneStore }) {
       </div>
 
       {/* VIEWPORT - wheel and trackpad cover zooming, so these fold early
-          too. */}
-      <div className="appbar-group appbar-tier" data-tier="1">
+          too. Out / readout / in reads left to right as one continuous
+          scale, with Fit All after it as the "show me everything" escape. */}
+      <div className="appbar-group appbar-tier">
         <BarIconButton
           icon="zoom-out"
           label="Zoom Out"
           className="appbar-btn"
           onClick={() => zoomOut({ duration: motionDuration(150) })}
         />
+        <ZoomLevelButton onReset={resetZoom} />
         <BarIconButton
           icon="zoom-in"
           label="Zoom In"
           className="appbar-btn"
           onClick={() => zoomIn({ duration: motionDuration(150) })}
         />
-        <BarIconButton icon="zoom-reset" label="Reset" className="appbar-btn" onClick={resetZoom} />
         <BarIconButton
           icon="fit"
           label="Fit All"
@@ -250,7 +380,7 @@ export function AppBar({ store }: { store: SceneStore }) {
       </div>
 
       {/* ARRANGE - acts on the graph's layout and landmarks. */}
-      <div className="appbar-group appbar-tier" data-tier="2">
+      <div className="appbar-group appbar-tier">
         <BarIconButton
           icon="organize"
           label="Organize"
@@ -275,33 +405,34 @@ export function AppBar({ store }: { store: SceneStore }) {
 
       {/* PANELS - canvas appearance and the plugin launcher. Text, because
           both open a surface whose contents the word names. */}
-      <div className="appbar-group appbar-tier" data-tier="3">
-        <BarButton
+      <div className="appbar-group appbar-tier">
+        <BarMenuButton
           label="View"
-          className={chip("view")}
-          trigger="view"
-          pressed={overlays.isOpen("view")}
+          surface="view"
+          labelled
+          isOpen={overlays.isOpen("view")}
           onClick={() => overlays.toggle("view", "popover")}
         />
-        <button
-          type="button"
-          className={chip("plugins")}
-          data-overlay-trigger="plugins"
-          aria-pressed={overlays.isOpen("plugins")}
+        <BarMenuButton
+          label="Plugins"
+          surface="plugins"
+          labelled
+          isOpen={overlays.isOpen("plugins")}
           onClick={() => overlays.toggle("plugins", "popover")}
-        >
-          Plugins <span className="appbar-chevron">&#9662;</span>
-        </button>
+        />
       </div>
 
       <span className="appbar-spacer" />
 
-      {/* Tier-gated the same way as every collapsible group above: CSS only
-          shows this once at least one tier is hidden, so it never appears
-          as a menu button opening an empty menu at full width. */}
+      {/* Gated by the same one breakpoint as every collapsible group above,
+          so it never appears as a menu button opening an empty menu at a
+          normal desktop width. */}
       <button
         type="button"
-        className={"appbar-btn appbar-btn-icon appbar-overflow-trigger" + (overlays.isOpen("toolbar-overflow") ? " checked" : "")}
+        className={
+          "appbar-btn appbar-btn-icon appbar-overflow-trigger" +
+          (overlays.isOpen("toolbar-overflow") ? " checked" : "")
+        }
         data-overlay-trigger="toolbar-overflow"
         aria-label="More toolbar actions"
         aria-haspopup="dialog"
@@ -310,14 +441,25 @@ export function AppBar({ store }: { store: SceneStore }) {
       >
         <AppBarIcon name="more" />
       </button>
-      <Popover name="toolbar-overflow" label="More toolbar actions" className="appbar-overflow-menu">
+      {/* Headings name the toolbar cluster each run of items came from. A
+          seventeen-item flat list is a list of everything, not a menu, and
+          this menu only ever opens as a whole - so the sections are the
+          only structure standing between the reader and the bar they just
+          lost. */}
+      <Popover
+        name="toolbar-overflow"
+        label="More toolbar actions"
+        className="appbar-menu appbar-overflow-menu"
+      >
+        <p className="appbar-menu-heading">
+          Edit and view
+        </p>
         <button
           type="button"
-          className="appbar-overflow-item"
-          data-tier="1"
+          className="appbar-menu-item appbar-overflow-item"
           onClick={() => {
             store.undo();
-            closeOverflow();
+            closeMenu();
           }}
           disabled={!scene.canUndo}
         >
@@ -325,11 +467,10 @@ export function AppBar({ store }: { store: SceneStore }) {
         </button>
         <button
           type="button"
-          className="appbar-overflow-item"
-          data-tier="1"
+          className="appbar-menu-item appbar-overflow-item"
           onClick={() => {
             store.redo();
-            closeOverflow();
+            closeMenu();
           }}
           disabled={!scene.canRedo}
         >
@@ -337,55 +478,54 @@ export function AppBar({ store }: { store: SceneStore }) {
         </button>
         <button
           type="button"
-          className="appbar-overflow-item"
-          data-tier="1"
+          className="appbar-menu-item appbar-overflow-item"
           onClick={() => {
             zoomIn({ duration: motionDuration(150) });
-            closeOverflow();
+            closeMenu();
           }}
         >
           Zoom In
         </button>
         <button
           type="button"
-          className="appbar-overflow-item"
-          data-tier="1"
+          className="appbar-menu-item appbar-overflow-item"
           onClick={() => {
             zoomOut({ duration: motionDuration(150) });
-            closeOverflow();
+            closeMenu();
           }}
         >
           Zoom Out
         </button>
         <button
           type="button"
-          className="appbar-overflow-item"
-          data-tier="1"
+          className="appbar-menu-item appbar-overflow-item"
           onClick={() => {
             resetZoom();
-            closeOverflow();
+            closeMenu();
           }}
         >
           Reset
         </button>
         <button
           type="button"
-          className="appbar-overflow-item"
-          data-tier="1"
+          className="appbar-menu-item appbar-overflow-item"
           onClick={() => {
             fitView({ duration: motionDuration(200), maxZoom: FIT_VIEW_MAX_ZOOM });
-            closeOverflow();
+            closeMenu();
           }}
         >
           Fit All
         </button>
+
+        <p className="appbar-menu-heading">
+          Arrange
+        </p>
         <button
           type="button"
-          className="appbar-overflow-item"
-          data-tier="2"
+          className="appbar-menu-item appbar-overflow-item"
           onClick={() => {
             store.organizeNodes();
-            closeOverflow();
+            closeMenu();
           }}
         >
           Organize
@@ -393,7 +533,6 @@ export function AppBar({ store }: { store: SceneStore }) {
         <button
           type="button"
           className={overflowItem("pins")}
-          data-tier="2"
           aria-pressed={overlays.isOpen("pins")}
           onClick={() => overlays.toggle("pins", "popover")}
         >
@@ -401,19 +540,21 @@ export function AppBar({ store }: { store: SceneStore }) {
         </button>
         <button
           type="button"
-          className="appbar-overflow-item"
-          data-tier="2"
+          className="appbar-menu-item appbar-overflow-item"
           onClick={() => {
             exportPng();
-            closeOverflow();
+            closeMenu();
           }}
         >
           Export PNG
         </button>
+
+        <p className="appbar-menu-heading">
+          Panels
+        </p>
         <button
           type="button"
           className={overflowItem("view")}
-          data-tier="3"
           aria-pressed={overlays.isOpen("view")}
           onClick={() => overlays.toggle("view", "popover")}
         >
@@ -422,16 +563,18 @@ export function AppBar({ store }: { store: SceneStore }) {
         <button
           type="button"
           className={overflowItem("plugins")}
-          data-tier="3"
           aria-pressed={overlays.isOpen("plugins")}
           onClick={() => overlays.toggle("plugins", "popover")}
         >
           Plugins
         </button>
+
+        <p className="appbar-menu-heading">
+          Workspace
+        </p>
         <button
           type="button"
           className={overflowItem("global-search")}
-          data-tier="4"
           aria-pressed={overlays.isOpen("global-search")}
           onClick={() => overlays.toggle("global-search", "dialog")}
         >
@@ -440,7 +583,6 @@ export function AppBar({ store }: { store: SceneStore }) {
         <button
           type="button"
           className={overflowItem("knowledge")}
-          data-tier="4"
           aria-pressed={overlays.isOpen("knowledge")}
           onClick={() => overlays.toggle("knowledge", "dialog")}
         >
@@ -449,7 +591,6 @@ export function AppBar({ store }: { store: SceneStore }) {
         <button
           type="button"
           className={overflowItem("builder-launch")}
-          data-tier="4"
           aria-pressed={overlays.isOpen("builder-launch")}
           onClick={() => overlays.toggle("builder-launch", "dialog")}
         >
@@ -458,7 +599,6 @@ export function AppBar({ store }: { store: SceneStore }) {
         <button
           type="button"
           className={overflowItem("harness-launch")}
-          data-tier="4"
           aria-pressed={overlays.isOpen("harness-launch")}
           onClick={() => overlays.toggle("harness-launch", "dialog")}
         >
@@ -467,7 +607,6 @@ export function AppBar({ store }: { store: SceneStore }) {
         <button
           type="button"
           className={overflowItem("diagnostics")}
-          data-tier="4"
           aria-pressed={overlays.isOpen("diagnostics")}
           onClick={() => overlays.toggle("diagnostics", "dialog")}
         >
@@ -476,7 +615,6 @@ export function AppBar({ store }: { store: SceneStore }) {
         <button
           type="button"
           className={overflowItem("help")}
-          data-tier="4"
           aria-pressed={overlays.isOpen("help")}
           onClick={() => overlays.toggle("help", "dialog")}
         >
@@ -485,7 +623,6 @@ export function AppBar({ store }: { store: SceneStore }) {
         <button
           type="button"
           className={overflowItem("about")}
-          data-tier="4"
           aria-pressed={overlays.isOpen("about")}
           onClick={() => overlays.toggle("about", "dialog")}
         >
@@ -497,10 +634,11 @@ export function AppBar({ store }: { store: SceneStore }) {
           Icon-only: the right end of a permanently-visible bar is where
           density pays, and each carries its full name as tooltip and
           accessible name. */}
-      <div className="appbar-group appbar-tier" data-tier="4">
+      <div className="appbar-group appbar-tier">
         <BarIconButton
           icon="search"
           label="Global Search"
+          hint="Ctrl+F"
           className={chip("global-search")}
           trigger="global-search"
           pressed={overlays.isOpen("global-search")}
@@ -530,29 +668,13 @@ export function AppBar({ store }: { store: SceneStore }) {
           pressed={overlays.isOpen("harness-launch")}
           onClick={() => overlays.toggle("harness-launch", "dialog")}
         />
-        <BarIconButton
-          icon="diagnostics"
-          label="Diagnostics"
-          className={chip("diagnostics")}
-          trigger="diagnostics"
-          pressed={overlays.isOpen("diagnostics")}
-          onClick={() => overlays.toggle("diagnostics", "dialog")}
-        />
-        <BarIconButton
+        <BarMenuButton
+          label="Help and diagnostics"
           icon="help"
-          label="Help"
-          className={chip("help")}
-          trigger="help"
-          pressed={overlays.isOpen("help")}
-          onClick={() => overlays.toggle("help", "dialog")}
-        />
-        <BarIconButton
-          icon="about"
-          label="About"
-          className={chip("about")}
-          trigger="about"
-          pressed={overlays.isOpen("about")}
-          onClick={() => overlays.toggle("about", "dialog")}
+          surface="help-menu"
+          labelled={false}
+          isOpen={overlays.isOpen("help-menu")}
+          onClick={() => overlays.toggle("help-menu", "popover")}
         />
       </div>
 
@@ -569,6 +691,38 @@ export function AppBar({ store }: { store: SceneStore }) {
           onClick={() => overlays.toggle("settings", "dialog")}
         />
       </div>
+
+      {/* Anchored (portaled, then placed from the trigger's own rect),
+          unlike the overflow menu above - nothing in here is width-gated, so
+          it has no reason to stay inside the @container scope, and
+          portaling buys it the viewport flip/clamp every other anchored
+          popover in the app already gets. */}
+      <Popover name="help-menu" label="Help and diagnostics" anchored className="appbar-menu">
+        <button
+          type="button"
+          className={menuItem("help")}
+          aria-pressed={overlays.isOpen("help")}
+          onClick={() => overlays.toggle("help", "dialog")}
+        >
+          Help
+        </button>
+        <button
+          type="button"
+          className={menuItem("diagnostics")}
+          aria-pressed={overlays.isOpen("diagnostics")}
+          onClick={() => overlays.toggle("diagnostics", "dialog")}
+        >
+          Diagnostics
+        </button>
+        <button
+          type="button"
+          className={menuItem("about")}
+          aria-pressed={overlays.isOpen("about")}
+          onClick={() => overlays.toggle("about", "dialog")}
+        >
+          About
+        </button>
+      </Popover>
     </div>
   );
 }
