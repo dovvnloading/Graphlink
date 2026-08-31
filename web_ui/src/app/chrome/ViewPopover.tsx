@@ -111,12 +111,91 @@ function useDebouncedSetting<T>(remote: T, commit: (value: T) => void, delayMs =
   return [pending === null ? remote : pending, set] as const;
 }
 
-/** A slider header: what the value is, and what it currently reads. */
+/** A field header: what the setting is, and what it currently reads. */
 function FieldRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="view-field-row">
       <span className="view-field-label">{label}</span>
       <span className="view-field-value">{value}</span>
+    </div>
+  );
+}
+
+/**
+ * A numeric setting: name, live value, one slider, and - where the backend
+ * publishes them - its landmark values as scale marks under the track.
+ *
+ * ONE CONTROL PER VALUE, which is the main thing this popover was missing.
+ * Pan speed and grid spacing each used to render a value badge, a slider,
+ * AND a four-button segmented control, all bound to the same number and
+ * stacked vertically: three representations of one setting, with nothing
+ * saying which was authoritative. That is a straight artifact of the port -
+ * the Qt controls offered presets, the SPA rewrite added sliders, and
+ * neither was taken away.
+ *
+ * The presets are worth keeping (they are the values the backend actually
+ * publishes as landmarks), so they stay - as small marks belonging to the
+ * slider's scale rather than as a competing control. Half the height, and
+ * no ambiguity about what sets the value.
+ *
+ * The track's fill is driven by --view-slider-fill rather than by a second
+ * element: a custom property set on the input inherits into the
+ * ::-webkit-slider-runnable-track pseudo-element, which is the only way to
+ * paint progress on a range input in this engine.
+ */
+function SliderField({
+  label,
+  ariaLabel,
+  value,
+  display,
+  min,
+  max,
+  presets,
+  formatPreset,
+  onInput,
+  onPreset,
+}: {
+  label: string;
+  ariaLabel: string;
+  value: number;
+  display: string;
+  min: number;
+  max: number;
+  presets?: readonly number[];
+  formatPreset?: (value: number) => string;
+  onInput: (value: number) => void;
+  onPreset?: (value: number) => void;
+}) {
+  const span = max - min;
+  const fill = span > 0 ? ((value - min) / span) * 100 : 0;
+  return (
+    <div className="view-field">
+      <FieldRow label={label} value={display} />
+      <input
+        type="range"
+        className="view-slider"
+        style={{ ["--view-slider-fill" as string]: `${Math.min(100, Math.max(0, fill))}%` }}
+        min={min}
+        max={max}
+        value={value}
+        aria-label={ariaLabel}
+        onChange={(e) => onInput(Number(e.target.value))}
+      />
+      {presets && presets.length > 0 && onPreset && (
+        <div className="view-ticks" role="group" aria-label={`${ariaLabel} presets`}>
+          {presets.map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              className={"view-tick" + (preset === value ? " active" : "")}
+              aria-pressed={preset === value}
+              onClick={() => onPreset(preset)}
+            >
+              {formatPreset ? formatPreset(preset) : preset}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -201,15 +280,41 @@ function SwatchRow({
  * their presets (published by the backend), their intent names - instead of
  * three separately-positioned popover cards.
  *
- * Redesigned past the literal port: every slider carries a label and a live
- * value readout; grid style is a segmented control; the font family uses
- * the app's own CustomSelect (the component built precisely because bare
- * <select> was ruled off-idiom) with a live preview of the resulting node
- * typography; connection toggles live in their own CONNECTIONS section
- * rather than under GRID (an artifact of which Qt bridge happened to own
- * them); color rows gained a free-choice picker; the filter section grew
- * group labels and a clear affordance; and a footer resets everything to
- * the documented defaults.
+ * WHAT THIS PASS FIXED, and why it was there. The first version of this
+ * panel was a consolidation of three Qt islands, and it consolidated them
+ * additively: whatever each island had, plus whatever the SPA rewrite
+ * introduced, stacked in the order it was written. The result read as a
+ * port rather than as a panel.
+ *
+ * - DUPLICATE CONTROLS. Pan speed and grid spacing each rendered a value
+ *   badge, a slider, and a four-button segmented control - three
+ *   representations of one number, stacked. Grid style rendered its value
+ *   as a badge directly above a segmented control already showing it. Each
+ *   setting has one control now; the published landmark values live on the
+ *   slider's own scale (see SliderField).
+ * - READOUTS DRESSED AS BUTTONS. Every value badge was a bordered,
+ *   inset-filled pill - the exact shape of .view-chip, which IS a button.
+ *   They are plain tabular text now, aligned right, and nothing that cannot
+ *   be clicked looks like it can.
+ * - OS CHECKBOXES. The toggles were the one place in this panel wearing
+ *   engine chrome, next to a fully custom slider, segmented control and
+ *   swatch row.
+ * - A TRACK THAT SHOWED NOTHING. The slider's track was a single flat bar,
+ *   so the only cue for a value was thumb position; the track is filled to
+ *   the value now, which is what makes a row of sliders readable at a
+ *   glance.
+ * - SECTIONS BY BRIDGE, NOT BY MEANING. "Snap to Grid" and "Smart Guides"
+ *   are drag behaviours and sat under GRID (appearance) because the legacy
+ *   grid bridge happened to own their checkboxes - the same accident that
+ *   had already put the connection toggles there. They are in CANVAS now,
+ *   with the pan speed, which is where the rest of "how moving around
+ *   behaves" lives. "Focus Accepted Paths" was a one-toggle BRANCHES
+ *   section sitting immediately above FILTER while doing the same job as
+ *   it - dimming what you are not looking at - so it opens that section
+ *   instead of preceding it.
+ * - A FOOTER THAT SCROLLED AWAY. Reset to Defaults was the last thing in a
+ *   panel taller than the popover, so getting to it meant scrolling past
+ *   every control it undoes. It is pinned to the bottom.
  */
 export function ViewPopover({ store }: { store: SceneStore }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
@@ -266,223 +371,215 @@ export function ViewPopover({ store }: { store: SceneStore }) {
 
   return (
     <Popover name="view" label="View settings" className="view-popover" anchored>
-      <section className="view-section" aria-label="Canvas pan speed">
-        <p className="view-section-title">Navigation</p>
-        <FieldRow label="Canvas pan speed" value={`${dragPercent}%`} />
-        <input
-          type="range"
-          className="view-slider"
-          min={dragConfig.percentMin}
-          max={dragConfig.percentMax}
-          value={dragPercent}
-          aria-label="Canvas pan speed"
-          onChange={(e) => setDragPercent(Number(e.target.value))}
-        />
-        <div className="view-segment" role="group" aria-label="Drag speed presets">
-          {dragConfig.percentPresets.map((percent) => (
-            <button
-              key={percent}
-              type="button"
-              className={"view-segment-btn" + (percent === dragPercent ? " active" : "")}
-              aria-pressed={percent === dragPercent}
-              onClick={() => store.setDragFactor(percent / 100)}
-            >
-              {percent}%
-            </button>
-          ))}
-        </div>
-      </section>
+      <div className="view-scroll">
+        <section className="view-section" aria-label="Canvas">
+          <p className="view-section-title">Canvas</p>
+          <SliderField
+            label="Pan speed"
+            ariaLabel="Canvas pan speed"
+            value={dragPercent}
+            display={`${dragPercent}%`}
+            min={dragConfig.percentMin}
+            max={dragConfig.percentMax}
+            presets={dragConfig.percentPresets}
+            formatPreset={(p) => `${p}%`}
+            onInput={setDragPercent}
+            onPreset={(p) => store.setDragFactor(p / 100)}
+          />
+          <ToggleRow
+            label="Snap to Grid"
+            hint="Dragged nodes land on grid lines"
+            checked={scene.snapToGrid}
+            onChange={(v) => store.setSnapToGrid(v)}
+          />
+          <ToggleRow
+            label="Smart Guides"
+            hint="Snap to alignments with nearby nodes"
+            checked={scene.smartGuides}
+            onChange={(v) => store.setSmartGuides(v)}
+          />
+        </section>
 
-      <section className="view-section" aria-label="Grid">
-        <p className="view-section-title">Grid</p>
-        <FieldRow label="Spacing" value={`${gridSize}px`} />
-        <input
-          type="range"
-          className="view-slider"
-          min={GRID_SIZE_MIN}
-          max={GRID_SIZE_MAX}
-          value={gridSize}
-          aria-label="Grid spacing"
-          onChange={(e) => setGridSize(Number(e.target.value))}
-        />
-        <div className="view-segment" role="group" aria-label="Grid spacing presets">
-          {grid.sizePresets.map((size) => (
-            <button
-              key={size}
-              type="button"
-              className={"view-segment-btn" + (size === gridSize ? " active" : "")}
-              aria-pressed={size === gridSize}
-              onClick={() => store.setGridSize(size)}
-            >
-              {size}px
-            </button>
-          ))}
-        </div>
-        <FieldRow label="Opacity" value={`${gridOpacity}%`} />
-        <input
-          type="range"
-          className="view-slider"
-          min={0}
-          max={100}
-          value={gridOpacity}
-          aria-label="Grid opacity"
-          onChange={(e) => setGridOpacity(Number(e.target.value))}
-        />
-        <FieldRow label="Style" value={grid.gridStyle} />
-        <div className="view-segment" role="group" aria-label="Grid style">
-          {grid.stylePresets.map((style) => (
-            <button
-              key={style}
-              type="button"
-              className={"view-segment-btn" + (style === grid.gridStyle ? " active" : "")}
-              aria-pressed={style === grid.gridStyle}
-              onClick={() => store.setGridStyle(style)}
-            >
-              {style}
-            </button>
-          ))}
-        </div>
-        <FieldRow label="Color" value={gridColor.toUpperCase()} />
-        <SwatchRow
-          presets={grid.colorPresets}
-          current={gridColor}
-          ariaPrefix="Grid color"
-          onPick={setGridColor}
-        />
-        <ToggleRow
-          label="Snap to Grid"
-          hint="Dragged nodes land on grid lines"
-          checked={scene.snapToGrid}
-          onChange={(v) => store.setSnapToGrid(v)}
-        />
-        <ToggleRow
-          label="Smart Guides"
-          hint="Snap to alignments with nearby nodes"
-          checked={scene.smartGuides}
-          onChange={(v) => store.setSmartGuides(v)}
-        />
-      </section>
+        <section className="view-section" aria-label="Grid">
+          <p className="view-section-title">Grid</p>
+          <SliderField
+            label="Spacing"
+            ariaLabel="Grid spacing"
+            value={gridSize}
+            display={`${gridSize}px`}
+            min={GRID_SIZE_MIN}
+            max={GRID_SIZE_MAX}
+            presets={grid.sizePresets}
+            formatPreset={(s) => `${s}px`}
+            onInput={setGridSize}
+            onPreset={(s) => store.setGridSize(s)}
+          />
+          <SliderField
+            label="Opacity"
+            ariaLabel="Grid opacity"
+            value={gridOpacity}
+            display={`${gridOpacity}%`}
+            min={0}
+            max={100}
+            onInput={setGridOpacity}
+          />
+          {/* No value readout above this one: the segmented control IS the
+              readout - the selected segment says "Dots" as plainly as a
+              badge above it did. */}
+          <div className="view-field">
+            <span className="view-field-label">Style</span>
+            <div className="view-segment" role="group" aria-label="Grid style">
+              {grid.stylePresets.map((style) => (
+                <button
+                  key={style}
+                  type="button"
+                  className={"view-segment-btn" + (style === grid.gridStyle ? " active" : "")}
+                  aria-pressed={style === grid.gridStyle}
+                  onClick={() => store.setGridStyle(style)}
+                >
+                  {style}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="view-field">
+            <FieldRow label="Color" value={gridColor.toUpperCase()} />
+            <SwatchRow
+              presets={grid.colorPresets}
+              current={gridColor}
+              ariaPrefix="Grid color"
+              onPick={setGridColor}
+            />
+          </div>
+        </section>
 
-      {/* Fade/orthogonal lived under GRID in the straight port only because
-          the legacy grid-control bridge happened to own their checkboxes;
-          they configure connections, so they get a section that says so. */}
-      <section className="view-section" aria-label="Connections">
-        <p className="view-section-title">Connections</p>
-        <ToggleRow
-          label="Fade Connections"
-          hint="Dim all lines except the one under the pointer"
-          checked={scene.fadeConnectionsEnabled}
-          onChange={(v) => store.setFadeConnections(v)}
-        />
-        <ToggleRow
-          label="Orthogonal Routing"
-          hint="Route eligible lines at right angles"
-          checked={scene.orthogonalRouting}
-          onChange={(v) => store.setOrthogonalConnections(v)}
-        />
-      </section>
+        {/* Fade/orthogonal lived under GRID in the straight port only because
+            the legacy grid-control bridge happened to own their checkboxes;
+            they configure connections, so they get a section that says so. */}
+        <section className="view-section" aria-label="Connections">
+          <p className="view-section-title">Connections</p>
+          <ToggleRow
+            label="Fade Connections"
+            hint="Dim all lines except the one under the pointer"
+            checked={scene.fadeConnectionsEnabled}
+            onChange={(v) => store.setFadeConnections(v)}
+          />
+          <ToggleRow
+            label="Orthogonal Routing"
+            hint="Route eligible lines at right angles"
+            checked={scene.orthogonalRouting}
+            onChange={(v) => store.setOrthogonalConnections(v)}
+          />
+        </section>
 
-      <section className="view-section" aria-label="Font">
-        <p className="view-section-title">Node Font</p>
-        <CustomSelect
-          value={scene.fontFamily}
-          options={fontConfig.fontFamilies.map((family) => ({ id: family, label: family }))}
-          onChange={(family) => store.setFontFamily(family)}
-          ariaLabel="Font family"
-        />
-        <FieldRow label="Size" value={`${fontSizePt}pt`} />
-        <input
-          type="range"
-          className="view-slider"
-          min={fontConfig.sizeMin}
-          max={fontConfig.sizeMax}
-          value={fontSizePt}
-          aria-label="Font size"
-          onChange={(e) => setFontSizePt(Number(e.target.value))}
-        />
-        <FieldRow label="Color" value={fontColor.toUpperCase()} />
-        <SwatchRow
-          presets={fontConfig.colorPresets}
-          current={fontColor}
-          ariaPrefix="Font color"
-          onPick={setFontColor}
-        />
-        {/* What the settings above actually produce on a node card - the
-            readout the three separate controls never had. */}
-        <div
-          className="view-font-preview"
-          aria-hidden="true"
-          style={{
-            fontFamily: scene.fontFamily,
-            fontSize: `${fontSizePt}pt`,
-            color: fontColor,
-          }}
-        >
-          The quick brown fox jumps over the lazy dog
-        </div>
-      </section>
+        <section className="view-section" aria-label="Node font">
+          <p className="view-section-title">Node Font</p>
+          <div className="view-field">
+            <span className="view-field-label">Family</span>
+            <CustomSelect
+              value={scene.fontFamily}
+              options={fontConfig.fontFamilies.map((family) => ({ id: family, label: family }))}
+              onChange={(family) => store.setFontFamily(family)}
+              ariaLabel="Font family"
+            />
+          </div>
+          <SliderField
+            label="Size"
+            ariaLabel="Font size"
+            value={fontSizePt}
+            display={`${fontSizePt}pt`}
+            min={fontConfig.sizeMin}
+            max={fontConfig.sizeMax}
+            onInput={setFontSizePt}
+          />
+          <div className="view-field">
+            <FieldRow label="Color" value={fontColor.toUpperCase()} />
+            <SwatchRow
+              presets={fontConfig.colorPresets}
+              current={fontColor}
+              ariaPrefix="Font color"
+              onPick={setFontColor}
+            />
+          </div>
+          {/* What the settings above actually produce on a node card - the
+              readout the three separate controls never had. */}
+          <div
+            className="view-font-preview"
+            aria-hidden="true"
+            style={{
+              fontFamily: scene.fontFamily,
+              fontSize: `${fontSizePt}pt`,
+              color: fontColor,
+            }}
+          >
+            The quick brown fox jumps over the lazy dog
+          </div>
+        </section>
 
-      <section className="view-section" aria-label="Branches">
-        <p className="view-section-title">Branches</p>
-        {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): dims every
-            node outside the accepted paths (rejected/superseded branches
-            and their descendants, unless an explicit "accepted" override
-            reactivates a sub-branch) - the whole-graph counterpart to a
-            single chat node's own "Hide Other Branches" menu action.
-            Backed by sceneStore's own local focusAcceptedPaths field
-            rather than `scene` - see that field's own comment. */}
-        <ToggleRow
-          label="Focus Accepted Paths"
-          hint="Dim rejected and superseded branches"
-          checked={focusAcceptedPaths}
-          onChange={(v) => store.setFocusAcceptedPaths(v)}
-        />
-      </section>
+        <section className="view-section" aria-label="Focus">
+          <div className="view-section-head">
+            <p className="view-section-title">Focus</p>
+            {filterCount > 0 && (
+              <button type="button" className="view-clear-btn" onClick={() => store.clearFilters()}>
+                Clear ({filterCount})
+              </button>
+            )}
+          </div>
+          {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): dims every
+              node outside the accepted paths (rejected/superseded branches
+              and their descendants, unless an explicit "accepted" override
+              reactivates a sub-branch) - the whole-graph counterpart to a
+              single chat node's own "Hide Other Branches" menu action.
+              Backed by sceneStore's own local focusAcceptedPaths field
+              rather than `scene` - see that field's own comment. It opens
+              this section rather than owning a one-toggle section of its
+              own directly above it: dimming rejected branches and dimming
+              filtered-out kinds are the same job. */}
+          <ToggleRow
+            label="Focus Accepted Paths"
+            hint="Dim rejected and superseded branches"
+            checked={focusAcceptedPaths}
+            onChange={(v) => store.setFocusAcceptedPaths(v)}
+          />
+          {/* ADR-012 stage 12.5: multi-select toggle chips - "active" means
+              "toggled into the filter set," not mutual exclusion; a click
+              only ever flips ITS OWN membership in sceneStore's filterKinds/
+              filterStatuses Sets. An empty set (no chip active) means no
+              filter at all - every node shows at full opacity. */}
+          <p className="view-subsection-title">By kind</p>
+          <div className="view-row" role="group" aria-label="Filter by node kind">
+            {FILTERABLE_NODE_KINDS.map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                className={"view-chip" + (filterKinds.has(kind) ? " active" : "")}
+                aria-pressed={filterKinds.has(kind)}
+                onClick={() => store.toggleFilterKind(kind)}
+              >
+                {FILTER_KIND_LABELS[kind]}
+              </button>
+            ))}
+          </div>
+          <p className="view-subsection-title">By branch status</p>
+          <div className="view-row" role="group" aria-label="Filter by branch status">
+            {FILTER_STATUS_VALUES.map((status) => (
+              <button
+                key={status}
+                type="button"
+                className={"view-chip" + (filterStatuses.has(status) ? " active" : "")}
+                aria-pressed={filterStatuses.has(status)}
+                onClick={() => store.toggleFilterStatus(status)}
+              >
+                {FILTER_STATUS_LABELS[status]}
+              </button>
+            ))}
+          </div>
+        </section>
+      </div>
 
-      <section className="view-section" aria-label="Filter">
-        <div className="view-section-head">
-          <p className="view-section-title">Filter</p>
-          {filterCount > 0 && (
-            <button type="button" className="view-clear-btn" onClick={() => store.clearFilters()}>
-              Clear ({filterCount})
-            </button>
-          )}
-        </div>
-        {/* ADR-012 stage 12.5: multi-select toggle chips - "active" means
-            "toggled into the filter set," not mutual exclusion; a click
-            only ever flips ITS OWN membership in sceneStore's filterKinds/
-            filterStatuses Sets. An empty set (no chip active) means no
-            filter at all - every node shows at full opacity. */}
-        <p className="view-subsection-title">By kind</p>
-        <div className="view-row" role="group" aria-label="Filter by node kind">
-          {FILTERABLE_NODE_KINDS.map((kind) => (
-            <button
-              key={kind}
-              type="button"
-              className={"view-chip" + (filterKinds.has(kind) ? " active" : "")}
-              aria-pressed={filterKinds.has(kind)}
-              onClick={() => store.toggleFilterKind(kind)}
-            >
-              {FILTER_KIND_LABELS[kind]}
-            </button>
-          ))}
-        </div>
-        <p className="view-subsection-title">By branch status</p>
-        <div className="view-row" role="group" aria-label="Filter by branch status">
-          {FILTER_STATUS_VALUES.map((status) => (
-            <button
-              key={status}
-              type="button"
-              className={"view-chip" + (filterStatuses.has(status) ? " active" : "")}
-              aria-pressed={filterStatuses.has(status)}
-              onClick={() => store.toggleFilterStatus(status)}
-            >
-              {FILTER_STATUS_LABELS[status]}
-            </button>
-          ))}
-        </div>
-      </section>
-
+      {/* Outside .view-scroll on purpose: the panel is taller than the
+          popover, and a footer inside the scroller means scrolling past
+          every control this button undoes in order to reach it. */}
       <div className="view-footer">
         <button type="button" className="view-reset-btn" onClick={resetAll}>
           Reset to Defaults
