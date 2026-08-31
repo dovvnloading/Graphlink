@@ -1,15 +1,44 @@
-/* GENERATED - do not hand-edit. Source of truth was the legacy
- * HelpDialog.SECTION_DEFS in graphlink_ui_dialogs/graphlink_system_dialogs.py
- * (deleted in Phase 4's shim-collapse increment once this file existed) -
- * mechanically extracted (icon fields dropped per the Phase 4 scope note;
- * see doc/FRONTEND_WEB_MIGRATION_MASTER_PLAN.md), not hand-retyped, so the
- * 76 items/19 subsections/9 sections of copy carried over byte-exact.
- * This is now the single canonical source - nothing else reads this
- * content, per "adding a section requires no Python change." */
+/**
+ * The Help panel's content.
+ *
+ * HAND-MAINTAINED. This file used to open with "GENERATED - do not
+ * hand-edit", inherited from the Qt-era extraction that first produced it
+ * (the legacy HelpDialog.SECTION_DEFS in graphlink_system_dialogs.py, long
+ * since deleted). That header stopped being true the first time someone
+ * added a section by hand, and by the time it was audited the file had
+ * grown from the 76 items it claimed to 88 - so the one instruction at the
+ * top of the file was both false and discouraging the exact maintenance the
+ * file was getting anyway. Edit it. Nothing generates it.
+ *
+ * WHAT THIS IS FOR. Someone opens Help because something on screen did not
+ * do what they expected, or because they suspect the app can do a thing and
+ * want to know where it lives. Both are answered by specifics: the real
+ * label on the real control, the actual key, the actual limit. Neither is
+ * answered by a paragraph about how the workspace empowers their workflow.
+ *
+ * SO: say the thing. Lead with the fact, not with a restatement of the
+ * item's own title. Give the shortcut if there is one. Say where a feature
+ * stops - what it will not do, what it cannot undo, what it costs - because
+ * that is the part nobody can discover by clicking around, and it is the
+ * part that makes the rest trustworthy. One sentence is a fine length. So
+ * is four, when four are needed. What kills a reference page is every entry
+ * being the same shape.
+ *
+ * KEEP IT TRUE. Every label here is quoted from the running app. When a
+ * control is renamed, this file is part of the change, not a follow-up.
+ * The audit that produced this rewrite found the Help panel confidently
+ * describing a "Controls toggle" renamed to View, a Shift-drag zoom gesture
+ * that had become rubber-band selection, and a "Graphlink-Web" plugin
+ * shipping under the name Web Research - three things a reader would have
+ * trusted and then failed to find.
+ */
 
 export interface HelpItem {
   action: string;
   description: string;
+  /** Key chords for this item, each rendered as its own <kbd>. Two entries
+   *  mean "either one works", which is a real case here (redo). */
+  keys?: string[];
 }
 
 export interface HelpSubsection {
@@ -25,536 +54,700 @@ export interface HelpSection {
 
 export const HELP_SECTIONS: HelpSection[] = [
   {
-    "name": "Overview",
-    "description": "What Graphlink is, how work is structured, and how a typical project moves from prompt to polished output.",
-    "subsections": [
+    name: "Start Here",
+    description: "What this app is, and the loop everything else hangs off.",
+    subsections: [
       {
-        "title": "What Graphlink Does",
-        "items": [
+        title: "The Idea",
+        items: [
           {
-            "action": "Visual AI Workspace",
-            "description": "Graphlink turns prompts, replies, notes, charts, documents, code, and plugin runs into connected items on one canvas. Instead of losing work inside a single scrolling transcript, you can keep multiple lines of thought visible at once."
+            action: "A graph, not a transcript",
+            description:
+              "Every prompt, reply, note, chart and tool run is a node on a canvas, connected to whatever it came from. A chat window forces one line of thought and buries the rest above the scroll. Here the alternatives stay side by side, and the connections record which answer came from which question.",
           },
           {
-            "action": "Branch-Based Conversations",
-            "description": "Every selected node becomes the anchor for what you do next. That makes it easy to fork alternatives, compare directions, and keep complex work organized as a family of branches instead of one long thread."
+            action: "The selected node is the context",
+            description:
+              "Whatever you have selected is the parent of whatever you do next. Select a reply and send a message, and the new node hangs off that reply with its history. Select a different one and you have branched. This is the single rule the rest of the app is built on - the composer's placeholder tells you which node it is about to answer.",
           },
           {
-            "action": "Mixed Content Graph",
-            "description": "A single project can contain chat nodes, code blocks, visible reasoning, attached files, generated images, notes, charts, and specialist tool nodes. The connections preserve where an idea came from and what it produced."
+            action: "It is a project file, not a session",
+            description:
+              "Nodes, frames, containers, pins, notes and plugin state persist, and a graph reopens from the Library exactly as you left it. Work that spans a week belongs here more than work that spans five minutes.",
           },
-          {
-            "action": "Saved Project Space",
-            "description": "Chats, plugin state, frames, containers, pins, and notes are persisted and can be reopened from the Library. Graphlink is designed for ongoing project work, not just one-off prompts."
-          }
-        ]
+        ],
       },
       {
-        "title": "Typical Session Flow",
-        "items": [
+        title: "Your First Ten Minutes",
+        items: [
           {
-            "action": "Start or Resume",
-            "description": "Open a recent project from the Library, or press Ctrl+T to start a new chat. The app is comfortable for quick ideation and for returning to long-running work."
+            action: "Make a node",
+            description:
+              "Double-click empty canvas. Or just type in the composer at the bottom and send.",
           },
           {
-            "action": "Build a Branch",
-            "description": "Send a prompt, review the result, then select the exact node you want to continue from. Each selection creates a deliberate branch point so you can refine or challenge a result without overwriting earlier work."
+            action: "Branch off an answer",
+            description:
+              "Click the reply you liked, then send your follow-up. Click a different reply and send a different follow-up. You now have two branches from the same point, and neither overwrote the other.",
           },
           {
-            "action": "Add Specialist Nodes",
-            "description": "When a branch needs something more than a plain reply, open Plugins to add reasoning, web research, coding, sandbox execution, drafting, HTML rendering, or branch comparison tools."
+            action: "Reach for a specialist",
+            description:
+              "Plugins in the toolbar adds a node that does something a plain reply cannot - research the web with citations, run Python, render HTML, draft a document. It attaches to the node you have selected.",
           },
           {
-            "action": "Capture the Outcome",
-            "description": "Use notes, explainers, takeaways, charts, exports, and document views to turn raw responses into a clearer project record. The goal is a canvas you can revisit and understand later."
-          }
-        ]
-      }
-    ]
+            action: "When you lose the thread",
+            description:
+              "Fit All frames everything on the canvas. The command palette finds any action by name. Both are faster than hunting.",
+            keys: ["Ctrl+K"],
+          },
+        ],
+      },
+      {
+        title: "Three Ways People Use It",
+        items: [
+          {
+            action: "Compare instead of decide early",
+            description:
+              "Ask the same question three ways from the same parent, leave all three on the canvas, and choose once you can see them together. Compare Branches puts two side by side; Synthesize Branches merges what survived.",
+            keys: ["Ctrl+Shift+C", "Ctrl+Shift+M"],
+          },
+          {
+            action: "Debug with the code that actually ran",
+            description:
+              "Keep the failing code in a Virtual Environment Runner node, the reasoning in its own branch, and the fix attempts as siblings. The run output stays attached to the attempt that produced it, which is the thing a chat log loses first.",
+          },
+          {
+            action: "Write long, in pieces",
+            description:
+              "An Artifact / Drafter node holds a living document while the branches around it argue about sections. The draft is one node you keep editing, not thirty replies you have to reassemble.",
+          },
+        ],
+      },
+    ],
   },
   {
-    "name": "Canvas & Branching",
-    "description": "How selection, context inheritance, branching, and side-by-side exploration work inside the graph.",
-    "subsections": [
+    name: "The Canvas",
+    description: "Moving around, selecting, branching, and what the gestures actually do.",
+    subsections: [
       {
-        "title": "How Branches Work",
-        "items": [
+        title: "Moving Around",
+        items: [
           {
-            "action": "Active Context Node",
-            "description": "The node you select becomes the parent for your next message or specialist tool. The input placeholder updates to show what you are responding to, which helps you stay oriented in large graphs."
+            action: "Pan",
+            description:
+              "Drag empty canvas with the left or middle button. Pan speed is adjustable - View, then Canvas, then Pan speed - which matters more than it sounds once a graph is bigger than a screen.",
           },
           {
-            "action": "Parent and Child History",
-            "description": "Branches inherit the relevant conversation history from their anchor node. Sibling branches can explore different ideas from the same point without stomping on each other."
+            action: "Zoom",
+            description:
+              "The mouse wheel zooms. Holding Ctrl while you scroll does the same thing, so either habit works. The toolbar's zoom readout shows the current level; click it to go back to 100%.",
           },
           {
-            "action": "Focus One Branch",
-            "description": "Chat nodes can temporarily hide other branches so you can concentrate on one path. This is especially useful once a graph starts to fan out into several competing directions."
+            action: "Fit All",
+            description:
+              "Reframes the view around everything on the canvas. The one control worth learning first, because it is the way back from anywhere.",
           },
           {
-            "action": "Regenerate from the Same Context",
-            "description": "Assistant responses can be regenerated from their parent branch when you want a fresh answer without manually rebuilding the surrounding context."
-          }
-        ]
+            action: "Minimap",
+            description:
+              "Bottom right. Click anywhere in it to jump there. It earns its keep at about the point the graph stops fitting on one screen.",
+          },
+        ],
       },
       {
-        "title": "Working on the Canvas",
-        "items": [
+        title: "Selecting",
+        items: [
           {
-            "action": "Select and Move",
-            "description": "Click a node to select it, drag on empty space to rubber-band select, and move one item or a whole group together. The graph behaves like a visual workspace, not a locked transcript."
+            action: "Click to select",
+            description: "One node. This also sets the context for your next message.",
           },
           {
-            "action": "Collapse Dense Areas",
-            "description": "Most major node types can collapse to keep the canvas readable. Collapse is especially helpful when a branch is stable but still needs to stay connected to the rest of the project."
+            action: "Shift-drag to rubber-band",
+            description:
+              "Hold Shift and drag across empty canvas to select everything inside the rectangle. Shift is what distinguishes this from panning - without it, dragging the background moves the view.",
           },
           {
-            "action": "Keep Notes Beside the Work",
-            "description": "Notes live alongside AI nodes rather than inside them. Use them for decisions, TODOs, pasted snippets, executive summaries, or anything that should stay visible but should not be sent back to the model."
+            action: "Ctrl-arrow to walk the branch",
+            description:
+              "Moves the selection to the parent, child or sibling of the current node. Reviewing a branch this way is considerably faster than aiming at each card.",
+            keys: ["Ctrl+←", "Ctrl+→"],
           },
           {
-            "action": "Compare Alternatives",
-            "description": "Select two or more branch tips and run Compare Branches (Ctrl+Shift+C, or the command palette) to get a note explaining where their logic, direction, and intent diverge. Synthesize Branches (Ctrl+Shift+M) instead merges them into one reply, using instructions you type next in the composer."
-          }
-        ]
-      }
-    ]
+            action: "Delete removes the selection",
+            description:
+              "Whatever is selected, however many. Undo brings it back - the undo stack lives on the backend and survives more than you would expect.",
+            keys: ["Ctrl+Z"],
+          },
+        ],
+      },
+      {
+        title: "Branching",
+        items: [
+          {
+            action: "History is inherited, not shared",
+            description:
+              "A branch carries the conversation down its own path from its anchor node. Two siblings from the same parent see the same history behind them and nothing of each other, which is what makes them a fair comparison.",
+          },
+          {
+            action: "Regenerate",
+            description:
+              "Re-asks from the same parent with the same context. Use it when the answer was wrong rather than the question.",
+          },
+          {
+            action: "Hide other branches",
+            description:
+              "A chat node's own menu can dim everything outside its path, for when the canvas has fanned out further than you can hold in your head. View, then Focus, then Focus Accepted Paths does the same thing graph-wide using branch status.",
+          },
+          {
+            action: "Mark what survived",
+            description:
+              "Branches can be set Accepted, Rejected or Superseded. Nothing is deleted - the rejected attempt stays on the canvas as a record of what you tried - but the filters and the focus lens can then dim it out of the way.",
+          },
+        ],
+      },
+    ],
   },
   {
-    "name": "Nodes & Content",
-    "description": "The main node types you will see on the canvas and what each one is best at.",
-    "subsections": [
+    name: "Node Types",
+    description: "What each kind of node is for, and when to reach for it.",
+    subsections: [
       {
-        "title": "Core Conversation Nodes",
-        "items": [
+        title: "Conversation",
+        items: [
           {
-            "action": "Chat Nodes",
-            "description": "User and assistant chat nodes are the backbone of the application. Selecting one lets you continue exactly that line of thought, which makes branching feel intentional instead of accidental."
+            action: "Chat",
+            description: "A prompt and its reply. The default, and most of any graph.",
           },
           {
-            "action": "Code Nodes",
-            "description": "When a response includes fenced code, Graphlink breaks it into dedicated code nodes. Those nodes can be copied, exported, regenerated through their parent reply, or used as a starting point for coding tools."
+            action: "Conversation",
+            description:
+              "A self-contained linear thread in one node, for the stretches where branching is not the point and you just want a normal back-and-forth.",
           },
           {
-            "action": "Thinking Nodes",
-            "description": "If a model returns visible reasoning or analysis, the app stores it as a separate thinking node. This keeps long reasoning trails available without burying the main answer."
+            action: "Thinking",
+            description:
+              "The model's reasoning, kept separate from its answer so you can read the working without it crowding the result. Produced when the Reasoning level in the composer is above Off.",
           },
           {
-            "action": "Document and Image Nodes",
-            "description": "Attachments become their own nodes on the branch so the source material remains visible next to the prompt that used it. That makes it easier to audit what the model actually saw."
-          }
-        ]
+            action: "Code",
+            description:
+              "A code block split out of a reply, so it can be copied, run or edited without dragging the prose along with it.",
+          },
+        ],
       },
       {
-        "title": "Supporting Content",
-        "items": [
+        title: "Content",
+        items: [
           {
-            "action": "Notes",
-            "description": "Manual notes, takeaways, explainer notes, and multi-node summary notes all live as movable note items. They are ideal for turning raw model output into cleaner project knowledge."
+            action: "Note",
+            description:
+              "Your own text, attached wherever you put it. The command palette makes one; there is deliberately no shortcut, because a note you meant to make is worth two seconds.",
           },
           {
-            "action": "Charts",
-            "description": "The app can turn text-derived or numeric content into bar, line, pie, histogram, and Sankey charts on the canvas. Charts are useful when a branch contains data you want to explain visually."
+            action: "Document and Image",
+            description:
+              "Attached files become nodes. Documents open in a reading pane with a table of contents and in-document search; images open at full size.",
           },
           {
-            "action": "Document View",
-            "description": "Long chat content can be opened in the document viewer for easier reading and review. This is especially helpful for lengthy drafts, specifications, or dense research summaries."
+            action: "Chart",
+            description:
+              "Generated from data in the conversation and rendered live, not as a picture of a chart. The underlying data stays inspectable.",
           },
           {
-            "action": "HTML Preview",
-            "description": "The HTML Renderer node can take markup and show a live preview inside the graph, with an optional pop-out preview window for closer inspection."
+            action: "Artifact",
+            description:
+              "A living Markdown document with a source and preview split. Meant to be revised in place across many turns.",
+          },
+        ],
+      },
+      {
+        title: "Agents and Tools",
+        items: [
+          {
+            action: "Plan",
+            description:
+              "The Builder's checklist. It shows the steps, which one is running, what has been spent against the budgets, and every tool call the run has made.",
           },
           {
-            "action": "Node Context Menus",
-            "description": "Right-click chat, code, and plugin nodes for copy, export, document view, branch isolation, regeneration, takeaways, explainers, charts, image generation, and deletion actions. When multiple chat nodes are selected, the menu also exposes group summary workflows."
-          }
-        ]
-      }
-    ]
+            action: "Agent",
+            description:
+              "The workspace agent's card - its task, the folder it is bound to, its turns, and any approval it is currently waiting on.",
+          },
+          {
+            action: "Web Research, Gitlink, Virtual Environment Runner, HTML Renderer",
+            description:
+              "Plugin nodes. Each has its own controls and its own state, and each stays on the canvas as a record of what it did.",
+          },
+        ],
+      },
+    ],
   },
   {
-    "name": "Navigation",
-    "description": "Mouse, keyboard, search, command palette, and view controls for moving quickly through small or very large graphs.",
-    "subsections": [
+    name: "Finding Things",
+    description: "Six different search surfaces, and which one you actually want.",
+    subsections: [
       {
-        "title": "Mouse and View Controls",
-        "items": [
+        title: "Search",
+        items: [
           {
-            "action": "Pan the Canvas",
-            "description": "Hold the Middle Mouse Button and drag to move around the workspace. This is the fastest way to traverse large graphs once you stop thinking of the canvas like a normal chat window."
+            action: "Command palette",
+            description:
+              "Every action in the app, by name. If you cannot remember where a control lives, this is faster than remembering.",
+            keys: ["Ctrl+K"],
           },
           {
-            "action": "Zoom and Focus",
-            "description": "Use Ctrl + Mouse Wheel to zoom, or use the toolbar buttons when you want a fixed step. The command palette (Ctrl + K) also has Zoom In, Zoom Out, and Reset View entries."
+            action: "Canvas search",
+            description:
+              "Text inside the nodes of the graph you have open. Matches are highlighted in place and you can step between them.",
+            keys: ["Ctrl+F"],
           },
           {
-            "action": "Zoom to an Area",
-            "description": "Hold Shift and drag a rectangle to zoom the view to a specific region. It is a precise way to jump into a dense subsection of a large project."
+            action: "Quick switcher",
+            description: "Jump to another saved graph by fuzzy-matching its title.",
+            keys: ["Ctrl+P"],
           },
           {
-            "action": "Fit All and Reset",
-            "description": "Fit All reframes the canvas around everything currently on it, while Reset restores the default zoom level. These two actions are the quickest recovery tools when you get lost."
+            action: "Global Search",
+            description:
+              "Across every workspace and every ingested document at once - the one to use when you know you wrote it somewhere and not where.",
           },
           {
-            "action": "Minimap and Overlays",
-            "description": "Use the Controls toggle to reveal drag, grid, and font tools, and use the minimap to jump directly to distant nodes. This becomes more valuable as your project spreads out."
-          }
-        ]
+            action: "Knowledge",
+            description:
+              "Searches your ingested knowledge base and returns the exact passage, at the exact offset, with a link back to the source where one exists. Lexical always; also vector-based once an embedding model is configured.",
+          },
+        ],
       },
       {
-        "title": "Keyboard Workflow",
-        "items": [
+        title: "Orientation",
+        items: [
           {
-            "action": "Branch Navigation",
-            "description": "Ctrl + Arrow Keys move between parent, child, and sibling nodes in the current branch. This makes branch review much faster than constant mouse travel."
+            action: "Navigation pins",
+            description:
+              "Drop a pin on a spot worth returning to, give it a name, and jump back from the Pins list. Pins are marked on the canvas itself, so they are findable without opening the list.",
           },
           {
-            "action": "Command Palette",
-            "description": "Press Ctrl + K to open a searchable command palette for layout, note creation, selection, navigation, plugin insertion, chart generation, and more. It is the fastest way to discover power-user actions."
+            action: "Filters",
+            description:
+              "View, then Focus. Filter by node kind or by branch status to dim everything you are not looking at. Nothing is hidden or moved - the filter is a lens, and Clear takes it off.",
           },
-          {
-            "action": "Canvas Search",
-            "description": "Press Ctrl + F to search across chat, code, document, image, thinking, and plugin nodes. Search results can be stepped through so you can quickly revisit important content."
-          },
-          {
-            "action": "Selection Utilities",
-            "description": "Delete removes the current selection, and the command palette also exposes focus selection, select all, collapse all, and expand all. These commands are useful once a graph becomes visually dense."
-          }
-        ]
+        ],
       },
-      {
-        "title": "Shortcut Reference",
-        "items": [
-          {
-            "action": "Ctrl + T / Ctrl + L / Ctrl + S",
-            "description": "Start a new chat, open the Library, or save the current project. These are the main project-level shortcuts you will use most often."
-          },
-          {
-            "action": "Ctrl + G / Ctrl + Shift + G",
-            "description": "Wrap the current selection in a Frame, or create a Container. A new Note has no dedicated shortcut - use the command palette (Ctrl + K) instead."
-          },
-          {
-            "action": "Ctrl + Z / Ctrl + Shift + Z / Ctrl + Y",
-            "description": "Undo, or redo (either Ctrl + Shift + Z or Ctrl + Y works - both are wired). These are gated while a text field has focus, so they never shadow ordinary in-field text undo."
-          }
-        ]
-      }
-    ]
+    ],
   },
   {
-    "name": "Organization",
-    "description": "Ways to group, label, tidy, and visually manage complex canvases as a project grows.",
-    "subsections": [
+    name: "Organizing",
+    description: "Grouping, tidying, and making a large canvas legible.",
+    subsections: [
       {
-        "title": "Structuring Large Graphs",
-        "items": [
+        title: "Structure",
+        items: [
           {
-            "action": "Frames",
-            "description": "Select node-like items and press Ctrl + G to wrap them in a frame. Frames are best for labeling a visual section of the project without forcing the grouped items to move as one rigid unit."
+            action: "Frames",
+            description: "Wrap a selection in a labelled boundary. The nodes stay independent.",
+            keys: ["Ctrl+G"],
           },
           {
-            "action": "Containers",
-            "description": "Use Ctrl + Shift + G to create a container when a set of items should move together. Containers are useful for keeping a working cluster intact while you reorganize the rest of the canvas."
+            action: "Containers",
+            description:
+              "Group nodes so they move together. Use a container when the group is one thing; use a frame when it is several things about one subject.",
+            keys: ["Ctrl+Shift+G"],
           },
           {
-            "action": "Titles and Colors",
-            "description": "Frames and containers can be renamed and recolored so sections of the graph read like chapters or workstreams. This helps when you want the canvas to double as a presentation surface."
+            action: "Titles and colors",
+            description:
+              "Rename any node, and colour frames and containers. Colour is the fastest legend a large canvas can have, and it costs nothing to change later.",
           },
           {
-            "action": "Auto-Organize Tree Layout",
-            "description": "The Organize button arranges conversational and plugin branches into a cleaner horizontal tree. It is a fast way to recover readability after a burst of exploratory work."
-          }
-        ]
+            action: "Organize",
+            description:
+              "Lays the graph out as a tree. It moves things - if you have arranged the canvas deliberately, this will undo that arrangement, and Undo will bring it back.",
+          },
+        ],
       },
       {
-        "title": "Orientation Aids",
-        "items": [
+        title: "Appearance",
+        items: [
           {
-            "action": "Navigation Pins",
-            "description": "Pins mark important places on the canvas and are saved with the chat. Use the Pins toolbar button to reveal the overlay and jump back to major milestones or hotspots."
+            action: "The View panel",
+            description:
+              "Canvas, Grid, Connections, Node Font and Focus. Pan speed, snapping, grid spacing and style, connection routing, node typography and the focus filters all live here, with Reset to Defaults pinned at the bottom.",
           },
           {
-            "action": "Grid and Guide Controls",
-            "description": "The controls overlay can enable snap-to-grid, smart guides, orthogonal routing, font controls, and faded connections. These tools are useful when a canvas needs visual cleanup rather than new AI output."
+            action: "Snapping",
+            description:
+              "Snap to Grid lands dragged nodes on grid lines. Smart Guides aligns them to their neighbours instead. Both are off by default; pick one rather than both.",
           },
           {
-            "action": "Reduce Visual Noise",
-            "description": "Combine collapse, grouping, branch isolation, and layout tools to keep the graph readable. Graphlink works best when you treat organization as part of the thinking process, not just post-processing."
-          }
-        ]
-      }
-    ]
+            action: "Quieter connections",
+            description:
+              "Fade Connections dims every line except the one under the pointer. On a graph with a hundred edges this is the difference between a diagram and a hairball.",
+          },
+          {
+            action: "Collapse",
+            description:
+              "Most node types collapse to a title bar. A branch that is finished but still worth keeping connected is exactly what collapse is for. Nodes also collapse automatically when you zoom far enough out.",
+          },
+        ],
+      },
+    ],
   },
   {
-    "name": "Plugins & Tools",
-    "description": "Specialist nodes that extend a branch into research, reasoning, coding, drafting, rendering, and comparison workflows.",
-    "subsections": [
+    name: "Plugins",
+    description: "Specialist nodes, grouped the way the picker groups them.",
+    subsections: [
       {
-        "title": "Research and Analysis",
-        "items": [
+        title: "Branch Foundations",
+        items: [
           {
-            "action": "Graphlink-Web",
-            "description": "Use this when a branch depends on current information or external sources. The node runs a web retrieval flow, summarizes the findings, and stores source links directly in the result."
+            action: "System Prompt",
+            description:
+              "Overrides the system prompt for everything downstream of it. One branch can run under different instructions than its siblings, which is the cheapest A/B test in the app.",
           },
           {
-            "action": "Conversation Node",
-            "description": "Creates a self-contained linear chat surface inside the graph. Use it when you want a focused sub-conversation that can be pruned and iterated without expanding the main branch too aggressively."
-          }
-        ]
+            action: "Conversation Node",
+            description: "A self-contained linear chat, for when you do not want to branch.",
+          },
+        ],
       },
       {
-        "title": "Build, Draft, and Render",
-        "items": [
+        title: "Reasoning and Research",
+        items: [
           {
-            "action": "System Prompt",
-            "description": "Adds a branch-scoped system prompt note that changes assistant behavior only for that conversation path. This is ideal when you want a role, tone, or instruction change without affecting the rest of the project."
+            action: "Web Research",
+            description:
+              "Searches, retrieves and summarizes web sources with citations, under a bounded network policy. Results carry their sources, so a claim can be checked rather than taken.",
+          },
+        ],
+      },
+      {
+        title: "Build and Execution",
+        items: [
+          {
+            action: "Gitlink",
+            description:
+              "Loads a GitHub repository as structured context, prepares file-level changes, and writes nothing until you approve the diff.",
           },
           {
-            "action": "Virtual Environment Runner",
-            "description": "Runs Python in a per-node virtualenv with declared dependencies - the venv isolates installed packages, not the operating system; code still runs with your full account privileges. Use it for implementation, debugging, code generation, and dependency-aware, reproducible execution."
+            action: "Virtual Environment Runner",
+            description:
+              "Runs Python in an isolated virtualenv with per-node requirements. Read the isolation claim precisely: it isolates installed packages, not the operating system. Code runs with your user account's privileges.",
           },
           {
-            "action": "Artifact / Drafter",
-            "description": "A living markdown drafting surface for reports, specs, briefs, and other documents that need repeated revision. It is the most natural place to keep polished long-form output inside the graph."
+            action: "HTML Renderer",
+            description: "Renders HTML from a parent node so you can see the page, not the markup.",
           },
+        ],
+      },
+      {
+        title: "Workflow and Drafting",
+        items: [
           {
-            "action": "HTML Renderer",
-            "description": "Turns HTML or UI markup into a preview pane inside the graph and can pop the preview into a separate window. It is the right tool when a branch needs visual feedback instead of plain text output."
-          }
-        ]
-      }
-    ]
+            action: "Artifact / Drafter",
+            description:
+              "A split-pane node for drafting and refining a Markdown document over many turns.",
+          },
+        ],
+      },
+    ],
   },
   {
-    "name": "Builder",
-    "description": "An agent that plans a checklist for a goal, then constructs it on the canvas one supervised step at a time - the same tools you could use by hand, run for you.",
-    "subsections": [
+    name: "The Builder",
+    description: "An agent that plans a job as a checklist, then builds it on the canvas.",
+    subsections: [
       {
-        "title": "How a Build Works",
-        "items": [
+        title: "Starting a Build",
+        items: [
           {
-            "action": "Goal, Plan, Build",
-            "description": "Give the Builder a goal, or pick a saved recipe, and it drafts a short checklist first. The plan is a real node on the canvas - review it, edit it if you want, and only then start the build."
+            action: "Describe the goal",
+            description:
+              "A sentence or two of what you want built. The Builder turns it into a plan you can read and edit before anything runs - the plan is the point, and it is worth reading.",
           },
           {
-            "action": "What It Can Build",
-            "description": "Create and edit chat, note, code, document, and web research nodes; execute Python; generate charts and assistant replies from a node's content; run web research and search your knowledge base - the same actions available to you, driven for you."
+            action: "Recipes",
+            description:
+              "A saved goal and step list. Starting from one skips the planning pass entirely, because the checklist already exists. You can save any finished build as a recipe and delete your own again later.",
           },
           {
-            "action": "Oversight: Co-pilot vs. Autopilot",
-            "description": "Co-pilot asks you to approve every mutating step. Autopilot runs to completion within its budgets, creating and editing nodes and executing code without asking - network access still asks every time, in either mode."
+            action: "Co-pilot or Autopilot",
+            description:
+              "Co-pilot asks before every mutating step. Autopilot does not - it creates nodes and executes code without stopping, inside the budgets. Network access still asks either way. Choose Autopilot when you have read the plan and believe it.",
           },
           {
-            "action": "Budgets Are Hard Limits",
-            "description": "Steps, tokens, and time are capped before a build starts. A budget breach pauses the build with its state intact rather than losing progress - raise the limit and resume to pick up exactly where it stopped."
-          }
-        ]
+            action: "Budgets are hard limits",
+            description:
+              "Quick, Standard and Extended set steps, tokens and wall-clock time; the exact numbers are under Set exact limits. A breach pauses the build rather than failing it, so a paused run can be resumed once you have decided it is worth more.",
+          },
+        ],
       },
       {
-        "title": "The Plan Node",
-        "items": [
+        title: "While It Runs",
+        items: [
           {
-            "action": "Watch It Build",
-            "description": "The plan node shows each step's status live, plus an expandable activity log of every tool call the build made and whether it succeeded."
+            action: "Watch the checklist",
+            description:
+              "The running step is highlighted on the plan card, spent budgets are shown against their limits, and every tool call the run has made is listed - including the ones that failed.",
           },
           {
-            "action": "Pause, Stop, and Resume",
-            "description": "A build can be stopped at any time. A paused, stopped, or failed build resumes from exactly where it left off - even after restarting the app, since the plan node itself is the resume point."
+            action: "Edit the plan",
+            description:
+              "Steps can be retitled, reordered and removed while the build is startable or paused. Steps that have already run are history and cannot be rewritten.",
           },
           {
-            "action": "Undo a Build",
-            "description": "Once a build finishes or stops, Undo Build reverts everything it did in one action, the same as undoing any other change."
+            action: "Stopping is permanent",
+            description:
+              "Pausing and interruptions can be resumed. Stop cannot - a stopped build is over, and the way forward is Undo build or a new one. This is deliberate, and the card says so before you press it.",
           },
           {
-            "action": "Save and Reuse Recipes",
-            "description": "Turn a finished build's plan into a reusable recipe from its own node's Save as Recipe action. A saved recipe can be deleted from the launcher when you no longer need it - built-in recipes cannot be removed."
-          }
-        ]
-      }
-    ]
+            action: "Undo build",
+            description:
+              "Reverses what the build did, back as far as the first thing you changed yourself afterwards. Your own later edits survive.",
+          },
+        ],
+      },
+    ],
   },
   {
-    "name": "Agent",
-    "description": "An agent that works inside a folder - reading, writing, running commands - over as many steps as the task needs, and answers on the canvas.",
-    "subsections": [
+    name: "The Agent",
+    description: "An agent that works inside a real folder on your machine.",
+    subsections: [
       {
-        "title": "Starting One",
-        "items": [
+        title: "Setting One Up",
+        items: [
           {
-            "action": "Task and Workspace",
-            "description": "Open Agent, describe the task, and choose the folder it should work in. Choosing the folder in the launcher is what grants access to it - pick nothing and the agent gets a private scratch folder of its own instead."
+            action: "Task and workspace",
+            description:
+              "Describe the job, then choose where it happens. The default is a private scratch folder. Choosing one of your own folders is what grants access to it - the agent cannot reach outside the folder it is bound to.",
           },
           {
-            "action": "What It Can Do",
-            "description": "Read, write, and search files in its workspace; run shell commands and Python there; keep long-running processes open; search your knowledge base; delegate read-only lookups to subagents; and build on the canvas it lives in."
+            action: "What it can do",
+            description:
+              "Read and write files in its workspace, run shell commands and Python there, and search your knowledge base. It works in turns and reports back on the canvas.",
           },
           {
-            "action": "Turn Budget",
-            "description": "Max turns is a hard limit on model turns for one task. Hitting it stops the task with everything it did intact - send a follow-up to continue from there."
+            action: "Turn budget",
+            description:
+              "A hard cap on how many turns one task gets. The run stops when it is reached, which is the backstop against an agent that has misunderstood the job and is busy being thorough about it.",
           },
           {
-            "action": "AGENTS.md",
-            "description": "A file named AGENTS.md at the workspace root joins the agent's instructions, so a folder can carry its own conventions. It is reference material only: it cannot grant a capability or waive an approval."
-          }
-        ]
+            action: "AGENTS.md",
+            description:
+              "If the workspace has one, the agent reads it. Project conventions belong there rather than in every task description.",
+          },
+        ],
       },
       {
-        "title": "Working With One",
-        "items": [
+        title: "Working With It",
+        items: [
           {
-            "action": "Approvals",
-            "description": "Anything that changes your machine asks first, showing the exact command or file content. Approve once, or allow that tool for the rest of the session - except for commands that cannot be undone, which always ask again."
+            action: "Approvals",
+            description:
+              "Anything that changes your machine asks first, showing the exact command or file write. Deny is the focused default. Some tools can be approved for the whole session; the ones that run arbitrary code cannot, by design.",
           },
           {
-            "action": "Watch It Work",
-            "description": "The card shows a live checklist when the agent keeps one, an activity log of every tool call, and how much of its context budget the conversation fills. When it needs you, the status says so."
+            action: "It can ask you things",
+            description:
+              "When the agent needs a decision it parks and waits, and the card gives you a box to answer in. A parked agent is not a stuck one.",
           },
           {
-            "action": "Answer, Follow Up, and Stop",
-            "description": "The agent can stop and ask you a question mid-run. Once a task ends - done, stopped, or failed - send a follow-up to keep the same conversation going; its history lives with its workspace, so it survives a restart."
+            action: "Follow up",
+            description:
+              "Send another instruction to a finished agent and it picks up with its workspace and history intact.",
           },
           {
-            "action": "The Agent vs. the Builder",
-            "description": "The Builder constructs nodes on the canvas from a plan you approve. The Agent works in a real folder on disk and reports back. Reach for the Agent when the work is files and commands, not canvas structure."
-          }
-        ]
-      }
-    ]
+            action: "Agent or Builder?",
+            description:
+              "The Builder builds a graph - nodes, charts, documents, on the canvas. The Agent changes files in a folder. If the output is something you want to read here, use the Builder; if it is something you want on disk, use the Agent.",
+          },
+        ],
+      },
+    ],
   },
   {
-    "name": "Settings & Models",
-    "description": "How runtime modes, providers, model routing, and quality-of-life settings shape the behavior of the application.",
-    "subsections": [
+    name: "Models and Settings",
+    description: "Providers, per-task routing, and the settings worth knowing about.",
+    subsections: [
       {
-        "title": "Runtime Modes",
-        "items": [
+        title: "Where Models Come From",
+        items: [
           {
-            "action": "Ollama (Local)",
-            "description": "Use local Ollama when you want on-device chat and reasoning. You can choose a default chat model and set a reasoning level - Off, Low, Medium, or High - to control how much the model thinks before responding."
+            action: "Ollama and Llama.cpp",
+            description:
+              "Local models, each with its own Settings page. Nothing leaves the machine. Both scan for installed models rather than making you type an identifier.",
           },
           {
-            "action": "API Endpoint Mode",
-            "description": "Use API Endpoint mode for OpenAI-compatible providers or Gemini. This unlocks hosted models, per-task model routing, and the image-generation path used by the canvas."
+            action: "API Endpoint",
+            description:
+              "OpenAI-compatible providers and Gemini. This is also the path that image generation runs on - local providers have none.",
           },
           {
-            "action": "Per-Task Model Selection",
-            "description": "Graphlink can store different models for title generation, main chat, chart generation, image generation, web validation, and web summarization. This lets you optimize cost and quality across different tools."
-          }
-        ]
+            action: "Per-task routing",
+            description:
+              "Chat, chat naming, chart generation, web validation and web summarization can each use a different model, and the API path adds image generation. The naming model is the one to make cheap: it writes titles and runs constantly.",
+          },
+          {
+            action: "Routing preference",
+            description:
+              "Cheapest Capable, Fastest or Best Quality, for tasks that are set to choose automatically rather than pinned to a model.",
+          },
+        ],
       },
       {
-        "title": "Personalization and Feedback",
-        "items": [
+        title: "Worth Knowing",
+        items: [
           {
-            "action": "Token Counter",
-            "description": "When enabled, the token counter estimates how many tokens your current draft will use before you send it. It is useful for keeping an eye on how large a request is getting."
+            action: "Reasoning level",
+            description:
+              "Off, Low, Medium or High, in the composer, per message. Higher levels think longer and cost more; High on a question that did not need it is the most common way to waste tokens here.",
           },
           {
-            "action": "Provider-Specific Guidance",
-            "description": "API settings explain which providers are supported and which fields matter for each one. OpenAI-compatible endpoints and Gemini use slightly different setup and model-loading paths."
+            action: "Token counter",
+            description:
+              "Estimates what the draft in the composer will cost before you send it. An estimate, not an invoice.",
           },
           {
-            "action": "Optional Feature Dependencies",
-            "description": "Some features rely on optional libraries, such as PDF or DOCX import-export support and HTML preview support. When something is unavailable, Graphlink tries to tell you what dependency is missing."
-          }
-        ]
-      }
-    ]
+            action: "Resource limits",
+            description:
+              "Caps on what executed code may consume. They apply to plugin runs, sandboxes and agents alike, including under Autopilot.",
+          },
+          {
+            action: "MCP servers and integrations",
+            description:
+              "Connect external tools through their own Settings pages. What a connected server exposes becomes available to agents - worth knowing before connecting one you have not read.",
+          },
+          {
+            action: "Theme",
+            description: "Match System, Light or Dark. The canvas follows.",
+          },
+          {
+            action: "Optional dependencies",
+            description:
+              "PDF and DOCX handling and HTML preview need libraries that may not be installed. When one is missing the app names it rather than failing quietly.",
+          },
+        ],
+      },
+    ],
   },
   {
-    "name": "Saving & Output",
-    "description": "Persistence, attachments, exports, and the ways Graphlink turns branch results into reusable project deliverables.",
-    "subsections": [
+    name: "Saving and Output",
+    description: "Persistence, attachments, and getting work back out.",
+    subsections: [
       {
-        "title": "Persistence and Library",
-        "items": [
+        title: "Saving",
+        items: [
           {
-            "action": "Background Saves",
-            "description": "Use Save to persist the current graph, including chats, plugin nodes, notes, pins, frames, containers, and view state. This makes it practical to treat a chat like a reusable workspace instead of a disposable session."
+            action: "Save",
+            description:
+              "Writes the current graph to the Library. Work is also saved in the background as you go, so Save is a bookmark more than a rescue.",
+            keys: ["Ctrl+S"],
           },
           {
-            "action": "Chat Library",
-            "description": "Open the Library with the toolbar or Ctrl + L to reopen, rename, organize, or continue past projects. The Library is the main entry point for resuming work across sessions."
+            action: "Library",
+            description:
+              "Every saved graph, grouped by when you touched it, with a preview of its last message. Rename and delete are per row.",
+            keys: ["Ctrl+L"],
           },
           {
-            "action": "Local Project Record",
-            "description": "Because the graph is saved as a full project state, your canvas can function as a working notebook, task map, and decision trail all at once."
-          }
-        ]
+            action: "It is all local",
+            description:
+              "Graphs, attachments and knowledge are stored on your machine. Nothing is uploaded except what you send to whichever model provider you have configured.",
+          },
+        ],
       },
       {
-        "title": "Attachments and Exports",
-        "items": [
+        title: "In and Out",
+        items: [
           {
-            "action": "Supported Attachments",
-            "description": "You can attach common text and code files, JSON, CSV, XML, HTML, CSS, JS, and Markdown. PDF and DOCX attachments are also supported when their reader libraries are installed."
+            action: "Attachments",
+            description:
+              "Drop files onto the canvas or attach them in the composer. Text, documents, code and images all become nodes you can branch from.",
           },
           {
-            "action": "Drag and Drop",
-            "description": "Files can be staged by dragging them onto the canvas or by using the paperclip button. The attachment becomes a visible branch node so it is clear what source material was provided."
+            action: "Export PNG",
+            description:
+              "The whole canvas as an image - the fastest way to show someone the shape of a project without giving them the project.",
           },
           {
-            "action": "Export Formats",
-            "description": "Chat, document, and code content can be exported in practical formats such as TXT, Markdown, HTML, and PDF. Chat and document content also support DOCX, and code can be exported as a Python script."
+            action: "Copy anything",
+            description:
+              "Code blocks, replies and document text all copy out cleanly. A graph is a place to think, not a place work gets trapped.",
           },
-          {
-            "action": "Generated Outputs",
-            "description": "Image generation, chart creation, takeaway notes, explainers, group summaries, and branch diff notes all let you promote transient AI output into reusable project artifacts."
-          }
-        ]
-      }
-    ]
+        ],
+      },
+    ],
   },
   {
-    "name": "Use Cases",
-    "description": "Practical ways to use the full application beyond simple back-and-forth prompting.",
-    "subsections": [
+    name: "Keyboard",
+    description: "Every global shortcut. All of them are Ctrl on Windows and Linux, Cmd on macOS.",
+    subsections: [
       {
-        "title": "Common Workflows",
-        "items": [
-          {
-            "action": "Research and Comparison",
-            "description": "Start with a broad question, branch different answers, use Graphlink-Web to ground facts, and finish with Branch Lens when you want a disciplined comparison between competing paths."
-          },
-          {
-            "action": "Coding and Debugging",
-            "description": "Ask for code on the main canvas, then move promising results into a Virtual Environment Runner node to iterate, install dependencies, and run it for real. This keeps ideation and execution connected."
-          },
-          {
-            "action": "Planning and Execution",
-            "description": "Use Workflow Architect when a goal feels large or undefined. It can convert a vague request into a clearer plugin sequence so your next few steps are already framed."
-          },
-          {
-            "action": "Shipping and Hardening",
-            "description": "When a branch is close to done, run Quality Gate to judge whether it actually meets the bar. It is especially useful before handoff, release, demos, or any moment when confidence matters more than momentum."
-          },
-          {
-            "action": "Long-Form Writing",
-            "description": "Keep source research nearby, use reasoning where needed, and let Artifact / Drafter hold the polished document. This is a strong workflow for specs, reports, proposals, and internal documentation."
-          }
-        ]
+        title: "Project",
+        items: [
+          { action: "New chat", description: "Starts a fresh graph.", keys: ["Ctrl+T"] },
+          { action: "Open the Library", description: "Your saved graphs.", keys: ["Ctrl+L"] },
+          { action: "Save", description: "Writes the current graph to the Library.", keys: ["Ctrl+S"] },
+        ],
       },
       {
-        "title": "Knowledge Work Patterns",
-        "items": [
+        title: "Finding",
+        items: [
+          { action: "Command palette", description: "Every action, by name.", keys: ["Ctrl+K"] },
+          { action: "Search this graph", description: "Text inside the nodes on screen.", keys: ["Ctrl+F"] },
+          { action: "Quick switcher", description: "Jump to another saved graph.", keys: ["Ctrl+P"] },
+        ],
+      },
+      {
+        title: "Editing",
+        items: [
           {
-            "action": "Meeting and Study Notes",
-            "description": "Generate takeaways, explainer notes, and group summaries around important nodes so the final canvas reads like a structured knowledge map rather than a raw transcript dump."
+            action: "Undo",
+            description: "The undo stack is owned by the backend, so it outlasts a lot.",
+            keys: ["Ctrl+Z"],
           },
           {
-            "action": "Product and UX Exploration",
-            "description": "Branch alternative product directions, draft requirements, render HTML prototypes, and compare variants without losing the reasoning that led to each option."
+            action: "Redo",
+            description: "Both spellings are wired - use whichever your hands already know.",
+            keys: ["Ctrl+Shift+Z", "Ctrl+Y"],
           },
           {
-            "action": "Data Storytelling",
-            "description": "Turn a branch that contains numbers or structure into charts, then keep the explanation, source inputs, and conclusions beside the visualization on the same canvas."
+            action: "Frame the selection",
+            description: "A labelled boundary around what is selected.",
+            keys: ["Ctrl+G"],
           },
           {
-            "action": "Prompt Variation by Branch",
-            "description": "Use System Prompt nodes and branching to test different assistant behaviors against the same underlying project. This is especially useful when you want to compare tone, role, or working style."
-          }
-        ]
-      }
-    ]
-  }
+            action: "Container from the selection",
+            description: "A group that moves as one.",
+            keys: ["Ctrl+Shift+G"],
+          },
+        ],
+      },
+      {
+        title: "Branches",
+        items: [
+          {
+            action: "Move through the branch",
+            description: "Parent, child and siblings of the selected node.",
+            keys: ["Ctrl+←", "Ctrl+→"],
+          },
+          { action: "Compare branches", description: "Two side by side.", keys: ["Ctrl+Shift+C"] },
+          {
+            action: "Synthesize branches",
+            description: "Merge what survived comparison into one result.",
+            keys: ["Ctrl+Shift+M"],
+          },
+        ],
+      },
+      {
+        title: "In a Text Field",
+        items: [
+          {
+            action: "Shortcuts stand down",
+            description:
+              "While a text field has focus, editing keys go to the field. Ctrl+Z undoes your typing, not the graph. The exceptions are deliberate: Ctrl+S saves and Ctrl+K opens the palette from anywhere, because both are reflexes worth honouring mid-sentence.",
+          },
+        ],
+      },
+    ],
+  },
 ];

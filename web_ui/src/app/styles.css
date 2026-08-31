@@ -4654,30 +4654,66 @@ mark.document-view-search-match-current {
   border-color: var(--gl-palette-selection);
 }
 
+/* -- Help panel body ------------------------------------------------------
+
+   Reference content, styled as reference content. Every item used to be its
+   own filled, rounded card: seventy identical grey boxes stacked down the
+   pane, which is a lot of ink spent saying "these things are separate" about
+   a list whose entries were never in danger of being confused for each
+   other. A card earns its box when it is a distinct object among unlike
+   neighbours. A run of like entries wants type and space instead - a name
+   that reads as a name, prose that reads as prose, and enough gap between
+   them to see where one stops.
+
+   The type sizes went up. Body copy sat at 11px in the MUTED token, which
+   is the treatment this design system uses for captions and hints - fine
+   for a one-line tooltip under a checkbox, and the wrong instrument for the
+   only long-form reading surface in the app. */
+
 .help-rail {
   width: 220px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   padding: 14px;
   overflow-y: auto;
   border-right: 1px solid var(--gl-surface-border);
 }
 
-.help-rail-intro {
-  margin: 0 0 4px;
-  font-size: 11px;
-  line-height: 1.4;
+/* Search over browse. A query replaces the section list's job rather than
+   narrowing inside it - see HelpDialog.tsx's own note on why the two are
+   not allowed to run at once. */
+.help-search {
+  box-sizing: border-box;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-field, var(--gl-surface-inset));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 7px;
+}
+
+.help-search::placeholder {
   color: var(--gl-surface-text-muted);
+}
+
+.help-search:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
 }
 
 .help-rail-buttons {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
+/* Hover and selected were the same fill, so the pointer made every row look
+   like the current one. They step now: idle, hover, selected. */
 .help-rail-button {
   box-sizing: border-box;
   width: 100%;
@@ -4686,22 +4722,30 @@ mark.document-view-search-match-current {
   font: inherit;
   font-size: 12px;
   font-weight: 600;
-  color: var(--gl-surface-text-muted);
+  color: var(--gl-surface-text-secondary);
   background: transparent;
   border: 1px solid transparent;
   border-radius: 7px;
   cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
 }
 
 .help-rail-button:hover {
-  background-color: var(--gl-neutral-button-hover);
+  background-color: var(--gl-neutral-button-background);
   color: var(--gl-surface-text-primary);
+}
+
+.help-rail-button:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: -1px;
 }
 
 .help-rail-button.active {
   background-color: var(--gl-neutral-button-hover);
-  border-color: var(--gl-surface-border);
-  color: var(--gl-surface-text-primary);
+  border-color: var(--gl-neutral-button-border);
+  color: var(--gl-surface-text-bright);
 }
 
 .help-content {
@@ -4709,7 +4753,7 @@ mark.document-view-search-match-current {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  padding: 16px 20px;
+  padding: 18px 22px;
   overflow-y: auto;
   /* Some Help sections overflow and get a scrollbar, others don't - without
      reserving the gutter unconditionally, every click between them shifted
@@ -4718,56 +4762,111 @@ mark.document-view-search-match-current {
 }
 
 .help-content-title {
-  margin: 0 0 4px;
-  font-size: 16px;
+  margin: 0 0 5px;
+  font-size: 17px;
   font-weight: 700;
-  color: var(--gl-surface-text-primary);
+  letter-spacing: -0.01em;
+  color: var(--gl-surface-text-bright);
 }
 
 .help-content-description {
-  margin: 0 0 14px;
-  font-size: 12px;
-  color: var(--gl-surface-text-muted);
+  margin: 0 0 20px;
+  max-width: 62ch;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--gl-surface-text-secondary);
 }
 
 .help-scroll-area {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 22px;
 }
 
 .help-section-block {
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
 .help-section-title {
-  margin: 0;
-  font-size: 12px;
+  margin: 0 0 12px;
+  padding-bottom: 8px;
+  font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.14em;
   color: var(--gl-surface-text-muted);
+  border-bottom: 1px solid var(--gl-surface-border);
 }
 
-.help-item-card {
-  padding: 8px 10px;
-  background-color: var(--gl-neutral-button-hover);
-  border-radius: 8px;
+.help-item + .help-item {
+  margin-top: 16px;
 }
 
 .help-item-action {
-  margin: 0 0 2px;
-  font-size: 12px;
-  font-weight: 650;
-  color: var(--gl-surface-text-primary);
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 3px;
 }
 
+.help-item-name {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--gl-surface-text-bright);
+}
+
+/* Measure, not width. The content column is ~560px, which at this size is
+   well past the point where the eye starts losing its place between lines. */
 .help-item-description {
   margin: 0;
-  font-size: 11px;
+  max-width: 62ch;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--gl-surface-text-secondary);
+}
+
+/* Only in search results: which section and subsection this entry came
+   from, since a result list has no headings to sit under. */
+.help-item-context {
+  margin: 4px 0 0;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--gl-surface-text-muted);
+}
+
+/* A key chord, drawn as a key. Shortcuts used to be spelled into the item's
+   own title in prose, where they carried no more weight than the words
+   around them - the one kind of content on this page that is scanned rather
+   than read. */
+.help-item-keys {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.help-item-keys-or {
+  margin-right: 6px;
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+.help-kbd {
+  display: inline-block;
+  padding: 2px 7px;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
 }
 
 /* -- Plugin picker popover (R2.5c) ----------------------------------------- */
