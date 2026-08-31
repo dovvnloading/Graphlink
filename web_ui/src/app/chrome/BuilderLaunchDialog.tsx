@@ -22,15 +22,29 @@ import { CustomSelect } from "./CustomSelect";
  * graph edits and code execution will proceed WITHOUT per-step approval
  * (resource caps still apply); network access always still asks.
  *
- * stage 8.7 rebuild: this was the last dialog in the app still using a bare
- * `<select>` (CustomSelect exists precisely to retire that - see its own
- * module doc) and three unlabelled-scale number spinners with no sense of
- * what they cost. Now: CustomSelect for the recipe picker, a live preview
- * of a selected recipe's own steps (the payload always carried them -
- * nothing rendered them), named budget TIERS with a plain-language summary
- * line in place of raw numbers, and the exact numbers moved behind an
- * "Advanced" disclosure for whoever wants them. Recipe deletion (builder/
- * deleteRecipe) rounds out the lifecycle saveRecipe started.
+ * FORM ORDER. The goal comes first and the recipe picker second, which is
+ * the reverse of how this launcher shipped. A recipe is an optional
+ * shortcut past the goal; leading with it put the exception before the
+ * rule, and it also stranded the one line explaining the whole dialog
+ * ("Describe a build yourself, or pick a saved recipe") underneath the
+ * recipe field, where it read as help text for the picker rather than as
+ * the choice the form is actually offering. That sentence is the dialog's
+ * intro now, and each field carries help about itself.
+ *
+ * SECTIONS. Oversight and Budgets are still real <fieldset>/<legend>
+ * elements - a radio group needs the grouping semantics and the legend is
+ * its accessible name - but they no longer render as browser-default
+ * fieldsets. The notched 1px box was the only instance of that treatment in
+ * the app; the legend is styled as a section title, exactly like
+ * ViewPopover's and Settings' own section headings (styles.css), so this
+ * dialog reads as part of the same product as everything around it.
+ *
+ * SHARED VOCABULARY. Every `builder-launch-*` class here is also used by
+ * HarnessLaunchDialog (the workspace-agent launcher), which is why the
+ * work of this pass is mostly in styles.css rather than in this file: the
+ * two launchers are one design, and fixing the shared classes fixes both.
+ * Anything genuinely specific to the Builder - the recipe preview card, the
+ * oversight choice cards - stays scoped to its own class here.
  */
 
 const DEFAULT_MAX_STEPS = 12;
@@ -185,9 +199,38 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
         preset.maxTokens === maxTokens &&
         preset.maxWallSeconds === maxWallSeconds,
     )?.id ?? null;
+  const canStart = Boolean(goal.trim() || recipe);
 
   return (
     <Dialog name="builder-launch" title="Builder" className="builder-launch-dialog">
+      {/* The one sentence that says what this dialog is for. It existed
+          before, stranded under the recipe picker where it read as help for
+          that field; nothing at the top of the dialog explained the Builder
+          at all. */}
+      <p className="builder-launch-intro">
+        The Builder plans a job as a checklist, then works through it on the
+        canvas. Describe what you want built, or start from a saved recipe.
+      </p>
+
+      <div className="builder-launch-field">
+        <label className="builder-launch-label" htmlFor="builder-goal">
+          Goal
+        </label>
+        <textarea
+          id="builder-goal"
+          className="builder-launch-goal"
+          placeholder="Research recent solar output trends, compute the growth rate, and chart it"
+          value={goal}
+          onChange={(event) => setGoal(event.target.value)}
+          rows={3}
+        />
+        <p className="builder-launch-hint">
+          {recipe
+            ? "Optional - the recipe carries its own goal. Anything typed here is added to it."
+            : "One or two sentences. The Builder turns this into a plan you can review before anything runs."}
+        </p>
+      </div>
+
       <div className="builder-launch-field">
         {/* A plain heading, not a <label>: CustomSelect is not a native
             form control with an id to associate via htmlFor, and it
@@ -209,17 +252,23 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
           onChange={setRecipe}
           ariaLabel="Recipe"
         />
-        {selectedRecipe ? (
+        {selectedRecipe && (
           <div className="builder-launch-recipe-preview">
             {selectedRecipe.description && (
-              <p className="builder-launch-hint">{selectedRecipe.description}</p>
+              <p className="builder-launch-recipe-description">{selectedRecipe.description}</p>
             )}
             {selectedRecipe.steps.length > 0 && (
-              <ol className="builder-launch-recipe-steps">
-                {selectedRecipe.steps.map((title, index) => (
-                  <li key={index}>{title}</li>
-                ))}
-              </ol>
+              <>
+                <p className="builder-launch-recipe-steps-label">
+                  Starts with {selectedRecipe.steps.length} step
+                  {selectedRecipe.steps.length === 1 ? "" : "s"}
+                </p>
+                <ol className="builder-launch-recipe-steps">
+                  {selectedRecipe.steps.map((title, index) => (
+                    <li key={index}>{title}</li>
+                  ))}
+                </ol>
+              </>
             )}
             {!selectedRecipe.builtIn && (
               <button
@@ -232,32 +281,15 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
               </button>
             )}
           </div>
-        ) : (
-          <p className="builder-launch-hint">Describe a build yourself, or pick a saved recipe.</p>
-        )}
-      </div>
-
-      <div className="builder-launch-field">
-        <label className="builder-launch-label" htmlFor="builder-goal">
-          What should the Builder construct?
-        </label>
-        <textarea
-          id="builder-goal"
-          className="builder-launch-goal"
-          placeholder="e.g. Research recent solar output trends, compute the growth rate, and chart it"
-          value={goal}
-          onChange={(event) => setGoal(event.target.value)}
-          rows={3}
-        />
-        {recipe && (
-          <p className="builder-launch-hint">
-            Optional - the recipe carries its own goal. Anything typed here is added to it.
-          </p>
         )}
       </div>
 
       <fieldset className="builder-launch-fieldset">
         <legend>Oversight</legend>
+        {/* Both choices are cards, and both are always drawn as cards. The
+            selected one used to be the only one with a surface at all, so
+            it read as a pressed button sitting next to a line of plain
+            text rather than as one of two peers. */}
         <label className={`builder-launch-choice${mode === "copilot" ? " selected" : ""}`}>
           <input
             type="radio"
@@ -289,7 +321,6 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
 
       <fieldset className="builder-launch-fieldset">
         <legend>Budgets</legend>
-        <p className="builder-launch-hint">Hard limits - a breach pauses the build.</p>
         <div className="view-segment" role="group" aria-label="Budget preset">
           {BUDGET_PRESETS.map((preset) => (
             <button
@@ -307,10 +338,16 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
             </button>
           ))}
         </div>
-        <p className="builder-launch-hint">{formatBudgetLine(maxSteps, maxTokens, maxWallSeconds)}</p>
+        {/* What the chosen tier actually costs, promoted out of muted
+            micro-type: this is the consequential number in the dialog and
+            it was the smallest text on screen. */}
+        <p className="builder-launch-budget-summary">
+          {formatBudgetLine(maxSteps, maxTokens, maxWallSeconds)}
+        </p>
+        <p className="builder-launch-hint">Hard limits - a breach pauses the build.</p>
 
         <details className="builder-launch-advanced">
-          <summary>Advanced</summary>
+          <summary>Set exact limits</summary>
           <div className="builder-launch-budgets">
             <label className="builder-launch-budget">
               <span className="builder-launch-budget-label">Max steps</span>
@@ -369,11 +406,17 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
       )}
 
       <div className="builder-launch-actions">
+        {/* Why the button is dead, said out loud. A disabled primary with
+            no explanation is the most common way a first-run user gets
+            stuck in a dialog like this one. */}
+        {!canStart && (
+          <p className="builder-launch-actions-hint">Describe a goal, or pick a recipe.</p>
+        )}
         <button
           type="button"
           className="builder-launch-start"
           onClick={startBuild}
-          disabled={starting || (!goal.trim() && !recipe)}
+          disabled={starting || !canStart}
         >
           {starting ? "Planning…" : recipe ? "Start from recipe" : "Plan the build"}
         </button>

@@ -2153,9 +2153,18 @@ body,
 
 /* Segmented control: one connected group for mutually-exclusive choices
    (grid style, spacing presets, drag presets), replacing loose buttons. */
+/* A segmented control: a recessed track with one raised, selected segment.
+   The track is what makes the selection readable - previously every segment
+   carried the same --gl-neutral-button-background fill and the selected one
+   was painted --gl-neutral-button-pressed, which is a step DARKER on the
+   dark palette. So the active segment was the dimmest of the three, and
+   merely hovering an inactive one lit it brighter than the selection. The
+   three states now step in one direction on both palettes:
+   track -> hover -> selected. */
 .view-segment {
   display: flex;
   margin-top: 6px;
+  background-color: var(--gl-surface-inset);
   border: 1px solid var(--gl-neutral-button-border);
   border-radius: 6px;
   overflow: hidden;
@@ -2168,10 +2177,13 @@ body,
   font-family: inherit;
   padding: 5px 0;
   color: var(--gl-surface-text-secondary);
-  background-color: var(--gl-neutral-button-background);
+  background-color: transparent;
   border: none;
   border-left: 1px solid var(--gl-neutral-button-border);
   cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
 }
 
 .view-segment-btn:first-child {
@@ -2179,12 +2191,17 @@ body,
 }
 
 .view-segment-btn:hover {
-  background-color: var(--gl-neutral-button-hover);
+  background-color: var(--gl-neutral-button-background);
   color: var(--gl-surface-text-primary);
 }
 
+.view-segment-btn:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: -2px;
+}
+
 .view-segment-btn.active {
-  background-color: var(--gl-neutral-button-pressed, var(--gl-neutral-button-hover));
+  background-color: var(--gl-neutral-button-hover);
   color: var(--gl-surface-text-bright);
 }
 
@@ -7420,10 +7437,33 @@ mark.document-view-search-match-current {
   background-color: var(--gl-neutral-button-hover);
 }
 
-/* -- ADR-008 stage 8.3: the Builder (plan node + launcher) ---------------- */
+/* -- ADR-008 stage 8.3: the Builder (plan node + launcher) ----------------
+
+   MONOCHROME, ON PURPOSE - AND WHAT THAT COSTS. This app's palette is a
+   deliberate graphite monochrome, and its four semantic status tokens
+   currently resolve to #848484 (error), #919191 (warning), #838383
+   (success) and #828282 (info). They are the same grey. Everything in this
+   block that previously distinguished a state by swapping between those
+   tokens - a done step from a failed one, a done build from a failed build
+   - was distinguishing nothing: one luminance level out of 255, on a card
+   the user is reading from across a canvas.
+
+   So state is carried here by SHAPE, WEIGHT and FILL, and only then tinted:
+   a check versus a cross versus a ring (PlanNodeView's StepMarker), a
+   filled dot versus a hollow one versus a square (the status dot below),
+   an emphasized surface versus a bare one. The semantic tokens are still
+   applied where they add anything, but nothing depends on them alone. This
+   also happens to be the accessible answer, which is not a coincidence -
+   "never encode meaning in colour alone" is the same rule.
+
+   SHARED VOCABULARY. HarnessNodeView (the workspace agent card) renders
+   against nearly all of these classes on purpose - status band, detail,
+   budgets, activity log, approval panel, buttons. Rules here are written to
+   hold for both cards, and the few Builder-only pieces (the step list, the
+   step editor) say so. */
 
 .plan-node {
-  min-width: 300px;
+  min-width: 320px;
   max-width: 420px;
 }
 .plan-node-title {
@@ -7452,57 +7492,196 @@ mark.document-view-search-match-current {
 .plan-node-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
+
+/* -- Status band ----------------------------------------------------------
+
+   The status used to be the loudest thing on the card - 12px semibold in
+   the brightest text colour, above a 12px step list. Status is transient
+   and the plan is the content, so this now reads as a caption with a state
+   dot, and the checklist under it carries the weight. */
 .plan-node-status {
-  font-size: 12px;
-  font-weight: 600;
   display: flex;
   align-items: center;
-  gap: 6px;
-  color: var(--gl-surface-text-primary);
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--gl-surface-text-secondary);
 }
+
+/* The state dot, as a pseudo-element so BOTH cards get it with no markup
+   change. Default: a hollow ring - "nothing is happening here". */
+.plan-node-status::before {
+  content: "";
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  background-color: transparent;
+}
+
+/* Running: a solid dot that breathes. The only motion on the card, and the
+   one thing worth an animation - "is this still going?" is the question a
+   long build gets asked most. */
+.plan-node-status-running::before,
+.plan-node-status-planning::before,
+.harness-node-status-running::before {
+  background-color: currentColor;
+  animation: plan-node-pulse 1.6s var(--gl-motion-ease) infinite;
+}
+
+@keyframes plan-node-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Done: solid, and the label steps back - the run is over and the card's
+   content is what matters now. */
+.plan-node-status-done::before,
+.harness-node-status-done::before {
+  background-color: currentColor;
+}
+
+/* Failed: a SQUARE, not a differently-tinted circle. This is the one
+   distinction the semantic tokens could not make on their own. */
+.plan-node-status-failed::before,
+.harness-node-status-failed::before {
+  border-radius: 2px;
+  background-color: currentColor;
+}
+
+/* Waiting on a person - approval, or a question. Half-filled, via a ring
+   with an inset core. */
+.plan-node-status-awaiting_approval::before,
+.plan-node-status-awaiting_start::before,
+.plan-node-status-paused::before,
+.harness-node-status-waiting::before {
+  box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
 .plan-node-status-failed { color: var(--gl-semantic-status-error); }
 .plan-node-status-done { color: var(--gl-semantic-status-success); }
 .plan-node-status-paused, .plan-node-status-interrupted { color: var(--gl-semantic-status-warning); }
+/* States that are ON THE USER read at full brightness - they are the only
+   ones that need acting on. */
+.plan-node-status-awaiting_start,
+.plan-node-status-awaiting_approval,
+.plan-node-status-running,
+.plan-node-status-planning {
+  color: var(--gl-surface-text-primary);
+}
+
 .plan-node-mode-chip {
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  padding: 1px 5px;
+  padding: 2px 5px;
   border-radius: 3px;
   border: 1px solid currentColor;
   opacity: 0.8;
 }
 .plan-node-detail {
-  font-size: 12px;
+  font-size: 11.5px;
+  line-height: 1.5;
   margin: 0;
   color: var(--gl-surface-text-muted);
 }
+
+/* -- The checklist (Builder only) ----------------------------------------
+
+   The plan is the point of this card, so it gets the type weight the status
+   band used to take. Each row is a grid rather than a baseline-aligned flex
+   row: a step's detail text belongs UNDER its title, indented to the title,
+   not trailing off the end of it where a long one dragged the row into a
+   ragged two-line wrap around the marker. No markup change - the detail
+   span is simply placed in column 2 of a second row. */
 .plan-node-steps {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 .plan-node-step {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  column-gap: 8px;
+  row-gap: 2px;
+  padding: 4px 6px;
+  border-radius: 6px;
   font-size: 12px;
+  line-height: 1.45;
   color: var(--gl-surface-text-primary);
 }
-.plan-node-step-marker { flex-shrink: 0; width: 14px; text-align: center; }
-.plan-node-step-running .plan-node-step-marker { color: var(--gl-semantic-status-info); }
-.plan-node-step-done { opacity: 0.75; }
-.plan-node-step-done .plan-node-step-marker { color: var(--gl-semantic-status-success); }
-.plan-node-step-failed .plan-node-step-marker { color: var(--gl-semantic-status-error); }
-.plan-node-step-detail {
-  font-size: 11px;
+.plan-node-step-marker {
+  grid-row: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 17px;
   color: var(--gl-surface-text-muted);
 }
+.plan-node-step-icon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.plan-node-step-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.plan-node-step-detail {
+  grid-column: 2;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--gl-surface-text-muted);
+}
+
+/* The step that is running right now gets a surface of its own. On a card
+   watched from a distance while it works, "which line is live" was a
+   half-filled text glyph and nothing else. */
+.plan-node-step-running {
+  background-color: var(--gl-surface-inset);
+}
+.plan-node-step-running .plan-node-step-marker {
+  color: var(--gl-surface-text-primary);
+  animation: plan-node-pulse 1.6s var(--gl-motion-ease) infinite;
+}
+.plan-node-step-done {
+  color: var(--gl-surface-text-muted);
+}
+.plan-node-step-done .plan-node-step-marker {
+  color: var(--gl-semantic-status-success, var(--gl-surface-text-muted));
+}
+.plan-node-step-failed .plan-node-step-marker {
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+}
+.plan-node-step-failed .plan-node-step-title {
+  color: var(--gl-surface-text-bright);
+}
+.plan-node-step-skipped {
+  color: var(--gl-surface-text-muted);
+}
+
+/* Honour a reduced-motion preference for both pulses. The dot and the
+   marker still change state; they just stop breathing. */
+@media (prefers-reduced-motion: reduce) {
+  .plan-node-status::before,
+  .plan-node-step-running .plan-node-step-marker {
+    animation: none;
+  }
+}
+
 /* ADR-021 stage 21.3: the plan-step editor. Reuses .plan-node-steps and
    .plan-node-step for layout so an editable row sits exactly where its
    read-only twin did - only the title cell swaps a span for an input, and
@@ -7510,7 +7689,20 @@ mark.document-view-search-match-current {
 .plan-node-step-editor {
   display: flex;
   flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
+}
+/* An editable row is one line: input, then its three controls. Overrides
+   the two-row grid the read-only row uses. */
+.plan-node-step-editor .plan-node-step {
+  display: flex;
+  align-items: center;
   gap: 6px;
+  padding: 0;
+  background: none;
 }
 .plan-node-step-input {
   box-sizing: border-box;
@@ -7519,11 +7711,12 @@ mark.document-view-search-match-current {
   font-family: inherit;
   font-size: 12px;
   line-height: 1.4;
-  padding: 3px 6px;
+  height: 26px;
+  padding: 0 8px;
   color: var(--gl-surface-text-primary);
-  background-color: var(--gl-surface-inset, var(--gl-surface-node-body));
+  background-color: var(--gl-surface-field, var(--gl-surface-node-body));
   border: 1px solid var(--gl-surface-border);
-  border-radius: 4px;
+  border-radius: 5px;
 }
 .plan-node-step-input:focus-visible {
   outline: 2px solid var(--gl-focus-ring);
@@ -7531,21 +7724,31 @@ mark.document-view-search-match-current {
 }
 .plan-node-step-action {
   flex-shrink: 0;
-  padding: 2px 6px;
-  font-size: 11px;
-  line-height: 1.2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   color: var(--gl-surface-text-muted);
-  background: var(--gl-neutral-button-background);
+  background: transparent;
   border: 1px solid var(--gl-surface-border);
-  border-radius: 4px;
+  border-radius: 5px;
   cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
 }
 .plan-node-step-action:hover:not(:disabled) {
-  background: var(--gl-neutral-button-hover);
+  background-color: var(--gl-neutral-button-background);
   color: var(--gl-surface-text-primary);
 }
+.plan-node-step-action:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
 .plan-node-step-action:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: default;
 }
 .plan-node-step-editor-actions {
@@ -7554,12 +7757,31 @@ mark.document-view-search-match-current {
   flex-wrap: wrap;
 }
 
+/* -- Budgets --------------------------------------------------------------
+
+   Three runs of bare grey text - "Steps 1/6 Tokens 4,232/50,000 Time
+   51s/300s" - set in the smallest, faintest style on the card. They are the
+   numbers a running build is actually watched on, and they were the hardest
+   thing on it to read. Each is a chip now, on the recessed surface, with
+   tabular figures so the digits stop jittering as they count up.
+
+   Shared with the agent card, whose own budget spans are the same shape
+   ("Turns 3 (max 20/task)"), so both get this with no markup change. */
 .plan-node-budgets {
   display: flex;
-  gap: 10px;
-  font-size: 11px;
-  color: var(--gl-surface-text-muted);
+  gap: 6px;
   flex-wrap: wrap;
+}
+.plan-node-budgets > span {
+  padding: 3px 8px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--gl-surface-text-secondary);
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 5px;
+  white-space: nowrap;
 }
 
 /* stage 8.7: the activity log. .chat-node-tool-invocations already supplies
@@ -7589,42 +7811,151 @@ mark.document-view-search-match-current {
 
 .plan-node-activity-elapsed {
   font-weight: 400;
+  font-variant-numeric: tabular-nums;
   color: var(--gl-surface-text-muted);
 }
+
+/* Brightness, not hue: --gl-semantic-status-error is #848484 against a
+   summary already set in #E0E0E0, so tinting this "error red" would have
+   made it QUIETER than the count beside it. */
+.plan-node-activity-errors {
+  color: var(--gl-surface-text-bright);
+}
+
+/* -- Tool approval --------------------------------------------------------
+
+   A blocking decision, so it gets the only emphasized surface on the card
+   and the only one that reads as an interruption rather than as content. */
 .plan-node-approval {
-  border: 1px solid var(--gl-semantic-status-warning);
-  border-radius: 6px;
-  padding: 8px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  padding: 10px;
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-left: 2px solid var(--gl-semantic-status-warning);
+  border-radius: 8px;
 }
-.plan-node-approval-title { font-size: 12px; font-weight: 600; }
+.plan-node-approval-title {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: var(--gl-surface-text-bright);
+}
+.plan-node-approval-title code {
+  font-size: 11.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background-color: var(--gl-surface-inset-deep, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+}
+/* The thing being consented to. Read as a code block, because it is one -
+   it was previously bare 11px text with no surface, indistinguishable from
+   the sentence above it. */
 .plan-node-approval-summary {
-  font-size: 11px;
   margin: 0;
-  max-height: 120px;
+  padding: 8px;
+  font-size: 11px;
+  line-height: 1.5;
+  max-height: 140px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset-deep, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
 }
 .plan-node-approval-actions, .plan-node-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
+
+/* -- Card buttons ---------------------------------------------------------
+
+   Every button on this card was the same neutral chip, so "Start build"
+   looked exactly like "Edit plan" and "Approve" exactly like "Deny". They
+   are ranked now, and the ranking uses the treatments the app already has
+   rather than inventing new ones. */
 .plan-node-button {
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
   font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 5px;
-  border: 1px solid var(--gl-neutral-button-border);
-  background: var(--gl-neutral-button-background);
-  color: var(--gl-surface-text-primary);
+  font-weight: 600;
+  font-family: inherit;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid var(--gl-surface-border);
+  background: transparent;
+  color: var(--gl-surface-text-secondary);
   cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    border-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
 }
-.plan-node-button:hover { background: var(--gl-neutral-button-hover); }
-.plan-node-button-start { border-color: var(--gl-semantic-status-info); }
-.plan-node-button-stop { border-color: var(--gl-semantic-status-error); }
-.plan-node-button-deny { border-color: var(--gl-semantic-status-warning); }
+.plan-node-button:hover:not(:disabled) {
+  background-color: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+}
+.plan-node-button:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
+.plan-node-button:disabled {
+  color: var(--gl-surface-text-muted);
+  cursor: default;
+}
+
+/* The card's primary: starting or resuming the run, and sending an answer
+   back to an agent that asked for one. Filled, the same way the launcher's
+   own primary is filled. */
+.plan-node-button-start {
+  color: var(--gl-surface-text-bright);
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-neutral-button-border);
+}
+.plan-node-button-start:hover:not(:disabled) {
+  background-color: var(--gl-surface-border-strong);
+  color: var(--gl-surface-text-bright);
+}
+
+/* Ending a run, and reversing one. Quiet until reached for, then plainly
+   consequential - the same restraint .builder-launch-delete-recipe uses for
+   the launcher's one destructive control. */
+.plan-node-button-stop:hover:not(:disabled),
+.plan-node-button-danger:hover:not(:disabled) {
+  color: var(--gl-semantic-status-error);
+  border-color: var(--gl-semantic-status-error);
+  background-color: transparent;
+}
+
+/* Approval buttons follow CodeExecutionApprovalPanel's own established
+   pairing (.code-exec-approval-approve-btn / -deny-btn): the affirmative is
+   the inverted, filled control and the refusal is the outlined neutral one,
+   so the two never read as interchangeable. Selected by exclusion rather
+   than by a new class, which is what lets the agent card's own three-button
+   version (Approve once / Approve for session / Deny) inherit the same
+   pairing without touching its markup. */
+.plan-node-approval-actions .plan-node-button:not(.plan-node-button-deny) {
+  color: var(--gl-surface-window);
+  background-color: var(--gl-surface-text-muted);
+  border-color: transparent;
+}
+.plan-node-approval-actions .plan-node-button:not(.plan-node-button-deny):hover:not(:disabled) {
+  filter: brightness(1.15);
+  color: var(--gl-surface-window);
+}
+.plan-node-button-deny {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border-color: var(--gl-neutral-button-border);
+}
+.plan-node-button-deny:hover:not(:disabled) {
+  background-color: var(--gl-neutral-button-hover);
+}
 
 /* PLAN-2026-08-24 H1: the workspace agent node. Deliberately rides the
    plan-node class vocabulary for everything shared (status band, detail,
@@ -7718,43 +8049,137 @@ mark.document-view-search-match-current {
   outline-offset: 1px;
 }
 
-/* <Dialog>'s own `className` lands on the PANEL (.overlay-dialog), never on
+/* -- The launchers (Builder + workspace agent) ---------------------------
+
+   ONE design, two dialogs. Every `builder-launch-*` class below is used by
+   BuilderLaunchDialog AND HarnessLaunchDialog; only the recipe preview and
+   the oversight choice cards belong to the Builder alone. Keeping the
+   vocabulary shared is what stops the app's two "describe a job, set its
+   budget, launch it" surfaces drifting into two different products.
+
+   <Dialog>'s own `className` lands on the PANEL (.overlay-dialog), never on
    the body - so a dialog's form layout has to be scoped to
    .overlay-dialog-body here, exactly the way .settings-dialog/.help-dialog/
-   .library-dialog already scope theirs. This block previously put the
-   column layout on .builder-launch-dialog itself, which only ever spaced
-   the header away from the body: the body stayed a plain block, so the
-   Recipe label, its <select>, and the goal label - all inline-level - ran
-   together on one line before the full-width <textarea> broke it. */
-.builder-launch-dialog { width: 540px; }
+   .library-dialog already scope theirs.
+
+   SPACING. 6px inside a field (label to control to hint), 18px between
+   fields, and a rule plus 16px at a section boundary. Everything used to
+   sit at a flat 14-16px, so a label was as far from its own input as it was
+   from the next question - there was no reading order in the form beyond
+   top-to-bottom. */
+
+.builder-launch-dialog { width: 560px; }
 
 .builder-launch-dialog .overlay-dialog-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 
-.builder-launch-field { display: flex; flex-direction: column; gap: 6px; }
-.builder-launch-label { font-size: 13px; font-weight: 600; }
-.builder-launch-hint { margin: 0; font-size: 11px; color: var(--gl-surface-text-muted); }
+/* The one sentence that says what the dialog is for. */
+.builder-launch-intro {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--gl-surface-text-secondary);
+}
 
-/* stage 8.7: the recipe picker is CustomSelect now (its own component owns
-   its styling) - this shared control box is what remains for the goal
-   textarea and the Advanced number fields. Previously also styled the bare
-   <select> this replaced. */
+.builder-launch-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.builder-launch-label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.builder-launch-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--gl-surface-text-muted);
+}
+
+/* -- Sections -------------------------------------------------------------
+
+   Still real <fieldset>/<legend> elements - a radio group needs the
+   grouping semantics, and the legend is that group's accessible name - but
+   drawn as section headings rather than as browser-default fieldsets. The
+   notched 1px box these rendered as was the only instance of that treatment
+   anywhere in the app, and it nested a bordered container inside an already
+   bordered dialog for no gain. The legend now matches .view-section-title
+   and .settings-section-title, so a Builder section reads like a Settings
+   section.
+
+   `display: block` plus an owl selector rather than `display: flex`: a
+   <legend> is laid out specially by the fieldset itself, and its behaviour
+   as a flex item is exactly the kind of thing that renders one way here and
+   another way after an engine update. Block flow has no such ambiguity.
+
+   `min-width: 0` is not decoration either - a fieldset's default
+   `min-inline-size: min-content` is what makes a long unbroken string
+   inside one push the whole dialog wider. */
+.builder-launch-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 16px 0 0;
+  border: 0;
+  border-top: 1px solid var(--gl-surface-border);
+}
+
+.builder-launch-fieldset > * + * {
+  margin-top: 8px;
+}
+
+.builder-launch-fieldset legend {
+  padding: 0;
+  margin-bottom: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--gl-surface-text-muted);
+}
+
+/* -- Text and number inputs ---------------------------------------------- */
+
 .builder-launch-goal,
 .builder-launch-number {
   box-sizing: border-box;
   width: 100%;
   font-family: inherit;
-  font-size: 13px;
-  padding: 8px;
+  font-size: 12.5px;
   color: var(--gl-surface-text-primary);
-  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  background-color: var(--gl-surface-field, var(--gl-surface-inset));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
 }
-.builder-launch-goal { resize: vertical; min-height: 72px; line-height: 1.45; }
+
+.builder-launch-goal {
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 84px;
+  line-height: 1.5;
+}
+
+.builder-launch-number {
+  height: 30px;
+  /* A two-digit turn budget does not need 540px of field. Capped rather
+     than sized, so the three side-by-side budget inputs in the Builder's
+     Advanced row still share the row evenly. */
+  max-width: 160px;
+  padding: 0 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.builder-launch-goal::placeholder {
+  color: var(--gl-surface-text-muted);
+}
 
 .builder-launch-goal:focus-visible,
 .builder-launch-number:focus-visible {
@@ -7762,51 +8187,102 @@ mark.document-view-search-match-current {
   outline-offset: 1px;
 }
 
-/* stage 8.7: a selected recipe's own steps, previewed before launch - the
-   payload always carried them (listRecipes), nothing ever rendered them.
-   A plain ordered list rather than .plan-node-steps: that list's per-step
-   status markers/classes describe a LIVE run, and nothing here has run
-   yet - this is a preview of what WILL happen, not a status board. */
+/* -- Recipe preview (Builder only) ---------------------------------------
+
+   listRecipes has always returned a recipe's description AND its steps;
+   until stage 8.7 nothing rendered either, and until this pass they were
+   rendered as loose text hanging under the picker rather than as a
+   description OF the thing selected in it. A card ties them to the
+   selection. */
 .builder-launch-recipe-preview {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
+  margin-top: 2px;
+  padding: 10px 12px;
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
 }
-.builder-launch-recipe-steps {
+
+.builder-launch-recipe-description {
   margin: 0;
-  padding-left: 20px;
-  font-size: 12px;
-  color: var(--gl-surface-text-primary);
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--gl-surface-text-secondary);
+}
+
+.builder-launch-recipe-steps-label {
+  margin: 0;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gl-surface-text-muted);
+}
+
+/* A plain ordered list rather than .plan-node-steps: that list's per-step
+   status markers describe a run, and nothing here has run yet. */
+.builder-launch-recipe-steps {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--gl-surface-text-primary);
 }
-/* One small-secondary-button idiom for this dialog family, two names: the
-   recipe delete (destructive, red on hover) and the neutral secondary the
-   workspace row uses. Shared declarations rather than a second lookalike
-   block, so the two can never drift into two slightly different buttons. */
+
+.builder-launch-recipe-steps li::marker {
+  color: var(--gl-surface-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* -- Secondary and destructive buttons ----------------------------------- */
+
 .builder-launch-delete-recipe,
 .builder-launch-secondary {
   align-self: flex-start;
-  font-size: 11px;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  font-weight: 600;
   font-family: inherit;
-  padding: 4px 8px;
-  color: var(--gl-surface-text-muted);
+  color: var(--gl-surface-text-secondary);
   background: transparent;
   border: 1px solid var(--gl-surface-border);
-  border-radius: 5px;
+  border-radius: 6px;
   cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    border-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
 }
+
+.builder-launch-secondary:hover:not(:disabled) {
+  background-color: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+}
+
+/* Deleting a saved recipe is the one irreversible thing this dialog can do,
+   and it looked exactly like every other quiet button next to it. */
 .builder-launch-delete-recipe:hover:not(:disabled) {
   color: var(--gl-semantic-status-error);
   border-color: var(--gl-semantic-status-error);
 }
-.builder-launch-secondary:hover:not(:disabled) {
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-hover);
+
+.builder-launch-delete-recipe:focus-visible,
+.builder-launch-secondary:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
 }
+
 .builder-launch-delete-recipe:disabled,
-.builder-launch-secondary:disabled { opacity: 0.5; cursor: default; }
+.builder-launch-secondary:disabled {
+  color: var(--gl-surface-text-muted);
+  cursor: default;
+}
 
 /* The launcher's workspace row - same "path, ellipsized, with its buttons
    beside it" shape as the agent card's own .harness-node-workspace, at the
@@ -7816,6 +8292,7 @@ mark.document-view-search-match-current {
   align-items: center;
   gap: 8px;
 }
+
 .harness-launch-workspace-dir {
   flex: 1;
   min-width: 0;
@@ -7826,74 +8303,181 @@ mark.document-view-search-match-current {
   color: var(--gl-surface-text-primary);
 }
 
-/* Same disclosure posture as .plan-node-activity/.chat-node-tool-invocations
-   - a native <details>, cursor-pointer bold summary - here hiding the exact
-   numeric fields behind the named presets above, for whoever wants them. */
+/* -- The Advanced disclosure ---------------------------------------------
+
+   The default <details> marker is a UA triangle that takes its size and
+   colour from nothing in this design system. Replaced with a caret drawn
+   from currentColor that rotates on open, so the control looks like it
+   belongs to the same app as the chevrons in the toolbar and the pickers. */
 .builder-launch-advanced summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  list-style: none;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--gl-surface-text-secondary);
 }
-.builder-launch-advanced[open] summary { margin-bottom: 8px; }
 
-.builder-launch-fieldset {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 0;
-  padding: 12px;
-  border: 1px solid var(--gl-surface-border);
-  border-radius: 6px;
+.builder-launch-advanced summary::-webkit-details-marker {
+  display: none;
 }
-.builder-launch-fieldset legend {
-  padding: 0 4px;
-  font-size: 12px;
+
+.builder-launch-advanced summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.builder-launch-advanced[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.builder-launch-advanced summary:hover {
+  color: var(--gl-surface-text-primary);
+}
+
+.builder-launch-advanced summary:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.builder-launch-advanced[open] summary {
+  margin-bottom: 10px;
+}
+
+/* -- Oversight choice cards (Builder only) -------------------------------
+
+   Two peers, drawn as two peers. The selected option used to be the only
+   one with a surface at all - a full-width filled slab next to a line of
+   plain text - so the pair read as one pressed button and one label rather
+   than as a choice. Both are cards now; selection is a fill and a border
+   step, the same "this one is active" language the rest of the app uses.
+
+   The native <input type="radio"> stays in the DOM and keeps every bit of
+   its keyboard and screen-reader behaviour; only its UA paint job is
+   replaced. A radio drawn by the OS is the one control in this dialog that
+   could never match anything else in it. */
+.builder-launch-choice {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 10px;
+  row-gap: 3px;
+  align-items: start;
+  padding: 10px 12px;
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    border-color var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.builder-launch-choice:hover {
+  border-color: var(--gl-surface-border-strong);
+}
+
+.builder-launch-choice.selected {
+  background-color: var(--gl-neutral-button-background);
+  border-color: var(--gl-neutral-button-border);
+}
+
+.builder-launch-choice input {
+  appearance: none;
+  grid-row: 1 / span 2;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  background: transparent;
+  border: 1px solid var(--gl-surface-border-strong);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+/* A radial-gradient dot rather than an inset box-shadow ring: the card's
+   own background changes with selection, and a shadow-drawn ring would
+   have to be repainted in whichever colour is currently behind it. A
+   gradient dot is drawn ON the transparent control and is correct over
+   either surface. */
+.builder-launch-choice input:checked {
+  border-color: var(--gl-surface-text-primary);
+  background-image: radial-gradient(
+    circle,
+    var(--gl-surface-text-primary) 0 3.2px,
+    transparent 3.4px
+  );
+}
+
+.builder-launch-choice input:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+
+.builder-launch-choice-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.builder-launch-choice.selected .builder-launch-choice-title {
+  color: var(--gl-surface-text-bright);
+}
+
+.builder-launch-choice-desc {
+  font-size: 11.5px;
+  line-height: 1.45;
   color: var(--gl-surface-text-muted);
 }
 
-/* Whole-row radio targets (title + description), so the click area is the
-   card rather than the 13px control itself. */
-.builder-launch-choice {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  column-gap: 9px;
-  row-gap: 2px;
-  align-items: start;
-  padding: 8px 9px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  cursor: pointer;
-}
-.builder-launch-choice:hover { background-color: var(--gl-neutral-button-hover); }
-.builder-launch-choice.selected {
-  border-color: var(--gl-semantic-status-info);
-  background-color: var(--gl-neutral-button-hover);
-}
-/* Spans both text rows so the title/description stack beside it - the
-   title and description stay DIRECT label children (rather than sharing a
-   wrapper) so jsx-a11y's label-has-associated-control can still see the
-   label's own text at its default search depth. */
-.builder-launch-choice input {
-  grid-row: span 2;
-  margin: 2px 0 0;
-  accent-color: var(--gl-semantic-status-info);
-}
-.builder-launch-choice-title { font-size: 13px; font-weight: 600; }
-.builder-launch-choice-desc { font-size: 11px; color: var(--gl-surface-text-muted); }
-
+/* The autopilot consent sentence. It is the only text in this dialog that
+   describes a permission being handed over, and it was styled as an
+   ordinary hint. */
 .builder-launch-disclosure {
   margin: 0;
   padding: 8px 10px;
-  font-size: 11px;
+  font-size: 11.5px;
   line-height: 1.5;
-  color: var(--gl-surface-text-primary);
-  background-color: color-mix(in srgb, var(--gl-semantic-status-warning) 12%, transparent);
+  color: var(--gl-surface-text-secondary);
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
   border-left: 2px solid var(--gl-semantic-status-warning);
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
-.builder-launch-budgets { display: flex; gap: 10px; }
+/* -- Budgets --------------------------------------------------------------
+
+   The preset segment is .view-segment (ViewPopover's own control), reused
+   rather than reimplemented. Only the type scale is overridden: 10px suits
+   a 300px popover and is too small for a 560px dialog. */
+.builder-launch-fieldset .view-segment-btn {
+  font-size: 11px;
+  padding: 7px 0;
+}
+
+/* What the chosen tier actually costs. This is the consequential number in
+   the dialog - it decides how much work and how much money a run can spend
+   - and it was the smallest, faintest text on screen. */
+.builder-launch-budget-summary {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--gl-surface-text-primary);
+}
+
+.builder-launch-budgets {
+  display: flex;
+  gap: 10px;
+}
+
 .builder-launch-budget {
   display: flex;
   flex-direction: column;
@@ -7901,22 +8485,82 @@ mark.document-view-search-match-current {
   flex: 1;
   min-width: 0;
 }
-.builder-launch-budget-label { font-size: 11px; color: var(--gl-surface-text-muted); }
 
-.builder-launch-error { color: var(--gl-semantic-status-error); font-size: 12px; margin: 0; }
-.builder-launch-actions { display: flex; justify-content: flex-end; }
-.builder-launch-start {
-  font-size: 13px;
-  font-family: inherit;
-  padding: 8px 16px;
-  border-radius: 6px;
-  border: 1px solid var(--gl-semantic-status-info);
-  background: var(--gl-neutral-button-background);
-  color: var(--gl-surface-text-primary);
-  cursor: pointer;
+.builder-launch-budget-label {
+  font-size: 11px;
+  color: var(--gl-surface-text-muted);
 }
-.builder-launch-start:hover:not(:disabled) { background: var(--gl-neutral-button-hover); }
-/* Disabled is the DEFAULT state here (no goal typed yet) and previously
-   looked identical to enabled - the primary action read as clickable
-   before it ever was. */
-.builder-launch-start:disabled { opacity: 0.45; cursor: default; }
+
+/* -- Errors and the footer ----------------------------------------------- */
+
+.builder-launch-error {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--gl-semantic-status-error);
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-semantic-status-error);
+  border-radius: 6px;
+}
+
+/* A real footer. The primary action used to float at the end of the
+   scrolling body with no rule above it, while the dialog's header had one -
+   so the panel was closed at the top and open at the bottom. */
+.builder-launch-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--gl-surface-border);
+}
+
+/* Why the primary is dead, said out loud and next to it. */
+.builder-launch-actions-hint {
+  margin: 0 auto 0 0;
+  font-size: 11.5px;
+  color: var(--gl-surface-text-muted);
+}
+
+/* The one primary button in the dialog, and the only filled control in it.
+   In a palette with no accent colour, "loudest" is a step up the neutral
+   scale plus the brightest text - the same language the app bar uses for
+   the panel that is currently open. It previously carried an info-coloured
+   border over the ordinary button fill, which made it a differently-
+   outlined peer of the quiet buttons rather than the obvious next move. */
+.builder-launch-start {
+  height: 32px;
+  padding: 0 16px;
+  font-size: 12.5px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--gl-surface-text-bright);
+  background-color: var(--gl-neutral-button-hover);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 7px;
+  cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    border-color var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.builder-launch-start:hover:not(:disabled) {
+  background-color: var(--gl-surface-border-strong);
+}
+
+.builder-launch-start:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Disabled is the DEFAULT state here (no goal typed yet), so it has to be
+   unmistakable rather than a 45%-opacity version of the enabled button: the
+   fill goes away entirely, which is the difference between "the primary
+   action, dimmed" and "not a button yet". */
+.builder-launch-start:disabled {
+  color: var(--gl-surface-text-muted);
+  background-color: transparent;
+  border-color: var(--gl-surface-border);
+  cursor: default;
+}

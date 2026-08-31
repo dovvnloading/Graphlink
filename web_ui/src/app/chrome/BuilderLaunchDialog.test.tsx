@@ -95,7 +95,7 @@ describe("BuilderLaunchDialog", () => {
   it("submits the goal with mode and default (Standard) budgets through builder/start", async () => {
     const { user, intents } = await setup();
 
-    await user.type(screen.getByLabelText(/what should the builder construct/i), "chart solar trends");
+    await user.type(screen.getByLabelText("Goal"), "chart solar trends");
     await user.click(screen.getByRole("button", { name: "Plan the build" }));
 
     expect(intents).toContainEqual([
@@ -180,7 +180,14 @@ describe("BuilderLaunchDialog", () => {
 
     expect(intents).toContainEqual(["builder", "deleteRecipe", ["My recipe"]]);
     // The list is re-fetched and the selection clears back to from-scratch.
-    expect(await screen.findByText("Describe a build yourself, or pick a saved recipe.")).toBeInTheDocument();
+    // Asserted on the preview card disappearing rather than on the intro
+    // sentence reappearing: that sentence explains the whole dialog now and
+    // is on screen at all times, so it stopped being a signal for anything.
+    // CustomSelect's trigger takes its accessible name from its ariaLabel
+    // ("Recipe"), so the SELECTION is its text content, not its name.
+    await screen.findByText("Start from scratch");
+    expect(screen.getByRole("button", { name: "Recipe" })).toHaveTextContent("Start from scratch");
+    expect(screen.queryByRole("button", { name: "Delete this recipe" })).not.toBeInTheDocument();
   });
 
   it("hides the delete affordance for a built-in recipe", async () => {
@@ -211,7 +218,7 @@ describe("BuilderLaunchDialog", () => {
     expect(deletingButton).toBeDisabled();
 
     resolveDelete(true);
-    await screen.findByText("Describe a build yourself, or pick a saved recipe.");
+    await screen.findByText("Start from scratch");
   });
 
   it("review-fix: deleteRecipe resolving false leaves the selection and recipe list untouched", async () => {
@@ -227,7 +234,7 @@ describe("BuilderLaunchDialog", () => {
 
     // Give the (rejected-by-backend) promise chain a tick to settle.
     await screen.findByRole("button", { name: "Delete this recipe" });
-    expect(screen.queryByText("Describe a build yourself, or pick a saved recipe.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Recipe" })).toHaveTextContent("My recipe");
     expect(intents.filter(([, intent]) => intent === "listRecipes")).toHaveLength(1); // only the on-open fetch
   });
 
@@ -268,7 +275,7 @@ describe("BuilderLaunchDialog", () => {
     expect(screen.getByRole("button", { name: "Standard" })).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByText(/6 steps · 50k tokens · 5 min/)).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText(/what should the builder construct/i), "goal");
+    await user.type(screen.getByLabelText("Goal"), "goal");
     await user.click(screen.getByRole("button", { name: "Plan the build" }));
 
     expect(intents).toContainEqual(["builder", "start", ["goal", "copilot", 6, 50_000, 300, null]]);
@@ -277,7 +284,7 @@ describe("BuilderLaunchDialog", () => {
   it("review-fix: a hand-dirtied Advanced field clears every preset's highlight, and a later preset click overwrites all three fields", async () => {
     const { user } = await setup();
 
-    await user.click(screen.getByText("Advanced"));
+    await user.click(screen.getByText("Set exact limits"));
     const stepsInput = screen.getByLabelText("Max steps");
     await user.clear(stepsInput);
     await user.type(stepsInput, "30");
@@ -299,7 +306,7 @@ describe("BuilderLaunchDialog", () => {
   it("clamps an out-of-range Advanced max-steps value on blur rather than silently reverting a typed 0", async () => {
     const { user, intents } = await setup();
 
-    await user.click(screen.getByText("Advanced"));
+    await user.click(screen.getByText("Set exact limits"));
     const stepsInput = screen.getByLabelText("Max steps");
     await user.clear(stepsInput);
     await user.type(stepsInput, "0");
@@ -310,7 +317,7 @@ describe("BuilderLaunchDialog", () => {
 
     expect(stepsInput).toHaveValue(1); // clamped to MIN_STEPS, not reverted to 12
 
-    await user.type(screen.getByLabelText(/what should the builder construct/i), "goal");
+    await user.type(screen.getByLabelText("Goal"), "goal");
     await user.click(screen.getByRole("button", { name: "Plan the build" }));
     expect(intents).toContainEqual(["builder", "start", ["goal", "copilot", 1, 150_000, 900, null]]);
   });
@@ -318,7 +325,7 @@ describe("BuilderLaunchDialog", () => {
   it("a null start result (backend refused) shows an error instead of closing", async () => {
     const { user } = await setup(null);
 
-    await user.type(screen.getByLabelText(/what should the builder construct/i), "goal");
+    await user.type(screen.getByLabelText("Goal"), "goal");
     await user.click(screen.getByRole("button", { name: "Plan the build" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/could not start/i);
@@ -328,17 +335,59 @@ describe("BuilderLaunchDialog", () => {
   it("a successful start closes the dialog and centers the viewport on the new plan node", async () => {
     const { user } = await setup("n7", [], [{ id: "n7", x: 300, y: 200 }]);
 
-    await user.type(screen.getByLabelText(/what should the builder construct/i), "goal");
+    await user.type(screen.getByLabelText("Goal"), "goal");
     await user.click(screen.getByRole("button", { name: "Plan the build" }));
 
     expect(
       await screen.findByRole("button", { name: "open builder" }),
     ).toBeInTheDocument();
-    expect(screen.queryByLabelText(/what should the builder construct/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Goal")).not.toBeInTheDocument();
 
     expect(setCenterCalls).toHaveLength(1);
     const [x, y] = setCenterCalls[0];
     expect(x).toBe(300 + 180);
     expect(y).toBe(200 + 90);
+  });
+  // -- Builder redesign ------------------------------------------------------
+
+  describe("form order and first-run legibility", () => {
+    it("leads with the goal, not with the recipe shortcut", async () => {
+      await setup();
+      const goal = screen.getByLabelText("Goal");
+      const recipe = screen.getByRole("button", { name: "Recipe" });
+      // A recipe is an optional shortcut PAST the goal; the launcher used to
+      // put it first, which led with the exception rather than the rule.
+      // Node.DOCUMENT_POSITION_FOLLOWING === 4.
+      expect(goal.compareDocumentPosition(recipe) & 4).toBeTruthy();
+    });
+
+    it("says what the Builder does, at the top, always", async () => {
+      await setup();
+      // This sentence existed before as help text under the recipe picker,
+      // where it described the wrong control and vanished the moment a
+      // recipe was selected.
+      expect(screen.getByText(/plans a job as a checklist/)).toBeInTheDocument();
+    });
+
+    it("explains why the primary action is disabled, and stops once it is not", async () => {
+      const { user } = await setup();
+      expect(screen.getByRole("button", { name: "Plan the build" })).toBeDisabled();
+      expect(screen.getByText("Describe a goal, or pick a recipe.")).toBeInTheDocument();
+
+      await user.type(screen.getByLabelText("Goal"), "chart solar trends");
+
+      expect(screen.getByRole("button", { name: "Plan the build" })).toBeEnabled();
+      expect(screen.queryByText("Describe a goal, or pick a recipe.")).toBeNull();
+    });
+
+    it("a selected recipe also satisfies the launch precondition", async () => {
+      const { user } = await setup("n1", [
+        { name: "Research and summarize", description: "d", steps: ["one"], mode: "copilot", builtIn: true },
+      ]);
+      await pickRecipe(user, "Research and summarize");
+
+      expect(screen.getByRole("button", { name: "Start from recipe" })).toBeEnabled();
+      expect(screen.queryByText("Describe a goal, or pick a recipe.")).toBeNull();
+    });
   });
 });
