@@ -2856,20 +2856,6 @@ function CanvasInner({
           </ViewportPortal>
         )}
       </ReactFlow>
-      {/* ADR-012 stage 12.6: a non-blank empty-canvas hint - a fresh
-          session's scene is otherwise indistinguishable from a broken one.
-          pointer-events:none on the wrapper (styles.css) so it never
-          intercepts panning/the double-click-to-create-node gesture on
-          .scene-canvas beneath it; the button itself opts back into
-          pointer-events so it stays clickable. */}
-      {scene.nodes.length === 0 && (
-        <div className="scene-empty-hint" role="status">
-          <p className="scene-empty-hint-text">Type a message to start, or load the sample workspace.</p>
-          <button type="button" className="scene-empty-hint-button" onClick={() => store.loadSampleWorkspace()}>
-            Load Sample Workspace
-          </button>
-        </div>
-      )}
     </div>
   );
 }

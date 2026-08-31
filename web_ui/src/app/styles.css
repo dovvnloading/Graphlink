@@ -251,52 +251,6 @@ body,
   background-color: var(--gl-surface-window);
 }
 
-/* ADR-012 stage 12.6: the empty-canvas hint - a fresh session's blank scene
-   otherwise looks indistinguishable from a broken one. Centered flex column
-   over the full canvas, same layout shape as .scene-bridge-error above (a
-   proven "replace/annotate the whole canvas region" pattern in this file),
-   but layered ON TOP of a working canvas rather than instead of a broken
-   one, so pointer-events is none on the wrapper - panning/the double-click-
-   to-create-node gesture on .scene-canvas underneath must keep working -
-   with only the button itself opting back in so it stays clickable. */
-.scene-empty-hint {
-  position: absolute;
-  inset: 0;
-  z-index: var(--gl-z-canvas-hud);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  padding: 32px;
-  text-align: center;
-  pointer-events: none;
-}
-
-.scene-empty-hint-text {
-  margin: 0;
-  max-width: 360px;
-  font-size: 13px;
-  color: var(--gl-surface-text-muted);
-}
-
-.scene-empty-hint-button {
-  padding: 6px 14px;
-  font-size: 12px;
-  font-weight: 600;
-  font-family: inherit;
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
-  border-radius: 6px;
-  cursor: pointer;
-  pointer-events: auto;
-}
-
-.scene-empty-hint-button:hover {
-  border-color: var(--gl-surface-border-strong, var(--gl-surface-text-muted));
-}
-
 .scene-node {
   min-width: 160px;
   background-color: var(--gl-surface-node-body);

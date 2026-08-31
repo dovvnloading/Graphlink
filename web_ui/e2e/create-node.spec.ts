@@ -33,11 +33,13 @@ test("creates a node by double-click, then a Conversation Node via the Plugins p
   const canvas = page.getByTestId("scene-canvas");
   const box = await canvas.boundingBox();
   if (!box) throw new Error("scene-canvas has no layout box to click into");
-  // Deliberately NOT the canvas's exact center: SceneCanvas.tsx's own empty-
-  // state hint (".scene-empty-hint", styles.css) is centered with `inset: 0`
-  // + flexbox centering and stays mounted until the first node exists - a
-  // dblclick at width/2,height/2 lands ON its real "Load Sample Workspace"
-  // button instead of blank canvas. A corner offset stays clear of it.
+  // A corner offset rather than the canvas's exact center. This used to be
+  // load-bearing: a full-canvas empty-state hint was centered over the
+  // canvas until the first node existed, so a dblclick at width/2,height/2
+  // landed on its "Load Sample Workspace" button instead of blank canvas.
+  // That overlay is gone, so any point on the canvas would do now - the
+  // offset is kept because the exact coordinates are arbitrary either way
+  // and moving them would churn a passing test for nothing.
   await canvas.dblclick({ position: { x: box.width * 0.15, y: box.height * 0.15 } });
 
   await expect(page.locator(".react-flow__node")).toHaveCount(1);

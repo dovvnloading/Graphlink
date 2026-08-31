@@ -3109,14 +3109,13 @@ describe("SceneCanvas version-rejection gate (ADR-003 stage 3.5)", () => {
   });
 });
 
-describe("SceneCanvas empty-canvas hint (ADR-012 stage 12.6)", () => {
+describe("SceneCanvas empty canvas", () => {
   type StateListener = (payload: Record<string, unknown>) => void;
 
   // Same minimal transport shape as makeStoreWithVersionControl above (a
   // sibling, not reused, since it is scoped to that describe block) - just
-  // enough of WsTransport's surface for SceneCanvas to mount and for a test
-  // to push a real scene snapshot afterward.
-  function makeStoreForEmptyHint() {
+  // enough of WsTransport's surface for SceneCanvas to mount.
+  function makeStoreForEmptyCanvas() {
     const stateListeners = new Map<string, StateListener>();
     const transport = {
       subscribe: vi.fn((topic: string, listener: StateListener) => {
@@ -3137,42 +3136,21 @@ describe("SceneCanvas empty-canvas hint (ADR-012 stage 12.6)", () => {
     return { store, transport, stateListeners };
   }
 
-  const HINT_TEXT = "Type a message to start, or load the sample workspace.";
-
-  it("renders the empty-canvas hint when the scene has no nodes", () => {
-    const { store } = makeStoreForEmptyHint();
-
-    render(
-      <ReactFlowProvider>
-        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
-      </ReactFlowProvider>,
-    );
-
-    expect(screen.getByText(HINT_TEXT)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Load Sample Workspace" })).toBeInTheDocument();
-  });
-
-  it("hides the empty-canvas hint once the scene has a real node", () => {
-    const { store, stateListeners } = makeStoreForEmptyHint();
-
-    render(
-      <ReactFlowProvider>
-        <SceneCanvas store={store} onOpenDocumentView={() => {}} />
-      </ReactFlowProvider>,
-    );
-    expect(screen.getByText(HINT_TEXT)).toBeInTheDocument();
-
-    act(() => {
-      stateListeners.get("scene")!(
-        baseScene({ nodes: [baseNode({ id: "n1" })] }) as unknown as Record<string, unknown>,
-      );
-    });
-
-    expect(screen.queryByText(HINT_TEXT)).toBeNull();
-  });
-
-  it("the Load Sample Workspace button fires the scene-topic loadSampleWorkspace intent", () => {
-    const { store, transport } = makeStoreForEmptyHint();
+  // ADR-012 stage 12.6 added a full-canvas "Type a message to start, or load
+  // the sample workspace" overlay with a Load Sample Workspace button. It is
+  // gone, and this is the guard against it coming back.
+  //
+  // It was not merely unwanted - it was painted at --gl-z-canvas-hud (21),
+  // the tier reserved for the token counter and the minimap, which each own
+  // a screen CORNER. This overlay was `position: absolute; inset: 0`, so it
+  // claimed the whole canvas at a tier ABOVE --gl-z-app-layer (20) - every
+  // popover anchored over the canvas, View and Plugins and Pins included.
+  // Its text and its button painted straight through all of them.
+  //
+  // The loadSampleWorkspace intent itself is untouched: OnboardingDialog
+  // still offers it, in a dialog, where a first-run affordance belongs.
+  it("renders no overlay on an empty scene - no hint text, no button over the canvas", () => {
+    const { store } = makeStoreForEmptyCanvas();
 
     render(
       <ReactFlowProvider>
@@ -3180,7 +3158,8 @@ describe("SceneCanvas empty-canvas hint (ADR-012 stage 12.6)", () => {
       </ReactFlowProvider>,
     );
 
-    screen.getByRole("button", { name: "Load Sample Workspace" }).click();
-    expect(transport.fireIntent).toHaveBeenCalledWith("scene", "loadSampleWorkspace", []);
+    expect(screen.queryByText(/load the sample workspace/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Load Sample Workspace" })).toBeNull();
+    expect(document.querySelector(".scene-empty-hint")).toBeNull();
   });
 });

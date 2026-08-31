@@ -33,8 +33,10 @@ test("boots against the real backend and renders the canvas shell", async ({ pag
   // has no visible text to check on the happy path this test exercises.
   await expect(page.locator('.app-shell[data-connection-status="open"]')).toBeAttached();
 
-  // A fresh session has zero nodes - SceneCanvas.tsx's own empty-state hint
-  // is the honest "nothing broken, genuinely nothing here yet" signal for
-  // that case (see its own comment on why this exists at all).
-  await expect(page.locator(".scene-empty-hint")).toBeVisible();
+  // A fresh session has zero nodes, and that is asserted directly now. It
+  // used to be asserted through SceneCanvas.tsx's empty-canvas hint - a
+  // full-canvas overlay that has since been removed for painting itself
+  // over every popover anchored on the canvas. An empty canvas is the state
+  // this line was always about; the overlay was only ever a proxy for it.
+  await expect(page.locator(".react-flow__node")).toHaveCount(0);
 });

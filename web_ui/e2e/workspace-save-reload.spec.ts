@@ -62,10 +62,10 @@ test("saves a node, clears the canvas, then reloads it from the chat library", a
   const canvas = page.getByTestId("scene-canvas");
   const box = await canvas.boundingBox();
   if (!box) throw new Error("scene-canvas has no layout box to click into");
-  // Off-center on purpose - see create-node.spec.ts's own comment: a click
-  // at the exact center lands on the empty-state hint's real "Load Sample
-  // Workspace" button (styles.css's ".scene-empty-hint" is centered with
-  // `inset: 0`) rather than blank canvas.
+  // A corner offset rather than the exact center - see create-node.spec.ts's
+  // own comment. It used to be dodging the empty-state hint's "Load Sample
+  // Workspace" button; that overlay is gone, and the offset is kept only
+  // because the coordinates are arbitrary either way.
   await canvas.dblclick({ position: { x: box.width * 0.15, y: box.height * 0.15 } });
   await expect(page.locator(".react-flow__node")).toHaveCount(1);
 
