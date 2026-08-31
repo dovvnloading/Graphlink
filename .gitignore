@@ -32,7 +32,15 @@ ENV/
 
 # Claude Code local tooling config (e.g. launch.json for the Browser pane's
 # dev-server preview) - per-developer/per-agent, never shared repo config.
-.claude/
+#
+# `.claude/*` rather than `.claude/` so git will descend into the directory
+# at all: a negation cannot re-include a file underneath an excluded
+# DIRECTORY, only underneath excluded contents. settings.json is the one
+# carve-out - it is shared repo config (the SPA bundle staleness guard, see
+# tools/rebuild-spa-if-stale.sh), which is exactly the thing that has to
+# survive a fresh clone rather than be re-derived per developer.
+.claude/*
+!.claude/settings.json
 
 # OS files
 .DS_Store
