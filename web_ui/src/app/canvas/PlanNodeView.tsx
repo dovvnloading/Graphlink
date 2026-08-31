@@ -114,13 +114,74 @@ function PlanNodeMenu({
   );
 }
 
-const STEP_MARKERS: Record<string, string> = {
-  pending: "○",
-  running: "◐",
-  done: "●",
-  failed: "✕",
-  skipped: "–",
-};
+/**
+ * The per-step status marker.
+ *
+ * Was a table of text glyphs - "○ ◐ ● ✕ –" - rendered at whatever weight
+ * and baseline the UI font happened to give them, next to an icon set drawn
+ * at a consistent 1.7 stroke everywhere else in the app. "◐" in particular
+ * read as a rendering artifact rather than as "this step is running now".
+ *
+ * The distinctions are carried by SHAPE, not by colour, and that is not a
+ * stylistic preference: this app's palette is a deliberate monochrome, and
+ * its four semantic status tokens currently resolve to #848484, #919191,
+ * #838383 and #828282 - error, warning, success and info are the same grey
+ * to within a couple of levels. A done step and a failed step were
+ * previously distinguished by a one-level luminance difference and nothing
+ * else. A check, a cross, a dash and a ring are unmistakable at any size,
+ * on any palette, and to anyone who cannot separate those greys at all.
+ */
+function StepMarker({ status }: { status: string }) {
+  switch (status) {
+    case "done":
+      return (
+        <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
+          <circle cx="8" cy="8" r="6.25" />
+          <path d="m5.2 8.2 2 2 3.6-4.2" />
+        </svg>
+      );
+    case "running":
+      return (
+        <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
+          <circle cx="8" cy="8" r="6.25" />
+          <circle cx="8" cy="8" r="2.6" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    case "failed":
+      return (
+        <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
+          <circle cx="8" cy="8" r="6.25" />
+          <path d="m5.8 5.8 4.4 4.4M10.2 5.8l-4.4 4.4" />
+        </svg>
+      );
+    case "skipped":
+      return (
+        <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
+          <circle cx="8" cy="8" r="6.25" />
+          <path d="M5.4 8h5.2" />
+        </svg>
+      );
+    default:
+      return (
+        <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
+          <circle cx="8" cy="8" r="6.25" />
+        </svg>
+      );
+  }
+}
+
+/** The three per-row controls in the step editor. Same reason as
+ * StepMarker: "↑ ↓ ✕" were font glyphs sitting inside buttons whose every
+ * neighbour draws an SVG. */
+function EditorIcon({ name }: { name: "up" | "down" | "remove" }) {
+  return (
+    <svg aria-hidden="true" viewBox="0 0 16 16" className="plan-node-step-icon">
+      {name === "up" && <path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7" />}
+      {name === "down" && <path d="M8 3.5v9M4.5 9 8 12.5 11.5 9" />}
+      {name === "remove" && <path d="m4.5 4.5 7 7M11.5 4.5l-7 7" />}
+    </svg>
+  );
+}
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
@@ -146,6 +207,17 @@ const RESUMABLE = new Set(["awaiting_start", "paused", "interrupted", "failed"])
 // on states no run backs. undo_run's reach stops at the first command a
 // DIFFERENT actor made after the build - later user edits survive.
 const UNDOABLE = new Set(["done", "failed", "stopped", "interrupted", "paused"]);
+
+// A stopped build is a DEAD END, and the card never said so. "stopped" is
+// deliberately absent from RESUMABLE above (mirroring the backend's own
+// _RESUMABLE_STATUSES exactly), so Stop - a button that sits where Start
+// and Resume sit and reads like a pause - permanently forecloses the run:
+// the only ways on from there are undoing it or launching a new build. That
+// is a product decision rather than a defect, but it was one the UI made
+// silently, at the moment it was already too late to act on.
+const TERMINAL_NOTES: Record<string, string> = {
+  stopped: "A stopped build can't be resumed - undo it, or start a new build.",
+};
 
 function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   const collapsed = useLodVisibility() || data.isCollapsed;
@@ -325,13 +397,16 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
           {data.builderStatusDetail}
         </p>
       )}
+      {TERMINAL_NOTES[data.builderStatus] && (
+        <p className="plan-node-detail">{TERMINAL_NOTES[data.builderStatus]}</p>
+      )}
 
       {data.planSteps.length > 0 && draftSteps === null && (
         <ul className="plan-node-steps">
           {data.planSteps.map((step) => (
             <li key={step.id} className={`plan-node-step plan-node-step-${step.status}`}>
               <span className="plan-node-step-marker" aria-hidden="true">
-                {STEP_MARKERS[step.status] ?? "○"}
+                <StepMarker status={step.status} />
               </span>
               <span className="plan-node-step-title">{step.title}</span>
               {step.detail && <span className="plan-node-step-detail">{step.detail}</span>}
@@ -356,7 +431,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
               return (
                 <li key={step.id} className={`plan-node-step plan-node-step-${step.status}`}>
                   <span className="plan-node-step-marker" aria-hidden="true">
-                    {STEP_MARKERS[step.status] ?? "○"}
+                    <StepMarker status={step.status} />
                   </span>
                   {frozen ? (
                     <span className="plan-node-step-title">{step.title}</span>
@@ -376,7 +451,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
                         disabled={!canMoveUp(index)}
                         onClick={() => moveStep(index, -1)}
                       >
-                        ↑
+                        <EditorIcon name="up" />
                       </button>
                       <button
                         type="button"
@@ -385,7 +460,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
                         disabled={!canMoveDown(index)}
                         onClick={() => moveStep(index, 1)}
                       >
-                        ↓
+                        <EditorIcon name="down" />
                       </button>
                       <button
                         type="button"
@@ -393,7 +468,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
                         aria-label={`Remove step ${index + 1}`}
                         onClick={() => removeStep(index)}
                       >
-                        ✕
+                        <EditorIcon name="remove" />
                       </button>
                     </>
                   )}
@@ -451,8 +526,15 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
             {data.builderActivity.length === 1
               ? "1 activity entry"
               : `${data.builderActivity.length} activity entries`}
-            {activityErrorCount > 0 &&
-              ` · ${activityErrorCount} error${activityErrorCount === 1 ? "" : "s"}`}
+            {/* The error count is the only part of this summary worth
+                reading at a glance, and it was set in the same muted grey
+                as the row count next to it - a build that failed five tool
+                calls looked exactly like one that failed none. */}
+            {activityErrorCount > 0 && (
+              <span className="plan-node-activity-errors">
+                {` · ${activityErrorCount} error${activityErrorCount === 1 ? "" : "s"}`}
+              </span>
+            )}
           </summary>
           <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef}>
             {data.builderActivity.map((row, index) => (
@@ -500,12 +582,21 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
           </button>
         )}
         {running && (
-          <button type="button" className="plan-node-button plan-node-button-stop nodrag" onClick={data.onCancel}>
+          <button
+            type="button"
+            className="plan-node-button plan-node-button-stop nodrag"
+            title="Stop this build. A stopped build cannot be resumed."
+            onClick={data.onCancel}
+          >
             Stop
           </button>
         )}
         {UNDOABLE.has(data.builderStatus) && data.builderRunId && (
-          <button type="button" className="plan-node-button nodrag" onClick={data.onUndoBuild}>
+          <button
+            type="button"
+            className="plan-node-button plan-node-button-danger nodrag"
+            onClick={data.onUndoBuild}
+          >
             Undo build
           </button>
         )}

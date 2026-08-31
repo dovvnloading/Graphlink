@@ -256,9 +256,15 @@ describe("PlanNodeView", () => {
           },
         ],
       });
-      renderPlan(data);
+      const { container } = renderPlan(data);
 
-      const summary = screen.getByText("2 activity entries · 1 error");
+      // The error count lives in its own <span> (it is the one part of this
+      // line worth reading at a glance and is styled to say so), so the
+      // summary's text is assembled from more than one node - matched on
+      // the element's own textContent rather than with a single-node text
+      // query, which no longer sees the whole string.
+      const summary = container.querySelector(".plan-node-activity summary")!;
+      expect(summary.textContent).toBe("2 activity entries · 1 error");
       const details = summary.closest("details");
       expect(details).not.toHaveAttribute("open");
       expect(screen.getAllByText("graph.create_node")).toHaveLength(2);
@@ -490,5 +496,70 @@ describe("PlanNodeView plan editing (ADR-021 stage 21.3)", () => {
     expect(screen.queryByRole("textbox", { name: "Step 1 title" })).toBeNull();
     expect(screen.getByRole("button", { name: "Edit plan" })).toBeTruthy();
     expect(onSetPlanSteps).not.toHaveBeenCalled();
+  });
+  // -- Builder redesign ------------------------------------------------------
+
+  describe("terminal states", () => {
+    it("a stopped build says it cannot be resumed, rather than just omitting Resume", () => {
+      renderPlan(makeData({ builderStatus: "stopped" }));
+      // "stopped" is deliberately absent from both this component's
+      // RESUMABLE set and the backend's own _RESUMABLE_STATUSES, so Stop is
+      // a one-way door. The card used to communicate that only by the
+      // silent absence of a button.
+      expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+      expect(
+        screen.getByText(/A stopped build can't be resumed/),
+      ).toBeInTheDocument();
+    });
+
+    it("does not show the terminal note for a state that CAN be resumed", () => {
+      renderPlan(makeData({ builderStatus: "paused" }));
+      expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+      expect(screen.queryByText(/can't be resumed/)).toBeNull();
+    });
+
+    it("Stop warns that it is one-way before it is pressed, not after", () => {
+      renderPlan(makeData({ builderStatus: "running" }));
+      expect(screen.getByRole("button", { name: "Stop" })).toHaveAttribute(
+        "title",
+        "Stop this build. A stopped build cannot be resumed.",
+      );
+    });
+  });
+
+  describe("step markers", () => {
+    // The four semantic status tokens in this app's palette resolve to
+    // #848484, #919191, #838383 and #828282 - error, warning, success and
+    // info are the same grey. A done step and a failed step were previously
+    // separated by a text glyph pair set in two of those, i.e. by nothing
+    // legible. These assertions pin the replacement: distinct SHAPES, drawn
+    // in the same icon language as the rest of the app.
+    it("draws each status as an icon rather than as a text glyph", () => {
+      const { container } = renderPlan(
+        makeData({
+          planSteps: [
+            { id: "s1", title: "done step", status: "done", detail: "" },
+            { id: "s2", title: "running step", status: "running", detail: "" },
+            { id: "s3", title: "failed step", status: "failed", detail: "" },
+            { id: "s4", title: "pending step", status: "pending", detail: "" },
+          ],
+        }),
+      );
+      expect(container.querySelectorAll(".plan-node-step-icon")).toHaveLength(4);
+      // None of the old glyphs survive anywhere in the rendered card.
+      for (const glyph of ["○", "◐", "●", "✕", "–"]) {
+        expect(container.textContent).not.toContain(glyph);
+      }
+    });
+
+    it("gives each status its own distinct geometry", () => {
+      const markup = (status: string) =>
+        renderPlan(makeData({ planSteps: [{ id: "s1", title: "t", status, detail: "" }] }))
+          .container.querySelector(".plan-node-step-icon")!.innerHTML;
+      const shapes = ["done", "running", "failed", "skipped", "pending"].map(markup);
+      // Five statuses, five different drawings - if any two ever collapse
+      // to the same paths, the distinction is back to being colour-only.
+      expect(new Set(shapes).size).toBe(5);
+    });
   });
 });
