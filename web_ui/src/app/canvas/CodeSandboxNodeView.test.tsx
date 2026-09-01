@@ -174,9 +174,11 @@ describe("CodeSandboxNodeView", () => {
     expect(data.onRun).toHaveBeenCalledExactlyOnceWith("plot a sine wave");
   });
 
-  it("Run is disabled while pendingRequestId is set", () => {
+  it("the run button reads Running and is disabled while pendingRequestId is set", () => {
+    // The label change is the state indicator: a disabled button that still
+    // says Run reads as broken rather than busy.
     renderCodeSandboxNode({ pendingRequestId: "req-1", codeSandboxCode: "print(1)" });
-    expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Running…" })).toBeDisabled();
   });
 
   // -- Cancel ---------------------------------------------------------------
@@ -280,7 +282,10 @@ describe("CodeSandboxNodeView", () => {
       codeSandboxCode: "import numpy as np\nprint(np.pi)",
       codeSandboxAnalysis: "This **prints pi**.",
     });
-    expect(screen.getByText("Code")).toBeInTheDocument();
+    // The code pane has no separate "Code" label any more - the markdown
+    // fence's own PYTHON header names it, once.
+    expect(screen.queryByText("Code")).toBeNull();
+    expect(document.querySelector(".code-sandbox-node-code")).not.toBeNull();
     expect(document.querySelector("pre code")).not.toBeNull();
     expect(screen.getByText("Analysis")).toBeInTheDocument();
     expect(screen.getByText("prints pi")).toBeInTheDocument();
