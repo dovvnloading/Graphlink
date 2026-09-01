@@ -2376,6 +2376,23 @@ def test_font_intents_use_bridge_slot_names_and_bound_values():
     asyncio.run(run())
 
 
+def test_font_color_defaults_to_theme_following_and_empty_resets_to_it():
+    # The default is the EMPTY string - "follow the theme" - not a hex. The
+    # old default was "#F0F0F0", a dark-theme white that made node text
+    # unreadable under the light palette; a stored hex cannot adapt, so only
+    # an explicit pick stores one. "" round-trips through setFontColor as the
+    # reset-to-theme value.
+    async def run():
+        bus, document, _ = make_bus()
+        assert document.scene_payload()["fontColor"] == ""
+        await bus.dispatch_intent("scene", "setFontColor", ["#9EC1E8"])
+        assert document.scene_payload()["fontColor"] == "#9EC1E8"
+        await bus.dispatch_intent("scene", "setFontColor", [""])
+        assert document.scene_payload()["fontColor"] == ""
+
+    asyncio.run(run())
+
+
 def test_organize_lines_up_disconnected_nodes_without_overlap():
     async def run():
         bus, document, _ = make_bus()

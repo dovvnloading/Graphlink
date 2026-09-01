@@ -47,7 +47,9 @@ export const initialSceneState: SceneState = {
   dragFactor: 1,
   fontFamily: "Segoe UI",
   fontSizePt: 9,
-  fontColor: "#F0F0F0",
+  // "" = follow the theme (see useCanvasFontVars.ts); matches the backend
+  // default in backend/domain/graph.py.
+  fontColor: "",
   // ADR-010 stage 10.2: nothing is undoable before the first real scene
   // frame arrives - a fresh client has no history of its own, and the
   // backend's is what counts.

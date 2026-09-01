@@ -54,7 +54,9 @@ const DEFAULTS = {
   gridColor: "#555555",
   fontFamily: "Segoe UI",
   fontSizePt: 9,
-  fontColor: "#F0F0F0",
+  // "" = follow the theme - the backend default (backend/domain/graph.py).
+  // Reset returns to adaptive text, not to a dark-theme white.
+  fontColor: "",
 } as const;
 
 // The grid-size slider's range. The presets (10/20/50/100) remain the
@@ -227,21 +229,39 @@ function ToggleRow({
   );
 }
 
-/** Preset color swatches plus a free-choice picker at the end of the row. */
+/** Preset color swatches plus a free-choice picker at the end of the row.
+ * `autoLabel`, when given, prepends an "follow the theme" swatch that picks
+ * the empty string - the reset-to-adaptive affordance the font color needs
+ * (an unset font color inherits the palette's own text token and stays
+ * readable in both themes). Grid color has no such state and omits it. */
 function SwatchRow({
   presets,
   current,
   ariaPrefix,
+  autoLabel,
   onPick,
 }: {
   presets: readonly string[];
   current: string;
   ariaPrefix: string;
+  autoLabel?: string;
   onPick: (color: string) => void;
 }) {
   const currentIsPreset = presets.includes(current);
   return (
     <div className="view-row" role="group" aria-label={`${ariaPrefix} presets`}>
+      {autoLabel && (
+        <button
+          type="button"
+          className={"view-color-swatch view-color-auto" + (current === "" ? " active" : "")}
+          title={autoLabel}
+          aria-label={`${ariaPrefix}, ${autoLabel}`}
+          aria-pressed={current === ""}
+          onClick={() => onPick("")}
+        >
+          A
+        </button>
+      )}
       {presets.map((color) => (
         <button
           key={color}
@@ -265,7 +285,11 @@ function SwatchRow({
       >
         <input
           type="color"
-          value={current}
+          // A color input cannot hold "" - the browser coerces invalid
+          // values (to #000000, with a console warning). When the current
+          // value is "follow the theme" the picker just needs a sane
+          // starting point for the dialog it opens.
+          value={current || "#949494"}
           aria-label={`${ariaPrefix}, custom`}
           onChange={(e) => onPick(e.target.value)}
         />
@@ -493,11 +517,12 @@ export function ViewPopover({ store }: { store: SceneStore }) {
             onInput={setFontSizePt}
           />
           <div className="view-field">
-            <FieldRow label="Color" value={fontColor.toUpperCase()} />
+            <FieldRow label="Color" value={fontColor ? fontColor.toUpperCase() : "Auto"} />
             <SwatchRow
               presets={fontConfig.colorPresets}
               current={fontColor}
               ariaPrefix="Font color"
+              autoLabel="Follow the theme"
               onPick={setFontColor}
             />
           </div>
@@ -509,7 +534,9 @@ export function ViewPopover({ store }: { store: SceneStore }) {
             style={{
               fontFamily: scene.fontFamily,
               fontSize: `${fontSizePt}pt`,
-              color: fontColor,
+              // Unset = the palette's own text token, exactly what the
+              // canvas will render (useCanvasFontVars.ts).
+              color: fontColor || "var(--gl-surface-text-primary)",
             }}
           >
             The quick brown fox jumps over the lazy dog

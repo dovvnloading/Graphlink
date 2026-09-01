@@ -149,11 +149,20 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
     # ChatScene owned only the flag and the geometry ran in the view layer.
     smart_guides: bool = False
     drag_factor: float = 1.0
-    # Canvas font (ChatScene's setFontFamily/-Size/-Color state, R2): defaults
-    # match the legacy scene's own construction-time values.
+    # Canvas font (ChatScene's setFontFamily/-Size/-Color state, R2): family
+    # and size default to the legacy scene's own construction-time values.
+    # font_color's default is the EMPTY STRING, meaning "follow the theme":
+    # the frontend only writes --gl-node-font-color when this is non-empty,
+    # and the CSS falls back to var(--gl-surface-text-primary) otherwise
+    # (styles.css). The legacy default was a literal "#F0F0F0" - white-ish
+    # text chosen for the dark theme - which made every node body unreadable
+    # the moment the light palette was active, because a stored hex cannot
+    # adapt. Only an explicit user pick stores a hex now, and an explicit
+    # pick applies as-is in both themes, which is what "I chose this color"
+    # means.
     font_family: str = "Segoe UI"
     font_size_pt: int = 9
-    font_color: str = "#F0F0F0"
+    font_color: str = ""
     # R3.3: which chat node the Composer's next Send continues from - the
     # Qt-free stand-in for "the currently active branch" until real node
     # selection exists. None means the next message starts a fresh root.
@@ -2071,6 +2080,9 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         if size_pt is not None:
             self.font_size_pt = max(FONT_SIZE_MIN, min(FONT_SIZE_MAX, int(size_pt)))
         if color is not None:
+            # "" is a valid value: reset to theme-following (see the field's
+            # own comment). Anything else is stored verbatim as the user's
+            # explicit choice.
             self.font_color = str(color)
 
     def set_view_state(self, zoom_factor: float, scroll_x: float, scroll_y: float) -> None:

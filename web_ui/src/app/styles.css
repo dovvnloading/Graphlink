@@ -2563,6 +2563,30 @@ body,
   box-shadow: 0 0 0 1px var(--gl-surface-text-primary);
 }
 
+/* The "follow the theme" swatch at the head of the font-color row. Not a
+   color at all, so it is not drawn as one: the letter mark on the plain
+   surface says "automatic" where a filled square would falsely promise a
+   specific hue. Active means the stored value is "" and node text inherits
+   var(--gl-surface-text-primary) - the palette's own body-text token,
+   already held to WCAG AA by the token contrast test
+   (web_ui/src/lib/tokens/token-theme-contrast.test.ts), which is the whole
+   point of following the theme instead of storing a hex. */
+.view-color-auto {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: inherit;
+  color: var(--gl-surface-text-secondary);
+  background-color: var(--gl-surface-inset);
+}
+
+.view-color-auto.active {
+  color: var(--gl-surface-text-bright);
+}
+
 /* The free-choice picker at the end of each swatch row: a native color
    input hidden inside a swatch-shaped label, so picking a custom value
    looks and feels like picking a preset. The dashed border marks it as
