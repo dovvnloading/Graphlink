@@ -66,6 +66,9 @@ function makeStore(
     setFontFamily: vi.fn(),
     setFontSize: vi.fn(),
     setFontColor: vi.fn(),
+    // Reset to Defaults calls this; absent from the double it threw an
+    // unhandled TypeError the moment a test actually clicked Reset.
+    clearFilters: vi.fn(),
   };
   return {
     store,
@@ -236,5 +239,52 @@ describe("ViewPopover (ADR-012 stage 12.5 node filter)", () => {
 
     expect(toggleFilterStatus).toHaveBeenCalledWith("superseded");
     expect(toggleFilterKind).not.toHaveBeenCalled();
+  });
+});
+
+describe("ViewPopover font color (theme-following default)", () => {
+  // The stored value "" means "follow the theme" - node text inherits
+  // var(--gl-surface-text-primary) instead of a fixed hex, which is what
+  // keeps it readable when the palette flips. These pin the panel's half of
+  // that contract; useCanvasFontVars.test.tsx pins the canvas half.
+  it("shows Auto (not an empty hex) when the color is unset, and marks the Auto swatch active", () => {
+    const { store } = makeStore();
+    renderOpen(store);
+    expect(screen.getByText("Auto")).toBeInTheDocument();
+    const auto = screen.getByRole("button", { name: "Font color, Follow the theme" });
+    expect(auto).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("picking the Auto swatch commits the empty string through setFontColor", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore({ fontColor: "#9EC1E8" });
+    const setFontColor = store.setFontColor as ReturnType<typeof vi.fn>;
+    renderOpen(store);
+
+    await user.click(screen.getByRole("button", { name: "Font color, Follow the theme" }));
+    // The debounce (useDebouncedSetting, 120ms) has to flush before the
+    // intent fires.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(setFontColor).toHaveBeenCalledWith("");
+  });
+
+  it("an explicit color still shows its hex and leaves Auto unpressed", () => {
+    const { store } = makeStore({ fontColor: "#9ec1e8" });
+    renderOpen(store);
+    expect(screen.getByText("#9EC1E8")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Font color, Follow the theme" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("Reset to Defaults returns the font color to theme-following", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore({ fontColor: "#E3C577" });
+    const setFontColor = store.setFontColor as ReturnType<typeof vi.fn>;
+    renderOpen(store);
+
+    await user.click(screen.getByRole("button", { name: "Reset to Defaults" }));
+    expect(setFontColor).toHaveBeenCalledWith("");
   });
 });

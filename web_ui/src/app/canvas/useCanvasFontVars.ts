@@ -37,6 +37,17 @@ export function useCanvasFontVars(
     // unit (1pt = 1/72in = 4/3px), not print-only, so this needs no
     // conversion - just the right unit suffix.
     el.style.setProperty("--gl-node-font-size", `${fontSizePt}pt`);
-    el.style.setProperty("--gl-node-font-color", fontColor);
+    // "" means "follow the theme": REMOVE the property rather than writing
+    // an empty value, so styles.css's own fallback chain -
+    // var(--gl-node-font-color, var(--gl-surface-text-primary)) - resolves
+    // to the active palette's text token in both themes. Writing "" would
+    // make the var() substitution take the empty value and drop the
+    // fallback. Only an explicit user pick writes a hex here, and an
+    // explicit pick applies as-is in both themes.
+    if (fontColor) {
+      el.style.setProperty("--gl-node-font-color", fontColor);
+    } else {
+      el.style.removeProperty("--gl-node-font-color");
+    }
   }, [wrapperRef, fontFamily, fontSizePt, fontColor]);
 }
