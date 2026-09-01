@@ -310,13 +310,15 @@ def test_executeplugin_rejects_wrong_arity_before_running_the_handler():
                 "kind": "intent",
                 "topic": "app-plugins",
                 "intent": "executePlugin",
-                "args": ["System Prompt", "node-1", "unexpected-extra"],
+                # executePlugin takes (name, parent_node_id, spawn_x,
+                # spawn_y); a fifth argument is the arity error.
+                "args": ["System Prompt", "node-1", 0, 0, "unexpected-extra"],
                 "id": 8,
             }
         )
         message = ws.receive_json()
         assert message["kind"] == "error"
-        assert message["error"] == "Invalid arguments: expected at most 2 argument(s), got 3."
+        assert message["error"] == "Invalid arguments: expected at most 4 argument(s), got 5."
 
 
 def test_junk_args_never_crash_or_disconnect_any_registered_intent():

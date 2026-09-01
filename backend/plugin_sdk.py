@@ -340,6 +340,16 @@ class PluginRunContext:
 
     plugin_id: str
     notifications: NotificationState
+    # Where a PARENTLESS node should be created, in scene coordinates. The
+    # picker sends the viewport's own center with every executePlugin call,
+    # so a plugin registered with requires_parent=False has a real,
+    # host-decided place to spawn - the gap that made requires_parent=False
+    # unrepresentable in v1 and, with it, forced every plugin (System Prompt
+    # included) to demand a pre-existing selected node before it could run.
+    # None only when a host constructs a context outside the picker path;
+    # parentless creation falls back to the origin in that case.
+    spawn_x: float | None = None
+    spawn_y: float | None = None
 
 
 @dataclass(frozen=True)
@@ -347,7 +357,9 @@ class NodeKindSpec:
     plugin_id: str
     kind: str  # ALREADY namespaced: f"{plugin_id}.{local_kind}"
     factory: NodeFactory
-    requires_parent: bool  # always True in v1
+    # False = creatable with nothing selected, spawned at the picker's
+    # reported viewport center (PluginRunContext.spawn_x/spawn_y).
+    requires_parent: bool
     # ADR-014 stage 14.2: OPTIONAL persistence/wire hooks - see
     # HostContext.register_node_kind's own docstring for the full contract.
     # A plugin that passes neither still gets its node's universal title/
@@ -449,6 +461,10 @@ class BuiltinActionSpec:
     description: str
     category: str
     handler: BuiltinActionHandler
+    # Mirrors PluginNodeKindSpec.requires_parent: False lets the picker run
+    # this action with nothing selected. The handler still owns its own
+    # validation - the host only stops gating the call on a parent id.
+    requires_parent: bool = True
 
 
 # SECURITY-FIX: register_builtin_plugin (below) attaches a picker action that
@@ -501,10 +517,14 @@ class HostContext:
         contains ".", so a namespaced kind can never literally collide with
         one, and no separate reserved-kind blocklist is needed.
 
-        v1 ONLY supports requires_parent=True. False is rejected outright:
-        PluginPicker.tsx's executePlugin(name, parentId) wire call carries
-        no x/y at all, so a parentless node has no host-decided place to
-        spawn.
+        `requires_parent=False` registers a kind that can be created on an
+        empty canvas with nothing selected. It was rejected outright in v1
+        because executePlugin's wire call carried no x/y, leaving a
+        parentless node with no host-decided place to spawn; the call now
+        carries the viewport center, surfaced to the factory as
+        PluginRunContext.spawn_x/spawn_y, so the position exists and the
+        restriction is gone. The factory is invoked with parent_node_id=None
+        in that case, and the created node is left unconnected.
 
         ADR-014 stage 14.2: 'serialize'/'deserialize' are the OPTIONAL
         generic persistence/wire seam for a plugin's own NodeState subclass
@@ -535,12 +555,6 @@ class HostContext:
             here is caught by the caller - the node still restores with
             its title/content, just without its extra state - never a
             failed load."""
-        if not requires_parent:
-            raise PluginRegistrationError(
-                f'plugin "{self.plugin_id}": requires_parent=False is not supported in SDK '
-                f"v1 - the picker's executePlugin(name, parentId) call carries no spawn "
-                f'position for a parentless node.'
-            )
         if not kind or not all(c.isalnum() or c == "_" for c in kind):
             raise PluginRegistrationError(
                 f'plugin "{self.plugin_id}": invalid node kind "{kind}" '
@@ -552,7 +566,8 @@ class HostContext:
                 f'plugin "{self.plugin_id}": node kind "{kind}" already registered'
             )
         self._node_kinds[namespaced] = NodeKindSpec(
-            plugin_id=self.plugin_id, kind=namespaced, factory=factory, requires_parent=True,
+            plugin_id=self.plugin_id, kind=namespaced, factory=factory,
+            requires_parent=requires_parent,
             serialize=serialize, deserialize=deserialize,
         )
 
@@ -585,6 +600,7 @@ class HostContext:
 
     def register_builtin_plugin(
         self, *, name: str, description: str, category: str, handler: BuiltinActionHandler,
+        requires_parent: bool = True,
     ) -> None:
         """ADR-014 stage 14.3: the first-party migration escape hatch - lets
         a plugin's register() call attach a picker entry directly to an
@@ -646,7 +662,7 @@ class HostContext:
             )
         self._builtin_actions[name] = BuiltinActionSpec(
             plugin_id=self.plugin_id, name=name, description=description,
-            category=category, handler=handler,
+            category=category, handler=handler, requires_parent=requires_parent,
         )
 
     def register_intent(

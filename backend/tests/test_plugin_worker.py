@@ -13,7 +13,7 @@ B. Discovery of an out-of-process plugin spawns a REAL worker subprocess,
    picker entry appears in plugins_payload() exactly like an in-process
    plugin's would.
 C. THE empirical secret-containment proof: a fake secret-shaped env var is
-   planted on the HOST test process, the shipped plugins/sandboxed_demo
+   planted on the HOST test process, the sandboxed_demo fixture plugin
    plugin's node-creation is triggered, and the created node's content -
    built entirely inside the WORKER subprocess - is asserted to contain
    NEITHER the planted value NOR the env var's own name.
@@ -47,6 +47,7 @@ import asyncio
 import shutil
 import textwrap
 import time
+from pathlib import Path
 
 import pytest
 
@@ -54,7 +55,6 @@ from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.plugin_sdk import (
-    DEFAULT_PLUGINS_ROOT,
     PluginRegistrationError,
     PluginWorkerClient,
     PluginWorkerError,
@@ -66,6 +66,34 @@ from backend.session_load import restore_chat_into_document
 from backend.session_save import build_chat_data
 from backend.tools import RunContext, ToolRegistry
 from graphlink_settings_store import SettingsManager
+
+# The three demo plugins (hello_node, counter_node, sandboxed_demo) live in
+# backend/tests/fixture_plugins/, not in the shipped plugins/ root: they are
+# test fixtures, and while they sat in plugins/ they were packaged into the
+# wheel by MANIFEST.in and listed in every user's plugin picker as "Hello
+# Node" / "Counter Node" / "Sandboxed Env Probe". They are still REAL plugins
+# loaded through real discovery - that is the point of them - just discovered
+# from a root that ships to nobody.
+FIXTURE_PLUGINS_ROOT = Path(__file__).resolve().parent / "fixture_plugins"
+
+
+@pytest.fixture
+def sandboxed_demo_is_discoverable(monkeypatch):
+    """Points backend/agent_dispatch/builder.py's own discover_plugins() at
+    the fixture root.
+
+    These tests assert the REAL tool-registry wiring for an out-of-process
+    plugin, end to end. sandboxed_demo used to sit in the shipped plugins/
+    root, so the default discovery found it for free - at the cost of every
+    user seeing "Sandboxed Env Probe" in their picker. The plugin is a
+    fixture now, so the test has to say where it lives; the wiring under
+    test is unchanged."""
+    from backend.plugin_sdk import discover_plugins as _discover
+
+    monkeypatch.setattr(
+        "backend.plugin_sdk.discover_plugins",
+        lambda *args, **kwargs: _discover(FIXTURE_PLUGINS_ROOT),
+    )
 
 
 def _close_workers(registry) -> None:
@@ -292,7 +320,7 @@ def test_out_of_process_plugin_worker_cannot_see_a_planted_host_secret_env_var(t
     """THE stage 14.5 exit criterion, proven empirically: plant
     GRAPHLINK_OPENAI_API_KEY=fake-test-secret-value on the HOST test
     process, discover a fresh copy of the REAL shipped
-    plugins/sandboxed_demo plugin (a fresh tmp_path copy, so the env var is
+    sandboxed_demo fixture plugin (a fresh tmp_path copy, so the env var is
     guaranteed to be set BEFORE this specific worker's Popen call, and this
     test never touches the shared, memoized real-repo-root registry any
     other test might have already populated), grant it, create its node,
@@ -303,7 +331,7 @@ def test_out_of_process_plugin_worker_cannot_see_a_planted_host_secret_env_var(t
 
     plugins_root = tmp_path / "plugins"
     plugins_root.mkdir()
-    shutil.copytree(DEFAULT_PLUGINS_ROOT / "sandboxed_demo", plugins_root / "sandboxed_demo")
+    shutil.copytree(FIXTURE_PLUGINS_ROOT / "sandboxed_demo", plugins_root / "sandboxed_demo")
 
     registry = discover_plugins(plugins_root)
     try:
@@ -860,7 +888,7 @@ def _approving_ctx() -> RunContext:
 # -- G: backend/agents.py's builder_tool_registry() really wires it in ------
 
 
-def test_builder_tool_registry_includes_the_real_shipped_sandboxed_demo_plugin_tool(tmp_path):
+def test_builder_tool_registry_includes_the_real_out_of_process_plugin_tool(tmp_path, sandboxed_demo_is_discoverable):
     from backend.agents import AgentDispatcher
 
     settings_manager = SettingsManager(tmp_path / "session.dat")
@@ -1049,7 +1077,7 @@ def test_out_of_process_plugin_node_state_round_trips_through_save_and_reload(tm
 # -- ADR-021 stage 21.4: plugin intent arguments, end to end ----------------
 
 
-def test_the_real_sandboxed_plugin_tool_advertises_its_declared_arguments(tmp_path):
+def test_the_real_sandboxed_plugin_tool_advertises_its_declared_arguments(tmp_path, sandboxed_demo_is_discoverable):
     """The host never imports plugins/sandboxed_demo/plugin.py, so it cannot
     see PingArgs at all - the worker generates the schema on its own side and
     sends it up at registration time. Before stage 21.4 this spec's
@@ -1072,7 +1100,7 @@ def test_the_real_sandboxed_plugin_tool_advertises_its_declared_arguments(tmp_pa
     assert spec.input_schema["required"] == ["message"]
 
 
-def test_arguments_reach_an_out_of_process_intent_and_come_back(tmp_path):
+def test_arguments_reach_an_out_of_process_intent_and_come_back(tmp_path, sandboxed_demo_is_discoverable):
     """The full stage-21.4 round trip across the isolation boundary: the host
     forwards a raw dict (it has no access to the plugin's dataclass), the
     worker validates and constructs PingArgs against the real type, and the
@@ -1100,7 +1128,7 @@ def test_arguments_reach_an_out_of_process_intent_and_come_back(tmp_path):
     assert result.content == "pong from sandboxed_demo: hi hi hi"
 
 
-def test_invalid_arguments_come_back_as_tool_feedback_not_a_crash(tmp_path):
+def test_invalid_arguments_come_back_as_tool_feedback_not_a_crash(tmp_path, sandboxed_demo_is_discoverable):
     """A wrong-typed argument is ordinary tool feedback the loop hands back
     to the model to correct - the posture ToolRegistry.invoke() takes for
     every expected denial - not an exception out of the turn."""

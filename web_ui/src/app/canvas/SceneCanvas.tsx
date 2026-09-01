@@ -2623,24 +2623,37 @@ function CanvasInner({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [selectedConnectionId, store]);
 
-  const onDoubleClick = useCallback(
-    (event: React.MouseEvent) => {
-      // Double-click on empty canvas creates a node there - the R1 stand-in
-      // for the plugin picker / context menu creation paths (R2/R8).
-      const target = event.target as HTMLElement;
-      if (!target.closest(".react-flow__node")) {
-        const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
-        store.addNode(position.x, position.y);
-      }
-    },
-    [screenToFlowPosition, store],
-  );
+  // The spawn point for anything created with nothing selected - the plugin
+  // picker's own creation path. Registered as a PROVIDER rather than a
+  // stored coordinate: this component owns the React Flow transform, and
+  // asking at click time means a pan or zoom since the last render can
+  // never hand out a stale point.
+  //
+  // This replaces a double-click-to-create-a-blank-node gesture that
+  // described itself as "the R1 stand-in for the plugin picker / context
+  // menu creation paths". Those paths shipped; the stand-in did not go
+  // away, and since every plugin required a pre-existing selected node, it
+  // had quietly become the only way to put a first node on an empty canvas
+  // - an undiscoverable double-click that produced an untitled placeholder.
+  // Plugins can now be created with nothing selected, so the scaffold is
+  // gone and the picker is the creation path.
+  useEffect(() => {
+    const wrapper = canvasWrapperRef.current;
+    if (!wrapper) return;
+    store.setViewportCenterProvider(() => {
+      const rect = wrapper.getBoundingClientRect();
+      return screenToFlowPosition({
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      });
+    });
+    return () => store.setViewportCenterProvider(null);
+  }, [screenToFlowPosition, store]);
 
   return (
     <div
       className="scene-canvas"
       ref={canvasWrapperRef}
-      onDoubleClick={onDoubleClick}
       // ADR-015 stage 15.6: the one stable, content-independent hook the
       // Playwright boot-smoke suite (web_ui/e2e/boot.spec.ts) needs to
       // assert the real canvas surface rendered - every other candidate
@@ -2680,9 +2693,11 @@ function CanvasInner({
         panOnDrag={false}
         snapToGrid={scene.snapToGrid}
         snapGrid={snapGrid}
-        // Double-click is the R1 create-node gesture (wrapper onDoubleClick);
-        // RF's default dblclick-zoom would consume it before it ever bubbles.
-        zoomOnDoubleClick={false}
+        // Double-click zooms, React Flow's own default. It was disabled
+        // only so the removed create-a-blank-node gesture could see the
+        // event first; with that gone, the standard canvas behavior every
+        // node editor has is the better use of the gesture.
+        zoomOnDoubleClick
         fitView
         // The initial fitView's OWN zoom ceiling, independent of maxZoom
         // below (which only bounds interactive/manual zoom) - see

@@ -12,13 +12,17 @@ import { Popover, useOverlays } from "../overlays/overlays";
  * `executePlugin` intent, which surfaces an honest "lands in R3/R5"
  * notification instead of creating a node - node types don't exist yet.
  *
- * R5.1: every plugin's click now also sends the canvas's currently-selected
+ * R5.1: every plugin's click also sends the canvas's currently-selected
  * node id (store.getSelectedNodeId()) as executePlugin's second argument -
- * future plugin-node-creation wiring built once, here, rather than
- * special-cased per plugin. Most plugins (including Web Research itself)
- * don't read this argument yet; it rides along regardless, same posture the
- * backend's own execute_plugin(plugin_name, parent_node_id=None) already
- * takes.
+ * plugin-node-creation wiring built once, here, rather than special-cased
+ * per plugin.
+ *
+ * It now sends the canvas viewport's center alongside it. A plugin
+ * registered with requires_parent=False is creatable with NOTHING selected,
+ * and this is the position such a node spawns at - the missing piece that
+ * previously made requires_parent=False unrepresentable and so forced every
+ * plugin, System Prompt included, to demand a pre-existing node before it
+ * could run at all.
  */
 
 const initialState: AppPluginsState = {
@@ -90,9 +94,12 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
                     type="button"
                     className="plugin-picker-row"
                     onClick={() => {
+                      const spawn = store.getSpawnPoint();
                       transport.fireIntent("app-plugins", "executePlugin", [
                         plugin.name,
                         store.getSelectedNodeId(),
+                        spawn.x,
+                        spawn.y,
                       ]);
                       // Close on select, matching the legacy popup's own
                       // post-execute dismiss - and so the resulting

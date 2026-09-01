@@ -4,6 +4,11 @@ hardcoded `if name == "System Prompt":` branch - the one built-in whose
 shape genuinely differs from the other 7 (a note placed ABOVE the branch
 root, not a child fanned below the selected node):
 
+- With NO selection, creates the note unattached at the picker's reported
+  viewport center; SceneDocument.adopt_pending_system_prompt then connects
+  it to the first branch root created afterwards. A system prompt is
+  authored before the branch it governs, so requiring an existing node
+  (the pre-fix behavior) forced a wasted send just to unlock the action.
 - Resolves parent_node_id's BRANCH ROOT (SceneDocument.get_branch_root),
   the same parent-edge walk backend/agents.py's
   _resolve_branch_system_prompt uses at send time - the note attaches to
@@ -32,11 +37,14 @@ def _execute(
     document: SceneDocument, run_ctx: PluginRunContext, parent_node_id: "str | None",
 ) -> "str | None":
     if not parent_node_id or parent_node_id not in document.nodes:
-        run_ctx.notifications.show(
-            "Please select a valid node to branch from before adding a System Prompt node.",
-            "warning",
-        )
-        return None
+        # No selection: create the prompt UNATTACHED, at the viewport center.
+        # A system prompt is the one node that is naturally authored BEFORE
+        # the branch it governs - requiring a node to exist first meant
+        # sending a message just to earn the right to set the prompt that
+        # should have shaped it. SceneDocument.adopt_pending_system_prompt
+        # connects this note to the first branch root that appears, which is
+        # the note -> root edge _resolve_branch_system_prompt looks for.
+        return _create_pending(document, run_ctx)
     root = document.get_branch_root(parent_node_id)
     existing = next(
         (
@@ -65,6 +73,37 @@ def _execute(
     return note.id
 
 
+def _create_pending(
+    document: SceneDocument, run_ctx: PluginRunContext,
+) -> "str | None":
+    """Creates (or reuses) the unattached system-prompt note.
+
+    Reuse mirrors the attached path's own dedup rule: a second pending note
+    would be just as inert as a second attached one, since only the first
+    can ever be adopted by a root."""
+    existing = next(
+        (
+            node
+            for node in document.nodes.values()
+            if node.kind == "note"
+            and node.state.is_system_prompt
+            and not any(edge.source == node.id for edge in document.edges.values())
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing.id
+
+    x = float(run_ctx.spawn_x or 0.0)
+    y = float(run_ctx.spawn_y or 0.0)
+
+    def _create():
+        return document.add_note(x, y, is_system_prompt=True)
+
+    note, _command = document.record_command("pluginSystemPrompt", "user", _create)
+    return note.id
+
+
 def register(host: HostContext) -> None:
     host.register_builtin_plugin(
         name="System Prompt",
@@ -74,4 +113,6 @@ def register(host: HostContext) -> None:
         ),
         category="Branch Foundations",
         handler=_execute,
+        # Creatable on an empty canvas: see _execute's own no-selection path.
+        requires_parent=False,
     )
