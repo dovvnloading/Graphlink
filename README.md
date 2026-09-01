@@ -3,12 +3,12 @@
 # GraphLink
 
 ![License](https://img.shields.io/badge/License-MIT-green)
-![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
+![Python](https://img.shields.io/badge/Python-3.12%2B-blue)
 ![Stack](https://img.shields.io/badge/Stack-FastAPI%20%2B%20React-blue)
 ![Local First](https://img.shields.io/badge/Local--First-AI%20Workspace-orange)
 ![GitHub stars](https://img.shields.io/github/stars/dovvnloading/Graphlink?style=social)
 
-<img alt="Graphlink canvas - one question branched into two parallel lines of inquiry, each with its own web research node" src="assets/screenshots/canvas-branching.png" />
+<img alt="Graphlink canvas - one question branched into two answers inside a frame, one continuing into a Python sandbox, beside a finished build and the chart it produced" src="assets/screenshots/canvas-branching.png" />
 
 **A local-first, graph-based AI workspace for branching reasoning, tool use, and multi-provider workflows.**
 
@@ -49,6 +49,7 @@ It is built with a Python (FastAPI) backend and a Vite/React/TypeScript single-p
 - **Multiple model backends** — run locally with Ollama or direct GGUF loading via `llama-cpp-python`, or switch to API Endpoint mode for OpenAI-compatible, Anthropic Claude, or Google Gemini. The active mode is switchable in Settings.
 - **Per-branch model routing** — pin a specific model to a node or a whole branch, on top of the per-task model defaults.
 - **Plugin nodes** — attach specialist nodes for web research, code execution, drafting, and repository-aware changes (see [Plugins](#plugins)), plus a plugin SDK with per-plugin capability grants and optional MCP server integration.
+- **The workspace agent** — point it at a folder and give it a task; it reads and writes files there, runs shell commands and Python, and asks before anything that changes your machine. Bounded by a per-task turn budget, and it reads an `AGENTS.md` if the workspace has one.
 - **Repository-aware editing** — Gitlink loads a GitHub repo into structured context, previews file-level changes, and only writes after explicit approval.
 - **Knowledge base and search** — ingest documents into a local knowledge store, search it from a node, and search across every workspace at once.
 - **Workspaces and library** — organize graphs into workspaces with favorites, tags, and archiving; reopen any of them from the Library.
@@ -60,21 +61,21 @@ It is built with a Python (FastAPI) backend and a Vite/React/TypeScript single-p
 - **Diagnostics** — a token and cost counter, a command palette, and an exportable diagnostic bundle for troubleshooting.
 - **Export** — save the whole canvas as a PNG, or export individual nodes: Chat as Markdown, Code as a source file (extension inferred from language), Image as PNG.
 
-Built-in node kinds on the graph surface: **Chat**, **Code**, **Document**, **Thinking**, **HTML**, **Image**, **Conversation**, **Web Research**, **Plan** (the Builder's checklist), **Artifact**, **Gitlink**, **Code Sandbox**, **Note**, and **Chart** — plus Frames, Containers, and Navigation Pins for organizing them.
+Built-in node kinds on the graph surface: **Chat**, **Code**, **Document**, **Thinking**, **HTML**, **Image**, **Conversation**, **Web Research**, **Plan** (the Builder's checklist), **Agent** (the workspace agent's card), **Artifact**, **Gitlink**, **Code Sandbox**, **Note**, and **Chart** — plus Frames, Containers, and Navigation Pins for organizing them.
 
 ## Screenshots
 
 **A build, on the canvas.** The plan node holds the checklist, the live budget counters, and an activity log of every tool call the run made — next to the nodes it actually created.
 
-<img alt="A finished Builder run: plan node with checklist, budgets and activity log, beside the Py-Coder node and chart it produced" src="assets/screenshots/builder-run.png" />
+<img alt="A finished Builder run: plan node with its checklist, spent budgets and activity log, beside the chart it produced" src="assets/screenshots/builder-run.png" />
 
 **Launching a build.** Pick a recipe (its steps are previewed before you commit), choose how much oversight you want, and set the budgets.
 
 <img alt="The Builder launch dialog showing a recipe with its steps previewed, co-pilot/autopilot oversight modes, and budget presets" src="assets/screenshots/builder-launcher.png" />
 
-**Code and charts inline.** Code Sandbox runs Python in a per-node virtualenv with declared dependencies; any node's content can become a chart.
+**Code and charts inline.** The Virtual Environment Runner keeps the requirements, the code and the terminal output on one node; any node's content can become a chart.
 
-<img alt="A chat question feeding a Py-Coder node with code and output, feeding a bar chart" src="assets/screenshots/code-and-charts.png" />
+<img alt="A Virtual Environment Runner node with its requirements, code and terminal output, beside the chart built from its results" src="assets/screenshots/code-and-charts.png" />
 
 ## The Builder
 
@@ -107,7 +108,7 @@ Attach these specialist nodes to a branch from the plugin picker:
 
 ### Requirements
 
-- Python 3.10 or newer. Windows is the primary development target today.
+- Python 3.12 or newer. Windows is the primary development target today.
 - Node.js 22 or newer (`web_ui/.nvmrc` pins 24, the exact version this project is developed against), needed only to build the frontend once.
 - Internet access is optional, and only needed for API Endpoint mode, GitHub-backed plugins, and web research.
 
@@ -222,7 +223,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, dev
 
 | Symptom | Things to check |
 | --- | --- |
-| App does not start | Dependencies installed from `requirements.txt`; the frontend is built (`web_ui/dist/app/index.html` exists — run `cd web_ui && npm run build` if not); launched with `python graphlink_desktop.py` from the repo root; Python 3.10+. |
+| App does not start | Dependencies installed from `requirements.txt`; the frontend is built (`web_ui/dist/app/index.html` exists — run `cd web_ui && npm run build` if not); launched with `python graphlink_desktop.py` from the repo root; Python 3.12+. |
 | Ollama features fail | Ollama installed and running; the selected model has been pulled and exists locally. |
 | Llama.cpp features fail | `llama-cpp-python` installed; the configured path points to a real `.gguf`; try a `chat_format` override or lower runtime settings. Use Ollama or API mode for image/audio. |
 | API mode fails | API key present; base URL correct for OpenAI-compatible mode; the selected models exist on the endpoint. |

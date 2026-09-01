@@ -552,8 +552,8 @@ class SceneNodeRow:
     chartType: str = ""
     chartData: ChartDataRow = field(default_factory=ChartDataRow)
     chartError: str = ""
-    chartWidth: float = 680.0
-    chartHeight: float = 500.0
+    chartWidth: float = 480.0
+    chartHeight: float = 340.0
     chartAspectLocked: bool = True
     chartSourceNodeId: str = ""
     # R6.3: the Source/Preview splitter position (html) and chat scroll
