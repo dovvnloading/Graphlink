@@ -344,32 +344,223 @@ body,
   stroke: var(--gl-surface-text-primary);
 }
 
-.scene-minimap {
-  /* Overrides React Flow's own baked-in Panel margin (15px, from its
-     bottom-right default position) so the minimap uses the SAME edge
-     inset as every other piece of canvas chrome, rather than a value
-     that happened to be close but came from a different system. */
+/* -- Canvas minimap -------------------------------------------------------
+
+   The panel is ours; the map inside it is React Flow's. RF renders MiniMap
+   as its own absolutely-positioned Panel, so it is flattened to a normal
+   block here and the surrounding <Panel> in SceneMinimap.tsx does the
+   positioning - which is what makes room for a header above the map. */
+
+.scene-minimap-panel {
+  /* Overrides React Flow's own baked-in Panel margin (15px) so the map uses
+     the SAME edge inset as every other piece of canvas chrome, rather than a
+     value that happened to be close but came from a different system. */
   margin: var(--gl-chrome-inset) !important;
-  /* R8a: the composer island used to be able to visually cover the
-     minimap's bottom-right corner (its React Flow-supplied z-index:5 lost
-     to the composer's app-layer:20 wherever they geometrically
-     overlapped) - the same class of bug the token counter had on the
-     opposite corner. .app-composer-layer's own width now reserves real
-     space on BOTH sides so overlap shouldn't happen in practice - but
-     "should never be able to" means this can't depend solely on getting
-     that geometry right, so both HUD elements ALSO outrank every
-     app-layer surface here, independent of position. !important for the
-     same reason as the margin above: RF's own stylesheet sets a z-index
-     on this exact element and loads after ours. */
+  /* R8a: the composer island used to be able to visually cover the map's
+     bottom-right corner (RF's own z-index:5 lost to the composer's
+     app-layer:20 wherever they geometrically overlapped) - the same class of
+     bug the token counter had on the opposite corner. .app-composer-layer's
+     own width now reserves real space on BOTH sides so overlap shouldn't
+     happen in practice - but "should never be able to" means this can't
+     depend solely on getting that geometry right, so both HUD elements ALSO
+     outrank every app-layer surface here, independent of position.
+     !important for the same reason as the margin above: RF's own stylesheet
+     sets a z-index on this exact element and loads after ours. */
   z-index: var(--gl-z-canvas-hud) !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
   border-radius: 8px;
 }
 
+/* What the map is currently showing, in words - and the one line that says
+   something the map itself cannot: how many nodes are parked on a decision
+   somewhere off screen. */
+.scene-minimap-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 4px 0 9px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--gl-surface-text-muted);
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+
+.scene-minimap-panel.collapsed .scene-minimap-header {
+  border-bottom: none;
+}
+
+.scene-minimap-count {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Brightness, not hue: --gl-semantic-status-warning is #919191 against a
+   header already set in #767676, so tinting this would barely move it. The
+   count is the only thing in this panel that asks for something. */
+.scene-minimap-waiting {
+  margin-left: auto;
+  padding: 1px 7px;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--gl-surface-text-bright);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.scene-minimap-waiting:hover {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.scene-minimap-waiting:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
+
+.scene-minimap-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin-left: auto;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+/* When the waiting chip is present it takes the auto margin, so the toggle
+   must not also claim one or the two are pushed apart. */
+.scene-minimap-waiting + .scene-minimap-toggle {
+  margin-left: 0;
+}
+
+.scene-minimap-toggle:hover {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+}
+
+.scene-minimap-toggle:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: -1px;
+}
+
+.scene-minimap-chevron {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* RF positions MiniMap as its own Panel. Inside our panel it is just the
+   map. */
+.scene-minimap {
+  position: static !important;
+  margin: 0 !important;
+  background-color: transparent;
+}
+
+/* The viewport rectangle. It is draggable and scroll-zoomable, and the stock
+   translucent-fill-only treatment gave no sign of either - a visible frame is
+   what makes it read as a handle rather than as a lighter patch. */
 .scene-minimap .react-flow__minimap-mask {
   fill: var(--gl-surface-window);
-  fill-opacity: 0.55;
+  fill-opacity: 0.6;
+  stroke: var(--gl-surface-text-muted);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+/* -- Nodes on the map -----------------------------------------------------
+
+   Four category treatments, separated by fill weight because this palette is
+   monochrome and fifteen distinguishable greys do not exist at this size.
+   Groups are outlines, which is also what they are on the canvas. */
+
+.scene-minimap-node {
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  transition: fill var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.scene-minimap-node-conversation {
+  fill: var(--gl-surface-handle);
+  stroke: var(--gl-surface-border-strong);
+}
+
+.scene-minimap-node-content {
+  fill: var(--gl-surface-handle-hover);
+  stroke: var(--gl-surface-border-strong);
+}
+
+.scene-minimap-node-tool {
+  fill: var(--gl-surface-text-muted);
+  stroke: var(--gl-surface-text-secondary);
+}
+
+.scene-minimap-node-group {
+  fill: none;
+  stroke: var(--gl-surface-border-strong);
+  stroke-dasharray: 4 3;
+}
+
+/* Selection reads on the map, so "where am I" survives a jump to the far
+   side of the graph. */
+.scene-minimap-node.selected {
+  fill: var(--gl-surface-text-bright);
+  stroke: var(--gl-surface-text-bright);
+  stroke-width: 2;
+}
+
+.scene-minimap-node-group.selected {
+  fill: none;
+}
+
+/* Run state, by stroke. A build three screens away that failed, or an agent
+   parked on a question, is exactly what a map should be able to tell you. */
+.scene-minimap-node-running {
+  stroke: var(--gl-surface-text-primary);
+  stroke-width: 2;
+  animation: scene-minimap-pulse 1.6s var(--gl-motion-ease) infinite;
+}
+
+.scene-minimap-node-failed {
+  stroke: var(--gl-surface-text-bright);
+  stroke-width: 2;
+  stroke-dasharray: 3 2;
+}
+
+.scene-minimap-node-attention {
+  fill: var(--gl-surface-text-bright);
+  stroke: var(--gl-surface-text-bright);
+  stroke-width: 3;
+  animation: scene-minimap-pulse 1.2s var(--gl-motion-ease) infinite;
+}
+
+@keyframes scene-minimap-pulse {
+  0%, 100% { stroke-opacity: 1; }
+  50% { stroke-opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-minimap-node-running,
+  .scene-minimap-node-attention {
+    animation: none;
+  }
 }
 
 .scene-node-handle {
