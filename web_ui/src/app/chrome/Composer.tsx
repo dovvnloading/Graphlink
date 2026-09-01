@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComposerStore } from "./composerStore";
@@ -62,7 +62,6 @@ export function Composer({
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
   const streamText = useSyncExternalStore(store.subscribe, store.getStreamText);
   const overlays = useOverlays();
-  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // ADR-002 Workstream 1 ("Branch from here"): sceneStore's own
   // replyTargetNodeId/scene, subscribed here (not just in SceneCanvas) so
@@ -89,13 +88,6 @@ export function Composer({
     sceneStore.subscribe,
     sceneStore.getSynthesizeTargetNodeIds,
   );
-
-  useLayoutEffect(() => {
-    const input = inputRef.current;
-    if (!input) return;
-    input.style.height = "auto";
-    input.style.height = `${Math.max(42, Math.min(160, input.scrollHeight))}px`;
-  }, [composer.draft.text]);
 
   const modelLabel = composer.route.modelLabel || composer.route.modelId || "Select a model";
   const isSynthesizing = !!synthesizeTargetNodeIds && synthesizeTargetNodeIds.length > 0;
@@ -176,7 +168,6 @@ export function Composer({
       )}
       <div className="composer-input-wrap">
         <textarea
-          ref={inputRef}
           // ADR-012 stage 12.3: the skip-link's own jump target - see
           // App.tsx's ".skip-link" anchor, which lets a keyboard user bypass
           // every node on the canvas (an N-node canvas is otherwise N tab
