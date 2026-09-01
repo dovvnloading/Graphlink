@@ -440,6 +440,12 @@ class SceneNodeRow:
     # diff/patch). Populated for kind=="artifact" rows, defaulted (empty
     # string) for every other kind.
     artifactContent: str = ""
+    # The Artifact node's last failure, carried on the node rather than left
+    # to a session-wide notification toast - with two artifact nodes on the
+    # canvas a toast cannot say which one failed. Live-wire only, matching
+    # researchError: neither appears in session_save.py/session_load.py, so
+    # a reloaded session does not resurrect a stale failure.
+    artifactError: str = ""
     # R5.3: the Gitlink node's real persisted shape - populated for
     # kind=="gitlink" rows, defaulted for every other kind. gitlinkContextXml
     # is DELIBERATELY NOT one of these fields - see this module's own

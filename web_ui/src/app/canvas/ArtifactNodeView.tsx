@@ -47,6 +47,7 @@ export interface ArtifactMessage {
 
 export interface ArtifactNodeData extends Record<string, unknown> {
   artifactContent: string;
+  artifactError: string;
   history: ArtifactMessage[];
   isCollapsed: boolean;
   pendingRequestId: string | null;
@@ -147,6 +148,7 @@ export function artifactNodePropsAreEqual(
   const b = next.data;
   return (
     a.artifactContent === b.artifactContent &&
+    a.artifactError === b.artifactError &&
     a.isCollapsed === b.isCollapsed &&
     a.pendingRequestId === b.pendingRequestId &&
     a.onToggleCollapse === b.onToggleCollapse &&
@@ -209,6 +211,15 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
         )
       }
     >
+      {data.artifactError && (
+        // On the node, not only in a session-wide toast: with two artifact
+        // nodes on the canvas a toast cannot say which one failed. Same
+        // banner treatment the sandbox card uses for its own failures.
+        <div className="code-sandbox-node-banner-error" role="alert">
+          {data.artifactError}
+        </div>
+      )}
+
       <div className="artifact-node-document">
         {hasContent ? (
           <div className="chat-node-content artifact-node-document-content">

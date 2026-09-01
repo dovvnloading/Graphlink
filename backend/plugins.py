@@ -120,10 +120,6 @@ _CATEGORY_META = [
         "description": "Deep thinking and web retrieval for exploring complex questions and grounding decisions.",
     },
     {
-        "name": "Validation & Delivery",
-        "description": "Acceptance reviews, branch comparison, and delivery-focused checks that harden work before release.",
-    },
-    {
         "name": "Build & Execution",
         "description": "Code generation, isolated execution, and rendering tools for turning ideas into working artifacts.",
     },

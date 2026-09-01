@@ -411,6 +411,7 @@ BuiltinActionHandler = Callable[[SceneDocument, PluginRunContext, "str | None"],
 
 def make_simple_child_node_handler(
     *, command_type: str, warning_suffix: str, create: Callable[[SceneDocument, str], SceneNode],
+    create_standalone: "Callable[[SceneDocument, float, float], SceneNode] | None" = None,
 ) -> BuiltinActionHandler:
     """Factory for the one BuiltinActionHandler shape shared, byte-for-byte
     apart from three call-site-specific values, by 6 of the 7 register_
@@ -432,17 +433,38 @@ def make_simple_child_node_handler(
     zero-arg closure and must return the created SceneNode - callers close
     over document.place_child(...)'s own kind string and any extra
     positional args their add_*_node factory needs (e.g. html_renderer's
-    empty initial html_content)."""
+    empty initial html_content).
+
+    'create_standalone' opts a plugin into being creatable with NOTHING
+    selected. Five of the six kinds using this factory never read the
+    parent's content at all - parent_node_id is only a place_child anchor
+    and an edge - so requiring a selection was a positional convenience
+    dressed up as a dependency, and it made the whole picker a dead end on
+    an empty canvas. When it is provided and no valid parent is selected,
+    it is called as create_standalone(document, x, y) with the viewport
+    centre the picker reported (PluginRunContext.spawn_x/spawn_y) and the
+    created node is left unconnected. Omit it and the parent stays
+    genuinely required - html_renderer does, because it really does seed
+    its content from document.nodes[parent_node_id].content."""
 
     def _execute(
         document: SceneDocument, run_ctx: PluginRunContext, parent_node_id: "str | None",
     ) -> "str | None":
         if not parent_node_id or parent_node_id not in document.nodes:
-            run_ctx.notifications.show(
-                f"Please select a valid node to branch from before adding {warning_suffix}.",
-                "warning",
+            if create_standalone is None:
+                run_ctx.notifications.show(
+                    f"Please select a valid node to branch from before adding {warning_suffix}.",
+                    "warning",
+                )
+                return None
+            x = float(run_ctx.spawn_x or 0.0)
+            y = float(run_ctx.spawn_y or 0.0)
+            node, _command = document.record_command(
+                command_type, "user",
+                lambda: create_standalone(document, x, y),
+                node_ids=[],
             )
-            return None
+            return node.id
         node, _command = document.record_command(
             command_type, "user",
             lambda: create(document, parent_node_id),

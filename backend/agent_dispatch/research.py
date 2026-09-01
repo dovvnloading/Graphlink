@@ -85,8 +85,25 @@ class ResearchDispatchOps:
         already-resolved id, it never resolves one itself (same "caller
         resolves, this method dispatches" split as every other kwarg here)."""
         from backend import agents as agents_module  # deferred: patch-seam + circular-import safety
-        if self._runs.is_busy("web_research"):
-            notifications_state.show("A web research request is already running.", "info")
+        # Per-NODE, for the same reason as start_artifact_reply above: a
+        # canvas whose whole premise is parallel branches should be able to
+        # research two of them at once, and a refusal should name the node
+        # that is actually busy. Same guard gitlink_run/code_sandbox use.
+        # Busy means "this node has a run the registry still holds", not
+        # merely "this node has a request id". Cancelling releases the
+        # registry slot immediately while the cancelled worker unwinds in
+        # its own time, and during that window the node still carries the
+        # dead request's id - reading the field alone would refuse the very
+        # next Run the user clicks after cancelling. The placeholder is the
+        # caller's own synchronous claim (see agents._NODE_RUN_CLAIM_
+        # PLACEHOLDER), which has no handle yet by definition.
+        pending = getattr(node, "pending_request_id", None)
+        if (
+            pending
+            and pending != agents_module._NODE_RUN_CLAIM_PLACEHOLDER
+            and self._runs.get(pending) is not None
+        ):
+            notifications_state.show("Web research is already running for this node.", "info")
             await bus.publish("notification")
             return
 
@@ -97,6 +114,11 @@ class ResearchDispatchOps:
         cancel_token = agents_module.CancellationToken()
         handle = self._runs.claim("web_research", node_id=node_id, on_cancel=cancel_token.cancel)
         request_id = handle.request_id
+        # Stamped HERE, synchronously, not inside _run() below: the busy
+        # guard is this field now, and a value written after the first await
+        # would leave a window in which a second click on the same node sees
+        # an idle node. Same ordering start_gitlink_run already relies on.
+        node.pending_request_id = request_id
         request = agents_module.WebResearchRequest(
             request_id=request_id,
             node_id=node_id,
@@ -118,7 +140,6 @@ class ResearchDispatchOps:
                 fn(*a)
 
         async def _run():
-            node.pending_request_id = request_id
             await bus.publish("scene")
             loop = asyncio.get_running_loop()
             service = agents_module.WebResearchService()
@@ -222,13 +243,6 @@ class ResearchDispatchOps:
         RunRegistry.cancel's own docstring for why kind= is passed."""
         return self._runs.cancel(request_id, kind="web_research")
 
-    def is_web_research_busy(self) -> bool:
-        """Lets callers check the single-slot guard before mutating scene
-        state, so a Run click on a node other than the one already running
-        doesn't reset that node's progress/error fields only to be rejected
-        a moment later by start_web_research's own busy check."""
-        return self._runs.is_busy("web_research")
-
     async def start_artifact_reply(
         self,
         *,
@@ -238,6 +252,7 @@ class ResearchDispatchOps:
         current_artifact: str,
         history: list,
         on_reply,
+        on_failure=None,
     ) -> None:
         """R5.2: the Artifact/Drafter independent-slot counterpart to
         start_image_reply/start_web_research above - NOT a variant of
@@ -276,8 +291,30 @@ class ResearchDispatchOps:
         guard, unlike gitlink_run/code_sandbox's use of the same
         field), so it needs no claim-ordering treatment of its own."""
         from backend import agents as agents_module  # deferred: patch-seam + circular-import safety
-        if self._runs.is_busy("artifact"):
-            notifications_state.show("An artifact request is already running.", "info")
+        # Per-NODE, not per-kind. RunRegistry.is_busy() is kind-scoped and
+        # session-wide (RunHandle's own docstring: node_id is "informational
+        # only ... NEVER consulted"), so one artifact node in flight blocked
+        # every other artifact node on the canvas - and the refusal could not
+        # say which node was holding the slot. gitlink_run/code_sandbox
+        # already guard on node.pending_request_id for exactly this reason
+        # (see AgentDispatcher.__init__'s own comment); this kind now does
+        # too, and the registry claim below stays purely for cancel/task
+        # bookkeeping so cancel()/cancel_all() sweeps are unchanged.
+        # Busy means "this node has a run the registry still holds", not
+        # merely "this node has a request id". Cancelling releases the
+        # registry slot immediately while the cancelled worker unwinds in
+        # its own time, and during that window the node still carries the
+        # dead request's id - reading the field alone would refuse the very
+        # next Run the user clicks after cancelling. The placeholder is the
+        # caller's own synchronous claim (see agents._NODE_RUN_CLAIM_
+        # PLACEHOLDER), which has no handle yet by definition.
+        pending = getattr(node, "pending_request_id", None)
+        if (
+            pending
+            and pending != agents_module._NODE_RUN_CLAIM_PLACEHOLDER
+            and self._runs.get(pending) is not None
+        ):
+            notifications_state.show("Artifact generation is already running for this node.", "info")
             await bus.publish("notification")
             return
 
@@ -288,9 +325,13 @@ class ResearchDispatchOps:
         cancel_event = threading.Event()
         handle = self._runs.claim("artifact", node_id=getattr(node, "id", None), cancel_event=cancel_event)
         request_id = handle.request_id
+        # Synchronous stamp - see start_web_research's own comment above.
+        node.pending_request_id = request_id
+        # Callers that do not record failures on the node (tests, and any
+        # future dispatch surface with no document) keep working unchanged.
+        record_failure = on_failure if on_failure is not None else (lambda _message: None)
 
         async def _run():
-            node.pending_request_id = request_id
             await bus.publish("scene")
             try:
                 new_content, ai_message = await asyncio.wait_for(
@@ -308,11 +349,14 @@ class ResearchDispatchOps:
                     await bus.publish("scene")
             except asyncio.TimeoutError:
                 cancel_event.set()
-                notifications_state.show(
+                message = (
                     "Artifact generation stopped responding before the request completed. "
-                    "Please try again.",
-                    "error",
+                    "Please try again."
                 )
+                # Recorded on the node as well as toasted: the toast says
+                # something failed, the node says WHICH one.
+                record_failure(message)
+                notifications_state.show(message, "error")
                 await bus.publish("notification")
             except Exception as exc:
                 if cancel_event.is_set():
@@ -322,7 +366,9 @@ class ResearchDispatchOps:
                     # noise about work they abandoned.
                     return
                 agents_module.logger.exception("artifact dispatch failed")
-                notifications_state.show(f"Artifact generation failed: {exc}", "error")
+                message = f"Artifact generation failed: {exc}"
+                record_failure(message)
+                notifications_state.show(message, "error")
                 await bus.publish("notification")
             finally:
                 self._runs.release(request_id)

@@ -267,6 +267,26 @@ class DispatcherCoreOps:
         )
         return resolved.ref if resolved is not None else None
 
+    def is_node_run_live(self, request_id: "str | None") -> bool:
+        """True when `request_id` is a run this registry still holds.
+
+        The per-node busy guard used by gitlink/code_sandbox/artifact/
+        web_research reads node.pending_request_id, but that field outlives
+        a cancelled run: cancelling releases the registry slot immediately
+        while the worker unwinds in its own time. Asking the registry
+        instead means "cancel, then Run again" works the instant the cancel
+        lands, rather than being refused until the dead worker finishes.
+
+        The synchronous claim placeholder counts as live - it is a claim its
+        own caller is about to convert into a real handle."""
+        from backend import agents as agents_module
+
+        if not request_id:
+            return False
+        if request_id == agents_module._NODE_RUN_CLAIM_PLACEHOLDER:
+            return True
+        return self._runs.get(request_id) is not None
+
     def _resolve_branch_system_prompt(self, canvas_document, node_id: str | None) -> str | None:
         """R6.1 port of legacy graphlink_chat_agent.py's
         resolve_branch_system_prompt: given the id of a chat node about to be

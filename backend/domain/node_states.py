@@ -80,6 +80,15 @@ class ArtifactState(NodeState):
     needed."""
 
     artifact_content: str = ""
+    # Why a field at all: an artifact generation that fails used to report
+    # only through a session-wide notification toast, so with two artifact
+    # nodes on the canvas there was no way to tell WHICH one failed. Every
+    # other async node kind already carries its failure on the node itself
+    # (WebResearchState.research_error, and gitlink/code_sandbox's own
+    # in-card banners). Live-wire only, deliberately: research_error is
+    # absent from session_save.py/session_load.py too, so a failure is not
+    # something a reloaded session resurrects.
+    artifact_error: str = ""
 
 
 @dataclass

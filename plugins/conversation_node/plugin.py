@@ -19,6 +19,9 @@ _execute = make_simple_child_node_handler(
     create=lambda document, parent_node_id: document.add_conversation_node(
         *document.place_child(parent_node_id, "conversation"), parent_node_id
     ),
+    # Creatable with nothing selected: this kind never reads the parent's
+    # content, so the parent was only ever a place_child anchor and an edge.
+    create_standalone=lambda document, x, y: document.add_conversation_node(x, y, None),
 )
 
 
@@ -28,4 +31,5 @@ def register(host: HostContext) -> None:
         description="Adds a node for a self-contained, linear chat conversation.",
         category="Branch Foundations",
         handler=_execute,
+        requires_parent=False,
     )

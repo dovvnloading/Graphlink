@@ -59,6 +59,9 @@
           "artifactContent": {
             "type": "string"
           },
+          "artifactError": {
+            "type": "string"
+          },
           "attachmentKind": {
             "type": "string"
           },
@@ -826,6 +829,7 @@
           "researchError",
           "researchRetainToKnowledge",
           "artifactContent",
+          "artifactError",
           "gitlinkRepo",
           "gitlinkBranch",
           "gitlinkScopeMode",

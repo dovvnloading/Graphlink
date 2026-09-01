@@ -167,7 +167,7 @@ class TestWebResearchRetentionOptIn:
                 seen.update(kwargs)
 
             dispatcher.start_web_research = fake_start
-            dispatcher.is_web_research_busy = lambda: False
+            dispatcher.is_node_run_live = lambda request_id: False
 
             await bus.dispatch_intent("scene", "runWebResearch", [node.id, "why is the sky blue"])
 
@@ -187,7 +187,7 @@ class TestWebResearchRetentionOptIn:
                 seen.update(kwargs)
 
             dispatcher.start_web_research = fake_start
-            dispatcher.is_web_research_busy = lambda: False
+            dispatcher.is_node_run_live = lambda request_id: False
 
             await bus.dispatch_intent("scene", "runWebResearch", [node.id, "a question"])
 

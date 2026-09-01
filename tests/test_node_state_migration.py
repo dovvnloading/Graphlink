@@ -325,7 +325,7 @@ def test_scene_node_core_field_count():
 # (one flat dict literal, no per-kind branching), so one representative node
 # is sufficient; the point is the KEY SET, not per-kind values.
 _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
-    "artifactContent", "attachmentKind", "branchStatus", "byteSize",
+    "artifactContent", "artifactError", "attachmentKind", "branchStatus", "byteSize",
     "chartAspectLocked", "chartData",
     "chartError", "chartHeight", "chartSourceNodeId", "chartType", "chartWidth",
     "chatScrollValue", "code", "codeSandboxAnalysis",
@@ -412,6 +412,7 @@ _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
     "imageAssetId": "",
     "htmlSplitterState": None,
     "artifactContent": "",
+    "artifactError": "",
     "code": "",
     "language": "",
     "isSystemPrompt": False,

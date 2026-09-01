@@ -146,7 +146,7 @@ function chatRow(id: string, x: number, y = 0): SceneNodeRow {
         isDocked: false, imageAssetId: "", history: [], pendingRequestId: null,
         researchStage: "", researchCompleted: 0, researchTotal: 0,
         researchActiveSourceId: null, researchError: "", researchResult: null, researchRetainToKnowledge: false,
-        artifactContent: "", gitlinkRepo: "", gitlinkBranch: "",
+        artifactContent: "", artifactError: "", gitlinkRepo: "", gitlinkBranch: "",
         gitlinkScopeMode: "selected", gitlinkLocalRoot: "", gitlinkRepoFilePaths: [],
         gitlinkSelectedPaths: [], gitlinkTaskPrompt: "", gitlinkContextStats: {},
         gitlinkContextSummary: "", gitlinkContextVersion: 0,

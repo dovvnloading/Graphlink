@@ -45,9 +45,21 @@ DISPATCHER_SOURCES = tuple(
 )
 
 # (method_name, busy-check kind literal used only for the failure message)
+# Kinds whose busy guard is the session-wide RunRegistry.is_busy(kind).
 MIGRATED_METHODS = [
     ("_dispatch", "chat"),
     ("start_image_reply", "image"),
+]
+
+# Kinds whose busy guard is the PER-NODE node.pending_request_id, the shape
+# gitlink_run/code_sandbox established. The ordering property under test is
+# identical - no await may separate the guard from the claim - but the guard
+# is a pending_request_id comparison rather than an is_busy() call, so it is
+# located differently. artifact and web_research moved onto this shape so two
+# different nodes of the same kind can run at once; that move is exactly what
+# makes the ordering load-bearing for them, since the field is now the gate
+# rather than UI bookkeeping.
+PER_NODE_GUARD_METHODS = [
     ("start_artifact_reply", "artifact"),
     ("start_web_research", "web_research"),
 ]
@@ -87,7 +99,23 @@ def _awaits_reaching_claim(statements):
     return offenders
 
 
-def _assert_no_await_between_busy_check_and_claim(method_name: str, kind: str) -> None:
+def _mentions_pending_request_id(node) -> bool:
+    """True when an `if` test reads node.pending_request_id, in either the
+    direct-attribute form or the getattr(node, "pending_request_id", None)
+    form the dispatch methods use for duck-typed nodes."""
+    for n in ast.walk(node):
+        if isinstance(n, ast.Attribute) and n.attr == "pending_request_id":
+            return True
+        if isinstance(n, ast.Constant) and n.value == "pending_request_id":
+            return True
+        if isinstance(n, ast.Name) and n.id == "pending":
+            return True
+    return False
+
+
+def _assert_no_await_between_busy_check_and_claim(
+    method_name: str, kind: str, *, per_node: bool = False
+) -> None:
     method = _find_method(method_name)
     body = method.body
 
@@ -95,10 +123,21 @@ def _assert_no_await_between_busy_check_and_claim(method_name: str, kind: str) -
         (i for i, stmt in enumerate(body) if isinstance(stmt, ast.If) and _statement_calls(stmt.test, "is_busy")),
         None,
     )
+    if busy_check_index is None and per_node:
+        busy_check_index = next(
+            (
+                i
+                for i, stmt in enumerate(body)
+                if isinstance(stmt, ast.If) and _mentions_pending_request_id(stmt.test)
+            ),
+            None,
+        )
     claim_index = next((i for i, stmt in enumerate(body) if _statement_calls(stmt, "claim")), None)
 
     assert busy_check_index is not None, (
-        f"no `if ...is_busy(...):` guard found in AgentDispatcher.{method_name} - did the guard move?"
+        f"no busy guard found in AgentDispatcher.{method_name} - did the guard move? "
+        "Expected either an `if ...is_busy(...):` check or, for a per-node kind, an "
+        "`if ...pending_request_id...:` check."
     )
     assert claim_index is not None, f"no `...claim(...)` call found in AgentDispatcher.{method_name} - did the claim move?"
     assert busy_check_index < claim_index, "the busy check must precede the claim, not follow it"
@@ -125,3 +164,8 @@ def _assert_no_await_between_busy_check_and_claim(method_name: str, kind: str) -
 def test_no_await_between_busy_check_and_registry_claim():
     for method_name, kind in MIGRATED_METHODS:
         _assert_no_await_between_busy_check_and_claim(method_name, kind)
+
+
+def test_no_await_between_per_node_busy_check_and_registry_claim():
+    for method_name, kind in PER_NODE_GUARD_METHODS:
+        _assert_no_await_between_busy_check_and_claim(method_name, kind, per_node=True)

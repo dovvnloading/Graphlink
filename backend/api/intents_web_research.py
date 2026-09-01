@@ -39,16 +39,33 @@ def register_web_research_intents(
     publish_scene = make_publish_scene(bus)
 
     async def run_web_research(node_id, query_text):
-        if agent_dispatcher.is_web_research_busy():
-            # Checked BEFORE touching document state: start_web_research_run
-            # resets a node's progress/error fields unconditionally, and the
-            # dispatcher only allows one web-research run at a time anyway -
-            # without this early check, clicking Run on a different node
-            # while one is already in flight would silently wipe that node's
-            # prior result/error banner even though no new run actually starts.
-            notifications.show("A web research request is already running.", "info")
+        # Checked BEFORE touching document state: start_web_research_run
+        # resets a node's progress/error fields unconditionally, so a click
+        # that will be refused must not first wipe the banner it is about to
+        # leave standing.
+        #
+        # Per-NODE now, not session-wide. The old check asked "is ANY web
+        # research running", which meant a second research node could not
+        # start while an unrelated one was in flight - on a canvas whose
+        # whole point is parallel branches. Guarding the node's own
+        # pending_request_id is both narrower and exactly what this comment
+        # always wanted: it protects THIS node's state from THIS node's
+        # second click, and says so.
+        busy_node = document.nodes.get(node_id)
+        if busy_node is not None and agent_dispatcher.is_node_run_live(
+            getattr(busy_node, "pending_request_id", None)
+        ):
+            notifications.show("Web research is already running for this node.", "info")
             await bus.publish("notification")
             return None
+        if busy_node is not None:
+            # Claimed synchronously, before the publish below - two rapid
+            # clicks on one node would otherwise both pass the check above.
+            # start_web_research recognizes this exact sentinel as its own
+            # caller's claim. Same mechanism run_code_sandbox already uses.
+            from backend import agents as agents_module
+
+            busy_node.pending_request_id = agents_module._NODE_RUN_CLAIM_PLACEHOLDER
         try:
             node = document.start_web_research_run(node_id, query_text)
         except SceneError:

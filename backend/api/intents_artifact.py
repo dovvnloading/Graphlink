@@ -61,10 +61,20 @@ def register_artifact_intents(
                 node_ids=[node_id],
             )
 
+        def _on_failure(message):
+            # Recorded as an "agent" command for the same reason _on_reply is:
+            # it is a model-produced outcome, not a direct user action.
+            document.record_command(
+                "failArtifactGeneration", "agent",
+                lambda: document.fail_artifact_generation(node_id, message),
+                node_ids=[node_id],
+            )
+
         await agent_dispatcher.start_artifact_reply(
             bus=bus,
             notifications_state=notifications,
             node=node,
+            on_failure=_on_failure,
             current_artifact=node.state.artifact_content,
             history=full_history,
             on_reply=_on_reply,
