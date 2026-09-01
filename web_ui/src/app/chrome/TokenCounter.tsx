@@ -35,8 +35,8 @@ export function TokenCounter({ store }: { store: ComposerStore }) {
         aria-expanded={hovered}
         aria-label={`Token usage: ${counter.totalTokens} total`}
       >
-        <span className="control-kicker">Tokens</span>
-        <span className="control-value">{counter.totalTokens}</span>
+        <span className="composer-control-label">Tokens</span>
+        <span className="composer-control-value">{counter.totalTokens}</span>
       </button>
       {hovered && (
         <div className="token-counter-popout" role="status" aria-label="Token usage breakdown">

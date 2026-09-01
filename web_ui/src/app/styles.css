@@ -2813,11 +2813,11 @@ body,
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 8px;
+  padding: 10px 10px 8px;
   box-sizing: border-box;
   background-color: var(--gl-surface-node-body);
   border: 1px solid var(--gl-surface-border);
-  border-radius: 14px;
+  border-radius: 16px;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
   transition: border-color 120ms ease;
 }
@@ -3005,7 +3005,7 @@ body,
   font-family: inherit;
   font-size: 13px;
   line-height: 1.4;
-  padding: 6px 4px 2px;
+  padding: 4px 6px 2px;
   color: var(--gl-surface-text-primary);
   background-color: transparent;
   border: none;
@@ -3024,8 +3024,8 @@ body,
 .composer-controls {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding-top: 4px;
+  gap: 4px;
+  padding-top: 6px;
 }
 
 /* R8a: flat/borderless at rest, a soft filled circle only on hover - was a
@@ -3035,12 +3035,12 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  width: 28px;
+  height: 28px;
   color: var(--gl-neutral-button-icon);
   background-color: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: 999px;
   cursor: pointer;
   transition: background-color 100ms ease;
 }
@@ -3069,16 +3069,21 @@ body,
   stroke-linejoin: round;
 }
 
+/* The rail's quiet chips (Reasoning, Model, Tokens): ONE line of type per
+   chip - a muted label, then the value. The old anatomy stacked a 9px
+   all-caps kicker over the value inside every chip, which put six lines of
+   micro-typography on a 30px rail. */
 .composer-control {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
   font-family: inherit;
   color: var(--gl-surface-text-primary);
   background-color: transparent;
   border: none;
-  border-radius: 6px;
+  border-radius: 999px;
   cursor: pointer;
   transition: background-color 100ms ease;
 }
@@ -3094,45 +3099,40 @@ body,
 }
 
 .composer-control .icon {
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.control-kicker {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
   color: var(--gl-surface-text-muted);
-  text-transform: uppercase;
 }
 
-/* R8a (UI/UX issue list finding #7): was max-width, a cap rather than a
-   fixed size, so a shorter label (e.g. reasoning level "Off") left the
-   button narrower than a longer one ("Medium"), and the adjacent control
-   visibly shifted sideways every time the value changed. A fixed width
-   keeps both the Reasoning and Model controls one stable size regardless
-   of which option/model is currently selected - long model ids still
-   ellipsis-truncate via the properties below, they just no longer resize
-   the button itself while doing it. */
-.control-value {
-  font-size: 11px;
+.composer-control-label {
+  font-size: 10.5px;
+  color: var(--gl-surface-text-muted);
+  white-space: nowrap;
+}
+
+.composer-control-value {
+  font-size: 11.5px;
   font-weight: 600;
-  width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.control-copy {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
+/* R8a (UI/UX issue list finding #7), carried forward: fixed value widths,
+   not caps, so neither chip resizes - and shoves its neighbour sideways -
+   when the selected option changes ("Off" vs "Medium", short vs long model
+   id). Long values still ellipsis-truncate inside the fixed box. */
+.composer-control-value-reasoning {
+  width: 52px;
+}
+
+.composer-control-value-model {
+  width: 150px;
 }
 
 /* R4.4 token-streaming preview - replaces the old static
@@ -3160,24 +3160,20 @@ body,
   word-break: break-word;
 }
 
-/* R8a: the one seam in the whole rail - everything to its left is flat, so
-   the send/cancel zone reads as a distinct group without boxing every
-   control individually. */
-.composer-send-group {
+/* Right end of the rail: the quiet token readout, then the card's one
+   primary. No separator seam any more - with a single primary slot there
+   is no button group left to fence off. */
+.composer-rail-end {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-left: auto;
-  padding-left: 8px;
-  border-left: 1px solid var(--gl-surface-border);
-}
-
-.composer-cancel-button {
-  color: var(--gl-semantic-status-error, var(--gl-neutral-button-icon));
 }
 
 /* The sole accent affordance on the card: solid fill + fully circular,
-   everything else on the rail is flat/borderless. */
+   everything else on the rail is flat/borderless. While a response is
+   cancellable the same slot renders as Stop (filled-square glyph) - state
+   is encoded in the glyph's shape, never in a color shift. */
 .composer-send-button {
   display: flex;
   align-items: center;
@@ -3263,7 +3259,7 @@ body,
   display: flex;
 }
 
-.token-counter-summary .control-value {
+.token-counter-summary .composer-control-value {
   min-width: 2ch;
   text-align: right;
 }
