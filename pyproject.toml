@@ -323,8 +323,10 @@ ignore_missing_imports = true
 #   - backend/tests/perf/measure_baselines.py ... `python -m ...` perf measurement CLI (ADR-019 stage 19.1)
 #   - backend/tests/perf/check_baseline.py ..... nightly regression checker, its stdout IS the CI job log (ADR-019 stage 19.3)
 #   - tools/build_app_icon.py ........... one-off dev icon builder
+#   - tools/seed_demo_graph.py .......... builds the README screenshots' fixture; its stdout confirms what it wrote
 "contracts/codegen.py" = ["T201"]
 "backend/evals/__main__.py" = ["T201"]
 "backend/tests/perf/measure_baselines.py" = ["T201"]
 "backend/tests/perf/check_baseline.py" = ["T201"]
 "tools/build_app_icon.py" = ["T201"]
+"tools/seed_demo_graph.py" = ["T201"]

@@ -2320,8 +2320,8 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             "chartType": n.state.chart_type if isinstance(n.state, ChartState) else "",
             "chartData": dict(n.state.chart_data) if isinstance(n.state, ChartState) else {},
             "chartError": n.state.chart_error if isinstance(n.state, ChartState) else "",
-            "chartWidth": n.state.chart_width if isinstance(n.state, ChartState) else 680.0,
-            "chartHeight": n.state.chart_height if isinstance(n.state, ChartState) else 500.0,
+            "chartWidth": n.state.chart_width if isinstance(n.state, ChartState) else 480.0,
+            "chartHeight": n.state.chart_height if isinstance(n.state, ChartState) else 340.0,
             "chartAspectLocked": n.state.chart_aspect_locked if isinstance(n.state, ChartState) else True,
             "chartSourceNodeId": n.state.chart_source_node_id if isinstance(n.state, ChartState) else "",
             # R6.3: HTML splitter + chat scroll gaps.

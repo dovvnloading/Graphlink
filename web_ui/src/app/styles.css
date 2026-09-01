@@ -613,7 +613,7 @@ body,
 
 .chat-node {
   width: 420px;
-  max-height: 640px;
+  max-height: 440px;
   min-height: 110px;
 }
 
@@ -661,7 +661,7 @@ body,
    them) - if a future change needs to add more properties here, add them
    to THIS block, not a new one further down the file. */
 .chat-node-content {
-  max-height: 560px;
+  max-height: 360px;
   overflow-y: auto;
   line-height: 1.55;
 }
@@ -1011,7 +1011,7 @@ body,
 .chat-node,
 .code-node {
   width: 420px;
-  max-height: 640px;
+  max-height: 440px;
   min-height: 110px;
 }
 
@@ -1026,7 +1026,7 @@ body,
 }
 
 .code-node-content {
-  max-height: 560px;
+  max-height: 360px;
   overflow-y: auto;
 }
 
@@ -1042,7 +1042,7 @@ body,
 
 .document-node {
   width: 420px;
-  max-height: 640px;
+  max-height: 440px;
   min-height: 110px;
 }
 
@@ -1052,7 +1052,7 @@ body,
 }
 
 .document-node-content {
-  max-height: 560px;
+  max-height: 360px;
   overflow-y: auto;
 }
 
@@ -1153,7 +1153,7 @@ body,
 
 .thinking-node {
   width: 420px;
-  max-height: 640px;
+  max-height: 440px;
   min-height: 110px;
 }
 
@@ -1168,7 +1168,7 @@ body,
 }
 
 .thinking-node-content {
-  max-height: 560px;
+  max-height: 360px;
   overflow-y: auto;
 }
 
@@ -1385,7 +1385,7 @@ body,
 
 .html-node {
   width: 420px;
-  max-height: 640px;
+  max-height: 440px;
   min-height: 110px;
 }
 
@@ -1542,7 +1542,7 @@ body,
 
 .image-node {
   width: 420px;
-  max-height: 640px;
+  max-height: 440px;
   min-height: 110px;
 }
 
@@ -1555,7 +1555,7 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
-  max-height: 560px;
+  max-height: 360px;
   overflow: hidden;
 }
 
@@ -3884,7 +3884,7 @@ body,
 .diagnostics-bundle-preview {
   margin: 8px 0 6px;
   padding: 10px;
-  max-height: 240px;
+  max-height: 160px;
   overflow: auto;
   font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
   font-size: 11px;
@@ -6024,7 +6024,7 @@ mark.document-view-search-match-current {
 
 .conversation-node {
   width: 420px;
-  max-height: 640px;
+  max-height: 440px;
   min-height: 110px;
 }
 
@@ -6037,7 +6037,7 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 560px;
+  max-height: 360px;
 }
 
 /* The scrollable message list - only this scrolls, not the input row below
@@ -6213,7 +6213,7 @@ mark.document-view-search-match-current {
 
 .web-research-node {
   width: 420px;
-  max-height: 640px;
+  max-height: 440px;
   min-height: 110px;
 }
 
@@ -6226,7 +6226,7 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 560px;
+  max-height: 360px;
   overflow-y: auto;
 }
 
@@ -6444,7 +6444,7 @@ mark.document-view-search-match-current {
 
 .artifact-node {
   width: 420px;
-  max-height: 640px;
+  max-height: 440px;
   min-height: 110px;
 }
 
@@ -6457,7 +6457,7 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 560px;
+  max-height: 360px;
   overflow-y: auto;
 }
 
@@ -6589,7 +6589,7 @@ mark.document-view-search-match-current {
 
 .gitlink-node {
   width: 460px;
-  max-height: 720px;
+  max-height: 480px;
   min-height: 110px;
 }
 
@@ -6602,7 +6602,7 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 640px;
+  max-height: 400px;
   overflow-y: auto;
 }
 
@@ -6926,7 +6926,7 @@ mark.document-view-search-match-current {
 
 .code-sandbox-node {
   width: 420px;
-  max-height: 720px;
+  max-height: 480px;
   min-height: 110px;
 }
 
@@ -6939,7 +6939,7 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 640px;
+  max-height: 400px;
   overflow-y: auto;
 }
 
@@ -7038,13 +7038,18 @@ mark.document-view-search-match-current {
 
 /* Reuses .chat-node-content's full markdown-body rule set verbatim - same
    shared-class convention .artifact-node-document-content/
-   .gitlink-node-proposal-markdown already establish for this pipeline. Only
-   overrides the max-height/overflow-y a nested pane should never take on its
-   own (the outer .code-sandbox-node-content already scrolls). */
+   .gitlink-node-proposal-markdown already establish for this pipeline.
+
+   These used to opt out of any cap at all, on the theory that the outer
+   .code-sandbox-node-content scrolls. It does - but with both panes
+   uncapped inside one scroller, a script of any length pushes the terminal
+   out of the visible area entirely, and the node arrives at its own 480px
+   ceiling showing nothing but source. Each pane scrolls itself now, so code
+   and output are both on screen whatever their lengths. */
 .code-sandbox-node-code,
 .code-sandbox-node-analysis {
-  max-height: none;
-  overflow: visible;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 /* The live terminal / static output fallback - plain preformatted text, NOT
@@ -7059,7 +7064,7 @@ mark.document-view-search-match-current {
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 240px;
+  max-height: 160px;
   overflow: auto;
   color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset, var(--gl-surface-window));

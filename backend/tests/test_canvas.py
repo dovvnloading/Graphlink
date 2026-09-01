@@ -5745,7 +5745,7 @@ def test_add_chart_node_creates_a_chart_connected_to_its_parent():
     assert chart.state.chart_type == "bar"
     assert chart.state.chart_data == _CHART_DATA
     assert chart.state.chart_source_node_id == parent.id
-    assert chart.state.chart_width == 680.0 and chart.state.chart_height == 500.0
+    assert chart.state.chart_width == 480.0 and chart.state.chart_height == 340.0
     assert chart.state.chart_aspect_locked is True
     assert any(e.source == parent.id and e.target == chart.id for e in doc.edges.values())
 
@@ -5833,8 +5833,8 @@ def test_scene_payload_exposes_all_chart_fields():
     assert row["chartType"] == "bar"
     assert row["chartData"] == _CHART_DATA
     assert row["chartError"] == "degraded"
-    assert row["chartWidth"] == 680.0
-    assert row["chartHeight"] == 500.0
+    assert row["chartWidth"] == 480.0
+    assert row["chartHeight"] == 340.0
     assert row["chartAspectLocked"] is True
     assert row["chartSourceNodeId"] == parent.id
 

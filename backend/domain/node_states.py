@@ -263,8 +263,8 @@ class ChartState(NodeState):
     chart_type: str = ""
     chart_data: dict = field(default_factory=dict)
     chart_error: str = ""
-    chart_width: float = 680.0
-    chart_height: float = 500.0
+    chart_width: float = 480.0
+    chart_height: float = 340.0
     chart_aspect_locked: bool = True
     chart_source_node_id: str = ""
 
