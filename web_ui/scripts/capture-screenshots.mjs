@@ -68,37 +68,9 @@ function run(cmd, args, opts = {}) {
   });
 }
 
-/** The map is canvas HUD, not part of a figure about two nodes - it is
- *  shown in the hero and folded away for the close-ups so it cannot sit in
- *  the corner of a diagram it has nothing to do with. */
-async function setMinimapCollapsed(page, collapsed) {
-  const toggle = page.locator(".scene-minimap-toggle");
-  if (!(await toggle.count())) return;
-  const label = await toggle.getAttribute("aria-label");
-  const isCollapsed = label === "Expand minimap";
-  if (isCollapsed !== collapsed) {
-    await toggle.click();
-    await sleep(250);
-  }
-}
-
-/** Zoom the canvas in on a node by pointing at it and scrolling - the real
- *  gesture, so the framing cannot drift from what a user would see. */
-async function zoomOnto(page, locator, steps) {
-  const box = await locator.boundingBox();
-  if (!box) throw new Error("node has no layout box to zoom onto");
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  for (let i = 0; i < steps; i += 1) {
-    await page.mouse.wheel(0, -240);
-    await sleep(120);
-  }
-  await sleep(500);
-}
-
 /** Fit All frames the graph in the whole canvas region, which the composer
- *  island overlays the bottom ~150px of - so the lowest row of a fitted
- *  graph sits behind it. Nudge the viewport up by dragging empty canvas at
- *  the far left, clear of every node at this zoom. */
+ *  island overlays the bottom ~150px of. Nudge the viewport up by dragging
+ *  empty canvas at the far left, clear of every node at fit zoom. */
 async function panUp(page, dy) {
   await page.mouse.move(150, 320);
   await page.mouse.down();
@@ -110,27 +82,6 @@ async function panUp(page, dy) {
 async function fitAll(page) {
   await page.locator('[aria-label="Fit All"]').click();
   await sleep(900);
-}
-
-/**
- * A figure framed on the nodes it is about, rather than a screenshot of the
- * whole window with the subject somewhere in it. Full-viewport shots of a
- * zoomed-in canvas are mostly empty space, and the composer island sits over
- * the bottom of it - so the clip is clamped above the composer rather than
- * capturing chrome that has nothing to do with the figure.
- */
-async function clipAround(page, locators, { pad = 48, bottomLimit = 1040 } = {}) {
-  const boxes = [];
-  for (const locator of locators) {
-    const box = await locator.boundingBox();
-    if (box) boxes.push(box);
-  }
-  if (boxes.length === 0) throw new Error("nothing to frame");
-  const left = Math.max(0, Math.min(...boxes.map((b) => b.x)) - pad);
-  const top = Math.max(0, Math.min(...boxes.map((b) => b.y)) - pad);
-  const right = Math.min(VIEWPORT.width, Math.max(...boxes.map((b) => b.x + b.width)) + pad);
-  const bottom = Math.min(bottomLimit, Math.max(...boxes.map((b) => b.y + b.height)) + pad);
-  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 async function main() {
@@ -185,40 +136,14 @@ async function main() {
     if (await toastClose.isVisible().catch(() => false)) await toastClose.click();
     await sleep(1200);
 
-    // -- The hero: the whole graph, with the toolbar and the map. ---------
+    // Every capture is the full canvas at Fit All - no zoomed or clipped
+    // figures. A canvas app's screenshots should show the canvas.
     await fitAll(page);
-    await panUp(page, 95);
+    await panUp(page, 30);
     await page.screenshot({ path: join(OUT_DIR, "canvas-branching.png") });
     console.log("captured canvas-branching.png");
 
-    // -- A build, mid-run, beside the chart it produced. ------------------
-    await setMinimapCollapsed(page, true);
-    await fitAll(page);
-    await zoomOnto(page, page.locator(".plan-node").first(), 1);
-    await page.screenshot({
-      path: join(OUT_DIR, "builder-run.png"),
-      clip: await clipAround(page, [
-        page.locator(".plan-node").first(),
-        page.locator(".react-flow__node-chart").first(),
-      ]),
-    });
-    console.log("captured builder-run.png");
-
-    // -- Code and charts. -------------------------------------------------
-    await fitAll(page);
-    await zoomOnto(page, page.locator(".react-flow__node-code_sandbox").first(), 1);
-    await page.screenshot({
-      path: join(OUT_DIR, "code-and-charts.png"),
-      clip: await clipAround(page, [
-        page.locator(".react-flow__node-code_sandbox").first(),
-        page.locator(".react-flow__node-chart").first(),
-      ]),
-    });
-    console.log("captured code-and-charts.png");
-
     // -- The launcher, with a recipe's steps previewed. -------------------
-    await setMinimapCollapsed(page, false);
-    await fitAll(page);
     await page.locator('[data-overlay-trigger="builder-launch"]').click();
     const builder = page.getByRole("dialog", { name: "Builder" });
     await builder.waitFor({ state: "visible" });
@@ -227,6 +152,15 @@ async function main() {
     await sleep(600);
     await page.screenshot({ path: join(OUT_DIR, "builder-launcher.png") });
     console.log("captured builder-launcher.png");
+    await page.keyboard.press("Escape");
+    await sleep(400);
+
+    // NOTE: no light-theme capture. The node font color is scene state with
+    // a near-white default chosen for the dark theme, so flipping the
+    // emulated color scheme currently produces white-on-white node text - a
+    // real product bug, tracked separately. Re-add a light capture once the
+    // default adapts to the theme.
+
   } finally {
     if (browser) await browser.close();
     backend.kill();
