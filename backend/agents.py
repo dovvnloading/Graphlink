@@ -197,6 +197,17 @@ _GITLINK_RUN_CLAIM_PLACEHOLDER = "pending"
 # overwrite".
 _CODE_EXEC_RUN_CLAIM_PLACEHOLDER = "pending"
 
+# ADR-002: artifact and web_research moved off the session-wide,
+# kind-scoped RunRegistry.is_busy() guard onto the same per-node guard
+# gitlink/code_sandbox already use, and inherit the same race with it -
+# both of their WS-intent wrappers publish a scene update BEFORE calling
+# the dispatcher, so without a synchronous claim two rapid clicks on ONE
+# node could both pass the guard. Claimed by the wrappers in
+# backend/api/intents_artifact.py and intents_web_research.py before any
+# await; the dispatch methods recognize ONLY this exact value as "already
+# claimed by my own caller, safe to overwrite".
+_NODE_RUN_CLAIM_PLACEHOLDER = "pending"
+
 
 def bootstrap_provider_state(settings_manager: SettingsManager) -> None:
     """Bootstrap api_provider's module-level provider state from persisted

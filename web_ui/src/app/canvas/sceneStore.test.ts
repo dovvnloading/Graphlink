@@ -152,7 +152,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         researchTotal: 0,
         researchError: "",
         researchRetainToKnowledge: false,
-        artifactContent: "",
+        artifactContent: "", artifactError: "",
         gitlinkRepo: "",
         gitlinkBranch: "",
         gitlinkScopeMode: "selected",

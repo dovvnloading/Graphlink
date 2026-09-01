@@ -859,7 +859,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         GET /api/assets/{id} route calls to serve the raw bytes + mime type."""
         return self.image_assets.get(asset_id)
 
-    def add_conversation_node(self, x: float, y: float, parent_id: str) -> SceneNode:
+    def add_conversation_node(self, x: float, y: float, parent_id: str | None) -> SceneNode:
         """R3.25's ConversationNode equivalent of add_document_node/
         add_thinking_node/add_html_node/add_image_node: a real multi-message
         conversation node. Same as document/thinking/html/image (and unlike
@@ -955,7 +955,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
 
     # -- R5.1: web research node ---------------------------------------------
 
-    def add_web_research_node(self, x: float, y: float, parent_id: str) -> SceneNode:
+    def add_web_research_node(self, x: float, y: float, parent_id: str | None) -> SceneNode:
         """The Web Research node's creation primitive - same required-parent
         posture as document/thinking/html/image/conversation nodes (never
         exists unparented). Title is always the fixed literal "Web Research"
@@ -1043,7 +1043,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
 
     # -- R5.2: artifact/drafter node -----------------------------------------
 
-    def add_artifact_node(self, x: float, y: float, parent_id: str) -> SceneNode:
+    def add_artifact_node(self, x: float, y: float, parent_id: str | None) -> SceneNode:
         """The Artifact/Drafter node's creation primitive - same required-
         parent posture as document/thinking/html/image/conversation/
         web_research nodes (never exists unparented). Title is always the
@@ -1076,6 +1076,24 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
         node.history.append({"role": "user", "content": str(text)})
+        # A new instruction supersedes the previous failure - leaving the
+        # banner up beside an in-flight run would report a stale outcome.
+        node.state.artifact_error = ""
+        return node
+
+    def fail_artifact_generation(self, node_id: str, message: str) -> SceneNode | None:
+        """Record a generation failure ON the node, so the card can say what
+        went wrong instead of leaving a session-wide toast to be matched to
+        one of several artifact nodes by guesswork.
+
+        Returns None for a node that no longer exists rather than raising:
+        this is called from the dispatch task's own except/timeout paths,
+        where the node may well have been deleted mid-flight, and a failure
+        report is not worth turning into a second failure."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            return None
+        node.state.artifact_error = str(message)
         return node
 
     def send_artifact_message(self, node_id: str, text: str) -> SceneNode:
@@ -1101,6 +1119,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
         node.state.artifact_content = str(new_content)
+        node.state.artifact_error = ""
         node.history.append({"role": "assistant", "content": str(ai_message)})
         return node
 
@@ -1114,7 +1133,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
     # from graphlink_plugins.gitlink - same precedent as ArtifactAgent/
     # web_research.domain already being imported there, not here.
 
-    def add_gitlink_node(self, x: float, y: float, parent_id: str) -> SceneNode:
+    def add_gitlink_node(self, x: float, y: float, parent_id: str | None) -> SceneNode:
         """The Gitlink node's creation primitive - same required-parent
         posture as document/thinking/html/image/conversation/web_research/
         artifact nodes (never exists unparented - confirmed against
@@ -1356,7 +1375,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
     # Same import posture as every other plugin-backed kind's domain methods:
     # canvas.py imports NOTHING from graphlink_plugins.code_sandbox.
 
-    def add_code_sandbox_node(self, x: float, y: float, parent_id: str) -> SceneNode:
+    def add_code_sandbox_node(self, x: float, y: float, parent_id: str | None) -> SceneNode:
         """The Virtual Environment Runner node's creation primitive - same
         required-parent posture as every R5 sibling. Title is always the
         fixed literal "Virtual Environment Runner" (matches
@@ -2280,6 +2299,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
                 n.state.research_retain_to_knowledge if isinstance(n.state, WebResearchState) else False
             ),
             "artifactContent": n.state.artifact_content if isinstance(n.state, ArtifactState) else "",
+            "artifactError": n.state.artifact_error if isinstance(n.state, ArtifactState) else "",
             "gitlinkRepo": n.state.gitlink_repo if isinstance(n.state, GitlinkState) else "",
             "gitlinkBranch": n.state.gitlink_branch if isinstance(n.state, GitlinkState) else "",
             "gitlinkScopeMode": (

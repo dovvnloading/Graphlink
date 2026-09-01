@@ -73,6 +73,7 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     researchResult: null,
     researchRetainToKnowledge: false,
     artifactContent: "",
+    artifactError: "",
     gitlinkRepo: "",
     gitlinkBranch: "",
     gitlinkScopeMode: "selected",

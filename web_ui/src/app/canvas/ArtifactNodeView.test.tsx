@@ -12,6 +12,7 @@ import { ArtifactNodeView, artifactNodePropsAreEqual, type ArtifactFlowNode } fr
 function baseData(overrides: Partial<ArtifactFlowNode["data"]> = {}): ArtifactFlowNode["data"] {
   return {
     artifactContent: "",
+    artifactError: "",
     history: [],
     isCollapsed: false,
     pendingRequestId: null,
@@ -124,6 +125,22 @@ describe("ArtifactNodeView", () => {
   it("stays expanded above the LOD threshold when isCollapsed is false", () => {
     renderArtifactNodeAtZoom(1, { isCollapsed: false });
     expect(screen.getByRole("textbox", { name: "Instruction" })).toBeInTheDocument();
+  });
+
+  // -- failure banner ---------------------------------------------------------
+
+  it("renders the failure on the card, not just as a session-wide toast", () => {
+    // With two artifact nodes on a canvas, a toast cannot say which one
+    // failed. Every other async node kind already carries its failure on
+    // the node itself.
+    renderArtifactNode({ artifactError: "Artifact generation failed: provider exploded" });
+    const banner = screen.getByRole("alert");
+    expect(banner).toHaveTextContent("Artifact generation failed: provider exploded");
+  });
+
+  it("renders no failure banner when there is no error", () => {
+    renderArtifactNode({ artifactError: "" });
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   // -- submit label + disabled state ------------------------------------------

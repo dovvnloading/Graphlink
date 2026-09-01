@@ -104,6 +104,38 @@ def test_get_plugin_categories_appends_more_plugins_only_if_uncategorized():
     assert "More Plugins" not in [category["name"] for category in grouped_empty]
 
 
+def test_only_html_renderer_still_demands_a_selected_parent():
+    """The picker is not a dead end on an empty canvas.
+
+    Five of the six built-ins using make_simple_child_node_handler never
+    read the parent's content - it was a place_child anchor and an edge -
+    so they create standalone at the reported spawn point. HTML Renderer is
+    the real exception: its factory seeds the new node's content FROM
+    document.nodes[parent_node_id].content.
+
+    Per-builtin name/category/command_type/undo behavior is pinned
+    exhaustively in test_plugin_builtin_migration.py's parametrized suite;
+    this asserts the split itself, once, at the dispatch layer.
+    """
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    created = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["Gitlink", None, 12.0, 34.0])
+    )
+    assert created is not None
+    assert canvas_document.nodes[created].kind == "gitlink"
+    assert notifications.visible is False
+
+    refused = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["HTML Renderer", None, 0.0, 0.0])
+    )
+    assert refused is None
+    assert notifications.visible is True
+    assert notifications.message == (
+        "Please select a valid node to branch from before adding an HTML Renderer node."
+    )
+
+
 def test_no_demo_plugin_ships_in_the_picker():
     """The shipped root is exactly the seven first-party plugins.
 
@@ -224,36 +256,6 @@ def _make_plugins_bus():
     return bus, notifications, canvas_document
 
 
-def test_execute_plugin_web_research_with_no_parent_shows_the_exact_warning():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Web Research"]))
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert notifications.message == (
-        "Please select a valid node to branch from before adding a Web Node."
-    )
-    assert not any(n.kind == "web_research" for n in canvas_document.nodes.values())
-
-
-def test_execute_plugin_web_research_with_unknown_parent_shows_the_same_warning():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(
-        bus.dispatch_intent("app-plugins", "executePlugin", ["Web Research", "ghost-node-id"])
-    )
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert notifications.message == (
-        "Please select a valid node to branch from before adding a Web Node."
-    )
-    assert not any(n.kind == "web_research" for n in canvas_document.nodes.values())
-
-
 def test_execute_plugin_web_research_with_a_valid_parent_creates_a_real_node_and_publishes_scene():
     bus, notifications, canvas_document = _make_plugins_bus()
     parent = canvas_document.add_node(10, 20, "parent")
@@ -287,36 +289,6 @@ def test_execute_plugin_web_research_with_a_valid_parent_creates_a_real_node_and
 
 
 # -- R5.2: "Artifact / Drafter" - the second real node-creation plugin ------
-
-
-def test_execute_plugin_artifact_drafter_requires_a_selected_parent():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Artifact / Drafter"]))
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert notifications.message == (
-        "Please select a valid node to branch from before adding an Artifact node."
-    )
-    assert not any(n.kind == "artifact" for n in canvas_document.nodes.values())
-
-
-def test_execute_plugin_artifact_drafter_rejects_unknown_parent_id():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(
-        bus.dispatch_intent("app-plugins", "executePlugin", ["Artifact / Drafter", "ghost-node-id"])
-    )
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert notifications.message == (
-        "Please select a valid node to branch from before adding an Artifact node."
-    )
-    assert not any(n.kind == "artifact" for n in canvas_document.nodes.values())
 
 
 def test_execute_plugin_artifact_drafter_creates_a_real_artifact_node():
@@ -354,36 +326,6 @@ def test_execute_plugin_artifact_drafter_creates_a_real_artifact_node():
 # -- R5.3: "Gitlink" - the third real node-creation plugin -------------------
 
 
-def test_execute_plugin_gitlink_requires_parent():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Gitlink"]))
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert notifications.message == (
-        "Please select a valid node to branch from before adding a Gitlink node."
-    )
-    assert not any(n.kind == "gitlink" for n in canvas_document.nodes.values())
-
-
-def test_execute_plugin_gitlink_rejects_unknown_parent_id():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(
-        bus.dispatch_intent("app-plugins", "executePlugin", ["Gitlink", "ghost-node-id"])
-    )
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert notifications.message == (
-        "Please select a valid node to branch from before adding a Gitlink node."
-    )
-    assert not any(n.kind == "gitlink" for n in canvas_document.nodes.values())
-
-
 def test_execute_plugin_gitlink_creates_node():
     bus, notifications, canvas_document = _make_plugins_bus()
     parent = canvas_document.add_node(10, 20, "parent")
@@ -415,33 +357,6 @@ def test_execute_plugin_gitlink_creates_node():
 
 
 # -- R5.4: "Execution Sandbox" - the fifth real node-creation plugin ----------
-
-
-def test_execute_plugin_execution_sandbox_requires_parent():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Virtual Environment Runner"]))
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert notifications.message == (
-        "Please select a valid node to branch from before adding a Virtual Environment Runner node."
-    )
-    assert not any(n.kind == "code_sandbox" for n in canvas_document.nodes.values())
-
-
-def test_execute_plugin_execution_sandbox_rejects_unknown_parent_id():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(
-        bus.dispatch_intent("app-plugins", "executePlugin", ["Virtual Environment Runner", "ghost-node-id"])
-    )
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert not any(n.kind == "code_sandbox" for n in canvas_document.nodes.values())
 
 
 def test_execute_plugin_execution_sandbox_creates_a_real_code_sandbox_node():
@@ -638,33 +553,6 @@ def test_execute_plugin_system_prompt_reuses_an_existing_note_instead_of_creatin
 # with zero UI-reachable creation path - execute_plugin had no branch for
 # it at all, silently falling through to the generic deferred notice despite
 # the node itself being fully functional.
-
-
-def test_execute_plugin_conversation_node_requires_parent():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Conversation Node"]))
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert notifications.message == (
-        "Please select a valid node to branch from before adding a Conversation Node."
-    )
-    assert not any(n.kind == "conversation" for n in canvas_document.nodes.values())
-
-
-def test_execute_plugin_conversation_node_rejects_unknown_parent_id():
-    bus, notifications, canvas_document = _make_plugins_bus()
-
-    result = asyncio.run(
-        bus.dispatch_intent("app-plugins", "executePlugin", ["Conversation Node", "ghost-node-id"])
-    )
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert not any(n.kind == "conversation" for n in canvas_document.nodes.values())
 
 
 def test_execute_plugin_conversation_node_creates_a_real_conversation_node():

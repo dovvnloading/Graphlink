@@ -19,6 +19,9 @@ _execute = make_simple_child_node_handler(
     create=lambda document, parent_node_id: document.add_artifact_node(
         *document.place_child(parent_node_id, "artifact"), parent_node_id
     ),
+    # Creatable with nothing selected: this kind never reads the parent's
+    # content, so the parent was only ever a place_child anchor and an edge.
+    create_standalone=lambda document, x, y: document.add_artifact_node(x, y, None),
 )
 
 
@@ -31,4 +34,5 @@ def register(host: HostContext) -> None:
         ),
         category="Workflow & Drafting",
         handler=_execute,
+        requires_parent=False,
     )

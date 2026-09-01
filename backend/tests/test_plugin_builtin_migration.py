@@ -142,8 +142,20 @@ def test_builtin_picker_entry_pinned_in_categories_payload(
     assert plugin_entry["description"] == description
 
 
-@pytest.mark.parametrize(_CASE_FIELDS, _BUILTIN_CASES)
-def test_builtin_requires_a_selected_parent_with_the_exact_warning(
+# Only HTML Renderer genuinely needs a parent: its factory seeds the new
+# node's content from document.nodes[parent_node_id].content. The other five
+# never read the parent at all - it was a place_child anchor and an edge -
+# so requiring a selection made the picker a dead end on an empty canvas.
+_PARENT_REQUIRED_IDS = {"html_renderer"}
+_PARENT_REQUIRED_CASES = [c for c in _BUILTIN_CASES if c.id in _PARENT_REQUIRED_IDS]
+_PARENTLESS_CASES = [c for c in _BUILTIN_CASES if c.id not in _PARENT_REQUIRED_IDS]
+
+assert _PARENT_REQUIRED_CASES, "html_renderer case went missing from _BUILTIN_CASES"
+assert len(_PARENTLESS_CASES) == 5, "expected exactly five parentless built-ins"
+
+
+@pytest.mark.parametrize(_CASE_FIELDS, _PARENT_REQUIRED_CASES)
+def test_parent_requiring_builtin_still_refuses_without_a_selection(
     picker_name, description, category, command_type, expected_kind, warning_text, expected_title,
 ):
     bus, notifications, canvas_document = _make_bus()
@@ -157,8 +169,8 @@ def test_builtin_requires_a_selected_parent_with_the_exact_warning(
     assert not any(n.kind == expected_kind for n in canvas_document.nodes.values())
 
 
-@pytest.mark.parametrize(_CASE_FIELDS, _BUILTIN_CASES)
-def test_builtin_rejects_an_unknown_parent_id_with_the_exact_warning(
+@pytest.mark.parametrize(_CASE_FIELDS, _PARENT_REQUIRED_CASES)
+def test_parent_requiring_builtin_still_rejects_an_unknown_parent_id(
     picker_name, description, category, command_type, expected_kind, warning_text, expected_title,
 ):
     bus, notifications, canvas_document = _make_bus()
@@ -168,10 +180,44 @@ def test_builtin_rejects_an_unknown_parent_id_with_the_exact_warning(
     )
 
     assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
     assert notifications.message == warning_text
     assert not any(n.kind == expected_kind for n in canvas_document.nodes.values())
+
+
+@pytest.mark.parametrize(_CASE_FIELDS, _PARENTLESS_CASES)
+def test_parentless_builtin_creates_an_unconnected_node_at_the_reported_spawn_point(
+    picker_name, description, category, command_type, expected_kind, warning_text, expected_title,
+):
+    bus, notifications, canvas_document = _make_bus()
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", [picker_name, None, 240.0, -80.0])
+    )
+
+    assert result is not None
+    node = canvas_document.nodes[result]
+    assert node.kind == expected_kind
+    assert (node.x, node.y) == (240.0, -80.0)
+    assert not any(e.target == node.id for e in canvas_document.edges.values())
+    assert notifications.visible is False, "creating on an empty canvas is not a deferral"
+    assert canvas_document.command_log[-1].command_type == command_type
+
+
+@pytest.mark.parametrize(_CASE_FIELDS, _PARENTLESS_CASES)
+def test_parentless_builtin_treats_a_stale_selection_as_no_selection(
+    picker_name, description, category, command_type, expected_kind, warning_text, expected_title,
+):
+    # A deleted selection is "nothing is selected", not an error worth
+    # blocking on.
+    bus, notifications, canvas_document = _make_bus()
+
+    result = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", [picker_name, "ghost-node-id", 0.0, 0.0])
+    )
+
+    assert result is not None
+    assert canvas_document.nodes[result].kind == expected_kind
+    assert notifications.visible is False
 
 
 @pytest.mark.parametrize(_CASE_FIELDS, _BUILTIN_CASES)

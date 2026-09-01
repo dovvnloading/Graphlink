@@ -31,6 +31,7 @@ export interface SceneNodeRow {
   researchResult?: ResearchResultRow | null;
   researchRetainToKnowledge: boolean;
   artifactContent: string;
+  artifactError: string;
   gitlinkRepo: string;
   gitlinkBranch: string;
   gitlinkScopeMode: string;
@@ -417,6 +418,11 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["artifactContent"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.artifactContent: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.artifactContent` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["artifactError"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.artifactError: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.artifactError` + ": expected string"); }
   }
   {
     const fieldValue = value["gitlinkRepo"];

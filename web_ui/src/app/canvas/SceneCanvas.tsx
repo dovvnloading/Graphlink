@@ -1563,6 +1563,7 @@ export function toFlowNodes(
         style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
           artifactContent: n.artifactContent,
+          artifactError: n.artifactError,
           history: n.history,
           isCollapsed: n.isCollapsed,
           pendingRequestId: n.pendingRequestId ?? null,

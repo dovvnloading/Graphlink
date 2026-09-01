@@ -2928,7 +2928,7 @@ def test_run_web_research_intent_publishes_scene_and_calls_start_web_research_wi
         def cancel_web_research(self, request_id):
             return False
 
-        def is_web_research_busy(self):
+        def is_node_run_live(self, request_id):
             return False
 
     async def run():
@@ -3001,7 +3001,7 @@ def test_run_web_research_intent_resolves_the_calling_sessions_workspace_collect
         def cancel_web_research(self, request_id):
             return False
 
-        def is_web_research_busy(self):
+        def is_node_run_live(self, request_id):
             return False
 
     async def run():
@@ -3052,7 +3052,7 @@ def test_run_web_research_never_misreads_a_note_edge_as_the_branch_parent():
         def cancel_web_research(self, request_id):
             return False
 
-        def is_web_research_busy(self):
+        def is_node_run_live(self, request_id):
             return False
 
     async def run():
@@ -3116,7 +3116,7 @@ def test_cancel_web_research_request_intent_calls_agent_dispatcher_cancel_web_re
             self.cancel_calls.append(request_id)
             return True
 
-        def is_web_research_busy(self):
+        def is_node_run_live(self, request_id):
             return False
 
     async def run():
@@ -3176,33 +3176,84 @@ def test_run_web_research_mid_flight_delete_of_the_node_is_a_silent_noop():
     asyncio.run(run())
 
 
-def test_run_web_research_on_a_different_node_while_one_is_busy_does_not_clobber_its_state():
-    # Review-found regression guard: run_web_research used to call
-    # start_web_research_run (which unconditionally resets research_stage/
-    # research_error/progress fields and republishes scene) BEFORE checking
-    # whether AgentDispatcher's single in-flight slot was already busy - so
-    # clicking Run on node B while node A was mid-research would silently wipe
-    # B's existing failure/cancelled banner even though no new run for B ever
-    # actually started. The busy check must happen first.
+def test_run_web_research_on_a_different_node_runs_alongside_one_already_in_flight():
+    # The busy guard is per-NODE, not session-wide. A canvas whose whole
+    # premise is parallel branches must be able to research two of them at
+    # once; the old kind-scoped RunRegistry.is_busy("web_research") let only
+    # one run exist anywhere, so a second research node simply could not
+    # start until the first finished.
     async def run():
         bus, document, recorder, dispatcher = make_bus_with_dispatcher()
         parent = document.add_chat_node(0, 0, "research this please", True)
         node_a = document.add_web_research_node(0, 160, parent.id)
         node_b = document.add_web_research_node(200, 160, parent.id)
 
-        # Give node_b a pre-existing failed state to prove it survives.
-        document.start_web_research_run(node_b.id, "node b's original query")
-        document.fail_web_research_run(node_b.id, cancelled=False, message="node b failed earlier")
-        assert node_b.state.research_stage == "failed"
-        assert node_b.state.research_error == "node b failed earlier"
+        started = threading.Event()
+        release = threading.Event()
+
+        def result_for(query):
+            return ResearchResult(
+                request_id="req",
+                original_query=query,
+                effective_query=query,
+                answer_markdown=f"result for {query}",
+                sources=[],
+                citations=[],
+                warnings=[],
+                provider_snapshot={},
+            )
+
+        def blocking_run(self, request, *, token=None, progress=None):
+            started.set()
+            release.wait(5)
+            return result_for(request.original_query)
+
+        with patch.object(agents_module.WebResearchService, "run", blocking_run):
+            result_a = await bus.dispatch_intent(
+                "scene", "runWebResearch", [node_a.id, "node a's query"]
+            )
+            assert result_a == node_a.id
+            await asyncio.to_thread(started.wait, 5)
+
+            # node_a is in flight. node_b is a DIFFERENT node, so it starts.
+            result_b = await bus.dispatch_intent(
+                "scene", "runWebResearch", [node_b.id, "node b's query"]
+            )
+            assert result_b == node_b.id
+            assert node_b.pending_request_id is not None
+
+            notice = await bus.publish("notification")
+            assert notice["visible"] is False, "a legitimate parallel run must not warn"
+
+            release.set()
+            tasks = [entry["task"] for entry in web_research_slots(dispatcher).values()]
+            for task in tasks:
+                await task
+
+        assert node_a.state.research_stage == "completed"
+        assert node_b.state.research_stage == "completed"
+
+    asyncio.run(run())
+
+
+def test_cancelling_a_web_research_run_frees_the_node_for_an_immediate_rerun():
+    # The per-node guard reads node.pending_request_id, but that field
+    # outlives a CANCELLED run: cancelling releases the registry slot at
+    # once while the worker unwinds in its own time. Guarding on the field
+    # alone would refuse the very next Run the user clicks after cancelling,
+    # so the guard asks the registry whether the request is still live.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_chat_node(0, 0, "research this please", True)
+        node = document.add_web_research_node(0, 160, parent.id)
 
         started = threading.Event()
         release = threading.Event()
         fake_result = ResearchResult(
-            request_id="req-a",
-            original_query="node a's query",
-            effective_query="node a's query",
-            answer_markdown="node a's result",
+            request_id="req",
+            original_query="q",
+            effective_query="q",
+            answer_markdown="done",
             sources=[],
             citations=[],
             warnings=[],
@@ -3215,34 +3266,79 @@ def test_run_web_research_on_a_different_node_while_one_is_busy_does_not_clobber
             return fake_result
 
         with patch.object(agents_module.WebResearchService, "run", blocking_run):
-            result_a = await bus.dispatch_intent(
-                "scene", "runWebResearch", [node_a.id, "node a's query"]
+            assert await bus.dispatch_intent("scene", "runWebResearch", [node.id, "q"]) == node.id
+            await asyncio.to_thread(started.wait, 5)
+            first_request_id = node.pending_request_id
+            assert first_request_id is not None
+
+            # Cancel frees the slot immediately; the worker is still held.
+            assert dispatcher.cancel_web_research(first_request_id) is True
+            assert node.pending_request_id == first_request_id, (
+                "the stale id is still on the node - that is exactly the trap"
             )
-            assert result_a == node_a.id
+
+            second = await bus.dispatch_intent("scene", "runWebResearch", [node.id, "q2"])
+            assert second == node.id, "a cancelled run must not block the next one"
+
+            release.set()
+            for entry in list(web_research_slots(dispatcher).values()):
+                await entry["task"]
+
+    asyncio.run(run())
+
+
+def test_run_web_research_twice_on_the_SAME_node_is_bounced_without_clobbering_it():
+    # The guarantee the old session-wide check was really protecting, kept
+    # and made precise: run_web_research calls start_web_research_run, which
+    # unconditionally resets stage/error/progress, so a click that will be
+    # refused must not first wipe the banner it is about to leave standing.
+    # Now the refusal is about THIS node, and says so.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+        parent = document.add_chat_node(0, 0, "research this please", True)
+        node = document.add_web_research_node(0, 160, parent.id)
+
+        started = threading.Event()
+        release = threading.Event()
+        fake_result = ResearchResult(
+            request_id="req-a",
+            original_query="the first query",
+            effective_query="the first query",
+            answer_markdown="the first result",
+            sources=[],
+            citations=[],
+            warnings=[],
+            provider_snapshot={},
+        )
+
+        def blocking_run(self, request, *, token=None, progress=None):
+            started.set()
+            release.wait(5)
+            return fake_result
+
+        with patch.object(agents_module.WebResearchService, "run", blocking_run):
+            assert await bus.dispatch_intent(
+                "scene", "runWebResearch", [node.id, "the first query"]
+            ) == node.id
             await asyncio.to_thread(started.wait, 5)
 
-            # node_a is now in flight (the single web-research slot is busy).
-            # Clicking Run on node_b must be rejected up front, WITHOUT
-            # touching node_b's stage/error/content at all.
-            result_b = await bus.dispatch_intent(
-                "scene", "runWebResearch", [node_b.id, "a brand new query for b"]
+            content_before = node.content
+            second = await bus.dispatch_intent(
+                "scene", "runWebResearch", [node.id, "a brand new query"]
             )
-            assert result_b is None
-            assert node_b.state.research_stage == "failed", "node_b's terminal state must survive the bounce"
-            assert node_b.state.research_error == "node b failed earlier"
-            assert node_b.content == "node b's original query", "node_b's content must not be overwritten"
+            assert second is None
+            assert node.content == content_before, "the bounced click must not overwrite the query"
 
             notice = await bus.publish("notification")
             assert notice["visible"] is True
             assert notice["msgType"] == "info"
-            assert notice["message"] == "A web research request is already running."
+            assert notice["message"] == "Web research is already running for this node."
 
             release.set()
             entry = next(iter(web_research_slots(dispatcher).values()))
             await entry["task"]
 
-        assert node_a.state.research_stage == "completed"
-        assert node_a.state.research_result["answerMarkdown"] == "node a's result"
+        assert node.state.research_stage == "completed"
 
     asyncio.run(run())
 
@@ -3259,6 +3355,52 @@ def test_add_artifact_node_creates_a_real_artifact_kind_node():
     assert node.state.artifact_content == ""
     assert node.history == []
     assert any(e.source == parent.id and e.target == node.id for e in doc.edges.values())
+
+
+def test_fail_artifact_generation_records_the_message_on_the_node():
+    # A failed generation used to report only through a session-wide
+    # notification toast, so with two artifact nodes there was no way to
+    # tell which one failed. Every other async node kind carries its
+    # failure on the node itself.
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_artifact_node(0, 0, parent.id)
+
+    returned = doc.fail_artifact_generation(node.id, "provider exploded")
+
+    assert returned is node
+    assert node.state.artifact_error == "provider exploded"
+
+
+def test_fail_artifact_generation_on_a_deleted_node_is_a_no_op_not_a_raise():
+    # Called from the dispatch task's own except/timeout paths, where the
+    # node may well have been deleted mid-flight - reporting a failure is
+    # not worth turning into a second failure.
+    doc = SceneDocument()
+    assert doc.fail_artifact_generation("ghost-node", "boom") is None
+
+
+def test_a_new_instruction_clears_the_previous_artifact_failure():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_artifact_node(0, 0, parent.id)
+    doc.fail_artifact_generation(node.id, "provider exploded")
+
+    doc.send_artifact_message(node.id, "try again please")
+
+    assert node.state.artifact_error == "", "a stale banner must not sit beside an in-flight run"
+
+
+def test_a_landed_generation_clears_the_previous_artifact_failure():
+    doc = SceneDocument()
+    parent = doc.add_node(0, 0, "parent")
+    node = doc.add_artifact_node(0, 0, parent.id)
+    doc.fail_artifact_generation(node.id, "provider exploded")
+
+    doc.complete_artifact_generation(node.id, "# Draft", "done")
+
+    assert node.state.artifact_error == ""
+    assert node.state.artifact_content == "# Draft"
 
 
 def test_append_artifact_user_message_appends_a_user_turn():
