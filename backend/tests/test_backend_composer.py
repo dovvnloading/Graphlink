@@ -743,3 +743,19 @@ def test_remove_attachment_removes_only_the_matching_id(tmp_path, monkeypatch):
 
     composer, keep_id = asyncio.run(run())
     assert [item.id for item in composer.staged_attachments] == [keep_id]
+
+
+def test_attach_file_types_are_valid_pywebview_filters():
+    """Every attach dialog filter must parse under pywebview's own grammar.
+
+    pywebview requires `Name (*.ext;*.ext)` - SEMICOLON-separated patterns
+    (webview/util.py's parse_file_type). The original tuple used spaces, so
+    every Attach click raised ValueError before a dialog appeared. Held to
+    the real parser, not a re-implementation of its regex, so a pywebview
+    grammar change fails here instead of at dialog-open time.
+    """
+    util = pytest.importorskip("webview.util")
+    from backend.composer import ATTACH_FILE_TYPES
+
+    for file_type in ATTACH_FILE_TYPES:
+        util.parse_file_type(file_type)  # raises ValueError if invalid

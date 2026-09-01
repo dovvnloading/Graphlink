@@ -63,6 +63,19 @@ DEFAULT_REASONING_LEVEL = "off"
 
 SEND_MODES = ("enter_to_send", "ctrl_enter_to_send")
 
+# pywebview validates each entry against `Name (*.ext;*.ext)` - the patterns
+# are SEMICOLON-separated (webview/util.py's parse_file_type). Space-separated
+# patterns raise ValueError at dialog-open time, so Attach crashed before a
+# dialog ever appeared. Module-level so the filter test can hold every entry
+# to the real parser.
+ATTACH_FILE_TYPES = (
+    "Common Attachments (*.png;*.jpg;*.jpeg;*.webp;*.mp3;*.wav;*.m4a;"
+    "*.flac;*.ogg;*.opus;*.aac;*.mp4;*.mpeg;*.mpga;*.oga;*.webm;*.pdf;"
+    "*.docx;*.txt;*.md;*.py;*.js;*.ts;*.json;*.csv;*.log)",
+    "Image Files (*.png;*.jpg;*.jpeg;*.webp)",
+    "All Files (*.*)",
+)
+
 
 class ComposerError(ValueError):
     """A composer intent referenced an invalid value."""
@@ -489,15 +502,7 @@ def register_composer(
         """
         from backend import native_dialogs
 
-        path = await native_dialogs.pick_file(
-            file_types=(
-                "Common Attachments (*.png *.jpg *.jpeg *.webp *.mp3 *.wav *.m4a "
-                "*.flac *.ogg *.opus *.aac *.mp4 *.mpeg *.mpga *.oga *.webm *.pdf "
-                "*.docx *.txt *.md *.py *.js *.ts *.json *.csv *.log)",
-                "Image Files (*.png *.jpg *.jpeg *.webp)",
-                "All Files (*.*)",
-            )
-        )
+        path = await native_dialogs.pick_file(file_types=ATTACH_FILE_TYPES)
         if not path:
             return
         try:
