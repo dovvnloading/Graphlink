@@ -613,7 +613,10 @@ body,
 
 .chat-node {
   width: 420px;
-  max-height: 440px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
   min-height: 110px;
 }
 
@@ -661,7 +664,7 @@ body,
    them) - if a future change needs to add more properties here, add them
    to THIS block, not a new one further down the file. */
 .chat-node-content {
-  max-height: 360px;
+  max-height: 300px;
   overflow-y: auto;
   line-height: 1.55;
 }
@@ -1011,7 +1014,10 @@ body,
 .chat-node,
 .code-node {
   width: 420px;
-  max-height: 440px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
   min-height: 110px;
 }
 
@@ -1026,7 +1032,7 @@ body,
 }
 
 .code-node-content {
-  max-height: 360px;
+  max-height: 300px;
   overflow-y: auto;
 }
 
@@ -1042,7 +1048,10 @@ body,
 
 .document-node {
   width: 420px;
-  max-height: 440px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
   min-height: 110px;
 }
 
@@ -1052,7 +1061,7 @@ body,
 }
 
 .document-node-content {
-  max-height: 360px;
+  max-height: 300px;
   overflow-y: auto;
 }
 
@@ -1153,7 +1162,10 @@ body,
 
 .thinking-node {
   width: 420px;
-  max-height: 440px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
   min-height: 110px;
 }
 
@@ -1168,7 +1180,7 @@ body,
 }
 
 .thinking-node-content {
-  max-height: 360px;
+  max-height: 300px;
   overflow-y: auto;
 }
 
@@ -1385,7 +1397,10 @@ body,
 
 .html-node {
   width: 420px;
-  max-height: 440px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
   min-height: 110px;
 }
 
@@ -1542,7 +1557,10 @@ body,
 
 .image-node {
   width: 420px;
-  max-height: 440px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
   min-height: 110px;
 }
 
@@ -1555,7 +1573,7 @@ body,
   display: flex;
   align-items: center;
   justify-content: center;
-  max-height: 360px;
+  max-height: 300px;
   overflow: hidden;
 }
 
@@ -1564,7 +1582,7 @@ body,
 .image-node-img {
   display: block;
   max-width: 100%;
-  max-height: 480px;
+  max-height: 300px;
   width: auto;
   height: auto;
   object-fit: contain;
@@ -6048,7 +6066,10 @@ mark.document-view-search-match-current {
 
 .conversation-node {
   width: 420px;
-  max-height: 440px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
   min-height: 110px;
 }
 
@@ -6061,7 +6082,7 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 360px;
+  max-height: 300px;
 }
 
 /* The scrollable message list - only this scrolls, not the input row below
@@ -6237,7 +6258,10 @@ mark.document-view-search-match-current {
 
 .web-research-node {
   width: 420px;
-  max-height: 440px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
   min-height: 110px;
 }
 
@@ -6250,7 +6274,7 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 360px;
+  max-height: 300px;
   overflow-y: auto;
 }
 
@@ -6468,7 +6492,10 @@ mark.document-view-search-match-current {
 
 .artifact-node {
   width: 420px;
-  max-height: 440px;
+  /* No shell max-height: the shell is overflow-hidden, so a cap here
+     amputates the card bottom whenever header chrome plus the capped
+     content region outgrow it. Height is bounded by the content
+     region's own cap instead, so the bottom border always renders. */
   min-height: 110px;
 }
 
@@ -6481,7 +6508,7 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 360px;
+  max-height: 300px;
   overflow-y: auto;
 }
 
@@ -6613,7 +6640,7 @@ mark.document-view-search-match-current {
 
 .gitlink-node {
   width: 460px;
-  max-height: 480px;
+  /* No shell max-height - see the chat-node comment. */
   min-height: 110px;
 }
 
@@ -6626,7 +6653,7 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 400px;
+  max-height: 340px;
   overflow-y: auto;
 }
 
@@ -6968,13 +6995,9 @@ mark.document-view-search-match-current {
 
 .code-sandbox-node {
   width: 420px;
-  /* Taller than the 440 the conversational kinds cap at, on purpose: this
-     card carries four panes (prompt, deps, code, terminal), and the budget
-     below is spent so the COMMON full state - code plus terminal - fits
-     with no outer scrollbar at all. An outer scroll on this card cuts
-     through the middle of whichever pane straddles its edge, which is the
-     exact mid-line clipping this rebuild exists to remove. */
-  max-height: 560px;
+  /* No shell max-height - see the chat-node comment. The body below is the
+     one bounded, scrolling region, so the card ends with its own border and
+     a scrollbar rather than an amputated pane. */
   min-height: 110px;
 }
 
@@ -6989,7 +7012,7 @@ mark.document-view-search-match-current {
   gap: 10px;
   /* Scrolls only in the uncommon everything-at-once state (analysis on top
      of code and terminal); the common state fits - see .code-sandbox-node. */
-  max-height: 520px;
+  max-height: 440px;
   overflow-y: auto;
 }
 
@@ -7192,7 +7215,7 @@ mark.document-view-search-match-current {
    area entirely, and the card hit its ceiling showing nothing but source. */
 .code-sandbox-node-code,
 .code-sandbox-node-analysis {
-  max-height: 185px;
+  max-height: 160px;
   overflow-y: auto;
 }
 
@@ -7210,7 +7233,7 @@ mark.document-view-search-match-current {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 150px;
+  max-height: 130px;
   overflow: auto;
   color: var(--gl-surface-text-primary);
   background-color: var(--gl-surface-inset-deep, var(--gl-surface-window));
@@ -7406,6 +7429,9 @@ mark.document-view-search-match-current {
 
 .note-node-content {
   cursor: text;
+  /* A pasted essay scrolls instead of becoming a poster-sized note. */
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 .note-node-content > :first-child {
@@ -8191,6 +8217,11 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* A long build's checklist scrolls rather than growing the card without
+     limit - the plan card had no bound at all, so a 20-step plan was a
+     20-step card. */
+  max-height: 280px;
+  overflow-y: auto;
 }
 .plan-node-step {
   display: grid;
