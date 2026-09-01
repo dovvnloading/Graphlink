@@ -2993,6 +2993,15 @@ body,
 .composer-input {
   flex: 1;
   resize: none;
+  /* Native auto-size (same posture as .code-sandbox-node-input): the height
+     tracks the content continuously, so it can never go stale the way a
+     one-shot JS scrollHeight measurement could - that measurement was only
+     as good as the layout at the instant it ran. Chromium's UA sheet makes
+     textareas border-box, so these bounds match the old JS 42..160 range. */
+  field-sizing: content;
+  min-height: 42px;
+  max-height: 160px;
+  overflow-y: auto;
   font-family: inherit;
   font-size: 13px;
   line-height: 1.4;
