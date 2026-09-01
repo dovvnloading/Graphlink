@@ -104,6 +104,24 @@ function makeResult(overrides: Partial<WebResearchResultRow> = {}): WebResearchR
 }
 
 describe("WebResearchNodeView", () => {
+  it("shows an empty state before anything has been researched", () => {
+    // The card used to render a query box above blank space, which never
+    // said what Run would produce.
+    renderWebResearchNode();
+    expect(screen.getByText("No research yet")).toBeInTheDocument();
+  });
+
+  it("does not show the empty state alongside a failure banner", () => {
+    renderWebResearchNode({ researchStage: "failed", researchError: "boom" });
+    expect(screen.queryByText("No research yet")).toBeNull();
+    expect(screen.getByText("boom")).toBeInTheDocument();
+  });
+
+  it("renders the retain-to-knowledge checkbox with the app's drawn checkbox class", () => {
+    renderWebResearchNode();
+    expect(screen.getByRole("checkbox")).toHaveClass("gl-checkbox");
+  });
+
   it("renders the query in the input and the header label", () => {
     renderWebResearchNode({ query: "who won the 2019 world series" });
     expect(screen.getByText("Web Research")).toBeInTheDocument();

@@ -28,11 +28,13 @@ import { useLodVisibility } from "./useLodVisibility";
  * see the state split below), collapse/expand (a real per-node toggle, same
  * ChatNode/DocumentNode manual-OR-LOD pattern - unlike CodeNode/ThinkingNode,
  * which have no manual collapse at all), delete. Deliberately, permanently
- * NOT wired (not a temporary stub - see the Popout button below): Popout /
- * standalone window view. Also deliberately not present even as a disabled
- * placeholder: "Open Document View" - there is no clear SPA equivalent for it
- * yet (matches this increment's own scope decision, not carried over from
- * any sibling node's menu).
+ * NOT wired: Popout / standalone window view - opening untrusted HTML in a
+ * separate window needs a security review first. It is not rendered at all,
+ * not even as a disabled button: a control that can never be used is noise
+ * on a card, and the reason for its absence belongs here rather than in a
+ * tooltip nobody can act on. Also deliberately absent: "Open Document View"
+ * - there is no clear SPA equivalent for it yet (matches this increment's
+ * own scope decision, not carried over from any sibling node's menu).
  *
  * Card controls, not a context menu: every sibling node view above uses a
  * right-click dropdown for its actions, but this node's action surface is
@@ -231,14 +233,12 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
             <button type="button" className="html-node-header-btn" onClick={data.onToggleCollapse}>
               {data.isCollapsed ? "Expand" : "Collapse"}
             </button>
-            <button
-              type="button"
-              className="html-node-header-btn"
-              disabled
-              title="Popout view isn't built yet - opening untrusted HTML in a separate window needs a security review first"
-            >
-              Popout
-            </button>
+            {/* No Popout control. It shipped as a permanently disabled
+                button with its reason in a tooltip, which is a dead control
+                on a card the user cannot do anything about - the rationale
+                is recorded in this module's own doc instead: opening
+                untrusted HTML in a separate window needs a security review
+                first, and until that happens there is nothing to render. */}
             <button
               type="button"
               className="html-node-header-btn html-node-delete-btn"

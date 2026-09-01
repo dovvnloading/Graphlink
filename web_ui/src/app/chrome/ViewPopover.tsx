@@ -220,7 +220,13 @@ function ToggleRow({
           hint into the checkbox's accessible NAME, when the hint is a
           description of the behaviour, not part of what the control is
           called. */}
-      <input type="checkbox" aria-label={label} checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <input
+        type="checkbox"
+        className="gl-checkbox"
+        aria-label={label}
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+      />
       <span className="view-toggle-text">
         <span className="view-toggle-label">{label}</span>
         <span className="view-toggle-hint">{hint}</span>

@@ -398,11 +398,35 @@ describe("GitlinkNodeView", () => {
     const data = renderGitlinkNode({ gitlinkRepoFilePaths: ["src/a.py", "src/b.py"] });
 
     await user.click(screen.getByLabelText("src/a.py"));
-    await user.selectOptions(screen.getByLabelText("Context scope"), "full");
+    // Context scope is a CustomSelect (chrome/CustomSelect.tsx) now, not a
+    // native <select>, so picking an option is a click on the trigger
+    // followed by a click on the portaled option button - the same idiom
+    // SettingsDialog.test.tsx's own chooseCustomOption helper uses.
+    await user.click(screen.getByRole("button", { name: "Context scope" }));
+    await user.click(await screen.findByRole("button", { name: "Full repo" }));
     expect(data.onBuildContext).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Build Context" }));
     expect(data.onBuildContext).toHaveBeenCalledWith("full", ["src/a.py"]);
+  });
+
+  it("renders file-row checkboxes with the app's drawn checkbox class", () => {
+    // A raw OS checkbox repeated once per file row was the most visible
+    // un-restyled control left on any card.
+    renderGitlinkNode({ gitlinkRepoFilePaths: ["src/a.py", "src/b.py"] });
+    for (const box of screen.getAllByRole("checkbox")) {
+      expect(box).toHaveClass("gl-checkbox");
+    }
+  });
+
+  it("renders the app's own dropdown for Context scope, never a native select", () => {
+    // Every other dropdown in this app (Settings, Builder, Chat Library,
+    // the View popover) is CustomSelect; this card was the last raw
+    // <select>, and an OS dropdown inside a canvas card reads as a foreign
+    // control.
+    renderGitlinkNode();
+    expect(document.querySelector("select")).toBeNull();
+    expect(screen.getByRole("button", { name: "Context scope" })).toBeInTheDocument();
   });
 
   it("Generate Change Set passes the trimmed task-prompt draft directly to onRun", async () => {

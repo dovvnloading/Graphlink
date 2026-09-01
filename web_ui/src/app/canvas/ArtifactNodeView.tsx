@@ -179,7 +179,18 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
   }
 
   const hasContent = data.artifactContent.trim().length > 0;
-  const submitLabel = hasContent ? "Refine" : "Generate";
+  const busy = !!data.pendingRequestId;
+  // Busy is stated, not just implied by a greyed-out button. The sandbox
+  // card's Run reads "Running…" while in flight; this one stayed on
+  // "Generate"/"Refine" and merely disabled, which reads as broken rather
+  // than working.
+  const submitLabel = busy
+    ? hasContent
+      ? "Refining…"
+      : "Generating…"
+    : hasContent
+      ? "Refine"
+      : "Generate";
 
   return (
     <NodeShell
@@ -254,12 +265,12 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
           <button
             type="button"
             className="artifact-node-submit-btn"
-            disabled={!draft.trim() || !!data.pendingRequestId}
+            disabled={!draft.trim() || busy}
             onClick={submit}
           >
             {submitLabel}
           </button>
-          {data.pendingRequestId && (
+          {busy && (
             <button
               type="button"
               className="artifact-node-cancel-btn"
