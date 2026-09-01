@@ -8,7 +8,7 @@
 ![Local First](https://img.shields.io/badge/Local--First-AI%20Workspace-orange)
 ![GitHub stars](https://img.shields.io/github/stars/dovvnloading/Graphlink?style=social)
 
-<img alt="Graphlink canvas - one question branched into two answers inside a frame, one continuing into a Python sandbox, beside a finished build and the chart it produced" src="assets/screenshots/canvas-branching.png" />
+<img alt="Graphlink canvas: a production incident investigated as a graph - three competing hypotheses branched from one question, a SQL run with its output, cited web research, two charts of the regression, and the Builder run that bisected the deploy" src="assets/screenshots/canvas-branching.png" />
 
 **A local-first, graph-based AI workspace for branching reasoning, tool use, and multi-provider workflows.**
 
@@ -65,17 +65,11 @@ Built-in node kinds on the graph surface: **Chat**, **Code**, **Document**, **Th
 
 ## Screenshots
 
-**A build, on the canvas.** The plan node holds the checklist, the live budget counters, and an activity log of every tool call the run made — next to the nodes it actually created.
-
-<img alt="A finished Builder run: plan node with its checklist, spent budgets and activity log, beside the chart it produced" src="assets/screenshots/builder-run.png" />
+**One investigation, as a graph.** A p99 regression worked end to end: competing hypotheses as sibling branches (one rejected, one superseded), the `pg_stat_statements` run that found the seq scan, cited research on why the b-tree could not serve the prefix query, the incident's shape in two charts, and the Builder run that bisected the deploy - all on one canvas, all still connected to the question that started it.
 
 **Launching a build.** Pick a recipe (its steps are previewed before you commit), choose how much oversight you want, and set the budgets.
 
-<img alt="The Builder launch dialog showing a recipe with its steps previewed, co-pilot/autopilot oversight modes, and budget presets" src="assets/screenshots/builder-launcher.png" />
-
-**Code and charts inline.** The Virtual Environment Runner keeps the requirements, the code and the terminal output on one node; any node's content can become a chart.
-
-<img alt="A Virtual Environment Runner node with its requirements, code and terminal output, beside the chart built from its results" src="assets/screenshots/code-and-charts.png" />
+<img alt="The Builder launch dialog over the incident graph: a recipe with its two steps previewed, co-pilot selected, and the Standard budget preset" src="assets/screenshots/builder-launcher.png" />
 
 ## The Builder
 
