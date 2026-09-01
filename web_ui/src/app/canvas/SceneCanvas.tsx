@@ -2,7 +2,6 @@ import {
   Background,
   BackgroundVariant,
   Handle,
-  MiniMap,
   Position,
   ReactFlow,
   ViewportPortal,
@@ -49,6 +48,7 @@ import { ConnectionCanvas, type ConnectionSpec } from "./connections/ConnectionC
 import type { ConnectionPath } from "./connections/connectionGeometry";
 import { isPointOnConnection } from "./connections/connectionGeometry";
 import { useLodVisibility } from "./useLodVisibility";
+import { SceneMinimap } from "./SceneMinimap";
 import { useCanvasFontVars } from "./useCanvasFontVars";
 import { useBranchFocus } from "./useBranchFocus";
 import { useViewportReporting } from "./useViewportReporting";
@@ -2553,31 +2553,6 @@ function CanvasInner({
     [reactFlow, storeApi],
   );
 
-  // R8a: the minimap used to render every node as React Flow's own default
-  // plain rectangle (no nodeColor/nodeStrokeColor was ever passed), which
-  // reads as flat, undifferentiated "white boxes" against this app's dark
-  // theme. note/frame/container are the only kinds with a real, user-
-  // assigned color (the same palette GroupColorPicker writes) - reflect it
-  // here so a colored group/note actually stands out on the minimap the
-  // way it does on the canvas. Every other kind (and any uncolored group/
-  // note) gets one deliberate, visible neutral instead of RF's default;
-  // the currently selected node gets the brightest tone so selection state
-  // reads on the minimap too. Colors are read from the real design tokens
-  // (not hardcoded hex) so this stays theme-driven.
-  const minimapNodeColor = useCssVar("--gl-surface-handle-hover", "#6A6A6A");
-  const minimapStrokeColor = useCssVar("--gl-surface-border-strong", "#505050");
-  const minimapSelectedColor = useCssVar("--gl-surface-text-bright", "#FFFFFF");
-  const getMinimapNodeColor = useCallback(
-    (node: SceneFlowNode) => {
-      if (node.selected) return minimapSelectedColor;
-      if ((node.type === "note" || node.type === "frame" || node.type === "container") && node.data.color) {
-        return node.data.color;
-      }
-      return minimapNodeColor;
-    },
-    [minimapNodeColor, minimapSelectedColor],
-  );
-
   const onConnect = useCallback(
     (connection: Connection) => {
       if (connection.source && connection.target) {
@@ -2779,14 +2754,7 @@ function CanvasInner({
           color={grid.gridColor}
           style={{ opacity: grid.gridOpacityPercent / 100 }}
         />
-        <MiniMap
-          pannable
-          zoomable
-          className="scene-minimap"
-          nodeColor={getMinimapNodeColor}
-          nodeStrokeColor={minimapStrokeColor}
-          nodeStrokeWidth={2}
-        />
+        <SceneMinimap store={store} />
         {/* R7.5b-3: smart-guide lines. Legacy's guides were QGraphicsLineItems
             in the same unified scene as the nodes, panning/zooming for free -
             ViewportPortal is the direct React Flow analog (children render
