@@ -6946,11 +6946,35 @@ mark.document-view-search-match-current {
   cursor: default;
 }
 
-/* -- R5.4 code_sandbox node ------------------------------------------------ */
+/* -- R5.4 code_sandbox node ------------------------------------------------
+
+   Rebuilt from the straight port, which had two structural defects and a
+   pile of visual ones.
+
+   THE SQUEEZE. The body is a max-height flex column with overflow, and a
+   flex container under height pressure SHRINKS its children below their
+   content size unless told not to - so every textarea and section on the
+   card was being compressed until it clipped its own text mid-glyph: a
+   two-line requirements box showing 1.6 lines, a prompt cut through its
+   descenders, a terminal showing half a row. The scroll container was
+   there to scroll, and instead it crushed. `flex-shrink: 0` on every child
+   is the actual fix; everything else here is proportion.
+
+   SCROLLBAR SOUP. Requirements, prompt, code and terminal each carried
+   their own scroll region inside the scrolling body - up to five nested
+   scrollbars on one card. Now: the two INPUTS auto-size to their content
+   (field-sizing, capped), and only the two OUTPUTS (code, terminal) scroll
+   independently, because output is unbounded and input is not. */
 
 .code-sandbox-node {
   width: 420px;
-  max-height: 480px;
+  /* Taller than the 440 the conversational kinds cap at, on purpose: this
+     card carries four panes (prompt, deps, code, terminal), and the budget
+     below is spent so the COMMON full state - code plus terminal - fits
+     with no outer scrollbar at all. An outer scroll on this card cuts
+     through the middle of whichever pane straddles its edge, which is the
+     exact mid-line clipping this rebuild exists to remove. */
+  max-height: 560px;
   min-height: 110px;
 }
 
@@ -6963,88 +6987,188 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 400px;
+  /* Scrolls only in the uncommon everything-at-once state (analysis on top
+     of code and terminal); the common state fits - see .code-sandbox-node. */
+  max-height: 520px;
   overflow-y: auto;
 }
 
-/* Reuses .web-research-node-query-input's/.gitlink-node-input's own chrome
-   verbatim - same shared-token convention already established across sibling
-   node views - applied here under this node kind's own class name. */
-.code-sandbox-node-requirements,
-.code-sandbox-node-input {
+/* The squeeze fix - see the block comment above. */
+.code-sandbox-node-content > * {
+  flex-shrink: 0;
+}
+
+/* -- Inputs ----------------------------------------------------------------
+
+   Both auto-size to their content and neither scrolls: an input the user is
+   typing into should never hide what was just typed. field-sizing is
+   Chromium-native (this app ships on WebView2 only); the min-heights are
+   the graceful floor if it is ever absent. No resize handles - a control
+   that fits its content has nothing to resize. */
+
+.code-sandbox-node-input,
+.code-sandbox-node-requirements {
   box-sizing: border-box;
   width: 100%;
-  resize: vertical;
-  font-family: inherit;
+  resize: none;
+  field-sizing: content;
   font-size: 12px;
-  line-height: 1.4;
-  padding: 8px 10px;
+  line-height: 1.5;
+  padding: 7px 9px;
   color: var(--gl-surface-text-primary);
-  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  background-color: var(--gl-surface-field, var(--gl-surface-inset));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
+}
+
+.code-sandbox-node-input {
+  font-family: inherit;
+  min-height: 52px;
+  max-height: 140px;
 }
 
 .code-sandbox-node-requirements {
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: 11px;
+  min-height: 44px;
+  max-height: 160px;
 }
 
-.code-sandbox-node-requirements:focus,
-.code-sandbox-node-input:focus {
+.code-sandbox-node-input::placeholder,
+.code-sandbox-node-requirements::placeholder {
+  color: var(--gl-surface-text-muted);
+}
+
+.code-sandbox-node-input:focus,
+.code-sandbox-node-requirements:focus {
   outline: none;
   border-color: var(--gl-surface-text-muted);
 }
 
-.code-sandbox-node-field-row {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
+/* -- Run row ---------------------------------------------------------------
 
-.code-sandbox-node-field-label {
-  font-size: 10px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--gl-surface-text-muted);
-}
+   One primary action per card. Run was a neutral chip identical to Cancel;
+   it is the filled control now, the same one-primary language the Builder
+   launcher and the plan card use. */
 
 .code-sandbox-node-run-row {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
 }
 
 .code-sandbox-node-run-row button {
-  font-size: 11px;
+  height: 27px;
+  font-size: 11.5px;
   font-weight: 600;
   font-family: inherit;
-  padding: 5px 12px;
-  color: var(--gl-surface-text-primary);
-  background-color: var(--gl-neutral-button-background);
-  border: 1px solid var(--gl-neutral-button-border);
+  padding: 0 14px;
   border-radius: 6px;
   cursor: pointer;
+  transition:
+    background-color var(--gl-motion-fast) var(--gl-motion-ease),
+    color var(--gl-motion-fast) var(--gl-motion-ease);
 }
 
-.code-sandbox-node-run-row button:hover:enabled {
+.code-sandbox-node-run {
+  color: var(--gl-surface-text-bright);
   background-color: var(--gl-neutral-button-hover);
+  border: 1px solid var(--gl-neutral-button-border);
 }
 
-.code-sandbox-node-run-row button:disabled {
-  opacity: 0.45;
+.code-sandbox-node-run:hover:enabled {
+  background-color: var(--gl-surface-border-strong);
+}
+
+.code-sandbox-node-run:disabled {
+  color: var(--gl-surface-text-muted);
+  background-color: transparent;
+  border-color: var(--gl-surface-border);
   cursor: default;
+}
+
+.code-sandbox-node-cancel {
+  color: var(--gl-surface-text-secondary);
+  background: transparent;
+  border: 1px solid var(--gl-surface-border);
+}
+
+.code-sandbox-node-cancel:hover {
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+  border-color: var(--gl-semantic-status-error, var(--gl-surface-border-strong));
+}
+
+/* -- Dependencies disclosure ----------------------------------------------
+
+   A manifest is written once and then mostly never read - it does not earn
+   a permanently open textarea at the top of the card. Folded, the summary
+   row carries the package count; open, the textarea auto-sizes like the
+   prompt. Same caret treatment as the launchers' own disclosure. */
+
+.code-sandbox-node-deps summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  list-style: none;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--gl-surface-text-muted);
+}
+
+.code-sandbox-node-deps summary::-webkit-details-marker {
+  display: none;
+}
+
+.code-sandbox-node-deps summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-left: 4px solid currentColor;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  transition: transform var(--gl-motion-fast) var(--gl-motion-ease);
+}
+
+.code-sandbox-node-deps[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.code-sandbox-node-deps summary:hover {
+  color: var(--gl-surface-text-primary);
+}
+
+.code-sandbox-node-deps[open] summary {
+  margin-bottom: 6px;
+}
+
+.code-sandbox-node-deps-count {
+  padding: 0 6px;
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 999px;
 }
 
 .code-sandbox-node-banner-error {
   padding: 8px 10px;
   font-size: 11px;
+  line-height: 1.5;
   color: var(--gl-semantic-status-error, currentColor);
   border: 1px solid var(--gl-semantic-status-error, currentColor);
   border-radius: 8px;
 }
+
+/* -- Outputs ---------------------------------------------------------------
+
+   Code and terminal are the unbounded panes, so they are the only two that
+   scroll themselves. */
 
 .code-sandbox-node-section {
   display: flex;
@@ -7054,25 +7178,21 @@ mark.document-view-search-match-current {
 
 .code-sandbox-node-section-label {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   color: var(--gl-surface-text-muted);
 }
 
 /* Reuses .chat-node-content's full markdown-body rule set verbatim - same
    shared-class convention .artifact-node-document-content/
    .gitlink-node-proposal-markdown already establish for this pipeline.
-
-   These used to opt out of any cap at all, on the theory that the outer
-   .code-sandbox-node-content scrolls. It does - but with both panes
-   uncapped inside one scroller, a script of any length pushes the terminal
-   out of the visible area entirely, and the node arrives at its own 480px
-   ceiling showing nothing but source. Each pane scrolls itself now, so code
-   and output are both on screen whatever their lengths. */
+   Bounded and self-scrolling: with both output panes uncapped inside one
+   scroller, a script of any length pushed the terminal out of the visible
+   area entirely, and the card hit its ceiling showing nothing but source. */
 .code-sandbox-node-code,
 .code-sandbox-node-analysis {
-  max-height: 200px;
+  max-height: 185px;
   overflow-y: auto;
 }
 
@@ -7080,18 +7200,20 @@ mark.document-view-search-match-current {
    the markdown pipeline (see CodeSandboxNodeView's own module doc for why:
    raw subprocess stdout/stderr is machine output, not prose or code-to-be-
    colorized - same posture .gitlink-node-context-xml already takes for its
-   own machine-generated XML body). */
+   own machine-generated XML body). The deep inset is what makes it read as
+   a terminal rather than as another form field. */
 .code-sandbox-node-terminal {
   margin: 0;
   padding: 8px 10px;
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size: 11px;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 160px;
+  max-height: 150px;
   overflow: auto;
   color: var(--gl-surface-text-primary);
-  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  background-color: var(--gl-surface-inset-deep, var(--gl-surface-window));
   border: 1px solid var(--gl-surface-border);
   border-radius: 6px;
 }

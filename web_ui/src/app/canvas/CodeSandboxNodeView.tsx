@@ -325,15 +325,67 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
         </>
       }
     >
-          <label className="code-sandbox-node-field-row">
-            <span className="code-sandbox-node-field-label">Requirements</span>
+          {/* The prompt is the node's primary input - it leads. The old
+              order put the requirements manifest first, which is the same
+              mistake the Builder launcher made with its recipe picker:
+              the qualifier before the question. */}
+          <textarea
+            className="code-sandbox-node-input"
+            value={promptDraft}
+            onChange={(event) => setPromptDraft(event.target.value)}
+            placeholder="Describe what the code should do…"
+            aria-label="Prompt"
+            rows={2}
+            spellCheck
+          />
+
+          <div className="code-sandbox-node-run-row">
+            <button
+              type="button"
+              className="code-sandbox-node-run"
+              disabled={!canRun || busy}
+              onClick={runNow}
+            >
+              {busy ? "Running…" : "Run"}
+            </button>
+            {data.pendingRequestId && (
+              <button
+                type="button"
+                className="code-sandbox-node-cancel"
+                onClick={() => data.onCancel()}
+                title="Cancel Virtual Environment Runner request"
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+
+          {/* Dependencies fold away: a manifest is set once and then mostly
+              read never - it was previously the FIRST thing on the card, an
+              always-open two-row textarea that clipped its own third line.
+              The summary carries the count so a folded manifest still says
+              what it holds. Native <details>, so keyboard and screen-reader
+              behaviour come from the platform; the textarea keeps its
+              blur/Enter commit contract unchanged. */}
+          <details className="code-sandbox-node-deps">
+            <summary>
+              Dependencies
+              {(() => {
+                const count = requirementsDraft
+                  .split("\n")
+                  .filter((line) => line.trim() && !line.trim().startsWith("#")).length;
+                return count > 0 ? (
+                  <span className="code-sandbox-node-deps-count">{count}</span>
+                ) : null;
+              })()}
+            </summary>
             <textarea
               className="code-sandbox-node-requirements"
               value={requirementsDraft}
               onChange={(event) => setRequirementsDraft(event.target.value)}
               onBlur={commitRequirements}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
+                if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
                   event.preventDefault();
                   // Do NOT call commitRequirements() here too - .blur()
                   // below synchronously fires the onBlur={commitRequirements}
@@ -348,28 +400,7 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
               rows={2}
               spellCheck={false}
             />
-          </label>
-
-          <textarea
-            className="code-sandbox-node-input"
-            value={promptDraft}
-            onChange={(event) => setPromptDraft(event.target.value)}
-            placeholder="Describe what the code should do…"
-            aria-label="Prompt"
-            rows={3}
-            spellCheck
-          />
-
-          <div className="code-sandbox-node-run-row">
-            <button type="button" disabled={!canRun || busy} onClick={runNow}>
-              Run
-            </button>
-            {data.pendingRequestId && (
-              <button type="button" onClick={() => data.onCancel()} title="Cancel Virtual Environment Runner request">
-                Cancel
-              </button>
-            )}
-          </div>
+          </details>
 
           {data.codeSandboxError && (
             <div className="code-sandbox-node-banner-error" role="alert">
@@ -379,26 +410,35 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
 
           {data.codeSandboxCode && (
             <div className="code-sandbox-node-section">
-              <span className="code-sandbox-node-section-label">Code</span>
+              {/* No "Code" label: the fence header NodeMarkdown renders
+                  already says PYTHON with its own Copy button, and two
+                  stacked all-caps headers naming the same pane was part of
+                  what read as a form rather than a tool. */}
               <div className="chat-node-content code-sandbox-node-code">
                 <NodeMarkdown content={toPythonFence(data.codeSandboxCode)} />
               </div>
             </div>
           )}
 
-          <div className="code-sandbox-node-section">
-            <span className="code-sandbox-node-section-label">Terminal</span>
-            {/* Plain preformatted text, never the markdown pipeline - see
-                module doc. While a run is in flight, shows live streamed
-                deltas; once it completes (pendingRequestId back to null),
-                falls back to the static, already-persisted
-                codeSandboxOutput field. */}
-            <pre className="code-sandbox-node-terminal">
-              {data.pendingRequestId
-                ? streamedOutput || "Waiting for output…"
-                : data.codeSandboxOutput || "No output yet."}
-            </pre>
-          </div>
+          {/* The terminal exists only once there is (or is about to be)
+              output. The old card rendered a permanent "No output yet." box
+              on every fresh node - an empty state for a section the user had
+              not asked for yet. */}
+          {(data.pendingRequestId || data.codeSandboxOutput) && (
+            <div className="code-sandbox-node-section">
+              <span className="code-sandbox-node-section-label">Terminal</span>
+              {/* Plain preformatted text, never the markdown pipeline - see
+                  module doc. While a run is in flight, shows live streamed
+                  deltas; once it completes (pendingRequestId back to null),
+                  falls back to the static, already-persisted
+                  codeSandboxOutput field. */}
+              <pre className="code-sandbox-node-terminal">
+                {data.pendingRequestId
+                  ? streamedOutput || "Waiting for output…"
+                  : data.codeSandboxOutput}
+              </pre>
+            </div>
+          )}
 
           {data.codeSandboxAnalysis && (
             <div className="code-sandbox-node-section">
