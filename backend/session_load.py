@@ -1108,6 +1108,14 @@ def _restore_children(
                     continue
 
 
+def _legacy_default_to_none(color):
+    """Deferred import: backend/chat_library.py owns the sentinel and the
+    rule, and importing it at module scope here would be circular."""
+    from backend.chat_library import _legacy_default_to_none as impl
+
+    return impl(color)
+
+
 def _restore_notes(document: SceneDocument, notes_data: list) -> dict[int, str]:
     notes_map: dict[int, str] = {}
     if not isinstance(notes_data, list):
@@ -1123,7 +1131,15 @@ def _restore_notes(document: SceneDocument, notes_data: list) -> dict[int, str]:
                 is_summary_note=bool(note_payload.get("is_summary_note", False)),
             )
             document.set_note_content(note.id, str(note_payload.get("content", "")))
-            document.set_group_color(note.id, note_payload.get("color"), note_payload.get("header_color"))
+            # Rows saved before the forced-default fix carry
+            # LEGACY_NOTE_DEFAULT_COLOR whether or not the user ever chose a
+            # colour; normalising on read means they render neutral without
+            # a destructive migration over anyone's saved database.
+            document.set_group_color(
+                note.id,
+                _legacy_default_to_none(note_payload.get("color")),
+                note_payload.get("header_color"),
+            )
             # ADR-002 Workstream 1 ("Branch status and lifecycle") -
             # confirmed, pre-existing gap fixed inline: is_branch_comparison
             # (Compare Branches) already synced live to the frontend via

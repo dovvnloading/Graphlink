@@ -288,6 +288,118 @@ def test_store_rejects_a_ref_that_is_not_a_content_digest(tmp_path):
 # -- note edges survive a real DB round-trip (not just the in-memory one) --
 
 
+def test_an_uncoloured_note_stays_uncoloured_across_a_db_round_trip(tmp_path):
+    """SceneNode.color's contract is "None means use the kind's own default
+    colour", resolved by the frontend. The save path used to override that
+    with a hard-coded "#4a7c59", so a note nobody ever coloured came back
+    from a save/reload permanently green - and in a colour absent from the
+    picker's own palette, so it could not be chosen or re-chosen either."""
+    from backend.chat_library import (
+        load_chat_row,
+        load_notes_rows,
+        load_pins_rows,
+        save_chat_atomically_row,
+    )
+
+    db_path = tmp_path / "chats.db"
+    doc = SceneDocument()
+    chat = doc.add_chat_node(0, 0, "hello", is_user=True)
+    note = doc.add_note(0, -120)
+    doc.set_note_content(note.id, "a plain note")
+    doc.connect(note.id, chat.id)
+    assert doc.nodes[note.id].color is None, "precondition: nothing chose a colour"
+
+    chat_data = build_chat_data(doc)
+    notes_data = chat_data.pop("notes_data")
+    pins_data = chat_data.pop("pins_data")
+    chat_id, _ = save_chat_atomically_row(db_path, None, "t", chat_data, notes_data, pins_data)
+
+    # Reloaded exactly as chat_library.loadChat does - through the notes
+    # table, not from the in-memory notes_data above.
+    restored = SceneDocument()
+    restore_chat_into_document(
+        restored,
+        load_chat_row(db_path, chat_id),
+        load_notes_rows(db_path, chat_id),
+        load_pins_rows(db_path, chat_id),
+    )
+
+    restored_note = next(n for n in restored.nodes.values() if n.kind == "note")
+    assert restored_note.color is None
+
+
+def test_a_chosen_note_colour_survives_a_db_round_trip(tmp_path):
+    """The other half: normalising the old default must not flatten a real
+    choice. The picker's own Green is #3f8f5c, a different value."""
+    from backend.chat_library import (
+        load_chat_row,
+        load_notes_rows,
+        load_pins_rows,
+        save_chat_atomically_row,
+    )
+
+    db_path = tmp_path / "chats.db"
+    doc = SceneDocument()
+    doc.add_chat_node(0, 0, "hello", is_user=True)
+    note = doc.add_note(0, -120)
+    doc.set_group_color(note.id, "#3f8f5c", None)
+
+    chat_data = build_chat_data(doc)
+    notes_data = chat_data.pop("notes_data")
+    pins_data = chat_data.pop("pins_data")
+    chat_id, _ = save_chat_atomically_row(db_path, None, "t", chat_data, notes_data, pins_data)
+
+    # Reloaded exactly as chat_library.loadChat does - through the notes
+    # table, not from the in-memory notes_data above.
+    restored = SceneDocument()
+    restore_chat_into_document(
+        restored,
+        load_chat_row(db_path, chat_id),
+        load_notes_rows(db_path, chat_id),
+        load_pins_rows(db_path, chat_id),
+    )
+
+    restored_note = next(n for n in restored.nodes.values() if n.kind == "note")
+    assert restored_note.color == "#3f8f5c"
+
+
+def test_a_legacy_note_row_carrying_the_old_forced_default_loads_uncoloured(tmp_path):
+    """Rows written before the fix carry the forced default whether or not
+    anyone chose it. Normalising on READ means they render neutral without a
+    destructive migration over an existing database."""
+    from backend.chat_library import (
+        load_chat_row,
+        load_notes_rows,
+        load_pins_rows,
+        save_chat_atomically_row,
+    )
+
+    db_path = tmp_path / "chats.db"
+    doc = SceneDocument()
+    doc.add_chat_node(0, 0, "hello", is_user=True)
+    doc.add_note(0, -120)
+
+    chat_data = build_chat_data(doc)
+    notes_data = chat_data.pop("notes_data")
+    pins_data = chat_data.pop("pins_data")
+    # Exactly what the pre-fix save path wrote.
+    notes_data[0]["color"] = "#4a7c59"
+    chat_id, _ = save_chat_atomically_row(db_path, None, "t", chat_data, notes_data, pins_data)
+
+    # Reloaded exactly as chat_library.loadChat does - through the notes
+    # table, not from the in-memory notes_data above.
+    restored = SceneDocument()
+    restore_chat_into_document(
+        restored,
+        load_chat_row(db_path, chat_id),
+        load_notes_rows(db_path, chat_id),
+        load_pins_rows(db_path, chat_id),
+    )
+
+    restored_note = next(n for n in restored.nodes.values() if n.kind == "note")
+    assert restored_note.color is None
+
+
 def test_note_edges_survive_a_full_db_round_trip(tmp_path):
     """Regression for the note-edge data-loss bug.
 

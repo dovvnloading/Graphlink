@@ -138,6 +138,12 @@ describe("NoteNodeView", () => {
     expect(container.querySelector(".note-node.system-prompt")).not.toBeNull();
     expect(screen.getByTitle("System Prompt")).toBeInTheDocument();
     expect(screen.queryByTitle("Summary Note")).toBeNull();
+    // The marker is carried by shape (the .system-prompt class's dashed,
+    // heavier border) and the badge above - never by an inline colour. It
+    // used to take the colour picker's own "Purple" swatch, which made a
+    // semantic marker indistinguishable from a note somebody had simply
+    // coloured purple.
+    expect(container.querySelector<HTMLElement>(".note-node")!.style.borderColor).toBe("");
 
     rerender(
       <ReactFlowProvider>

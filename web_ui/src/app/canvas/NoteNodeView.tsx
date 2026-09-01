@@ -1,6 +1,6 @@
 import { type Node, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
-import { GroupColorPicker, NOTE_SYSTEM_PROMPT_BORDER_COLOR } from "./GroupColorPicker";
+import { GroupColorPicker } from "./GroupColorPicker";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeShell } from "./NodeShell";
 
@@ -116,10 +116,14 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
       // see this file's own module doc - so this is always false, never
       // wired to useLodVisibility.
       collapsed={false}
-      style={{
-        backgroundColor: data.color ?? undefined,
-        borderColor: data.isSystemPrompt ? NOTE_SYSTEM_PROMPT_BORDER_COLOR : undefined,
-      }}
+      // No borderColor override for a system prompt. It used to be the
+      // picker's own "Purple" swatch, which put a SEMANTIC marker (this note
+      // governs the branch) and a USER CHOICE (I coloured this note purple)
+      // in the same visual channel - indistinguishable the moment someone
+      // picks Purple for a note body. The meaning is carried by shape
+      // instead: .note-node.system-prompt's dashed 2px border, plus the ⚙
+      // badge in the header. See styles.css for the token it borders in.
+      style={{ backgroundColor: data.color ?? undefined }}
       header={
         <div className="scene-node-title note-node-header" style={{ backgroundColor: data.headerColor ?? undefined }}>
           <span className="note-node-badges">
