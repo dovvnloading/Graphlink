@@ -1,5 +1,6 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
+import { CustomSelect, type CustomSelectOption } from "../chrome/CustomSelect";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
@@ -73,6 +74,11 @@ export interface GitlinkPendingChangeRow {
   reason: string;
   content?: string | null;
 }
+
+const GITLINK_SCOPE_OPTIONS: CustomSelectOption[] = [
+  { id: "selected", label: "Selected files" },
+  { id: "full", label: "Full repo" },
+];
 
 export interface GitlinkNodeData extends Record<string, unknown> {
   gitlinkRepo: string;
@@ -406,6 +412,10 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
           {activeTab === "setup" && (
             <div className="gitlink-node-setup-tab" role="tabpanel">
               <div className="gitlink-node-field-row">
+                {/* Labelled, not placeholder-only. Two of this tab's four
+                    fields already carried a real label; these two announced
+                    themselves only until you typed into them. */}
+                <span className="gitlink-node-field-label">Repository</span>
                 <input
                   type="text"
                   className="gitlink-node-input"
@@ -420,6 +430,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   placeholder="owner/repo"
                   aria-label="Repository"
                 />
+                <span className="gitlink-node-field-label">Branch</span>
                 <input
                   type="text"
                   className="gitlink-node-input"
@@ -438,7 +449,16 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   <button type="button" disabled={busy} onClick={listRepos}>
                     {repoOptionsLoading ? "Loading…" : "List My Repos"}
                   </button>
-                  <button type="button" disabled={busy || !repoDraft.trim()} onClick={loadTree}>
+                  {/* The tab's one primary. Setup had four buttons at equal
+                      weight, so nothing said which one moves you forward -
+                      the same one-primary language the launchers, the plan
+                      card and the sandbox card already use. */}
+                  <button
+                    type="button"
+                    className="gitlink-node-primary-btn"
+                    disabled={busy || !repoDraft.trim()}
+                    onClick={loadTree}
+                  >
                     Load Repo Tree
                   </button>
                 </div>
@@ -456,17 +476,22 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                 )}
               </div>
 
-              <label className="gitlink-node-field-row">
+              {/* The app's own dropdown, not a native <select>. CustomSelect
+                  is what Settings, Builder, Chat Library and the View
+                  popover all render; this card was the last raw <select>
+                  left, and an OS dropdown inside a canvas card reads as a
+                  foreign control. It portals to the body and positions off
+                  getBoundingClientRect, so React Flow's viewport transform
+                  does not affect it. */}
+              <div className="gitlink-node-field-row">
                 <span className="gitlink-node-field-label">Context scope</span>
-                <select
-                  className="gitlink-node-select"
+                <CustomSelect
                   value={scopeMode}
-                  onChange={(event) => setScopeMode(event.target.value)}
-                >
-                  <option value="selected">Selected files</option>
-                  <option value="full">Full repo</option>
-                </select>
-              </label>
+                  options={GITLINK_SCOPE_OPTIONS}
+                  onChange={setScopeMode}
+                  ariaLabel="Context scope"
+                />
+              </div>
 
               <div className="gitlink-node-field-row">
                 <label className="gitlink-node-field-row">
@@ -541,6 +566,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                         <label className="gitlink-node-file-row">
                           <input
                             type="checkbox"
+                            className="gl-checkbox"
                             checked={selectedPaths.includes(path)}
                             onChange={() => togglePath(path)}
                           />

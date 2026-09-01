@@ -158,12 +158,21 @@ describe("ArtifactNodeView", () => {
     expect(submitButton).toBeEnabled();
   });
 
-  it("the submit button is disabled while pendingRequestId is set, even with non-empty draft", async () => {
+  it("the submit button states that it is busy, and is disabled, while pendingRequestId is set", async () => {
+    // Busy is stated, not merely implied by a greyed-out button still
+    // reading "Generate" - the same posture the sandbox card's "Running…"
+    // takes. Both halves are asserted: the label AND the disabled state.
     const user = userEvent.setup();
     renderArtifactNode({ pendingRequestId: "req-1" });
     const input = screen.getByRole("textbox", { name: "Instruction" });
     await user.type(input, "real text");
-    expect(screen.getByRole("button", { name: "Generate" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Generate" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Generating…" })).toBeDisabled();
+  });
+
+  it("the busy label tracks Refine when the document already has content", () => {
+    renderArtifactNode({ pendingRequestId: "req-1", artifactContent: "# Existing draft" });
+    expect(screen.getByRole("button", { name: "Refining…" })).toBeDisabled();
   });
 
   // -- submit / Enter / Shift+Enter -------------------------------------------

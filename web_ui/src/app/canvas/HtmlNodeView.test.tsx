@@ -265,19 +265,16 @@ describe("HtmlNodeView", () => {
     );
   });
 
-  it("the Popout button is present, disabled, and wired to nothing observable", async () => {
+  it("renders no Popout control, and never opens a window", () => {
+    // It used to ship as a permanently disabled button explaining itself in
+    // a tooltip. A control the user can never act on is noise on the card;
+    // the reason popout is unbuilt lives in the module doc now. Asserted as
+    // absence rather than deleted outright, so re-adding a dead placeholder
+    // fails here.
     const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
-    const user = userEvent.setup();
     renderHtmlNode();
 
-    const popout = screen.getByRole("button", { name: "Popout" });
-    expect(popout).toBeDisabled();
-    expect(popout).toHaveAttribute(
-      "title",
-      "Popout view isn't built yet - opening untrusted HTML in a separate window needs a security review first",
-    );
-
-    await user.click(popout); // disabled - fires nothing
+    expect(screen.queryByRole("button", { name: "Popout" })).toBeNull();
     expect(openSpy).not.toHaveBeenCalled();
     openSpy.mockRestore();
   });

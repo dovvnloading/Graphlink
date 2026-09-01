@@ -2655,12 +2655,19 @@ body,
   cursor: pointer;
 }
 
-/* A drawn checkbox. These were the last engine-drawn controls in the panel:
-   an OS checkbox sitting beside a custom slider, a custom segmented control
-   and a custom swatch row, with `accent-color` doing what it could. The
-   native input stays - every bit of its keyboard and screen-reader
-   behaviour with it - and only the paint job is replaced. */
-.view-toggle-row input[type="checkbox"] {
+/* A drawn checkbox. These were the last engine-drawn controls in the View
+   panel: an OS checkbox sitting beside a custom slider, a custom segmented
+   control and a custom swatch row, with `accent-color` doing what it could.
+   The native input stays - every bit of its keyboard and screen-reader
+   behaviour with it - and only the paint job is replaced.
+
+   Now a shared class rather than a View-panel-only rule. The canvas node
+   views never got this treatment during the Qt-to-React move, so Web
+   Research's "Save sources to knowledge base" and Gitlink's per-file rows
+   were still rendering raw OS checkboxes inside cards where every other
+   control is drawn - most visible in Gitlink's file list, where the control
+   repeats once per row. One class, one appearance, everywhere. */
+.gl-checkbox {
   appearance: none;
   position: relative;
   flex-shrink: 0;
@@ -2676,18 +2683,19 @@ body,
     border-color var(--gl-motion-fast) var(--gl-motion-ease);
 }
 
-.view-toggle-row:hover input[type="checkbox"]:not(:checked) {
+.gl-checkbox:hover:not(:checked):enabled,
+.view-toggle-row:hover .gl-checkbox:not(:checked):enabled {
   border-color: var(--gl-surface-text-muted);
 }
 
-.view-toggle-row input[type="checkbox"]:checked {
+.gl-checkbox:checked {
   background-color: var(--gl-surface-text-primary);
   border-color: var(--gl-surface-text-primary);
 }
 
 /* The tick, drawn from two borders on a rotated box - no glyph, so it
    cannot pick up a fallback font's own idea of what a checkmark is. */
-.view-toggle-row input[type="checkbox"]:checked::after {
+.gl-checkbox:checked::after {
   content: "";
   position: absolute;
   left: 4px;
@@ -2699,9 +2707,14 @@ body,
   transform: rotate(45deg);
 }
 
-.view-toggle-row input[type="checkbox"]:focus-visible {
+.gl-checkbox:focus-visible {
   outline: 2px solid var(--gl-focus-ring);
   outline-offset: 2px;
+}
+
+.gl-checkbox:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .view-toggle-text {
@@ -6199,6 +6212,15 @@ mark.document-view-search-match-current {
   box-sizing: border-box;
   width: 100%;
   resize: none;
+  /* Native auto-size, the same posture .composer-input and
+     .code-sandbox-node-input already take. Without it a rows=1 textarea
+     with no height of its own stays one line forever: you type a
+     paragraph into this card and can see the last line only. Chromium
+     makes textareas border-box, so these bounds are real pixel bounds. */
+  field-sizing: content;
+  min-height: 34px;
+  max-height: 140px;
+  overflow-y: auto;
   font-family: inherit;
   font-size: 12px;
   line-height: 1.4;
@@ -6423,6 +6445,35 @@ mark.document-view-search-match-current {
   color: var(--gl-surface-text-muted);
 }
 
+/* Empty state, mirroring .library-empty-state's own anatomy (a title naming
+   the state, then one line saying what will fill it) at card scale rather
+   than dialog scale. Without it the card was a query box above blank space,
+   which never told the user what Run would produce. */
+.web-research-node-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 18px 12px;
+  text-align: center;
+  color: var(--gl-surface-text-muted);
+}
+
+.web-research-node-empty-state-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.web-research-node-empty-state-sub {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  max-width: 260px;
+}
+
 .web-research-node-result {
   display: flex;
   flex-direction: column;
@@ -6513,8 +6564,16 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 300px;
+  max-height: 430px;
   overflow-y: auto;
+}
+
+/* Same squeeze fix the code_sandbox card documents: a max-height flex
+   column shrinks its children below their content size unless told not to.
+   The instruction row is the one thing on this card that must never be
+   compressed or scrolled out of reach - it is how you use the node at all. */
+.artifact-node-content > * {
+  flex-shrink: 0;
 }
 
 .artifact-node-document {
@@ -6535,9 +6594,14 @@ mark.document-view-search-match-current {
    establish for this pipeline. Only overrides the max-height/overflow-y a
    nested preview pane should never take on its own (the outer
    .artifact-node-content already scrolls). */
+/* The document preview is the unbounded region here (the model returns a
+   whole document every turn), so it is the region that scrolls itself.
+   Leaving it uncapped and letting the card body do the scrolling instead
+   meant a long draft pushed the turn history and the instruction row out
+   of the visible card entirely. */
 .artifact-node-document-content {
-  max-height: none;
-  overflow: visible;
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 /* The turn history - same scrollable-list posture as
@@ -6547,6 +6611,10 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* Bounded for the same reason as the preview above - an N-turn history
+     must not be able to push the instruction row off the card. */
+  max-height: 150px;
+  overflow-y: auto;
 }
 
 /* Per-turn bubble - reuses conversation-node-bubble's own role-modifier
@@ -6578,6 +6646,15 @@ mark.document-view-search-match-current {
   box-sizing: border-box;
   width: 100%;
   resize: none;
+  /* Native auto-size, the same posture .composer-input and
+     .code-sandbox-node-input already take. Without it a rows=1 textarea
+     with no height of its own stays one line forever: you type a
+     paragraph into this card and can see the last line only. Chromium
+     makes textareas border-box, so these bounds are real pixel bounds. */
+  field-sizing: content;
+  min-height: 34px;
+  max-height: 140px;
+  overflow-y: auto;
   font-family: inherit;
   font-size: 12px;
   line-height: 1.4;
@@ -6658,8 +6735,25 @@ mark.document-view-search-match-current {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 340px;
+  /* Budgeted so the whole Setup tab - four labelled fields, its buttons and
+     the bounded repo/file lists - sits inside the card with no outer
+     scrollbar, leaving the file list (the one genuinely unbounded region,
+     capped at 160px below) as the only thing that scrolls. */
+  max-height: 530px;
   overflow-y: auto;
+}
+
+/* THE SQUEEZE, same defect the code_sandbox card had before its rebuild: a
+   max-height flex column shrinks its children below their content size
+   unless told not to, so the Setup tab's fields and rows were compressed
+   until the card both scrolled itself AND scrolled its file list inside -
+   two nested scrollbars on one card, with whichever region straddled the
+   edge cut through the middle. `flex-shrink: 0` is the actual fix; the
+   raised budget above is what lets the common Setup state sit inside the
+   card with no outer scrollbar at all, leaving the file list - the one
+   genuinely unbounded region - as the only thing that scrolls. */
+.gitlink-node-content > * {
+  flex-shrink: 0;
 }
 
 .gitlink-node-tabs {
@@ -6760,6 +6854,25 @@ mark.document-view-search-match-current {
 
 .gitlink-node-inline-row button:hover:enabled {
   background-color: var(--gl-neutral-button-hover);
+}
+
+/* The one filled control in the Setup tab - same treatment
+   .code-sandbox-node-run carries, so "the action that moves you forward"
+   looks the same on every card that has one. */
+.gitlink-node-inline-row button.gitlink-node-primary-btn {
+  color: var(--gl-surface-text-bright);
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-neutral-button-border);
+}
+
+.gitlink-node-inline-row button.gitlink-node-primary-btn:hover:enabled {
+  background-color: var(--gl-surface-border-strong);
+}
+
+.gitlink-node-inline-row button.gitlink-node-primary-btn:disabled {
+  color: var(--gl-surface-text-muted);
+  background-color: transparent;
+  border-color: var(--gl-surface-border);
 }
 
 .gitlink-node-inline-row button:disabled {

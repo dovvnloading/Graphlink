@@ -197,6 +197,10 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
   const isFailed = data.researchStage === "failed";
   const isCancelled = data.researchStage === "cancelled";
   const showProgress = showStepper && data.researchTotal > 0;
+  // Nothing has been asked yet: no result, no failure, no run in flight.
+  // The card previously rendered a query box above blank space, which says
+  // nothing about what Run will produce.
+  const isEmpty = !data.researchResult && !isFailed && !isCancelled && !showStepper;
 
   return (
     <NodeShell
@@ -270,6 +274,7 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
         <label className="web-research-node-retain nodrag">
           <input
             type="checkbox"
+            className="gl-checkbox"
             checked={data.researchRetainToKnowledge}
             disabled={!!data.pendingRequestId}
             onChange={(event) => data.onSetRetainToKnowledge(event.target.checked)}
@@ -309,6 +314,17 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
       {isCancelled && (
         <div className="web-research-node-banner web-research-node-banner-cancelled">
           {data.researchError || "Research was cancelled."}
+        </div>
+      )}
+
+      {isEmpty && (
+        // Same empty-state idiom as .library-empty-state (ChatLibraryDialog):
+        // a title naming the state, then one line saying what will fill it.
+        <div className="web-research-node-empty-state">
+          <p className="web-research-node-empty-state-title">No research yet</p>
+          <p className="web-research-node-empty-state-sub">
+            Ask a question and run it to collect cited sources into this node.
+          </p>
         </div>
       )}
 
