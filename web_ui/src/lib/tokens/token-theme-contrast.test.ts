@@ -139,50 +139,100 @@ function contrastRatio(hexA: string, hexB: string): number {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+const WCAG_AAA_TEXT = 7.0;
 const WCAG_AA_TEXT = 4.5;
-const WCAG_AA_LARGE_TEXT = 3.0;
 
-// The surface/text pairs that carry real body copy - not every token
-// (borders/shadows/dividers are deliberately low-contrast by design in
-// BOTH themes, see gl-vars-dev.css's own derivation notes; testing those
-// against a text-contrast bar would be testing the wrong thing).
+// Every token that carries text is held to a published WCAG 2.2 tier, and
+// held to it against the WORST-CASE surface it can be painted on rather
+// than only against the window: --gl-surface-field is the lightest dark
+// surface and the darkest light one, so a token that clears the bar there
+// clears it on every other surface in the same theme.
 //
-// text-muted is held to AA-LARGE (3:1), not full AA-normal-text (4.5:1) -
-// not a carve-out invented for this test, but the pre-existing dark
-// palette's own actual ratio: #1E1E1E/#767676 is 3.67:1, already below
-// 4.5:1 before this stage touched anything, consistent with "muted" being
-// a deliberately de-emphasized role (captions/hints, not body copy). The
-// light derivation (#E1E1E1/#717171, 3.73:1) was hand-corrected beyond the
-// mechanical inversion specifically to match this same bar, not to invent
-// a new one.
-const TEXT_SURFACE_PAIRS: Array<[surface: string, text: string, minRatio: number]> = [
-  ["--gl-surface-window", "--gl-surface-text-bright", WCAG_AA_TEXT],
-  ["--gl-surface-window", "--gl-surface-text-strong", WCAG_AA_TEXT],
-  ["--gl-surface-window", "--gl-surface-text-primary", WCAG_AA_TEXT],
-  ["--gl-surface-window", "--gl-surface-text-soft", WCAG_AA_TEXT],
-  ["--gl-surface-window", "--gl-surface-text-secondary", WCAG_AA_TEXT],
-  ["--gl-surface-window", "--gl-surface-text-label", WCAG_AA_TEXT],
-  ["--gl-surface-window", "--gl-surface-text-muted", WCAG_AA_LARGE_TEXT],
-  ["--gl-surface-node-body", "--gl-surface-text-primary", WCAG_AA_TEXT],
-  ["--gl-surface-inset-deep", "--gl-surface-text-primary", WCAG_AA_TEXT],
-  ["--gl-surface-field", "--gl-composer-input-text", WCAG_AA_TEXT],
+//   AAA normal text (7:1)  - the body/heading roles.
+//   AA normal text (4.5:1) - the deliberately de-emphasized roles. 4.5:1 is
+//                            simultaneously AA for normal text and AAA for
+//                            large text, so this is a real published bar,
+//                            not a local carve-out.
+//
+// This replaces an AA-large (3:1) allowance that had applied to
+// --gl-surface-text-muted alone. Muted carries more of this app's text than
+// any token except --gl-surface-text-primary, and at 3.29:1 against a field
+// surface it read as washed out in dark mode; the semantic-status greys were
+// worse still (2.89:1 in light). Borders, shadows and dividers are NOT in
+// this table - they are deliberately low-contrast in both themes, and
+// testing them against a text bar would be testing the wrong thing.
+const TEXT_TOKENS: Array<[textVar: string, minRatio: number]> = [
+  ["--gl-surface-text-bright", WCAG_AAA_TEXT],
+  ["--gl-surface-text-strong", WCAG_AAA_TEXT],
+  ["--gl-surface-text-primary", WCAG_AAA_TEXT],
+  ["--gl-surface-text-soft", WCAG_AAA_TEXT],
+  ["--gl-surface-text-secondary", WCAG_AAA_TEXT],
+  ["--gl-surface-text-label", WCAG_AAA_TEXT],
+  ["--gl-surface-text-muted", WCAG_AA_TEXT],
+  ["--gl-semantic-status-error", WCAG_AA_TEXT],
+  ["--gl-semantic-status-warning", WCAG_AA_TEXT],
+  ["--gl-semantic-status-success", WCAG_AA_TEXT],
+  ["--gl-semantic-status-info", WCAG_AA_TEXT],
+  ["--gl-palette-selection", WCAG_AA_TEXT],
+  ["--gl-semantic-search-highlight", WCAG_AA_TEXT],
+];
+
+// The lowest-contrast surface each theme ever paints text on.
+const WORST_CASE_SURFACE = "--gl-surface-field";
+
+// The remaining surfaces that carry real body copy, checked for the primary
+// body token so a surface can never drift light/dark on its own.
+const BODY_SURFACES = [
+  "--gl-surface-window",
+  "--gl-surface-node-body",
+  "--gl-surface-inset",
+  "--gl-surface-inset-deep",
 ];
 
 describe.each([
   ["dark", darkTokens],
   ["light", explicitLightTokens],
-] as const)("%s theme: text/surface contrast meets its WCAG bar", (themeName, tokens) => {
-  it.each(TEXT_SURFACE_PAIRS)("%s / %s (>= %s:1)", (surfaceVar, textVar, minRatio) => {
-    const surfaceHex = tokens.get(surfaceVar);
-    const textHex = tokens.get(textVar);
-    expect(surfaceHex, `${surfaceVar} missing in ${themeName}`).toBeDefined();
-    expect(textHex, `${textVar} missing in ${themeName}`).toBeDefined();
+] as const)("%s theme: text contrast meets its WCAG bar", (themeName, tokens) => {
+  const surfaceHex = () => {
+    const hex = tokens.get(WORST_CASE_SURFACE);
+    expect(hex, `${WORST_CASE_SURFACE} missing in ${themeName}`).toBeDefined();
+    return hex!;
+  };
 
-    const ratio = contrastRatio(surfaceHex!, textHex!);
+  it.each(TEXT_TOKENS)(
+    `%s on ${WORST_CASE_SURFACE} (>= %s:1)`,
+    (textVar, minRatio) => {
+      const textHex = tokens.get(textVar);
+      expect(textHex, `${textVar} missing in ${themeName}`).toBeDefined();
+
+      const surface = surfaceHex();
+      const ratio = contrastRatio(surface, textHex!);
+      expect(
+        ratio,
+        `${themeName} ${WORST_CASE_SURFACE}(${surface}) / ${textVar}(${textHex}) = ${ratio.toFixed(2)}:1, needs >= ${minRatio}:1`,
+      ).toBeGreaterThanOrEqual(minRatio);
+    },
+  );
+
+  it.each(BODY_SURFACES)("--gl-surface-text-primary on %s (>= 7:1)", (surfaceVar) => {
+    const surface = tokens.get(surfaceVar);
+    const textHex = tokens.get("--gl-surface-text-primary");
+    expect(surface, `${surfaceVar} missing in ${themeName}`).toBeDefined();
+    expect(textHex).toBeDefined();
+
+    const ratio = contrastRatio(surface!, textHex!);
     expect(
       ratio,
-      `${themeName} ${surfaceVar}(${surfaceHex}) / ${textVar}(${textHex}) = ${ratio.toFixed(2)}:1, needs >= ${minRatio}:1`,
-    ).toBeGreaterThanOrEqual(minRatio);
+      `${themeName} ${surfaceVar}(${surface}) / primary(${textHex}) = ${ratio.toFixed(2)}:1`,
+    ).toBeGreaterThanOrEqual(WCAG_AAA_TEXT);
+  });
+
+  it("the composer input's own text clears AAA on its field", () => {
+    const surface = tokens.get("--gl-surface-field");
+    const textHex = tokens.get("--gl-composer-input-text");
+    expect(surface).toBeDefined();
+    expect(textHex).toBeDefined();
+    expect(contrastRatio(surface!, textHex!)).toBeGreaterThanOrEqual(WCAG_AAA_TEXT);
   });
 });
 

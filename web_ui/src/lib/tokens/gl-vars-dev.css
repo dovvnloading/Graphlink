@@ -51,10 +51,27 @@
  * app is a pure gray, R=G=B - a deliberate "graphite" monochrome design,
  * not colorful branding), inverted per-channel for solid hex tokens and
  * polarity-flipped for alpha-wash tokens, then spot-checked against real
- * WCAG relative-luminance contrast ratios (not raw RGB distance) - one
- * token (--gl-surface-text-muted) needed a manual correction beyond the
- * mechanical inversion to match its dark-mode counterpart's own contrast
- * ratio; every other token is the direct derivation. */
+ * WCAG relative-luminance contrast ratios (not raw RGB distance).
+ *
+ * The text-carrying tokens are NOT the mechanical inversion: each one is
+ * solved so that BOTH themes clear the same WCAG 2.2 tier against the
+ * worst-case (lowest-contrast) surface they are ever painted on, which is
+ * --gl-surface-field in both directions. Two tiers, both straight out of
+ * the spec - nothing bespoke:
+ *
+ *   AAA normal text, 7:1 - text-bright/strong/primary/soft/secondary/label
+ *   AA  normal text, 4.5:1 - the deliberately de-emphasized roles:
+ *                            text-muted, the four semantic-status greys,
+ *                            palette-selection, search-highlight
+ *
+ * (4.5:1 is simultaneously WCAG AA for normal text and AAA for large text,
+ * so the de-emphasized tier is a real published bar, not a local carve-out.
+ * It replaces the old AA-large 3:1 allowance, under which text-muted -
+ * which carries more of this app's text than any token except
+ * text-primary - sat at 3.29:1 against a field surface and read as
+ * washed out in dark mode.)
+ *
+ * token-theme-contrast.test.ts enforces exactly this table. */
 :root {
   --gl-composer-attach-button-background: rgba(255, 255, 255, 0.018);
   --gl-composer-attach-button-border: rgba(150, 150, 150, 0.28);
@@ -135,7 +152,7 @@
   --gl-neutral-button-pressed: #343434;
   --gl-palette-ai-node: #828282;
   --gl-palette-nav-highlight: #949494;
-  --gl-palette-selection: #858585;
+  --gl-palette-selection: #939393;
   --gl-palette-user-node: #838383;
   --gl-radius-lg: 12px;
   --gl-radius-md: 8px;
@@ -144,11 +161,11 @@
   --gl-semantic-conversation-ai-bubble: #323232;
   --gl-semantic-conversation-user-bubble: #696969;
   --gl-semantic-default: #858585;
-  --gl-semantic-search-highlight: #949494;
-  --gl-semantic-status-error: #848484;
-  --gl-semantic-status-info: #828282;
-  --gl-semantic-status-success: #838383;
-  --gl-semantic-status-warning: #919191;
+  --gl-semantic-search-highlight: #a2a2a2;
+  --gl-semantic-status-error: #929292;
+  --gl-semantic-status-info: #909090;
+  --gl-semantic-status-success: #919191;
+  --gl-semantic-status-warning: #9f9f9f;
   --gl-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.40);
   --gl-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.45);
   --gl-shadow-3: 0 8px 28px rgba(0, 0, 0, 0.55);
@@ -170,8 +187,8 @@
   --gl-surface-inset-deep: #121212;
   --gl-surface-node-body: #252525;
   --gl-surface-text-bright: #FFFFFF;
-  --gl-surface-text-label: #A4A4A4;
-  --gl-surface-text-muted: #767676;
+  --gl-surface-text-label: #B4B4B4;
+  --gl-surface-text-muted: #949494;
   --gl-surface-text-primary: #E0E0E0;
   --gl-surface-text-secondary: #BDBDBD;
   --gl-surface-text-soft: #CCCCCC;
@@ -269,7 +286,7 @@
     --gl-neutral-button-pressed: #CBCBCB;
     --gl-palette-ai-node: #7D7D7D;
     --gl-palette-nav-highlight: #6B6B6B;
-    --gl-palette-selection: #7A7A7A;
+    --gl-palette-selection: #595959;
     --gl-palette-user-node: #7C7C7C;
     --gl-radius-lg: 12px;
     --gl-radius-md: 8px;
@@ -278,11 +295,11 @@
     --gl-semantic-conversation-ai-bubble: #CDCDCD;
     --gl-semantic-conversation-user-bubble: #969696;
     --gl-semantic-default: #7A7A7A;
-    --gl-semantic-search-highlight: #6B6B6B;
-    --gl-semantic-status-error: #7B7B7B;
-    --gl-semantic-status-info: #7D7D7D;
-    --gl-semantic-status-success: #7C7C7C;
-    --gl-semantic-status-warning: #6E6E6E;
+    --gl-semantic-search-highlight: #4A4A4A;
+    --gl-semantic-status-error: #5A5A5A;
+    --gl-semantic-status-info: #5C5C5C;
+    --gl-semantic-status-success: #5B5B5B;
+    --gl-semantic-status-warning: #4D4D4D;
     --gl-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.18);
     --gl-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.203);
     --gl-shadow-3: 0 8px 28px rgba(0, 0, 0, 0.248);
@@ -304,8 +321,8 @@
     --gl-surface-inset-deep: #EDEDED;
     --gl-surface-node-body: #DADADA;
     --gl-surface-text-bright: #000000;
-    --gl-surface-text-label: #5B5B5B;
-    --gl-surface-text-muted: #717171;
+    --gl-surface-text-label: #404040;
+    --gl-surface-text-muted: #5A5A5A;
     --gl-surface-text-primary: #1F1F1F;
     --gl-surface-text-secondary: #424242;
     --gl-surface-text-soft: #333333;
@@ -399,7 +416,7 @@
   --gl-neutral-button-pressed: #CBCBCB;
   --gl-palette-ai-node: #7D7D7D;
   --gl-palette-nav-highlight: #6B6B6B;
-  --gl-palette-selection: #7A7A7A;
+  --gl-palette-selection: #595959;
   --gl-palette-user-node: #7C7C7C;
   --gl-radius-lg: 12px;
   --gl-radius-md: 8px;
@@ -408,11 +425,11 @@
   --gl-semantic-conversation-ai-bubble: #CDCDCD;
   --gl-semantic-conversation-user-bubble: #969696;
   --gl-semantic-default: #7A7A7A;
-  --gl-semantic-search-highlight: #6B6B6B;
-  --gl-semantic-status-error: #7B7B7B;
-  --gl-semantic-status-info: #7D7D7D;
-  --gl-semantic-status-success: #7C7C7C;
-  --gl-semantic-status-warning: #6E6E6E;
+  --gl-semantic-search-highlight: #4A4A4A;
+  --gl-semantic-status-error: #5A5A5A;
+  --gl-semantic-status-info: #5C5C5C;
+  --gl-semantic-status-success: #5B5B5B;
+  --gl-semantic-status-warning: #4D4D4D;
   --gl-shadow-1: 0 1px 3px rgba(0, 0, 0, 0.18);
   --gl-shadow-2: 0 4px 12px rgba(0, 0, 0, 0.203);
   --gl-shadow-3: 0 8px 28px rgba(0, 0, 0, 0.248);
@@ -434,8 +451,8 @@
   --gl-surface-inset-deep: #EDEDED;
   --gl-surface-node-body: #DADADA;
   --gl-surface-text-bright: #000000;
-  --gl-surface-text-label: #5B5B5B;
-  --gl-surface-text-muted: #717171;
+  --gl-surface-text-label: #404040;
+  --gl-surface-text-muted: #5A5A5A;
   --gl-surface-text-primary: #1F1F1F;
   --gl-surface-text-secondary: #424242;
   --gl-surface-text-soft: #333333;
