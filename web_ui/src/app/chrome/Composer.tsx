@@ -239,8 +239,10 @@ export function Composer({
           }
           onClick={() => overlays.toggle("reasoning", "popover")}
         >
-          <span className="control-kicker">Reasoning</span>
-          <span className="control-value">{composer.route.reasoning.label}</span>
+          <span className="composer-control-label">Reasoning</span>
+          <span className="composer-control-value composer-control-value-reasoning">
+            {composer.route.reasoning.label}
+          </span>
           <Icon name="chevron" />
         </button>
 
@@ -266,22 +268,23 @@ export function Composer({
           }
           onClick={() => overlays.toggle("model", "popover")}
         >
-          <span className="control-copy">
-            <span className="control-kicker">{composer.route.provider}</span>
-            <span className="control-value" title={modelLabel}>
-              {modelLabel}
-            </span>
+          <span className="composer-control-label">{composer.route.provider}</span>
+          <span className="composer-control-value composer-control-value-model" title={modelLabel}>
+            {modelLabel}
           </span>
           <Icon name="chevron" />
         </button>
 
-        {showTokenCounter && <TokenCounter store={store} />}
+        <div className="composer-rail-end">
+          {showTokenCounter && <TokenCounter store={store} />}
 
-        <div className="composer-send-group">
-          {composer.request.canCancel && (
+          {composer.request.canCancel ? (
+            // One primary slot, two states: while a response can still be
+            // cancelled the slot IS the stop control - Send never renders
+            // beside it as a competing (and necessarily disabled) twin.
             <button
               type="button"
-              className="composer-icon-button composer-cancel-button"
+              className="composer-send-button"
               onClick={() => {
                 if (composer.request.id) store.cancelChatRequest(composer.request.id);
               }}
@@ -290,18 +293,18 @@ export function Composer({
             >
               <Icon name="stop" />
             </button>
+          ) : (
+            <button
+              type="button"
+              className="composer-send-button"
+              disabled={!composer.draft.text.trim() || !composer.request.canSend}
+              title="Send message"
+              aria-label="Send message"
+              onClick={send}
+            >
+              <Icon name="send" />
+            </button>
           )}
-
-          <button
-            type="button"
-            className="composer-send-button"
-            disabled={!composer.draft.text.trim() || !composer.request.canSend}
-            title="Send message"
-            aria-label="Send message"
-            onClick={send}
-          >
-            <Icon name="send" />
-          </button>
         </div>
       </div>
 
