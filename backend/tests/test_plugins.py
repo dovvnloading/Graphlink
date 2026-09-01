@@ -15,6 +15,10 @@ from backend.plugin_sdk import discover_plugins
 from backend.plugins import get_plugin_categories, plugins_payload, register_plugins
 from graphlink_settings_store import SettingsManager
 
+# The demo plugins are fixtures, not shipped plugins - see
+# backend/tests/fixture_plugins/ and this module's header comment.
+FIXTURE_PLUGINS_ROOT = Path(__file__).resolve().parent / "fixture_plugins"
+
 
 def _fresh_settings_manager() -> SettingsManager:
     # ADR-014 stage 14.4: register_plugins now requires a real SettingsManager
@@ -33,11 +37,15 @@ def _fresh_settings_manager() -> SettingsManager:
 # supply entries even with no real registry. Since the 8 built-ins are now
 # real discovered plugins themselves, there is no picker entry that exists
 # independent of a real registry anymore - these tests now pass the real
-# discovered registry (discover_plugins(), the production plugins/ root),
-# which also picks up plugins/hello_node/ and plugins/counter_node/ (both
-# registered under the HostContext default "More Plugins" category) - a
+# discovered registry (discover_plugins(), the production plugins/ root) - a
 # genuine, expected structural difference from the pre-migration synthetic
 # "just the hardcoded 8" listing, not a narrowing of intent.
+#
+# The shipped root holds exactly the seven first-party plugins. The demo
+# plugins that used to sit alongside them - and so appeared in every user's
+# picker under "More Plugins" - are fixtures now, discovered from
+# backend/tests/fixture_plugins/, so the catch-all category's behavior is
+# proven against that root instead.
 
 
 def test_get_plugin_categories_groups_in_category_order_and_skips_empty():
@@ -46,12 +54,11 @@ def test_get_plugin_categories_groups_in_category_order_and_skips_empty():
 
     # "Validation & Delivery" has no plugins mapped to it in the real
     # shipped plugin set today, so the empty-category-skip rule drops it
-    # from the result entirely. "More Plugins" is appended last for
-    # plugins/hello_node/'s and plugins/counter_node/'s uncategorized
-    # entries.
+    # from the result entirely. Every shipped plugin declares a real
+    # category, so the "More Plugins" catch-all is correctly absent.
     assert names == [
         "Branch Foundations", "Reasoning & Research", "Build & Execution",
-        "Workflow & Drafting", "More Plugins",
+        "Workflow & Drafting",
     ]
     for category in grouped:
         assert category["plugins"]
@@ -82,11 +89,11 @@ def test_get_plugin_categories_pins_the_original_curated_within_category_order_f
 
 
 def test_get_plugin_categories_appends_more_plugins_only_if_uncategorized():
-    # Real discovery includes plugins/hello_node/ and plugins/counter_node/,
-    # both registered with the HostContext default category ("More
-    # Plugins") - proves the catch-all activates for genuinely
-    # uncategorized entries.
-    grouped = get_plugin_categories(discover_plugins())
+    # The fixture root's demo plugins register with the HostContext default
+    # category ("More Plugins"), which is what proves the catch-all
+    # activates for genuinely uncategorized entries. No SHIPPED plugin is
+    # uncategorized any more - see this module's own header comment.
+    grouped = get_plugin_categories(discover_plugins(FIXTURE_PLUGINS_ROOT))
     more_plugins = next(c for c in grouped if c["name"] == "More Plugins")
     plugin_names = {p["name"] for p in more_plugins["plugins"]}
     assert {"Hello Node", "Counter Node"} <= plugin_names
@@ -95,6 +102,21 @@ def test_get_plugin_categories_appends_more_plugins_only_if_uncategorized():
     # the catch-all must not appear.
     grouped_empty = get_plugin_categories(None)
     assert "More Plugins" not in [category["name"] for category in grouped_empty]
+
+
+def test_no_demo_plugin_ships_in_the_picker():
+    """The shipped root is exactly the seven first-party plugins.
+
+    hello_node/counter_node/sandboxed_demo were packaged into the wheel by
+    MANIFEST.in's `recursive-include plugins` and listed in every user's
+    picker as "Hello Node" / "Counter Node" / "Sandboxed Env Probe"."""
+    names = {
+        plugin["name"]
+        for category in get_plugin_categories(discover_plugins())
+        for plugin in category["plugins"]
+    }
+
+    assert not names & {"Hello Node", "Counter Node", "Sandboxed Env Probe"}
 
 
 def test_get_plugin_categories_covers_every_plugin_exactly_once():
@@ -466,34 +488,76 @@ def test_execute_plugin_execution_sandbox_creates_a_real_code_sandbox_node():
 # send time.
 
 
-def test_execute_plugin_system_prompt_requires_parent():
-    bus, notifications, canvas_document = _make_plugins_bus()
+def test_execute_plugin_system_prompt_with_no_selection_creates_a_pending_note():
+    """A system prompt is authored BEFORE the branch it governs.
 
-    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt"]))
-
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert notifications.message == (
-        "Please select a valid node to branch from before adding a System Prompt node."
-    )
-    assert not any(n.kind == "note" for n in canvas_document.nodes.values())
-
-
-def test_execute_plugin_system_prompt_rejects_unknown_parent_id():
+    Requiring a selected node meant sending a message - spending tokens -
+    purely to unlock the action that should have shaped that message. With
+    nothing selected the note is created unattached, at the spawn point the
+    picker reports."""
     bus, notifications, canvas_document = _make_plugins_bus()
 
     result = asyncio.run(
-        bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt", "ghost-node-id"])
+        bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt", None, 120.0, -40.0])
     )
 
-    assert result is None
-    assert notifications.visible is True
-    assert notifications.msg_type == "warning"
-    assert notifications.message == (
-        "Please select a valid node to branch from before adding a System Prompt node."
+    assert result is not None
+    note = canvas_document.nodes[result]
+    assert note.kind == "note"
+    assert note.state.is_system_prompt is True
+    assert (note.x, note.y) == (120.0, -40.0)
+    # Unattached by design - a new branch root adopts it later.
+    assert not any(edge.source == note.id for edge in canvas_document.edges.values())
+    assert notifications.visible is False
+
+
+def test_execute_plugin_system_prompt_with_no_selection_reuses_the_pending_note():
+    """Same dedup posture as the attached path: a second pending note would
+    be just as inert as a second attached one."""
+    bus, _notifications, canvas_document = _make_plugins_bus()
+
+    first = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt", None, 0.0, 0.0])
     )
-    assert not any(n.kind == "note" for n in canvas_document.nodes.values())
+    second = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt", None, 500.0, 500.0])
+    )
+
+    assert first == second
+    assert sum(1 for n in canvas_document.nodes.values() if n.kind == "note") == 1
+
+
+def test_execute_plugin_system_prompt_treats_an_unknown_parent_id_as_no_selection():
+    """A stale or deleted selection is simply "nothing is selected", which is
+    now a supported path rather than a blocking warning."""
+    bus, notifications, canvas_document = _make_plugins_bus()
+
+    result = asyncio.run(
+        bus.dispatch_intent(
+            "app-plugins", "executePlugin", ["System Prompt", "ghost-node-id", 10.0, 20.0]
+        )
+    )
+
+    assert result is not None
+    assert canvas_document.nodes[result].state.is_system_prompt is True
+    assert notifications.visible is False
+
+
+def test_a_new_branch_root_adopts_the_pending_system_prompt_note():
+    """The note -> root edge _resolve_branch_system_prompt looks for is drawn
+    when the first parentless chat node appears, so a prompt written first
+    actually governs the conversation it was written for."""
+    bus, _notifications, canvas_document = _make_plugins_bus()
+    note_id = asyncio.run(
+        bus.dispatch_intent("app-plugins", "executePlugin", ["System Prompt", None, 0.0, 0.0])
+    )
+
+    root = canvas_document.add_chat_node(0.0, 200.0, "first message", True)
+
+    assert any(
+        edge.source == note_id and edge.target == root.id
+        for edge in canvas_document.edges.values()
+    )
 
 
 def test_execute_plugin_system_prompt_creates_a_note_attached_to_the_branch_root_not_the_selected_child():

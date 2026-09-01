@@ -100,7 +100,10 @@ describe("PluginPicker", () => {
     await user.click(screen.getByText("open plugins"));
 
     await user.click(screen.getByText("System Prompt"));
-    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["System Prompt", null]]);
+    // Spawn point rides along on every call: it is where a plugin that does
+    // not require a parent lands when nothing is selected. 0,0 here because
+    // no canvas has registered a viewport-center provider in this test.
+    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["System Prompt", null, 0, 0]]);
     // Close-on-select: the popover dismisses so the resulting notification
     // banner is seen unobstructed (matching the legacy popup's behavior).
     expect(screen.queryByText("Categories")).toBeNull();
@@ -113,7 +116,7 @@ describe("PluginPicker", () => {
     await user.click(screen.getByText("open plugins"));
 
     await user.click(screen.getByText("System Prompt"));
-    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["System Prompt", "node-42"]]);
+    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["System Prompt", "node-42", 0, 0]]);
   });
 
   it("every plugin's click sends the selected node id, not just Web Research's", async () => {
@@ -124,6 +127,34 @@ describe("PluginPicker", () => {
     await user.click(screen.getByRole("button", { name: /Build & Execution/ }));
 
     await user.click(screen.getByText("Virtual Environment Runner"));
-    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["Virtual Environment Runner", "node-7"]]);
+    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["Virtual Environment Runner", "node-7", 0, 0]]);
+  });
+
+  it("sends the canvas viewport's center as the spawn point when a provider is registered", async () => {
+    const store = new SceneStore({ subscribe: vi.fn(), intent: vi.fn(), fireIntent: vi.fn() } as unknown as WsTransport);
+    // SceneCanvas registers this; it owns the React Flow transform, so
+    // nothing outside the provider tree can convert screen to scene coords.
+    store.setViewportCenterProvider(() => ({ x: 320, y: -75 }));
+    const { user, intents } = setup(store);
+    await user.click(screen.getByText("open plugins"));
+
+    await user.click(screen.getByText("System Prompt"));
+    expect(intents).toContainEqual([
+      "app-plugins",
+      "executePlugin",
+      ["System Prompt", null, 320, -75],
+    ]);
+  });
+
+  it("asks the provider at click time, so a pan since the last render is reflected", async () => {
+    const store = new SceneStore({ subscribe: vi.fn(), intent: vi.fn(), fireIntent: vi.fn() } as unknown as WsTransport);
+    let center = { x: 0, y: 0 };
+    store.setViewportCenterProvider(() => center);
+    const { user, intents } = setup(store);
+    await user.click(screen.getByText("open plugins"));
+    center = { x: 900, y: 900 };
+
+    await user.click(screen.getByText("System Prompt"));
+    expect(intents).toContainEqual(["app-plugins", "executePlugin", ["System Prompt", null, 900, 900]]);
   });
 });

@@ -27,52 +27,42 @@ import { gotoApp } from "./helpers";
  *
  * The node saved/reloaded here is a System Prompt note (the "System Prompt"
  * plugin action, plugins/system_prompt/plugin.py), NOT a Conversation Node -
- * deliberately, and NOT the bare double-click placeholder alone either.
- * Empirically confirmed while building this suite (backend/session_load.py's
- * `_restore_node`, read directly):
+ * deliberately. Empirically confirmed while building this suite
+ * (backend/session_load.py's `_restore_node`, read directly):
  *
- * - A double-click's own default `kind="placeholder"` (backend/domain/
- *   model.py) is excluded from `_REGULAR_KINDS` entirely - session_save.py's
- *   `_build_chat_data` never serializes it, so a canvas holding ONLY a
- *   placeholder saves a real chats.db row whose own node list is empty.
- * - "conversation" (and html/pycoder/code_sandbox/web_research/artifact/
- *   gitlink) is in `_PARENT_NODE_INDEX_KINDS`, which `_restore_node`
- *   REQUIRES a resolvable parent index for - `if parent_new_id is None:
- *   return None, None`. A Conversation Node parented off a placeholder saves
- *   fine (its own `parent_node_index` is simply `null`) but is then SILENTLY
- *   DROPPED on load, because null is never a resolvable index. There is no
- *   real, LLM-free UI path to a first, persistable "conversation"-kind node
- *   on a genuinely empty canvas: bootstrapping one always means parenting it
- *   off the one parentless creation gesture there is (double-click), and
- *   that gesture's own node is exactly the unpersisted kind this drops.
- * - A Note (`kind="note"`, System Prompt's own handler) has NEITHER problem:
- *   notes are NOT part of `_REGULAR_KINDS`/the node-index/parent-resolution
- *   machinery above at all - they serialize into their own `notes_data` list
- *   (position-only, by backend/session_save.py's own notes-are-separate
- *   design) and restore via `_restore_notes`, which never resolves a parent
- *   index. The placeholder here is still needed as System Prompt's own
- *   required `parent_node_id` argument (branch-root lookup), but the NOTE it
- *   creates round-trips through save/load independent of that placeholder
- *   parent's own unpersisted fate - confirmed empirically before writing
- *   this spec's final assertions.
+ * - "conversation" (and html/code_sandbox/web_research/artifact/gitlink) is
+ *   in `_PARENT_NODE_INDEX_KINDS`, which `_restore_node` REQUIRES a
+ *   resolvable parent index for - `if parent_new_id is None: return None,
+ *   None`. A node of those kinds with no resolvable parent saves fine (its
+ *   `parent_node_index` is simply `null`) but is then SILENTLY DROPPED on
+ *   load, so none of them is a valid subject for a save/reload assertion
+ *   made from a single-node canvas.
+ * - A Note (`kind="note"`, System Prompt's own handler) has no such
+ *   problem: notes are NOT part of `_REGULAR_KINDS`/the node-index/
+ *   parent-resolution machinery at all - they serialize into their own
+ *   `notes_data` list (position-only, by backend/session_save.py's own
+ *   notes-are-separate design) and restore via `_restore_notes`, which
+ *   never resolves a parent index.
+ *
+ * The note is created directly on the empty canvas. This spec used to
+ * bootstrap through a double-click placeholder purely to satisfy System
+ * Prompt's then-required `parent_node_id`; that placeholder was itself an
+ * unpersisted kind (excluded from `_REGULAR_KINDS`), so the test was
+ * carrying a node that saving deliberately threw away. System Prompt is
+ * registered requires_parent=False now, so the setup is simply the real
+ * thing the assertion is about.
  */
 test("saves a node, clears the canvas, then reloads it from the chat library", async ({ page }) => {
   await gotoApp(page);
 
-  const canvas = page.getByTestId("scene-canvas");
-  const box = await canvas.boundingBox();
-  if (!box) throw new Error("scene-canvas has no layout box to click into");
-  // A corner offset rather than the exact center - see create-node.spec.ts's
-  // own comment. It used to be dodging the empty-state hint's "Load Sample
-  // Workspace" button; that overlay is gone, and the offset is kept only
-  // because the coordinates are arbitrary either way.
-  await canvas.dblclick({ position: { x: box.width * 0.15, y: box.height * 0.15 } });
-  await expect(page.locator(".react-flow__node")).toHaveCount(1);
+  await expect(page.locator(".react-flow__node")).toHaveCount(0);
 
-  await page.locator(".react-flow__node").first().click();
   await page.locator('[data-overlay-trigger="plugins"]').click();
   await page.getByRole("option", { name: "System Prompt" }).click();
   await expect(page.locator(".react-flow__node-note")).toHaveCount(1);
+  // The note is the ONLY node on the canvas - nothing else to persist, so
+  // the reload assertion below is unambiguous.
+  await expect(page.locator(".react-flow__node")).toHaveCount(1);
 
   await page.getByRole("button", { name: "Save", exact: true }).click();
 

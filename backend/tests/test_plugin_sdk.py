@@ -12,6 +12,7 @@ conftest.py-style real-data-dir guard (discovery never reads/writes
 import asyncio
 import logging
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -28,6 +29,15 @@ from backend.plugins import register_plugins
 from backend.session_load import restore_chat_into_document
 from backend.session_save import build_chat_data
 from graphlink_settings_store import SettingsManager
+
+# The three demo plugins (hello_node, counter_node, sandboxed_demo) live in
+# backend/tests/fixture_plugins/, not in the shipped plugins/ root: they are
+# test fixtures, and while they sat in plugins/ they were packaged into the
+# wheel by MANIFEST.in and listed in every user's plugin picker as "Hello
+# Node" / "Counter Node" / "Sandboxed Env Probe". They are still REAL plugins
+# loaded through real discovery - that is the point of them - just discovered
+# from a root that ships to nobody.
+FIXTURE_PLUGINS_ROOT = Path(__file__).resolve().parent / "fixture_plugins"
 
 
 def _write_plugin(
@@ -216,18 +226,35 @@ def test_picker_name_collision_between_two_plugins_is_recorded_first_wins_not_ov
     assert "plugin_b.greet" not in registry.node_kinds
 
 
-# -- requires_parent=False: rejected at REGISTRATION time -------------------
+# -- requires_parent: both values are real registrations now ----------------
+#
+# requires_parent=False used to raise here, because executePlugin's wire call
+# carried no x/y and a parentless node had nowhere host-decided to spawn. The
+# call now reports the canvas viewport's center, so the position exists and
+# the kind registers - which is what lets a plugin be created on an empty
+# canvas instead of demanding a pre-existing selected node.
 
 
-def test_requires_parent_false_raises_plugin_registration_error_at_registration_time():
+def test_requires_parent_false_registers_and_is_reported_on_the_spec():
     host = HostContext("some_plugin")
 
     def _factory(document, run_ctx, parent_id):
-        raise AssertionError("factory must never be called - registration itself must fail")
+        raise AssertionError("factory is not called at registration time")
 
-    with pytest.raises(PluginRegistrationError):
-        host.register_node_kind("floating", _factory, requires_parent=False)
-    assert "some_plugin.floating" not in host._node_kinds
+    host.register_node_kind("floating", _factory, requires_parent=False)
+
+    assert host._node_kinds["some_plugin.floating"].requires_parent is False
+
+
+def test_requires_parent_defaults_to_true():
+    host = HostContext("some_plugin")
+
+    def _factory(document, run_ctx, parent_id):
+        raise AssertionError("factory is not called at registration time")
+
+    host.register_node_kind("child", _factory)
+
+    assert host._node_kinds["some_plugin.child"].requires_parent is True
 
 
 # -- HostContext.register_intent(): declaration-time behavior only ----------
@@ -531,8 +558,8 @@ def test_undo_reverts_a_plugin_created_node_and_its_parent_edge(tmp_path):
 #
 # Every test below deliberately uses a FRESH tmp_path plugin, never known to
 # session_save.py/session_load.py's own source code, to prove the mechanism
-# is genuinely generic - not a special case for plugins/hello_node/ or
-# plugins/counter_node/ (which get their own, separate, real-plugin-
+# is genuinely generic - not a special case for the hello_node or
+# counter_node fixtures (which get their own, separate, real-plugin-
 # integration coverage further down). No test in this section adds a single
 # line to session_save.py/session_load.py to pass - that IS the proof that
 # a future plugin needs zero edits there.
@@ -836,13 +863,14 @@ def test_a_plugin_serializer_that_raises_logs_a_warning_on_the_save_path_too(tmp
 #
 # The tests above prove the MECHANISM is generic against an arbitrary,
 # never-before-seen plugin. These two prove the actual shipped
-# plugins/hello_node/ and plugins/counter_node/ (real discover_plugins(),
-# no tmp_path override) round-trip correctly through the real default
-# discovery root - the production configuration, not just the test harness.
+# hello_node/ and counter_node/ (real discover_plugins() against the
+# fixture root) round-trip correctly through real discovery - the same code
+# path production uses, exercised by real plugin packages rather than by a
+# hand-built tmp_path stub.
 
 
 def test_real_hello_node_plugin_round_trips_through_save_and_reload(tmp_path):
-    registry = discover_plugins()
+    registry = discover_plugins(FIXTURE_PLUGINS_ROOT)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
 
@@ -860,7 +888,7 @@ def test_real_hello_node_plugin_round_trips_through_save_and_reload(tmp_path):
 
 
 def test_real_counter_node_plugin_round_trips_its_custom_state_through_save_and_reload(tmp_path):
-    registry = discover_plugins()
+    registry = discover_plugins(FIXTURE_PLUGINS_ROOT)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
 

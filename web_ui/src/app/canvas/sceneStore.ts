@@ -552,6 +552,21 @@ export class SceneStore {
   getFilterStatuses = (): ReadonlySet<string> => this.filterStatuses;
   getExportInProgress = (): boolean => this.exportInProgress;
 
+  /** Where a node created with nothing selected should be placed, in scene
+   * coordinates. SceneCanvas registers a provider (it owns the React Flow
+   * transform; nothing outside the provider tree can convert screen to
+   * scene coordinates), and callers ask at ACTION time rather than reading
+   * a stored value, so a pan or zoom between renders can never hand out a
+   * stale point. Falls back to the origin before the canvas has mounted. */
+  private viewportCenterProvider: (() => { x: number; y: number }) | null = null;
+
+  setViewportCenterProvider(provider: (() => { x: number; y: number }) | null): void {
+    this.viewportCenterProvider = provider;
+  }
+
+  getSpawnPoint = (): { x: number; y: number } =>
+    this.viewportCenterProvider?.() ?? { x: 0, y: 0 };
+
   // R5.1: no-op-if-unchanged, same discipline as every other setter here that
   // guards a redundant assignment before paying for an emit() fan-out.
   setSelectedNodeId(id: string | null): void {

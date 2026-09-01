@@ -547,7 +547,50 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         self.nodes[node_id] = node
         if parent_id is not None:
             self.connect(parent_id, node_id)
+        else:
+            self.adopt_pending_system_prompt(node_id)
         return node
+
+    def adopt_pending_system_prompt(self, root_id: str) -> SceneEdge | None:
+        """Connects an unattached system-prompt note to a new branch root.
+
+        plugins/system_prompt/ can create its note with nothing selected, so
+        that a prompt can be written BEFORE the conversation it governs -
+        the natural order, and the one the old "select a node first" rule
+        made impossible without a wasted send. Such a note starts with no
+        edges, and AgentDispatcher._resolve_branch_system_prompt only ever
+        looks for a note -> root edge, so the note would stay silently inert
+        until something drew that edge. This is that something: the first
+        parentless chat node - a new branch root - adopts it.
+
+        Deliberately narrow. It fires only for a node created with no
+        parent, only when exactly one unattached system-prompt note exists,
+        and only while that root has no system prompt of its own; anything
+        more ambiguous is left alone rather than guessed at. Returns the
+        edge it created, or None when it did nothing."""
+        root = self.nodes.get(root_id)
+        if root is None:
+            return None
+        sources = {edge.source for edge in self.edges.values()}
+        pending = [
+            node
+            for node in self.nodes.values()
+            if node.kind == "note"
+            and getattr(node.state, "is_system_prompt", False)
+            and node.id not in sources
+        ]
+        if len(pending) != 1:
+            return None
+        already_attached = any(
+            edge.target == root_id
+            and (source := self.nodes.get(edge.source)) is not None
+            and source.kind == "note"
+            and getattr(source.state, "is_system_prompt", False)
+            for edge in self.edges.values()
+        )
+        if already_attached:
+            return None
+        return self.connect(pending[0].id, root_id)
 
     def add_code_node(
         self,
@@ -621,7 +664,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         see DocumentState's own docstring (backend/domain/node_states.py)
         for those exact rules.
         """
-        if parent_id not in self.nodes:
+        if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
         # Mirrors DocumentNode.__init__'s `(attachment_kind or
@@ -648,7 +691,8 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             ),
         )
         self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
         return node
 
     def add_thinking_node(
@@ -674,7 +718,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         there is no delete_thinking_node; deletion goes entirely through the
         existing generic remove_nodes.
         """
-        if parent_id not in self.nodes:
+        if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
         title = str(thinking_text)[:THINKING_TITLE_PREVIEW_LENGTH] or "Thinking"
@@ -687,7 +731,8 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             content=str(thinking_text),
         )
         self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
         return node
 
     def add_html_node(
@@ -716,7 +761,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         thinking): there is no delete_html_node; deletion goes entirely
         through the existing generic remove_nodes.
         """
-        if parent_id not in self.nodes:
+        if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
         title = str(html_content)[:HTML_TITLE_PREVIEW_LENGTH] or "HTML"
@@ -730,7 +775,8 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             state=HtmlState(),
         )
         self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
         return node
 
     def set_html_splitter_state(self, node_id: str, value: float) -> None:
@@ -788,7 +834,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         additionally evicts this node's image_assets entry so bytes never
         outlive the node (see remove_nodes).
         """
-        if parent_id not in self.nodes:
+        if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
         asset_id = f"img{uuid.uuid4().hex}"
@@ -804,7 +850,8 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             state=ImageState(image_asset_id=asset_id),
         )
         self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
         return node
 
     def get_image_asset(self, asset_id: str) -> tuple[bytes, str] | None:
@@ -838,7 +885,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         thinking/html/image): there is no delete_conversation_node; deletion
         goes entirely through the existing generic remove_nodes.
         """
-        if parent_id not in self.nodes:
+        if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
         node = SceneNode(
@@ -849,7 +896,8 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             kind="conversation",
         )
         self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
         return node
 
     def append_conversation_user_message(self, node_id: str, text: str) -> SceneNode:
@@ -915,7 +963,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         is no meaningful single preview string before a query has ever been
         run). Content starts empty; the query text only lands once
         start_web_research_run is called."""
-        if parent_id not in self.nodes:
+        if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
         node = SceneNode(
@@ -927,7 +975,8 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             state=WebResearchState(),
         )
         self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
         return node
 
     def start_web_research_run(self, node_id: str, query: str) -> SceneNode:
@@ -1003,7 +1052,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         document has ever been drafted). artifact_content starts empty; the
         document text only lands once complete_artifact_generation is
         called."""
-        if parent_id not in self.nodes:
+        if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
         node = SceneNode(
@@ -1015,7 +1064,8 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             state=ArtifactState(),
         )
         self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
         return node
 
     def append_artifact_user_message(self, node_id: str, text: str) -> SceneNode:
@@ -1072,7 +1122,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         invalid_parent_message for Gitlink, there is no unparented/root form
         in the domain model). Title is always the fixed literal "Gitlink"
         (mirrors conversation/web_research/artifact's own fixed titles)."""
-        if parent_id not in self.nodes:
+        if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
         node = SceneNode(
@@ -1084,7 +1134,8 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             state=GitlinkState(),
         )
         self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
         return node
 
     def set_gitlink_local_root(self, node_id: str, local_root: str) -> SceneNode:
@@ -1319,7 +1370,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         sandbox directory name (VirtualEnvSandbox re-sanitizes it again on
         its own side, but a short, already-safe id keeps the on-disk path
         short and human-scannable)."""
-        if parent_id not in self.nodes:
+        if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
         node = SceneNode(
@@ -1331,7 +1382,8 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             state=CodeSandboxState(code_sandbox_sandbox_id=uuid.uuid4().hex[:12]),
         )
         self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
         return node
 
     def set_web_research_retain_to_knowledge(self, node_id: str, retain: bool) -> SceneNode:
@@ -1942,7 +1994,7 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
     # -- ADR-014 stage 14.1: Plugin SDK node-creation primitive -------------
 
     def add_plugin_node(
-        self, kind: str, x: float, y: float, parent_id: str, *,
+        self, kind: str, x: float, y: float, parent_id: str | None, *,
         title: str = "", content: str = "", state: NodeState | None = None,
     ) -> SceneNode:
         """Generic node-creation primitive for ADR-014's Plugin SDK
@@ -1952,9 +2004,15 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         parent. `kind` arrives here ALREADY namespaced as
         f"{plugin_id}.{local_kind}" (backend/plugin_sdk.py's HostContext.
         register_node_kind) - this method itself does no namespacing or
-        validation of its own, same "trust the caller, one required-parent
-        posture" contract as add_web_research_node/add_gitlink_node/etc."""
-        if parent_id not in self.nodes:
+        validation of its own, same "trust the caller" contract as
+        add_web_research_node/add_gitlink_node/etc.
+
+        `parent_id=None` creates the node UNCONNECTED, at the given x/y.
+        That is the one deliberate difference from its add_X_node siblings,
+        and it is what a plugin registered with requires_parent=False needs:
+        such a plugin is creatable on an empty canvas, where by definition
+        there is no parent to attach to."""
+        if parent_id is not None and parent_id not in self.nodes:
             raise SceneError(f"unknown parent node: {parent_id}")
         node_id = f"n{next(self._counter)}"
         node = SceneNode(
@@ -1962,7 +2020,8 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             title=str(title) or kind, kind=str(kind), content=str(content), state=state,
         )
         self.nodes[node_id] = node
-        self.connect(parent_id, node_id)
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
         return node
 
     # -- edges -------------------------------------------------------------

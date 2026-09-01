@@ -71,6 +71,12 @@ class ExecutePluginArgs:
 
     plugin_name: str
     parent_node_id: str | None = None
+    # The canvas viewport's center at click time, in scene coordinates.
+    # Carried for every call, but only READ when the resolved plugin does
+    # not require a parent - it is where such a node is spawned. Optional so
+    # an older caller (or a test) that omits it still dispatches.
+    spawn_x: float | None = None
+    spawn_y: float | None = None
 
 
 @dataclass
@@ -279,6 +285,8 @@ async def _execute_discovered_plugin(
     settings_manager: SettingsManager,
     name: str,
     parent_node_id: str | None,
+    spawn_x: float | None = None,
+    spawn_y: float | None = None,
 ):
     """The single executePlugin dispatch path for EVERY name - built-in or
     third-party alike, since ADR-014 stage 14.3 migrated the last hardcoded
@@ -317,7 +325,10 @@ async def _execute_discovered_plugin(
     regardless of which mechanism a real match would have used."""
     builtin_spec = plugin_registry.resolve_builtin_action(name)
     if builtin_spec is not None:
-        run_ctx = PluginRunContext(plugin_id=builtin_spec.plugin_id, notifications=notifications)
+        run_ctx = PluginRunContext(
+            plugin_id=builtin_spec.plugin_id, notifications=notifications,
+            spawn_x=spawn_x, spawn_y=spawn_y,
+        )
         result = builtin_spec.handler(canvas_document, run_ctx, parent_node_id)
         await bus.publish("scene" if result is not None else "notification")
         return result
@@ -337,25 +348,38 @@ async def _execute_discovered_plugin(
         await bus.publish("notification")
         return None
 
-    if not parent_node_id or parent_node_id not in canvas_document.nodes:
+    # A kind registered with requires_parent=False is creatable with nothing
+    # selected - it spawns at the viewport center the picker reported rather
+    # than at a place_child offset from a parent. Only a kind that genuinely
+    # needs a branch to attach to still refuses without one.
+    has_parent = bool(parent_node_id) and parent_node_id in canvas_document.nodes
+    if kind_spec.requires_parent and not has_parent:
         notifications.show(
             f'Please select a valid node to branch from before adding a '
             f'{picker_entry.name} node.', "warning",
         )
         await bus.publish("notification")
         return None
-    run_ctx = PluginRunContext(plugin_id=kind_spec.plugin_id, notifications=notifications)
+    effective_parent = parent_node_id if has_parent else None
+    run_ctx = PluginRunContext(
+        plugin_id=kind_spec.plugin_id, notifications=notifications,
+        spawn_x=spawn_x, spawn_y=spawn_y,
+    )
 
     def _mutator():
-        seed = kind_spec.factory(canvas_document, run_ctx, parent_node_id)
-        x, y = canvas_document.place_child(parent_node_id, kind_spec.kind)
+        seed = kind_spec.factory(canvas_document, run_ctx, effective_parent)
+        if effective_parent is not None:
+            x, y = canvas_document.place_child(effective_parent, kind_spec.kind)
+        else:
+            x, y = float(spawn_x or 0.0), float(spawn_y or 0.0)
         return canvas_document.add_plugin_node(
-            kind_spec.kind, x, y, parent_node_id,
+            kind_spec.kind, x, y, effective_parent,
             title=seed.title, content=seed.content, state=seed.state,
         )
 
     node, _command = canvas_document.record_command(
-        f"plugin:{kind_spec.kind}", "user", _mutator, node_ids=[parent_node_id],
+        f"plugin:{kind_spec.kind}", "user", _mutator,
+        node_ids=[effective_parent] if effective_parent is not None else [],
     )
     await bus.publish("scene")
     return node.id
@@ -694,7 +718,10 @@ def register_plugins(
     # _plugin_grants_payload's own docstring.
     bus.register_topic("app-plugins", lambda: plugins_payload(plugin_registry, settings_manager))
 
-    async def execute_plugin(plugin_name: str, parent_node_id: str | None = None):
+    async def execute_plugin(
+        plugin_name: str, parent_node_id: str | None = None,
+        spawn_x: float | None = None, spawn_y: float | None = None,
+    ):
         name = str(plugin_name).strip()
         # ADR-014 stage 14.3: every name - built-in or third-party alike -
         # flows through the same generic dispatch helper now. See
@@ -702,7 +729,8 @@ def register_plugins(
         # registration mechanisms it checks, in order, and (stage 14.4) the
         # grant gate the generic path now enforces.
         return await _execute_discovered_plugin(
-            bus, notifications, canvas_document, plugin_registry, settings_manager, name, parent_node_id,
+            bus, notifications, canvas_document, plugin_registry, settings_manager, name,
+            parent_node_id, spawn_x, spawn_y,
         )
 
     bus.register_intent("app-plugins", "executePlugin", execute_plugin, args_schema=ExecutePluginArgs)
