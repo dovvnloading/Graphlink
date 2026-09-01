@@ -128,6 +128,29 @@ CHATS_DB_SCHEMA_VERSION = 5
 _TIMESTAMP_DISPLAY_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f")
 
 
+# The colour every note was silently stamped with on save before this was
+# fixed. It is NOT one of GroupColorPicker's own eight swatches, so a note
+# carrying it demonstrably got it from that old default rather than from a
+# user's choice - which is what makes normalising it back to None safe.
+LEGACY_NOTE_DEFAULT_COLOR = "#4a7c59"
+
+
+def _legacy_default_to_none(color):
+    """Treats the old forced default as "no colour chosen".
+
+    Applied on the way IN (save) and on the way OUT (load, see
+    backend/session_load.py's _restore_notes), so existing rows render
+    neutral without this needing a destructive migration over the database.
+    A user who genuinely wants a green note still has the picker's own
+    Green, and picking it stores that hex, which is left alone."""
+    if color is None:
+        return None
+    text = str(color).strip()
+    if not text or text.lower() == LEGACY_NOTE_DEFAULT_COLOR:
+        return None
+    return text
+
+
 def _parse_stored_timestamp(value: Any) -> datetime | None:
     raw = str(value)
     for fmt in _TIMESTAMP_DISPLAY_FORMATS:
@@ -1789,7 +1812,23 @@ def save_chat_atomically_row(
                         float(position.get("y", 0.0)),
                         float(size.get("width", 0.0)),
                         float(size.get("height", 0.0)),
-                        str(note.get("color") or "#4a7c59"),
+                        # None, not a hex. SceneNode.color's own contract is
+                        # "None means use the kind's own default colour, a
+                        # rendering fallback that is entirely the frontend's
+                        # job" - and NoteNodeView already honours it
+                        # (backgroundColor: data.color ?? undefined). Forcing
+                        # "#4a7c59" here overrode that on every save, so a
+                        # note the user never coloured came back from a
+                        # save/reload permanently green - in a colour that is
+                        # not even in the picker's palette (its Green is
+                        # #3f8f5c), so it could never be chosen again either.
+                        # "" (the column is NOT NULL - see _ensure_schema's
+                        # `color TEXT NOT NULL`, which is why a hex was being
+                        # invented here in the first place). The empty string
+                        # is the storable spelling of "no colour chosen", and
+                        # _legacy_default_to_none maps it straight back to
+                        # None on the way out.
+                        _legacy_default_to_none(note.get("color")) or "",
                         note.get("header_color"),
                         1 if note.get("is_system_prompt") else 0,
                         1 if note.get("is_summary_note") else 0,

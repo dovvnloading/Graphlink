@@ -51,11 +51,6 @@ export const GROUP_MONO_COLORS: NamedColor[] = [
   { name: "Dark Gray", hex: "#454545" },
 ];
 
-// Exported so NoteNodeView's isSystemPrompt dashed border can stay visually
-// consistent with the popover's own "Purple" swatch, rather than picking an
-// unrelated one-off purple.
-export const NOTE_SYSTEM_PROMPT_BORDER_COLOR = GROUP_NAMED_COLORS[2].hex;
-
 export interface GroupColorPickerProps {
   color: string | null;
   headerColor: string | null;

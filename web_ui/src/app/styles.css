@@ -7500,9 +7500,16 @@ mark.document-view-search-match-current {
   max-width: 360px;
 }
 
+/* A system prompt is marked by SHAPE, not by hue: a dashed, heavier border
+   plus the header's own badge. It used to also take the colour picker's
+   "Purple" swatch as its border colour, which put a semantic marker and a
+   user's own colour choice in the same channel - a note the user coloured
+   purple was then indistinguishable from one governing the branch. The
+   token below keeps it legible in both themes without spending a colour. */
 .note-node.system-prompt {
   border-style: dashed;
   border-width: 2px;
+  border-color: var(--gl-surface-text-muted);
 }
 
 .note-node-header {
