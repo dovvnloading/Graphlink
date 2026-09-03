@@ -232,6 +232,271 @@
           "code": {
             "type": "string"
           },
+          "codeReviewAdditions": {
+            "type": "integer"
+          },
+          "codeReviewBaseRef": {
+            "type": "string"
+          },
+          "codeReviewChangedFiles": {
+            "type": "integer"
+          },
+          "codeReviewConfidence": {
+            "type": "string"
+          },
+          "codeReviewDeletions": {
+            "type": "integer"
+          },
+          "codeReviewDiffChars": {
+            "type": "integer"
+          },
+          "codeReviewDiffTruncated": {
+            "type": "boolean"
+          },
+          "codeReviewDiffVersion": {
+            "type": "integer"
+          },
+          "codeReviewDismissedIds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "codeReviewError": {
+            "type": "string"
+          },
+          "codeReviewErrors": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "evidence": {
+                  "type": "string"
+                },
+                "fix": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "integer"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string"
+                },
+                "tier": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "severity",
+                "tier",
+                "kind",
+                "path",
+                "line",
+                "title",
+                "evidence",
+                "fix"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "codeReviewFiles": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "additions": {
+                  "type": "integer"
+                },
+                "deletions": {
+                  "type": "integer"
+                },
+                "patch": {
+                  "type": "string"
+                },
+                "patchTruncated": {
+                  "type": "boolean"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "previousPath": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "status",
+                "additions",
+                "deletions",
+                "patch",
+                "patchTruncated"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "codeReviewFilesTruncated": {
+            "type": "boolean"
+          },
+          "codeReviewFindings": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "category": {
+                  "type": "string"
+                },
+                "evidence": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "impact": {
+                  "type": "string"
+                },
+                "line": {
+                  "type": "integer"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "recommendation": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string"
+                },
+                "tier": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "severity",
+                "tier",
+                "category",
+                "path",
+                "line",
+                "title",
+                "evidence",
+                "impact",
+                "recommendation"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "codeReviewHeadRef": {
+            "type": "string"
+          },
+          "codeReviewOverview": {
+            "type": "string"
+          },
+          "codeReviewPrHtmlUrl": {
+            "type": "string"
+          },
+          "codeReviewPrNumber": {
+            "type": "integer"
+          },
+          "codeReviewPrState": {
+            "type": "string"
+          },
+          "codeReviewPrTitle": {
+            "type": "string"
+          },
+          "codeReviewPrUrl": {
+            "type": "string"
+          },
+          "codeReviewQa": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "answer": {
+                  "type": "string"
+                },
+                "question": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "question",
+                "answer"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "codeReviewQualityScore": {
+            "type": "integer"
+          },
+          "codeReviewQualitySummary": {
+            "type": "string"
+          },
+          "codeReviewRepo": {
+            "type": "string"
+          },
+          "codeReviewRisk": {
+            "type": "string"
+          },
+          "codeReviewScores": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "codeReviewState": {
+            "type": "string"
+          },
+          "codeReviewTitle": {
+            "type": "string"
+          },
+          "codeReviewVerdict": {
+            "type": "string"
+          },
+          "codeReviewWalkthrough": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "explanation": {
+                  "type": "string"
+                },
+                "groupTitle": {
+                  "type": "string"
+                },
+                "paths": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "groupTitle",
+                "paths",
+                "explanation"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
           "codeSandboxAnalysis": {
             "type": "string"
           },
@@ -845,6 +1110,37 @@
           "gitlinkPreviewText",
           "gitlinkChangeState",
           "gitlinkError",
+          "codeReviewPrUrl",
+          "codeReviewRepo",
+          "codeReviewPrNumber",
+          "codeReviewPrTitle",
+          "codeReviewPrState",
+          "codeReviewPrHtmlUrl",
+          "codeReviewBaseRef",
+          "codeReviewHeadRef",
+          "codeReviewAdditions",
+          "codeReviewDeletions",
+          "codeReviewChangedFiles",
+          "codeReviewFiles",
+          "codeReviewFilesTruncated",
+          "codeReviewDiffTruncated",
+          "codeReviewDiffChars",
+          "codeReviewDiffVersion",
+          "codeReviewWalkthrough",
+          "codeReviewFindings",
+          "codeReviewErrors",
+          "codeReviewDismissedIds",
+          "codeReviewTitle",
+          "codeReviewOverview",
+          "codeReviewConfidence",
+          "codeReviewScores",
+          "codeReviewQualityScore",
+          "codeReviewVerdict",
+          "codeReviewRisk",
+          "codeReviewQualitySummary",
+          "codeReviewQa",
+          "codeReviewState",
+          "codeReviewError",
           "codeSandboxRequirements",
           "codeSandboxPrompt",
           "codeSandboxCode",

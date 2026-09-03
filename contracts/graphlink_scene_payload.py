@@ -172,6 +172,18 @@ for the populating side. Not read by the frontend today (same "on the
 wire, not yet a rendered feature" posture `contentParts` above already
 established) - real dynamic frontend plugin rendering is stage 14.5's job,
 per ADR-014's own stage 14.1 scoping decision.
+
+Review Lens adds the code_review node's `codeReview*` fields: populated
+for kind=="code_review" rows, defaulted for every other kind, same
+additive rule. `codeReviewDiffText` is DELIBERATELY NOT one of these -
+the same snapshot-cost reasoning that keeps `gitlinkContextXml` off the
+wire (see the R5.3 paragraph above) applies to a 60KB unified diff, so
+it is served on demand via fetchCodeReviewDiffText, keyed by
+`codeReviewDiffVersion`. Findings/errors ride as `CodeReviewFindingRow`/
+`CodeReviewErrorRow` (proper nested dataclasses, the `ResearchSourceRow`
+convention for list-of-structured-object fields); scores ride as
+dict[str, str] (coerced at the wire builder, the gitlinkContextStats
+precedent).
 """
 
 from __future__ import annotations
@@ -254,6 +266,80 @@ class GitlinkPendingChangeRow:
     # default value, so this must be Optional for a delete-only item to
     # validate.
     content: str | None = None
+
+
+@dataclass
+class CodeReviewFileRow:
+    """One row of Review Lens's per-file change list - the typed wire shape
+    of CodeReviewState.code_review_files' own dicts (backend/domain/
+    node_states.py). `previousPath` is genuinely absent (not empty string)
+    for every non-rename, so it is Optional for the same required/optional
+    reason GitlinkPendingChangeRow.content above is."""
+
+    path: str
+    status: str = "modified"
+    additions: int = 0
+    deletions: int = 0
+    patch: str = ""
+    patchTruncated: bool = False
+    previousPath: str | None = None
+
+
+@dataclass
+class CodeReviewWalkthroughGroupRow:
+    """One guided-walkthrough group - the typed wire shape of
+    CodeReviewState.code_review_walkthrough's own {"group_title","paths",
+    "explanation"} dicts."""
+
+    groupTitle: str
+    paths: list[str] = field(default_factory=list)
+    explanation: str = ""
+
+
+@dataclass
+class CodeReviewFindingRow:
+    """One severity-tiered review finding - the typed wire shape of
+    CodeReviewState.code_review_findings' own dicts. `severity` is one of
+    critical|high|medium|low|info (the engine's precise scale);
+    `tier` is the reviewer-facing badge (red|yellow|gray).
+    `line` is 0 when the finding is diff-wide rather than line-anchored."""
+
+    id: str
+    severity: str
+    tier: str
+    category: str
+    path: str
+    line: int
+    title: str
+    evidence: str
+    impact: str
+    recommendation: str
+
+
+@dataclass
+class CodeReviewErrorRow:
+    """One high-confidence error - the typed wire shape of
+    CodeReviewState.code_review_errors' own dicts. Same severity/tier/line
+    conventions as CodeReviewFindingRow above."""
+
+    id: str
+    severity: str
+    tier: str
+    kind: str
+    path: str
+    line: int
+    title: str
+    evidence: str
+    fix: str
+
+
+@dataclass
+class CodeReviewQaRow:
+    """One answered follow-up - the typed wire shape of
+    CodeReviewState.code_review_qa's own {"question","answer"} dicts."""
+
+    question: str
+    answer: str
 
 
 @dataclass
@@ -483,6 +569,48 @@ class SceneNodeRow:
     gitlinkChangeFingerprint: str | None = None
     gitlinkChangeState: str = "draft"
     gitlinkError: str = ""
+    # Review Lens: the code_review node's real persisted shape - populated
+    # for kind=="code_review" rows, defaulted for every other kind.
+    # codeReviewDiffText is DELIBERATELY NOT one of these fields - the full
+    # unified diff (up to 60KB) rides the same ~20-undebounced-triggers
+    # snapshot cost gitlinkContextXml's own module-doc note describes, so
+    # it is served on demand via fetchCodeReviewDiffText instead, keyed by
+    # codeReviewDiffVersion below (the R5.3 post-review FIX 6 precedent).
+    codeReviewPrUrl: str = ""
+    codeReviewRepo: str = ""
+    codeReviewPrNumber: int = 0
+    codeReviewPrTitle: str = ""
+    codeReviewPrState: str = ""
+    codeReviewPrHtmlUrl: str = ""
+    codeReviewBaseRef: str = ""
+    codeReviewHeadRef: str = ""
+    codeReviewAdditions: int = 0
+    codeReviewDeletions: int = 0
+    codeReviewChangedFiles: int = 0
+    codeReviewFiles: list[CodeReviewFileRow] = field(default_factory=list)
+    codeReviewFilesTruncated: bool = False
+    codeReviewDiffTruncated: bool = False
+    codeReviewDiffChars: int = 0
+    codeReviewDiffVersion: int = 0
+    codeReviewWalkthrough: list[CodeReviewWalkthroughGroupRow] = field(default_factory=list)
+    codeReviewFindings: list[CodeReviewFindingRow] = field(default_factory=list)
+    codeReviewErrors: list[CodeReviewErrorRow] = field(default_factory=list)
+    codeReviewDismissedIds: list[str] = field(default_factory=list)
+    codeReviewTitle: str = ""
+    codeReviewOverview: str = ""
+    codeReviewConfidence: str = ""
+    # dict[str, str], not dict[str, int]: coerced at the wire builder
+    # (backend/domain/graph.py), the store_gitlink_context str-coercion
+    # precedent for gitlinkContextStats - the generator's closed type set
+    # admits string-valued dicts on SceneNodeRow.
+    codeReviewScores: dict[str, str] = field(default_factory=dict)
+    codeReviewQualityScore: int = 0
+    codeReviewVerdict: str = "none"
+    codeReviewRisk: str = ""
+    codeReviewQualitySummary: str = ""
+    codeReviewQa: list[CodeReviewQaRow] = field(default_factory=list)
+    codeReviewState: str = "draft"
+    codeReviewError: str = ""
     # R5.4: the Execution Sandbox node's real persisted shape - populated for
     # kind=="code_sandbox" rows, defaulted for every other kind.
     # codeSandboxSandboxId is DELIBERATELY NOT one of these fields - see

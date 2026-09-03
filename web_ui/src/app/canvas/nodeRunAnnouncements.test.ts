@@ -41,6 +41,12 @@ describe("describeNodeRunTransition (ADR-012 stage 12.3)", () => {
     expect(describeNodeRunTransition(prev, next)).toBe("Git operation failed");
   });
 
+  it("announces a code review failing via codeReviewError", () => {
+    const prev = row({ kind: "code_review", pendingRequestId: "r1" });
+    const next = row({ kind: "code_review", pendingRequestId: null, codeReviewError: "boom" });
+    expect(describeNodeRunTransition(prev, next)).toBe("Code review failed");
+  });
+
   it("announces a harness run failing via harnessStatus", () => {
     const prev = row({ kind: "harness", pendingRequestId: "r1" });
     const next = row({ kind: "harness", pendingRequestId: null, harnessStatus: "failed" });

@@ -141,7 +141,7 @@ _ACTIVE_SAVE_ASSET_STORE: contextvars.ContextVar = contextvars.ContextVar(
 # entire fix; both serializer and restorer already existed and are correct.
 _REGULAR_KINDS = (
     "chat", "code", "document", "image", "thinking", "conversation", "html",
-    "web_research", "artifact", "gitlink", "code_sandbox", "plan", "harness",
+    "web_research", "artifact", "gitlink", "code_review", "code_sandbox", "plan", "harness",
 )
 
 
@@ -171,6 +171,7 @@ def _is_plugin_kind(kind: str) -> bool:
 _PARENT_CONTENT_INDEX_KINDS = {"code", "document", "image", "thinking"}
 _PARENT_NODE_INDEX_KINDS = {
     "conversation", "html", "code_sandbox", "web_research", "artifact", "gitlink",
+    "code_review",
 }
 
 # Mirrors scene_index.py's CHILD_LINK_NODE_TYPES = (ChatNode, ConversationNode,
@@ -407,6 +408,54 @@ def _serialize_gitlink_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
+def _serialize_code_review_node(node: SceneNode) -> dict[str, Any]:
+    # NOTE (ADR-002 stage 2.5 gate): every field below is read as
+    # node.state.<field>, never via a `state = node.state` alias -
+    # tests/test_node_state_migration.py's bare-attribute ban only
+    # recognizes the `X.state.<field>` shape, so an alias would fail the
+    # build (the _serialize_gitlink_node precedent reads the same way).
+    return {
+        "node_type": "code_review",
+        "pr_url": node.state.code_review_pr_url,
+        "pr_state": {
+            "repo": node.state.code_review_repo,
+            "number": node.state.code_review_pr_number,
+            "title": node.state.code_review_pr_title,
+            "state": node.state.code_review_pr_state,
+            "html_url": node.state.code_review_pr_html_url,
+            "base_ref": node.state.code_review_base_ref,
+            "head_ref": node.state.code_review_head_ref,
+        },
+        "additions": node.state.code_review_additions,
+        "deletions": node.state.code_review_deletions,
+        "changed_files": node.state.code_review_changed_files,
+        "files": [dict(entry) for entry in node.state.code_review_files],
+        "files_truncated": bool(node.state.code_review_files_truncated),
+        "diff_text": node.state.code_review_diff_text,
+        "diff_truncated": bool(node.state.code_review_diff_truncated),
+        "diff_chars": node.state.code_review_diff_chars,
+        "diff_version": node.state.code_review_diff_version,
+        "review": {
+            "walkthrough": [dict(group) for group in node.state.code_review_walkthrough],
+            "findings": [dict(item) for item in node.state.code_review_findings],
+            "errors": [dict(item) for item in node.state.code_review_errors],
+            "dismissed_ids": list(node.state.code_review_dismissed_ids),
+            "title": node.state.code_review_title,
+            "overview": node.state.code_review_overview,
+            "confidence": node.state.code_review_confidence,
+            "scores": dict(node.state.code_review_scores),
+            "quality_score": node.state.code_review_quality_score,
+            "verdict": node.state.code_review_verdict,
+            "risk": node.state.code_review_risk,
+            "quality_summary": node.state.code_review_quality_summary,
+        },
+        "qa": [dict(entry) for entry in node.state.code_review_qa],
+        "review_state": node.state.code_review_state,
+        "error": node.state.code_review_error,
+        "is_collapsed": bool(node.is_collapsed),
+    }
+
+
 def _serialize_code_sandbox_node(node: SceneNode) -> dict[str, Any]:
     return {
         "node_type": "code_sandbox",
@@ -581,6 +630,7 @@ _NODE_SERIALIZERS = {
     "web_research": lambda node, document: _serialize_web_node(node),
     "artifact": lambda node, document: _serialize_artifact_node(node),
     "gitlink": lambda node, document: _serialize_gitlink_node(node),
+    "code_review": lambda node, document: _serialize_code_review_node(node),
     "code_sandbox": lambda node, document: _serialize_code_sandbox_node(node),
     "plan": lambda node, document: _serialize_plan_node(node),
     "harness": lambda node, document: _serialize_harness_node(node),

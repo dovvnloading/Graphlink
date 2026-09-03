@@ -90,6 +90,37 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     gitlinkChangeFingerprint: null,
     gitlinkChangeState: "",
     gitlinkError: "",
+    codeReviewPrUrl: "",
+    codeReviewRepo: "",
+    codeReviewPrNumber: 0,
+    codeReviewPrTitle: "",
+    codeReviewPrState: "",
+    codeReviewPrHtmlUrl: "",
+    codeReviewBaseRef: "",
+    codeReviewHeadRef: "",
+    codeReviewAdditions: 0,
+    codeReviewDeletions: 0,
+    codeReviewChangedFiles: 0,
+    codeReviewFiles: [],
+    codeReviewFilesTruncated: false,
+    codeReviewDiffTruncated: false,
+    codeReviewDiffChars: 0,
+    codeReviewDiffVersion: 0,
+    codeReviewWalkthrough: [],
+    codeReviewFindings: [],
+    codeReviewErrors: [],
+    codeReviewDismissedIds: [],
+    codeReviewTitle: "",
+    codeReviewOverview: "",
+    codeReviewConfidence: "",
+    codeReviewScores: {},
+    codeReviewQualityScore: 0,
+    codeReviewVerdict: "none",
+    codeReviewRisk: "",
+    codeReviewQualitySummary: "",
+    codeReviewQa: [],
+    codeReviewState: "draft",
+    codeReviewError: "",
     codeSandboxRequirements: "",
     codeSandboxApprovalRequirements: "",
     codeSandboxApprovalAllowSourceBuilds: false,
@@ -815,7 +846,6 @@ describe("toFlowNodes (R5.3 gitlink node)", () => {
     // mapping (and the wire payload it reads from) never references it.
     expect("gitlinkContextXml" in (glFlowNode!.data as Record<string, unknown>)).toBe(false);
   });
-
   it("coalesces null-ish optional fields (pendingRequestId/gitlinkChangeFingerprint) to null", () => {
     const scene = baseScene({
       nodes: [baseNode({ id: "gl-2", kind: "gitlink" })],
@@ -915,6 +945,66 @@ describe("toFlowNodes (R5.3 gitlink node)", () => {
 
     (glFlowNode!.data as { onDelete: () => void }).onDelete();
     expect(removeSpy).toHaveBeenCalledWith(["gl-1"]);
+  });
+});
+
+describe("toFlowNodes (Review Lens node)", () => {
+  it("maps a code_review scene node's fields onto the flow node's data - and the full diff text is never read (not part of the wire payload)", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({
+          id: "cr-1",
+          kind: "code_review",
+          isCollapsed: false,
+          pendingRequestId: "req-9",
+          codeReviewPrUrl: "https://github.com/o/r/pull/3",
+          codeReviewRepo: "o/r",
+          codeReviewPrNumber: 3,
+          codeReviewPrTitle: "Add health check",
+          codeReviewPrState: "open",
+          codeReviewAdditions: 10,
+          codeReviewDeletions: 2,
+          codeReviewChangedFiles: 1,
+          codeReviewFiles: [
+            { path: "x.py", status: "added", additions: 10, deletions: 0, patch: "@@ x", patchTruncated: false },
+          ],
+          codeReviewDiffVersion: 1,
+          codeReviewVerdict: "strong",
+          codeReviewQualityScore: 90,
+          codeReviewState: "reviewed",
+        }),
+      ],
+      edges: [],
+    });
+    const store = makeStore();
+
+    const flowNodes = toFlowNodes(scene, store);
+    const crFlowNode = flowNodes.find((n) => n.id === "cr-1");
+    expect(crFlowNode).toBeDefined();
+    expect(crFlowNode!.type).toBe("code_review");
+    expect(crFlowNode!.data).toMatchObject({
+      codeReviewRepo: "o/r",
+      codeReviewPrNumber: 3,
+      codeReviewPrTitle: "Add health check",
+      codeReviewDiffVersion: 1,
+      codeReviewVerdict: "strong",
+      codeReviewQualityScore: 90,
+      codeReviewState: "reviewed",
+      isCollapsed: false,
+      pendingRequestId: "req-9",
+    });
+    // codeReviewDiffText genuinely is not part of SceneNodeRow at all - this
+    // mapping (and the wire payload it reads from) never references it.
+    expect("codeReviewDiffText" in (crFlowNode!.data as Record<string, unknown>)).toBe(false);
+  });
+
+  it("routes an unknown future kind to the placeholder fallback, never the code_review view", () => {
+    const scene = baseScene({
+      nodes: [baseNode({ id: "zz-1", kind: "some_future_kind" })],
+      edges: [],
+    });
+    const flowNodes = toFlowNodes(scene, makeStore());
+    expect(flowNodes.find((n) => n.id === "zz-1")!.type).toBe("placeholder");
   });
 });
 

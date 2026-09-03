@@ -85,6 +85,9 @@ from graphlink_note_agent import BranchComparisonAgent, BranchSynthesisAgent, Ex
 from graphlink_settings_store import SettingsManager  # type hint only
 from graphlink_plugins.common.github_client import GitHubRestClient
 from graphlink_plugins.gitlink.agent import GitlinkAgent, _fingerprint_changes, _is_repo_text_path  # noqa: F401
+from graphlink_plugins.review_lens.diff_fetch import fetch_pr_review_bundle
+from graphlink_plugins.review_lens.pr_url import parse_pr_url
+from graphlink_plugins.review_lens.review_engine import ReviewLensAgent
 from graphlink_plugins.gitlink.repository import (
     GitlinkRepository,
     apply_change_set,
@@ -122,6 +125,7 @@ from backend.run_lifecycle import RunRegistry, run_single_shot  # noqa: F401
 from backend.structured_output import StructuredOutputError, respond_json
 from backend.agent_dispatch.builder import BuilderDispatchOps
 from backend.agent_dispatch.chat import ChatDispatchOps
+from backend.agent_dispatch.code_review import CodeReviewDispatchOps
 from backend.agent_dispatch.code_sandbox import CodeSandboxDispatchOps
 from backend.agent_dispatch.content import ContentDispatchOps
 from backend.agent_dispatch.core import DispatcherCoreOps
@@ -171,6 +175,15 @@ GITLINK_IMPORT_TIMEOUT_SECONDS = 90
 # fetch per selected path); local-root-backed builds are pure disk I/O and
 # finish well under this.
 GITLINK_CONTEXT_TIMEOUT_SECONDS = 300
+# Review Lens: one PR-metadata GET + up to two pages of file-listing GETs +
+# one diff download (network-timeout-capped at 60s by diff_fetch itself).
+CODE_REVIEW_DIFF_TIMEOUT_SECONDS = 120
+# Review Lens: one LLM completion over up to 45,000 chars of diff
+# (review_engine's MAX_DIFF_MODEL_CHARS) - same call-count shape as a
+# Gitlink run, with a comparable input size, hence the same watchdog.
+CODE_REVIEW_RUN_TIMEOUT_SECONDS = 600
+# Review Lens: one follow-up Q&A completion over the same capped diff.
+CODE_REVIEW_ASK_TIMEOUT_SECONDS = 300
 
 # R5.3 post-review FIX 4(b): the sentinel value backend/canvas.py's
 # run_gitlink_change_set stores into node.pending_request_id SYNCHRONOUSLY,
@@ -292,6 +305,7 @@ class AgentDispatcher(
     ChatDispatchOps,
     ResearchDispatchOps,
     GitlinkDispatchOps,
+    CodeReviewDispatchOps,
     CodeSandboxDispatchOps,
     ContentDispatchOps,
 ):
@@ -717,6 +731,34 @@ def _call_gitlink_agent(payload):
     verbatim - same defensive-by-construction dict-in/dict-out contract,
     completely unmodified."""
     return GitlinkAgent().get_response(payload)
+
+
+def _fetch_code_review_bundle(settings_manager, pr_url):
+    """Runs inside asyncio.to_thread. Parses the pasted PR URL, then fetches
+    the PR metadata + file list + unified diff via the shared GitHub REST
+    client (token from the session's settings, public PRs working
+    token-less). Returns diff_fetch.fetch_pr_review_bundle's own dict."""
+    owner, repo, number = parse_pr_url(pr_url)
+    client = GitHubRestClient(settings_manager)
+    return fetch_pr_review_bundle(client, owner, repo, number)
+
+
+def _call_review_lens_agent(bundle):
+    """Runs inside asyncio.to_thread. Reuses ReviewLensAgent.get_response
+    verbatim - same defensive-by-construction dict-in/dict-out contract as
+    _call_gitlink_agent above (a model failure degrades to the deterministic
+    fallback review inside the engine, never an exception)."""
+    return ReviewLensAgent().get_response(bundle)
+
+
+def _ask_review_lens_agent(diff_text, question, review_summary):
+    """Runs inside asyncio.to_thread. One follow-up Q&A over an already-
+    fetched diff - raises RuntimeError with a display-safe message on
+    empty input or model failure (the dispatcher's own _run maps it to
+    the node's error banner, matching every other run surface)."""
+    return ReviewLensAgent().answer_question(
+        diff_text=diff_text, question=question, review_summary=review_summary,
+    )
 
 
 def _build_gitlink_proposal_markdown(repo, branch, result):

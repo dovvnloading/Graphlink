@@ -21,6 +21,7 @@ const FILTER_KIND_LABELS: Record<string, string> = {
   plan: "Plan",
   artifact: "Artifact",
   gitlink: "Gitlink",
+  code_review: "Code Review",
   code_sandbox: "Code Sandbox",
   note: "Note",
   chart: "Chart",

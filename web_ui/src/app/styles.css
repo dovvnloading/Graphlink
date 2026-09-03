@@ -7091,6 +7091,385 @@ mark.document-view-search-match-current {
   cursor: default;
 }
 
+/* -- Review Lens node ----------------------------------------------------
+   Same card chrome as .gitlink-node-*: a max-height scrolling flex column
+   with flex-shrink: 0 children (THE SQUEEZE fix), tab strip, labelled
+   field rows, inset inputs, neutral buttons with one filled primary, stat
+   rows, banners, and empty states - all on the same shared tokens, so the
+   card reads as the same family. New here: the severity-tier pills
+   (red/yellow/gray severity tiers), the verdict banner,
+   and the walkthrough/finding/Q&A list treatments. */
+
+.code-review-node-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 530px;
+  overflow-y: auto;
+}
+
+.code-review-node-content > * {
+  flex-shrink: 0;
+}
+
+.code-review-node-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+
+.code-review-node-tab {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 6px 10px;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.code-review-node-tab:hover {
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-tab.active {
+  color: var(--gl-surface-text-primary);
+  border-bottom-color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-tab-count {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+}
+
+.code-review-node-setup-tab,
+.code-review-node-walkthrough-tab,
+.code-review-node-findings-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.code-review-node-field-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.code-review-node-field-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-inline-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.code-review-node-input {
+  box-sizing: border-box;
+  width: 100%;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 8px 10px;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.code-review-node-input:focus {
+  outline: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-inline-row button {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  padding: 5px 12px;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.code-review-node-inline-row button:hover:enabled {
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.code-review-node-inline-row button.code-review-node-primary-btn {
+  color: var(--gl-surface-text-bright);
+  background-color: var(--gl-neutral-button-hover);
+  border-color: var(--gl-neutral-button-border);
+}
+
+.code-review-node-inline-row button.code-review-node-primary-btn:hover:enabled {
+  background-color: var(--gl-surface-border-strong);
+}
+
+.code-review-node-inline-row button.code-review-node-primary-btn:disabled {
+  color: var(--gl-surface-text-muted);
+  background-color: transparent;
+  border-color: var(--gl-surface-border);
+}
+
+.code-review-node-inline-row button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.code-review-node-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.code-review-node-identity-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-stat-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.code-review-node-stat-key {
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-stat-value {
+  color: var(--gl-surface-text-primary);
+  font-weight: 600;
+}
+
+.code-review-node-banner-error {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--gl-semantic-status-error, currentColor);
+  border: 1px solid var(--gl-semantic-status-error, currentColor);
+  border-radius: 8px;
+}
+
+.code-review-node-banner-warning {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-surface-border-strong, var(--gl-surface-border));
+  border-radius: 8px;
+}
+
+.code-review-node-empty {
+  margin: 0;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-file-count {
+  margin: 0;
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-walkthrough-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.code-review-node-walkthrough-group {
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.code-review-node-walkthrough-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-walkthrough-paths {
+  font-size: 10px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color: var(--gl-surface-text-muted);
+  word-break: break-word;
+}
+
+.code-review-node-walkthrough-explanation {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-diff-markdown {
+  max-height: none;
+  overflow: visible;
+}
+
+.code-review-node-diff-text {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 320px;
+  overflow: auto;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.code-review-node-qa {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.code-review-node-qa-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.code-review-node-qa-question {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-qa-answer {
+  max-height: none;
+  overflow: visible;
+}
+
+.code-review-node-verdict {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--gl-surface-border);
+}
+
+.code-review-node-verdict-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-verdict-score {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-verdict-risk {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-verdict-strong {
+  border-color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-verdict-needs_revision,
+.code-review-node-verdict-not_ready {
+  border-color: var(--gl-semantic-status-error, currentColor);
+}
+
+.code-review-node-overview {
+  margin: 0;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-scorecard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.code-review-node-finding {
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.code-review-node-finding-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.code-review-node-finding-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-finding-meta {
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+.code-review-node-finding-text {
+  margin: 0;
+  font-size: 11px;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-tier {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-tier-red {
+  color: var(--gl-semantic-status-error, currentColor);
+  border-color: var(--gl-semantic-status-error, currentColor);
+}
+
+.code-review-node-tier-yellow {
+  border-color: var(--gl-surface-border-strong, var(--gl-surface-border));
+}
+
 /* -- R5.4 code_sandbox node ------------------------------------------------
 
    Rebuilt from the straight port, which had two structural defects and a

@@ -275,10 +275,14 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 178 -> 179 when the agent launcher grew its own workspace pick
     # (harness/pickLaunchWorkspace - the node-less sibling of
     # harness/pickWorkspace, so the first run can already be bound to the
-    # right folder instead of spending itself in scratch).
+    # right folder instead of spending itself in scratch), and 179 -> 186
+    # when Review Lens added scene's own setCodeReviewPrUrl/
+    # fetchCodeReviewDiff/fetchCodeReviewDiffText/runCodeReview/
+    # cancelCodeReviewRequest/askCodeReviewQuestion/dismissCodeReviewFinding
+    # septet (backend/api/intents_code_review.py).
     real = _collect_real_registrations()
-    assert len(real) == 179, (
-        f"expected exactly 179 real registered intents, found {len(real)} - "
+    assert len(real) == 186, (
+        f"expected exactly 186 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

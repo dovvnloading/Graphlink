@@ -184,6 +184,15 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "cancelGitlinkRequest", "B", "run-lifecycle: cancel"),
     Classified("scene", "applyGitlinkChanges", "B", "run-lifecycle: writes real files to disk, an external side effect Ctrl+Z cannot safely reverse"),
 
+    # -- backend/api/intents_code_review.py (scene) --------------------------
+    Classified("scene", "setCodeReviewPrUrl", "A", "content: user-pasted pull-request URL"),
+    Classified("scene", "fetchCodeReviewDiff", "B", "run-lifecycle: caches a fetched PR diff for review"),
+    Classified("scene", "fetchCodeReviewDiffText", "B", "read-only: fetches the stored diff text, no mutation"),
+    Classified("scene", "runCodeReview", "B", "run-lifecycle: start/complete/fail an agent run"),
+    Classified("scene", "cancelCodeReviewRequest", "B", "run-lifecycle: cancel"),
+    Classified("scene", "askCodeReviewQuestion", "B", "run-lifecycle: answers one follow-up over the cached diff"),
+    Classified("scene", "dismissCodeReviewFinding", "A", "content: dismissal flag is document state"),
+
     # -- backend/api/intents_groups.py (scene) -------------------------------
     Classified("scene", "addNote", "A", "content: create"),
     Classified("scene", "setNoteContent", "A", "content: text edit"),

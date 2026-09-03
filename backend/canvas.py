@@ -83,6 +83,7 @@ from backend.domain.model import (
 from backend.domain.node_states import (
     ArtifactState,
     ChatState,
+    CodeReviewState,
     CodeSandboxState,
     CodeState,
     DocumentState,
@@ -255,6 +256,7 @@ from backend.api.intents_chart import register_chart_intents  # noqa: E402
 from backend.api.intents_chat import register_chat_intents  # noqa: E402
 from backend.api.intents_chat_image import register_chat_image_intents  # noqa: E402
 from backend.api.intents_code_sandbox import register_code_sandbox_intents  # noqa: E402
+from backend.api.intents_code_review import register_code_review_intents  # noqa: E402
 from backend.api.intents_conversation import register_conversation_intents  # noqa: E402
 from backend.api.intents_gitlink import register_gitlink_intents  # noqa: E402
 from backend.api.intents_global_search import register_global_search_intents  # noqa: E402
@@ -360,6 +362,7 @@ def register_canvas(
     register_chart_intents(bus, document, notifications, agent_dispatcher)
     register_branches_intents(bus, document, notifications, agent_dispatcher, composer_document)
     register_gitlink_intents(bus, document, notifications, agent_dispatcher)
+    register_code_review_intents(bus, document, notifications, agent_dispatcher)
     register_code_sandbox_intents(bus, document, notifications, agent_dispatcher)
     register_builder_intents(bus, document, notifications, agent_dispatcher)
     register_harness_intents(bus, document, notifications, agent_dispatcher)

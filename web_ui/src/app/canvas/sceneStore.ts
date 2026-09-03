@@ -1023,6 +1023,42 @@ export class SceneStore {
     this.transport.fireIntent("scene", "applyGitlinkChanges", [nodeId, fingerprint]);
   }
 
+  // Review Lens node - seven intents backing the Setup/Walkthrough/
+  // Findings flow (see CodeReviewNodeView.tsx's own module doc for the
+  // per-tab breakdown). fetchCodeReviewDiffText is the one lazy
+  // read-after-fetch (the fetchGitlinkContext precedent): the full
+  // unified diff never rides the scene snapshot, so the Walkthrough tab
+  // pulls it on demand keyed by codeReviewDiffVersion. Every other
+  // Review Lens method below stays on fireIntent - only the two
+  // request/response reads need the id synchronously.
+  setCodeReviewPrUrl(nodeId: string, prUrl: string): void {
+    this.transport.fireIntent("scene", "setCodeReviewPrUrl", [nodeId, prUrl], undefined, true);
+  }
+
+  fetchCodeReviewDiff(nodeId: string, prUrl: string): void {
+    this.transport.fireIntent("scene", "fetchCodeReviewDiff", [nodeId, prUrl]);
+  }
+
+  fetchCodeReviewDiffText(nodeId: string): Promise<string> {
+    return this.transport.request("scene", "fetchCodeReviewDiffText", [nodeId]) as Promise<string>;
+  }
+
+  runCodeReview(nodeId: string): void {
+    this.transport.fireIntent("scene", "runCodeReview", [nodeId]);
+  }
+
+  cancelCodeReviewRequest(requestId: string): void {
+    this.transport.fireIntent("scene", "cancelCodeReviewRequest", [requestId]);
+  }
+
+  askCodeReviewQuestion(nodeId: string, question: string): void {
+    this.transport.fireIntent("scene", "askCodeReviewQuestion", [nodeId, question]);
+  }
+
+  dismissCodeReviewFinding(nodeId: string, findingId: string): void {
+    this.transport.fireIntent("scene", "dismissCodeReviewFinding", [nodeId, findingId]);
+  }
+
   // R5.4: Execution Sandbox node - setCodeSandboxRequirements/
   // runCodeSandbox/cancelCodeSandboxRequest mirror backend/canvas.py's
   // registered intent names 1:1, same convention as every scene intent

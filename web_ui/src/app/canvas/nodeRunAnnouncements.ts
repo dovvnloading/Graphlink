@@ -28,6 +28,7 @@ export function describeNodeRunTransition(prev: SceneNodeRow | undefined, next: 
     if (isPending) return `${label} started`;
     if (next.kind === "code_sandbox" && next.codeSandboxError) return `${label} failed`;
     if (next.kind === "gitlink" && next.gitlinkError) return `${label} failed`;
+    if (next.kind === "code_review" && next.codeReviewError) return `${label} failed`;
     if (next.kind === "harness" && next.harnessStatus === "failed") return `${label} failed`;
     return `${label} completed`;
   }
@@ -44,6 +45,7 @@ export function describeNodeRunTransition(prev: SceneNodeRow | undefined, next: 
 const KIND_LABELS: Record<string, string> = {
   code_sandbox: "Code sandbox run",
   gitlink: "Git operation",
+  code_review: "Code review",
   chat: "Chat response",
   artifact: "Artifact generation",
   web_research: "Web research",

@@ -38,7 +38,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "perf"))
 from graph_factory import LARGE  # noqa: E402
 
 # ADR-003 stage 3.4's own stated exit criterion.
-SINGLE_EDIT_WIRE_BUDGET_BYTES = 5 * 1024
+#
+# Deliberate amendment - 2026-09-03 (Review Lens feature). The 5 KiB
+# baseline assumed the pre-Review-Lens wire key set; the code_review
+# node's 31 new keys (default-valued for every other kind - the same
+# additive rule every kind before it followed) cost a measured +94 bytes
+# on a single-node upsert (5120 -> 5214). Re-anchored to that new reality
+# with ~2% headroom (5214 + 110); a future kind's own keys will need
+# their own deliberate amendment here, same as this one - never a silent
+# bump to absorb an accidental blob (codeReviewDiffText stays OFF the
+# wire for exactly this reason - see CodeReviewState's own comment).
+SINGLE_EDIT_WIRE_BUDGET_BYTES = 5324
 
 
 class Recorder:
