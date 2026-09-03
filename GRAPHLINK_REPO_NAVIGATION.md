@@ -158,7 +158,7 @@ Separately, and still accurate: `backend/domain/` has a full document-NODE model
 
 ## Concrete Node and Connection Taxonomy
 
-### Real node kinds today (verified directly against the `kind=` literals now in `backend/domain/graph.py`, 16 total)
+### Real node kinds today (verified directly against the `kind=` literals now in `backend/domain/graph.py`, 17 total)
 
 | `kind` string | User-facing name (plugin picker, where applicable) | React component |
 |---|---|---|
@@ -172,13 +172,14 @@ Separately, and still accurate: `backend/domain/` has a full document-NODE model
 | `web_research` | Web Research | `WebResearchNodeView.tsx` |
 | `artifact` | Artifact / Drafter | `ArtifactNodeView.tsx` |
 | `gitlink` | Gitlink | `GitlinkNodeView.tsx` |
+| `code_review` | Review Lens | `CodeReviewNodeView.tsx` |
 | `code_sandbox` | Virtual Environment Runner | `CodeSandboxNodeView.tsx` |
 | `note` | (System Prompt picker entry creates one) | `NoteNodeView.tsx` |
 | `frame` | (Create Frame command) | `GroupNodeView.tsx` (shared with `container`, distinguished by `data.groupKind`) |
 | `container` | (Create Container command) | `GroupNodeView.tsx` |
 | `chart` | Chart | `ChartNodeView.tsx` |
 
-"System Prompt" is a plugin-picker entry, not a distinct node kind - it creates a `note` node with `is_system_prompt=True`. There is no separate `reasoning`/`workflow`/`graph_diff`/`quality_gate`/`code_review` node kind - those plugin categories were removed before the Qt-removal effort even began and were never ported.
+"System Prompt" is a plugin-picker entry, not a distinct node kind - it creates a `note` node with `is_system_prompt=True`. There is no separate `reasoning`/`workflow`/`graph_diff`/`quality_gate` node kind - those plugin categories were removed before the Qt-removal effort even began and were never ported. (`code_review` is the one exception: a NEW first-party kind added post-migration for Review Lens, not a port of the removed advisor plugin.)
 
 ### Connections: one unified model, not 13 parallel lists
 
@@ -257,7 +258,11 @@ This is the live registration order in `backend/plugins.py::_PLUGINS` / `_CATEGO
 
 - `Artifact / Drafter` - creates an `artifact` node.
 
-`Validation & Delivery` is defined in `_CATEGORY_META` but has zero plugins mapped to it today, so `get_plugin_categories()` filters it out of the returned listing (same "skip empty categories" algorithm the deleted `PluginPortal` used). There is no `Reasoning`/`Workflow Architect`/`Quality Gate`/`Code Review Agent`/`Branch Lens (GraphDiff)` plugin - those were removed well before the Qt-removal effort began and were never carried into `backend/plugins.py`.
+### Validation & Delivery
+
+- `Review Lens` - creates a `code_review` node (guided PR review: fetch diff, guided walkthrough, severity-tiered findings, scorecard).
+
+`Validation & Delivery` holds Review Lens (the first post-migration first-party addition). There is no `Reasoning`/`Workflow Architect`/`Quality Gate`/`Branch Lens (GraphDiff)` plugin - those were removed well before the Qt-removal effort began and were never carried into `backend/plugins.py`.
 
 ## Concrete File Index
 

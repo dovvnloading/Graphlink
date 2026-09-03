@@ -81,7 +81,19 @@ const ASSETS_DIR = join(HERE, "..", "dist", "app", "assets");
 // it still does not move the budget. Closing the real gap still needs the
 // eagerly-rendered node views code-split - work no stage owns, and which
 // this stage does not pretend to do.
-const LARGEST_CHUNK_CEILING_BYTES = 866_000;
+//
+// Deliberate, commented amendment - 2026-09-03 (ADR-019 section 4),
+// Review Lens feature.
+//
+// Real, intended growth, no new dependency: the Review Lens node adds one
+// more eagerly-rendered node view (CodeReviewNodeView: Setup/Walkthrough/
+// Findings tabs, verdict banner, tiered findings, diff viewer, Q&A) plus
+// its SceneCanvas/sceneStore wiring and card CSS. Measured cost: largest
+// chunk 866,000-ceiling -> 890,541 bytes (+24,541, ~2.8%); total JS
+// 1,423,000-ceiling -> 1,445,539 bytes (+22,539, ~1.6%). No chunk grew
+// from a dependency (imports are the existing shared card components -
+// NodeShell/NodeMenu/NodeMarkdown/CollapseToggleButton - plus React).
+const LARGEST_CHUNK_CEILING_BYTES = 917_000;
 // Post-11.6 reality: six chunks (main + katex + highlight.js + the three
 // lazy dialogs) total 1,288,075 bytes - essentially unchanged from the
 // pre-split single-chunk total, as expected: splitting redistributes code
@@ -99,7 +111,7 @@ const LARGEST_CHUNK_CEILING_BYTES = 866_000;
 // 1,423,872, rounded down to a clean number) - this only ever moves the
 // ceiling down again in a later stage that shrinks the total, per this
 // file's own ratchet discipline above.
-const TOTAL_JS_CEILING_BYTES = 1_423_000;
+const TOTAL_JS_CEILING_BYTES = 1_489_000;
 
 let entries;
 try {

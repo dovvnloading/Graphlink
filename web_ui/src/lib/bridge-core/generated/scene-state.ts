@@ -48,6 +48,37 @@ export interface SceneNodeRow {
   gitlinkChangeFingerprint?: string | null;
   gitlinkChangeState: string;
   gitlinkError: string;
+  codeReviewPrUrl: string;
+  codeReviewRepo: string;
+  codeReviewPrNumber: number;
+  codeReviewPrTitle: string;
+  codeReviewPrState: string;
+  codeReviewPrHtmlUrl: string;
+  codeReviewBaseRef: string;
+  codeReviewHeadRef: string;
+  codeReviewAdditions: number;
+  codeReviewDeletions: number;
+  codeReviewChangedFiles: number;
+  codeReviewFiles: CodeReviewFileRow[];
+  codeReviewFilesTruncated: boolean;
+  codeReviewDiffTruncated: boolean;
+  codeReviewDiffChars: number;
+  codeReviewDiffVersion: number;
+  codeReviewWalkthrough: CodeReviewWalkthroughGroupRow[];
+  codeReviewFindings: CodeReviewFindingRow[];
+  codeReviewErrors: CodeReviewErrorRow[];
+  codeReviewDismissedIds: string[];
+  codeReviewTitle: string;
+  codeReviewOverview: string;
+  codeReviewConfidence: string;
+  codeReviewScores: Record<string, string>;
+  codeReviewQualityScore: number;
+  codeReviewVerdict: string;
+  codeReviewRisk: string;
+  codeReviewQualitySummary: string;
+  codeReviewQa: CodeReviewQaRow[];
+  codeReviewState: string;
+  codeReviewError: string;
   codeSandboxRequirements: string;
   codeSandboxPrompt: string;
   codeSandboxCode: string;
@@ -175,6 +206,52 @@ export interface GitlinkPendingChangeRow {
   operation: string;
   reason: string;
   content?: string | null;
+}
+
+export interface CodeReviewFileRow {
+  path: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch: string;
+  patchTruncated: boolean;
+  previousPath?: string | null;
+}
+
+export interface CodeReviewWalkthroughGroupRow {
+  groupTitle: string;
+  paths: string[];
+  explanation: string;
+}
+
+export interface CodeReviewFindingRow {
+  id: string;
+  severity: string;
+  tier: string;
+  category: string;
+  path: string;
+  line: number;
+  title: string;
+  evidence: string;
+  impact: string;
+  recommendation: string;
+}
+
+export interface CodeReviewErrorRow {
+  id: string;
+  severity: string;
+  tier: string;
+  kind: string;
+  path: string;
+  line: number;
+  title: string;
+  evidence: string;
+  fix: string;
+}
+
+export interface CodeReviewQaRow {
+  question: string;
+  answer: string;
 }
 
 export interface ChartDataRow {
@@ -506,6 +583,168 @@ function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void
     const fieldValue = value["gitlinkError"];
     if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.gitlinkError: missing required field`);
     else { if (typeof fieldValue !== "string") errors.push(`${path}.gitlinkError` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewPrUrl"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewPrUrl: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewPrUrl` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewRepo"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewRepo: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewRepo` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewPrNumber"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewPrNumber: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.codeReviewPrNumber` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["codeReviewPrTitle"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewPrTitle: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewPrTitle` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewPrState"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewPrState: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewPrState` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewPrHtmlUrl"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewPrHtmlUrl: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewPrHtmlUrl` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewBaseRef"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewBaseRef: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewBaseRef` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewHeadRef"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewHeadRef: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewHeadRef` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewAdditions"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewAdditions: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.codeReviewAdditions` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["codeReviewDeletions"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewDeletions: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.codeReviewDeletions` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["codeReviewChangedFiles"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewChangedFiles: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.codeReviewChangedFiles` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["codeReviewFiles"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewFiles: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.codeReviewFiles` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkCodeReviewFileRow(item, `${path}.codeReviewFiles` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["codeReviewFilesTruncated"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewFilesTruncated: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.codeReviewFilesTruncated` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["codeReviewDiffTruncated"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewDiffTruncated: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.codeReviewDiffTruncated` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["codeReviewDiffChars"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewDiffChars: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.codeReviewDiffChars` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["codeReviewDiffVersion"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewDiffVersion: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.codeReviewDiffVersion` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["codeReviewWalkthrough"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewWalkthrough: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.codeReviewWalkthrough` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkCodeReviewWalkthroughGroupRow(item, `${path}.codeReviewWalkthrough` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["codeReviewFindings"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewFindings: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.codeReviewFindings` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkCodeReviewFindingRow(item, `${path}.codeReviewFindings` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["codeReviewErrors"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewErrors: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.codeReviewErrors` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkCodeReviewErrorRow(item, `${path}.codeReviewErrors` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["codeReviewDismissedIds"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewDismissedIds: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.codeReviewDismissedIds` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.codeReviewDismissedIds` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["codeReviewTitle"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewTitle: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewTitle` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewOverview"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewOverview: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewOverview` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewConfidence"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewConfidence: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewConfidence` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewScores"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewScores: missing required field`);
+    else { if (!isRecord(fieldValue)) errors.push(`${path}.codeReviewScores` + ": expected object");
+    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.codeReviewScores` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["codeReviewQualityScore"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewQualityScore: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.codeReviewQualityScore` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["codeReviewVerdict"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewVerdict: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewVerdict` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewRisk"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewRisk: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewRisk` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewQualitySummary"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewQualitySummary: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewQualitySummary` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewQa"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewQa: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.codeReviewQa` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { checkCodeReviewQaRow(item, `${path}.codeReviewQa` + `[${i}]`, errors); }); }
+  }
+  {
+    const fieldValue = value["codeReviewState"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewState: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewState` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["codeReviewError"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.codeReviewError: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.codeReviewError` + ": expected string"); }
   }
   {
     const fieldValue = value["codeSandboxRequirements"];
@@ -1086,6 +1325,181 @@ function checkGitlinkPendingChangeRow(value: unknown, path: string, errors: stri
   {
     const fieldValue = value["content"];
     if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.content` + ": expected string"); }
+  }
+}
+
+function checkCodeReviewFileRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["path"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.path: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.path` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["status"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.status: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.status` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["additions"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.additions: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.additions` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["deletions"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.deletions: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.deletions` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["patch"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.patch: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.patch` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["patchTruncated"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.patchTruncated: missing required field`);
+    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.patchTruncated` + ": expected boolean"); }
+  }
+  {
+    const fieldValue = value["previousPath"];
+    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.previousPath` + ": expected string"); }
+  }
+}
+
+function checkCodeReviewWalkthroughGroupRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["groupTitle"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.groupTitle: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.groupTitle` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["paths"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.paths: missing required field`);
+    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.paths` + ": expected array");
+    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.paths` + `[${i}]` + ": expected string"); }); }
+  }
+  {
+    const fieldValue = value["explanation"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.explanation: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.explanation` + ": expected string"); }
+  }
+}
+
+function checkCodeReviewFindingRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["id"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["severity"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.severity: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.severity` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["tier"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.tier: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.tier` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["category"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.category: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.category` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["path"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.path: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.path` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["line"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.line: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.line` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["title"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.title: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.title` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["evidence"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.evidence: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.evidence` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["impact"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.impact: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.impact` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["recommendation"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.recommendation: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.recommendation` + ": expected string"); }
+  }
+}
+
+function checkCodeReviewErrorRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["id"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["severity"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.severity: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.severity` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["tier"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.tier: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.tier` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["kind"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.kind: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.kind` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["path"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.path: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.path` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["line"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.line: missing required field`);
+    else { if (typeof fieldValue !== "number") errors.push(`${path}.line` + ": expected number"); }
+  }
+  {
+    const fieldValue = value["title"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.title: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.title` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["evidence"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.evidence: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.evidence` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["fix"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.fix: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.fix` + ": expected string"); }
+  }
+}
+
+function checkCodeReviewQaRow(value: unknown, path: string, errors: string[]): void {
+  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
+  {
+    const fieldValue = value["question"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.question: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.question` + ": expected string"); }
+  }
+  {
+    const fieldValue = value["answer"];
+    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.answer: missing required field`);
+    else { if (typeof fieldValue !== "string") errors.push(`${path}.answer` + ": expected string"); }
   }
 }
 

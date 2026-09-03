@@ -1,0 +1,24 @@
+# plugins/review_lens/plugin.toml
+#
+# First-party Review Lens picker action (the guided PR
+# reviewer). Uses HostContext.register_builtin_plugin (NOT
+# register_node_kind/register_picker_entry) - the same escape hatch the 7
+# migrated built-ins use, for the same reason: the "code_review" kind
+# string is a first-party domain kind (backend/domain/graph.py's
+# SceneDocument.add_code_review_node, the wire contract, and
+# session_save.py/session_load.py's hand-written serializer), so routing
+# it through the generic, auto-namespaced PluginNodeSeed path would mint a
+# second-class "review_lens.review" kind for zero benefit. See
+# HostContext.register_builtin_plugin's own docstring (backend/
+# plugin_sdk.py) for the full escape-hatch rationale.
+
+[plugin]
+id = "review_lens"
+name = "Review Lens"
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "Fetches a GitHub pull-request diff, walks through it group by group, and surfaces severity-tiered findings with a deterministic scorecard."
+
+[frontend]
+view = "generic"

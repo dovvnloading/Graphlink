@@ -114,6 +114,24 @@ MIGRATED_KIND_FIELDS = {
         "builder_awaiting_tool_approval", "builder_approval_tool_name",
         "builder_approval_summary", "builder_status_detail",
     ],
+    # Review Lens: the code_review node - born state-typed like "plan"
+    # above (never a bare-SceneNode field era), listed here so the
+    # bare-attribute ban covers it from day one. Every name carries the
+    # code_review_ prefix, so no exemptions are needed.
+    "code_review": [
+        "code_review_pr_url", "code_review_repo", "code_review_pr_number",
+        "code_review_pr_title", "code_review_pr_state", "code_review_pr_html_url",
+        "code_review_base_ref", "code_review_head_ref", "code_review_additions",
+        "code_review_deletions", "code_review_changed_files", "code_review_files",
+        "code_review_files_truncated", "code_review_diff_text",
+        "code_review_diff_truncated", "code_review_diff_chars",
+        "code_review_diff_version", "code_review_walkthrough",
+        "code_review_findings", "code_review_errors", "code_review_dismissed_ids",
+        "code_review_title", "code_review_overview", "code_review_confidence",
+        "code_review_scores", "code_review_quality_score", "code_review_verdict",
+        "code_review_risk", "code_review_quality_summary", "code_review_qa",
+        "code_review_state", "code_review_error",
+    ],
 }
 
 
@@ -369,6 +387,20 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     # user.ask interaction surfaces (§2.3).
     "harnessApprovalSessionOffered", "harnessPlan",
     "harnessAwaitingQuestion", "harnessQuestion",
+    # Review Lens: the code_review node's 31 wire fields (codeReviewDiffText
+    # deliberately excluded - served on demand via fetchCodeReviewDiffText,
+    # the gitlinkContextXml precedent).
+    "codeReviewPrUrl", "codeReviewRepo", "codeReviewPrNumber",
+    "codeReviewPrTitle", "codeReviewPrState", "codeReviewPrHtmlUrl",
+    "codeReviewBaseRef", "codeReviewHeadRef", "codeReviewAdditions",
+    "codeReviewDeletions", "codeReviewChangedFiles", "codeReviewFiles",
+    "codeReviewFilesTruncated", "codeReviewDiffTruncated",
+    "codeReviewDiffChars", "codeReviewDiffVersion", "codeReviewWalkthrough",
+    "codeReviewFindings", "codeReviewErrors", "codeReviewDismissedIds",
+    "codeReviewTitle", "codeReviewOverview", "codeReviewConfidence",
+    "codeReviewScores", "codeReviewQualityScore", "codeReviewVerdict",
+    "codeReviewRisk", "codeReviewQualitySummary", "codeReviewQa",
+    "codeReviewState", "codeReviewError",
 ])
 
 
@@ -498,6 +530,40 @@ _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
     # to None, same as the ChatState dataclass defaults.
     "promptTokens": None,
     "completionTokens": None,
+    # Review Lens: code_review's 31 wire keys; a non-owning node's row
+    # carries the CodeReviewState dataclass defaults (verdict "none" and
+    # review state "draft" are real defaults, not empty placeholders).
+    "codeReviewPrUrl": "",
+    "codeReviewRepo": "",
+    "codeReviewPrNumber": 0,
+    "codeReviewPrTitle": "",
+    "codeReviewPrState": "",
+    "codeReviewPrHtmlUrl": "",
+    "codeReviewBaseRef": "",
+    "codeReviewHeadRef": "",
+    "codeReviewAdditions": 0,
+    "codeReviewDeletions": 0,
+    "codeReviewChangedFiles": 0,
+    "codeReviewFiles": [],
+    "codeReviewFilesTruncated": False,
+    "codeReviewDiffTruncated": False,
+    "codeReviewDiffChars": 0,
+    "codeReviewDiffVersion": 0,
+    "codeReviewWalkthrough": [],
+    "codeReviewFindings": [],
+    "codeReviewErrors": [],
+    "codeReviewDismissedIds": [],
+    "codeReviewTitle": "",
+    "codeReviewOverview": "",
+    "codeReviewConfidence": "",
+    "codeReviewScores": {},
+    "codeReviewQualityScore": 0,
+    "codeReviewVerdict": "none",
+    "codeReviewRisk": "",
+    "codeReviewQualitySummary": "",
+    "codeReviewQa": [],
+    "codeReviewState": "draft",
+    "codeReviewError": "",
 }
 
 

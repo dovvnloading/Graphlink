@@ -191,6 +191,7 @@ from typing import Any
 from backend.canvas import (
     ArtifactState,
     ChatState,
+    CodeReviewState,
     CodeSandboxState,
     CodeState,
     DocumentState,
@@ -677,6 +678,71 @@ def _restore_gitlink_payload(payload: dict[str, Any]) -> SceneNode:
     )
 
 
+def _restore_code_review_payload(payload: dict[str, Any]) -> SceneNode:
+    x, y = _position(payload)
+    pr_state = payload.get("pr_state")
+    pr_state = pr_state if isinstance(pr_state, dict) else {}
+    review = payload.get("review")
+    review = review if isinstance(review, dict) else {}
+
+    def _dict_list(value):
+        return [dict(item) for item in value] if isinstance(value, list) else []
+
+    scores = review.get("scores")
+    scores = {str(k): int(v) for k, v in scores.items()} if isinstance(scores, dict) else {}
+    try:
+        pr_number = max(0, int(pr_state.get("number", 0)))
+    except (TypeError, ValueError):
+        pr_number = 0
+    dismissed = review.get("dismissed_ids")
+    dismissed_ids = (
+        [str(item) for item in dismissed if str(item)] if isinstance(dismissed, list) else []
+    )
+
+    return SceneNode(
+        id="", x=x, y=y, title="Review Lens", kind="code_review",
+        state=CodeReviewState(
+            code_review_pr_url=str(payload.get("pr_url", "")),
+            code_review_repo=str(pr_state.get("repo", "")),
+            code_review_pr_number=pr_number,
+            code_review_pr_title=str(pr_state.get("title", "")),
+            code_review_pr_state=str(pr_state.get("state", "")),
+            code_review_pr_html_url=str(pr_state.get("html_url", "")),
+            code_review_base_ref=str(pr_state.get("base_ref", "")),
+            code_review_head_ref=str(pr_state.get("head_ref", "")),
+            code_review_additions=max(0, int(payload.get("additions", 0) or 0)),
+            code_review_deletions=max(0, int(payload.get("deletions", 0) or 0)),
+            code_review_changed_files=max(0, int(payload.get("changed_files", 0) or 0)),
+            code_review_files=_dict_list(payload.get("files")),
+            code_review_files_truncated=bool(payload.get("files_truncated", False)),
+            code_review_diff_text=str(payload.get("diff_text", "")),
+            code_review_diff_truncated=bool(payload.get("diff_truncated", False)),
+            code_review_diff_chars=max(0, int(payload.get("diff_chars", 0) or 0)),
+            code_review_diff_version=max(0, int(payload.get("diff_version", 0) or 0)),
+            code_review_walkthrough=_dict_list(review.get("walkthrough")),
+            code_review_findings=_dict_list(review.get("findings")),
+            code_review_errors=_dict_list(review.get("errors")),
+            code_review_dismissed_ids=dismissed_ids,
+            code_review_title=str(review.get("title", "")),
+            code_review_overview=str(review.get("overview", "")),
+            code_review_confidence=str(review.get("confidence", "")),
+            code_review_scores=scores,
+            code_review_quality_score=max(0, int(review.get("quality_score", 0) or 0)),
+            code_review_verdict=str(review.get("verdict", "none") or "none"),
+            code_review_risk=str(review.get("risk", "")),
+            code_review_quality_summary=str(review.get("quality_summary", "")),
+            code_review_qa=_dict_list(payload.get("qa")),
+            # A persisted review is static data (findings/scorecard), never
+            # a live run handle - restoring the recorded state verbatim is
+            # safe, unlike run-handle-bearing kinds that must normalize to
+            # "interrupted".
+            code_review_state=str(payload.get("review_state", "draft") or "draft"),
+            code_review_error=str(payload.get("error", "")),
+        ),
+        is_collapsed=bool(payload.get("is_collapsed", False)),
+    )
+
+
 def _migrate_legacy_pycoder_payload(payload: dict[str, Any]) -> SceneNode:
     """PLAN-2026-08-24 H5: Py-Coder is retired - a saved "pycoder" payload
     (this backend's own R5.4 shape, or the truly-legacy Qt app's) can no
@@ -957,6 +1023,7 @@ _NODE_RESTORERS = {
     "web": lambda payload, document: _restore_web_payload(payload),
     "artifact": lambda payload, document: _restore_artifact_payload(payload),
     "gitlink": lambda payload, document: _restore_gitlink_payload(payload),
+    "code_review": lambda payload, document: _restore_code_review_payload(payload),
     "pycoder": lambda payload, document: _migrate_legacy_pycoder_payload(payload),
     "code_sandbox": lambda payload, document: _restore_code_sandbox_payload(payload),
     "plan": lambda payload, document: _restore_plan_payload(payload),
@@ -972,6 +1039,7 @@ _NODE_RESTORERS = {
 _PARENT_CONTENT_INDEX_KINDS = {"code", "document", "image", "thinking"}
 _PARENT_NODE_INDEX_KINDS = {
     "conversation", "html", "pycoder", "code_sandbox", "web", "artifact", "gitlink",
+    "code_review",
 }
 
 # Kinds whose live children_indices/children_ids relationship the CURRENT

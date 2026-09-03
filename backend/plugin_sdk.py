@@ -503,10 +503,14 @@ class BuiltinActionSpec:
 # plugin ids that legitimately use it (grep-confirmed: these are the only
 # plugins/ packages that call register_builtin_plugin); any other plugin_id
 # calling it is a discovery-time PluginRegistrationError, which is caught and
-# surfaced as a load error rather than run.
+# surfaced as a load error rather than run. Review Lens ("review_lens") is
+# the one post-migration addition: a first-party kind (code_review) with
+# hand-written domain/wire/persistence code, so the generic auto-namespaced
+# path would mint a second-class kind for zero benefit - the same rationale
+# as the original 7.
 _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS = frozenset({
     "artifact", "code_sandbox", "conversation_node", "gitlink",
-    "html_renderer", "system_prompt", "web_research",
+    "html_renderer", "system_prompt", "web_research", "review_lens",
 })
 
 

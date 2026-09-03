@@ -22,6 +22,7 @@ import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
 import { ChartNodeView, type ChartFlowNode } from "./ChartNodeView";
 import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
 import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
+import { CodeReviewNodeView, type CodeReviewFlowNode } from "./CodeReviewNodeView";
 import { CodeSandboxNodeView, type CodeSandboxFlowNode } from "./CodeSandboxNodeView";
 import { ConversationNodeView, type ConversationFlowNode, type ConversationMessage } from "./ConversationNodeView";
 import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
@@ -84,6 +85,7 @@ export type SceneFlowNode =
   | WebResearchFlowNode
   | ArtifactFlowNode
   | GitlinkFlowNode
+  | CodeReviewFlowNode
   | CodeSandboxFlowNode
   | NoteFlowNode
   | GroupFlowNode
@@ -122,6 +124,7 @@ const NODE_TYPES = {
   web_research: WebResearchNodeView,
   artifact: ArtifactNodeView,
   gitlink: GitlinkNodeView,
+  code_review: CodeReviewNodeView,
   code_sandbox: CodeSandboxNodeView,
   note: NoteNodeView,
   // R6.1: one shared component backs both "frame" and "container" NODE_TYPES
@@ -429,6 +432,7 @@ export const FILTERABLE_NODE_KINDS = [
   "plan",
   "artifact",
   "gitlink",
+  "code_review",
   "code_sandbox",
   "note",
   "chart",
@@ -917,6 +921,26 @@ function makeGitlinkFns(id: string, liveRef: { current: DispatcherLive }) {
       if (n.pendingRequestId) store.cancelGitlinkRequest(n.pendingRequestId);
     },
     onApply: (fingerprint: string) => liveRef.current.store.applyGitlinkChanges(id, fingerprint),
+  };
+}
+
+function makeCodeReviewFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onToggleCollapse: () => {
+      const { n, store } = liveRef.current;
+      store.setChatCollapsed(id, !n.isCollapsed);
+    },
+    onDelete: () => liveRef.current.store.removeNodes([id]),
+    onSetPrUrl: (prUrl: string) => liveRef.current.store.setCodeReviewPrUrl(id, prUrl),
+    onFetchDiff: (prUrl: string) => liveRef.current.store.fetchCodeReviewDiff(id, prUrl),
+    onFetchDiffText: () => liveRef.current.store.fetchCodeReviewDiffText(id),
+    onRun: () => liveRef.current.store.runCodeReview(id),
+    onCancel: () => {
+      const { n, store } = liveRef.current;
+      if (n.pendingRequestId) store.cancelCodeReviewRequest(n.pendingRequestId);
+    },
+    onAsk: (question: string) => liveRef.current.store.askCodeReviewQuestion(id, question),
+    onDismissFinding: (findingId: string) => liveRef.current.store.dismissCodeReviewFinding(id, findingId),
   };
 }
 
@@ -1615,6 +1639,71 @@ export function toFlowNodes(
           gitlinkChangeFingerprint: n.gitlinkChangeFingerprint ?? null,
           gitlinkChangeState: n.gitlinkChangeState,
           gitlinkError: n.gitlinkError,
+          isCollapsed: n.isCollapsed,
+          pendingRequestId: n.pendingRequestId ?? null,
+          ...fns,
+        },
+      };
+      cache.flowNodes.set(n, { extraSig, flowNode });
+      flowNodes.push(flowNode);
+      continue;
+    }
+    if (n.kind === "code_review") {
+      // No onDock here either (same reasoning as every non-dockable R5
+      // plugin-node branch above) - CodeReviewNodeView never offers a
+      // dock-into-parent action. No isBranchFocusActive here either.
+      // isDimmed IS wired below as of ADR-012 stage 12.5 - see the html
+      // branch's own comment for why that's safe.
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(
+        cache,
+        n.id,
+        { n, store, onOpenDocumentView, onToggleBranchFocus },
+        makeCodeReviewFns,
+      );
+      if (cached && cached.extraSig === extraSig) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
+        id: n.id,
+        type: "code_review" as const,
+        position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        data: {
+          codeReviewPrUrl: n.codeReviewPrUrl,
+          codeReviewRepo: n.codeReviewRepo,
+          codeReviewPrNumber: n.codeReviewPrNumber,
+          codeReviewPrTitle: n.codeReviewPrTitle,
+          codeReviewPrState: n.codeReviewPrState,
+          codeReviewPrHtmlUrl: n.codeReviewPrHtmlUrl,
+          codeReviewBaseRef: n.codeReviewBaseRef,
+          codeReviewHeadRef: n.codeReviewHeadRef,
+          codeReviewAdditions: n.codeReviewAdditions,
+          codeReviewDeletions: n.codeReviewDeletions,
+          codeReviewChangedFiles: n.codeReviewChangedFiles,
+          codeReviewFiles: n.codeReviewFiles,
+          codeReviewFilesTruncated: n.codeReviewFilesTruncated,
+          codeReviewDiffTruncated: n.codeReviewDiffTruncated,
+          codeReviewDiffChars: n.codeReviewDiffChars,
+          codeReviewDiffVersion: n.codeReviewDiffVersion,
+          codeReviewWalkthrough: n.codeReviewWalkthrough,
+          codeReviewFindings: n.codeReviewFindings,
+          codeReviewErrors: n.codeReviewErrors,
+          codeReviewDismissedIds: n.codeReviewDismissedIds,
+          codeReviewTitle: n.codeReviewTitle,
+          codeReviewOverview: n.codeReviewOverview,
+          codeReviewConfidence: n.codeReviewConfidence,
+          codeReviewScores: n.codeReviewScores,
+          codeReviewQualityScore: n.codeReviewQualityScore,
+          codeReviewVerdict: n.codeReviewVerdict,
+          codeReviewRisk: n.codeReviewRisk,
+          codeReviewQualitySummary: n.codeReviewQualitySummary,
+          codeReviewQa: n.codeReviewQa,
+          codeReviewState: n.codeReviewState,
+          codeReviewError: n.codeReviewError,
           isCollapsed: n.isCollapsed,
           pendingRequestId: n.pendingRequestId ?? null,
           ...fns,

@@ -127,6 +127,10 @@ _CATEGORY_META = [
         "name": "Workflow & Drafting",
         "description": "Agentic orchestration and structured drafting surfaces for multi-step work.",
     },
+    {
+        "name": "Validation & Delivery",
+        "description": "Review and verification tools for understanding changes before they ship.",
+    },
 ]
 
 
@@ -143,8 +147,9 @@ _CATEGORY_META = [
 # Runner/code_sandbox, Gitlink, HTML Renderer) instead of the
 # original Gitlink, Virtual Environment Runner, HTML Renderer -
 # a real, user-visible regression for a migration meant to be a
-# byte-faithful relocation. Only these 7 pre-SDK built-ins get a curated
-# slot (PLAN-2026-08-24 H5 retired the 8th, Py-Coder); every other plugin
+# byte-faithful relocation. Only these 8 curated names get a slot (the 7
+# pre-SDK built-ins - PLAN-2026-08-24 H5 retired the 8th, Py-Coder - plus
+# Review Lens, the first post-migration first-party addition); every other plugin
 # (a third-party or demo plugin, none of which shipped before this stage
 # existed) sorts AFTER every curated entry within its own category, in
 # whatever order discovery naturally produced - see
@@ -153,6 +158,7 @@ _CATEGORY_META = [
 _BUILTIN_PICKER_ORDER = (
     "System Prompt", "Conversation Node", "Web Research", "Gitlink",
     "Virtual Environment Runner", "HTML Renderer", "Artifact / Drafter",
+    "Review Lens",
 )
 
 

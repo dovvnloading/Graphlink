@@ -78,6 +78,7 @@ from backend.domain.node_states import (
     ArtifactState,
     ChartState,
     ChatState,
+    CodeReviewState,
     CodeSandboxState,
     CodeState,
     ContainerState,
@@ -1370,6 +1371,246 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         node.state.gitlink_error = str(message)
         return node
 
+    # -- Review Lens node ------------------------------------------------------
+    #
+    # Same import posture as every other plugin-backed kind's domain methods:
+    # canvas.py imports NOTHING from graphlink_plugins.review_lens - every
+    # method below takes plain values (already fetched/normalized by the
+    # dispatch layer) and only stores them.
+
+    def add_code_review_node(self, x: float, y: float, parent_id: str | None) -> SceneNode:
+        """The Review Lens node's creation primitive - same required-parent
+        posture as gitlink (the picker offers standalone creation at the
+        viewport center, but the parent edge is attached whenever a valid
+        parent was selected). Title is always the fixed literal
+        "Review Lens" (mirrors gitlink's own fixed title)."""
+        if parent_id is not None and parent_id not in self.nodes:
+            raise SceneError(f"unknown parent node: {parent_id}")
+        node_id = f"n{next(self._counter)}"
+        node = SceneNode(
+            id=node_id,
+            x=float(x),
+            y=float(y),
+            title="Review Lens",
+            kind="code_review",
+            state=CodeReviewState(),
+        )
+        self.nodes[node_id] = node
+        if parent_id is not None:
+            self.connect(parent_id, node_id)
+        return node
+
+    def set_code_review_pr_url(self, node_id: str, pr_url: str) -> SceneNode:
+        """The one dedicated config setter Review Lens needs: the user types
+        or pastes the PR link BEFORE ever clicking Fetch, with no other
+        action call site to piggyback on (the setGitlinkLocalRoot
+        precedent exactly)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "code_review":
+            raise SceneError(f"node is not a code_review node: {node_id}")
+        node.state.code_review_pr_url = str(pr_url)
+        return node
+
+    def store_code_review_diff(
+        self,
+        node_id: str,
+        *,
+        pr_url: str,
+        repo: str,
+        pr_number: int,
+        pr_title: str,
+        pr_state: str,
+        html_url: str,
+        base_ref: str,
+        head_ref: str,
+        additions: int,
+        deletions: int,
+        changed_files: int,
+        files: list,
+        files_truncated: bool,
+        diff_text: str,
+        diff_truncated: bool,
+        diff_chars: int,
+    ) -> SceneNode:
+        """Lands a successful fetchCodeReviewDiff result. A new fetch
+        supersedes any prior review on this node (walkthrough, findings,
+        errors, verdict, Q&A, and dismissals are all reset) - reviewing
+        against a stale diff's findings would be worse than showing none,
+        the same supersede reasoning store_gitlink_context applies to
+        context builds. code_review_diff_version is incremented
+        UNCONDITIONALLY (the R5.3 post-review FIX 6 precedent) so the
+        frontend's lazy-diff guard can never serve a previous fetch's
+        text for this one."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "code_review":
+            raise SceneError(f"node is not a code_review node: {node_id}")
+        try:
+            pr_number_value = max(0, int(pr_number))
+        except (TypeError, ValueError):
+            pr_number_value = 0
+        node.state.code_review_pr_url = str(pr_url)
+        node.state.code_review_repo = str(repo)
+        node.state.code_review_pr_number = pr_number_value
+        node.state.code_review_pr_title = str(pr_title)
+        node.state.code_review_pr_state = str(pr_state)
+        node.state.code_review_pr_html_url = str(html_url)
+        node.state.code_review_base_ref = str(base_ref)
+        node.state.code_review_head_ref = str(head_ref)
+        node.state.code_review_additions = max(0, int(additions or 0))
+        node.state.code_review_deletions = max(0, int(deletions or 0))
+        node.state.code_review_changed_files = max(0, int(changed_files or 0))
+        node.state.code_review_files = [dict(entry) for entry in (files or []) if isinstance(entry, dict)]
+        node.state.code_review_files_truncated = bool(files_truncated)
+        node.state.code_review_diff_text = str(diff_text)
+        node.state.code_review_diff_truncated = bool(diff_truncated)
+        node.state.code_review_diff_chars = max(0, int(diff_chars or 0))
+        node.state.code_review_diff_version += 1
+        node.state.code_review_walkthrough = []
+        node.state.code_review_findings = []
+        node.state.code_review_errors = []
+        node.state.code_review_dismissed_ids = []
+        node.state.code_review_title = ""
+        node.state.code_review_overview = ""
+        node.state.code_review_confidence = ""
+        node.state.code_review_scores = {}
+        node.state.code_review_quality_score = 0
+        node.state.code_review_verdict = "none"
+        node.state.code_review_risk = ""
+        node.state.code_review_quality_summary = ""
+        node.state.code_review_qa = []
+        node.state.code_review_state = "fetched"
+        node.state.code_review_error = ""
+        return node
+
+    def fetch_code_review_diff_text(self, node_id: str) -> str:
+        """The read-side of the lazy fetch: code_review_diff_text is
+        EXCLUDED from scene_payload() (see CodeReviewState's own comment) -
+        this is the only way the frontend ever gets the full text, via the
+        read-only fetchCodeReviewDiffText intent."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "code_review":
+            raise SceneError(f"node is not a code_review node: {node_id}")
+        return node.state.code_review_diff_text
+
+    def start_code_review_run(self, node_id: str) -> SceneNode:
+        """Mark a review run started: clears the error banner but keeps any
+        prior review visible until the new one lands (stale-while-
+        revalidate, the start_gitlink_run precedent - a failed re-run must
+        never blank a previously good review)."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "code_review":
+            raise SceneError(f"node is not a code_review node: {node_id}")
+        node.state.code_review_error = ""
+        return node
+
+    def complete_code_review_run(
+        self,
+        node_id: str,
+        *,
+        title: str,
+        overview: str,
+        confidence: str,
+        walkthrough: list,
+        findings: list,
+        errors: list,
+        scores: dict,
+        quality_score: int,
+        verdict: str,
+        risk: str,
+        quality_summary: str,
+    ) -> SceneNode:
+        """Lands a successful runCodeReview result: the walkthrough,
+        findings, errors, and scorecard, plus verdict/risk. Caps are
+        re-enforced here (defense in depth - the engine already caps, but
+        the domain is what bounds the wire and the save file). A new
+        review resets dismissals: finding ids are re-minted per review,
+        so a dismissal of the old review's f3 must never hide the new
+        review's f3."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "code_review":
+            raise SceneError(f"node is not a code_review node: {node_id}")
+        node.state.code_review_title = str(title)
+        node.state.code_review_overview = str(overview)
+        node.state.code_review_confidence = str(confidence)
+        node.state.code_review_walkthrough = [
+            dict(group) for group in (walkthrough or []) if isinstance(group, dict)
+        ][:8]
+        node.state.code_review_findings = [
+            dict(item) for item in (findings or []) if isinstance(item, dict)
+        ][:12]
+        node.state.code_review_errors = [
+            dict(item) for item in (errors or []) if isinstance(item, dict)
+        ][:10]
+        node.state.code_review_dismissed_ids = []
+        node.state.code_review_scores = {
+            str(key): max(0, int(value)) for key, value in (scores or {}).items()
+        }
+        node.state.code_review_quality_score = max(0, int(quality_score or 0))
+        node.state.code_review_verdict = str(verdict or "none")
+        node.state.code_review_risk = str(risk or "")
+        node.state.code_review_quality_summary = str(quality_summary)
+        node.state.code_review_state = "reviewed"
+        node.state.code_review_error = ""
+        return node
+
+    def fail_code_review_run(self, node_id: str, message: str) -> SceneNode | None:
+        """No-op (return None without raising) if the node is gone - a
+        background failure landing after node deletion should be silent
+        (the fail_gitlink_run precedent). Deliberately does NOT clear any
+        prior review - a failed re-run must never wipe out a previously
+        good one; only the error banner reflects the new failure."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            return None
+        node.state.code_review_error = str(message)
+        return node
+
+    def dismiss_code_review_finding(self, node_id: str, finding_id: str) -> SceneNode:
+        """Record one finding/error dismissal (the reviewer's dismiss
+        affordance). Idempotent: unknown ids and repeats are quiet no-ops,
+        never errors - dismissal is UI state, and a double-click must not
+        be able to fail a run."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "code_review":
+            raise SceneError(f"node is not a code_review node: {node_id}")
+        dismissed = str(finding_id)
+        known_ids = {
+            str(item.get("id")) for item in (
+                list(node.state.code_review_findings) + list(node.state.code_review_errors)
+            ) if isinstance(item, dict)
+        }
+        if dismissed and dismissed in known_ids and dismissed not in node.state.code_review_dismissed_ids:
+            node.state.code_review_dismissed_ids.append(dismissed)
+        return node
+
+    def append_code_review_qa(self, node_id: str, question: str, answer: str) -> SceneNode:
+        """Land one answered follow-up. Capped at the 20 most recent
+        entries - the Q&A list is on the wire (unlike the diff text), so
+        unbounded growth here would be unbounded wire growth."""
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "code_review":
+            raise SceneError(f"node is not a code_review node: {node_id}")
+        node.state.code_review_qa.append({
+            "question": str(question),
+            "answer": str(answer),
+        })
+        node.state.code_review_qa = node.state.code_review_qa[-20:]
+        return node
+
     # -- R5.4: Execution Sandbox node ------------------------------------------
     #
     # Same import posture as every other plugin-backed kind's domain methods:
@@ -2344,6 +2585,115 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
                 n.state.gitlink_change_state if isinstance(n.state, GitlinkState) else "draft"
             ),
             "gitlinkError": n.state.gitlink_error if isinstance(n.state, GitlinkState) else "",
+            "codeReviewPrUrl": n.state.code_review_pr_url if isinstance(n.state, CodeReviewState) else "",
+            "codeReviewRepo": n.state.code_review_repo if isinstance(n.state, CodeReviewState) else "",
+            "codeReviewPrNumber": (
+                n.state.code_review_pr_number if isinstance(n.state, CodeReviewState) else 0
+            ),
+            "codeReviewPrTitle": (
+                n.state.code_review_pr_title if isinstance(n.state, CodeReviewState) else ""
+            ),
+            "codeReviewPrState": (
+                n.state.code_review_pr_state if isinstance(n.state, CodeReviewState) else ""
+            ),
+            "codeReviewPrHtmlUrl": (
+                n.state.code_review_pr_html_url if isinstance(n.state, CodeReviewState) else ""
+            ),
+            "codeReviewBaseRef": (
+                n.state.code_review_base_ref if isinstance(n.state, CodeReviewState) else ""
+            ),
+            "codeReviewHeadRef": (
+                n.state.code_review_head_ref if isinstance(n.state, CodeReviewState) else ""
+            ),
+            "codeReviewAdditions": (
+                n.state.code_review_additions if isinstance(n.state, CodeReviewState) else 0
+            ),
+            "codeReviewDeletions": (
+                n.state.code_review_deletions if isinstance(n.state, CodeReviewState) else 0
+            ),
+            "codeReviewChangedFiles": (
+                n.state.code_review_changed_files if isinstance(n.state, CodeReviewState) else 0
+            ),
+            "codeReviewFiles": (
+                [dict(f) for f in n.state.code_review_files]
+                if isinstance(n.state, CodeReviewState)
+                else []
+            ),
+            "codeReviewFilesTruncated": (
+                n.state.code_review_files_truncated if isinstance(n.state, CodeReviewState) else False
+            ),
+            # codeReviewDiffText is DELIBERATELY OMITTED - see
+            # CodeReviewState's own comment (the gitlinkContextXml
+            # precedent). Served on demand via fetchCodeReviewDiffText.
+            "codeReviewDiffTruncated": (
+                n.state.code_review_diff_truncated if isinstance(n.state, CodeReviewState) else False
+            ),
+            "codeReviewDiffChars": (
+                n.state.code_review_diff_chars if isinstance(n.state, CodeReviewState) else 0
+            ),
+            # The lazy-diff cache key (the R5.3 post-review FIX 6
+            # precedent): bumped by every successful fetch, so the
+            # frontend never serves a previous fetch's text for this one.
+            "codeReviewDiffVersion": (
+                n.state.code_review_diff_version if isinstance(n.state, CodeReviewState) else 0
+            ),
+            "codeReviewWalkthrough": (
+                [dict(g) for g in n.state.code_review_walkthrough]
+                if isinstance(n.state, CodeReviewState)
+                else []
+            ),
+            "codeReviewFindings": (
+                [dict(f) for f in n.state.code_review_findings]
+                if isinstance(n.state, CodeReviewState)
+                else []
+            ),
+            "codeReviewErrors": (
+                [dict(e) for e in n.state.code_review_errors]
+                if isinstance(n.state, CodeReviewState)
+                else []
+            ),
+            "codeReviewDismissedIds": (
+                list(n.state.code_review_dismissed_ids)
+                if isinstance(n.state, CodeReviewState)
+                else []
+            ),
+            "codeReviewTitle": (
+                n.state.code_review_title if isinstance(n.state, CodeReviewState) else ""
+            ),
+            "codeReviewOverview": (
+                n.state.code_review_overview if isinstance(n.state, CodeReviewState) else ""
+            ),
+            "codeReviewConfidence": (
+                n.state.code_review_confidence if isinstance(n.state, CodeReviewState) else ""
+            ),
+            # Scores ride the wire as dict[str, str] - coerced here, the
+            # store_gitlink_context str-coercion precedent for
+            # gitlinkContextStats (contracts only admit string-valued
+            # dicts on SceneNodeRow).
+            "codeReviewScores": (
+                {str(k): str(v) for k, v in n.state.code_review_scores.items()}
+                if isinstance(n.state, CodeReviewState)
+                else {}
+            ),
+            "codeReviewQualityScore": (
+                n.state.code_review_quality_score if isinstance(n.state, CodeReviewState) else 0
+            ),
+            "codeReviewVerdict": (
+                n.state.code_review_verdict if isinstance(n.state, CodeReviewState) else "none"
+            ),
+            "codeReviewRisk": n.state.code_review_risk if isinstance(n.state, CodeReviewState) else "",
+            "codeReviewQualitySummary": (
+                n.state.code_review_quality_summary if isinstance(n.state, CodeReviewState) else ""
+            ),
+            "codeReviewQa": (
+                [dict(entry) for entry in n.state.code_review_qa]
+                if isinstance(n.state, CodeReviewState)
+                else []
+            ),
+            "codeReviewState": (
+                n.state.code_review_state if isinstance(n.state, CodeReviewState) else "draft"
+            ),
+            "codeReviewError": n.state.code_review_error if isinstance(n.state, CodeReviewState) else "",
             # codeSandboxSandboxId is DELIBERATELY OMITTED - see
             # CodeSandboxState's own comment (pure internal
             # directory-naming key, mirrors gitlink_imported_root's

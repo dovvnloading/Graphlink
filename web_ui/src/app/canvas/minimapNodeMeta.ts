@@ -54,6 +54,7 @@ const CATEGORY_BY_KIND: Record<string, MinimapCategory> = {
   harness: "tool",
   web_research: "tool",
   gitlink: "tool",
+  code_review: "tool",
   code_sandbox: "tool",
   frame: "group",
   container: "group",
@@ -89,7 +90,8 @@ export function minimapState(node: SceneNodeRow): MinimapState {
     node.harnessStatus === "failed" ||
     node.researchError ||
     node.codeSandboxError ||
-    node.gitlinkError
+    node.gitlinkError ||
+    node.codeReviewError
   ) {
     return "failed";
   }

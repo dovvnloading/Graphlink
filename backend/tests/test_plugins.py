@@ -52,13 +52,13 @@ def test_get_plugin_categories_groups_in_category_order_and_skips_empty():
     grouped = get_plugin_categories(discover_plugins())
     names = [category["name"] for category in grouped]
 
-    # "Validation & Delivery" has no plugins mapped to it in the real
-    # shipped plugin set today, so the empty-category-skip rule drops it
-    # from the result entirely. Every shipped plugin declares a real
-    # category, so the "More Plugins" catch-all is correctly absent.
+    # "Validation & Delivery" holds Review Lens (the first post-migration
+    # first-party addition), so the empty-category-skip rule keeps it while
+    # dropping nothing. Every shipped plugin declares a real category, so
+    # the "More Plugins" catch-all is correctly absent.
     assert names == [
         "Branch Foundations", "Reasoning & Research", "Build & Execution",
-        "Workflow & Drafting",
+        "Workflow & Drafting", "Validation & Delivery",
     ]
     for category in grouped:
         assert category["plugins"]
@@ -658,13 +658,14 @@ def test_every_builtin_now_has_a_real_builtin_action_registration():
     # ADR-014 stage 14.3: R7.5a's old "every _PLUGINS entry has moved off
     # the generic deferred notice" claim is now expressed differently -
     # there is no more `_PLUGINS` list to compare against. Confirms
-    # instead that all 7 migrated built-ins are real
+    # instead that all 8 first-party built-ins (the 7 migrated ones plus
+    # Review Lens, the first post-migration addition) are real
     # `plugin_registry.builtin_actions` entries (the ADR-014 stage 14.3
     # escape hatch), not `picker_entries` (the generic PluginNodeSeed
     # path reserved for third-party plugins and the demo plugins).
     handled = {
         "Web Research", "Artifact / Drafter", "Gitlink", "Virtual Environment Runner",
-        "System Prompt", "Conversation Node", "HTML Renderer",
+        "System Prompt", "Conversation Node", "HTML Renderer", "Review Lens",
     }
     registry = discover_plugins()
     assert handled == set(registry.builtin_actions)

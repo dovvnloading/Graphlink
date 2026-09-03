@@ -590,6 +590,80 @@ class CodeSandboxState(NodeState):
 
 
 @dataclass
+class CodeReviewState(NodeState):
+    """The Review Lens node's persisted shape: a guided pull-request
+    review - fetch a PR's unified diff, walk through it in
+    logically-grouped order, and surface severity-tiered findings plus a
+    deterministic weighted scorecard.
+
+    - code_review_pr_url: the pasted PR link (user input, verbatim).
+    - code_review_repo/pr_number/pr_title/pr_state/pr_html_url/base_ref/
+      head_ref/additions/deletions/changed_files: the fetched PR identity,
+      landed by store_code_review_diff (backend/domain/graph.py).
+    - code_review_files: per-file rows {path, status, additions,
+      deletions, patch, patch_truncated, previous_path?}. Patches are
+      capped at fetch time (review_lens/diff_fetch.py's
+      MAX_FILE_PATCH_CHARS) so this stays bounded.
+    - code_review_diff_text: the FULL unified diff (up to MAX_DIFF_CHARS).
+      Same ceiling reasoning as GitlinkState.gitlink_context_xml: the
+      scene topic republishes on ~20 undebounced triggers, so a 60KB blob
+      riding every snapshot would tax every unrelated mutation for the
+      rest of the session. EXCLUDED from scene_payload() on purpose;
+      served on demand via the read-only fetchCodeReviewDiffText intent.
+    - code_review_diff_version: monotonic per-node counter bumped by every
+      successful fetch (the R5.3 post-review FIX 6 precedent) - the
+      frontend keys its lazy-diff cache on this, never on a summary
+      string that two different fetches could share.
+    - code_review_walkthrough/findings/errors: landed by
+      complete_code_review_run. Findings/errors carry stable f1../e1..
+      ids (assigned by the engine at normalization time) so
+      code_review_dismissed_ids survives re-reviews and snapshots.
+    - code_review_scores: per-category ints in memory; the wire field
+      (scene_payload()'s "codeReviewScores") is honestly dict[str, str]
+      - coerced at the wire builder, mirroring store_gitlink_context's
+      own str-coercion precedent for gitlinkContextStats.
+    - code_review_qa: capped (MAX_QA_ENTRIES, enforced by append_) list
+      of {question, answer} follow-ups answered over the stored diff.
+    - code_review_state: draft (no diff yet) | fetched (diff ready) |
+      reviewed (a review landed).
+    - code_review_error: the current fetch/run/ask error banner text,
+      cleared on the next attempt."""
+
+    code_review_pr_url: str = ""
+    code_review_repo: str = ""
+    code_review_pr_number: int = 0
+    code_review_pr_title: str = ""
+    code_review_pr_state: str = ""
+    code_review_pr_html_url: str = ""
+    code_review_base_ref: str = ""
+    code_review_head_ref: str = ""
+    code_review_additions: int = 0
+    code_review_deletions: int = 0
+    code_review_changed_files: int = 0
+    code_review_files: list[dict[str, Any]] = field(default_factory=list)
+    code_review_files_truncated: bool = False
+    code_review_diff_text: str = ""
+    code_review_diff_truncated: bool = False
+    code_review_diff_chars: int = 0
+    code_review_diff_version: int = 0
+    code_review_walkthrough: list[dict[str, Any]] = field(default_factory=list)
+    code_review_findings: list[dict[str, Any]] = field(default_factory=list)
+    code_review_errors: list[dict[str, Any]] = field(default_factory=list)
+    code_review_dismissed_ids: list[str] = field(default_factory=list)
+    code_review_title: str = ""
+    code_review_overview: str = ""
+    code_review_confidence: str = ""
+    code_review_scores: dict[str, int] = field(default_factory=dict)
+    code_review_quality_score: int = 0
+    code_review_verdict: str = "none"
+    code_review_risk: str = ""
+    code_review_quality_summary: str = ""
+    code_review_qa: list[dict[str, str]] = field(default_factory=list)
+    code_review_state: str = "draft"
+    code_review_error: str = ""
+
+
+@dataclass
 class ChatState(NodeState):
     """Relocated verbatim from SceneNode's eight chat-only fields (former
     backend/domain/model.py fields). SceneNode's own `content` field
