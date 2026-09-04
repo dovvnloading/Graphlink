@@ -383,8 +383,30 @@ files = [
     # TYPE_CHECKING only, and the package now checks clean with no
     # behavioural change. See that module's own docstring.
     "settings_store",
+    # 2026-09-04: the persistence layer, which was 60% of everything left.
+    #
+    # session_save.py alone held 246 of the 444 remaining `mypy backend`
+    # errors, every one the same NodeState | None union-attr. Its per-kind
+    # serializers are reached through a kind-keyed dispatch table, so each one
+    # already knows what it is looking at - it just had no way to say so.
+    # node_access.with_state is that way; the bodies are untouched.
+    "backend/session_save.py",
+    "backend/session_load.py",
 ]
 ignore_missing_imports = true
+# Check the files in `files` fully; use everything they import for type
+# information without reporting errors inside it. Without this, listing
+# backend/session_save.py pulls its whole import closure - autosave,
+# chat_library, assets, api_provider - into the gate and reports 141 errors in
+# modules nobody put on the ratchet, which would mean the only way to add a
+# clean module is to first clean everything it touches. The ratchet is meant
+# to move one module at a time; this is what lets it.
+#
+# It does not weaken what is already listed: every module in `files` is still
+# checked in full, and the followed modules were reporting zero errors of
+# their own before this line existed, because the only ones being followed
+# were themselves listed.
+follow_imports = "silent"
 
 [tool.ruff.lint.per-file-ignores]
 # backend/canvas.py's own docstring: it deliberately re-imports every
