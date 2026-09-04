@@ -6,11 +6,14 @@ class's shared state established by DispatcherCoreOps.__init__ - it is
 composed exactly once, by backend/agents.py's
 `class AgentDispatcher(DispatcherCoreOps, ...)`.
 
-Method bodies follow backend/agent_dispatch/gitlink.py's own shapes
-verbatim in structure (the plain-blocking-action skeleton with inline
-pending_request_id claim for fetch/ask; the fire-and-forget RunRegistry-
-claimed background task with cooperative cancel_event for the review run
-itself); only the Review Lens payloads differ. Any name that lives in
+Method bodies follow backend/agent_dispatch/gitlink.py's own shapes; only
+the Review Lens payloads differ. fetch/ask are plain blocking actions
+that claim node.pending_request_id inline - they share
+DispatcherCoreOps._run_node_blocking_action for that, rather than each
+feature mixin keeping its own copy of the skeleton (this module used to
+carry a byte-identical duplicate of gitlink's). The review run itself is
+a fire-and-forget RunRegistry-claimed background task with a cooperative
+cancel_event, still shaped like start_gitlink_run. Any name that lives in
 backend/agents.py's module namespace (module helpers, constants, names
 imported into it) is accessed late-bound as `agents_module.<name>`
 through an in-body deferred import, NEVER via a module-top import here: a
@@ -26,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import uuid
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -36,54 +38,12 @@ if TYPE_CHECKING:
 class CodeReviewDispatchOps:
     """Review Lens dispatch: PR-diff fetch plus the Review and Ask surfaces (mixin - see module docstring)."""
 
-    async def _run_code_review_blocking_action(
-        self,
-        *,
-        bus: SessionBus,
-        notifications_state,
-        node,
-        action,
-        timeout: float,
-        timeout_message: str,
-        error_log_message: str,
-        error_notify_prefix: str,
-        default=None,
-    ):
-        """Shared skeleton behind the two PLAIN code-review async methods
-        below (fetch_code_review_diff/ask_code_review_question) - the same
-        shape as GitlinkDispatchOps._run_gitlink_blocking_action: these two
-        (unlike start_code_review_run) claim node.pending_request_id inline
-        and are awaited directly by the caller, with no RunRegistry/
-        cancel_event involvement. `action` is a zero-arg async callable
-        doing the actual blocking work (already wrapped in asyncio.to_thread
-        by the caller); everything around it - the busy marker
-        claim/release, the "scene" publishes bracketing it, and the
-        timeout/exception -> notification handling - is shared."""
-        from backend import agents as agents_module  # deferred: patch-seam + circular-import safety
-        request_id = uuid.uuid4().hex
-        node.pending_request_id = request_id
-        await bus.publish("scene")
-        try:
-            return await asyncio.wait_for(action(), timeout=timeout)
-        except asyncio.TimeoutError:
-            notifications_state.show(timeout_message, "error")
-            await bus.publish("notification")
-            return default
-        except Exception as exc:
-            agents_module.logger.exception(error_log_message)
-            notifications_state.show(f"{error_notify_prefix}: {exc}", "error")
-            await bus.publish("notification")
-            return default
-        finally:
-            node.pending_request_id = None
-            await bus.publish("scene")
-
     async def fetch_code_review_diff(self, *, bus: SessionBus, notifications_state, node, pr_url: str):
         from backend import agents as agents_module  # deferred: patch-seam + circular-import safety
         async def _action():
             return await asyncio.to_thread(agents_module._fetch_code_review_bundle, self._settings_manager, pr_url)
 
-        return await self._run_code_review_blocking_action(
+        return await self._run_node_blocking_action(
             bus=bus,
             notifications_state=notifications_state,
             node=node,
@@ -198,7 +158,7 @@ class CodeReviewDispatchOps:
                 agents_module._ask_review_lens_agent, diff_text, question, review_summary,
             )
 
-        return await self._run_code_review_blocking_action(
+        return await self._run_node_blocking_action(
             bus=bus,
             notifications_state=notifications_state,
             node=node,

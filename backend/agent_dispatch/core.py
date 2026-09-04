@@ -26,6 +26,7 @@ import asyncio
 import inspect
 import logging
 import threading
+import uuid
 
 from typing import TYPE_CHECKING
 
@@ -167,6 +168,60 @@ class DispatcherCoreOps:
         # the only state that must survive between runs is the plain string
         # node.state.code_sandbox_sandbox_id, real SceneNode state, not a
         # live object.
+
+    async def _run_node_blocking_action(
+        self,
+        *,
+        bus: SessionBus,
+        notifications_state,
+        node,
+        action,
+        timeout: float,
+        timeout_message: str,
+        error_log_message: str,
+        error_notify_prefix: str,
+        default=None,
+    ):
+        """The skeleton behind every PLAIN per-node async action - the ones
+        that claim node.pending_request_id inline and are awaited directly by
+        their caller, with no RunRegistry or cancel_event involvement (unlike
+        the start_* surfaces, which go through _dispatch or their own
+        fire-and-forget task).
+
+        `action` is a zero-arg async callable doing the actual blocking work,
+        already wrapped in asyncio.to_thread by the caller, including any
+        success-path transform of the thread result. Everything around it -
+        the busy-marker claim and release, the "scene" publishes bracketing
+        it, and the timeout/exception-to-notification handling - is shared.
+
+        Lives on the core rather than on a feature mixin because it is not
+        feature-specific: GitlinkDispatchOps extracted it for its own four
+        plain actions, then CodeReviewDispatchOps arrived and copied the
+        whole thing verbatim for its two - a helper written to remove
+        duplication, duplicated. Every dispatch mixin composes with this
+        class, so the next kind that needs the shape inherits it.
+
+        Callers: gitlink's fetch_repositories/load_repo_tree/import_snapshot/
+        build_context, and code review's fetch_diff/ask_question. Deliberately
+        NOT an exhaustive list to keep current - grep the name."""
+        from backend import agents as agents_module  # deferred: patch-seam + circular-import safety
+        request_id = uuid.uuid4().hex
+        node.pending_request_id = request_id
+        await bus.publish("scene")
+        try:
+            return await asyncio.wait_for(action(), timeout=timeout)
+        except asyncio.TimeoutError:
+            notifications_state.show(timeout_message, "error")
+            await bus.publish("notification")
+            return default
+        except Exception as exc:
+            agents_module.logger.exception(error_log_message)
+            notifications_state.show(f"{error_notify_prefix}: {exc}", "error")
+            await bus.publish("notification")
+            return default
+        finally:
+            node.pending_request_id = None
+            await bus.publish("scene")
 
     def _runtime_kwargs(self) -> dict:
         """ADR-006 stage 6.5: `{"runtime": self._provider_runtime}` for a
