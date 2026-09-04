@@ -58,6 +58,43 @@ def test_no_register_function_exceeds_the_300_line_cap():
     )
 
 
+# Below this much headroom, report it. A cap that everything sits just under
+# is a cap that will bind on whoever happens to touch one of those functions
+# next, for a reason that has nothing to do with their change - the same
+# erosion web_ui/scripts/check-bundle-size.mjs kept suffering, where a ratchet
+# with 323 bytes left "passed" right up until an unrelated two-line bug fix
+# tripped it. 10% of the cap (30 lines) is enough warning to split
+# deliberately rather than under duress.
+HEADROOM_WARN_LINES = MAX_REGISTER_FUNCTION_LINES // 10
+
+
+def test_the_number_of_register_functions_near_the_cap_is_not_growing():
+    """A cap everything sits just under will bind on whoever happens to touch
+    one of those functions next, for a reason that has nothing to do with
+    their change. That is the erosion web_ui/scripts/check-bundle-size.mjs
+    kept suffering - a ratchet with 323 bytes left "passed" right up until an
+    unrelated two-line bug fix tripped it.
+
+    Four functions were within 30 lines of the cap when this was added (294,
+    290, 285, 283), and splitting a 294-line registration function is real
+    work that should be scheduled rather than forced. So this does not fail
+    on those four - it fails on a FIFTH, which is the signal that the
+    pressure is growing rather than being paid down.
+
+    Lower the recorded count as they are split. Never raise it."""
+    tight = sorted(
+        (MAX_REGISTER_FUNCTION_LINES - length, f"{path.relative_to(REPO_ROOT).as_posix()}::{node.name}", length)
+        for path, node, length in _register_functions()
+        if MAX_REGISTER_FUNCTION_LINES - length < HEADROOM_WARN_LINES
+    )
+    assert len(tight) <= 4, (
+        f"{len(tight)} register* functions are now within {HEADROOM_WARN_LINES} lines of the "
+        f"{MAX_REGISTER_FUNCTION_LINES}-line cap, up from the 4 recorded here. Split one "
+        "before adding another:\n    "
+        + "\n    ".join(f"{length} lines ({headroom} left)  {name}" for headroom, name, length in tight)
+    )
+
+
 def test_at_least_one_register_function_is_found():
     # A collection bug (wrong glob, wrong name-matching predicate) would
     # make the test above vacuously pass with zero offenders - this
