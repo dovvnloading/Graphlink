@@ -334,6 +334,124 @@ def test_fallback_is_quiet_on_clean_diffs():
     assert len(fallback["walkthrough"]) == 1
 
 
+def _patched(*path_and_patch):
+    """A payload whose files carry real per-file patches, so the heuristics
+    scan one file at a time instead of one joined corpus."""
+    files = [
+        {"path": path, "additions": 1, "deletions": 0, "patch": patch}
+        for path, patch in path_and_patch
+    ]
+    return _payload(
+        files=files,
+        changed_files=len(files),
+        diff_text="\n".join(patch for _, patch in path_and_patch),
+    )
+
+
+def test_fallback_does_not_pair_a_call_in_one_file_with_text_in_another():
+    """The heuristics used to run over every file's added lines joined into
+    one string, with re.DOTALL - so a benign subprocess call in one file and
+    the words `shell=True` inside a string literal in a DIFFERENT file were
+    reported together as one HIGH-severity security finding."""
+    agent = ReviewLensAgent()
+    fallback = agent._fallback_review(_patched(
+        ("a/one.py", "@@\n+subprocess.run([\"ls\"], check=True)\n"),
+        ("b/two.py", "@@\n+DOC = 'never pass shell=True here'\n"),
+    ))
+    assert fallback["review_findings"] == []
+    assert fallback["category_scores"]["security"] == 82
+
+
+def test_fallback_still_flags_a_real_shell_true_call_across_lines():
+    """The control for the test above: narrowing the pattern to one call's own
+    argument list must not cost the genuine multi-line case."""
+    agent = ReviewLensAgent()
+    fallback = agent._fallback_review(_patched(
+        ("c/run.py", "@@\n+subprocess.run(\n+    cmd,\n+    shell=True,\n+)\n"),
+    ))
+    titles = [finding["title"] for finding in fallback["review_findings"]]
+    assert any("Shell execution" in title for title in titles)
+    assert fallback["review_findings"][0]["path"] == "c/run.py"
+
+
+def test_fallback_detects_a_bare_except_on_the_last_added_line():
+    """Added lines are joined WITHOUT a trailing newline, so the old
+    `except\\s*:\\s*\\n` pattern could never match the final added line."""
+    agent = ReviewLensAgent()
+    fallback = agent._fallback_review(_patched(("d/x.py", "@@\n+try:\n+    go()\n+except:")))
+    titles = [finding["title"] for finding in fallback["review_findings"]]
+    assert any("Bare exception" in title for title in titles)
+
+
+def test_fallback_findings_name_the_file_they_matched_in():
+    """The TODO, bare-except and debug-logging checks used to hard-code an
+    empty path and always render "diff-wide", even with a file to name."""
+    agent = ReviewLensAgent()
+    fallback = agent._fallback_review(_patched(("e/y.py", "@@\n+# TODO: later\n+print('hi')\n")))
+    assert fallback["review_findings"]
+    assert {finding["path"] for finding in fallback["review_findings"]} == {"e/y.py"}
+
+
+# =============================================================================
+# review_engine.py - a pre-screen must not be scored like a review
+# =============================================================================
+
+
+def _no_model(monkeypatch, exc=RuntimeError("boom")):
+    monkeypatch.setattr(api_provider, "chat", lambda **kwargs: (_ for _ in ()).throw(exc))
+
+
+def test_fallback_review_reports_no_verdict_and_no_score(monkeypatch):
+    """_fallback_review seeds every category at 82 and only moves scores DOWN
+    on a concrete hit, so a clean diff used to come back as "Strong, 82/100,
+    Release risk: Low" for a change no model ever read."""
+    _no_model(monkeypatch)
+    agent = ReviewLensAgent()
+    result = agent.get_response(_payload(diff_text="diff --git a/x.py b/x.py\n+x = 1\n"))
+    assert result["fallback"] is True
+    assert result["verdict"] == "none"  # CodeReviewNodeView hides the banner on this
+    assert result["quality_score"] == 0
+    assert result["risk_level"] == ""
+    assert "Not assessed" in result["quality_report_markdown"]
+    assert "Verdict:" not in result["quality_report_markdown"]
+    assert "no model review ran" in result["overview_markdown"]
+
+
+def test_an_unparseable_model_reply_also_reports_no_verdict(monkeypatch):
+    """The fallback is reached by any reply get_response cannot parse as JSON,
+    not only by an outage - the same bare except covers both."""
+    monkeypatch.setattr(api_provider, "chat", lambda **kwargs: {"message": {"content": "sorry, no"}})
+    agent = ReviewLensAgent()
+    result = agent.get_response(_payload())
+    assert result["fallback"] is True
+    assert result["verdict"] == "none"
+    assert result["quality_score"] == 0
+
+
+def test_a_real_model_reply_is_still_graded_normally(monkeypatch):
+    monkeypatch.setattr(
+        api_provider, "chat",
+        lambda **kwargs: {"message": {"content": json.dumps(_parsed())}},
+    )
+    agent = ReviewLensAgent()
+    result = agent.get_response(_payload())
+    assert result["fallback"] is False
+    assert result["verdict"] == "strong"
+    assert result["quality_score"] > 0
+    assert "Weighted Scorecard" in result["quality_report_markdown"]
+
+
+def test_fallback_keeps_category_scores_a_heuristic_actually_lowered(monkeypatch):
+    """Dropping the headline grade must not discard real evidence: a matched
+    heuristic still lowers its own category."""
+    _no_model(monkeypatch)
+    agent = ReviewLensAgent()
+    result = agent.get_response(_patched(("a/x.py", "@@\n+api_key = \"sk-live-123\"\n")))
+    assert result["verdict"] == "none"
+    assert result["category_scores"]["security"] <= 35
+    assert result["errors_found"]
+
+
 # =============================================================================
 # review_engine.py - get_response / answer_question
 # =============================================================================

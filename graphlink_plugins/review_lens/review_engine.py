@@ -43,6 +43,7 @@ rule explicitly (the diff is untrusted data, not instructions).
 
 from __future__ import annotations
 
+import json
 import re
 
 import api_provider
@@ -202,6 +203,46 @@ def _added_lines(diff_text):
         if line.startswith("+") and not line.startswith("+++"):
             added.append(line[1:])
     return added
+
+
+def _added_sections(payload):
+    """[(path, that file's added-line text)] - the unit every fallback
+    heuristic scans.
+
+    The heuristics used to run over ONE string: every file's added lines
+    joined together. Combined with re.DOTALL that let a single pattern match
+    across two unrelated files - a benign `subprocess.run([...])` in one file
+    and the word `shell=True` inside a string literal in another were reported
+    as one HIGH-severity "shell execution path added" finding. Scanning per
+    file cannot produce that pairing, and it gives every match a real path to
+    cite instead of the diff-wide placeholder three of the checks used.
+
+    Falls back to the whole unified diff as one unnamed section when the
+    payload carries no per-file patches (an older saved payload, or a file
+    list GitHub would not give us) - a nameless finding still beats none.
+    """
+    sections = []
+    for entry in payload.get("files") or []:
+        if not isinstance(entry, dict):
+            continue
+        added = "\n".join(_added_lines(str(entry.get("patch") or "")))
+        if added.strip():
+            sections.append((_clean_path(entry.get("path")), added))
+    if not sections:
+        whole = "\n".join(_added_lines(payload.get("diff_text", "")))
+        if whole.strip():
+            sections.append(("", whole))
+    return sections
+
+
+def _first_section_matching(sections, pattern, flags=0):
+    """The path of the first file whose own added lines match, or None when
+    nothing matches. None (not "") is the miss, so a real match on a file
+    with no recorded path stays distinguishable from no match at all."""
+    for path, added in sections:
+        if re.search(pattern, added, flags):
+            return path
+    return None
 
 
 def _top_dir(path):
@@ -390,12 +431,8 @@ Rules:
             return _group_files_for_walkthrough(files)
         return normalized[:MAX_WALKTHROUGH_GROUPS]
 
-    def _normalize_findings(self, findings, files, *, is_error_list=False, id_prefix="f"):
+    def _normalize_findings(self, findings, *, is_error_list=False, id_prefix="f"):
         normalized = []
-        known_paths = set()
-        for entry in files or []:
-            if isinstance(entry, dict) and _clean_path(entry.get("path")):
-                known_paths.add(_clean_path(entry.get("path")))
         for item in findings or []:
             if not isinstance(item, dict):
                 continue
@@ -466,9 +503,7 @@ Rules:
         added lines. Scores start at 82 (the legacy default) and only move
         down on concrete evidence - a fallback must never invent praise or
         condemnation it cannot see."""
-        diff_text = payload.get("diff_text", "")
-        added = _added_lines(diff_text)
-        added_text = "\n".join(added)
+        sections = _added_sections(payload)
         findings = []
         errors = []
         scores = {key: 82 for key in REVIEW_CATEGORY_WEIGHTS}
@@ -486,22 +521,19 @@ Rules:
                 "path": path, "line": 0, "title": title, "evidence": evidence, "fix": fix,
             })
 
-        def _first_path_matching(pattern, flags=0):
-            for entry in payload.get("files") or []:
-                if not isinstance(entry, dict):
-                    continue
-                patch = str(entry.get("patch") or "")
-                if re.search(pattern, "\n".join(
-                    line[1:] for line in patch.splitlines()
-                    if line.startswith("+") and not line.startswith("+++")
-                ), flags):
-                    return _clean_path(entry.get("path"))
-            return ""
+        # One pattern per check, matched per file. Each check used to carry
+        # TWO regexes - one to decide whether it fired, a looser one to find a
+        # path to blame - which is how the shell check detected
+        # case-insensitively and attributed case-sensitively, and how three
+        # checks ended up hard-coding "" and always rendering "diff-wide".
+        # `path is not None` is the fired test, so a match inside a file with
+        # no recorded path still reports.
 
-        if re.search(r"(api[_-]?key|secret|token|password)\s*=\s*['\"][^'\"]+['\"]", added_text, re.IGNORECASE):
+        path = _first_section_matching(
+            sections, r"(api[_-]?key|secret|token|password)\s*=\s*['\"][^'\"]+['\"]", re.IGNORECASE)
+        if path is not None:
             add_error(
-                "high", "Security",
-                _first_path_matching(r"(api[_-]?key|secret|token|password)\s*=\s*['\"]", re.IGNORECASE),
+                "high", "Security", path,
                 "Hard-coded secret-like value added",
                 "An added line assigns a literal value to a secret-like variable name.",
                 "Move the value to secure configuration or environment-based secret management.",
@@ -509,10 +541,10 @@ Rules:
             scores["security"] = min(scores["security"], 35)
             scores["maintainability"] = min(scores["maintainability"], 55)
 
-        if re.search(r"\b(eval|exec)\s*\(", added_text):
+        path = _first_section_matching(sections, r"\b(eval|exec)\s*\(")
+        if path is not None:
             add_finding(
-                "high", "Security",
-                _first_path_matching(r"\b(eval|exec)\s*\("),
+                "high", "Security", path,
                 "Dynamic code execution added",
                 "An added line calls `eval(...)` or `exec(...)` directly.",
                 "Dynamic execution expands injection and debugging risk.",
@@ -520,10 +552,18 @@ Rules:
             )
             scores["security"] = min(scores["security"], 40)
 
-        if re.search(r"subprocess\.(Popen|run)\(.*shell\s*=\s*True", added_text, re.IGNORECASE | re.DOTALL) or "os.system(" in added_text:
+        # `[^)]*` keeps the match inside one call's own argument list, and
+        # re.DOTALL is gone. Together they were the worst of these: `.*` under
+        # DOTALL ran across every file's added lines at once, so a benign
+        # `subprocess.run(["ls"])` in one file plus the words `shell=True` in
+        # a string literal in another produced a HIGH-severity finding and
+        # dropped the security score to 45. `[^)]` still spans newlines, so a
+        # genuine multi-line call is still caught.
+        path = _first_section_matching(
+            sections, r"subprocess\.(?:Popen|run)\([^)]*shell\s*=\s*True|os\.system\(", re.IGNORECASE)
+        if path is not None:
             add_finding(
-                "high", "Security",
-                _first_path_matching(r"subprocess\.(Popen|run)|os\.system\("),
+                "high", "Security", path,
                 "Shell execution path added",
                 "An added line invokes a shell command path from code.",
                 "Shell execution becomes dangerous if any untrusted input reaches the command.",
@@ -531,9 +571,13 @@ Rules:
             )
             scores["security"] = min(scores["security"], 45)
 
-        if re.search(r"except\s*:\s*\n", added_text):
+        # Anchored with re.MULTILINE rather than trailing `\n`: the added
+        # lines are joined WITHOUT a trailing newline, so `except\s*:\s*\n`
+        # could never match a bare except on the last added line of a diff.
+        path = _first_section_matching(sections, r"^\s*except\s*:\s*$", re.MULTILINE)
+        if path is not None:
             add_finding(
-                "medium", "Reliability", "",
+                "medium", "Reliability", path,
                 "Bare exception handler added",
                 "An added line starts a bare `except:` block.",
                 "Bare exception handling can swallow unrelated failures and make debugging harder.",
@@ -541,19 +585,20 @@ Rules:
             )
             scores["reliability"] = min(scores["reliability"], 60)
 
-        if re.search(r"except\s+Exception\s*:\s*pass", added_text):
+        path = _first_section_matching(sections, r"except\s+Exception\s*:\s*pass\b")
+        if path is not None:
             add_error(
-                "high", "Reliability",
-                _first_path_matching(r"except\s+Exception\s*:\s*pass"),
+                "high", "Reliability", path,
                 "Added exception is silently discarded",
                 "An added line uses `except Exception: pass`, which hides execution failures.",
                 "Handle the exception explicitly or surface the failure so the caller can react.",
             )
             scores["reliability"] = min(scores["reliability"], 42)
 
-        if re.search(r"\b(TODO|FIXME)\b", added_text):
+        path = _first_section_matching(sections, r"\b(TODO|FIXME)\b")
+        if path is not None:
             add_finding(
-                "low", "Maintainability", "",
+                "low", "Maintainability", path,
                 "TODO or FIXME markers added",
                 "Added lines contain TODO/FIXME markers.",
                 "Open TODO markers often indicate unfinished edge cases or deferred cleanup.",
@@ -561,9 +606,10 @@ Rules:
             )
             scores["maintainability"] = min(scores["maintainability"], 72)
 
-        if re.search(r"\b(print|console\.log)\s*\(", added_text):
+        path = _first_section_matching(sections, r"\b(print|console\.log)\s*\(")
+        if path is not None:
             add_finding(
-                "low", "Maintainability", "",
+                "low", "Maintainability", path,
                 "Debug logging added",
                 "Added lines call print/console.log directly.",
                 "Ad-hoc logging in shipped code pollutes output and is easy to forget.",
@@ -587,7 +633,7 @@ Rules:
             "category_scores": scores,
         }
 
-    def _normalize_response(self, parsed, payload):
+    def _normalize_response(self, parsed, payload, *, fallback=False):
         files = payload.get("files") or []
         if not isinstance(parsed, dict):
             parsed = {}
@@ -596,16 +642,34 @@ Rules:
             "overview": _clean_text(parsed.get("overview"), limit=1200) or "No structured overview was returned.",
             "confidence": _clean_text(parsed.get("confidence"), limit=20).lower(),
             "walkthrough": self._normalize_walkthrough(parsed.get("walkthrough"), files),
-            "review_findings": self._normalize_findings(parsed.get("review_findings"), files),
-            "errors_found": self._normalize_findings(parsed.get("errors_found"), files, is_error_list=True, id_prefix="e"),
+            "review_findings": self._normalize_findings(parsed.get("review_findings")),
+            "errors_found": self._normalize_findings(parsed.get("errors_found"), is_error_list=True, id_prefix="e"),
             "category_scores": self._normalize_scores(parsed.get("category_scores") if isinstance(parsed.get("category_scores"), dict) else None),
         }
         if normalized["confidence"] not in {"low", "medium", "high"}:
             normalized["confidence"] = "medium"
-        normalized["quality_score"] = self._compute_weighted_score(normalized["category_scores"])
-        normalized["verdict"], normalized["risk_level"] = self._derive_verdict(
-            normalized["quality_score"], normalized["review_findings"], normalized["errors_found"],
-        )
+        normalized["fallback"] = bool(fallback)
+        if fallback:
+            # A deterministic pre-screen is not a review, and must not be
+            # scored like one. _fallback_review seeds every category at 82 and
+            # only moves scores DOWN on a concrete hit, so a clean diff came
+            # out of here as "Verdict: Strong, 82/100, Release risk: Low" for
+            # a change no model ever read - reachable not just from an outage
+            # but from any reply get_response could not parse as JSON.
+            #
+            # "none" is the verdict the node already uses to mean "not
+            # reviewed yet", and CodeReviewNodeView hides the whole verdict
+            # banner on it, so this needs no frontend change. The category
+            # scores are kept: unlike the headline grade they are real
+            # evidence, lowered only where a heuristic actually matched.
+            normalized["quality_score"] = 0
+            normalized["verdict"] = "none"
+            normalized["risk_level"] = ""
+        else:
+            normalized["quality_score"] = self._compute_weighted_score(normalized["category_scores"])
+            normalized["verdict"], normalized["risk_level"] = self._derive_verdict(
+                normalized["quality_score"], normalized["review_findings"], normalized["errors_found"],
+            )
         normalized["quality_summary"] = self._build_quality_summary(normalized)
         normalized["finding_count"] = len(normalized["review_findings"])
         normalized["error_count"] = len(normalized["errors_found"])
@@ -629,7 +693,9 @@ Rules:
             f"- Pull request: {payload.get('repo', '')}#{payload.get('pr_number', '')} - {payload.get('pr_title', '')}",
             f"- Files changed: {payload.get('changed_files', len(payload.get('files') or []))} "
             f"(+{payload.get('additions', 0)}/-{payload.get('deletions', 0)} lines)",
-            f"- Full diff visible to model: {'No' if payload.get('diff_truncated') else 'Yes'}",
+            "- Full diff visible to model: no model review ran"
+            if normalized.get("fallback")
+            else f"- Full diff visible to model: {'No' if payload.get('diff_truncated') else 'Yes'}",
         ]
         if payload.get("files_truncated"):
             lines.append("- File list truncated: the review covers the first files returned by GitHub.")
@@ -687,6 +753,29 @@ Rules:
             f"- {REVIEW_CATEGORY_LABELS[key]} ({REVIEW_CATEGORY_WEIGHTS[key]}%): {normalized['category_scores'][key]}/100"
             for key in REVIEW_CATEGORY_WEIGHTS
         ]
+        if normalized.get("fallback"):
+            # No verdict, no weighted score, no verdict logic - none of it was
+            # earned. The rubric grades a model's reading of the change; the
+            # pre-screen only pattern-matched added lines, so saying "Strong"
+            # here would be inventing the one number a reviewer most wants to
+            # trust. What it DID look at is listed instead.
+            return "\n".join([
+                "## Code Quality Report", "",
+                "**Not assessed.** The model review did not run, so nothing graded this "
+                "change. What follows is a deterministic pre-screen of the diff's added "
+                "lines - it can only report patterns it matched, never absence of risk. "
+                "Run the review again for a real assessment.", "",
+                "### What the pre-screen looks for",
+                "- Hard-coded secret-like assignments",
+                "- `eval` / `exec` calls",
+                "- Shell execution (`shell=True`, `os.system`)",
+                "- Bare `except:` handlers",
+                "- `except Exception: pass`",
+                "- `TODO` / `FIXME` markers",
+                "- Direct `print` / `console.log` calls", "",
+                "Anything it matched is in the findings above. A clean pre-screen means "
+                "none of those patterns appeared - not that the change is sound.",
+            ])
         verdict_label = normalized["verdict"].replace("_", " ").title()
         return "\n".join([
             "## Code Quality Report", "",
@@ -705,6 +794,15 @@ Rules:
     def _build_quality_summary(self, normalized):
         findings_count = len(normalized["review_findings"])
         errors_count = len(normalized["errors_found"])
+        if normalized.get("fallback"):
+            # "Scores strongest in X, weakest in Y" is meaningless off the
+            # pre-screen's flat 82 baseline - with nothing matched, strongest
+            # and weakest are just whichever key won a tie.
+            return (
+                "The model review did not run, so this change has not been graded. "
+                f"A deterministic pre-screen of the added lines matched {findings_count} "
+                f"pattern finding(s) and {errors_count} high-confidence issue(s)."
+            )
         strongest = max(normalized["category_scores"], key=lambda k: normalized["category_scores"][k])
         weakest = min(normalized["category_scores"], key=lambda k: normalized["category_scores"][k])
         return (
@@ -717,8 +815,6 @@ Rules:
         """Run the full review: one model call, normalized; any failure
         (transport, non-JSON, empty) degrades to the deterministic fallback
         review, never an exception."""
-        import json
-
         diff_text = payload.get("diff_text", "")
         visible_diff, truncated = _truncate_diff_for_model(diff_text)
         user_prompt = "\n".join([
@@ -761,7 +857,7 @@ Rules:
                 "errors_found": fallback["errors_found"],
                 "category_scores": fallback["category_scores"],
                 "quality_summary": "",
-            }, payload)
+            }, payload, fallback=True)
         result = self._normalize_response(parsed, payload)
         result["raw_response"] = raw_text
         return result
