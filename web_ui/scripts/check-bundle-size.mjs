@@ -93,6 +93,39 @@ const ASSETS_DIR = join(HERE, "..", "dist", "app", "assets");
 // 1,423,000-ceiling -> 1,445,539 bytes (+22,539, ~1.6%). No chunk grew
 // from a dependency (imports are the existing shared card components -
 // NodeShell/NodeMenu/NodeMarkdown/CollapseToggleButton - plus React).
+//
+// CORRECTION - 2026-09-04 (QA audit).
+//
+// The amendment immediately above measures its own delta from the previous
+// CEILING (866,000) instead of the previous MEASUREMENT (841,347, recorded
+// by the 08-19 amendment). Review Lens did not cost +24,541 bytes; against
+// the last number this file actually recorded it cost +49,194 (+5.8%),
+// roughly double. The ceiling itself is not wrong - 917,000 is ~3% over the
+// real 890,541, the posture every amendment here has chosen - but the
+// arithmetic explaining it is, and a ratchet whose audit trail is wrong
+// cannot be reasoned about later.
+//
+// The gap is drift, and it went unattributed exactly as before: `git log`
+// shows 39 commits touching web_ui/src between the 08-19 amendment and
+// Review Lens, and NONE of them touched this file. Both prior amendments
+// were written about this same recurrence ("Drift, again, unattributed...
+// conflating them is how a ratchet dies quietly"), which makes this the
+// third time, and the first two were only caught after the gate had already
+// stopped being able to catch anything - 323 bytes of headroom in August,
+// 1,293 in September.
+//
+// So the numbers below are re-anchored to measured reality, and the script
+// now prints its own headroom and raises a CI annotation when that headroom
+// gets thin (see HEADROOM_WARN_RATIO). A warning, deliberately not a
+// failure: drift is nobody's individual fault, and failing an unrelated PR
+// for it is the false alarm the 08-12 amendment was itself written about.
+// Somebody has to see the erosion while there is still room to act on it.
+//
+// The underlying ADR-019 budget for the initial chunk is still 500 KiB
+// (512,000 bytes) and 890,541 is ~74% over it. This ceiling remains a
+// regression ratchet, not the budget. Closing the real gap still needs the
+// 17 eagerly-rendered node views in SceneCanvas.tsx code-split - work no
+// stage owns.
 const LARGEST_CHUNK_CEILING_BYTES = 917_000;
 // Post-11.6 reality: six chunks (main + katex + highlight.js + the three
 // lazy dialogs) total 1,288,075 bytes - essentially unchanged from the
@@ -112,6 +145,14 @@ const LARGEST_CHUNK_CEILING_BYTES = 917_000;
 // ceiling down again in a later stage that shrinks the total, per this
 // file's own ratchet discipline above.
 const TOTAL_JS_CEILING_BYTES = 1_489_000;
+
+// Below this much headroom, say so. Both prior amendments record the same
+// story: the ceiling was set with ~3-5% room, ordinary week-to-week growth
+// ate it silently, and the erosion was only noticed once the gate had 0.04%
+// (August) and 0.15% (September) left - at which point the next unrelated
+// change tripped it and looked like the culprit. 1.5% would have surfaced
+// both while there was still room to re-anchor deliberately.
+const HEADROOM_WARN_RATIO = 0.015;
 
 let entries;
 try {
@@ -166,8 +207,34 @@ if (failures.length > 0) {
   process.exit(1);
 }
 
+// Headroom is printed, not just the raw sizes: the number that actually
+// predicts a false alarm is how much room is left, and it was never on
+// screen. A CI annotation (rather than a buried log line) is what gets it in
+// front of someone while re-anchoring is still a deliberate choice.
+const headroom = (bytes, ceiling) => (ceiling - bytes) / ceiling;
+const asPercent = (ratio) => `${(ratio * 100).toFixed(1)}%`;
+const chunkHeadroom = headroom(chunks[0].bytes, LARGEST_CHUNK_CEILING_BYTES);
+const totalHeadroom = headroom(totalBytes, TOTAL_JS_CEILING_BYTES);
+
+for (const [label, bytes, ceiling, room] of [
+  ["largest chunk", chunks[0].bytes, LARGEST_CHUNK_CEILING_BYTES, chunkHeadroom],
+  ["total JS", totalBytes, TOTAL_JS_CEILING_BYTES, totalHeadroom],
+]) {
+  if (room >= HEADROOM_WARN_RATIO) continue;
+  const message =
+    `check-bundle-size: ${label} is ${bytes.toLocaleString()} bytes against a ` +
+    `${ceiling.toLocaleString()} ceiling - only ${asPercent(room)} headroom left. ` +
+    "Growth has been accumulating without the ceiling being re-anchored. Re-anchor it " +
+    "as a deliberate, commented amendment (ADR-019 §4) measured from the LAST RECORDED " +
+    "MEASUREMENT, not from the current ceiling, before an unrelated change trips it.";
+  // GitHub renders ::warning:: as an annotation on the run; elsewhere it is
+  // just a line, which is why the prefix is conditional rather than always on.
+  console.log(process.env.GITHUB_ACTIONS ? `::warning::${message}` : `WARNING: ${message}`);
+}
+
 console.log(
   `check-bundle-size OK: largest chunk ${chunks[0].bytes.toLocaleString()} bytes ` +
-    `(ceiling ${LARGEST_CHUNK_CEILING_BYTES.toLocaleString()}), ` +
-    `total ${totalBytes.toLocaleString()} bytes (ceiling ${TOTAL_JS_CEILING_BYTES.toLocaleString()}).`,
+    `(ceiling ${LARGEST_CHUNK_CEILING_BYTES.toLocaleString()}, ${asPercent(chunkHeadroom)} headroom), ` +
+    `total ${totalBytes.toLocaleString()} bytes ` +
+    `(ceiling ${TOTAL_JS_CEILING_BYTES.toLocaleString()}, ${asPercent(totalHeadroom)} headroom).`,
 );

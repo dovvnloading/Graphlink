@@ -89,6 +89,25 @@ filterwarnings = [
     # removal) - backend/tests/test_builder.py's one call is a documented
     # no-op probe (see that test's own comment), not a real usage to migrate.
     "ignore:'asyncio.get_event_loop_policy' is deprecated.*:DeprecationWarning",
+    # 2026-09-04 audit: the three error:: lines above cannot see a starlette
+    # deprecation at all. StarletteDeprecationWarning subclasses UserWarning,
+    # not DeprecationWarning - so the one policy written to catch "a
+    # dependency bump silently breaking at the next major version" was
+    # structurally blind to the dependency that has already announced one.
+    # Named by its defining module (starlette.exceptions) rather than
+    # starlette.testclient, which re-exports it but emits the warning below
+    # on import - pytest resolves this path while loading the config.
+    "error::starlette.exceptions.StarletteDeprecationWarning",
+    # The one starlette deprecation live today, recorded rather than
+    # silently passed. Every run emits it; the whole TestClient surface
+    # depends on it (test_ws_origin, test_http_trust_boundary,
+    # test_security_invariants, test_auth, test_session_lifecycle and four
+    # more). Clearing it means moving the test client onto httpx2, which is
+    # a hash-locked dependency change and its own reviewed piece of work,
+    # not a warnings-policy edit. Until then the error:: line above means a
+    # SECOND starlette deprecation fails the build instead of hiding behind
+    # this one.
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated.*:starlette.exceptions.StarletteDeprecationWarning",
 ]
 # Hang diagnosis. pytest's built-in faulthandler dumps a full traceback of
 # every thread if any single test runs longer than this, naming the exact
