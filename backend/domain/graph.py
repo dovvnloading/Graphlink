@@ -102,6 +102,20 @@ def _estimate_tokens(text: str) -> int:
     return TokenEstimator().count_tokens(text)
 
 
+def _bundle_int(value: object) -> int:
+    """Non-negative int from a fetch bundle, defaulting to 0.
+
+    The bundle is assembled from a GitHub API response, so every numeric
+    field in it is external input. graphlink_plugins/review_lens/diff_fetch.py
+    already coerces on the way in; this is the second line of the same
+    defence, for a bundle that reached here by any other route (a test, a
+    future caller, a hand-built payload)."""
+    try:
+        return max(0, int(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
 @dataclass
 class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
     """The canvas document for one session. Plain data + invariants; the
@@ -1414,27 +1428,20 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
         return node
 
     def store_code_review_diff(
-        self,
-        node_id: str,
-        *,
-        pr_url: str,
-        repo: str,
-        pr_number: int,
-        pr_title: str,
-        pr_state: str,
-        html_url: str,
-        base_ref: str,
-        head_ref: str,
-        additions: int,
-        deletions: int,
-        changed_files: int,
-        files: list,
-        files_truncated: bool,
-        diff_text: str,
-        diff_truncated: bool,
-        diff_chars: int,
+        self, node_id: str, *, pr_url: str, bundle: dict,
     ) -> SceneNode:
-        """Lands a successful fetchCodeReviewDiff result. A new fetch
+        """Lands a successful fetchCodeReviewDiff result.
+
+        Takes the fetch bundle whole rather than as 15 separate keyword
+        arguments. It used to be the latter, which made this the widest
+        signature in the repo at 18 parameters - and every one of them was
+        pure transport: the caller pulled 15 values out of a dict with
+        .get() only for this method to set them straight onto node.state.
+        `pr_url` stays separate because it is not part of the bundle: it is
+        what the user typed, kept even when the fetch that used it is
+        superseded.
+
+        A new fetch
         supersedes any prior review on this node (walkthrough, findings,
         errors, verdict, Q&A, and dismissals are all reset) - reviewing
         against a stale diff's findings would be worse than showing none,
@@ -1448,26 +1455,25 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "code_review":
             raise SceneError(f"node is not a code_review node: {node_id}")
-        try:
-            pr_number_value = max(0, int(pr_number))
-        except (TypeError, ValueError):
-            pr_number_value = 0
+        pr_number_value = _bundle_int(bundle.get("pr_number"))
         node.state.code_review_pr_url = str(pr_url)
-        node.state.code_review_repo = str(repo)
+        node.state.code_review_repo = str(bundle.get("repo", ""))
         node.state.code_review_pr_number = pr_number_value
-        node.state.code_review_pr_title = str(pr_title)
-        node.state.code_review_pr_state = str(pr_state)
-        node.state.code_review_pr_html_url = str(html_url)
-        node.state.code_review_base_ref = str(base_ref)
-        node.state.code_review_head_ref = str(head_ref)
-        node.state.code_review_additions = max(0, int(additions or 0))
-        node.state.code_review_deletions = max(0, int(deletions or 0))
-        node.state.code_review_changed_files = max(0, int(changed_files or 0))
-        node.state.code_review_files = [dict(entry) for entry in (files or []) if isinstance(entry, dict)]
-        node.state.code_review_files_truncated = bool(files_truncated)
-        node.state.code_review_diff_text = str(diff_text)
-        node.state.code_review_diff_truncated = bool(diff_truncated)
-        node.state.code_review_diff_chars = max(0, int(diff_chars or 0))
+        node.state.code_review_pr_title = str(bundle.get("pr_title", ""))
+        node.state.code_review_pr_state = str(bundle.get("pr_state", ""))
+        node.state.code_review_pr_html_url = str(bundle.get("html_url", ""))
+        node.state.code_review_base_ref = str(bundle.get("base_ref", ""))
+        node.state.code_review_head_ref = str(bundle.get("head_ref", ""))
+        node.state.code_review_additions = _bundle_int(bundle.get("additions"))
+        node.state.code_review_deletions = _bundle_int(bundle.get("deletions"))
+        node.state.code_review_changed_files = _bundle_int(bundle.get("changed_files"))
+        node.state.code_review_files = [
+            dict(entry) for entry in (bundle.get("files") or []) if isinstance(entry, dict)
+        ]
+        node.state.code_review_files_truncated = bool(bundle.get("files_truncated", False))
+        node.state.code_review_diff_text = str(bundle.get("diff_text", ""))
+        node.state.code_review_diff_truncated = bool(bundle.get("diff_truncated", False))
+        node.state.code_review_diff_chars = _bundle_int(bundle.get("diff_chars"))
         node.state.code_review_diff_version += 1
         node.state.code_review_walkthrough = []
         node.state.code_review_findings = []

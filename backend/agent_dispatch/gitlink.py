@@ -352,19 +352,32 @@ class GitlinkDispatchOps:
         request_id = handle.request_id
         node.pending_request_id = request_id
 
-        if not node.state.gitlink_pending_changes:
+        async def _abandon(reason: str) -> None:
+            """Give back everything this call claimed, and say why.
+
+            Five refusal paths below shared these four lines verbatim. That
+            is four chances each to forget one, and forgetting the first two
+            is not a cosmetic slip: a missed `pending_request_id = None`
+            leaves the node permanently busy, and a missed release() leaks
+            the registry slot for the rest of the session.
+
+            Its `await` sits on the ABANDON path only, so the atomic
+            check-and-freeze section further down keeps its zero-await
+            guarantee - the comparisons there still run with no suspension
+            point between them; this only runs once one of them has already
+            decided to give up."""
             node.pending_request_id = None
             self._runs.release(request_id)
-            on_failure("There is no approved change set to write.")
+            on_failure(reason)
             await bus.publish("scene")
+
+        if not node.state.gitlink_pending_changes:
+            await _abandon("There is no approved change set to write.")
             return
 
         local_root_text = (local_root or "").strip()
         if not local_root_text:
-            node.pending_request_id = None
-            self._runs.release(request_id)
-            on_failure("Select or import a local repository path before applying changes.")
-            await bus.publish("scene")
+            await _abandon("Select or import a local repository path before applying changes.")
             return
         local_root_path = Path(local_root_text).expanduser()
         # R5.3 post-review FIX 3: wrapped in asyncio.to_thread, like every
@@ -379,10 +392,7 @@ class GitlinkDispatchOps:
         # control.
         local_root_exists = await asyncio.to_thread(local_root_path.exists)
         if not local_root_exists:
-            node.pending_request_id = None
-            self._runs.release(request_id)
-            on_failure("The selected local repository path does not exist.")
-            await bus.publish("scene")
+            await _abandon("The selected local repository path does not exist.")
             return
 
         # --- Atomic check-and-freeze: NO await between these statements. ---
@@ -391,10 +401,7 @@ class GitlinkDispatchOps:
             client_fingerprint != current_fingerprint
             or current_fingerprint != node.state.gitlink_change_fingerprint
         ):
-            node.pending_request_id = None
-            self._runs.release(request_id)
-            on_failure("The proposed change set changed after approval. Review it again before applying.")
-            await bus.publish("scene")
+            await _abandon("The proposed change set changed after approval. Review it again before applying.")
             return
         # R5.3 post-review FIX 2: the fingerprint above says nothing about
         # WHERE the content is written - _fingerprint_changes only hashes
@@ -408,13 +415,10 @@ class GitlinkDispatchOps:
         # and how document.complete_gitlink_run records
         # gitlink_change_local_root.
         if local_root_text != (node.state.gitlink_change_local_root or ""):
-            node.pending_request_id = None
-            self._runs.release(request_id)
-            on_failure(
+            await _abandon(
                 "The local repository path changed since this proposal was generated. "
                 "Regenerate the change set before applying."
             )
-            await bus.publish("scene")
             return
         changes_snapshot = [dict(item) for item in node.state.gitlink_pending_changes]
         # --- End atomic section. Everything past this point operates ONLY on
