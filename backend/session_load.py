@@ -207,6 +207,10 @@ from backend.canvas import (
     _content_codec,
     _placeholder_chart_data,
 )
+from backend.domain.node_access import with_state
+# Not re-exported by backend.canvas, unlike the kinds above - imported
+# from the domain package directly, as session_save.py does.
+from backend.domain.node_states import ChartState, FrameState, NoteState
 from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 from graphlink_navigation_pins import NavigationPinRecord
@@ -469,7 +473,7 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             is_branch_synthesis=bool(payload.get("is_branch_synthesis", False)),
             synthesis_instructions=str(payload.get("synthesis_instructions", "") or ""),
             branch_status=(
-                payload.get("branch_status")
+                str(payload.get("branch_status"))
                 if payload.get("branch_status") in SceneDocument.BRANCH_STATUS_VALUES
                 else "active"
             ),
@@ -538,7 +542,10 @@ def _restore_image_payload(payload: dict[str, Any], document: SceneDocument) -> 
     import uuid as _uuid
 
     x, y = _position(payload)
-    node = SceneNode(id="", x=x, y=y, title="Image", kind="image", state=ImageState())
+    node = with_state(
+        SceneNode(id="", x=x, y=y, title="Image", kind="image", state=ImageState()),
+        ImageState,
+    )
     asset_store = _ACTIVE_ASSET_STORE.get()
 
     # ADR-009 stage 9.5: READ BOTH SHAPES. A chat saved with an asset store
@@ -616,16 +623,19 @@ def _restore_web_payload(payload: dict[str, Any]) -> SceneNode:
     # R6.4 translation: legacy node_type "web" -> backend kind
     # "web_research" (confirmed distinct strings, not a typo).
     x, y = _position(payload)
-    node = SceneNode(
-        id="", x=x, y=y, title="Web Research", kind="web_research",
-        content=str(payload.get("query", "")),
-        history=_restore_history(payload.get("conversation_history")),
-        is_collapsed=bool(payload.get("is_collapsed", False)),
-        state=WebResearchState(
-            # ADR-021 stage 21.5: absent in every pre-21.5 row, which is
-            # exactly the False default Web Research has always behaved as.
-            research_retain_to_knowledge=bool(payload.get("retain_to_knowledge", False)),
+    node = with_state(
+        SceneNode(
+            id="", x=x, y=y, title="Web Research", kind="web_research",
+            content=str(payload.get("query", "")),
+            history=_restore_history(payload.get("conversation_history")),
+            is_collapsed=bool(payload.get("is_collapsed", False)),
+            state=WebResearchState(
+                # ADR-021 stage 21.5: absent in every pre-21.5 row, which is
+                # exactly the False default Web Research has always behaved as.
+                research_retain_to_knowledge=bool(payload.get("retain_to_knowledge", False)),
+            ),
         ),
+        WebResearchState,
     )
     research_result = payload.get("research_result")
     if isinstance(research_result, dict) and research_result:
@@ -870,7 +880,7 @@ def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
     goal = str(payload.get("goal", ""))
     raw_status = str(payload.get("builder_status", "draft") or "draft")
     status = raw_status if raw_status in _BUILDER_TERMINAL_STATUSES + ("draft",) else "interrupted"
-    steps = []
+    steps: list[dict[str, Any]] = []
     for raw in payload.get("steps") or []:
         if isinstance(raw, dict) and raw.get("title"):
             steps.append({
@@ -1240,10 +1250,13 @@ def _restore_notes(document: SceneDocument, notes_data: list) -> dict[int, str]:
             continue
         try:
             x, y = _position(note_payload)
-            note = document.add_note(
-                x, y,
-                is_system_prompt=bool(note_payload.get("is_system_prompt", False)),
-                is_summary_note=bool(note_payload.get("is_summary_note", False)),
+            note = with_state(
+                document.add_note(
+                    x, y,
+                    is_system_prompt=bool(note_payload.get("is_system_prompt", False)),
+                    is_summary_note=bool(note_payload.get("is_summary_note", False)),
+                ),
+                NoteState,
             )
             document.set_note_content(note.id, str(note_payload.get("content", "")))
             # Rows saved before the forced-default fix carry
@@ -1308,7 +1321,12 @@ def _restore_charts(
                 chart_payload, "parent_node_id", "parent_node_index", nodes_by_id, all_nodes_map,
             )
             x, y = _position(chart_payload)
-            chart = document.add_chart_node(x, y, parent_id, chart_type, chart_data, chart_error=chart_error)
+            chart = with_state(
+                document.add_chart_node(
+                    x, y, parent_id, chart_type, chart_data, chart_error=chart_error,
+                ),
+                ChartState,
+            )
             # Aspect-lock MUST be applied before any resize: resize_chart's
             # own aspect-preserving re-derivation reads chart_aspect_locked
             # at call time, and a freshly-created chart always starts locked
@@ -1348,7 +1366,7 @@ def _restore_frames(
             member_ids = [frame_source_map[i] for i in item_indices if i in frame_source_map]
             if not member_ids:
                 continue
-            frame = document.create_frame(member_ids)
+            frame = with_state(document.create_frame(member_ids), FrameState)
             document.set_group_label(frame.id, str(frame_payload.get("note", "") or ""))
             document.set_group_color(frame.id, frame_payload.get("color"), frame_payload.get("header_color"))
             if bool(frame_payload.get("is_locked", True)) != frame.state.is_locked:
@@ -1681,7 +1699,7 @@ def _restore_branch_provenance_item_ids(
 def _restore_pins(document: SceneDocument, pins_data: list) -> None:
     if not isinstance(pins_data, list) or not pins_data:
         return
-    records = []
+    records: list[NavigationPinRecord] = []
     for pin_payload in pins_data:
         if not isinstance(pin_payload, dict):
             continue
@@ -1863,12 +1881,14 @@ def _restore_chat_into_document(
     by_payload_id = dict(nodes_by_id)
     if isinstance(notes_data, list):
         for note_index, note_payload in enumerate(notes_data):
-            note_new_id = notes_map.get(note_index)
-            if not isinstance(note_payload, dict) or note_new_id is None:
+            # Not `note_new_id`: that name is bound as a plain str by the
+            # loop over notes_map.items() earlier in this function.
+            mapped_note_id = notes_map.get(note_index)
+            if not isinstance(note_payload, dict) or mapped_note_id is None:
                 continue
             note_payload_id = note_payload.get("id")
             if note_payload_id:
-                by_payload_id[str(note_payload_id)] = note_new_id
+                by_payload_id[str(note_payload_id)] = mapped_note_id
     by_payload_id.update(charts_by_id)
 
     if not _restore_flat_edges(document, chat_data, by_payload_id):

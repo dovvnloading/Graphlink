@@ -90,6 +90,31 @@ def optional_node(
     return node  # type: ignore[return-value]
 
 
+def with_state(node: SceneNode, state_cls: type[_S]) -> "_NodeWith[_S]":
+    """A node whose kind has already been decided, narrowed by its state.
+
+    require_node's form for code that is HANDED a node instead of looking one
+    up. backend/session_save.py's per-kind serializers are the case this
+    exists for: each is reached through a kind-keyed dispatch table, so the
+    kind is settled before the function is entered - what the function needs
+    is not another kind check but a way to say which state it is about to
+    read, in a form a checker can follow.
+
+    Unlike is_node_of this returns the node rather than a bool, because these
+    callers have no wrong-kind branch to take: a serializer handed the wrong
+    node cannot produce a correct payload, and writing a half-built one into
+    a save file is worse than failing. The isinstance check is redundant on
+    every live path for the same reason require_node's is - and, exactly like
+    require_node's, it is the difference between a clear error and a
+    confusing one if a future dispatch table ever disagrees with itself.
+    """
+    if not isinstance(node.state, state_cls):
+        raise SceneError(
+            f"node {node.id} is {node.kind} but has no {state_cls.__name__}"
+        )
+    return node  # type: ignore[return-value]
+
+
 def is_node_of(
     node: SceneNode | None, kind: str | tuple[str, ...], state_cls: type[_S],
 ) -> TypeGuard["_NodeWith[_S]"]:

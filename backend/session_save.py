@@ -105,6 +105,25 @@ import re
 from typing import Any
 
 from backend.canvas import SceneDocument, SceneNode, _content_codec
+from backend.domain.node_access import with_state
+from backend.domain.node_states import (
+    ArtifactState,
+    ChartState,
+    ChatState,
+    CodeReviewState,
+    CodeSandboxState,
+    CodeState,
+    ContainerState,
+    DocumentState,
+    FrameState,
+    GitlinkState,
+    HarnessState,
+    HtmlState,
+    ImageState,
+    NoteState,
+    PlanState,
+    WebResearchState,
+)
 from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_settings_store import SettingsManager
 
@@ -217,7 +236,8 @@ def _serialize_history(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # _classify_edges) - these functions never reference `document` or other
 # nodes at all, mirroring session_load.py's equivalent restorers.
 
-def _serialize_chat_node(node: SceneNode) -> dict[str, Any]:
+def _serialize_chat_node(raw_node: SceneNode) -> dict[str, Any]:
+    node = with_state(raw_node, ChatState)
     if node.state.content_parts is not None:
         raw_content = _content_codec.process_content_for_serialization(node.state.content_parts)
     else:
@@ -269,11 +289,13 @@ def _serialize_chat_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
-def _serialize_code_node(node: SceneNode) -> dict[str, Any]:
+def _serialize_code_node(raw_node: SceneNode) -> dict[str, Any]:
+    node = with_state(raw_node, CodeState)
     return {"node_type": "code", "code": node.state.code, "language": node.state.language}
 
 
-def _serialize_document_node(node: SceneNode) -> dict[str, Any]:
+def _serialize_document_node(raw_node: SceneNode) -> dict[str, Any]:
+    node = with_state(raw_node, DocumentState)
     return {
         "node_type": "document",
         "title": node.title,
@@ -290,7 +312,7 @@ def _serialize_document_node(node: SceneNode) -> dict[str, Any]:
 
 
 def _serialize_image_node(
-    node: SceneNode, document: SceneDocument, asset_store: Any | None = None
+    raw_node: SceneNode, document: SceneDocument, asset_store: Any | None = None
 ) -> dict[str, Any]:
     """ADR-009 stage 9.5: writes the image's bytes to the content-addressed
     asset store when one is supplied, emitting only a ref - so autosave
@@ -303,6 +325,7 @@ def _serialize_image_node(
     shape, so a chat saved by an older build keeps loading untouched and no
     row ever has to be rewritten to make this safe. The inline path is
     what a future cleanup deletes, once no old rows remain in the wild."""
+    node = with_state(raw_node, ImageState)
     asset = document.image_assets.get(node.state.image_asset_id)
     image_bytes = asset[0] if asset is not None else b""
     mime_type = asset[1] if asset is not None else "image/png"
@@ -347,7 +370,8 @@ def _serialize_conversation_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
-def _serialize_html_node(node: SceneNode) -> dict[str, Any]:
+def _serialize_html_node(raw_node: SceneNode) -> dict[str, Any]:
+    node = with_state(raw_node, HtmlState)
     return {
         "node_type": "html",
         "html_content": node.content,
@@ -357,7 +381,8 @@ def _serialize_html_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
-def _serialize_web_node(node: SceneNode) -> dict[str, Any]:
+def _serialize_web_node(raw_node: SceneNode) -> dict[str, Any]:
+    node = with_state(raw_node, WebResearchState)
     research_result = _camel_to_snake_deep(node.state.research_result) if node.state.research_result else {}
     return {
         # R6.5 translation (inverse of R6.4's own): backend kind
@@ -374,7 +399,8 @@ def _serialize_web_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
-def _serialize_artifact_node(node: SceneNode) -> dict[str, Any]:
+def _serialize_artifact_node(raw_node: SceneNode) -> dict[str, Any]:
+    node = with_state(raw_node, ArtifactState)
     return {
         "node_type": "artifact",
         "instruction": node.content,
@@ -384,7 +410,8 @@ def _serialize_artifact_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
-def _serialize_gitlink_node(node: SceneNode) -> dict[str, Any]:
+def _serialize_gitlink_node(raw_node: SceneNode) -> dict[str, Any]:
+    node = with_state(raw_node, GitlinkState)
     return {
         "node_type": "gitlink",
         "task_prompt": node.state.gitlink_task_prompt,
@@ -408,12 +435,13 @@ def _serialize_gitlink_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
-def _serialize_code_review_node(node: SceneNode) -> dict[str, Any]:
+def _serialize_code_review_node(raw_node: SceneNode) -> dict[str, Any]:
     # NOTE (ADR-002 stage 2.5 gate): every field below is read as
     # node.state.<field>, never via a `state = node.state` alias -
     # tests/test_node_state_migration.py's bare-attribute ban only
     # recognizes the `X.state.<field>` shape, so an alias would fail the
     # build (the _serialize_gitlink_node precedent reads the same way).
+    node = with_state(raw_node, CodeReviewState)
     return {
         "node_type": "code_review",
         "pr_url": node.state.code_review_pr_url,
@@ -456,7 +484,8 @@ def _serialize_code_review_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
-def _serialize_code_sandbox_node(node: SceneNode) -> dict[str, Any]:
+def _serialize_code_sandbox_node(raw_node: SceneNode) -> dict[str, Any]:
+    node = with_state(raw_node, CodeSandboxState)
     return {
         "node_type": "code_sandbox",
         "prompt": node.state.code_sandbox_prompt,
@@ -470,7 +499,7 @@ def _serialize_code_sandbox_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
-def _serialize_plan_node(node: SceneNode) -> dict[str, Any]:
+def _serialize_plan_node(raw_node: SceneNode) -> dict[str, Any]:
     """ADR-008 stage 8.3: the Builder plan node. NEW-app-only kind (the
     legacy app never had a Builder) - a legacy load silently skips it, the
     same documented tolerant behavior every post-legacy kind gets. The
@@ -478,6 +507,7 @@ def _serialize_plan_node(node: SceneNode) -> dict[str, Any]:
     persisted: they describe a RunHandle that cannot survive a restart;
     session_load's restorer likewise normalizes a non-terminal
     builder_status to "interrupted" (see PlanState's own docstring)."""
+    node = with_state(raw_node, PlanState)
     return {
         "node_type": "plan",
         "goal": node.state.plan_goal,
@@ -502,7 +532,7 @@ def _serialize_plan_node(node: SceneNode) -> dict[str, Any]:
     }
 
 
-def _serialize_harness_node(node: SceneNode) -> dict[str, Any]:
+def _serialize_harness_node(raw_node: SceneNode) -> dict[str, Any]:
     """PLAN-2026-08-24 H1: the harness node. NEW-app-only kind, same
     tolerant legacy-skip posture as the plan node. Deliberately small:
     conversation history lives in the workspace transcript, not here (see
@@ -510,6 +540,7 @@ def _serialize_harness_node(node: SceneNode) -> dict[str, Any]:
     plus the two durable identities (workspace id, last run id).
     session_load normalizes a non-terminal harness_status to
     "interrupted", the exact PlanState treatment."""
+    node = with_state(raw_node, HarnessState)
     return {
         "node_type": "harness",
         "goal": node.state.harness_goal,
@@ -637,7 +668,8 @@ _NODE_SERIALIZERS = {
 }
 
 
-def _serialize_note(node: SceneNode) -> dict[str, Any]:
+def _serialize_note(raw_node: SceneNode) -> dict[str, Any]:
+    node = with_state(raw_node, NoteState)
     return {
         "id": node.id,
         "content": node.content,
@@ -684,7 +716,8 @@ def _serialize_pin(record) -> dict[str, Any]:
     }
 
 
-def _serialize_frame(node: SceneNode, frame_source_index: dict[str, int]) -> dict[str, Any]:
+def _serialize_frame(raw_node: SceneNode, frame_source_index: dict[str, int]) -> dict[str, Any]:
+    node = with_state(raw_node, FrameState)
     item_indices = [frame_source_index[i] for i in node.item_ids if i in frame_source_index]
     # Technical-debt audit finding: group_width/group_height is the frame's
     # CURRENT effective size, and reading it unconditionally is CORRECT
@@ -735,7 +768,8 @@ def _serialize_frame(node: SceneNode, frame_source_index: dict[str, int]) -> dic
     }
 
 
-def _serialize_container(node: SceneNode, all_items_index: dict[str, int]) -> dict[str, Any]:
+def _serialize_container(raw_node: SceneNode, all_items_index: dict[str, int]) -> dict[str, Any]:
+    node = with_state(raw_node, ContainerState)
     item_indices = [all_items_index[i] for i in node.item_ids if i in all_items_index]
     width = node.state.group_width if node.state.group_width is not None else 0.0
     height = node.state.group_height if node.state.group_height is not None else 0.0
@@ -754,8 +788,9 @@ def _serialize_container(node: SceneNode, all_items_index: dict[str, int]) -> di
 
 
 def _serialize_chart(
-    node: SceneNode, nodes_index: dict[str, int], parent_id: str | None,
+    raw_node: SceneNode, nodes_index: dict[str, int], parent_id: str | None,
 ) -> dict[str, Any]:
+    node = with_state(raw_node, ChartState)
     parent_index = nodes_index.get(parent_id) if parent_id is not None else None
     return {
         "id": node.id,
