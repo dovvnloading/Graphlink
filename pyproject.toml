@@ -352,46 +352,43 @@ select = ["E9", "F", "T201"]
 # [tool.ruff]'s comment above) rejects. Ratchet this list wider as more
 # modules earn real annotations - never narrower.
 files = [
+    # 2026-09-04: everything. This list began as four files and was widened a
+    # module at a time as each one earned it; the last sweep took the tree from
+    # 179 errors to zero, so the ratchet's end state is simply "all of it".
+    #
+    # Kept as an explicit list of roots rather than ".", so that a new
+    # top-level directory has to be added here deliberately rather than
+    # arriving unchecked - and so this stays the record of what is covered.
+    "backend",
     "contracts",
-    "backend/events.py",
-    "backend/token_counter.py",
-    "graphlink_process_env.py",
-    # 2026-09-04: backend/domain/, the whole package.
-    #
-    # The blocker was never annotation effort - it was that SceneNode.state is
-    # typed `NodeState | None` against a field-less marker, so every per-kind
-    # field access was unverifiable. backend/domain/node_access.py's
-    # require_node/optional_node/is_node_of narrow the NODE, which
-    # tests/test_node_state_migration.py permits (it constrains the ACCESS
-    # SHAPE, `<anything>.state.<field>`, not how the node was obtained) where
-    # aliasing the state does not.
-    #
-    # Widened in three steps as the per-kind method groups came out of
-    # SceneDocument: three modules, then thirteen, then all eighteen once the
-    # four cross-cutting mixins were narrowed too. That last group could not
-    # use require_node directly - they read per-kind state off nodes they hold
-    # rather than look up by id, which is what is_node_of is for.
-    "backend/domain",
-    # 2026-09-04: the first widening since this list was written, and the
-    # ratchet moving the direction its own comment asks for.
-    #
-    # settings_store/ used to report 115 errors, every one attr-defined, and
-    # 101 of those were three names: state, _save_state, _protect_and_track.
-    # The package was not badly typed, it was untypeable - a mixin cannot be
-    # checked in isolation when nothing declares what the class composing it
-    # provides. settings_store/_composed.py declares exactly that, in
-    # TYPE_CHECKING only, and the package now checks clean with no
-    # behavioural change. See that module's own docstring.
+    "graphlink_plugins",
+    "provider_runtime",
     "settings_store",
-    # 2026-09-04: the persistence layer, which was 60% of everything left.
-    #
-    # session_save.py alone held 246 of the 444 remaining `mypy backend`
-    # errors, every one the same NodeState | None union-attr. Its per-kind
-    # serializers are reached through a kind-keyed dispatch table, so each one
-    # already knows what it is looking at - it just had no way to say so.
-    # node_access.with_state is that way; the bodies are untouched.
-    "backend/session_save.py",
-    "backend/session_load.py",
+    "tests",
+    "tools",
+    "api_provider.py",
+    "graphlink_artifact_agent.py",
+    "graphlink_audio.py",
+    "graphlink_chart_data.py",
+    "graphlink_chart_rendering.py",
+    "graphlink_chat_agent.py",
+    "graphlink_desktop.py",
+    "graphlink_execution_guard.py",
+    "graphlink_grid_view_settings.py",
+    "graphlink_memory.py",
+    "graphlink_migrations.py",
+    "graphlink_model_catalog.py",
+    "graphlink_navigation_pins.py",
+    "graphlink_note_agent.py",
+    "graphlink_process_env.py",
+    "graphlink_prompts.py",
+    "graphlink_scratch_dirs.py",
+    "graphlink_secrets.py",
+    "graphlink_settings_store.py",
+    "graphlink_task_config.py",
+    "graphlink_token_estimator.py",
+    "graphlink_version.py",
+    "graphlink_wire_schema.py",
 ]
 ignore_missing_imports = true
 # Check the files in `files` fully; use everything they import for type

@@ -210,7 +210,16 @@ def build_profile(root: Path, is_user_dir: bool) -> dict:
 
 def _meta_payload(profile: dict, root: Path) -> dict:
     try:
-        from graphlink_version import __version__ as app_version
+        # BUG FIX: this imported `__version__`, a name graphlink_version.py has
+        # never defined - it holds one line, APP_VERSION. The import raised
+        # ImportError on every call, the except swallowed it, and every
+        # transcript ever written recorded "app": "" instead of the version it
+        # exists to record. backend/about.py, backend/diagnostic_bundle.py and
+        # backend/workspace_archive.py all import the right name.
+        #
+        # The try/except stays: a transcript is worth writing even if the
+        # version cannot be read, which is the whole reason this is guarded.
+        from graphlink_version import APP_VERSION as app_version
     except Exception:
         app_version = ""
     return {

@@ -613,7 +613,9 @@ def add_document_with_chunks(
                 ).fetchone()[0]
                 return IngestOutcome(document_id=existing_id, chunk_count=existing_count, was_new=False)
 
-            document_id = cursor.lastrowid
+            # lastrowid is Optional only because it is None before the first
+            # INSERT on a cursor; this reads it directly after one.
+            document_id: int = cursor.lastrowid  # type: ignore[assignment]
             conn.executemany(
                 "INSERT INTO chunks (document_id, ordinal, text, token_count, offset_start, offset_end) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -726,7 +728,9 @@ def get_or_create_workspace_collection(db_path: Path, workspace_id: int) -> int:
                     "INSERT INTO collections (name, scope, created_at, workspace_id) VALUES (?, ?, ?, ?)",
                     (f"workspace-{workspace_id}", "workspace", _now_iso(), workspace_id),
                 )
-                return int(cursor.lastrowid)
+                # lastrowid is Optional only because it is None before the
+                # first INSERT on a cursor; this reads it directly after one.
+                return int(cursor.lastrowid)  # type: ignore[arg-type]
             except sqlite3.IntegrityError:
                 # REVIEW-FIX: the SELECT above and this INSERT are not one
                 # atomic step - a second, fully separate connection (every

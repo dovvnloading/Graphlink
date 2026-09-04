@@ -400,6 +400,19 @@ class SessionBus:
         `send_queue_maxsize` bounds each BUFFERED connection's outbound queue
         (see attach(buffered=True) and _BufferedConnection)."""
         self.session_id = session_id
+        # Attached from outside, after construction, by the modules that own
+        # each concern: backend/chat_library.py sets the three chat_* names in
+        # register_chat_library, and backend/autosave.py sets autosave_task.
+        # Declared here so that is a stated part of the object rather than
+        # something a reader has to discover by grepping for `bus.` - and so a
+        # checker reading either of those modules can follow it. They are real
+        # assignments, not TYPE_CHECKING-only: None is the honest before-wiring
+        # value and code already tests for it.
+        self.chat_db_path: Any = None
+        self.chat_mutation_guard: Any = None
+        self.chat_save_state: Any = None
+        self.autosave_task: Any = None
+        self.autosave_guarded_tick: Any = None
         # ADR-016 stage 16.3: optional - fires with (topic, serialized byte
         # size) from _broadcast, once per outbound message. None by default
         # (every test-constructed SessionBus, and this codebase has

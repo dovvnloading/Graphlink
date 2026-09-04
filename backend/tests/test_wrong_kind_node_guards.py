@@ -28,6 +28,8 @@ Everything else raises SceneError.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from backend.domain.model import SceneError
@@ -39,8 +41,12 @@ def _chat_id(doc: SceneDocument) -> str:
     return doc.add_chat_node(0.0, 0.0, "hello", True).id
 
 
-# (method name, positional args after node_id, keyword args)
-RAISES = [
+# (method name, positional args after node_id, keyword args). Spelled out
+# rather than inferred because the two tables are concatenated below, and
+# per-table inference gives them element types too narrow to add together.
+_Call = tuple[str, tuple[Any, ...], dict[str, Any]]
+
+RAISES: list[_Call] = [
     ("complete_web_research_run", ({"summary": "s"},), {}),
     ("fail_web_research_run", (), {"cancelled": False, "message": "boom"}),
     ("append_artifact_user_message", ("write it again",), {}),
@@ -49,7 +55,7 @@ RAISES = [
     ("complete_gitlink_apply", (2,), {}),
 ]
 
-RETURNS_NONE = [
+RETURNS_NONE: list[_Call] = [
     ("apply_web_research_progress", (object(),), {}),
     ("fail_artifact_generation", ("boom",), {}),
     ("complete_code_sandbox_run", ("code", "out", "analysis"), {}),

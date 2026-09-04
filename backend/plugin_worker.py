@@ -62,6 +62,7 @@ import inspect
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from backend.notifications import NotificationState
 from backend.plugin_sdk import (
@@ -146,7 +147,7 @@ def _intents_payload(host: HostContext) -> list:
     import. The dict crosses as plain JSON; the type itself never does."""
     payload = []
     for spec in host._intents:
-        entry = {"name": spec.name}
+        entry: dict[str, Any] = {"name": spec.name}
         if spec.args_schema is not None:
             entry["args_schema"] = json_schema_for(spec.args_schema)
         payload.append(entry)
@@ -213,7 +214,7 @@ def main() -> None:
         params = request.get("params") or {}
         try:
             if method == "get_registrations":
-                result = {
+                result: dict[str, Any] = {
                     "node_kinds": _node_kinds_payload(host),
                     "picker_entries": _picker_entries_payload(host),
                     "intents": _intents_payload(host),
@@ -226,7 +227,15 @@ def main() -> None:
                     raise ValueError(f"unknown node kind: {local_kind!r}")
                 parent_data = params.get("parent_snapshot") or {}
                 parent_id = str(parent_data.get("id", ""))
-                document = _WorkerDocumentStandin({parent_id: _WorkerParentSnapshot(parent_data)})
+                # Deliberately untyped: the stand-in is NOT a SceneDocument
+                # and must never become one - see this module's docstring on
+                # why a factory receives a read-only stand-in instead of the
+                # live document. NodeFactory still declares SceneDocument
+                # because that is what an in-process factory is handed, so
+                # the substitution is duck-typing the checker cannot verify.
+                document: Any = _WorkerDocumentStandin(
+                    {parent_id: _WorkerParentSnapshot(parent_data)}
+                )
                 run_ctx = PluginRunContext(plugin_id=host.plugin_id, notifications=notifications)
                 seed = kind_spec.factory(document, run_ctx, parent_id)
                 result = {

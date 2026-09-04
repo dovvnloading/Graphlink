@@ -440,7 +440,7 @@ def test_scene_payload_key_set_is_unchanged_by_the_migration():
 # key-set-only test above cannot see, since the key was always present,
 # only its fallback VALUE for a non-owning node's row was wrong. Grows one
 # entry per migrated field, alongside MIGRATED_KIND_FIELDS above.
-_EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS = {
+_EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS: dict[str, object] = {
     "imageAssetId": "",
     "htmlSplitterState": None,
     "artifactContent": "",

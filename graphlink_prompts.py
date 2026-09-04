@@ -180,14 +180,18 @@ def _resolve_harness_core() -> str:
     return loop.HARNESS_SYSTEM_PROMPT
 
 
+# reasoning_budget_hint returns `str | None` because "medium" deliberately
+# has no hint - it is the model's own default. "low" and "high" are the two
+# rungs that do carry text, which is why they are the two that are registered
+# here at all, so neither resolver can actually see the None.
 def _resolve_reasoning_hint_low() -> str:
     import api_provider
-    return api_provider.reasoning_budget_hint("low")
+    return api_provider.reasoning_budget_hint("low")  # type: ignore[return-value]
 
 
 def _resolve_reasoning_hint_high() -> str:
     import api_provider
-    return api_provider.reasoning_budget_hint("high")
+    return api_provider.reasoning_budget_hint("high")  # type: ignore[return-value]
 
 
 _PROMPT_RESOLVERS = {

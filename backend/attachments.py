@@ -185,7 +185,12 @@ def _read_pdf(path: Path) -> str:
         import pypdf as pdf_reader_lib
     except ImportError:
         try:
-            import PyPDF2 as pdf_reader_lib  # noqa: N813
+            # The two packages are the same library either side of its
+            # rename, and this code only touches the PdfReader/extract_text
+            # surface they share - but mypy has no way to express "either of
+            # these modules, whichever imported" and reads the fallback as a
+            # redefinition of the name the first import already bound.
+            import PyPDF2 as pdf_reader_lib  # type: ignore[no-redef]  # noqa: N813
         except ImportError:
             raise AttachmentError(PDF_INSTALL_MESSAGE) from None
 
@@ -216,7 +221,13 @@ def _read_docx(path: Path) -> str:
         import docx
     except ImportError:
         raise AttachmentError(DOCX_INSTALL_MESSAGE) from None
-    document = docx.Document(path)
+    # python-docx annotates Document() as str | IO[bytes] | None, but its
+    # runtime contract is wider: anything that is not a str is handed
+    # straight to zipfile.ZipFile, which takes a Path. Passing str(path)
+    # instead would not be an equivalent rewrite - the str branch runs an
+    # os.path.isdir/is_zipfile probe first and raises PackageNotFoundError
+    # for a missing file, where the Path branch raises FileNotFoundError.
+    document = docx.Document(path)  # type: ignore[arg-type]
     return "\n".join(paragraph.text for paragraph in document.paragraphs)
 
 

@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import Any, Callable, NamedTuple, NoReturn
 from urllib.parse import urlparse
 
 import ollama
@@ -17,7 +17,9 @@ try:
     import requests
     REQUESTS_AVAILABLE = True
 except ImportError:
-    requests = None
+    # The optional-dependency shape: the name is a module when the import
+    # works and None when it does not, which no annotation expresses.
+    requests = None  # type: ignore[assignment]
     REQUESTS_AVAILABLE = False
 
 # Qt-removal plan R4.1: import the Qt-free split, not graphlink_config -
@@ -200,7 +202,8 @@ OLLAMA_REASONING_LEVEL = "high"
 ANTHROPIC_REASONING_LEVEL = "off"
 GEMINI_REASONING_LEVEL = "off"
 OPENAI_REASONING_LEVEL = "off"
-API_MODELS = {
+# Per-task model id, or None for a task with nothing configured yet.
+API_MODELS: dict[str, str | None] = {
     config.TASK_TITLE: None,
     config.TASK_CHAT: None,
     config.TASK_CHART: None,
@@ -208,7 +211,9 @@ API_MODELS = {
     config.TASK_WEB_VALIDATE: None,
     config.TASK_WEB_SUMMARIZE: None,
 }
-LLAMA_CPP_SETTINGS = {
+# Mixed value types (paths, ints, a chat format string), so an inferred
+# dict[str, object] would make every .get() unusable at its use site.
+LLAMA_CPP_SETTINGS: dict[str, Any] = {
     "chat_model_path": "",
     "title_model_path": "",
     "reasoning_level": "high",
@@ -217,7 +222,10 @@ LLAMA_CPP_SETTINGS = {
     "n_gpu_layers": 0,
     "n_threads": 0,
 }
-_LLAMA_CPP_CLIENT_CACHE = {}
+# Keyed by llama_cpp_runtime's 5-tuple of (path, chat_format, n_ctx,
+# n_gpu_layers, n_threads); the values are Llama handles, whose type is
+# only importable when llama-cpp-python is installed.
+_LLAMA_CPP_CLIENT_CACHE: dict[tuple[str, Any, int, int, int], Any] = {}
 _LLAMA_CPP_CLIENT_LOCK = threading.RLock()
 
 # _LLAMA_CPP_CLIENT_LOCK above guards only the CACHE (lookup/creation). It
@@ -403,7 +411,7 @@ class ProviderRuntime:
     def snapshot(self) -> _ProviderSnapshot:
         return _ProviderSnapshot(**self._read_all())
 
-    def initialize_api(self, provider: str, api_key: str, base_url: str = None):
+    def initialize_api(self, provider: str, api_key: str, base_url: str | None = None):
         client, api_key, base_url = _build_api_client(provider, api_key, base_url)
         self._write(
             use_api_mode=True,
@@ -582,7 +590,7 @@ class _ModuleBackedProviderRuntime(ProviderRuntime):
     def _write(self, **updates) -> dict:
         module_globals = globals()
         with _PROVIDER_STATE_LOCK:
-            previous = {}
+            previous: dict[str, Any] = {}
             for key, value in updates.items():
                 if key == "api_models":
                     previous[key] = dict(API_MODELS)
@@ -631,11 +639,14 @@ ANTHROPIC_DEFAULT_MAX_TOKENS = {
     config.TASK_CHART: 4096,
     config.TASK_WEB_SUMMARIZE: 4096,
 }
-_OLLAMA_CAPABILITY_CACHE = {}
+# model name (lowercased) -> the capability set show() reported, or None
+# for a model the daemon does not know. A failed PROBE is deliberately not
+# cached - see _get_ollama_capabilities.
+_OLLAMA_CAPABILITY_CACHE: dict[str, set[str] | None] = {}
 # ADR-006 stage 6.6: context windows extracted from the same `ollama.show()`
 # call the capability cache uses, cached under the same key discipline and
 # invalidated by the same invalidate_ollama_capability_cache() entry point.
-_OLLAMA_CONTEXT_WINDOW_CACHE = {}
+_OLLAMA_CONTEXT_WINDOW_CACHE: dict[str, int | None] = {}
 
 # ADR-006 stage 6.6: API-mode context windows, matched by model-id prefix.
 # Same posture as anthropic_supports_reasoning below: a documented
@@ -847,8 +858,12 @@ def _extract_context_window_from_show(show_response) -> int | None:
         key for key in model_info if str(key).endswith(".context_length")
     )
     for key in candidates:
+        raw_value = model_info.get(key)
+        if raw_value is None:
+            # Was reached by letting int(None) raise into the handler below.
+            continue
         try:
-            value = int(model_info.get(key))
+            value = int(raw_value)
         except (TypeError, ValueError):
             continue
         if value > 0:
@@ -938,14 +953,18 @@ def _prepare_ollama_messages(messages: list) -> list:
             continue
         tool_calls = msg.get("tool_calls")
         if tool_calls:
-            processed_messages.append({
+            # Annotated because the value types differ: a checker reading the
+            # literal alone infers dict[str, str] from the first two keys and
+            # then rejects the list on the third.
+            assistant_turn: dict[str, Any] = {
                 "role": "assistant",
                 "content": str(msg.get("content") or ""),
                 "tool_calls": [
                     {"function": {"name": call["name"], "arguments": call["arguments"]}}
                     for call in tool_calls
                 ],
-            })
+            }
+            processed_messages.append(assistant_turn)
             continue
 
         content = msg.get("content")
@@ -1257,13 +1276,13 @@ def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
             from backend.providers.anthropic_provider import AnthropicProvider
 
             return AnthropicProvider(
-                client=state.api_client, api_key=state.api_key, model=model_ref.model_id,
+                client=state.api_client, api_key=state.api_key or "", model=model_ref.model_id,
                 reasoning_level=state.anthropic_reasoning_level,
             )
         from backend.providers.gemini_provider import GeminiProvider
 
         return GeminiProvider(
-            api_key=state.api_key, model=model_ref.model_id,
+            api_key=state.api_key or "", model=model_ref.model_id,
             reasoning_level=state.gemini_reasoning_level,
         )
 
@@ -1596,7 +1615,7 @@ def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
             from backend.providers.anthropic_provider import AnthropicProvider
 
             provider = AnthropicProvider(
-                client=state.api_client, api_key=state.api_key, model=api_model,
+                client=state.api_client, api_key=state.api_key or "", model=api_model,
                 reasoning_level=state.anthropic_reasoning_level,
             )
             # ADR-006 stage 6.8: transient-transport retry (429/5xx/
@@ -1608,7 +1627,7 @@ def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
             from backend.providers.gemini_provider import GeminiProvider
 
             provider = GeminiProvider(
-                api_key=state.api_key, model=api_model,
+                api_key=state.api_key or "", model=api_model,
                 reasoning_level=state.gemini_reasoning_level,
             )
             # ADR-006 stage 6.8: transient-transport retry (429/5xx/
@@ -1714,7 +1733,7 @@ def _complete_with_transport_retry(provider, chat_request, token, cancel_event):
             attempt += 1
 
 
-def _translate_chat_exception(exc: Exception, state, messages: list) -> None:
+def _translate_chat_exception(exc: Exception, state, messages: list) -> NoReturn:
     """Shared exception-normalization for chat()/chat_stream(): translates raw
     provider/network exceptions into actionable, user-facing messages. Always
     raises - either a translated exception (chained `from exc`) or the
@@ -1974,14 +1993,14 @@ def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bo
                 from backend.providers.anthropic_provider import AnthropicProvider
 
                 provider = AnthropicProvider(
-                    client=state.api_client, api_key=state.api_key, model=api_model,
+                    client=state.api_client, api_key=state.api_key or "", model=api_model,
                     reasoning_level=state.anthropic_reasoning_level,
                 )
             elif state.api_provider_type == config.API_PROVIDER_GEMINI:
                 from backend.providers.gemini_provider import GeminiProvider
 
                 provider = GeminiProvider(
-                    api_key=state.api_key, model=api_model,
+                    api_key=state.api_key or "", model=api_model,
                     reasoning_level=state.gemini_reasoning_level,
                 )
             else:
@@ -2162,14 +2181,14 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 from backend.providers.anthropic_provider import AnthropicProvider
 
                 provider = AnthropicProvider(
-                    client=state.api_client, api_key=state.api_key, model=api_model,
+                    client=state.api_client, api_key=state.api_key or "", model=api_model,
                     reasoning_level=state.anthropic_reasoning_level,
                 )
             elif state.api_provider_type == config.API_PROVIDER_GEMINI:
                 from backend.providers.gemini_provider import GeminiProvider
 
                 provider = GeminiProvider(
-                    api_key=state.api_key, model=api_model,
+                    api_key=state.api_key or "", model=api_model,
                     reasoning_level=state.gemini_reasoning_level,
                 )
             else:
@@ -2251,12 +2270,14 @@ def describe_active_model(task: str, runtime: "ProviderRuntime | None" = None) -
     return ("ollama", state.ollama_models.get(task) or "")
 
 
-def _build_api_client(provider: str, api_key: str, base_url: str = None):
+def _build_api_client(provider: str, api_key: str, base_url: str | None = None):
     """The client-construction half of initialize_api, with NO state
     mutation - ADR-006 stage 6.5 splits it out so ProviderRuntime instances
     and the throwaway catalog listing (list_models_for_config) can build a
     client without repointing anything. Returns (client, resolved_key,
     resolved_base_url)."""
+    # OpenAI/Anthropic SDK client, or the plain dict the REST fallbacks use.
+    client: Any
     if provider == config.API_PROVIDER_OPENAI:
         try:
             from openai import OpenAI
@@ -2268,7 +2289,7 @@ def _build_api_client(provider: str, api_key: str, base_url: str = None):
         if not base_url:
             base_url = "https://api.openai.com/v1"
 
-        api_key = api_key or _first_env_api_key(_OPENAI_API_KEY_ENV_VARS)
+        api_key = api_key or _first_env_api_key(_OPENAI_API_KEY_ENV_VARS) or ""
         if not api_key:
             if _is_local_base_url(base_url):
                 api_key = "dummy-key-for-local"
@@ -2287,7 +2308,7 @@ def _build_api_client(provider: str, api_key: str, base_url: str = None):
             client = OpenAI(api_key=api_key, base_url=base_url)
 
     elif provider == config.API_PROVIDER_ANTHROPIC:
-        api_key = api_key or _first_env_api_key(_ANTHROPIC_API_KEY_ENV_VARS)
+        api_key = api_key or _first_env_api_key(_ANTHROPIC_API_KEY_ENV_VARS) or ""
         if not api_key:
             raise RuntimeError("Anthropic API key not configured. Open Settings and save your Anthropic API key.")
 
@@ -2324,7 +2345,7 @@ def _build_api_client(provider: str, api_key: str, base_url: str = None):
         # snapshot's api_key OR-branch never fired, silently falling
         # through to a LIVE re-read of API_KEY and then os.environ at
         # actual-call time instead of the value frozen at request entry.
-        api_key = api_key or _first_env_api_key(_GEMINI_API_KEY_ENV_VARS)
+        api_key = api_key or _first_env_api_key(_GEMINI_API_KEY_ENV_VARS) or ""
         if not api_key:
             raise RuntimeError("Gemini API key not configured. Open Settings and save your Gemini API key.")
         client = {"provider": config.API_PROVIDER_GEMINI}
@@ -2334,7 +2355,7 @@ def _build_api_client(provider: str, api_key: str, base_url: str = None):
     return client, api_key, base_url
 
 
-def initialize_api(provider: str, api_key: str, base_url: str = None):
+def initialize_api(provider: str, api_key: str, base_url: str | None = None):
     """Configure the DEFAULT session's runtime (the module globals) for an
     API endpoint - ADR-006 stage 6.5: the logic lives on ProviderRuntime,
     shared with per-session instances; this delegate keeps every existing
@@ -2383,7 +2404,7 @@ def get_available_models():
         raise RuntimeError(f"Failed to fetch models from endpoint: {exc}") from exc
 
 
-def list_models_for_config(provider: str, api_key: str, base_url: str = None):
+def list_models_for_config(provider: str, api_key: str, base_url: str | None = None):
     """ADR-006 stage 6.5: catalog listing WITHOUT touching live provider
     state. loadApiModels used to call initialize_api just to refresh a
     Settings dropdown - a read-only catalog fetch silently repointed the

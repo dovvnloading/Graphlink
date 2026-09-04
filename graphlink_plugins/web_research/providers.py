@@ -28,21 +28,31 @@ try:
     from ddgs import DDGS
     DUCKDUCKGO_SEARCH_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised through diagnostics
-    DDGS = None
+    # This module's contract for every optional dependency is that the
+    # imported name is either the real thing or None, with the *_AVAILABLE
+    # flag beside it saying which - callers check the flag before touching
+    # the name (see dependency_status() and the guards in the providers
+    # below). mypy has no way to express a name whose type depends on what
+    # happens to be installed, so it reads the fallback as clobbering the
+    # imported class. That is what the ignore here and on the requests and
+    # bs4 fallbacks below covers, and nothing more.
+    DDGS = None  # type: ignore[assignment, misc]
     DUCKDUCKGO_SEARCH_AVAILABLE = False
 
 try:
     import requests
     REQUESTS_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised through diagnostics
-    requests = None
+    # See the ddgs fallback above for why this assignment needs an ignore.
+    requests = None  # type: ignore[assignment]
     REQUESTS_AVAILABLE = False
 
 try:
     from bs4 import BeautifulSoup
     BEAUTIFULSOUP_AVAILABLE = True
 except ImportError:  # pragma: no cover - exercised through diagnostics
-    BeautifulSoup = None
+    # See the ddgs fallback above for why this assignment needs an ignore.
+    BeautifulSoup = None  # type: ignore[assignment, misc]
     BEAUTIFULSOUP_AVAILABLE = False
 
 
@@ -165,7 +175,11 @@ if REQUESTS_AVAILABLE:
             )
             return super().send(request, **kwargs)
 else:
-    _PinnedHTTPAdapter = None
+    # The same optional-dependency shape as the imports at the top of this
+    # module: with no requests there is no HTTPAdapter to subclass, so the
+    # name is None and every path that constructs the adapter (all of which
+    # need a live requests Session to mount it on) is unreachable.
+    _PinnedHTTPAdapter = None  # type: ignore[assignment, misc]
 
 
 class RequestsDocumentFetcher:
@@ -455,7 +469,7 @@ class BeautifulSoupContentExtractor:
                 except json.JSONDecodeError:
                     text = decoded
                 title = urlsplit(payload.final_url).hostname or "JSON source"
-                sections = (text,)
+                sections: tuple[str, ...] = (text,)
             elif payload.content_type == "text/plain":
                 text = decoded
                 title = urlsplit(payload.final_url).hostname or "Text source"

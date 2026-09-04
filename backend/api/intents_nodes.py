@@ -16,6 +16,8 @@ import base64
 from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
+from backend.domain.node_access import optional_node
+from backend.domain.node_states import CodeSandboxState, HarnessState
 from backend.events import SessionBus
 from graphlink_scratch_dirs import HARNESS_WORKSPACE_ROOT, remove_scratch_dir_for_id
 
@@ -59,10 +61,15 @@ def _capture_live_run_teardown(document: SceneDocument, ids: list[str]):
       Approve/Deny/Stop buttons all no-op with nothing left to call
       them on).
     """
+    # optional_node applies exactly the "present, and of this kind" test the
+    # hand-written condition did, and additionally narrows `state` to the
+    # kind's own class so the field read below is checkable - see
+    # backend/domain/node_access.py.
     sandbox_ids = [
-        document.nodes[node_id].state.code_sandbox_sandbox_id
+        node.state.code_sandbox_sandbox_id
         for node_id in ids
-        if document.nodes.get(node_id) is not None and document.nodes[node_id].kind == "code_sandbox"
+        if (node := optional_node(document.nodes, node_id, "code_sandbox", CodeSandboxState))
+        is not None
     ]
     code_sandbox_cancels = [
         document.nodes[node_id].pending_request_id
@@ -83,9 +90,9 @@ def _capture_live_run_teardown(document: SceneDocument, ids: list[str]):
     # recompute-from-durable-id path the sandbox dirs use, and its
     # live run cancelled like a plan node's.
     harness_workspace_ids = [
-        document.nodes[node_id].state.harness_workspace_id
+        harness.state.harness_workspace_id
         for node_id in ids
-        if document.nodes.get(node_id) is not None and document.nodes[node_id].kind == "harness"
+        if (harness := optional_node(document.nodes, node_id, "harness", HarnessState)) is not None
     ]
     harness_cancels = [
         document.nodes[node_id].pending_request_id

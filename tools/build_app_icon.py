@@ -138,7 +138,11 @@ def render(size: int, stroke: float, margin: float) -> Image.Image:
     for pts, colour in STROKES:
         _draw_polyline(draw, [tx(p) for p in pts], stroke * scale, colour)
 
-    return img.resize((size, size), Image.LANCZOS)
+    # Pillow 9.1 moved the resampling filters onto Image.Resampling and
+    # left Image.LANCZOS as a deprecated alias the stubs no longer
+    # declare. The alias still resolves at runtime on the pinned
+    # version; naming its real home beats ignoring the report.
+    return img.resize((size, size), Image.Resampling.LANCZOS)
 
 
 def build_svg() -> str:

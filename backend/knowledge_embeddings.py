@@ -18,7 +18,7 @@ neighbor machinery would be solving a problem this app doesn't have.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 import numpy as np
 
@@ -33,6 +33,21 @@ if TYPE_CHECKING:
 
 DEFAULT_BATCH_SIZE = 32
 _VECTOR_DTYPE = "<f4"  # little-endian float32 - explicit, platform-independent
+
+
+class _EmbeddingCapable(Protocol):
+    """The `embed()` half of the provider seam, as this module needs it.
+
+    backend/providers/base.py's `Provider` protocol declares only stream();
+    `embed()` exists on exactly the providers that also set
+    capabilities.embedding (OllamaProvider, OpenAIProvider), which is why
+    both entry points below reject a provider whose capabilities say
+    otherwise BEFORE calling it. This narrow protocol is what lets that
+    runtime-checked invariant be stated to the type checker at the two call
+    sites, without widening the shared `Provider` protocol into something
+    the three non-embedding providers would no longer satisfy."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
 
 
 def _pack_vector(vector) -> bytes:
@@ -74,7 +89,7 @@ def embed_pending_chunks(
     embedded_count = 0
     for start in range(0, len(pending), batch_size):
         batch = pending[start : start + batch_size]
-        vectors = provider.embed([row["text"] for row in batch])
+        vectors = cast(_EmbeddingCapable, provider).embed([row["text"] for row in batch])
         # Adversarial-review finding: zip() alone silently truncates/
         # mispairs if a provider ever returns a different-length list than
         # it was given (a non-conforming proxy, a future provider) -
@@ -134,7 +149,7 @@ def vector_search(
     if not rows:
         return []
 
-    query_vectors = provider.embed([query])
+    query_vectors = cast(_EmbeddingCapable, provider).embed([query])
     if len(query_vectors) != 1:
         raise ValueError(
             f"provider.embed() returned {len(query_vectors)} vector(s) for a single query "

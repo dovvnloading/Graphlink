@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from backend.events import SessionBus
     from graphlink_settings_store import SettingsManager
+    from backend.tools import ToolRegistry
 
 
 class DispatcherParts:
@@ -44,7 +45,10 @@ class DispatcherParts:
 
         def _cancel_with_pending_approval_denied(self, request_id: str, kind: str) -> bool: ...
 
-        def builder_tool_registry(self, document: Any) -> object: ...
+        # Narrowed from `object`: BuilderDispatchOps returns a real
+        # ToolRegistry, and declaring that here is what lets sibling
+        # mixins call it without restating the type at each site.
+        def builder_tool_registry(self, document: Any) -> "ToolRegistry": ...
 
         # The run engine every start_* surface funnels through, and the
         # plain-blocking-action skeleton the gitlink/code-review surfaces

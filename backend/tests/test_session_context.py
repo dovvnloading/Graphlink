@@ -28,7 +28,9 @@ class _FakeSettingsManager:
 
 def _make_context() -> SessionContext:
     return SessionContext(
-        agent_dispatcher=AgentDispatcher(_FakeSettingsManager()),
+        # Nothing in these tests reaches settings at all, so the fake stands
+        # in for a SettingsManager it cannot be declared a subclass of.
+        agent_dispatcher=AgentDispatcher(_FakeSettingsManager()),  # type: ignore[arg-type]
         canvas_document=SceneDocument(),
     )
 

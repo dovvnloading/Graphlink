@@ -327,7 +327,7 @@ def _extract_node_index_text(node: dict[str, Any]) -> str:
     elif node_type == "conversation":
         body_text = _flatten_conversation_history(node.get("conversation_history")).strip()
     else:
-        field_name = _TEXT_FIELD_BY_NODE_TYPE.get(node_type, "content")
+        field_name = _TEXT_FIELD_BY_NODE_TYPE.get(str(node_type or ""), "content")
         raw_value = node.get(field_name)
         body_text = str(raw_value).strip() if isinstance(raw_value, str) else ""
 
@@ -884,7 +884,9 @@ def _migration_002_workspaces_and_graphs(conn: sqlite3.Connection) -> None:
         default_workspace_id = int(existing_default[0])
     else:
         cursor = conn.execute("INSERT INTO workspaces (name) VALUES ('Default')")
-        default_workspace_id = int(cursor.lastrowid)
+        # lastrowid is Optional only because it is None before the first
+        # INSERT on a cursor; this reads it directly after one.
+        default_workspace_id = int(cursor.lastrowid)  # type: ignore[arg-type]
 
     # "chats" still exists under its old name - a database at version 0/1
     # that hasn't seen this migration yet (real user data, or the fresh-db
@@ -1402,7 +1404,8 @@ def create_workspace(db_path: Path, name: str) -> dict[str, Any] | None:
         return None
     with contextlib.closing(_connect(db_path)) as conn, conn:
         cursor = conn.execute("INSERT INTO workspaces (name) VALUES (?)", (trimmed,))
-        workspace_id = int(cursor.lastrowid)
+        # Same lastrowid-after-INSERT invariant as _ensure_default_workspace.
+        workspace_id = int(cursor.lastrowid)  # type: ignore[arg-type]
     return {
         "id": workspace_id, "name": trimmed, "icon": "", "archived": False,
         "defaultModelProvider": "", "defaultModelId": "",
@@ -1784,19 +1787,23 @@ def save_chat_atomically_row(
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (title, chat_data_json, preview, message_count, now, workspace_id),
                 )
-                resolved_chat_id = cursor.lastrowid
+                # lastrowid is set by the INSERT immediately above.
+                resolved_chat_id = cursor.lastrowid  # type: ignore[assignment]
             else:
                 cursor = conn.execute(
                     "INSERT INTO graphs (title, data, preview, message_count, updated_at) "
                     "VALUES (?, ?, ?, ?, ?)",
                     (title, chat_data_json, preview, message_count, now),
                 )
-                resolved_chat_id = cursor.lastrowid
+                # lastrowid is set by the INSERT immediately above.
+                resolved_chat_id = cursor.lastrowid  # type: ignore[assignment]
 
             conn.execute("DELETE FROM notes WHERE chat_id = ?", (resolved_chat_id,))
             for note in notes_data:
-                position = note.get("position") if isinstance(note.get("position"), dict) else {}
-                size = note.get("size") if isinstance(note.get("size"), dict) else {}
+                raw_position = note.get("position")
+                position = raw_position if isinstance(raw_position, dict) else {}
+                raw_size = note.get("size")
+                size = raw_size if isinstance(raw_size, dict) else {}
                 conn.execute(
                     """
                     INSERT INTO notes (
@@ -1841,7 +1848,8 @@ def save_chat_atomically_row(
 
             conn.execute("DELETE FROM pins WHERE chat_id = ?", (resolved_chat_id,))
             for index, pin in enumerate(pins_data):
-                position = pin.get("position") if isinstance(pin.get("position"), dict) else {}
+                raw_pin_position = pin.get("position")
+                position = raw_pin_position if isinstance(raw_pin_position, dict) else {}
                 conn.execute(
                     """
                     INSERT INTO pins (

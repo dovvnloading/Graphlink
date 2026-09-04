@@ -70,7 +70,10 @@ def _make_dispatch_env(enable_system_prompt: bool = True):
     bus.register_topic("app-composer", composer_document.payload)
     # A real "scene" topic - the success path publishes it after on_reply.
     bus.register_topic("scene", lambda: {})
-    dispatcher = AgentDispatcher(_FakeSettingsManager(enable_system_prompt))
+    # The fake is a stand-in for the one method AgentDispatcher reads off a
+    # SettingsManager (see its docstring), not a subclass of one - a
+    # relationship the concrete parameter type has no way to express.
+    dispatcher = AgentDispatcher(_FakeSettingsManager(enable_system_prompt))  # type: ignore[arg-type]
     return bus, notifications, composer_document, dispatcher
 
 

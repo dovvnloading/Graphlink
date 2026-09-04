@@ -114,8 +114,12 @@ async def run_subagent(
         cancel=CancelToken(cancel_event) if cancel_event is not None else None,
     )
     # The duck-typed root channel the fs tools read (ctx.harness_workspace_dir),
-    # so the child confines to exactly its parent's root.
-    ctx.harness_workspace_dir = workspace_dir
+    # so the child confines to exactly its parent's root. It is set on a plain
+    # RunContext rather than declared as a field, which the checker cannot
+    # follow; the parent loop declares the same channel as a real field on its
+    # HarnessRunContext subclass (backend/harness/loop.py), and the tools that
+    # read it all go through getattr with a None default.
+    ctx.harness_workspace_dir = workspace_dir  # type: ignore[attr-defined]
 
     specs = tuple(
         spec for spec in registry.specs()

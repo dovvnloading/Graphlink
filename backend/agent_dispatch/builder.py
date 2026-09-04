@@ -23,20 +23,32 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from typing import TYPE_CHECKING
 
 from backend.agent_dispatch._composed import DispatcherParts
+
+if TYPE_CHECKING:
+    from backend.tools import ToolRegistry
 
 
 class BuilderDispatchOps(DispatcherParts):
     """The Builder agent loop and its tool-registry assembly (mixin - see module docstring)."""
 
-    def builder_tool_registry(self, document) -> "object":
+    # Declared, never assigned here: a bare annotation creates no class
+    # attribute, so builder_tool_registry()'s `getattr(self, ..., None)`
+    # lazy-build probe below behaves exactly as it always has. It exists so
+    # invalidate_builder_registry() can put None back without the checker
+    # inferring the attribute's type from the sole ToolRegistry assignment.
+    _builder_registry: "ToolRegistry | None"
+
+    def builder_tool_registry(self, document) -> "ToolRegistry":
         """The session's one ToolRegistry, built lazily on first builder
         start (ADR-007 shipped the registry with zero production
         constructors; the Builder is its designated first consumer).
         Cached: tools bind the session's own SceneDocument/dispatcher, and
         both live exactly as long as this dispatcher does."""
-        if getattr(self, "_builder_registry", None) is None:
+        registry = getattr(self, "_builder_registry", None)
+        if registry is None:
             from backend.builder import register_builder_control_tools
             from backend.tools import ToolRegistry
             from backend.tools_graph import register_graph_tools, register_run_node_tool
@@ -55,7 +67,7 @@ class BuilderDispatchOps(DispatcherParts):
             self._register_configured_mcp_tools(registry)
             self._register_plugin_tools(registry, document)
             self._builder_registry = registry
-        return self._builder_registry
+        return registry
 
     def invalidate_builder_registry(self) -> None:
         """SECURITY-FIX: builder_tool_registry() above builds the registry

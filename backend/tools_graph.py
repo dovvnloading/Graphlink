@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from typing import Any
 
 from backend.domain.graph import SceneDocument, SceneError
@@ -392,6 +393,12 @@ def make_set_node_content_handler(document: SceneDocument):
             return _error(f"Unknown node: {node_id!r}.")
         run_id = _run_id_of(ctx)
 
+        # record_command is generic in whatever its mutator returns, and this
+        # call site discards that value, so the branches below are free to
+        # differ: some wrap a domain method that hands the node back, others
+        # one that returns None. Declared here so the first branch's return
+        # type is not silently imposed on all the rest.
+        mutator: Callable[[], object]
         if node.kind == "chat" and isinstance(node.state, ChatState):
             mutator = lambda: document.update_chat_node_content(node_id, content)
         elif node.kind == "note" and isinstance(node.state, NoteState):

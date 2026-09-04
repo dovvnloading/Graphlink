@@ -91,7 +91,7 @@ def _get_llama_cpp_model_path(task: str, settings: dict | None = None) -> str:
     return active_settings.get("chat_model_path", "")
 
 
-def _validate_llama_cpp_model_path(model_path: str, task: str):
+def _validate_llama_cpp_model_path(model_path: str | None, task: str):
     import api_provider as _mod  # deferred: patch-seam safety (see module docstring)
     raw_model_path = str(model_path or "").strip()
     if not raw_model_path:
@@ -284,7 +284,11 @@ def _configure_llama_cpp_chat_handler(client, settings: dict | None = None):
             call_kwargs["enable_thinking"] = getattr(client, "_graphlink_enable_thinking", False)
         return base_handler(**call_kwargs)
 
-    graphlink_chat_handler._graphlink_wrapped_handler = True
+    # setattr, not plain attribute assignment: the marker is an ad-hoc
+    # attribute on a function object, declared on no type. Both readers
+    # above already use getattr(..., False), so setattr is the symmetric
+    # write side of the same convention.
+    setattr(graphlink_chat_handler, "_graphlink_wrapped_handler", True)
     client._graphlink_base_chat_handler = base_handler
     client._graphlink_enable_thinking = enable_thinking
     client.chat_handler = graphlink_chat_handler
