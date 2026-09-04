@@ -367,6 +367,25 @@ def _finite_float(value: Any, default: float = 0.0) -> float:
     return result if math.isfinite(result) else default
 
 
+def _non_negative_int(value: Any, default: int = 0) -> int:
+    """_finite_float's integer sibling, and for the same reason: a saved
+    chat row is hostile-data-on-disk, so a bare `int(value)` on anything
+    read out of one is a crash waiting for a corrupt row.
+
+    It matters more here than the raw exception suggests. _restore_node
+    wraps every restorer in `except Exception: return None, None`, so a
+    restorer that raises does not surface an error - the node is dropped
+    from the canvas entirely. One non-numeric value in a saved payload
+    used to take the whole node with it.
+
+    `or 0` is not a substitute: it guards None and "" but passes "n/a"
+    straight into int(), which is exactly the shape that raises."""
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def _position(payload: dict[str, Any]) -> tuple[float, float]:
     position = payload.get("position")
     if isinstance(position, dict):
@@ -689,11 +708,8 @@ def _restore_code_review_payload(payload: dict[str, Any]) -> SceneNode:
         return [dict(item) for item in value] if isinstance(value, list) else []
 
     scores = review.get("scores")
-    scores = {str(k): int(v) for k, v in scores.items()} if isinstance(scores, dict) else {}
-    try:
-        pr_number = max(0, int(pr_state.get("number", 0)))
-    except (TypeError, ValueError):
-        pr_number = 0
+    scores = {str(k): _non_negative_int(v) for k, v in scores.items()} if isinstance(scores, dict) else {}
+    pr_number = _non_negative_int(pr_state.get("number"))
     dismissed = review.get("dismissed_ids")
     dismissed_ids = (
         [str(item) for item in dismissed if str(item)] if isinstance(dismissed, list) else []
@@ -710,15 +726,15 @@ def _restore_code_review_payload(payload: dict[str, Any]) -> SceneNode:
             code_review_pr_html_url=str(pr_state.get("html_url", "")),
             code_review_base_ref=str(pr_state.get("base_ref", "")),
             code_review_head_ref=str(pr_state.get("head_ref", "")),
-            code_review_additions=max(0, int(payload.get("additions", 0) or 0)),
-            code_review_deletions=max(0, int(payload.get("deletions", 0) or 0)),
-            code_review_changed_files=max(0, int(payload.get("changed_files", 0) or 0)),
+            code_review_additions=_non_negative_int(payload.get("additions")),
+            code_review_deletions=_non_negative_int(payload.get("deletions")),
+            code_review_changed_files=_non_negative_int(payload.get("changed_files")),
             code_review_files=_dict_list(payload.get("files")),
             code_review_files_truncated=bool(payload.get("files_truncated", False)),
             code_review_diff_text=str(payload.get("diff_text", "")),
             code_review_diff_truncated=bool(payload.get("diff_truncated", False)),
-            code_review_diff_chars=max(0, int(payload.get("diff_chars", 0) or 0)),
-            code_review_diff_version=max(0, int(payload.get("diff_version", 0) or 0)),
+            code_review_diff_chars=_non_negative_int(payload.get("diff_chars")),
+            code_review_diff_version=_non_negative_int(payload.get("diff_version")),
             code_review_walkthrough=_dict_list(review.get("walkthrough")),
             code_review_findings=_dict_list(review.get("findings")),
             code_review_errors=_dict_list(review.get("errors")),
@@ -727,7 +743,7 @@ def _restore_code_review_payload(payload: dict[str, Any]) -> SceneNode:
             code_review_overview=str(review.get("overview", "")),
             code_review_confidence=str(review.get("confidence", "")),
             code_review_scores=scores,
-            code_review_quality_score=max(0, int(review.get("quality_score", 0) or 0)),
+            code_review_quality_score=_non_negative_int(review.get("quality_score")),
             code_review_verdict=str(review.get("verdict", "none") or "none"),
             code_review_risk=str(review.get("risk", "")),
             code_review_quality_summary=str(review.get("quality_summary", "")),
@@ -874,12 +890,12 @@ def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
             builder_status=status,
             builder_mode=mode if mode in ("copilot", "autopilot") else "copilot",
             builder_run_id=str(payload.get("builder_run_id", "")),
-            builder_max_steps=int(payload.get("max_steps", 12) or 12),
-            builder_max_tokens=int(payload.get("max_tokens", 150_000) or 150_000),
-            builder_max_wall_seconds=int(payload.get("max_wall_seconds", 900) or 900),
-            builder_spent_steps=int(payload.get("spent_steps", 0) or 0),
-            builder_spent_tokens=int(payload.get("spent_tokens", 0) or 0),
-            builder_spent_wall_seconds=int(payload.get("spent_wall_seconds", 0) or 0),
+            builder_max_steps=_non_negative_int(payload.get("max_steps") or 12, 12),
+            builder_max_tokens=_non_negative_int(payload.get("max_tokens") or 150_000, 150_000),
+            builder_max_wall_seconds=_non_negative_int(payload.get("max_wall_seconds") or 900, 900),
+            builder_spent_steps=_non_negative_int(payload.get("spent_steps")),
+            builder_spent_tokens=_non_negative_int(payload.get("spent_tokens")),
+            builder_spent_wall_seconds=_non_negative_int(payload.get("spent_wall_seconds")),
             builder_status_detail=(
                 str(payload.get("status_detail", ""))
                 if raw_status == status
@@ -1121,6 +1137,17 @@ def _restore_node(
     try:
         node = restorer(payload, document)
     except Exception:
+        # Same reasoning as the "no restorer registered" warning above, for
+        # the other way a node can vanish: swallowing the exception keeps one
+        # bad row from failing the whole session load, which is right - but
+        # doing it silently meant a restorer bug erased the node from the
+        # canvas with no trace anywhere. The row on disk is untouched, so a
+        # fixed restorer brings the node back; this log is what makes that
+        # diagnosable instead of a mystery.
+        logger.exception(
+            "session load: restorer for node kind %r raised - the node stays in the saved "
+            "row but is not on this canvas", node_type,
+        )
         return None, None
     return document.register_restored_node(node), parent_new_id
 
