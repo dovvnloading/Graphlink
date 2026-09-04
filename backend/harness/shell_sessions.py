@@ -41,7 +41,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from pathlib import Path
 
-from graphlink_execution_guard import create_execution_guard
+from graphlink_execution_guard import ExecutionResourceGuard, create_execution_guard
 from graphlink_process_env import safe_subprocess_env
 
 # Per-session output ring. Lines, not bytes: a line is the unit anyone
@@ -82,7 +82,7 @@ class LocalSubprocessBackend(ShellBackend):
     """Guarded local subprocess - the ADR-005 stage-5.2/5.3 posture."""
 
     def __init__(self) -> None:
-        self._guards: dict[int, object] = {}
+        self._guards: dict[int, ExecutionResourceGuard] = {}
 
     def spawn(self, command: str, cwd: Path):
         kwargs: dict = {"env": safe_subprocess_env()}

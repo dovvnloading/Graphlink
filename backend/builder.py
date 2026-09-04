@@ -393,7 +393,7 @@ def plan_steps_for_goal(goal: str, *, runtime=None, settings_manager=None) -> li
         runtime=runtime,
         settings_manager=settings_manager,
     )
-    steps = []
+    steps: list[dict] = []
     for raw in payload.get("steps", [])[:_MAX_PLAN_STEPS]:
         title = str(raw.get("title") or "").strip()
         if title:

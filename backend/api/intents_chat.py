@@ -30,6 +30,8 @@ against a future increment if this needs fixing.
 
 from __future__ import annotations
 
+from functools import partial
+
 from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene, make_publish_token_counter
 from backend.composer import ComposerDocument
@@ -99,9 +101,17 @@ def _promote_document_attachments(document: SceneDocument, node, staged: list) -
         # stacking (ADR-021 stage 21.5's requirement, now via the shared
         # placement engine instead of a local index offset).
         ax, ay = document.place_child(node.id, "document")
+        # functools.partial rather than the `lambda attachment=attachment,
+        # ax=ax, ay=ay:` this used to be. The default arguments were there only
+        # to bind this iteration's values eagerly, which is exactly what
+        # partial does - and record_command runs the mutator synchronously,
+        # inside this same iteration, so nothing here was ever read late.
+        # A lambda carrying defaults cannot be checked against
+        # record_command's zero-argument `Callable[[], T]` parameter at all.
         document.record_command(
             "addDocumentNode", "user",
-            lambda attachment=attachment, ax=ax, ay=ay: document.add_document_node(
+            partial(
+                document.add_document_node,
                 ax,
                 ay,
                 attachment.name,

@@ -109,7 +109,11 @@ class CrawlEtiquette:
             # Mirrors RobotFileParser.read()'s own convention: a robots.txt
             # we're not authorized to see is treated as "no bots wanted here
             # at all", not as "no rules exist".
-            parser.disallow_all = True
+            # RobotFileParser.__init__ really does set self.disallow_all,
+            # and its own read() assigns True to it on exactly this 401/403
+            # branch - the attribute is just missing from typeshed's stub, so
+            # the ignore covers a gap there rather than anything wrong here.
+            parser.disallow_all = True  # type: ignore[attr-defined]
             self._robots[origin] = parser
             return parser
         # Any other non-200 (404 included) - no robots.txt in effect,

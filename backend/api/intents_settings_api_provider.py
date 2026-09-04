@@ -312,7 +312,14 @@ def register_settings_api_provider_intents(
             openai_key = api_key if provider == config.API_PROVIDER_OPENAI else KEEP_EXISTING_SECRET
             anthropic_key = api_key if provider == config.API_PROVIDER_ANTHROPIC else KEEP_EXISTING_SECRET
             gemini_key = api_key if provider == config.API_PROVIDER_GEMINI else KEEP_EXISTING_SECRET
-            manager.set_api_settings(provider, base_url, openai_key, anthropic_key, gemini_key)
+            # set_api_settings annotates its three key parameters `str`, but
+            # KEEP_EXISTING_SECRET is part of its contract, not a violation of
+            # it: its body branches on `value is KEEP_EXISTING_SECRET` and
+            # skips that field entirely, which is the whole mechanism the
+            # comment above relies on. The annotation in
+            # settings_store/cloud_provider.py is the thing that is too
+            # narrow - widening it there retires this ignore.
+            manager.set_api_settings(provider, base_url, openai_key, anthropic_key, gemini_key)  # type: ignore[arg-type]
             manager.set_api_models(normalized_models, provider)
             for task, model_id in normalized_models.items():
                 api_provider.set_task_model(task, model_id)

@@ -82,7 +82,9 @@ def _insert_chat(db_path, title: str, data: str = "{}") -> int:
             (title, data, "2026-01-01 10:00:00", "2026-01-02 11:30:00"),
         )
         conn.commit()
-        return cursor.lastrowid
+        # sqlite3 types lastrowid Optional because it is None before any
+        # INSERT has run on the cursor; this cursor just ran one.
+        return cursor.lastrowid  # type: ignore[return-value]
     finally:
         conn.close()
 
@@ -491,7 +493,7 @@ def _create_migration_1_shaped_db(db_path) -> list[int]:
         conn.execute("CREATE INDEX idx_notes_chat_id ON notes (chat_id)")
         conn.execute("CREATE INDEX idx_pins_chat_id ON pins (chat_id)")
 
-        chat_ids = []
+        chat_ids: list[int] = []
         for title, preview, count, created, updated in (
             ("First Chat", "hi there", 1, "2026-01-01 09:00:00", "2026-01-01 09:05:00"),
             ("Second Chat", "another one", 2, "2026-01-02 10:00:00", "2026-01-02 10:10:00"),
@@ -503,7 +505,8 @@ def _create_migration_1_shaped_db(db_path) -> list[int]:
                 (title, json.dumps({"nodes": [{"node_type": "chat", "raw_content": preview}]}),
                  created, updated, preview, count),
             )
-            chat_ids.append(cursor.lastrowid)
+            # lastrowid is Optional only until the cursor has run an INSERT.
+            chat_ids.append(cursor.lastrowid)  # type: ignore[arg-type]
 
         # Notes and pins attached to the first chat only - mirrors
         # _create_pre_migration_shaped_db's own "at least one" scope; the
@@ -690,7 +693,7 @@ def _create_migration_2_shaped_db(db_path) -> list[int]:
         conn.execute("CREATE INDEX idx_pins_chat_id ON pins (chat_id)")
         conn.execute("CREATE INDEX idx_graphs_workspace_id ON graphs (workspace_id)")
 
-        graph_ids = []
+        graph_ids: list[int] = []
         for title, workspace_id in (
             ("First Graph", default_id),
             ("Second Graph", default_id),
@@ -700,7 +703,8 @@ def _create_migration_2_shaped_db(db_path) -> list[int]:
                 "INSERT INTO graphs (title, data, workspace_id) VALUES (?, ?, ?)",
                 (title, json.dumps({"nodes": []}), workspace_id),
             )
-            graph_ids.append(cursor.lastrowid)
+            # lastrowid is Optional only until the cursor has run an INSERT.
+            graph_ids.append(cursor.lastrowid)  # type: ignore[arg-type]
         conn.commit()
 
         conn.execute("PRAGMA user_version = 2")
@@ -892,7 +896,7 @@ def _create_migration_3_shaped_db(db_path) -> list[int]:
         conn.execute("CREATE INDEX idx_graphs_workspace_id ON graphs (workspace_id)")
         conn.execute("CREATE INDEX idx_graph_tags_tag_id ON graph_tags (tag_id)")
 
-        graph_ids = []
+        graph_ids: list[int] = []
         for title, workspace_id in (
             ("First Graph", default_id),
             ("Second Graph", default_id),
@@ -902,7 +906,8 @@ def _create_migration_3_shaped_db(db_path) -> list[int]:
                 "INSERT INTO graphs (title, data, workspace_id) VALUES (?, ?, ?)",
                 (title, json.dumps({"nodes": []}), workspace_id),
             )
-            graph_ids.append(cursor.lastrowid)
+            # lastrowid is Optional only until the cursor has run an INSERT.
+            graph_ids.append(cursor.lastrowid)  # type: ignore[arg-type]
         conn.commit()
 
         conn.execute("PRAGMA user_version = 3")

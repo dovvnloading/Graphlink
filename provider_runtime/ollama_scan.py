@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from graphlink_model_catalog import ModelDescriptor
 
 
-def _normalize_ollama_models_root(path_value: str | None) -> Path | None:
+def _normalize_ollama_models_root(path_value: str | Path | None) -> Path | None:
     normalized = str(path_value or "").strip()
     if not normalized:
         return None

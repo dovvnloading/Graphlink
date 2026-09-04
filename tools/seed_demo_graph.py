@@ -36,6 +36,12 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from backend.chat_library import save_chat_atomically_row  # noqa: E402
 from backend.domain.graph import SceneDocument  # noqa: E402
+from backend.domain.node_access import with_state  # noqa: E402
+from backend.domain.node_states import (  # noqa: E402
+    ChatState,
+    CodeSandboxState,
+    PlanState,
+)
 from backend.session_save import build_chat_data  # noqa: E402
 
 QUESTION = (
@@ -216,8 +222,8 @@ def build_document() -> SceneDocument:
     hyp_db = doc.add_chat_node(-740, -330, HYPOTHESIS_DB, False, question.id)
     hyp_ser = doc.add_chat_node(-220, -330, HYPOTHESIS_SERIALIZATION, False, question.id)
     hyp_rb = doc.add_chat_node(300, -330, HYPOTHESIS_ROLLBACK, False, question.id)
-    hyp_ser.state.branch_status = "rejected"
-    hyp_rb.state.branch_status = "superseded"
+    with_state(hyp_ser, ChatState).state.branch_status = "rejected"
+    with_state(hyp_rb, ChatState).state.branch_status = "superseded"
 
     # Placed for the picture beside the branch it narrates; nothing else
     # references it.
@@ -230,9 +236,10 @@ def build_document() -> SceneDocument:
     follow_up = doc.add_chat_node(-740, -60, FOLLOW_UP, True, hyp_db.id)
     sandbox = doc.add_code_sandbox_node(-1290, -520, follow_up.id)
     doc.set_code_sandbox_requirements(sandbox.id, "psycopg[binary]==3.2.1")
-    sandbox.state.code_sandbox_prompt = "Top offenders from pg_stat_statements, with plans"
-    sandbox.state.code_sandbox_code = SANDBOX_CODE
-    sandbox.state.code_sandbox_output = SANDBOX_OUTPUT
+    sandbox_node = with_state(sandbox, CodeSandboxState)
+    sandbox_node.state.code_sandbox_prompt = "Top offenders from pg_stat_statements, with plans"
+    sandbox_node.state.code_sandbox_code = SANDBOX_CODE
+    sandbox_node.state.code_sandbox_output = SANDBOX_OUTPUT
 
     research = doc.add_web_research_node(-1290, 190, follow_up.id)
     doc.start_web_research_run(research.id, RESEARCH_QUERY)
@@ -266,12 +273,13 @@ def build_document() -> SceneDocument:
     plan = doc.add_plan_node(1400, -520, PLAN_GOAL, mode="copilot",
                              max_steps=8, max_tokens=80_000, max_wall_seconds=1_800)
     doc.set_plan_steps(plan.id, PLAN_STEPS)
-    plan.state.builder_status = "done"
-    plan.state.builder_run_id = "run-demo-1"
-    plan.state.builder_spent_steps = 5
-    plan.state.builder_spent_tokens = 42_710
-    plan.state.builder_spent_wall_seconds = 763
-    plan.state.builder_activity = ACTIVITY
+    plan_node = with_state(plan, PlanState)
+    plan_node.state.builder_status = "done"
+    plan_node.state.builder_run_id = "run-demo-1"
+    plan_node.state.builder_spent_steps = 5
+    plan_node.state.builder_spent_tokens = 42_710
+    plan_node.state.builder_spent_wall_seconds = 763
+    plan_node.state.builder_activity = ACTIVITY
 
     note = doc.add_note(1400, -30)
     doc.set_note_content(note.id, NOTE_TEXT)

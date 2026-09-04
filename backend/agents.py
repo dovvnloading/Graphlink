@@ -74,6 +74,7 @@ import logging
 import threading
 import uuid  # noqa: F401
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import quote
 
 import api_provider
@@ -317,7 +318,18 @@ class AgentDispatcher(
 # takes. Kept as data rather than an if/elif so adding a third note agent is
 # one entry, not another branch in three places.
 NOTE_AGENT_LABELS = {"takeaway": "Key takeaway", "explainer": "Explainer note"}
-_NOTE_AGENTS = {"takeaway": KeyTakeawayAgent, "explainer": ExplainerAgent}
+
+
+class _NoteAgent(Protocol):
+    """What the table below actually requires of a note agent. The two
+    classes in it share no base class - they are independent agents in
+    graphlink_note_agent.py that happen to answer the same one call - so
+    the common type has to be structural rather than nominal."""
+
+    def get_response(self, text: str) -> str: ...
+
+
+_NOTE_AGENTS: dict[str, type[_NoteAgent]] = {"takeaway": KeyTakeawayAgent, "explainer": ExplainerAgent}
 
 
 def _call_note_agent(note_kind: str, source_text: str) -> str:

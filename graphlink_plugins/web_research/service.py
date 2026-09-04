@@ -222,7 +222,7 @@ class WebResearchService:
 
         from .domain import ResearchCitation
 
-        result = ResearchResult(
+        research_result = ResearchResult(
             request_id=request.request_id,
             original_query=query,
             effective_query=effective_query,
@@ -233,4 +233,4 @@ class WebResearchService:
             provider_snapshot=dict(request.provider_snapshot),
         )
         self._emit(request, progress, ResearchStage.COMPLETED, "Research completed.", len(candidates), len(candidates))
-        return result
+        return research_result

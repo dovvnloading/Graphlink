@@ -53,7 +53,10 @@ def make_ctx(*, scopes=ALL_SCOPES, run_id: str | None = None) -> RunContext:
 
     ctx = RunContext(granted_scopes=frozenset(scopes), request_approval=approve)
     if run_id is not None:
-        ctx.run_id = run_id
+        # run_id lives on the builder's own RunContext subclass, and
+        # _run_id_of() reads it duck-typed; the base class it is attached to
+        # here has no such field to declare. Same seam as test_tools_graph.py.
+        ctx.run_id = run_id  # type: ignore[attr-defined]
     return ctx
 
 

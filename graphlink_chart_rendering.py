@@ -422,7 +422,10 @@ def _render_sankey_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str
     flows = chart_data["flows"]
     incoming = defaultdict(list)
     outgoing = defaultdict(list)
-    indegree = defaultdict(int)
+    # The `incoming`/`outgoing` defaultdicts above take their element type
+    # from the .append() calls below; this one is only ever read through
+    # augmented assignment, which gives mypy nothing to infer from.
+    indegree: defaultdict[str, int] = defaultdict(int)
     nodes = set()
 
     for flow in flows:

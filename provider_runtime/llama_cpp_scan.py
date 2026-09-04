@@ -21,7 +21,7 @@ from pathlib import Path
 import os
 
 
-def _normalize_llama_cpp_scan_root(path_value: str | None) -> Path | None:
+def _normalize_llama_cpp_scan_root(path_value: str | Path | None) -> Path | None:
     normalized = str(path_value or "").strip()
     if not normalized:
         return None

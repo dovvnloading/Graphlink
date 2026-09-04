@@ -42,7 +42,7 @@ it.
 from __future__ import annotations
 
 import time
-from typing import Iterator
+from typing import Generator, Iterator, cast
 
 import ollama
 
@@ -225,7 +225,16 @@ class OllamaProvider:
             thinking_parts: list[str] = []
             tool_calls: tuple[ToolCall, ...] = ()
             usage = None
-            stream = ollama.chat(model=self.model_id, messages=messages, stream=True, **kwargs)
+            # ollama types its streaming chat() as `Iterator[ChatResponse]`,
+            # which has no close() - but the object it actually returns is the
+            # generator ollama/_client.py's own `_request` builds around
+            # `with self._client.stream(...)`, so the close() both call sites
+            # below depend on is genuinely there. The declared return type is
+            # simply wider than what the library hands back.
+            stream = cast(
+                "Generator[ollama.ChatResponse, None, None]",
+                ollama.chat(model=self.model_id, messages=messages, stream=True, **kwargs),
+            )
             try:
                 for part in stream:
                     if cancel.is_set():

@@ -35,7 +35,7 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     # ADR-015 stage 15.3: _start_backend/_shutdown_backend's own annotations
@@ -289,7 +289,12 @@ def main() -> int:
     #
     # Rebuild assets/graphlink.ico with: python tools/build_app_icon.py
     icon_path = REPO_ROOT / "assets" / "graphlink.ico"
-    start_kwargs = {"debug": bool(os.environ.get("GRAPHLINK_DEBUG_WEBVIEW"))}
+    # Mixed value types (a bool, then a str path below), so an inferred
+    # dict[str, bool] would reject the icon - and, being **-splatted into
+    # webview.start(), every one of its keyword parameters too.
+    start_kwargs: dict[str, Any] = {
+        "debug": bool(os.environ.get("GRAPHLINK_DEBUG_WEBVIEW")),
+    }
     if icon_path.is_file():
         start_kwargs["icon"] = str(icon_path)
     else:

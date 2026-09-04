@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+from typing import Any
 
 
 def _gemini_headers(api_key: str, extra_headers: dict | None = None) -> dict:
@@ -259,8 +260,8 @@ def _gemini_part_from_content(part: dict, uploaded_files: list, cancel_event=Non
 def _prepare_gemini_contents(messages: list, cancel_event=None, api_key: str | None = None) -> tuple[str | None, list, list]:
     import api_provider as _mod  # deferred: patch-seam safety (see module docstring)
     system_prompt = None
-    contents = []
-    uploaded_files = []
+    contents: list[dict[str, Any]] = []
+    uploaded_files: list[str] = []
 
     for msg in messages:
         _mod._raise_if_cancelled(cancel_event)
@@ -273,7 +274,7 @@ def _prepare_gemini_contents(messages: list, cancel_event=None, api_key: str | N
         # tool_result block) and, like Ollama, provides no native call id -
         # GeminiProvider.stream() synthesizes one the same way Ollama's does.
         if role_name == "tool":
-            parts = [{
+            parts: list[dict[str, Any]] = [{
                 "functionResponse": {
                     "name": msg.get("name", ""),
                     "response": {"result": str(msg.get("content") or "")},

@@ -61,8 +61,9 @@ def make_ctx(
     if run_id is not None:
         # The builder's own context subclass carries run_id (backend/builder.py,
         # stage 8.3); until it exists, tests attach the attribute the same way
-        # _run_id_of() reads it - duck-typed, deliberately.
-        ctx.run_id = run_id
+        # _run_id_of() reads it - duck-typed, deliberately, which is exactly
+        # what the base RunContext cannot declare.
+        ctx.run_id = run_id  # type: ignore[attr-defined]
     return ctx, prompts
 
 

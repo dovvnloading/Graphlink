@@ -520,11 +520,16 @@ class McpStdioClient:
             # forever; the blocked syscall (and its thread) leaks, but a
             # leaked thread beats a permanently deadlocked client.
             outcome: list[BaseException] = []
+            # Bound to a local because the guard above narrows process.stdin
+            # only for this frame - a nested function could in principle run
+            # after the attribute changed, so the narrowing does not reach
+            # inside the closure. The stream itself is the same object.
+            stdin = process.stdin
 
             def _blocking_write() -> None:
                 try:
-                    process.stdin.write(payload)
-                    process.stdin.flush()
+                    stdin.write(payload)
+                    stdin.flush()
                 except Exception as exc:  # re-raised on the caller's thread below
                     outcome.append(exc)
 

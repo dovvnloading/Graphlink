@@ -20,6 +20,8 @@ touch only SceneNode's own fields.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from backend.canvas import SceneNode
@@ -28,8 +30,10 @@ from backend.domain.node_states import ChatState
 from backend import session_save
 
 
-# (serializer, kind it is registered for, extra positional args after the node)
-SERIALIZERS = [
+# (serializer, kind it is registered for, extra positional args after the node).
+# The extras are heterogeneous and mostly empty, so the element type has to be
+# spelled out rather than inferred from the rows.
+SERIALIZERS: list[tuple[Any, str, tuple[Any, ...]]] = [
     (session_save._serialize_chat_node, "chat", ()),
     (session_save._serialize_code_node, "code", ()),
     (session_save._serialize_document_node, "document", ()),

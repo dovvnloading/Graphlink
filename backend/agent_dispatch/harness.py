@@ -23,8 +23,12 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from typing import TYPE_CHECKING
 
 from backend.agent_dispatch._composed import DispatcherParts
+
+if TYPE_CHECKING:
+    from backend.tools import ToolRegistry
 
 
 class HarnessDispatchOps(DispatcherParts):
@@ -124,7 +128,7 @@ class HarnessDispatchOps(DispatcherParts):
         if repls is not None:
             repls.stop_all()
 
-    def harness_tool_registry(self, document) -> "object":
+    def harness_tool_registry(self, document) -> "ToolRegistry":
         """The harness rides the SAME per-session registry the Builder
         built (tools.py: one registry per session, RunContext is what's
         per-run) - fs tools are simply registered into it on first harness

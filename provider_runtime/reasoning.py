@@ -19,6 +19,7 @@ changes. api_provider.py re-exports every name below, so every existing
 from __future__ import annotations
 
 import re
+from typing import Any
 
 
 def normalize_reasoning_level(value: str | None) -> str:
@@ -138,7 +139,7 @@ def anthropic_reasoning_kwargs(model_id: str, level: str, max_tokens: int) -> di
         # request that has reasoning enabled.
         return {"output_config": {"effort": level}}
     budget = _mod._ANTHROPIC_BUDGET_TOKENS[level]
-    result = {"thinking": {"type": "enabled", "budget_tokens": budget}}
+    result: dict[str, Any] = {"thinking": {"type": "enabled", "budget_tokens": budget}}
     if max_tokens <= budget:
         result["max_tokens"] = budget + _mod._ANTHROPIC_THINKING_HEADROOM_TOKENS
     return result

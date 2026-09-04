@@ -144,7 +144,7 @@ from backend.tools import KNOWN_SCOPES
 # never reinvented, for the out-of-process plugin worker's own Popen call.
 # See PluginWorkerClient.connect's own docstring for the full call-order
 # contract these two enforce together.
-from graphlink_execution_guard import create_execution_guard
+from graphlink_execution_guard import ExecutionResourceGuard, create_execution_guard
 # ADR-021 stage 21.4: a plugin intent's declared args_schema is a
 # dataclass, described and validated with the SAME ADR-003 machinery
 # every wire payload already uses - not a second, plugin-only scheme.
@@ -936,7 +936,7 @@ class PluginWorkerClient:
         self.source_dir = source_dir
         self.timeout = timeout
         self._process: subprocess.Popen | None = None
-        self._guard = None
+        self._guard: ExecutionResourceGuard | None = None
         self._reader_thread: threading.Thread | None = None
         self._stderr_thread: threading.Thread | None = None
         # A bounded tail of the worker's stderr, drained continuously by its
@@ -1524,8 +1524,8 @@ def _merge_into_registry(
         registry.node_kinds[kind] = spec
     for name, entry in host._picker_entries.items():
         registry.picker_entries[name] = entry
-    for name, spec in host._builtin_actions.items():
-        registry.builtin_actions[name] = spec
+    for name, action_spec in host._builtin_actions.items():
+        registry.builtin_actions[name] = action_spec
     registry.intents.extend(host._intents)
 
 

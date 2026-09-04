@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import json
+from typing import Any
 
 
 def _anthropic_headers(api_key: str, extra_headers: dict | None = None) -> dict:
@@ -61,7 +62,13 @@ def _attach_http_error_metadata(error: Exception, exc) -> Exception:
     predicate needs both. Attaches `status_code` (int) and `retry_after`
     (float seconds parsed from the Retry-After header, or None) onto the
     error about to be raised."""
-    error.status_code = getattr(exc, "code", None)
+    # setattr, not plain attribute assignment: status_code and retry_after
+    # are metadata bolted onto an arbitrary Exception instance, so they are
+    # declared on no class. Every reader already goes through
+    # getattr(exc, ..., None) - see _is_transport_retryable and
+    # _retry_after_from_exception in api_provider - and setattr is simply
+    # the symmetric write side of that.
+    setattr(error, "status_code", getattr(exc, "code", None))
     retry_after = None
     try:
         headers = getattr(exc, "headers", None)
@@ -70,7 +77,7 @@ def _attach_http_error_metadata(error: Exception, exc) -> Exception:
             retry_after = float(str(header_value).strip())
     except (TypeError, ValueError):
         retry_after = None
-    error.retry_after = retry_after
+    setattr(error, "retry_after", retry_after)
     return error
 
 
@@ -206,7 +213,7 @@ def _anthropic_content_block_from_part(part: dict) -> dict | None:
 def _prepare_anthropic_messages(messages: list, cancel_event=None) -> tuple[str | None, list]:
     import api_provider as _mod  # deferred: patch-seam safety (see module docstring)
     system_parts = []
-    anthropic_messages = []
+    anthropic_messages: list[dict[str, Any]] = []
 
     for msg in messages:
         _mod._raise_if_cancelled(cancel_event)
@@ -315,7 +322,7 @@ def _prepare_anthropic_kwargs(task: str, kwargs: dict, model_id: str = "", reaso
 def _extract_anthropic_text(response) -> str:
     import api_provider as _mod  # deferred: patch-seam safety (see module docstring)
     answer_parts = []
-    reasoning_parts = []
+    reasoning_parts: list[str] = []
     reasoning_seen: set[str] = set()
 
     for block in _mod._extract_response_field(response, "content", []) or []:

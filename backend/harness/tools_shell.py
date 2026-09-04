@@ -97,7 +97,7 @@ def _run_command(command: str, cwd, cancel_event) -> tuple[str, "int | None", st
     real build. The reader also means the timeout path can hand back what
     the command managed to say before it was killed, which is the whole
     diagnostic value of a hung command."""
-    kwargs = {"env": safe_subprocess_env()}
+    kwargs: dict = {"env": safe_subprocess_env()}
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     guard = create_execution_guard()

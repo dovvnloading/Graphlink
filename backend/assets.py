@@ -49,6 +49,8 @@ from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 
 from backend.asset_store import ALLOWED_IMAGE_MIME_TYPES, extension_for_mime
+from backend.domain.node_access import optional_node
+from backend.domain.node_states import ChartState
 from backend.events import EventBus, UnknownSessionError
 from backend.session_context import get_session_context
 from graphlink_chart_rendering import render_chart_png, render_chart_svg
@@ -148,8 +150,8 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
         document = _get_canvas_document(bus, session)
         if document is None:
             return JSONResponse({"error": "unknown chart"}, status_code=404)
-        node = document.nodes.get(node_id)
-        if node is None or node.kind != "chart":
+        node = optional_node(document.nodes, node_id, "chart", ChartState)
+        if node is None:
             return JSONResponse({"error": "unknown chart"}, status_code=404)
 
         normalized_format = str(fmt or "png").strip().lower()
@@ -157,7 +159,7 @@ def register_assets(app: FastAPI, bus: EventBus) -> None:
             return JSONResponse({"error": "unsupported export format"}, status_code=400)
 
         title = node.state.chart_data.get("title") if isinstance(node.state.chart_data, dict) else ""
-        filename = _sanitize_chart_filename(title)
+        filename = _sanitize_chart_filename(str(title or ""))
 
         if normalized_format == "svg":
             svg_bytes = await asyncio.to_thread(

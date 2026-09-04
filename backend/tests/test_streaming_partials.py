@@ -239,7 +239,10 @@ def _make_canvas_env(session_name: str):
     bus.register_topic("notification", notifications.payload)
     composer_document = ComposerDocument()
     bus.register_topic("app-composer", composer_document.payload)
-    dispatcher = AgentDispatcher(_FakeSettingsManager())
+    # test_agents.py's fake, borrowed wholesale: it implements the one method
+    # AgentDispatcher reads, which a concrete SettingsManager parameter type
+    # cannot say is enough.
+    dispatcher = AgentDispatcher(_FakeSettingsManager())  # type: ignore[arg-type]
     document = register_canvas(bus, notifications, dispatcher, composer_document)
     return bus, notifications, composer_document, dispatcher, document
 

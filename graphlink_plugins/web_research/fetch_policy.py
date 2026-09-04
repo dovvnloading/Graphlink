@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import socket
 from dataclasses import dataclass
+from typing import Any, Callable, Sequence
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 
@@ -67,7 +68,11 @@ class FetchPolicy:
     read_timeout_seconds: float = 15.0
     total_timeout_seconds: float = 30.0
     max_bytes: int = 2 * 1024 * 1024
-    resolver: object = socket.getaddrinfo
+    # Injected so tests (and any future caller with its own resolution
+    # policy) can substitute a resolver; the shape that matters is
+    # socket.getaddrinfo's - called with a host and a port, returning
+    # records whose fifth element is the sockaddr.
+    resolver: Callable[..., Sequence[Any]] = socket.getaddrinfo
 
     def _resolve_addresses(self, parsed: SplitResult) -> list[str]:
         if not parsed.hostname:

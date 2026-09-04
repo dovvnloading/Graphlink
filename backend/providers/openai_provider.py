@@ -29,7 +29,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import graphlink_task_config as config
 from api_provider import (
@@ -115,7 +115,11 @@ def prepare_openai_messages(messages: list) -> list:
         if not isinstance(content, list):
             prepared.append(message)
             continue
-        parts = []
+        # Annotated rather than inferred: the branches below build three
+        # different part shapes (text, image_url, input_audio), and only the
+        # first one is a flat str->str mapping. Inference from that first
+        # append alone would make every nested part below a type error.
+        parts: list[dict[str, Any]] = []
         for part in content:
             if not isinstance(part, dict):
                 # Same defensive posture as _prepare_ollama_messages' own

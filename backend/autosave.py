@@ -271,7 +271,11 @@ def register_autosave(
     db_path: Path,
     canvas_document: SceneDocument,
     notifications: NotificationState | None,
-    mutation_guard: dict[str, bool],
+    # Any, not bool, matching what chat_library._new_mutation_guard actually
+    # builds: the guard has never been all-bool. It carries `active` (a bool),
+    # `owner` (a str or None) and `released` (an asyncio.Event), and the
+    # claim/release block below writes all three.
+    mutation_guard: dict[str, Any],
     last_saved: dict[str, Any],
     *,
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS,

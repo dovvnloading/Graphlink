@@ -163,8 +163,13 @@ def fetch_pr_review_bundle(client, owner: str, repo: str, number: int) -> dict[s
 
     diff_text, diff_truncated = _fetch_unified_diff(client, metadata_url)
 
-    base = metadata.get("base") if isinstance(metadata.get("base"), dict) else {}
-    head = metadata.get("head") if isinstance(metadata.get("head"), dict) else {}
+    # Bound to locals before the isinstance check rather than looked up twice
+    # inline: a check on one call cannot tell a type checker anything about a
+    # second, so the narrowing has to happen on a single value.
+    raw_base = metadata.get("base")
+    raw_head = metadata.get("head")
+    base = raw_base if isinstance(raw_base, dict) else {}
+    head = raw_head if isinstance(raw_head, dict) else {}
     return {
         "repo": slug,
         "pr_number": number,

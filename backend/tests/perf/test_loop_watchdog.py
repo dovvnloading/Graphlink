@@ -145,7 +145,7 @@ def test_no_representative_operation_blocks_the_loop_beyond_the_ci_ceiling():
 # emptiness) so a future legitimate exception, if one is ever deliberately
 # added, has an obvious place to be pinned rather than silently widening
 # the scanner's own matching.
-_KNOWN_RENDER_CALL_SITES = {}
+_KNOWN_RENDER_CALL_SITES: dict[str, int] = {}
 
 _WATCHED_RENDER_NAMES = {"render_chart_png", "render_chart_svg"}
 
