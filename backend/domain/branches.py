@@ -31,6 +31,9 @@ from backend.domain.model import (
 if TYPE_CHECKING:
     from graphlink_model_catalog import ModelRef
 
+from backend.domain.node_access import require_node
+from backend.domain.node_states import ChatState, NoteState
+
 from backend.domain._composed import SceneDocumentParts
 
 
@@ -43,11 +46,7 @@ class BranchOps(SceneDocumentParts):
         set_note_content, mirroring set_group_color's own "extra setter call
         right after creation" shape (see the WS intent wrapper in
         register_canvas)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "note":
-            raise SceneError(f"node is not a note node: {node_id}")
+        node = require_node(self.nodes, node_id, "note", NoteState)
         node.state.is_branch_comparison = True
         node.item_ids = list(source_node_ids)
 
@@ -66,11 +65,7 @@ class BranchOps(SceneDocumentParts):
         of a note-kind one (see ChatState's own comment, backend/domain/
         node_states.py, for why this is a distinct method/flag rather than
         reusing Compare Branches')."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "chat":
-            raise SceneError(f"node is not a chat node: {node_id}")
+        node = require_node(self.nodes, node_id, "chat", ChatState)
         node.state.is_branch_synthesis = True
         node.item_ids = list(source_node_ids)
         node.state.synthesis_instructions = str(instructions)
@@ -96,11 +91,7 @@ class BranchOps(SceneDocumentParts):
         already established that 2+ branches can be simultaneously
         legitimate (its own item_ids records multiple sources at once) -
         forcing exclusivity here would fight that existing workflow."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "chat":
-            raise SceneError(f"node is not a chat node: {node_id}")
+        node = require_node(self.nodes, node_id, "chat", ChatState)
         status = str(status)
         if status not in self.BRANCH_STATUS_VALUES:
             raise SceneError(f"invalid branch status: {status}")
@@ -115,11 +106,9 @@ class BranchOps(SceneDocumentParts):
         branch_status on purpose - no validation ties them together (a
         "rejected" node CAN technically be marked Final Deliverable; this
         is not blocked, though not a realistic path either)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "chat":
-            raise SceneError(f"node is not a chat node: {node_id}")
+        # Validation only - the node itself is not needed, just the two
+        # SceneErrors this raises for a missing or non-chat id.
+        require_node(self.nodes, node_id, "chat", ChatState)
         if is_final:
             self.final_deliverable_node_id = node_id
         elif self.final_deliverable_node_id == node_id:
@@ -131,11 +120,7 @@ class BranchOps(SceneDocumentParts):
         resolve_model_for_node's own docstring) resolves to. Both fields
         write together, mirroring set_group_color's own "no partial value"
         posture - a pin is a real (provider, model_id) pair or nothing."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "chat":
-            raise SceneError(f"node is not a chat node: {node_id}")
+        node = require_node(self.nodes, node_id, "chat", ChatState)
         provider = str(provider or "").strip()
         model_id = str(model_id or "").strip()
         if not provider or not model_id:
@@ -144,11 +129,7 @@ class BranchOps(SceneDocumentParts):
         node.state.override_model_id = model_id
 
     def clear_model_override(self, node_id: str) -> None:
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "chat":
-            raise SceneError(f"node is not a chat node: {node_id}")
+        node = require_node(self.nodes, node_id, "chat", ChatState)
         node.state.override_provider = ""
         node.state.override_model_id = ""
 
@@ -168,11 +149,7 @@ class BranchOps(SceneDocumentParts):
         intents own the side effects" separation (chat_library persistence
         is owned by intents_chat_library.py, never by graph.py/branches.py
         directly)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "chat":
-            raise SceneError(f"node is not a chat node: {node_id}")
+        node = require_node(self.nodes, node_id, "chat", ChatState)
         node.state.index_into_knowledge = bool(enabled)
 
     def resolve_model_for_node(
@@ -349,9 +326,11 @@ class BranchOps(SceneDocumentParts):
             for target in reconnect_targets:
                 self.connect(parent_id, target)
 
-        for edge in [parent_edge, *child_edges, *note_edges]:
-            if edge is not None:
-                self.edges.pop(edge.id, None)
+        # A distinct name from the `edge` above: this list also holds
+        # parent_edge, which may be None.
+        for stale_edge in [parent_edge, *child_edges, *note_edges]:
+            if stale_edge is not None:
+                self.edges.pop(stale_edge.id, None)
 
         if self.last_chat_node_id == node_id:
             # The active branch continues from wherever it now ends: the
@@ -515,11 +494,7 @@ class BranchOps(SceneDocumentParts):
         SceneError; the WS-intent wrapper in register_canvas catches it and
         shows ONE friendly notification for all three cases - see that wrapper
         for why."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "chat":
-            raise SceneError(f"node is not a chat node: {node_id}")
+        node = require_node(self.nodes, node_id, "chat", ChatState)
         parent_edge = self._branch_parent_edge(node_id)
         if parent_edge is None:
             raise SceneError(f"node has no parent and cannot be regenerated: {node_id}")
@@ -616,10 +591,6 @@ class BranchOps(SceneDocumentParts):
         so a node that had previously been individually expanded/collapsed
         differently loses that distinction the first time this runs - an
         accepted, stated tradeoff, not solved here."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "chat":
-            raise SceneError(f"node is not a chat node: {node_id}")
+        require_node(self.nodes, node_id, "chat", ChatState)  # validation only
         for nid in self._chat_subtree_ids(node_id):
             self.nodes[nid].is_collapsed = bool(collapsed)

@@ -279,7 +279,31 @@ class ChartState(NodeState):
 
 
 @dataclass
-class FrameState(NodeState):
+class GroupSizedState(NodeState):
+    """The two fields frame and container genuinely share.
+
+    FrameState's docstring explains why those two kinds are NOT one class:
+    is_locked and the group_manual_* quartet are meaningless for a
+    container, and forcing them onto a shared base would resurrect the
+    "every kind carries fields it never uses" problem the migration exists
+    to remove. That reasoning is about those five fields. It was never
+    about group_width/group_height, which the wire contract names for both
+    kinds and which every piece of group geometry reads for both.
+
+    Naming that overlap in one place is what lets the group-geometry code
+    be type-checked: `_recompute_group_bounds` and its callers look a node
+    up, confirm it is a frame or a container, and then read
+    `.state.group_width` - which no single per-kind class could describe.
+    Nothing about the wire payload, the persisted shape or either kind's
+    field set changes; the fields are declared one level up.
+    """
+
+    group_width: float | None = None
+    group_height: float | None = None
+
+
+@dataclass
+class FrameState(GroupSizedState):
     """Relocated verbatim from SceneNode's frame-only fields (former
     backend/domain/model.py fields, R6.1).
 
@@ -325,32 +349,29 @@ class FrameState(NodeState):
       round-trip without the collapsed-pill overwrite (this pair)
       destroying it.
 
-    NOT shared with ContainerState despite group_width/group_height being
-    common to both: is_locked/group_manual_* are explicitly meaningless
-    for containers (no lock concept, no manual-resize capability - no
-    resize_container method exists), so forcing them onto a shared base
-    would resurrect the exact "every kind carries fields it never uses"
-    problem this migration exists to remove."""
+    NOT the same class as ContainerState: is_locked/group_manual_* are
+    explicitly meaningless for containers (no lock concept, no
+    manual-resize capability - no resize_container method exists), so
+    forcing them onto a shared base would resurrect the exact "every kind
+    carries fields it never uses" problem this migration exists to remove.
+    group_width/group_height ARE common to both, and are declared on the
+    GroupSizedState base both inherit - see its own docstring."""
 
     is_locked: bool = True
     group_manual_width: float | None = None
     group_manual_height: float | None = None
     group_manual_x: float | None = None
     group_manual_y: float | None = None
-    group_width: float | None = None
-    group_height: float | None = None
 
 
 @dataclass
-class ContainerState(NodeState):
+class ContainerState(GroupSizedState):
     """Relocated verbatim from SceneNode's group_width/group_height fields
     (former backend/domain/model.py fields, R6.1), as they apply to
     container kind specifically - see FrameState's own docstring for why
-    this is a separate class rather than a shared base with FrameState,
-    despite the field-name overlap."""
-
-    group_width: float | None = None
-    group_height: float | None = None
+    this is a separate class from FrameState rather than the same one,
+    despite the field-name overlap. The two fields themselves are declared
+    on GroupSizedState, which both inherit."""
 
 
 @dataclass

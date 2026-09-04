@@ -34,6 +34,9 @@ from backend.domain.model import (
     SceneNode,
 )
 
+from backend.domain.node_access import is_node_of
+from backend.domain.node_states import ChartState, GroupSizedState
+
 from backend.domain._composed import SceneDocumentParts
 
 # Clearance between neighbouring nodes. Horizontal is a little wider than
@@ -113,9 +116,9 @@ class LayoutOps(SceneDocumentParts):
         measured = self.measured_sizes.get(node.id)
         width, height = measured if measured is not None else (None, None)
         if not (width and width > 0 and height and height > 0):
-            if node.kind == "chart" and node.state is not None:
+            if is_node_of(node, "chart", ChartState):
                 width, height = node.state.chart_width, node.state.chart_height
-            elif node.kind in ("frame", "container") and node.state is not None:
+            elif is_node_of(node, ("frame", "container"), GroupSizedState):
                 width, height = node.state.group_width, node.state.group_height
         if not (width and width > 0) or not (height and height > 0):
             fw, fh = KIND_FALLBACK_FOOTPRINTS.get(node.kind, DEFAULT_FALLBACK_FOOTPRINT)
@@ -382,9 +385,10 @@ class LayoutOps(SceneDocumentParts):
 
         def root_owner_key(nid: str) -> tuple[str, int]:
             fid, cid = frame_of.get(nid), container_of.get(nid)
-            if fid is None and cid is None:
+            owner = fid if fid is not None else cid
+            if owner is None:
                 return "", 0
-            cluster = find_cluster(fid if fid is not None else cid)
+            cluster = find_cluster(owner)
             # Within one cluster: container-only members first, the hinge
             # (dual membership) in the middle, frame-only members last -
             # for the common two-group cluster this puts each group's own
@@ -445,8 +449,9 @@ class LayoutOps(SceneDocumentParts):
                 (e for e in self.edges.values() if e.target == node.id), None,
             )
             if parent_edge is not None and parent_edge.source in self.nodes:
-                parent = self.nodes[parent_edge.source]
-                node.x, node.y = parent.x, parent.y
+                # Not `parent`: that name is a str elsewhere in this module.
+                parent_node = self.nodes[parent_edge.source]
+                node.x, node.y = parent_node.x, parent_node.y
 
         self._organize_groups()
 

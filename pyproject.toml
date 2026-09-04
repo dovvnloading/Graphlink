@@ -356,40 +356,22 @@ files = [
     "backend/events.py",
     "backend/token_counter.py",
     "graphlink_process_env.py",
-    # 2026-09-04, second widening: the first three backend/domain/ entries.
+    # 2026-09-04: backend/domain/, the whole package.
     #
     # The blocker was never annotation effort - it was that SceneNode.state is
     # typed `NodeState | None` against a field-less marker, so every per-kind
     # field access was unverifiable. backend/domain/node_access.py's
-    # require_node narrows the NODE, which
+    # require_node/optional_node/is_node_of narrow the NODE, which
     # tests/test_node_state_migration.py permits (it constrains the ACCESS
     # SHAPE, `<anything>.state.<field>`, not how the node was obtained) where
-    # aliasing the state does not. These three modules check clean because of
-    # it; the rest of backend/domain/ follows as its per-kind groups are
-    # extracted the same way.
-    "backend/domain/node_access.py",
-    "backend/domain/nodes_code_review.py",
-    "backend/domain/nodes_gitlink.py",
-    # 2026-09-04, third widening: the rest of backend/domain/'s per-kind
-    # groups, once the last thirteen kinds were extracted out of
-    # SceneDocument the same way, plus the four leaf modules they sit on.
+    # aliasing the state does not.
     #
-    # 13 of the 18 modules in backend/domain/ are now checked. The five that
-    # are not are graph.py itself and the four cross-cutting mixins
-    # (groups/branches/commands/layout), which hold 124 errors between them
-    # of the same union-attr shape - they read per-kind state off nodes they
-    # look up generically, so require_node cannot narrow them without a kind
-    # to narrow to. That is the next piece of work, not a gap being waved
-    # through.
-    "backend/domain/_composed.py",
-    "backend/domain/content_codec.py",
-    "backend/domain/model.py",
-    "backend/domain/node_states.py",
-    "backend/domain/nodes_agent_runs.py",
-    "backend/domain/nodes_content.py",
-    "backend/domain/nodes_conversational.py",
-    "backend/domain/nodes_planning.py",
-    "backend/domain/nodes_visual.py",
+    # Widened in three steps as the per-kind method groups came out of
+    # SceneDocument: three modules, then thirteen, then all eighteen once the
+    # four cross-cutting mixins were narrowed too. That last group could not
+    # use require_node directly - they read per-kind state off nodes they hold
+    # rather than look up by id, which is what is_node_of is for.
+    "backend/domain",
     # 2026-09-04: the first widening since this list was written, and the
     # ratchet moving the direction its own comment asks for.
     #

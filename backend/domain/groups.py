@@ -29,7 +29,13 @@ from backend.domain.model import (
     SceneError,
     SceneNode,
 )
-from backend.domain.node_states import ContainerState, FrameState
+from backend.domain.node_access import is_node_of, optional_node, require_node
+from backend.domain.node_states import (
+    ChartState,
+    ContainerState,
+    FrameState,
+    GroupSizedState,
+)
 
 from backend.domain._composed import SceneDocumentParts
 
@@ -75,9 +81,9 @@ class GroupOps(SceneDocumentParts):
             # test_node_state_migration.py's ADR-002 gate reads this
             # statically and an intermediate local would read as a bare
             # field access on the node itself.
-            if member.kind == "chart" and member.state is not None:
+            if is_node_of(member, "chart", ChartState):
                 width, height = member.state.chart_width, member.state.chart_height
-            elif member.kind in ("frame", "container") and member.state is not None:
+            elif is_node_of(member, ("frame", "container"), GroupSizedState):
                 width, height = member.state.group_width, member.state.group_height
         if not (width and width > 0):
             width = GROUP_MEMBER_DEFAULT_WIDTH
@@ -129,7 +135,7 @@ class GroupOps(SceneDocumentParts):
         for _ in range(4):
             pass_changed = False
             for group in self.nodes.values():
-                if group.kind not in ("frame", "container"):
+                if not is_node_of(group, ("frame", "container"), GroupSizedState):
                     continue
                 if not any(member_id in touched for member_id in group.item_ids):
                     continue
@@ -157,7 +163,10 @@ class GroupOps(SceneDocumentParts):
         origin when item_ids is empty or every id is stale, so callers
         (including resize_frame's own minimum-size clamp) always get a
         well-defined rect back."""
-        left = top = right = bottom = None
+        left: float | None = None
+        top: float | None = None
+        right: float | None = None
+        bottom: float | None = None
         for member_id in item_ids:
             member = self.nodes.get(member_id)
             if member is None:
@@ -170,7 +179,10 @@ class GroupOps(SceneDocumentParts):
             top = my1 if top is None else min(top, my1)
             right = mx2 if right is None else max(right, mx2)
             bottom = my2 if bottom is None else max(bottom, my2)
-        if left is None:
+        # All four are set together by the loop above or none of them are,
+        # so this is the same single condition it has always been - spelled
+        # out so a checker can see the arithmetic below is safe.
+        if left is None or top is None or right is None or bottom is None:
             left = top = 0.0
             right, bottom = GROUP_MEMBER_DEFAULT_WIDTH, GROUP_MEMBER_DEFAULT_HEIGHT
         x = left - GROUP_PADDING
@@ -225,37 +237,41 @@ class GroupOps(SceneDocumentParts):
            nothing manual set): x/y/width/height come straight from the
            padded bbox-of-members.
         """
-        node = self.nodes.get(node_id)
-        if node is None or node.kind not in ("frame", "container"):
+        node = optional_node(self.nodes, node_id, ("frame", "container"), GroupSizedState)
+        if node is None:
             return
         if node.is_collapsed:
             node.state.group_width = GROUP_COLLAPSED_WIDTH
             node.state.group_height = GROUP_COLLAPSED_HEIGHT
             return
         bx, by, bw, bh = self._bbox_of_members(node.item_ids)
-        has_manual = node.kind == "frame" and (
-            node.state.group_manual_width is not None
-            or node.state.group_manual_height is not None
-            or node.state.group_manual_x is not None
-            or node.state.group_manual_y is not None
-        )
-        if has_manual:
+        # The same `node.kind == "frame" and (...)` test this has always
+        # made, with the frame re-fetched under its own state type so the
+        # group_manual_* reads below are checkable. A container never
+        # reaches the branch, exactly as before - it has no such fields.
+        frame = optional_node(self.nodes, node_id, "frame", FrameState)
+        if frame is not None and (
+            frame.state.group_manual_width is not None
+            or frame.state.group_manual_height is not None
+            or frame.state.group_manual_x is not None
+            or frame.state.group_manual_y is not None
+        ):
             width = (
-                node.state.group_manual_width
-                if node.state.group_manual_width is not None
-                else (node.state.group_width or bw)
+                frame.state.group_manual_width
+                if frame.state.group_manual_width is not None
+                else (frame.state.group_width or bw)
             )
             height = (
-                node.state.group_manual_height
-                if node.state.group_manual_height is not None
-                else (node.state.group_height or bh)
+                frame.state.group_manual_height
+                if frame.state.group_manual_height is not None
+                else (frame.state.group_height or bh)
             )
-            if node.state.group_manual_x is not None and node.state.group_manual_y is not None:
-                anchor_x, anchor_y = node.state.group_manual_x, node.state.group_manual_y
+            if frame.state.group_manual_x is not None and frame.state.group_manual_y is not None:
+                anchor_x, anchor_y = frame.state.group_manual_x, frame.state.group_manual_y
             else:
                 anchor_x = bx + bw / 2.0 - width / 2.0
                 anchor_y = by + bh / 2.0 - height / 2.0
-            node.x, node.y, node.state.group_width, node.state.group_height = self._union_rect(
+            frame.x, frame.y, frame.state.group_width, frame.state.group_height = self._union_rect(
                 (anchor_x, anchor_y, width, height), (bx, by, bw, bh)
             )
             return
@@ -408,11 +424,7 @@ class GroupOps(SceneDocumentParts):
         drag-suppression concept at the domain-model layer, only at the
         frontend interaction layer), but keeping the call is cheap and
         future-proofs a later change to that math."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "frame":
-            raise SceneError(f"node is not a frame node: {node_id}")
+        node = require_node(self.nodes, node_id, "frame", FrameState)
         node.state.is_locked = not node.state.is_locked
         self._recompute_group_bounds(node_id)
 
@@ -440,11 +452,7 @@ class GroupOps(SceneDocumentParts):
         immediately afterward so x/y re-centers on the current member bbox
         around the new size right away, same posture as toggle_frame_lock's
         own trailing recompute call."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "frame":
-            raise SceneError(f"node is not a frame node: {node_id}")
+        node = require_node(self.nodes, node_id, "frame", FrameState)
         _, _, min_width, min_height = self._bbox_of_members(node.item_ids)
         node.state.group_manual_width = max(float(width), min_width)
         node.state.group_manual_height = max(float(height), min_height)
@@ -458,11 +466,7 @@ class GroupOps(SceneDocumentParts):
         an immediate bbox recompute. The size half is the exact inverse of
         resize_frame; the position half is what makes this button also undo
         an independent unlocked-frame drag, not just a resize."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "frame":
-            raise SceneError(f"node is not a frame node: {node_id}")
+        node = require_node(self.nodes, node_id, "frame", FrameState)
         node.state.group_manual_width = None
         node.state.group_manual_height = None
         node.state.group_manual_x = None
