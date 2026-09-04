@@ -27,7 +27,7 @@
 // component renders, so an empty fallback would collapse the card and let
 // edges snap to a zero-size box for a frame or two.
 
-import { lazy, Suspense, type ComponentType } from "react";
+import { Component, lazy, Suspense, type ComponentType, type ReactNode } from "react";
 
 /** The shell shown while a kind's chunk is still loading. */
 function NodeChunkFallback() {
@@ -38,6 +38,55 @@ function NodeChunkFallback() {
   );
 }
 
+/** Shown when a chunk could not be fetched at all.
+ *
+ * There is deliberately no retry button. React.lazy caches the REJECTION as
+ * well as the resolution, so re-rendering the same lazy component replays the
+ * failure forever - a retry that cannot work is worse than none. Reloading
+ * re-runs the import from scratch, which is the only thing that can recover. */
+function NodeChunkError() {
+  return (
+    <div className="scene-node scene-node-loading" role="alert">
+      <div className="scene-node-title">
+        This card could not load. Reload the app to try again.
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Catches a failed chunk fetch for ONE node.
+ *
+ * Without it a rejected import propagates uncaught and React unmounts the
+ * whole tree - one node kind failing to load (a stale index after a deploy, a
+ * dropped connection mid-session) would blank the entire canvas and the app
+ * chrome with it. Verified: a rejecting lazy() inside only a Suspense
+ * boundary surfaces as an unhandled error, because Suspense catches the
+ * PROMISE, never the rejection.
+ *
+ * A class component because that is the only thing React lets be an error
+ * boundary. Per node, for the same reason the Suspense boundary is per node:
+ * the blast radius of one bad chunk should be one card.
+ */
+class NodeChunkBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    // Left visible rather than swallowed: a chunk that will not load is a
+    // deploy/network problem worth seeing in the console, and this component
+    // cannot surface it any other way.
+    console.error("node view chunk failed to load", error);
+  }
+
+  render() {
+    return this.state.failed ? <NodeChunkError /> : this.props.children;
+  }
+}
+
 /**
  * Wrap a lazily-imported node component in its own Suspense boundary.
  *
@@ -45,18 +94,28 @@ function NodeChunkFallback() {
  * one that throws a promise - so the boundary has to live between them,
  * here, rather than at any call site.
  */
-function withNodeSuspense<P extends object>(Component: ComponentType<P>): ComponentType<P> {
+function withNodeSuspense<P extends object>(Loaded: ComponentType<P>): ComponentType<P> {
   function LazyNodeView(props: P) {
+    // Boundary OUTSIDE Suspense: Suspense catches the thrown promise, the
+    // boundary catches its rejection. Nested the other way the rejection
+    // escapes past the boundary entirely.
     return (
-      <Suspense fallback={<NodeChunkFallback />}>
-        <Component {...props} />
-      </Suspense>
+      <NodeChunkBoundary>
+        <Suspense fallback={<NodeChunkFallback />}>
+          <Loaded {...props} />
+        </Suspense>
+      </NodeChunkBoundary>
     );
   }
   // Keeps React DevTools and any test that queries by displayName readable.
-  LazyNodeView.displayName = `LazyNodeView(${Component.displayName || "chunk"})`;
+  LazyNodeView.displayName = `LazyNodeView(${Loaded.displayName || "chunk"})`;
   return LazyNodeView;
 }
+
+// Exposed for lazyNodeViews.test.tsx only. The wrapper's behaviour on a
+// failed chunk is the thing worth testing, and it cannot be reached through
+// the real exports without a real failing chunk.
+export const __testing = { withNodeSuspense }
 
 // Named exports, so each import() is unwrapped to a default for lazy().
 export const ArtifactNodeView = withNodeSuspense(

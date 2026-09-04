@@ -132,12 +132,24 @@ function nextPaint(): Promise<void> {
   });
 }
 
+/** Every Suspense fallback that means "this node has not rendered yet".
+ * Kept as one constant so a third fallback cannot be added without a reader
+ * of the export path seeing it. */
+export const NODE_LOADING_SELECTOR = ".chart-node-placeholder, .scene-node-loading";
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Polls `root` for any still-loading chart node (ChartNodeView.tsx's
- * `.chart-node-placeholder` Suspense fallback) and resolves once none remain.
+/** Polls `root` for any still-loading node and resolves once none remain.
+ *
+ * TWO fallbacks qualify. `.chart-node-placeholder` is ChartNodeView.tsx's own,
+ * and was the only one this waited on. ADR-019's node-view code split added
+ * `.scene-node-loading` (lazyNodeViews.tsx), which is shown while ANY node
+ * kind's chunk loads - and export is precisely when the most chunks are
+ * unloaded, because exportCanvasAsPng disables onlyRenderVisibleElements to
+ * mount the off-viewport nodes, which are exactly the ones whose chunks were
+ * never fetched. Without this the PNG captures "Loading..." shells.
  * Bounded by `timeoutMs` so a genuinely stuck or failed chunk load (offline,
  * a bad deploy) degrades to "capture whatever is there" rather than hanging
  * the export indefinitely - consistent with this module's broader "never
@@ -155,7 +167,7 @@ export async function waitForChartPlaceholdersToClear(
   pollIntervalMs: number = CHART_CHUNK_POLL_INTERVAL_MS,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (root.querySelector(".chart-node-placeholder") && Date.now() < deadline) {
+  while (root.querySelector(NODE_LOADING_SELECTOR) && Date.now() < deadline) {
     await sleep(pollIntervalMs);
   }
 }
