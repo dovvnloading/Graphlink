@@ -81,6 +81,22 @@ dev = ["pytest", "pytest-cov", "pytest-xdist", "ruff", "mypy", "hypothesis", "mu
 # the perf suite - CI passes -n0 there explicitly, since its timing
 # assertions must not share a loaded machine with 11 sibling workers).
 addopts = "--strict-markers --strict-config -n auto --dist worksteal"
+# --strict-markers means every marker has to be declared here or the run
+# fails, which is the point: this one is load-bearing, not decorative.
+#
+# posix_permissions marks the 9 tests that assert restrictive file mode bits
+# (0600) on chats.db, the knowledge store, DB backups and session.dat - the
+# secrets-at-rest file. All 9 begin with `if sys.platform == "win32":
+# pytest.skip("chmod is a no-op on Windows")`, and python-tests is the ONLY
+# job in ci.yml that runs pytest at all, pinned to windows-latest for DPAPI.
+# So until the posix-permissions job was added they skipped in CI and ran
+# nowhere else: nine assertions about the permissions of a file holding API
+# keys, executing on no machine anyone checked. The marker is what lets that
+# job select exactly them on ubuntu, without dragging in the ~18 other tests
+# in the same files that genuinely require Windows.
+markers = [
+    "posix_permissions: asserts POSIX file mode bits; skipped on Windows, run by the posix-permissions CI job",
+]
 filterwarnings = [
     "error::DeprecationWarning",
     "error::PendingDeprecationWarning",

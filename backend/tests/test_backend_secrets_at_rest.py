@@ -461,6 +461,7 @@ class TestSessionFilePermissionsAreRestricted:
 
         assert (state_file, 0o600) in calls
 
+    @pytest.mark.posix_permissions
     def test_posix_permission_bits_are_actually_0600(self, tmp_path):
         if sys.platform == "win32":
             pytest.skip("chmod is a no-op on Windows - see class docstring")
@@ -470,6 +471,7 @@ class TestSessionFilePermissionsAreRestricted:
 
         assert stat.S_IMODE(state_file.stat().st_mode) == 0o600
 
+    @pytest.mark.posix_permissions
     def test_self_heals_a_pre_existing_file_with_looser_permissions(self, tmp_path):
         if sys.platform == "win32":
             pytest.skip("chmod is a no-op on Windows - see class docstring")
@@ -514,6 +516,7 @@ class TestCorruptedStateBackupIsAlsoChmodded:
         backup_path = next(tmp_path.glob("session.dat.corrupted-*"))
         assert (backup_path, 0o600) in calls
 
+    @pytest.mark.posix_permissions
     def test_posix_permission_bits_on_the_backup_are_actually_0600(self, tmp_path):
         if sys.platform == "win32":
             pytest.skip("chmod is a no-op on Windows - see class docstring")
