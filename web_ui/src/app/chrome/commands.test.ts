@@ -254,7 +254,7 @@ describe("buildCommands", () => {
     expect(exportWithNodes.enabled()).toBe(true);
   });
 
-  it("export-canvas-png's run() actually invokes exportCanvasAsPng with the instance and background token", () => {
+  it("export-canvas-png's run() actually invokes exportCanvasAsPng with the instance and background token", async () => {
     // Audit finding: this used to assert `expect(() => run()).not.toThrow()`,
     // which is vacuous - run() `void`s a call to an async function, and an
     // async function never throws synchronously, so it held for EVERY
@@ -268,7 +268,11 @@ describe("buildCommands", () => {
 
     commands.find((c) => c.id === "export-canvas-png")!.run();
 
-    expect(exportCanvasAsPngMock).toHaveBeenCalledOnce();
+    // run() now reaches exportCanvasAsPng through a dynamic import, so the
+    // call lands a microtask later. waitFor keeps the assertion real - it
+    // still fails if the command is wired to nothing, which is the whole
+    // point of the note above.
+    await vi.waitFor(() => expect(exportCanvasAsPngMock).toHaveBeenCalledOnce());
     // ADR-011 stage 11.2: a 3rd arg now threads store.setExportInProgress
     // through so exportCanvasAsPng can suspend onlyRenderVisibleElements for
     // the capture's duration - see that module's own doc. Asserted as

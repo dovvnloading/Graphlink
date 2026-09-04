@@ -1,7 +1,6 @@
 import { useReactFlow, useStore } from "@xyflow/react";
 import { useSyncExternalStore } from "react";
 import { FIT_VIEW_MAX_ZOOM } from "../canvas/canvasConstants";
-import { exportCanvasAsPng } from "../canvas/exportCanvasPng";
 import { motionDuration } from "../reducedMotion";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
@@ -294,12 +293,19 @@ export function AppBar({ store }: { store: SceneStore }) {
     const viewport = getViewport();
     setViewport({ ...viewport, zoom: 1 }, { duration: motionDuration(200) });
   };
-  const exportPng = () =>
-    void exportCanvasAsPng(
+  // Imported on click, not at module scope: exportCanvasAsPng pulls in
+  // html-to-image (13 KB of the initial chunk) to rasterize the canvas, and
+  // a session that never exports a PNG never needs it. The await lands
+  // inside the handler, so the "export in progress" flag the callback below
+  // sets still brackets the real work exactly as before.
+  const exportPng = async () => {
+    const { exportCanvasAsPng } = await import("../canvas/exportCanvasPng");
+    await exportCanvasAsPng(
       { getNodes, getViewport, setViewport },
       "--gl-surface-window",
       (value) => store.setExportInProgress(value),
     );
+  };
 
   // Overlay-opening actions (Pins/View/Plugins/About/Help) close the open
   // menu for free via OverlayProvider's own single-open policy - opening any

@@ -33,11 +33,13 @@ function renderPanel(overrides: Partial<React.ComponentProps<typeof DocumentView
 }
 
 describe("DocumentViewPanel", () => {
-  it("renders the fixed title and the passed markdown content", () => {
+  it("renders the fixed title and the passed markdown content", async () => {
     renderPanel({ content: "# Heading\n\nA paragraph of body text." });
 
+    // The title is part of the eager shell; the body arrives with the lazy
+    // markdown chunk, hence findBy rather than getBy.
     expect(screen.getByText("Document View")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Heading" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Heading" })).toBeInTheDocument();
     expect(screen.getByText("A paragraph of body text.")).toBeInTheDocument();
   });
 
@@ -71,14 +73,32 @@ describe("DocumentViewPanel", () => {
     expect(screen.getByLabelText("Document View")).toBeInTheDocument();
   });
 
-  it("collapses to zero width and is aria-hidden when closed, without unmounting", () => {
+  it("collapses to zero width and is aria-hidden when closed", () => {
     const { container } = renderPanel({ isOpen: false, content: "still here" });
 
     const panel = container.querySelector(".document-view-panel") as HTMLElement;
     expect(panel).toHaveAttribute("aria-hidden", "true");
     expect(panel.style.width).toBe("0px");
-    // Content stays mounted (no unmount/remount flicker on next open) -
-    // just clipped by the closed panel's own overflow:hidden.
+  });
+
+  it("does not load its markdown chunk for a panel that has never been opened", () => {
+    // The deferral this panel's lazy split exists for: the shell mounts with
+    // the app, the ~130 KB of markdown machinery behind it does not, until
+    // somebody actually opens the Document View.
+    renderPanel({ isOpen: false, content: "still here" });
+    expect(screen.queryByText("still here")).toBeNull();
+  });
+
+  it("keeps its content mounted after being closed again, so reopening does not flicker", async () => {
+    const { rerender } = renderPanel({ isOpen: true, content: "still here" });
+    expect(await screen.findByText("still here")).toBeInTheDocument();
+
+    rerender(
+      <DocumentViewPanel isOpen={false} content="still here" sourceLabel={null} onClose={vi.fn()} />,
+    );
+
+    // Closed, but never unmounted - the property the eager version had, kept
+    // by latching "has been opened" rather than tracking `isOpen`.
     expect(screen.getByText("still here")).toBeInTheDocument();
   });
 
@@ -171,9 +191,11 @@ describe("DocumentViewPanel", () => {
   // shape, the reading-progress bar's scroll-driven width, and the
   // reset-on-new-content behavior.
   describe("table of contents + reading progress (stage 2)", () => {
-    it("shows the Outline toggle when the content has 2+ headings", () => {
+    it("shows the Outline toggle when the content has 2+ headings", async () => {
       renderPanel({ content: "# One\n\n## Two" });
-      expect(screen.getByRole("button", { name: "Outline" })).toBeInTheDocument();
+      // Headings come from a dynamically imported parser, so they land a
+      // microtask after mount rather than during it.
+      expect(await screen.findByRole("button", { name: "Outline" })).toBeInTheDocument();
     });
 
     it("shows no Outline toggle when the content has fewer than 2 headings", () => {
@@ -437,7 +459,7 @@ describe("DocumentViewPanel", () => {
       const onClose = vi.fn();
       renderPanel({ onClose, content: "# One\n\n## Two" });
 
-      await user.click(screen.getByRole("button", { name: "Outline" }));
+      await user.click(await screen.findByRole("button", { name: "Outline" }));
       expect(screen.getByRole("menu", { name: "Table of contents" })).toBeInTheDocument();
 
       await user.keyboard("{Escape}");

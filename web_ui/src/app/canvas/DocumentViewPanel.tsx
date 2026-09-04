@@ -1,8 +1,23 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DocumentViewMarkdown } from "./DocumentViewMarkdown";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { DocumentViewToc } from "./DocumentViewToc";
 import { DocumentViewSearch } from "./DocumentViewSearch";
-import { extractHeadings } from "./documentViewHeadings";
+import type { DocumentHeading } from "./documentViewHeadings";
+
+// Everything that parses or renders markdown loads on first open, not at
+// module scope. Between them, DocumentViewMarkdown (react-markdown plus six
+// remark/rehype plugins and react-medium-image-zoom) and
+// documentViewHeadings (its own unified/remark-parse pass) were ~130 KB of
+// the initial chunk - reachable only through this panel, which is behind a
+// click and which many sessions never open at all.
+//
+// The panel SHELL deliberately stays eager. It is an <aside> that animates
+// `width 220ms ease` from 0, and a CSS transition does not fire on a freshly
+// mounted element: lazy-mounting the shell would cost the first open its
+// slide-in. Splitting the contents instead keeps the animation exactly as it
+// was and still leaves the weight behind the click.
+const DocumentViewMarkdown = lazy(() =>
+  import("./DocumentViewMarkdown").then((m) => ({ default: m.DocumentViewMarkdown })),
+);
 
 const SEARCH_MATCH_SELECTOR = ".document-view-search-match";
 const SEARCH_MATCH_CURRENT_CLASS = "document-view-search-match-current";
@@ -261,11 +276,40 @@ export function DocumentViewPanel({
       });
   }, [content]);
 
+  // Latches true the first time the panel opens and never resets, so the two
+  // dynamic imports below fire on that first open rather than on App's own
+  // mount. React.lazy inside an always-rendered subtree would otherwise
+  // request its chunk moments after page load - splitting the bundle without
+  // deferring the fetch, which is the whole point. (Same reasoning, and the
+  // same latch, as App.tsx's LazySurface.) Closing the panel does not unmount
+  // anything, so scroll position, search text and width survive exactly as
+  // they did when this was all eager.
+  const [hasOpened, setHasOpened] = useState(isOpen);
+  if (isOpen && !hasOpened) {
+    setHasOpened(true);
+  }
+
   // Stage 2: table of contents + reading progress. Extracted from the raw
   // markdown source (not queried from the rendered DOM) - see
   // documentViewHeadings.ts's own doc comment for why this is both simpler
   // and available before the very first paint.
-  const headings = useMemo(() => extractHeadings(content ?? ""), [content]);
+  //
+  // Now resolved through a dynamic import, so this is state fed by an effect
+  // rather than a useMemo. The observable difference is one microtask: the
+  // table of contents is empty for a tick after content changes, then fills
+  // in. DocumentViewToc already renders nothing below two headings, so that
+  // tick looks the same as a document that simply has no outline.
+  const [headings, setHeadings] = useState<DocumentHeading[]>([]);
+  useEffect(() => {
+    if (!hasOpened) return;
+    let cancelled = false;
+    void import("./documentViewHeadings").then(({ extractHeadings }) => {
+      if (!cancelled) setHeadings(extractHeadings(content ?? ""));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [content, hasOpened]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [readingProgress, setReadingProgress] = useState(0);
 
@@ -529,7 +573,14 @@ export function DocumentViewPanel({
           onScroll={onScroll}
           style={{ fontSize: fontSizeMultiplier === 1 ? undefined : `${fontSizeMultiplier}em` }}
         >
-          <DocumentViewMarkdown content={content ?? ""} searchQuery={searchQuery} />
+          {/* fallback={null} rather than a spinner: the panel is mid
+              slide-in on the one render where this can be pending, and an
+              empty body for that moment is what the animation already shows. */}
+          {hasOpened && (
+            <Suspense fallback={null}>
+              <DocumentViewMarkdown content={content ?? ""} searchQuery={searchQuery} />
+            </Suspense>
+          )}
         </div>
       </div>
       {/* This is the ARIA APG "window splitter" pattern: a focusable,
