@@ -51,6 +51,8 @@ from graphlink_token_estimator import TokenEstimator
 
 from backend.domain.branches import BranchOps
 from backend.domain.commands import CommandOps
+from backend.domain.nodes_code_review import CodeReviewOps
+from backend.domain.nodes_gitlink import GitlinkOps
 from backend.domain.content_codec import _content_codec
 from backend.domain.groups import GroupOps
 from backend.domain.layout import LayoutOps
@@ -102,22 +104,10 @@ def _estimate_tokens(text: str) -> int:
     return TokenEstimator().count_tokens(text)
 
 
-def _bundle_int(value: object) -> int:
-    """Non-negative int from a fetch bundle, defaulting to 0.
-
-    The bundle is assembled from a GitHub API response, so every numeric
-    field in it is external input. graphlink_plugins/review_lens/diff_fetch.py
-    already coerces on the way in; this is the second line of the same
-    defence, for a bundle that reached here by any other route (a test, a
-    future caller, a hand-built payload)."""
-    try:
-        return max(0, int(value))  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return 0
 
 
 @dataclass
-class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
+class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps, CodeReviewOps, GitlinkOps):
     """The canvas document for one session. Plain data + invariants; the
     R6 serializer will read/write exactly this shape."""
 
@@ -1148,242 +1138,16 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
     # from graphlink_plugins.gitlink - same precedent as ArtifactAgent/
     # web_research.domain already being imported there, not here.
 
-    def add_gitlink_node(self, x: float, y: float, parent_id: str | None) -> SceneNode:
-        """The Gitlink node's creation primitive - same required-parent
-        posture as document/thinking/html/image/conversation/web_research/
-        artifact nodes (never exists unparented - confirmed against
-        graphlink_plugin_portal.py's own no_selection_message/
-        invalid_parent_message for Gitlink, there is no unparented/root form
-        in the domain model). Title is always the fixed literal "Gitlink"
-        (mirrors conversation/web_research/artifact's own fixed titles)."""
-        if parent_id is not None and parent_id not in self.nodes:
-            raise SceneError(f"unknown parent node: {parent_id}")
-        node_id = f"n{next(self._counter)}"
-        node = SceneNode(
-            id=node_id,
-            x=float(x),
-            y=float(y),
-            title="Gitlink",
-            kind="gitlink",
-            state=GitlinkState(),
-        )
-        self.nodes[node_id] = node
-        if parent_id is not None:
-            self.connect(parent_id, node_id)
-        return node
 
-    def set_gitlink_local_root(self, node_id: str, local_root: str) -> SceneNode:
-        """The one dedicated config setter Gitlink needs (see the design
-        rationale on every other config field being passed as a direct
-        action parameter instead): the user may type/paste a local checkout
-        path BEFORE ever clicking Import/Build Context, with no other action
-        call site to piggyback on."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
-        node.state.gitlink_local_root = str(local_root)
-        return node
 
-    def store_gitlink_repo_tree(self, node_id: str, repo: str, branch: str, file_paths: list[str]) -> SceneNode:
-        """Lands a successful loadGitlinkRepoTree result: repo, branch
-        (resolved server-side, including any default-branch lookup), and the
-        scanned text-file path list."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
-        node.state.gitlink_repo = str(repo)
-        node.state.gitlink_branch = str(branch)
-        node.state.gitlink_repo_file_paths = list(file_paths)
-        return node
 
-    def store_gitlink_snapshot_root(self, node_id: str, repo: str, branch: str, local_root: str) -> SceneNode:
-        """Lands a successful importGitlinkSnapshot result - sets
-        repo/branch/local_root AND gitlink_imported_root (so a later run
-        knows this path came from an import, matching legacy repo_state's
-        imported_root concept)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
-        node.state.gitlink_repo = str(repo)
-        node.state.gitlink_branch = str(branch)
-        node.state.gitlink_local_root = str(local_root)
-        node.state.gitlink_imported_root = str(local_root)
-        return node
 
-    def store_gitlink_context(
-        self,
-        node_id: str,
-        *,
-        scope_mode: str,
-        selected_paths: list[str],
-        context_xml: str,
-        context_stats: dict[str, Any],
-        context_summary: str,
-    ) -> SceneNode:
-        """Lands a successful buildGitlinkContext result: scope_mode,
-        selected_paths, and all three context_* fields. context_stats is
-        stringified value-by-value here - repository.py's
-        build_context_bundle returns a mixed int/str dict, but the wire field
-        this feeds (scene_payload()'s "gitlinkContextStats") must stay
-        honestly dict[str, str] for the codegen'd validator (see the field's
-        own comment on SceneNode).
 
-        R5.3 post-review FIX 6: gitlink_context_version is incremented
-        UNCONDITIONALLY every time this method runs - a genuine monotonic
-        counter, never reset, never skipped - closing a real bug
-        gitlink_context_summary alone could not: two different Build Context
-        results (e.g. selecting a different single file each time) can
-        produce an IDENTICAL summary string (see that field's own comment on
-        SceneNode), which was tricking the frontend's lazy-fetch-once guard
-        into skipping a real refetch and showing stale XML."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
-        node.state.gitlink_scope_mode = str(scope_mode)
-        node.state.gitlink_selected_paths = list(selected_paths)
-        node.state.gitlink_context_xml = str(context_xml)
-        node.state.gitlink_context_stats = {str(k): str(v) for k, v in (context_stats or {}).items()}
-        node.state.gitlink_context_summary = str(context_summary)
-        node.state.gitlink_context_version += 1
-        return node
 
-    def fetch_gitlink_context_xml(self, node_id: str) -> str:
-        """The read-side of the lazy fetch: gitlink_context_xml is EXCLUDED
-        from scene_payload() (see the field's own comment on SceneNode) - this
-        is the only way the frontend ever gets the full text, via the
-        read-only fetchGitlinkContext intent."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
-        return node.state.gitlink_context_xml
 
-    def start_gitlink_run(self, node_id: str, task_prompt: str) -> SceneNode:
-        """Begin one Generate Change Set run: stores the task prompt and
-        clears any previous error. Deliberately does NOT touch
-        gitlink_pending_changes/gitlink_proposal_markdown/
-        gitlink_change_fingerprint here - those only change once
-        complete_gitlink_run lands a real result, same stale-while-revalidate
-        posture web research's own start_web_research_run documents for
-        research_result."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
-        node.state.gitlink_task_prompt = str(task_prompt)
-        node.state.gitlink_error = ""
-        return node
 
-    def complete_gitlink_run(
-        self,
-        node_id: str,
-        proposal_markdown: str,
-        pending_changes: list[dict[str, Any]],
-        preview_text: str,
-        fingerprint: str | None,
-        local_root: str,
-    ) -> SceneNode:
-        """Land a successful run. proposal_markdown/pending_changes/
-        preview_text are always set. If pending_changes is non-empty:
-        change_state becomes "previewed", fingerprint is recorded, AND
-        (R5.3 post-review FIX 2) gitlink_change_local_root records the
-        EXACT local_root this run used - the write-destination binding
-        start_gitlink_apply's fourth check enforces, since the fingerprint
-        alone says nothing about where the content is written. If
-        pending_changes is empty (the agent's own write_intent came back
-        no_changes or blocked): change_state becomes "draft" and both
-        fingerprint and local_root are cleared - mirrors legacy
-        set_proposal's own unconditional `change_state = PREVIEWED if
-        pending_changes else DRAFT` exactly (an empty proposal is never
-        something to approve), extended so an empty proposal never leaves a
-        dangling local_root binding behind either.
 
-        `local_root` is compared as raw trimmed text against
-        start_gitlink_apply's own local_root_text - stored stripped here so
-        that comparison lines up exactly."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        node.state.gitlink_proposal_markdown = str(proposal_markdown)
-        node.state.gitlink_pending_changes = list(pending_changes or [])
-        node.state.gitlink_preview_text = str(preview_text)
-        if node.state.gitlink_pending_changes:
-            node.state.gitlink_change_state = "previewed"
-            node.state.gitlink_change_fingerprint = fingerprint
-            node.state.gitlink_change_local_root = str(local_root).strip()
-        else:
-            node.state.gitlink_change_state = "draft"
-            node.state.gitlink_change_fingerprint = None
-            node.state.gitlink_change_local_root = None
-        return node
 
-    def fail_gitlink_run(self, node_id: str, message: str) -> SceneNode | None:
-        """No-op (return None without raising) if the node is gone - a
-        background failure landing after node deletion should be silent,
-        matching the more defensive posture used for other failure-only
-        paths in this file (e.g. apply_web_research_progress). Deliberately
-        does NOT clear any existing pending_changes/proposal_markdown/
-        change_state - a failed re-run must never wipe out a previously
-        staged, still-valid proposal; only the error banner reflects the
-        new failure."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            return None
-        node.state.gitlink_error = str(message)
-        return node
-
-    def complete_gitlink_apply(self, node_id: str, written_files: int) -> SceneNode:
-        """Land a successful apply: change_state becomes "applied", error is
-        cleared.
-
-        R5.3 post-review FIX 1 (CRITICAL): ALSO clears gitlink_pending_changes
-        and gitlink_change_fingerprint - a successful Apply must invalidate
-        the approval it just consumed, or the exact same already-applied
-        change set could be replayed via a second applyGitlinkChanges call
-        (start_gitlink_apply's fingerprint check would still pass, since
-        nothing here previously changed after a successful write).
-        gitlink_change_local_root is cleared alongside them (R5.3 post-review
-        FIX 2) - a cleared approval must have no dangling bound fields.
-        gitlink_proposal_markdown/gitlink_preview_text are DELIBERATELY left
-        untouched - they remain visible as a historical record of what was
-        applied."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        node.state.gitlink_change_state = "applied"
-        node.state.gitlink_error = ""
-        node.state.gitlink_pending_changes = []
-        node.state.gitlink_change_fingerprint = None
-        node.state.gitlink_change_local_root = None
-        return node
-
-    def fail_gitlink_apply(self, node_id: str, message: str) -> SceneNode | None:
-        """No-op if the node is gone. Reverts change_state to "previewed"
-        (NEVER silently "applied"), CLEARS gitlink_change_fingerprint (so a
-        stale approval can never be replayed) and gitlink_change_local_root
-        (R5.3 post-review FIX 2 - a cleared approval must have no dangling
-        bound fields), and sets gitlink_error verbatim. Handles BOTH the
-        fingerprint-mismatch refusal path, the local_root-mismatch refusal
-        path, and the write-failure path identically - all three are "the
-        apply did not happen, here is why"."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            return None
-        node.state.gitlink_change_state = "previewed"
-        node.state.gitlink_change_fingerprint = None
-        node.state.gitlink_change_local_root = None
-        node.state.gitlink_error = str(message)
-        return node
 
     # -- Review Lens node ------------------------------------------------------
     #
@@ -1392,230 +1156,14 @@ class SceneDocument(BranchOps, GroupOps, LayoutOps, CommandOps):
     # method below takes plain values (already fetched/normalized by the
     # dispatch layer) and only stores them.
 
-    def add_code_review_node(self, x: float, y: float, parent_id: str | None) -> SceneNode:
-        """The Review Lens node's creation primitive - same required-parent
-        posture as gitlink (the picker offers standalone creation at the
-        viewport center, but the parent edge is attached whenever a valid
-        parent was selected). Title is always the fixed literal
-        "Review Lens" (mirrors gitlink's own fixed title)."""
-        if parent_id is not None and parent_id not in self.nodes:
-            raise SceneError(f"unknown parent node: {parent_id}")
-        node_id = f"n{next(self._counter)}"
-        node = SceneNode(
-            id=node_id,
-            x=float(x),
-            y=float(y),
-            title="Review Lens",
-            kind="code_review",
-            state=CodeReviewState(),
-        )
-        self.nodes[node_id] = node
-        if parent_id is not None:
-            self.connect(parent_id, node_id)
-        return node
 
-    def set_code_review_pr_url(self, node_id: str, pr_url: str) -> SceneNode:
-        """The one dedicated config setter Review Lens needs: the user types
-        or pastes the PR link BEFORE ever clicking Fetch, with no other
-        action call site to piggyback on (the setGitlinkLocalRoot
-        precedent exactly)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
-        node.state.code_review_pr_url = str(pr_url)
-        return node
 
-    def store_code_review_diff(
-        self, node_id: str, *, pr_url: str, bundle: dict,
-    ) -> SceneNode:
-        """Lands a successful fetchCodeReviewDiff result.
 
-        Takes the fetch bundle whole rather than as 15 separate keyword
-        arguments. It used to be the latter, which made this the widest
-        signature in the repo at 18 parameters - and every one of them was
-        pure transport: the caller pulled 15 values out of a dict with
-        .get() only for this method to set them straight onto node.state.
-        `pr_url` stays separate because it is not part of the bundle: it is
-        what the user typed, kept even when the fetch that used it is
-        superseded.
 
-        A new fetch
-        supersedes any prior review on this node (walkthrough, findings,
-        errors, verdict, Q&A, and dismissals are all reset) - reviewing
-        against a stale diff's findings would be worse than showing none,
-        the same supersede reasoning store_gitlink_context applies to
-        context builds. code_review_diff_version is incremented
-        UNCONDITIONALLY (the R5.3 post-review FIX 6 precedent) so the
-        frontend's lazy-diff guard can never serve a previous fetch's
-        text for this one."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
-        pr_number_value = _bundle_int(bundle.get("pr_number"))
-        node.state.code_review_pr_url = str(pr_url)
-        node.state.code_review_repo = str(bundle.get("repo", ""))
-        node.state.code_review_pr_number = pr_number_value
-        node.state.code_review_pr_title = str(bundle.get("pr_title", ""))
-        node.state.code_review_pr_state = str(bundle.get("pr_state", ""))
-        node.state.code_review_pr_html_url = str(bundle.get("html_url", ""))
-        node.state.code_review_base_ref = str(bundle.get("base_ref", ""))
-        node.state.code_review_head_ref = str(bundle.get("head_ref", ""))
-        node.state.code_review_additions = _bundle_int(bundle.get("additions"))
-        node.state.code_review_deletions = _bundle_int(bundle.get("deletions"))
-        node.state.code_review_changed_files = _bundle_int(bundle.get("changed_files"))
-        node.state.code_review_files = [
-            dict(entry) for entry in (bundle.get("files") or []) if isinstance(entry, dict)
-        ]
-        node.state.code_review_files_truncated = bool(bundle.get("files_truncated", False))
-        node.state.code_review_diff_text = str(bundle.get("diff_text", ""))
-        node.state.code_review_diff_truncated = bool(bundle.get("diff_truncated", False))
-        node.state.code_review_diff_chars = _bundle_int(bundle.get("diff_chars"))
-        node.state.code_review_diff_version += 1
-        node.state.code_review_walkthrough = []
-        node.state.code_review_findings = []
-        node.state.code_review_errors = []
-        node.state.code_review_dismissed_ids = []
-        node.state.code_review_title = ""
-        node.state.code_review_overview = ""
-        node.state.code_review_confidence = ""
-        node.state.code_review_scores = {}
-        node.state.code_review_quality_score = 0
-        node.state.code_review_verdict = "none"
-        node.state.code_review_risk = ""
-        node.state.code_review_quality_summary = ""
-        node.state.code_review_qa = []
-        node.state.code_review_state = "fetched"
-        node.state.code_review_error = ""
-        return node
 
-    def fetch_code_review_diff_text(self, node_id: str) -> str:
-        """The read-side of the lazy fetch: code_review_diff_text is
-        EXCLUDED from scene_payload() (see CodeReviewState's own comment) -
-        this is the only way the frontend ever gets the full text, via the
-        read-only fetchCodeReviewDiffText intent."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
-        return node.state.code_review_diff_text
 
-    def start_code_review_run(self, node_id: str) -> SceneNode:
-        """Mark a review run started: clears the error banner but keeps any
-        prior review visible until the new one lands (stale-while-
-        revalidate, the start_gitlink_run precedent - a failed re-run must
-        never blank a previously good review)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
-        node.state.code_review_error = ""
-        return node
 
-    def complete_code_review_run(
-        self,
-        node_id: str,
-        *,
-        title: str,
-        overview: str,
-        confidence: str,
-        walkthrough: list,
-        findings: list,
-        errors: list,
-        scores: dict,
-        quality_score: int,
-        verdict: str,
-        risk: str,
-        quality_summary: str,
-    ) -> SceneNode:
-        """Lands a successful runCodeReview result: the walkthrough,
-        findings, errors, and scorecard, plus verdict/risk. Caps are
-        re-enforced here (defense in depth - the engine already caps, but
-        the domain is what bounds the wire and the save file). A new
-        review resets dismissals: finding ids are re-minted per review,
-        so a dismissal of the old review's f3 must never hide the new
-        review's f3."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
-        node.state.code_review_title = str(title)
-        node.state.code_review_overview = str(overview)
-        node.state.code_review_confidence = str(confidence)
-        node.state.code_review_walkthrough = [
-            dict(group) for group in (walkthrough or []) if isinstance(group, dict)
-        ][:8]
-        node.state.code_review_findings = [
-            dict(item) for item in (findings or []) if isinstance(item, dict)
-        ][:12]
-        node.state.code_review_errors = [
-            dict(item) for item in (errors or []) if isinstance(item, dict)
-        ][:10]
-        node.state.code_review_dismissed_ids = []
-        node.state.code_review_scores = {
-            str(key): max(0, int(value)) for key, value in (scores or {}).items()
-        }
-        node.state.code_review_quality_score = max(0, int(quality_score or 0))
-        node.state.code_review_verdict = str(verdict or "none")
-        node.state.code_review_risk = str(risk or "")
-        node.state.code_review_quality_summary = str(quality_summary)
-        node.state.code_review_state = "reviewed"
-        node.state.code_review_error = ""
-        return node
 
-    def fail_code_review_run(self, node_id: str, message: str) -> SceneNode | None:
-        """No-op (return None without raising) if the node is gone - a
-        background failure landing after node deletion should be silent
-        (the fail_gitlink_run precedent). Deliberately does NOT clear any
-        prior review - a failed re-run must never wipe out a previously
-        good one; only the error banner reflects the new failure."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            return None
-        node.state.code_review_error = str(message)
-        return node
-
-    def dismiss_code_review_finding(self, node_id: str, finding_id: str) -> SceneNode:
-        """Record one finding/error dismissal (the reviewer's dismiss
-        affordance). Idempotent: unknown ids and repeats are quiet no-ops,
-        never errors - dismissal is UI state, and a double-click must not
-        be able to fail a run."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
-        dismissed = str(finding_id)
-        known_ids = {
-            str(item.get("id")) for item in (
-                list(node.state.code_review_findings) + list(node.state.code_review_errors)
-            ) if isinstance(item, dict)
-        }
-        if dismissed and dismissed in known_ids and dismissed not in node.state.code_review_dismissed_ids:
-            node.state.code_review_dismissed_ids.append(dismissed)
-        return node
-
-    def append_code_review_qa(self, node_id: str, question: str, answer: str) -> SceneNode:
-        """Land one answered follow-up. Capped at the 20 most recent
-        entries - the Q&A list is on the wire (unlike the diff text), so
-        unbounded growth here would be unbounded wire growth."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
-        node.state.code_review_qa.append({
-            "question": str(question),
-            "answer": str(answer),
-        })
-        node.state.code_review_qa = node.state.code_review_qa[-20:]
-        return node
 
     # -- R5.4: Execution Sandbox node ------------------------------------------
     #
