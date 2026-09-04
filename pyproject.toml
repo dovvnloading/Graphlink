@@ -165,7 +165,36 @@ faulthandler_timeout = 60
 # ~90.4% measured at landing (coverage 7.15.2) - it exists to catch an
 # actual coverage collapse, not to gate every incremental dip.
 [tool.coverage.run]
-source = ["backend", "graphlink_plugins"]
+# EVERY shipped package plus EVERY shipped loose module - kept in step with
+# pyproject's own [tool.setuptools] manifest by
+# tests/test_coverage_scope.py, which fails when the two drift.
+#
+# It used to be just backend + graphlink_plugins. Two of the four shipped
+# PACKAGES were outside the floor entirely, and so were all 23 root modules -
+# including api_provider.py, the code that talks to every model endpoint.
+# Measured at the time of widening: 21,606 statements, 86% covered, so the
+# 85% floor holds unchanged. provider_runtime is the weak spot inside it
+# (ollama_scan 8%, llama_cpp_scan 10%, gemini_transport 29%) and that is
+# precisely the point - those numbers were invisible before, and a
+# regression in them now counts against the floor.
+#
+# The root modules are named WITHOUT a .py suffix. coverage's `source` takes
+# packages and directories, and silently ignores anything else - the first
+# version of this list wrote "api_provider.py" and measured exactly nothing
+# new (statement count stayed at 18,763 instead of rising to 21,606). A
+# config that looks right and gates nothing is the failure this list was
+# widened to fix, so: names, not paths.
+source = [
+    "backend", "graphlink_plugins", "provider_runtime", "settings_store", "contracts",
+    "api_provider", "graphlink_artifact_agent", "graphlink_audio",
+    "graphlink_chart_data", "graphlink_chart_rendering", "graphlink_chat_agent",
+    "graphlink_desktop", "graphlink_execution_guard", "graphlink_grid_view_settings",
+    "graphlink_memory", "graphlink_migrations", "graphlink_model_catalog",
+    "graphlink_navigation_pins", "graphlink_note_agent", "graphlink_process_env",
+    "graphlink_prompts", "graphlink_scratch_dirs", "graphlink_secrets",
+    "graphlink_settings_store", "graphlink_task_config", "graphlink_token_estimator",
+    "graphlink_version", "graphlink_wire_schema",
+]
 omit = ["*/tests/*", "*/__pycache__/*"]
 
 [tool.coverage.report]
