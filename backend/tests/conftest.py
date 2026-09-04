@@ -25,6 +25,42 @@ settings.load_profile("ci" if os.environ.get("CI") else "default")
 
 
 @pytest.fixture(autouse=True)
+def _never_probe_a_real_ollama_daemon(monkeypatch):
+    """Hard-stop any test from reaching out to a live Ollama daemon.
+
+    Three api_provider entry points probe it - _get_ollama_capabilities (via
+    ollama_supports_tools and ollama_supports_embedding) and
+    _get_ollama_context_window - and all three go through ollama.show(), which
+    is a real HTTP call to 127.0.0.1:11434. A test run made 102 of them.
+
+    Two things made that expensive rather than merely wrong. On a machine with
+    no daemon listening, each attempt costs a ~2s TCP connect. And
+    _get_ollama_capabilities deliberately does not cache a probe failure -
+    correct in production, where a daemon may simply have been restarting, but
+    it means every single check pays that cost again.
+
+    It was also a correctness problem, quietly: a developer running Ollama
+    locally got different answers from these functions than CI did, on the
+    same code.
+
+    Raising from show() is the same "daemon unavailable" outcome the failed
+    connect produced, minus the socket. It is patched on the real module
+    rather than replacing api_provider.ollama wholesale, because other code
+    reaches through that module object for ollama.chat. Tests that want their
+    own show() - backend/tests/test_context_budget.py does - override this
+    with their own monkeypatch, which still wins.
+    """
+    ollama_module = getattr(api_provider, "ollama", None)
+    if ollama_module is None:  # pragma: no cover - ollama is a hard dependency
+        return
+
+    def unavailable_show(*_args, **_kwargs):
+        raise RuntimeError("no ollama daemon in tests")
+
+    monkeypatch.setattr(ollama_module, "show", unavailable_show, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _never_touch_the_real_user_data_dir(monkeypatch, tmp_path):
     """Hard-fail any test that opens the developer's REAL ~/.graphlink files.
 
