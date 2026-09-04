@@ -73,6 +73,87 @@ def test_unrecognized_node_type_is_skipped_not_raised():
     assert len(document.nodes) == 1
 
 
+# -- hostile numeric fields must not cost the whole node ---------------------
+# _restore_node swallows any restorer exception and drops the node, so a bare
+# int() anywhere in a restorer turns one corrupt value into a vanished node -
+# PR URL, stored diff, findings, scorecard and Q&A gone with no error shown.
+# _non_negative_int is _finite_float's integer sibling and exists for exactly
+# this; these tests pin the shape rather than the individual call sites.
+
+
+def _code_review(**extra):
+    # code_review is a _PARENT_NODE_INDEX_KINDS kind: without a resolvable
+    # parent the node is skipped before its restorer is ever reached, so every
+    # payload here is paired with _chat("parent") at index 0.
+    payload = {"node_type": "code_review", "position": {"x": 0.0, "y": 0.0},
+               "parent_node_index": 0, "pr_url": "https://github.com/o/r/pull/3"}
+    payload.update(extra)
+    return payload
+
+
+def test_code_review_node_survives_a_non_numeric_score():
+    document = _restore(nodes=[_chat("parent"),
+                               _code_review(review={"scores": {"correctness": "n/a"}})])
+    node = next(n for n in document.nodes.values() if n.kind == "code_review")
+    assert node.state.code_review_pr_url == "https://github.com/o/r/pull/3"
+    assert node.state.code_review_scores == {"correctness": 0}
+
+
+def test_code_review_node_survives_non_numeric_counts():
+    document = _restore(nodes=[_chat("parent"), _code_review(
+        additions="lots", deletions=None, changed_files="many",
+        diff_chars="?", diff_version="v2",
+        pr_state={"number": "twelve"}, review={"quality_score": "high"},
+    )])
+    node = next(n for n in document.nodes.values() if n.kind == "code_review")
+    assert node.state.code_review_additions == 0
+    assert node.state.code_review_changed_files == 0
+    assert node.state.code_review_pr_number == 0
+    assert node.state.code_review_quality_score == 0
+
+
+def test_plan_node_survives_non_numeric_budget_fields():
+    """The same bug class in the plan restorer: it already guarded activity
+    elapsedMs against exactly this, then read six budget fields with a bare
+    int() six lines further down."""
+    document = _restore(nodes=[{
+        "node_type": "plan", "position": {"x": 0.0, "y": 0.0}, "goal": "ship it",
+        "max_steps": "twelve", "max_tokens": "lots", "max_wall_seconds": "soon",
+        "spent_steps": "some", "spent_tokens": "many", "spent_wall_seconds": "a while",
+    }])
+    node = next(n for n in document.nodes.values() if n.kind == "plan")
+    assert node.state.plan_goal == "ship it"
+    # Unreadable caps fall back to their documented defaults, not to zero -
+    # a restored plan with max_steps=0 could never run again.
+    assert node.state.builder_max_steps == 12
+    assert node.state.builder_max_tokens == 150_000
+    assert node.state.builder_max_wall_seconds == 900
+    assert node.state.builder_spent_steps == 0
+
+
+def test_a_restorer_that_raises_is_logged_not_swallowed_in_silence(caplog):
+    """The node is still dropped - one bad row must not fail the whole load -
+    but it no longer disappears without a trace."""
+    import logging
+
+    import backend.session_load as session_load
+
+    def _boom(payload, document):
+        raise RuntimeError("restorer exploded")
+
+    original = session_load._NODE_RESTORERS["code_review"]
+    session_load._NODE_RESTORERS["code_review"] = _boom
+    try:
+        with caplog.at_level(logging.ERROR, logger="backend.session_load"):
+            document = _restore(nodes=[_chat("parent"), _code_review()])
+    finally:
+        session_load._NODE_RESTORERS["code_review"] = original
+
+    assert len(document.nodes) == 1  # the parent chat still loaded
+    assert "code_review" in caplog.text
+    assert "restorer exploded" in caplog.text
+
+
 # -- parent-required kinds: parent_content_node_index ------------------------
 
 

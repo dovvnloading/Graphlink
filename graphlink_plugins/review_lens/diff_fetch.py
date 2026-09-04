@@ -122,28 +122,44 @@ def fetch_pr_review_bundle(client, owner: str, repo: str, number: int) -> dict[s
         except (TypeError, ValueError):
             return 0
 
+    declared_changed_files = _int(metadata.get("changed_files"))
+
+    # The loop header is `while True`, deliberately. It used to be
+    # `while len(files) < MAX_PR_FILES`, which pre-empted the cap check inside
+    # the row loop below: a page that filled the list EXACTLY to the cap ended
+    # the loop with hit_cap still False, so a 150-file PR reported
+    # files_truncated=False while carrying only its first 100 files. Since
+    # _build_overview_markdown gates its "File list truncated" line on that
+    # flag, the review then claimed to cover a change it had only half read.
+    #
+    # Letting the loop ask for the next page instead costs one extra request
+    # for a PR of exactly 100 files (that page comes back empty) and is the
+    # only way to tell "exactly 100" from "the first 100 of more".
     files: list[dict[str, Any]] = []
-    files_truncated = False
+    hit_cap = False
     page = 1
-    while len(files) < MAX_PR_FILES:
+    while True:
         rows = client.request(metadata_url + "/files", params={"per_page": 100, "page": page})
         if not isinstance(rows, list) or not rows:
             break
         for row in rows:
             if len(files) >= MAX_PR_FILES:
-                files_truncated = True
+                hit_cap = True  # rows left unread on the page we stopped on
                 break
             normalized = _normalize_file_entry(row)
             if normalized:
                 files.append(normalized)
-        if len(rows) < 100 or files_truncated:
+        if hit_cap or len(rows) < 100:
             break
         page += 1
-    if not files_truncated and page > 1:
-        # We stopped because the listing ended, not because of the cap -
-        # files_truncated stays False. (The flag is only set above, at the
-        # cap; this branch exists to say so explicitly.)
-        pass
+
+    # Two independent signals, because either alone has a blind spot: hit_cap
+    # catches the listing being cut short, and the declared count catches
+    # everything we dropped for any other reason (an unusable row that
+    # _normalize_file_entry rejected, a listing that disagrees with the PR's
+    # own metadata). Both point the same way - fewer files in hand than the PR
+    # actually changed - and the flag exists to say exactly that.
+    files_truncated = hit_cap or declared_changed_files > len(files)
 
     diff_text, diff_truncated = _fetch_unified_diff(client, metadata_url)
 
@@ -159,7 +175,7 @@ def fetch_pr_review_bundle(client, owner: str, repo: str, number: int) -> dict[s
         "head_ref": str(head.get("ref") or "").strip(),
         "additions": _int(metadata.get("additions")),
         "deletions": _int(metadata.get("deletions")),
-        "changed_files": _int(metadata.get("changed_files")) or len(files),
+        "changed_files": declared_changed_files or len(files),
         "files": files,
         "files_truncated": files_truncated,
         "diff_text": diff_text,

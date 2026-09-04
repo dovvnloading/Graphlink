@@ -158,6 +158,57 @@ def test_fetch_bundle_caps_file_pages_and_flags_truncation(monkeypatch):
     assert bundle["files_truncated"] is True
 
 
+def _file_rows(start, count):
+    return [
+        {"filename": f"f{i}.py", "status": "modified", "additions": 1, "deletions": 0, "patch": "@@ x"}
+        for i in range(start, start + count)
+    ]
+
+
+def test_fetch_bundle_flags_truncation_when_a_full_page_lands_exactly_on_the_cap(monkeypatch):
+    """The boundary the cap check used to miss entirely.
+
+    The old `while len(files) < MAX_PR_FILES` header ended the loop the moment
+    page 1 filled the list, BEFORE anything could set the truncation flag - so
+    a 150-file PR returned 100 files with files_truncated=False, and the review
+    header said "Files changed: 150" while the walkthrough covered 100 of them.
+    """
+    cap = diff_fetch_module.MAX_PR_FILES
+    client = _FakeClient(
+        _metadata(changed_files=150),
+        [_file_rows(0, cap), _file_rows(cap, 50)],
+    )
+    bundle = _run_bundle(monkeypatch, client, diff_text="x")
+    assert len(bundle["files"]) == cap
+    assert bundle["changed_files"] == 150
+    assert bundle["files_truncated"] is True
+
+
+def test_fetch_bundle_does_not_claim_truncation_for_exactly_the_cap(monkeypatch):
+    """The other half of the same boundary: a PR of exactly MAX_PR_FILES files
+    is fully covered, and must not be reported as truncated. Costs one extra
+    (empty) page request, which is the only way to tell it apart from the
+    first 100 of more."""
+    cap = diff_fetch_module.MAX_PR_FILES
+    client = _FakeClient(_metadata(changed_files=cap), [_file_rows(0, cap), []])
+    bundle = _run_bundle(monkeypatch, client, diff_text="x")
+    assert len(bundle["files"]) == cap
+    assert bundle["files_truncated"] is False
+
+
+def test_fetch_bundle_flags_truncation_when_rows_were_dropped_as_unusable(monkeypatch):
+    """The declared-count half of the flag, independent of the page cap: rows
+    _normalize_file_entry rejects still leave the review with fewer files than
+    the PR changed, and the flag has to say so."""
+    client = _FakeClient(
+        _metadata(changed_files=3),
+        [[{"filename": "kept.py", "status": "modified"}, {"filename": "   "}, {}]],
+    )
+    bundle = _run_bundle(monkeypatch, client, diff_text="x")
+    assert len(bundle["files"]) == 1
+    assert bundle["files_truncated"] is True
+
+
 def test_fetch_bundle_maps_diff_download_failures_to_display_errors(monkeypatch):
     client = _FakeClient(_metadata(), [[]])
     monkeypatch.setattr(
