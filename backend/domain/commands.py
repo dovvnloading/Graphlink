@@ -167,7 +167,7 @@ class Command:
             self.node_before or self.node_after or self.edge_before or self.edge_after
         ) and (self.pin_before is None or self.pin_before == self.pin_after)
 
-    def invert(self, document: object) -> None:
+    def invert(self, document: SceneDocumentParts) -> None:
         """Restores document state to exactly how it was before this
         command's mutator ran. Goes through the *_before snapshots only -
         never re-invokes the original domain method, which is the whole
@@ -185,7 +185,7 @@ class Command:
             # per-id scoping doesn't apply to pins the way it does nodes).
             document.pins.reset(list(self.pin_before))
 
-    def apply(self, document: object) -> None:
+    def apply(self, document: SceneDocumentParts) -> None:
         """The mirror of invert() - restores to the *_after state. Not
         needed for a first-time forward mutation (that already happened
         for real before this Command was constructed); this exists for
@@ -283,13 +283,18 @@ def _restore(live: dict, snapshot: dict) -> None:
             # only case where trusting the snapshot is correct. Mirrored
             # below for HarnessState.harness_activity, same rationale.
             current = live.get(key)
-            if isinstance(getattr(restored, "state", None), PlanState) and isinstance(
-                getattr(current, "state", None), PlanState,
-            ):
+            # `current is not None` is redundant at runtime - getattr's own
+            # default already makes the isinstance fail - and is spelled out
+            # so the reads below are checkable. getattr stays because this
+            # helper also restores edges and image assets, which have no
+            # .state at all.
+            if current is not None and isinstance(
+                getattr(restored, "state", None), PlanState,
+            ) and isinstance(getattr(current, "state", None), PlanState):
                 restored.state.builder_activity = current.state.builder_activity
-            if isinstance(getattr(restored, "state", None), HarnessState) and isinstance(
-                getattr(current, "state", None), HarnessState,
-            ):
+            if current is not None and isinstance(
+                getattr(restored, "state", None), HarnessState,
+            ) and isinstance(getattr(current, "state", None), HarnessState):
                 restored.state.harness_activity = current.state.harness_activity
             live[key] = restored
 

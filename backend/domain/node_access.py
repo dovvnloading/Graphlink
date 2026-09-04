@@ -26,7 +26,7 @@ plain SceneNode it looked up, unchanged.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeGuard, TypeVar
 
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_states import NodeState
@@ -43,8 +43,15 @@ if TYPE_CHECKING:
         state: _S  # type: ignore[assignment]
 
 
+def _kind_names(kind: str | tuple[str, ...]) -> tuple[str, ...]:
+    """One kind or several, as a tuple. `" or ".join` of a single-element
+    tuple is that element, so the one-kind error message is unchanged."""
+    return (kind,) if isinstance(kind, str) else kind
+
+
 def require_node(
-    nodes: dict[str, SceneNode], node_id: str, kind: str, state_cls: type[_S],
+    nodes: dict[str, SceneNode], node_id: str, kind: str | tuple[str, ...],
+    state_cls: type[_S],
 ) -> _NodeWith[_S]:
     """The node with `node_id`, guaranteed to exist and to be `kind`.
 
@@ -60,13 +67,15 @@ def require_node(
     node = nodes.get(node_id)
     if node is None:
         raise SceneError(f"unknown node: {node_id}")
-    if node.kind != kind:
-        raise SceneError(f"node is not a {kind} node: {node_id}")
+    kinds = _kind_names(kind)
+    if node.kind not in kinds:
+        raise SceneError(f"node is not a {' or '.join(kinds)} node: {node_id}")
     return node  # type: ignore[return-value]
 
 
 def optional_node(
-    nodes: dict[str, SceneNode], node_id: str, kind: str, state_cls: type[_S],
+    nodes: dict[str, SceneNode], node_id: str, kind: str | tuple[str, ...],
+    state_cls: type[_S],
 ) -> "_NodeWith[_S] | None":
     """require_node's silent sibling: None instead of a raise.
 
@@ -76,6 +85,35 @@ def optional_node(
     for the fields they set on the way through.
     """
     node = nodes.get(node_id)
-    if node is None or node.kind != kind:
+    if node is None or node.kind not in _kind_names(kind):
         return None
     return node  # type: ignore[return-value]
+
+
+def is_node_of(
+    node: SceneNode | None, kind: str | tuple[str, ...], state_cls: type[_S],
+) -> TypeGuard["_NodeWith[_S]"]:
+    """require_node's form for a node you already hold.
+
+    The group-geometry code iterates `self.nodes.values()` and skips
+    everything that is not a frame or a container; there is no id to look
+    up a second time, and doing so to get the narrowing would be a dict
+    read bought purely to satisfy a checker. This narrows the node in hand
+    instead.
+
+    TypeGuard, not TypeIs, so that the 3.10 floor this repo declares is
+    enough and nothing has to import typing_extensions at runtime. It
+    narrows only the positive branch, so a `continue`-on-wrong-kind loop
+    reads as `if is_node_of(...)` rather than `if not ...: continue`.
+
+    Unlike require_node this also rejects a node with no state at all. Its
+    callers hold a node that reached them from somewhere - a dict of every
+    node in the scene, a caller's own parameter - rather than one their
+    kind's constructor just made, and every hand-written check it replaces
+    carried the same `and node.state is not None` conjunct.
+    """
+    return (
+        node is not None
+        and node.kind in _kind_names(kind)
+        and node.state is not None
+    )

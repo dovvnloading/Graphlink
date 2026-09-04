@@ -64,6 +64,7 @@ from backend.domain.model import (
     SceneError,
     SceneNode,
 )
+from backend.domain.node_access import is_node_of, require_node
 from backend.domain.node_states import (
     ArtifactState,
     ChartState,
@@ -631,7 +632,11 @@ class SceneDocument(
             # the live bbox stay in agreement. See _recompute_group_bounds
             # for how this anchor is unioned with live content so it still
             # can never clip a member.
-            node.state.group_manual_x, node.state.group_manual_y = node.x, node.y
+            # Cannot raise: the node is present and its kind was just
+            # checked. Re-fetched under FrameState purely so the two
+            # frame-only writes below are checkable.
+            frame = require_node(self.nodes, node_id, "frame", FrameState)
+            frame.state.group_manual_x, frame.state.group_manual_y = node.x, node.y
             self._recompute_group_bounds(node_id)
         # R6.1: keep every frame/container this node is a member of enclosing
         # it - a node is a member of at most one frame AND at most one
@@ -672,7 +677,7 @@ class SceneDocument(
                 continue
             node.x, node.y = float(x), float(y)
             moved_ids.add(node_id)
-            if node.kind == "frame":
+            if is_node_of(node, "frame", FrameState):
                 node.state.group_manual_x, node.state.group_manual_y = node.x, node.y
         affected_groups: set[str] = set()
         for moved_id in moved_ids:

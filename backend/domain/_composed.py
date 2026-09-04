@@ -50,6 +50,15 @@ class SceneDocumentParts:
         pins: Any
         _counter: itertools.count
 
+        # Scalars held on SceneDocument that the mixins both read and
+        # write. Without these BranchOps infers `str` from its own first
+        # assignment and then rejects the `= None` two lines later, which
+        # is how a field declared `str | None` on SceneDocument itself
+        # produced an error on SceneDocument's own declaration.
+        last_chat_node_id: str | None
+        final_deliverable_node_id: str | None
+        current_chat_id: int | None
+
         # The undo/redo command layer (CommandOps' own, consumed by siblings).
         command_log: deque
         redo_stack: list
