@@ -17,6 +17,7 @@ from typing import Any
 
 from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import CHAT_TITLE_PREVIEW_LENGTH, SceneError, SceneNode
+from backend.domain.node_access import require_node
 from backend.domain.node_states import ChatState
 
 
@@ -114,11 +115,7 @@ class ConversationalOps(SceneDocumentParts):
         content area. chat kind only (SceneError otherwise), matching every
         other kind-specific setter's guard pattern in this file (e.g.
         resize_chart/toggle_frame_lock)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "chat":
-            raise SceneError(f"node is not a chat node: {node_id}")
+        node = require_node(self.nodes, node_id, "chat", ChatState)
         node.state.chat_scroll_value = float(value)
 
     # -- conversation node (a full thread in a single node) ------------------

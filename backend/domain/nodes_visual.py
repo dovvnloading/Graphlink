@@ -27,6 +27,7 @@ from backend.domain.model import (
     SceneError,
     SceneNode,
 )
+from backend.domain.node_access import require_node
 from backend.domain.node_states import ChartState, ImageState
 
 
@@ -134,11 +135,7 @@ class VisualOps(SceneDocumentParts):
 
         ADR-013 stage 13.4: no longer re-renders a PNG here - see
         add_chart_node's own docstring for why."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "chart":
-            raise SceneError(f"node is not a chart node: {node_id}")
+        node = require_node(self.nodes, node_id, "chart", ChartState)
 
         requested_width = float(width)
         requested_height = float(height)
@@ -166,11 +163,7 @@ class VisualOps(SceneDocumentParts):
 
     def toggle_chart_aspect_lock(self, node_id: str) -> None:
         """Chart kind only (SceneError otherwise). Flips chart_aspect_locked."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "chart":
-            raise SceneError(f"node is not a chart node: {node_id}")
+        node = require_node(self.nodes, node_id, "chart", ChartState)
         node.state.chart_aspect_locked = not node.state.chart_aspect_locked
 
     def add_image_node(

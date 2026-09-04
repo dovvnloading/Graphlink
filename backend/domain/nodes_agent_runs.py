@@ -17,6 +17,7 @@ import uuid
 
 from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import SceneError, SceneNode
+from backend.domain.node_access import optional_node, require_node
 from backend.domain.node_states import (
     ArtifactState,
     CodeSandboxState,
@@ -68,11 +69,7 @@ class AgentRunOps(SceneDocumentParts):
         stale-while-revalidate: the previous run's answer stays visible until
         this run replaces it on success, or fails/cancels (leaving the stale
         result annotated by the new research_error)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "web_research":
-            raise SceneError(f"node is not a web_research node: {node_id}")
+        node = require_node(self.nodes, node_id, "web_research", WebResearchState)
         node.content = str(query)
         node.state.research_stage = ""
         node.state.research_completed = 0
@@ -89,7 +86,7 @@ class AgentRunOps(SceneDocumentParts):
         agents.py importing backend.canvas.SceneNode). Silent no-op (returns
         None, never raises) if node_id is no longer in self.nodes - the node
         may have been deleted while a background run was still in flight."""
-        node = self.nodes.get(node_id)
+        node = optional_node(self.nodes, node_id, "web_research", WebResearchState)
         if node is None:
             return None
         node.state.research_stage = event.stage.value
@@ -103,9 +100,7 @@ class AgentRunOps(SceneDocumentParts):
         gone - the WS wrapper's own liveness check (in register_canvas)
         guards the actual mid-flight-delete race; this stays a hard
         precondition here, same posture as update_chat_node_content."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
+        node = require_node(self.nodes, node_id, "web_research", WebResearchState)
         node.state.research_stage = "completed"
         node.state.research_error = ""
         node.state.research_active_source_id = None
@@ -116,9 +111,7 @@ class AgentRunOps(SceneDocumentParts):
         """Land a failed or cancelled run. research_result is deliberately
         left untouched (stale-while-revalidate - see start_web_research_run's
         own docstring)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
+        node = require_node(self.nodes, node_id, "web_research", WebResearchState)
         node.state.research_stage = "cancelled" if cancelled else "failed"
         node.state.research_error = message
         node.state.research_active_source_id = None
@@ -128,11 +121,7 @@ class AgentRunOps(SceneDocumentParts):
         """ADR-021 stage 21.5: the per-node "keep these sources" preference.
         Same shape as set_code_sandbox_requirements below - validate the
         node exists and is the right kind, then write one state field."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "web_research":
-            raise SceneError(f"node is not a web_research node: {node_id}")
+        node = require_node(self.nodes, node_id, "web_research", WebResearchState)
         node.state.research_retain_to_knowledge = bool(retain)
         return node
 
@@ -167,9 +156,7 @@ class AgentRunOps(SceneDocumentParts):
         """Append a real user instruction to an artifact node's history -
         mirrors append_conversation_user_message exactly (same shape, same
         error-handling style)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
+        node = require_node(self.nodes, node_id, "artifact", ArtifactState)
         node.history.append({"role": "user", "content": str(text)})
         # A new instruction supersedes the previous failure - leaving the
         # banner up beside an in-flight run would report a stale outcome.
@@ -185,7 +172,7 @@ class AgentRunOps(SceneDocumentParts):
         this is called from the dispatch task's own except/timeout paths,
         where the node may well have been deleted mid-flight, and a failure
         report is not worth turning into a second failure."""
-        node = self.nodes.get(node_id)
+        node = optional_node(self.nodes, node_id, "artifact", ArtifactState)
         if node is None:
             return None
         node.state.artifact_error = str(message)
@@ -210,9 +197,7 @@ class AgentRunOps(SceneDocumentParts):
         web_research's more defensive pre-check pattern (there is no
         stage-stepper/persisted-error field here for a mid-flight delete to
         race against)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
+        node = require_node(self.nodes, node_id, "artifact", ArtifactState)
         node.state.artifact_content = str(new_content)
         node.state.artifact_error = ""
         node.history.append({"role": "assistant", "content": str(ai_message)})
@@ -254,11 +239,7 @@ class AgentRunOps(SceneDocumentParts):
         return node
 
     def set_code_sandbox_requirements(self, node_id: str, requirements_text: str) -> SceneNode:
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_sandbox":
-            raise SceneError(f"node is not a code_sandbox node: {node_id}")
+        node = require_node(self.nodes, node_id, "code_sandbox", CodeSandboxState)
         node.state.code_sandbox_requirements = str(requirements_text)
         return node
 
@@ -271,11 +252,7 @@ class AgentRunOps(SceneDocumentParts):
         set here while no gate is open never reaches an actual run; the
         approval panel is the only surface that ever renders this control,
         and it only renders while awaiting_approval is true."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_sandbox":
-            raise SceneError(f"node is not a code_sandbox node: {node_id}")
+        node = require_node(self.nodes, node_id, "code_sandbox", CodeSandboxState)
         node.state.code_sandbox_approval_allow_source_builds = bool(allow)
         return node
 
@@ -286,11 +263,7 @@ class AgentRunOps(SceneDocumentParts):
         method decides generate-vs-reuse by reading the EXISTING
         code_sandbox_code value at call time, so this must not overwrite it
         before that decision is made."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_sandbox":
-            raise SceneError(f"node is not a code_sandbox node: {node_id}")
+        node = require_node(self.nodes, node_id, "code_sandbox", CodeSandboxState)
         node.state.code_sandbox_prompt = str(input_text)
         node.state.code_sandbox_error = ""
         return node
@@ -300,12 +273,15 @@ class AgentRunOps(SceneDocumentParts):
         flag: an unrecovered failure after exhausting its own repair
         attempts surfaces as a failed run (see
         AgentDispatcher.start_code_sandbox_run), never as a "succeeded but
-        flagged" result. Not kind-guarded: only ever reached via run_code_
-        sandbox's own on_success closure (backend/api/
-        intents_code_sandbox.py), whose node_id was already validated by
-        start_code_sandbox_run's own guard earlier in the same request -
-        same posture as complete_gitlink_run."""
-        node = self.nodes.get(node_id)
+        flagged" result. Only ever reached via run_code_sandbox's own
+        on_success closure (backend/api/intents_code_sandbox.py), whose
+        node_id was already validated by start_code_sandbox_run's own guard
+        earlier in the same request, so the kind check here is redundant on
+        every live path - it is here so that a caller who gets it wrong gets
+        None rather than a phantom code_sandbox_* attribute grafted onto
+        some other kind's state (these are plain non-slotted dataclasses;
+        the bad write would otherwise succeed silently)."""
+        node = optional_node(self.nodes, node_id, "code_sandbox", CodeSandboxState)
         if node is None:
             return None
         node.state.code_sandbox_code = str(code)
@@ -324,9 +300,9 @@ class AgentRunOps(SceneDocumentParts):
         awaiting_approval flag is ALWAYS cleared here too, unconditionally,
         so a denied/cancelled approval never leaves the node stuck showing
         the approval prompt forever (stale-while-revalidate: existing
-        code/output/analysis survive untouched). Not kind-guarded - see
-        complete_code_sandbox_run's own comment."""
-        node = self.nodes.get(node_id)
+        code/output/analysis survive untouched). Same kind-check posture as
+        complete_code_sandbox_run - see its docstring."""
+        node = optional_node(self.nodes, node_id, "code_sandbox", CodeSandboxState)
         if node is None:
             return None
         node.state.code_sandbox_awaiting_approval = False

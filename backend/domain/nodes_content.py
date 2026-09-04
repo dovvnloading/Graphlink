@@ -20,6 +20,7 @@ from backend.domain.model import (
     SceneError,
     SceneNode,
 )
+from backend.domain.node_access import require_node
 from backend.domain.node_states import DocumentState, HtmlState, NoteState
 
 
@@ -189,11 +190,7 @@ class ContentOps(SceneDocumentParts):
         position. html kind only (SceneError otherwise), matching every
         other kind-specific setter's guard pattern in this file (e.g.
         resize_chart/toggle_frame_lock)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "html":
-            raise SceneError(f"node is not an html node: {node_id}")
+        node = require_node(self.nodes, node_id, "html", HtmlState)
         node.state.html_splitter_state = float(value)
 
     # -- R6.1: notes -----------------------------------------------------------
