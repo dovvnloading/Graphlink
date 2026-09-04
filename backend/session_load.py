@@ -386,6 +386,32 @@ def _non_negative_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _positive_int(value: Any, default: int) -> int:
+    """_non_negative_int's sibling for BUDGET CAPS, where zero is not a value.
+
+    A counter may legitimately be 0; a cap may not. `max_steps=0`,
+    `max_tokens=0` or `max_wall_seconds=0` restores a plan that
+    builder._spend_breach rejects on its first tick - the plan is on the
+    canvas and can never run again.
+
+    _non_negative_int is the wrong helper for these and was used for them
+    anyway. It only falls back when `int()` RAISES, so every numeric route to
+    zero got through it:
+
+        max_steps=-5     -> 0     max_steps='0'   -> 0
+        max_steps='-5'   -> 0     max_steps=0.5   -> 0
+
+    and the outer `or default` at the call site only catches Python-falsy
+    values, so the string "0" and "-5" sail past that too. Anything that does
+    not resolve to a usable positive cap falls back to the documented
+    default here."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 def _position(payload: dict[str, Any]) -> tuple[float, float]:
     position = payload.get("position")
     if isinstance(position, dict):
@@ -890,9 +916,9 @@ def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
             builder_status=status,
             builder_mode=mode if mode in ("copilot", "autopilot") else "copilot",
             builder_run_id=str(payload.get("builder_run_id", "")),
-            builder_max_steps=_non_negative_int(payload.get("max_steps") or 12, 12),
-            builder_max_tokens=_non_negative_int(payload.get("max_tokens") or 150_000, 150_000),
-            builder_max_wall_seconds=_non_negative_int(payload.get("max_wall_seconds") or 900, 900),
+            builder_max_steps=_positive_int(payload.get("max_steps"), 12),
+            builder_max_tokens=_positive_int(payload.get("max_tokens"), 150_000),
+            builder_max_wall_seconds=_positive_int(payload.get("max_wall_seconds"), 900),
             builder_spent_steps=_non_negative_int(payload.get("spent_steps")),
             builder_spent_tokens=_non_negative_int(payload.get("spent_tokens")),
             builder_spent_wall_seconds=_non_negative_int(payload.get("spent_wall_seconds")),
@@ -935,12 +961,6 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
                 "elapsedMs": elapsed_ms,
             })
 
-    def _int(key: str, default: int) -> int:
-        try:
-            return int(payload.get(key, default) or default)
-        except (TypeError, ValueError):
-            return default
-
     return SceneNode(
         id="", x=x, y=y,
         title=f"Agent: {goal[:40]}" if goal else "Agent",
@@ -959,12 +979,12 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
             harness_workspace_id=str(payload.get("workspace_id") or uuid.uuid4().hex[:12]),
             harness_workspace_path=str(payload.get("workspace_path", "")),
             harness_activity=activity,
-            harness_max_turns=_int("max_turns", 16),
-            harness_spent_turns=_int("spent_turns", 0),
-            harness_spent_tokens=_int("spent_tokens", 0),
-            harness_context_tokens=_int("context_tokens", 0),
-            harness_max_context_tokens=_int("max_context_tokens", 48_000),
-            harness_compactions=_int("compactions", 0),
+            harness_max_turns=_positive_int(payload.get("max_turns"), 16),
+            harness_spent_turns=_non_negative_int(payload.get("spent_turns")),
+            harness_spent_tokens=_non_negative_int(payload.get("spent_tokens")),
+            harness_context_tokens=_non_negative_int(payload.get("context_tokens")),
+            harness_max_context_tokens=_positive_int(payload.get("max_context_tokens"), 48_000),
+            harness_compactions=_non_negative_int(payload.get("compactions")),
         ),
         is_collapsed=bool(payload.get("is_collapsed", False)),
     )

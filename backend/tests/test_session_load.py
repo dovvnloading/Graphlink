@@ -10,6 +10,8 @@ via `git show af72ffd~1:...` for the 5 deleted plugin kinds) - not
 approximated.
 """
 
+import pytest
+
 import backend.agents as agents_module  # noqa: F401 - see test_canvas.py's own import-order note
 from backend.canvas import SceneDocument
 from backend.session_load import restore_chat_into_document
@@ -110,6 +112,56 @@ def test_code_review_node_survives_non_numeric_counts():
     assert node.state.code_review_changed_files == 0
     assert node.state.code_review_pr_number == 0
     assert node.state.code_review_quality_score == 0
+
+
+@pytest.mark.parametrize("bad_cap", [-5, "-5", "0", 0.5, 0, "twelve", None, "", []])
+def test_plan_caps_never_restore_to_an_unusable_value(bad_cap):
+    """A counter may be 0; a cap may not. builder._spend_breach rejects a plan
+    with max_steps=0 on its first tick, so it lands on the canvas and can never
+    run again.
+
+    _non_negative_int was the wrong helper for these and was used anyway: it
+    only falls back when int() RAISES, so every numeric route to zero got
+    through - -5 and '0' and 0.5 all clamped to 0 rather than falling back."""
+    document = _restore(nodes=[{
+        "node_type": "plan", "position": {"x": 0.0, "y": 0.0}, "goal": "g",
+        "max_steps": bad_cap, "max_tokens": bad_cap, "max_wall_seconds": bad_cap,
+    }])
+    node = next(n for n in document.nodes.values() if n.kind == "plan")
+    assert node.state.builder_max_steps == 12
+    assert node.state.builder_max_tokens == 150_000
+    assert node.state.builder_max_wall_seconds == 900
+
+
+@pytest.mark.parametrize("bad_cap", [-5, "-5", "0", 0, "x", None])
+def test_harness_caps_never_restore_negative_or_zero(bad_cap):
+    """The harness restorer had it worse than plan: its local `_int` helper
+    passed negatives straight through, so a saved -5 restored as -5."""
+    document = _restore(nodes=[{
+        "node_type": "harness", "position": {"x": 0.0, "y": 0.0}, "goal": "g",
+        "max_turns": bad_cap, "max_context_tokens": bad_cap,
+    }])
+    node = next(n for n in document.nodes.values() if n.kind == "harness")
+    assert node.state.harness_max_turns == 16
+    assert node.state.harness_max_context_tokens == 48_000
+
+
+def test_real_caps_and_zero_counters_both_survive():
+    """The other side: a legitimate cap is kept, and a counter of 0 - which is
+    a real value, not a missing one - is not rewritten to a default."""
+    document = _restore(nodes=[
+        {"node_type": "plan", "position": {"x": 0.0, "y": 0.0}, "goal": "g",
+         "max_steps": 7, "spent_steps": 0},
+        {"node_type": "harness", "position": {"x": 0.0, "y": 0.0}, "goal": "g",
+         "max_turns": 9, "spent_turns": 0, "compactions": 0},
+    ])
+    plan = next(n for n in document.nodes.values() if n.kind == "plan")
+    harness = next(n for n in document.nodes.values() if n.kind == "harness")
+    assert plan.state.builder_max_steps == 7
+    assert plan.state.builder_spent_steps == 0
+    assert harness.state.harness_max_turns == 9
+    assert harness.state.harness_spent_turns == 0
+    assert harness.state.harness_compactions == 0
 
 
 def test_plan_node_survives_non_numeric_budget_fields():
