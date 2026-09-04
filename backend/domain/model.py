@@ -155,13 +155,25 @@ class SceneNode:
     y: float
     title: str
     kind: str = "placeholder"
-    # R3.1 (doc/QT_REMOVAL_PLAN.md): the chat node's real persisted shape -
-    # graphlink_session/serializers.py's raw_content/is_user/is_collapsed,
-    # minus everything Qt-only (paint state, scroll position, docked-child
-    # widgets). Unused (default) for every other kind.
-    # R3.17: also reused verbatim as the html node's raw HTML source string -
-    # no separate field, same reuse pattern as R3.5's code text and R3.13's
-    # thinking text living in this same field.
+    # The node's single free-text body. Originally R3.1
+    # (doc/QT_REMOVAL_PLAN.md), the chat node's persisted shape -
+    # graphlink_session/serializers.py's raw_content, minus everything
+    # Qt-only (paint state, scroll position, docked-child widgets).
+    #
+    # It is NOT chat-only and has not been for a long time. This comment used
+    # to end "Unused (default) for every other kind" while a later line in the
+    # same block already contradicted it, and the list has kept growing since.
+    # Verified 2026-09-04 against the SceneNode(...) constructions in
+    # backend/domain/graph.py and backend/session_load.py, TEN kinds populate
+    # it: artifact, chat, document, harness, html, image, note, plan,
+    # thinking, web_research. Pinned by tests/test_shared_node_field_docs.py,
+    # so this list fails the build rather than rotting again.
+    #
+    # That shared use is deliberate, and it is why `content` did not move to a
+    # per-kind class in the ADR-002 stage 2.5 migration: a field ten kinds
+    # write would have to be duplicated across ten state classes to live
+    # there, which is worse than one core field. Treat it as core, like
+    # title - not as a kind-specific leftover.
     content: str = ""
     is_collapsed: bool = False
     # R3.13 (doc/QT_REMOVAL_PLAN.md): the ThinkingNode/docked-child increment -
@@ -170,14 +182,24 @@ class SceneNode:
     # time from this flag (scan nodes whose parent edge points at it), never
     # stored on the parent itself. Unused (default) for every other kind.
     is_docked: bool = False
-    # R3.25 (doc/QT_REMOVAL_PLAN.md): the ConversationNode's real persisted
-    # shape - graphlink_conversation_node.py's conversation_history, a
-    # growing list of {"role": "user"|"assistant", "content": text} dicts
-    # rendered as multiple bubbles inside one node card. This is the one R3
-    # kind whose OWN field is a LIST rather than a scalar - every prior kind
-    # (chat/code/document/thinking/html/image) stores one scalar value per
-    # node; a conversation node instead owns a whole message history. Unused
-    # (default empty list) for every other kind.
+    # A node's own message history: a growing list of
+    # {"role": "user"|"assistant", "content": text} dicts. Originally R3.25
+    # (doc/QT_REMOVAL_PLAN.md), the ConversationNode's persisted shape, ported
+    # from graphlink_conversation_node.py's conversation_history.
+    #
+    # It is NOT conversation-only and has not been since the plugin kinds
+    # landed. This comment used to say "Unused (default empty list) for every
+    # other kind"; verified 2026-09-04 against the restorers in
+    # backend/domain/graph.py and backend/session_load.py, SEVEN kinds
+    # populate it: artifact, chat, code_sandbox, conversation, gitlink, html,
+    # web_research. Any kind that holds a back-and-forth with a model keeps it
+    # here. Pinned by tests/test_shared_node_field_docs.py.
+    #
+    # Shared for the same reason `content` is, and left on SceneNode by the
+    # ADR-002 stage 2.5 migration for the same reason - see that field's own
+    # note above. backend/domain/node_states.py's docstring is right to list
+    # `conversation` among the kinds with no state class: its history is not a
+    # kind-specific field, it is this shared one.
     history: list[dict[str, str]] = field(default_factory=list)
     # R4.3 (doc/QT_REMOVAL_PLAN.md): transient per-node in-flight-request
     # marker - the id of the AgentDispatcher request currently generating a
