@@ -384,6 +384,21 @@ def ollama_mode(monkeypatch):
     monkeypatch.setattr(api_provider, "OLLAMA_REASONING_LEVEL", "off")
     monkeypatch.setitem(config.OLLAMA_MODELS, config.TASK_CHAT, "fake-model:1b")
 
+    # Every chat_stream through this fixture asks _get_ollama_context_window
+    # what window the daemon will serve for "fake-model:1b", and that calls
+    # ollama.show() for real. No daemon runs in a test environment and none
+    # anywhere serves a model by that name, so the answer was always going to
+    # be "unavailable" - it just took a ~2s TCP connect to find out, once per
+    # worker process, charged in full to whichever ollama-mode test happened
+    # to be scheduled first. None is exactly what the failed call returned,
+    # and callers fall back to _DEFAULT_CONTEXT_WINDOW from there.
+    #
+    # Stubbed at this function rather than at api_provider.ollama: the module
+    # object is also what the provider and the transient-error classifier
+    # reach through, and swapping the whole thing for a namespace with only
+    # show() on it silently disables the retry path these tests exercise.
+    monkeypatch.setattr(api_provider, "_get_ollama_context_window", lambda model_name: None)
+
 
 def test_the_real_chat_stream_streams_multiple_incremental_deltas_through_the_seam(
     monkeypatch, ollama_mode, ollama_chat
@@ -2585,6 +2600,52 @@ def _capture_transport_sleeps(monkeypatch):
     return sleeps
 
 
+class _ScriptedCancelEvent:
+    """A cancellation event that cancels on cue instead of on a timer.
+
+    _transport_retry_wait checks the event, computes its backoff delay, and
+    only then blocks in event.wait(delay). Setting a real Event from a
+    threading.Timer races that sequence: whichever of the two lands first
+    decides which of the two guards the test ends up covering, and if the
+    timer wins, the PRE-wait check fires and the interruptible wait is never
+    entered at all.
+
+    That race was not close. The predecessor of these tests armed a 50ms
+    timer against a first attempt that took either ~60ms or ~2s depending on
+    whether ollama.show() had already been called in that worker process -
+    so which guard it covered was decided by xdist's scheduling, not by
+    anything about the code.
+
+    Scripting the moment of cancellation removes the race in both
+    directions, so each guard can be pinned on its own. api_provider only
+    ever calls is_set() (via _raise_if_cancelled) and wait() on this object,
+    so a duck-typed stand-in is enough - no threading.Event required.
+
+    `waits` records the timeout each wait() was handed, which is what makes
+    "the backoff really was about to be ten seconds long" assertable at all.
+    """
+
+    def __init__(self, *, cancel_during_wait):
+        self._cancel_during_wait = cancel_during_wait
+        self._set = False
+        self.waits: list[float | None] = []
+
+    def set(self):
+        self._set = True
+
+    def is_set(self):
+        return self._set
+
+    def wait(self, timeout=None):
+        self.waits.append(timeout)
+        if self._cancel_during_wait:
+            # Another thread cancelled while the backoff was waiting.
+            self._set = True
+        # threading.Event.wait's own contract: True if the flag is set, False
+        # if the timeout expired first.
+        return self._set
+
+
 def test_429_with_retry_after_sleeps_exactly_that_long_then_succeeds(monkeypatch, ollama_mode):
     # THE stage exit criterion: Retry-After wins over the (smaller) jittered
     # backoff, exactly one sleep, then the retried stream succeeds.
@@ -2722,26 +2783,69 @@ def test_retries_are_capped_at_the_max_attempt_count(monkeypatch, ollama_mode):
     assert calls["streams"] == 1 + api_provider._TRANSPORT_RETRY_MAX_ATTEMPTS
 
 
-def test_cancel_during_backoff_aborts_promptly(monkeypatch, ollama_mode):
-    import time as time_module
+def test_a_cancel_during_backoff_interrupts_the_wait_instead_of_sleeping_it_out(
+    monkeypatch, ollama_mode,
+):
+    """The reason _transport_retry_wait waits on the cancel event rather than
+    calling time.sleep: a 10-second Retry-After must not be slept out when the
+    user has already given up.
 
+    Asserted on what the code did, not on how long the machine took to do
+    it. Elapsed time does distinguish the two branches when the wait is
+    actually reached - time.sleep(10) really does take ten seconds - but it
+    only reports the difference, it cannot say which branch ran, what delay
+    was computed, or whether the backoff was entered at all. The three
+    assertions below say all of that, and none of them care how busy the
+    machine is.
+    """
+    sleeps = _capture_transport_sleeps(monkeypatch)
     _install_flaky_ollama_factory(
         monkeypatch, [_transient_error(status_code=429, retry_after=10.0)]
     )
-    cancel_event = threading.Event()
-    timer = threading.Timer(0.05, cancel_event.set)
-    timer.start()
-    started = time_module.monotonic()
-    try:
-        with pytest.raises(api_provider.RequestCancelledError):
-            api_provider.chat_stream(
-                config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None,
-                cancellation_event=cancel_event,
-            )
-    finally:
-        timer.cancel()
-    # A 10s Retry-After must NOT be slept out - Event.wait wakes on cancel.
-    assert time_module.monotonic() - started < 2.0
+    cancel_event = _ScriptedCancelEvent(cancel_during_wait=True)
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        api_provider.chat_stream(
+            config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None,
+            cancellation_event=cancel_event,
+        )
+
+    # Exactly one backoff, and it really was the full Retry-After - so this
+    # is not passing because the delay happened to be negligible.
+    assert cancel_event.waits == [10.0]
+    # ...and it went through the INTERRUPTIBLE wait. time.sleep cannot be
+    # cancelled: reaching it would block the caller for the whole ten
+    # seconds no matter what the user did.
+    assert sleeps == []
+
+
+def test_a_cancel_before_the_backoff_aborts_without_waiting_at_all(
+    monkeypatch, ollama_mode,
+):
+    """_transport_retry_wait's guard on the near side of the sleep.
+
+    This is the path the previous version of the test above fell into
+    whenever its 50ms timer beat the first stream attempt - which is what
+    happened whenever that attempt paid for ollama.show()'s ~2s connect. The
+    coverage was real but incidental, and it belonged to a test named for
+    the other guard entirely. Pinned deliberately here rather than left to
+    scheduling.
+    """
+    sleeps = _capture_transport_sleeps(monkeypatch)
+    _install_flaky_ollama_factory(
+        monkeypatch, [_transient_error(status_code=429, retry_after=10.0)]
+    )
+    cancel_event = _ScriptedCancelEvent(cancel_during_wait=False)
+    cancel_event.set()
+
+    with pytest.raises(api_provider.RequestCancelledError):
+        api_provider.chat_stream(
+            config.TASK_CHAT, [{"role": "user", "content": "hi"}], lambda d, r: None,
+            cancellation_event=cancel_event,
+        )
+
+    assert cancel_event.waits == []
+    assert sleeps == []
 
 
 def test_blocking_complete_rides_the_same_transport_retry(monkeypatch):
