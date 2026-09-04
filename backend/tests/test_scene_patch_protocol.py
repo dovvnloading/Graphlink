@@ -413,11 +413,13 @@ def test_a_value_mutated_and_reverted_between_publishes_never_leaks_to_a_late_su
 
 
 def test_registering_a_patch_builder_without_a_baseline_builder_is_a_programming_error():
-    # The pairing is load-bearing and its failure is completely silent, so
-    # it is asserted rather than merely documented.
+    # The pairing is load-bearing and its failure is completely silent, so it
+    # is enforced rather than merely documented - and RAISED rather than
+    # asserted, because `python -O` strips an assert and would take the
+    # enforcement with it.
     document = SceneDocument()
     bus = SessionBus("no-baseline")
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="baseline_builder"):
         bus.register_topic("scene", document.scene_payload, patch_builder=document.take_dirty_patch_ops)
 
 

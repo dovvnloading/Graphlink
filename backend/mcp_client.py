@@ -426,7 +426,12 @@ class McpStdioClient:
 
     def _read_loop(self) -> None:
         process = self._process
-        assert process is not None and process.stdout is not None
+        if process is None or process.stdout is None:
+            # Raised, not asserted: `python -O` strips an assert, and the
+            # AttributeError that follows on a None pipe is a far worse
+            # message than this - it surfaces deep inside a reader thread
+            # with no hint that the process simply was not connected.
+            raise RuntimeError("read loop started before the process was connected")
         try:
             while True:
                 # SECURITY-FIX: readline(size) bounds a single read to

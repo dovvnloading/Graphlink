@@ -134,7 +134,10 @@ class AssetStore:
         bytes twice writes once and returns the same ref both times."""
         ref = content_ref(data)
         target = self._path_for(ref)
-        assert target is not None  # content_ref always yields a valid ref
+        if target is None:  # content_ref always yields a valid ref
+            # Raised, not asserted - `python -O` strips an assert, and this
+            # one guards the line below from writing to None.
+            raise ValueError(f"asset ref {ref!r} does not map to a storage path")
         if target.is_file():
             return ref
 

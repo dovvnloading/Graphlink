@@ -459,13 +459,22 @@ class SessionBus:
         `baseline_builder` must accompany `patch_builder` - it supplies the
         last-published state send_snapshot serves, without which a
         subscriber can be handed state newer than the revision stamped on it
-        and diverge permanently. Asserted rather than merely documented,
-        because that failure is completely silent."""
-        assert name not in self._topics, f"topic {name!r} registered twice"
-        assert patch_builder is None or baseline_builder is not None, (
-            f"topic {name!r}: a patch_builder needs a baseline_builder, or "
-            f"send_snapshot serves live state stamped with a stale revision"
-        )
+        and diverge permanently. Enforced rather than merely documented,
+        because that failure is completely silent.
+
+        RAISED, not asserted. These were `assert` statements, which `python
+        -O` strips - and with them gone a duplicate registration silently
+        REPLACES the previous handler. backend/app.py's _configure_session
+        registers 12 topics and ~90 intents in an order its own comments
+        call load-bearing, so a silent overwrite there is exactly the class
+        of failure these checks exist to make loud."""
+        if name in self._topics:
+            raise ValueError(f"topic {name!r} registered twice")
+        if patch_builder is not None and baseline_builder is None:
+            raise ValueError(
+                f"topic {name!r}: a patch_builder needs a baseline_builder, or "
+                f"send_snapshot serves live state stamped with a stale revision"
+            )
         self._topics[name] = _Topic(
             name, builder, schema_version, min_compatible, patch_builder, baseline_builder
         )
@@ -503,10 +512,13 @@ class SessionBus:
              become a real schema in a later increment.
         """
         key = (topic, intent)
-        assert key not in self._intents, f"intent {topic}/{intent} registered twice"
-        assert args_schema is None or dataclasses.is_dataclass(args_schema), (
-            f"args_schema for {topic}/{intent} must be a dataclass type, got {args_schema!r}"
-        )
+        # Raised, not asserted - see register_topic's own note.
+        if key in self._intents:
+            raise ValueError(f"intent {topic}/{intent} registered twice")
+        if args_schema is not None and not dataclasses.is_dataclass(args_schema):
+            raise TypeError(
+                f"args_schema for {topic}/{intent} must be a dataclass type, got {args_schema!r}"
+            )
         self._intents[key] = _IntentRegistration(handler, args_schema)
 
     def has_topic(self, name: str) -> bool:
