@@ -151,7 +151,49 @@ const ASSETS_DIR = join(HERE, "..", "dist", "app", "assets");
 // and React Flow are the bulk of what remains, and no further split is
 // planned; this closes the gap that was attributed to the node views, not
 // the whole gap.
-const LARGEST_CHUNK_CEILING_BYTES = 804_000;
+// Deliberate, commented amendment - 2026-09-04 (ADR-019 section 4).
+//
+// The second time this number has moved DOWN, and the first time the ADR-019
+// budget has been in sight rather than a footnote.
+//
+// A sourcemap attribution of the initial chunk - every output byte charged
+// back to the module it came from - found that two things reachable ONLY
+// through a click were sitting in it:
+//
+//   * The markdown machinery behind the Document View. DocumentViewPanel was
+//     statically imported by App.tsx, and it pulled DocumentViewMarkdown
+//     (react-markdown plus six remark/rehype plugins and
+//     react-medium-image-zoom) and documentViewHeadings (its own
+//     unified/remark-parse pass for the table of contents). The 11 node views
+//     that also use markdown were already lazy; this one eager importer was
+//     holding the whole unified/micromark/mdast stack in the initial chunk
+//     for every session, including the many that never open the panel.
+//   * html-to-image, reached from AppBar's Export PNG button and the command
+//     palette's export command.
+//
+// Both now load on demand. The Document View's SHELL deliberately stays
+// eager: it is an <aside> that animates `width 220ms ease` from 0, and a CSS
+// transition does not fire on a freshly mounted element, so lazy-mounting the
+// shell would have cost the first open its slide-in. Only its contents moved.
+//
+// Measured: largest chunk 781,060 -> 595,517 bytes (-185,543, -23.8%). Total
+// JS 1,456,011 -> 1,458,443 (+2,432, +0.2%) - the usual per-chunk overhead of
+// splitting, and the budget ADR-019 sets is on the initial chunk anyway.
+//
+// Both ceilings re-anchored to ~3% over measured reality, the posture every
+// amendment here has used. Stated plainly, as every raise was: the ADR-019
+// budget for the initial chunk is 500 KiB (512,000 bytes), and at 595,517 the
+// initial chunk is ~16% over it - down from ~52%, and before this pass ~74%.
+//
+// What is left is no longer a mystery, and is recorded here so the next
+// person does not have to re-measure it. Of the 595,517 bytes: ~328,600 is
+// dependencies (React and React-DOM ~140,000; React Flow and its d3
+// dependencies ~175,000 - both load-bearing for first paint and neither
+// splittable), and ~262,300 is this app's own source, concentrated in
+// lib/bridge-core (~84,000), app/canvas (~82,000) and app/chrome (~78,000).
+// Closing the last ~83,500 bytes means splitting app source, not removing a
+// dependency - which is a real option now that it is the only one left.
+const LARGEST_CHUNK_CEILING_BYTES = 613_000;
 // Post-11.6 reality: six chunks (main + katex + highlight.js + the three
 // lazy dialogs) total 1,288,075 bytes - essentially unchanged from the
 // pre-split single-chunk total, as expected: splitting redistributes code

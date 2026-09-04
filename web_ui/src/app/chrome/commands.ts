@@ -1,7 +1,6 @@
 import type { ReactFlowInstance } from "@xyflow/react";
 import { applyCompareBranches, applySynthesizeBranches } from "../canvas/branchActions";
 import { FIT_VIEW_MAX_ZOOM } from "../canvas/canvasConstants";
-import { exportCanvasAsPng } from "../canvas/exportCanvasPng";
 import type { SceneStore } from "../canvas/sceneStore";
 import type { OverlayContextValue } from "../overlays/overlays";
 import { motionDuration } from "../reducedMotion";
@@ -100,7 +99,11 @@ export function buildCommands(
       id: "export-canvas-png",
       name: "Export Canvas as PNG",
       aliases: ["export png", "download image", "save canvas image"],
-      run: () => void exportCanvasAsPng(rf, "--gl-surface-window", (value) => store.setExportInProgress(value)),
+      // Imported on run, not at module scope - see AppBar.tsx's exportPng.
+      run: () =>
+        void import("../canvas/exportCanvasPng").then(({ exportCanvasAsPng }) =>
+          exportCanvasAsPng(rf, "--gl-surface-window", (value) => store.setExportInProgress(value)),
+        ),
       enabled: hasNodes,
     },
     {
