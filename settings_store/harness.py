@@ -12,8 +12,10 @@ the class wrapper is new.
 
 from __future__ import annotations
 
+from settings_store._composed import SettingsManagerParts
 
-class HarnessSettingsOps:
+
+class HarnessSettingsOps(SettingsManagerParts):
 
     def get_harness_trusted_dirs(self) -> list:
         """PLAN-2026-08-24 H4: directories the user has explicitly granted

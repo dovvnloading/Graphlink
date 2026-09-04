@@ -12,8 +12,10 @@ the class wrapper is new.
 
 from __future__ import annotations
 
+from settings_store._composed import SettingsManagerParts
 
-class PluginGrantsOps:
+
+class PluginGrantsOps(SettingsManagerParts):
 
     def get_plugin_grants(self) -> dict:
         """ADR-014 stage 14.4: install-time consent grants for discovered

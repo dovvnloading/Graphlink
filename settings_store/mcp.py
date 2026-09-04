@@ -17,6 +17,8 @@ the class wrapper is new.
 
 from __future__ import annotations
 
+from settings_store._composed import SettingsManagerParts
+
 import uuid
 
 import graphlink_secrets
@@ -36,7 +38,7 @@ def _normalize_mcp_env(raw):
     }
 
 
-class McpSettingsOps:
+class McpSettingsOps(SettingsManagerParts):
 
     def get_mcp_servers(self) -> list:
         """ADR-007 stage 7.5: configured MCP servers - the persisted
