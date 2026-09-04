@@ -7,8 +7,12 @@ composed exactly once, by backend/agents.py's
 `class AgentDispatcher(DispatcherCoreOps, ...)`.
 
 Method bodies are relocated VERBATIM from backend/agents.py; only the class
-wrapper, imports, and the patch-seam rewrites below are new. Any name that
-lives in backend/agents.py's module namespace (module helpers, constants,
+wrapper, imports, and the patch-seam rewrites below are new. The one later
+departure: the plain-blocking-action skeleton the four repository plumbing
+methods share was extracted here first, then copied verbatim into
+code_review.py - it now lives on DispatcherCoreOps as
+_run_node_blocking_action, where every dispatch mixin already has it. Any
+name that lives in backend/agents.py's module namespace (module helpers,
 names imported into it) is accessed late-bound as `agents_module.<name>`
 through an in-body deferred import, NEVER via a module-top import here: a
 top-level `from backend.agents import X` would be a circular import
@@ -23,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import uuid
 from pathlib import Path
 
 from typing import TYPE_CHECKING
@@ -35,57 +38,12 @@ if TYPE_CHECKING:
 class GitlinkDispatchOps:
     """Gitlink dispatch: repo plumbing plus the Run and Apply surfaces (mixin - see module docstring)."""
 
-    async def _run_gitlink_blocking_action(
-        self,
-        *,
-        bus: SessionBus,
-        notifications_state,
-        node,
-        action,
-        timeout: float,
-        timeout_message: str,
-        error_log_message: str,
-        error_notify_prefix: str,
-        default=None,
-    ):
-        """Shared skeleton behind the four PLAIN gitlink async methods below
-        (fetch_gitlink_repositories/load_gitlink_repo_tree/
-        import_gitlink_snapshot/build_gitlink_context) - see the comment
-        above `fetch_gitlink_repositories` for why these four (unlike
-        start_gitlink_run/start_gitlink_apply) claim node.pending_request_id
-        inline and are awaited directly by the caller, with no
-        RunRegistry/cancel_event involvement. `action` is a zero-arg async
-        callable doing the actual blocking work (already wrapped in
-        asyncio.to_thread by the caller, including any success-path
-        transform of the thread result); everything around it - the busy
-        marker claim/release, the "scene" publishes bracketing it, and the
-        timeout/exception -> notification handling - was identical across
-        all four before this extraction."""
-        from backend import agents as agents_module  # deferred: patch-seam + circular-import safety
-        request_id = uuid.uuid4().hex
-        node.pending_request_id = request_id
-        await bus.publish("scene")
-        try:
-            return await asyncio.wait_for(action(), timeout=timeout)
-        except asyncio.TimeoutError:
-            notifications_state.show(timeout_message, "error")
-            await bus.publish("notification")
-            return default
-        except Exception as exc:
-            agents_module.logger.exception(error_log_message)
-            notifications_state.show(f"{error_notify_prefix}: {exc}", "error")
-            await bus.publish("notification")
-            return default
-        finally:
-            node.pending_request_id = None
-            await bus.publish("scene")
-
     async def fetch_gitlink_repositories(self, *, bus: SessionBus, notifications_state, node) -> list[str]:
         from backend import agents as agents_module  # deferred: patch-seam + circular-import safety
         async def _action():
             return await asyncio.to_thread(agents_module._list_github_repositories, self._settings_manager)
 
-        return await self._run_gitlink_blocking_action(
+        return await self._run_node_blocking_action(
             bus=bus,
             notifications_state=notifications_state,
             node=node,
@@ -105,7 +63,7 @@ class GitlinkDispatchOps:
         async def _action():
             return await asyncio.to_thread(agents_module._load_gitlink_tree, self._settings_manager, repo, branch)
 
-        return await self._run_gitlink_blocking_action(
+        return await self._run_node_blocking_action(
             bus=bus,
             notifications_state=notifications_state,
             node=node,
@@ -132,7 +90,7 @@ class GitlinkDispatchOps:
             )
             return resolved_repo, resolved_branch, str(local_root_path)
 
-        return await self._run_gitlink_blocking_action(
+        return await self._run_node_blocking_action(
             bus=bus,
             notifications_state=notifications_state,
             node=node,
@@ -164,7 +122,7 @@ class GitlinkDispatchOps:
                 imported_root_hint=node.state.gitlink_imported_root,
             )
 
-        return await self._run_gitlink_blocking_action(
+        return await self._run_node_blocking_action(
             bus=bus,
             notifications_state=notifications_state,
             node=node,
