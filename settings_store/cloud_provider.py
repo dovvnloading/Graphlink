@@ -24,11 +24,13 @@ the class wrapper is new.
 
 from __future__ import annotations
 
+from settings_store._composed import SettingsManagerParts
+
 import graphlink_secrets
 from graphlink_model_catalog import normalize_model_id
 
 
-class CloudProviderSettingsOps:
+class CloudProviderSettingsOps(SettingsManagerParts):
 
     def get_anthropic_reasoning_level(self):
         return self.state.get("anthropic_reasoning_level", "off")

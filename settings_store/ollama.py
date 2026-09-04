@@ -15,6 +15,8 @@ the class wrapper is new.
 
 from __future__ import annotations
 
+from settings_store._composed import SettingsManagerParts
+
 from graphlink_model_catalog import (
     AUTO_MODEL,
     INHERIT_MODEL,
@@ -24,7 +26,7 @@ from graphlink_model_catalog import (
 )
 
 
-class OllamaSettingsOps:
+class OllamaSettingsOps(SettingsManagerParts):
 
     def get_ollama_model_assignments(self):
         assignments = self.state.get("ollama_model_assignments", {})

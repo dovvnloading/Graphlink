@@ -292,6 +292,17 @@ files = [
     "backend/events.py",
     "backend/token_counter.py",
     "graphlink_process_env.py",
+    # 2026-09-04: the first widening since this list was written, and the
+    # ratchet moving the direction its own comment asks for.
+    #
+    # settings_store/ used to report 115 errors, every one attr-defined, and
+    # 101 of those were three names: state, _save_state, _protect_and_track.
+    # The package was not badly typed, it was untypeable - a mixin cannot be
+    # checked in isolation when nothing declares what the class composing it
+    # provides. settings_store/_composed.py declares exactly that, in
+    # TYPE_CHECKING only, and the package now checks clean with no
+    # behavioural change. See that module's own docstring.
+    "settings_store",
 ]
 ignore_missing_imports = true
 

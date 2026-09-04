@@ -16,6 +16,8 @@ the class wrapper and imports are new.
 
 from __future__ import annotations
 
+from settings_store._composed import SettingsManagerParts
+
 import json
 import logging
 import os
@@ -35,7 +37,7 @@ from graphlink_model_catalog import (
 logger = logging.getLogger(__name__)
 
 
-class PersistenceOps:
+class PersistenceOps(SettingsManagerParts):
 
     def __init__(self, state_file: Path | str | None = None):
         self.state_file = Path(state_file) if state_file is not None else Path.home() / '.graphlink' / 'session.dat'

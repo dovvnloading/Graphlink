@@ -16,13 +16,15 @@ the class wrapper is new.
 
 from __future__ import annotations
 
+from settings_store._composed import SettingsManagerParts
+
 
 def _is_llama_cpp_gguf_path(path_value) -> bool:
     normalized = str(path_value or "").strip()
     return bool(normalized) and normalized.lower().endswith(".gguf")
 
 
-class LlamaCppSettingsOps:
+class LlamaCppSettingsOps(SettingsManagerParts):
 
     def get_llama_cpp_chat_model_path(self):
         return str(self.state.get("llama_cpp_chat_model_path", "")).strip()

@@ -13,8 +13,10 @@ the class wrapper is new.
 
 from __future__ import annotations
 
+from settings_store._composed import SettingsManagerParts
 
-class RecipesOps:
+
+class RecipesOps(SettingsManagerParts):
 
     @staticmethod
     def _normalize_recipe(entry) -> "dict | None":

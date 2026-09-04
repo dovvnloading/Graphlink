@@ -12,8 +12,10 @@ the class wrapper is new.
 
 from __future__ import annotations
 
+from settings_store._composed import SettingsManagerParts
 
-class PricingSettingsOps:
+
+class PricingSettingsOps(SettingsManagerParts):
 
     def get_pricing_overrides(self) -> dict:
         """ADR-016 stage 16.2: user-editable local pricing table, keyed by

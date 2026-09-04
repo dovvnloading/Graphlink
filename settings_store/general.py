@@ -15,10 +15,12 @@ the class wrapper is new.
 
 from __future__ import annotations
 
+from settings_store._composed import SettingsManagerParts
+
 from datetime import datetime, timezone
 
 
-class GeneralSettingsOps:
+class GeneralSettingsOps(SettingsManagerParts):
 
     def get_show_token_counter(self):
         # R8a: off by default - the overlay is opt-in now, not opt-out.
