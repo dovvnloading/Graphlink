@@ -66,7 +66,7 @@
  */
 import { memo, Profiler, type ReactNode } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
-import { act, render } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 const chatNodeRenders = { count: 0 };
@@ -94,6 +94,44 @@ vi.mock("./ChatNodeView", async (importOriginal) => {
     }, original.chatNodePropsAreEqual),
   };
 });
+
+/**
+ * Wait for the lazily-imported node-view chunks to mount.
+ *
+ * ADR-019: SceneCanvas registers each node kind through lazyNodeViews.tsx
+ * (React.lazy + a per-node Suspense boundary), so the first render of a
+ * canvas produces the fallback shell, not the node component. Without this
+ * wait the counter below sees zero renders and every assertion here passes
+ * or fails for the wrong reason - the "guards the guard" case caught exactly
+ * that when this gate was first run against the split bundle.
+ *
+ * Polled rather than a fixed tick count: resolving one kind takes an
+ * unspecified number of microtask hops (this file's own vi.mock factory
+ * awaits importOriginal(), adding one more), and a hard-coded flush that
+ * happens to be one hop short silently reintroduces the zero-measurement
+ * bug.
+ *
+ * The condition is POSITIVE - every expected stub is on screen - not
+ * "no fallback shells remain". The negative form is also true BEFORE the
+ * nodes have rendered at all, so it resolved immediately under load and put
+ * the zero-measurement bug straight back; it passed when this file ran
+ * alone and failed in the full suite.
+ */
+async function flushLazyNodeChunks() {
+  // 5s, not waitFor's 1s default: what is being waited on is vitest
+  // transforming and evaluating 17 newly-split chunk entry points, not
+  // anything the app does at runtime. Under a full parallel suite that
+  // exceeded 1s and the gate failed with "expected 0 to be 10" - the
+  // zero-measurement symptom again, from a different cause. It passes in
+  // ~150ms when this file runs alone.
+  await waitFor(
+    () => {
+      expect(document.body.querySelectorAll('[data-testid="chat-node-stub"]').length)
+        .toBe(NODE_COUNT);
+    },
+    { timeout: 5_000 },
+  );
+}
 
 import { SceneCanvas } from "./SceneCanvas";
 import { SceneStore, initialSceneState } from "./sceneStore";
@@ -249,7 +287,7 @@ function mountWithCommitCounter(children: ReactNode) {
 }
 
 describe("re-renders per single-node update (ADR-019 stage 19.2)", () => {
-  it("finds real renders at all (guards the guard)", () => {
+  it("finds real renders at all (guards the guard)", async () => {
     const { store, stateListeners } = makeWiredStore();
     mountWithCommitCounter(
       <ReactFlowProvider>
@@ -259,12 +297,14 @@ describe("re-renders per single-node update (ADR-019 stage 19.2)", () => {
     act(() => {
       stateListeners.get("scene")!(makeScene() as unknown as Record<string, unknown>);
     });
-    // The stub actually rendered once per node on mount - a broken mock or a
-    // React Flow harness change would make the gate below pass vacuously.
+    await flushLazyNodeChunks();
+    // The stub actually rendered once per node on mount - a broken mock, a
+    // React Flow harness change, or an unresolved lazy chunk would make the
+    // gate below pass vacuously.
     expect(chatNodeRenders.count).toBeGreaterThanOrEqual(NODE_COUNT);
   });
 
-  it("a single-node update stays within the pinned commit and render baselines", () => {
+  it("a single-node update stays within the pinned commit and render baselines", async () => {
     const { store, stateListeners } = makeWiredStore();
     const commits = mountWithCommitCounter(
       <ReactFlowProvider>
@@ -274,6 +314,10 @@ describe("re-renders per single-node update (ADR-019 stage 19.2)", () => {
     act(() => {
       stateListeners.get("scene")!(makeScene() as unknown as Record<string, unknown>);
     });
+    // Resolve the lazy chunks BEFORE zeroing the counters, so the update
+    // below is measured against fully-mounted node views - the same steady
+    // state a user is in by the time they drag or edit anything.
+    await flushLazyNodeChunks();
 
     chatNodeRenders.count = 0;
     commits.count = 0;
@@ -310,7 +354,7 @@ describe("re-renders per single-node update (ADR-019 stage 19.2)", () => {
   // isolated pieces: chatNodePropsAreEqual's own pure-function unit tests,
   // and a real-DOM render check keyed off `selected`, never `content`,
   // never through the store - see ChatNodeView.test.tsx).
-  it("a single-node CONTENT edit (the ADR's own literal exit criterion) re-renders exactly 1 node view end-to-end through the real store pipeline", () => {
+  it("a single-node CONTENT edit (the ADR's own literal exit criterion) re-renders exactly 1 node view end-to-end through the real store pipeline", async () => {
     const { store, stateListeners } = makeWiredStore();
     mountWithCommitCounter(
       <ReactFlowProvider>
@@ -320,6 +364,7 @@ describe("re-renders per single-node update (ADR-019 stage 19.2)", () => {
     act(() => {
       stateListeners.get("scene")!(makeScene() as unknown as Record<string, unknown>);
     });
+    await flushLazyNodeChunks();
 
     chatNodeRenders.count = 0;
     act(() => {
