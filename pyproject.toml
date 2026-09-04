@@ -370,6 +370,26 @@ files = [
     "backend/domain/node_access.py",
     "backend/domain/nodes_code_review.py",
     "backend/domain/nodes_gitlink.py",
+    # 2026-09-04, third widening: the rest of backend/domain/'s per-kind
+    # groups, once the last thirteen kinds were extracted out of
+    # SceneDocument the same way, plus the four leaf modules they sit on.
+    #
+    # 13 of the 18 modules in backend/domain/ are now checked. The five that
+    # are not are graph.py itself and the four cross-cutting mixins
+    # (groups/branches/commands/layout), which hold 124 errors between them
+    # of the same union-attr shape - they read per-kind state off nodes they
+    # look up generically, so require_node cannot narrow them without a kind
+    # to narrow to. That is the next piece of work, not a gap being waved
+    # through.
+    "backend/domain/_composed.py",
+    "backend/domain/content_codec.py",
+    "backend/domain/model.py",
+    "backend/domain/node_states.py",
+    "backend/domain/nodes_agent_runs.py",
+    "backend/domain/nodes_content.py",
+    "backend/domain/nodes_conversational.py",
+    "backend/domain/nodes_planning.py",
+    "backend/domain/nodes_visual.py",
     # 2026-09-04: the first widening since this list was written, and the
     # ratchet moving the direction its own comment asks for.
     #

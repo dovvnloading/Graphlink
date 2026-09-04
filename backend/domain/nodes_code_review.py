@@ -16,6 +16,11 @@ starting with the two largest groups.
 The mixin needs only what SceneDocumentParts already declares - `nodes`,
 `connect`, `_counter` - so it inherits that and stays type-checkable in
 isolation, exactly like its cross-cutting siblings.
+
+Import posture, carried over with the code: nothing here imports from
+graphlink_plugins.review_lens - every method below takes plain values,
+already fetched and normalized by the dispatch layer, and only stores
+them.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_access import optional_node, require_node
 from backend.domain.node_states import CodeReviewState
+
 
 def _bundle_int(value: object) -> int:
     """Non-negative int from a fetch bundle, defaulting to 0.
