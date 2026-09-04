@@ -234,9 +234,16 @@ jobs:
         working-directory: web_ui
         run: npm ci
 
+      # Wrapped rather than a bare `npm audit --audit-level=high`: that
+      # conflates "this dependency set has a high-severity advisory" with
+      # "registry.npmjs.org did not answer" into the same exit code, and the
+      # second failed two consecutive Python-only pull requests in one
+      # afternoon. See web_ui/scripts/audit-with-retry.mjs's own header for
+      # the full reasoning and the trade it makes. A real advisory still
+      # fails the build on the first attempt.
       - name: npm audit (known-vulnerability scan, high+critical only)
         working-directory: web_ui
-        run: npm audit --audit-level=high
+        run: node scripts/audit-with-retry.mjs
 
       - name: Run checks (schema drift, typecheck, lint, vitest, build)
         working-directory: web_ui
