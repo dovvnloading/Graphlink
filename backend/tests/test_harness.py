@@ -663,3 +663,84 @@ class TestPersistence:
         payload["workspace_id"] = ""
         restored = _restore_harness_payload(payload)
         assert restored.state.harness_workspace_id
+
+
+class TestInterruptedToolCallsAreClosedOnReload:
+    """A run interrupted between "the model asked for tools" and "the tools
+    ran" must not wedge the node.
+
+    backend/harness/loop.py appends the assistant turn - tool_calls and all -
+    and persists it BEFORE invoking any tool. A Stop, timeout, provider fault
+    or crash in that window leaves the transcript ending on an assistant turn
+    whose calls were never answered. The follow-up then sends
+    assistant(tool_calls) immediately followed by user(...), which every major
+    provider rejects: OpenAI wants a tool message per tool_call, Anthropic a
+    tool_result per tool_use. The bad turn is on disk, so every subsequent
+    follow-up fails identically and the node never recovers.
+
+    drop_leading_orphan_tools already handled the other end of this (a history
+    that OPENS mid tool-sequence); this is the missing half.
+    """
+
+    @staticmethod
+    def _assistant_with_calls():
+        return {
+            "role": "assistant", "content": "",
+            "tool_calls": [
+                {"id": "c1", "name": "fs.read", "arguments": "{}"},
+                {"id": "c2", "name": "shell.exec", "arguments": "{}"},
+            ],
+        }
+
+    def test_a_fully_interrupted_turn_gets_synthetic_results(self, tmp_path):
+        append_message(tmp_path, {"role": "user", "content": "go"})
+        append_message(tmp_path, self._assistant_with_calls())
+
+        loaded = load_messages(tmp_path)
+
+        assert [m["role"] for m in loaded] == ["user", "assistant", "tool", "tool"]
+        assert [m["tool_call_id"] for m in loaded if m["role"] == "tool"] == ["c1", "c2"]
+        assert all("Interrupted" in m["content"] for m in loaded if m["role"] == "tool")
+
+    def test_a_partially_answered_turn_only_fills_the_gap(self, tmp_path):
+        """A Stop between two calls leaves the first answered."""
+        append_message(tmp_path, {"role": "user", "content": "go"})
+        append_message(tmp_path, self._assistant_with_calls())
+        append_message(tmp_path, {"role": "tool", "tool_call_id": "c1", "name": "fs.read", "content": "real result"})
+
+        loaded = load_messages(tmp_path)
+
+        results = [m for m in loaded if m["role"] == "tool"]
+        assert [m["tool_call_id"] for m in results] == ["c1", "c2"]
+        assert results[0]["content"] == "real result"
+        assert "Interrupted" in results[1]["content"]
+
+    def test_every_requested_call_ends_up_answered(self, tmp_path):
+        """The invariant the providers actually enforce, stated directly."""
+        append_message(tmp_path, {"role": "user", "content": "go"})
+        append_message(tmp_path, self._assistant_with_calls())
+
+        loaded = load_messages(tmp_path)
+
+        requested = {call["id"] for m in loaded for call in m.get("tool_calls", [])}
+        answered = {m["tool_call_id"] for m in loaded if m["role"] == "tool"}
+        assert requested == answered
+        assert loaded[-1]["role"] != "assistant" or not loaded[-1].get("tool_calls")
+
+    def test_a_healthy_transcript_is_left_alone(self, tmp_path):
+        append_message(tmp_path, {"role": "user", "content": "go"})
+        append_message(tmp_path, self._assistant_with_calls())
+        append_message(tmp_path, {"role": "tool", "tool_call_id": "c1", "name": "fs.read", "content": "a"})
+        append_message(tmp_path, {"role": "tool", "tool_call_id": "c2", "name": "shell.exec", "content": "b"})
+        append_message(tmp_path, {"role": "assistant", "content": "done"})
+
+        loaded = load_messages(tmp_path)
+
+        assert [m["role"] for m in loaded] == ["user", "assistant", "tool", "tool", "assistant"]
+        assert [m["content"] for m in loaded if m["role"] == "tool"] == ["a", "b"]
+
+    def test_an_assistant_turn_with_no_tool_calls_is_untouched(self, tmp_path):
+        append_message(tmp_path, {"role": "user", "content": "go"})
+        append_message(tmp_path, {"role": "assistant", "content": "just an answer"})
+
+        assert [m["role"] for m in load_messages(tmp_path)] == ["user", "assistant"]

@@ -312,6 +312,70 @@ def drop_leading_orphan_tools(messages: list[dict]) -> list[dict]:
     return messages[index:]
 
 
+_INTERRUPTED_TOOL_RESULT = (
+    "Interrupted - the run stopped before this tool produced a result."
+)
+
+
+def close_unanswered_tool_calls(messages: list[dict]) -> list[dict]:
+    """Give every requested tool_call a result, synthesizing one where the run
+    never produced it.
+
+    drop_leading_orphan_tools above handles a history that OPENS mid
+    tool-sequence. This is the other end, and it was missing.
+
+    backend/harness/loop.py appends the assistant turn - tool_calls and all -
+    and persists it BEFORE invoking any tool, so an interruption between those
+    two points leaves the transcript ending on an assistant turn whose calls
+    were never answered. A Stop lands there, so does a timeout, a provider
+    fault, or the process dying. On the next follow-up load_messages returns
+    that turn and loop.py appends the new user message after it, producing:
+
+        ... assistant(tool_calls=[c1, c2]), user("try again")
+
+    which every major provider rejects - OpenAI requires a tool message per
+    tool_call, Anthropic requires a tool_result block per tool_use. The
+    follow-up fails, the bad turn is still on disk, and the node is wedged
+    permanently: every subsequent attempt fails the same way.
+
+    Repairing on LOAD rather than when the run lands is deliberate. It fixes
+    transcripts already sitting on disk from before this existed, and it
+    covers interruption paths that never reach a landing handler at all (a
+    crash, a kill). A synthetic result rather than dropping the assistant
+    turn, because the turn is a real record of what the agent decided to do -
+    losing it would make the transcript lie about the run.
+
+    Handles the partially-answered case too: a Stop between two calls leaves
+    the first answered and the second not.
+    """
+    repaired: list[dict] = []
+    index = 0
+    while index < len(messages):
+        message = messages[index]
+        repaired.append(message)
+        index += 1
+        calls = message.get("tool_calls") if message.get("role") == "assistant" else None
+        if not isinstance(calls, list) or not calls:
+            continue
+        answered: set[str] = set()
+        while index < len(messages) and messages[index].get("role") == "tool":
+            answered.add(str(messages[index].get("tool_call_id", "")))
+            repaired.append(messages[index])
+            index += 1
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            call_id = str(call.get("id", ""))
+            if call_id and call_id not in answered:
+                repaired.append({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "name": str(call.get("name", "")),
+                    "content": _INTERRUPTED_TOOL_RESULT,
+                })
+    return repaired
+
+
 def load_messages(workspace: Path) -> list[dict]:
     """The reload path: the last MAX_RELOADED_MESSAGES message lines, each
     content-capped, in file order. A missing file is an empty history (a
@@ -359,4 +423,4 @@ def load_messages(workspace: Path) -> list[dict]:
         return []
     if len(messages) > MAX_RELOADED_MESSAGES:
         messages = messages[-MAX_RELOADED_MESSAGES:]
-    return drop_leading_orphan_tools(messages)
+    return close_unanswered_tool_calls(drop_leading_orphan_tools(messages))
