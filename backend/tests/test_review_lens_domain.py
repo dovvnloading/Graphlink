@@ -413,16 +413,47 @@ def test_fallback_does_not_pair_a_call_in_one_file_with_text_in_another():
     assert fallback["category_scores"]["security"] == 82
 
 
-def test_fallback_still_flags_a_real_shell_true_call_across_lines():
-    """The control for the test above: narrowing the pattern to one call's own
-    argument list must not cost the genuine multi-line case."""
+@pytest.mark.parametrize(
+    "label, patch",
+    [
+        ("plain", "@@\n+subprocess.run(cmd, shell=True)\n"),
+        # Every one of these puts a CALL in the argument list, and every one of
+        # them went undetected when the pattern was a flat `[^)]*` - which
+        # cannot cross the `)` that closes the inner call. They are the common
+        # real shapes, and the original control case (multi-line, no nested
+        # parens) was the one shape that happened to survive.
+        ("env=", "@@\n+subprocess.run(cmd, env=os.environ.copy(), shell=True)\n"),
+        ("cwd=", "@@\n+subprocess.run(cmd, cwd=str(path), shell=True)\n"),
+        ("joined args", '@@\n+subprocess.run(" ".join(parts), shell=True)\n'),
+        ("multiline", "@@\n+subprocess.run(\n+    cmd,\n+    shell=True,\n+)\n"),
+        ("multiline nested", "@@\n+subprocess.run(\n+    build(cmd),\n+    shell=True,\n+)\n"),
+        ("os.system", "@@\n+os.system(cmd)\n"),
+    ],
+)
+def test_fallback_flags_every_real_shell_execution_shape(label, patch):
     agent = ReviewLensAgent()
-    fallback = agent._fallback_review(_patched(
-        ("c/run.py", "@@\n+subprocess.run(\n+    cmd,\n+    shell=True,\n+)\n"),
-    ))
+    fallback = agent._fallback_review(_patched(("c/run.py", patch)))
     titles = [finding["title"] for finding in fallback["review_findings"]]
-    assert any("Shell execution" in title for title in titles)
+    assert any("Shell execution" in title for title in titles), label
     assert fallback["review_findings"][0]["path"] == "c/run.py"
+
+
+@pytest.mark.parametrize(
+    "label, patch",
+    [
+        ("text in a string", "@@\n+DOC = 'never pass shell=True here'\n"),
+        ("shell=False", "@@\n+subprocess.run(cmd, shell=False)  # not shell=True\n"),
+        # The span must not escape one call to reach a later statement, which
+        # is the false positive the per-file scoping and this bound exist for.
+        ("later statement", "@@\n+subprocess.run(cmd)\n+SHELL_DOC = 'never shell=True'\n"),
+        ("two calls then text", "@@\n+subprocess.run(a)\n+subprocess.run(b)\n+x = 'shell=True'\n"),
+    ],
+)
+def test_fallback_does_not_invent_a_shell_finding(label, patch):
+    agent = ReviewLensAgent()
+    fallback = agent._fallback_review(_patched(("c/run.py", patch)))
+    titles = [finding["title"] for finding in fallback["review_findings"]]
+    assert not any("Shell execution" in title for title in titles), label
 
 
 def test_fallback_detects_a_bare_except_on_the_last_added_line():
@@ -477,6 +508,52 @@ def test_an_unparseable_model_reply_also_reports_no_verdict(monkeypatch):
     assert result["fallback"] is True
     assert result["verdict"] == "none"
     assert result["quality_score"] == 0
+
+
+@pytest.mark.parametrize(
+    "label, reply",
+    [
+        ("empty object", "{}"),
+        # The likeliest non-happy-path reply any provider gives, and the one
+        # that made this a live defect rather than a theoretical one.
+        ("refusal object", '{"error": "I cannot review this"}'),
+        ("bare null", "null"),
+        ("a list", "[1, 2, 3]"),
+        ("fenced empty object", "```json\n{}\n```"),
+        ("wrong shape entirely", '{"unrelated": "payload"}'),
+    ],
+)
+def test_a_reply_that_parses_but_carries_no_review_reports_no_verdict(monkeypatch, label, reply):
+    """Gating the fallback on `json.loads` RAISING was not enough. Each of
+    these parses cleanly, so it reached _normalize_response, where
+    _normalize_scores defaulted all eight categories to 72 - and the node
+    rendered "Needs Revision, 72/100, Release risk: Medium" for a change no
+    model had read."""
+    monkeypatch.setattr(api_provider, "chat", lambda **kwargs: {"message": {"content": reply}})
+    agent = ReviewLensAgent()
+    result = agent.get_response(_payload())
+    assert result["fallback"] is True, label
+    assert result["verdict"] == "none", label
+    assert result["quality_score"] == 0, label
+
+
+@pytest.mark.parametrize(
+    "label, reply",
+    [
+        ("overview only", '{"overview": "All good."}'),
+        ("scores only", '{"category_scores": {"correctness": 90}}'),
+        ("findings only", '{"review_findings": [{"title": "T", "evidence": "E"}]}'),
+    ],
+)
+def test_a_thin_but_real_review_is_still_graded(monkeypatch, label, reply):
+    """The other side of the same gate: a genuine review with nothing wrong to
+    report still has an overview and a scorecard, and must NOT be discarded as
+    contentless."""
+    monkeypatch.setattr(api_provider, "chat", lambda **kwargs: {"message": {"content": reply}})
+    agent = ReviewLensAgent()
+    result = agent.get_response(_payload())
+    assert result["fallback"] is False, label
+    assert result["verdict"] != "none", label
 
 
 def test_a_real_model_reply_is_still_graded_normally(monkeypatch):
