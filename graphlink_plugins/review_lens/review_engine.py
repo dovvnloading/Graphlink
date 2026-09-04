@@ -205,6 +205,38 @@ def _added_lines(diff_text):
     return added
 
 
+def looks_like_a_review(parsed):
+    """True only if the model actually returned a review.
+
+    The distinction the fallback has to key on, and previously did not. It
+    keyed on `json.loads` RAISING, which conflates "the model said nothing
+    usable" with "the model said something unparseable" - and only catches the
+    second. A reply that parses fine but carries no review at all (`{}`, a
+    refusal object like {"error": "I cannot review this"}, a bare `null`, a
+    JSON list) sailed past that check into _normalize_response, where
+    _normalize_scores defaults all eight categories to 72 and the node
+    rendered "Verdict: Needs Revision, 72/100, Release risk: Medium" for a
+    change no model had read. A refusal is the single likeliest non-happy-path
+    reply any provider gives.
+
+    A real review has SOMETHING to say: an overview, a scorecard naming at
+    least one known category, or a non-empty walkthrough/findings/errors list.
+    A clean review still has the first two - only the lists may be empty - so
+    this does not reject a genuine "nothing wrong here" verdict.
+    """
+    if not isinstance(parsed, dict):
+        return False
+    if _clean_text(parsed.get("overview")):
+        return True
+    scores = parsed.get("category_scores")
+    if isinstance(scores, dict) and any(key in REVIEW_CATEGORY_WEIGHTS for key in scores):
+        return True
+    return any(
+        isinstance(parsed.get(key), list) and parsed.get(key)
+        for key in ("walkthrough", "review_findings", "errors_found")
+    )
+
+
 def _added_sections(payload):
     """[(path, that file's added-line text)] - the unit every fallback
     heuristic scans.
@@ -552,15 +584,27 @@ Rules:
             )
             scores["security"] = min(scores["security"], 40)
 
-        # `[^)]*` keeps the match inside one call's own argument list, and
-        # re.DOTALL is gone. Together they were the worst of these: `.*` under
-        # DOTALL ran across every file's added lines at once, so a benign
-        # `subprocess.run(["ls"])` in one file plus the words `shell=True` in
-        # a string literal in another produced a HIGH-severity finding and
-        # dropped the security score to 45. `[^)]` still spans newlines, so a
-        # genuine multi-line call is still caught.
+        # The span stays inside one call's own argument list - `[^()]` cannot
+        # cross either bracket, and the `\([^()]*\)` alternative lets ONE level
+        # of nesting through so an argument that is itself a call does not end
+        # the match early. re.DOTALL is gone.
+        #
+        # Both halves are load-bearing and each was wrong once. The original
+        # `.*` under DOTALL ran across every file's added lines at a time, so a
+        # benign `subprocess.run(["ls"])` in one file plus the words
+        # `shell=True` in a string literal in ANOTHER scored a HIGH finding.
+        # The first fix for that used a flat `[^)]*`, which cannot cross a
+        # `)` at all - so it silently stopped detecting the most common real
+        # shapes, every one of which puts a call in the argument list:
+        # `env=os.environ.copy()`, `cwd=str(path)`, `" ".join(parts)`,
+        # `build(cmd)`. Four of six real shapes went undetected until a
+        # verification pass measured them. The cases are pinned in
+        # backend/tests/test_review_lens_domain.py.
         path = _first_section_matching(
-            sections, r"subprocess\.(?:Popen|run)\([^)]*shell\s*=\s*True|os\.system\(", re.IGNORECASE)
+            sections,
+            r"subprocess\.(?:Popen|run)\((?:[^()]|\([^()]*\))*?shell\s*=\s*True|os\.system\(",
+            re.IGNORECASE,
+        )
         if path is not None:
             add_finding(
                 "high", "Security", path,
@@ -836,10 +880,17 @@ Rules:
             {"role": "system", "content": self.SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ]
+        raw_text = None
+        parsed = None
         try:
             raw_text = api_provider.chat(task=config.TASK_CHAT, messages=messages)["message"]["content"]
             parsed = json.loads(self._extract_json(raw_text))
         except Exception:
+            parsed = None
+
+        # Two ways to end up without a review, and BOTH have to land here. The
+        # try/except above only catches the second. See looks_like_a_review.
+        if not looks_like_a_review(parsed):
             fallback = self._fallback_review(payload)
             return self._normalize_response({
                 "title": f"Review of {payload.get('repo', '')}#{payload.get('pr_number', '')}",
