@@ -164,10 +164,14 @@ def test_sessions_are_isolated():
 
 
 def test_duplicate_registration_is_a_programming_error():
+    """ValueError, not AssertionError: these were asserts, and `python -O`
+    strips those - a duplicate registration would then silently REPLACE the
+    previous handler rather than failing. See register_topic's own note and
+    tests/test_no_production_asserts.py."""
     bus, _ = make_session()
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="registered twice"):
         bus.register_topic("counter", dict)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError, match="registered twice"):
         bus.register_intent("counter", "bump", lambda: None)
 
 
