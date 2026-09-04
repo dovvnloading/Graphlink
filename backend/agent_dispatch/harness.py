@@ -24,8 +24,10 @@ from __future__ import annotations
 import asyncio
 import threading
 
+from backend.agent_dispatch._composed import DispatcherParts
 
-class HarnessDispatchOps:
+
+class HarnessDispatchOps(DispatcherParts):
     """The Harness agent: grants, process bookkeeping, and the Harness run (mixin - see module docstring)."""
 
     def answer_harness_question(self, request_id: str, answer) -> bool:

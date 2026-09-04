@@ -29,8 +29,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from backend.events import SessionBus
 
+from backend.agent_dispatch._composed import DispatcherParts
 
-class CodeSandboxDispatchOps:
+
+class CodeSandboxDispatchOps(DispatcherParts):
     """The Execution Sandbox run surface and its plumbing (mixin - see module docstring)."""
 
     async def remove_code_sandbox_scratch_dir(self, sandbox_id: str) -> None:

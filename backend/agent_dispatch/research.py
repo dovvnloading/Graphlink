@@ -29,8 +29,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from backend.events import SessionBus
 
+from backend.agent_dispatch._composed import DispatcherParts
 
-class ResearchDispatchOps:
+
+class ResearchDispatchOps(DispatcherParts):
     """Web Research and Artifact generation dispatch (mixin - see module docstring)."""
 
     async def start_web_research(

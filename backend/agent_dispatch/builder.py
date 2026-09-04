@@ -24,8 +24,10 @@ from __future__ import annotations
 import asyncio
 import threading
 
+from backend.agent_dispatch._composed import DispatcherParts
 
-class BuilderDispatchOps:
+
+class BuilderDispatchOps(DispatcherParts):
     """The Builder agent loop and its tool-registry assembly (mixin - see module docstring)."""
 
     def builder_tool_registry(self, document) -> "object":

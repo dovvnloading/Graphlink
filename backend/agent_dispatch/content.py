@@ -26,8 +26,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from backend.events import SessionBus
 
+from backend.agent_dispatch._composed import DispatcherParts
 
-class ContentDispatchOps:
+
+class ContentDispatchOps(DispatcherParts):
     """Chart, note, branch-comparison, and branch-synthesis generation (mixin - see module docstring)."""
 
     async def start_chart_generation(

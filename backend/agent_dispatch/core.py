@@ -34,8 +34,10 @@ if TYPE_CHECKING:
     from backend.events import SessionBus
     from graphlink_settings_store import SettingsManager
 
+from backend.agent_dispatch._composed import DispatcherParts
 
-class DispatcherCoreOps:
+
+class DispatcherCoreOps(DispatcherParts):
     """The shared dispatcher core: construction, model resolution, cancellation, approvals, and `_dispatch` (mixin - see module docstring)."""
 
     def __init__(self, settings_manager: SettingsManager, provider_runtime=None, diagnostics=None):
