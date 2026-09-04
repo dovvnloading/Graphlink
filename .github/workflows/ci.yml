@@ -337,8 +337,12 @@ jobs:
 
       # pytest-xdist is needed even at -n0: [tool.pytest.ini_options].addopts
       # names -n, so the plugin has to be importable for the run to start.
+      # hypothesis for the same class of reason - backend/tests/conftest.py
+      # imports it at module scope, so pytest cannot load the conftest (and
+      # therefore collects nothing at all) without it. Versions match the
+      # python-tests job's own pins.
       - name: Install pytest
-        run: pip install --quiet pytest==9.1.1 pytest-xdist==3.8.0
+        run: pip install --quiet pytest==9.1.1 pytest-xdist==3.8.0 hypothesis==6.165.10
 
       - name: Run the POSIX permission assertions
         run: >
