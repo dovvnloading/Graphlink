@@ -46,6 +46,7 @@ class TestConnectionHygiene:
             conn.close()
         assert mode.lower() == "wal"
 
+    @pytest.mark.posix_permissions
     def test_posix_permission_bits_are_actually_0600(self, db_path):
         if os.name == "nt":
             pytest.skip("POSIX permission bits are not meaningful on Windows")

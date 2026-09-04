@@ -116,6 +116,7 @@ class TestChatsDbPermissionsAreRestricted:
 
         assert (db_path, 0o600) in calls
 
+    @pytest.mark.posix_permissions
     def test_posix_permission_bits_are_actually_0600(self, db_path):
         if sys.platform == "win32":
             pytest.skip("chmod is a no-op on Windows - see class docstring")
@@ -124,6 +125,7 @@ class TestChatsDbPermissionsAreRestricted:
 
         assert stat.S_IMODE(db_path.stat().st_mode) == 0o600
 
+    @pytest.mark.posix_permissions
     def test_self_heals_a_pre_existing_db_with_looser_permissions(self, db_path):
         if sys.platform == "win32":
             pytest.skip("chmod is a no-op on Windows - see class docstring")
@@ -214,6 +216,7 @@ class TestChatsDbUsesWalModeForChmoddableSidecars:
         assert (wal_path, 0o600) in calls
         assert (shm_path, 0o600) in calls
 
+    @pytest.mark.posix_permissions
     def test_self_heals_stale_sidecars_left_behind_by_a_crash(self, db_path):
         if sys.platform == "win32":
             pytest.skip("chmod is a no-op on Windows - see class docstring")

@@ -155,6 +155,7 @@ def test_take_backup_is_wal_safe_against_a_live_writer_holding_a_transaction(db_
         writer.close()
 
 
+@pytest.mark.posix_permissions
 def test_take_backup_chmods_the_backup_to_0600(db_path):
     import stat
     import sys
@@ -380,6 +381,7 @@ def test_restore_is_atomic_no_leftover_temp_file_on_success(db_path):
     assert not tmp_path.exists()
 
 
+@pytest.mark.posix_permissions
 def test_restore_chmods_the_restored_file_to_0600(db_path):
     import stat
     import sys

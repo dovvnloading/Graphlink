@@ -301,3 +301,53 @@ jobs:
       - name: Run Playwright E2E suite
         working-directory: web_ui
         run: npm run test:e2e
+
+  # A fifth job, and the smallest. python-tests is the only job that runs
+  # pytest and it is pinned to windows-latest for DPAPI, so the 9 tests that
+  # assert POSIX file mode bits - on chats.db, the knowledge store, DB
+  # backups, and session.dat, the secrets-at-rest file - skipped in CI and
+  # ran nowhere else. Nine assertions about the permissions of a file holding
+  # API keys, executing on no machine anyone checked.
+  #
+  # Scoped to the four files that contain them, NOT all of backend/tests:
+  # pytest imports every module it collects, and this file's own comment
+  # above records that ~18 tests elsewhere genuinely assume Windows.
+  # Narrowing collection is what keeps this job about permissions rather
+  # than about porting the suite to Linux. tests/test_posix_permission_
+  # coverage.py ties the file list below to the marked tests, so a tenth
+  # marked test landing in a fifth file fails the build instead of silently
+  # not running here.
+  #
+  # ubuntu-latest, and deliberately cheap: no coverage, no xdist workers
+  # (-n0 for 9 tests), no dev tooling beyond pytest itself.
+  posix-permissions:
+    name: POSIX file permissions (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # pytest-xdist is needed even at -n0: [tool.pytest.ini_options].addopts
+      # names -n, so the plugin has to be importable for the run to start.
+      # hypothesis for the same class of reason - backend/tests/conftest.py
+      # imports it at module scope, so pytest cannot load the conftest (and
+      # therefore collects nothing at all) without it. Versions match the
+      # python-tests job's own pins.
+      - name: Install pytest
+        run: pip install --quiet pytest==9.1.1 pytest-xdist==3.8.0 hypothesis==6.165.10
+
+      - name: Run the POSIX permission assertions
+        run: >
+          python -m pytest -q -n0 -m posix_permissions
+          backend/tests/test_chat_library.py
+          backend/tests/test_db_backup.py
+          backend/tests/test_knowledge_store.py
+          backend/tests/test_backend_secrets_at_rest.py
