@@ -60,25 +60,7 @@ def register_code_review_intents(
             bus=bus, notifications_state=notifications, node=node, pr_url=effective_url,
         )
         if bundle is not None:
-            document.store_code_review_diff(
-                node_id,
-                pr_url=effective_url,
-                repo=bundle.get("repo", ""),
-                pr_number=bundle.get("pr_number", 0),
-                pr_title=bundle.get("pr_title", ""),
-                pr_state=bundle.get("pr_state", ""),
-                html_url=bundle.get("html_url", ""),
-                base_ref=bundle.get("base_ref", ""),
-                head_ref=bundle.get("head_ref", ""),
-                additions=bundle.get("additions", 0),
-                deletions=bundle.get("deletions", 0),
-                changed_files=bundle.get("changed_files", 0),
-                files=bundle.get("files", []),
-                files_truncated=bundle.get("files_truncated", False),
-                diff_text=bundle.get("diff_text", ""),
-                diff_truncated=bundle.get("diff_truncated", False),
-                diff_chars=bundle.get("diff_chars", 0),
-            )
+            document.store_code_review_diff(node_id, pr_url=effective_url, bundle=bundle)
             await publish_scene()
         return node_id
 

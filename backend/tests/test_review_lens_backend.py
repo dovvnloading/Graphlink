@@ -99,7 +99,7 @@ def test_set_pr_url_and_wrong_kind_guard():
 
 def test_store_diff_lands_fields_bumps_version_and_resets_review():
     doc, node = _doc_with_review()
-    doc.store_code_review_diff(node.id, pr_url="u", **{k: v for k, v in _bundle().items()})
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
     live = doc.nodes[node.id]
     assert live.state.code_review_repo == "o/r"
     assert live.state.code_review_pr_number == 3
@@ -113,7 +113,7 @@ def test_store_diff_lands_fields_bumps_version_and_resets_review():
         "findings": live.state.code_review_findings, "errors": [], "scores": {},
         "quality_score": 1, "verdict": "strong", "risk": "low", "quality_summary": "S",
     })
-    doc.store_code_review_diff(node.id, pr_url="u", **{k: v for k, v in _bundle().items()})
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
     live = doc.nodes[node.id]
     assert live.state.code_review_diff_version == 2
     assert live.state.code_review_verdict == "none"
@@ -122,13 +122,13 @@ def test_store_diff_lands_fields_bumps_version_and_resets_review():
 
 def test_fetch_diff_text_is_wrong_kind_guarded():
     doc, node = _doc_with_review()
-    doc.store_code_review_diff(node.id, pr_url="u", **{k: v for k, v in _bundle().items()})
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
     assert doc.fetch_code_review_diff_text(node.id) == "diff --git x"
 
 
 def test_complete_run_caps_and_resets_dismissals():
     doc, node = _doc_with_review()
-    doc.store_code_review_diff(node.id, pr_url="u", **{k: v for k, v in _bundle().items()})
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
     doc.complete_code_review_run(
         node.id, title="T", overview="O", confidence="high",
         walkthrough=[{"group_title": f"g{i}", "paths": ["x"], "explanation": "e"} for i in range(20)],
@@ -147,7 +147,7 @@ def test_complete_run_caps_and_resets_dismissals():
 def test_fail_run_is_silent_for_missing_nodes_and_keeps_prior_review():
     doc, node = _doc_with_review()
     assert doc.fail_code_review_run("missing", "boom") is None
-    doc.store_code_review_diff(node.id, pr_url="u", **{k: v for k, v in _bundle().items()})
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
     doc.complete_code_review_run(
         node.id, title="T", overview="O", confidence="high", walkthrough=[],
         findings=[], errors=[], scores={}, quality_score=80,
@@ -161,7 +161,7 @@ def test_fail_run_is_silent_for_missing_nodes_and_keeps_prior_review():
 
 def test_dismiss_finding_is_idempotent_and_quiet_on_unknown_ids():
     doc, node = _doc_with_review()
-    doc.store_code_review_diff(node.id, pr_url="u", **{k: v for k, v in _bundle().items()})
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
     doc.complete_code_review_run(
         node.id, title="T", overview="O", confidence="high", walkthrough=[],
         findings=[{"id": "f1"}], errors=[{"id": "e1"}], scores={},
@@ -188,7 +188,7 @@ def test_append_qa_caps_at_twenty_entries():
 
 def test_wire_row_carries_review_fields_but_not_the_diff_text():
     doc, node = _doc_with_review()
-    doc.store_code_review_diff(node.id, pr_url="u", **{k: v for k, v in _bundle().items()})
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
     doc.complete_code_review_run(
         node.id, title="T", overview="O", confidence="high",
         walkthrough=[], findings=[], errors=[], scores={"correctness": 80},
@@ -208,8 +208,7 @@ def test_wire_row_carries_review_fields_but_not_the_diff_text():
 
 def test_save_load_round_trip_preserves_review_state():
     doc, node = _doc_with_review()
-    doc.store_code_review_diff(node.id, pr_url="https://github.com/o/r/pull/3",
-                               **{k: v for k, v in _bundle().items()})
+    doc.store_code_review_diff(node.id, pr_url="https://github.com/o/r/pull/3", bundle=_bundle())
     doc.complete_code_review_run(
         node.id, title="T", overview="O", confidence="high",
         walkthrough=[{"group_title": "G", "paths": ["x.py"], "explanation": "E"}],
@@ -328,7 +327,7 @@ def test_dispatch_ask_returns_answer_text(monkeypatch):
     )
     dispatcher = _dispatcher()
     doc, node = _doc_with_review()
-    doc.store_code_review_diff(node.id, pr_url="u", **{k: v for k, v in _bundle().items()})
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
 
     async def run():
         return await dispatcher.ask_code_review_question(
@@ -423,7 +422,7 @@ def test_intent_run_requires_a_fetched_diff():
 
 def test_intent_ask_appends_qa():
     doc, node = _doc_with_review()
-    doc.store_code_review_diff(node.id, pr_url="u", **{k: v for k, v in _bundle().items()})
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
     dispatcher = _StubDispatcher()
     bus, _notifications = _intent_bus(doc, dispatcher)
 
@@ -436,7 +435,7 @@ def test_intent_ask_appends_qa():
 
 def test_intent_dismiss_is_undoable():
     doc, node = _doc_with_review()
-    doc.store_code_review_diff(node.id, pr_url="u", **{k: v for k, v in _bundle().items()})
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
     doc.complete_code_review_run(
         node.id, title="T", overview="O", confidence="high", walkthrough=[],
         findings=[{"id": "f1"}], errors=[], scores={}, quality_score=80,
