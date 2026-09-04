@@ -13,6 +13,7 @@ from typing import Any
 
 from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import SceneError, SceneNode
+from backend.domain.node_access import optional_node, require_node
 from backend.domain.node_states import GitlinkState
 
 class GitlinkOps(SceneDocumentParts):
@@ -46,11 +47,7 @@ class GitlinkOps(SceneDocumentParts):
         action parameter instead): the user may type/paste a local checkout
         path BEFORE ever clicking Import/Build Context, with no other action
         call site to piggyback on."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
+        node = require_node(self.nodes, node_id, "gitlink", GitlinkState)
         node.state.gitlink_local_root = str(local_root)
         return node
 
@@ -58,11 +55,7 @@ class GitlinkOps(SceneDocumentParts):
         """Lands a successful loadGitlinkRepoTree result: repo, branch
         (resolved server-side, including any default-branch lookup), and the
         scanned text-file path list."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
+        node = require_node(self.nodes, node_id, "gitlink", GitlinkState)
         node.state.gitlink_repo = str(repo)
         node.state.gitlink_branch = str(branch)
         node.state.gitlink_repo_file_paths = list(file_paths)
@@ -73,11 +66,7 @@ class GitlinkOps(SceneDocumentParts):
         repo/branch/local_root AND gitlink_imported_root (so a later run
         knows this path came from an import, matching legacy repo_state's
         imported_root concept)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
+        node = require_node(self.nodes, node_id, "gitlink", GitlinkState)
         node.state.gitlink_repo = str(repo)
         node.state.gitlink_branch = str(branch)
         node.state.gitlink_local_root = str(local_root)
@@ -110,11 +99,7 @@ class GitlinkOps(SceneDocumentParts):
         produce an IDENTICAL summary string (see that field's own comment on
         SceneNode), which was tricking the frontend's lazy-fetch-once guard
         into skipping a real refetch and showing stale XML."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
+        node = require_node(self.nodes, node_id, "gitlink", GitlinkState)
         node.state.gitlink_scope_mode = str(scope_mode)
         node.state.gitlink_selected_paths = list(selected_paths)
         node.state.gitlink_context_xml = str(context_xml)
@@ -128,11 +113,7 @@ class GitlinkOps(SceneDocumentParts):
         from scene_payload() (see the field's own comment on SceneNode) - this
         is the only way the frontend ever gets the full text, via the
         read-only fetchGitlinkContext intent."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
+        node = require_node(self.nodes, node_id, "gitlink", GitlinkState)
         return node.state.gitlink_context_xml
 
     def start_gitlink_run(self, node_id: str, task_prompt: str) -> SceneNode:
@@ -143,11 +124,7 @@ class GitlinkOps(SceneDocumentParts):
         complete_gitlink_run lands a real result, same stale-while-revalidate
         posture web research's own start_web_research_run documents for
         research_result."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "gitlink":
-            raise SceneError(f"node is not a gitlink node: {node_id}")
+        node = require_node(self.nodes, node_id, "gitlink", GitlinkState)
         node.state.gitlink_task_prompt = str(task_prompt)
         node.state.gitlink_error = ""
         return node
@@ -179,9 +156,7 @@ class GitlinkOps(SceneDocumentParts):
         `local_root` is compared as raw trimmed text against
         start_gitlink_apply's own local_root_text - stored stripped here so
         that comparison lines up exactly."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
+        node = require_node(self.nodes, node_id, "gitlink", GitlinkState)
         node.state.gitlink_proposal_markdown = str(proposal_markdown)
         node.state.gitlink_pending_changes = list(pending_changes or [])
         node.state.gitlink_preview_text = str(preview_text)
@@ -204,7 +179,7 @@ class GitlinkOps(SceneDocumentParts):
         change_state - a failed re-run must never wipe out a previously
         staged, still-valid proposal; only the error banner reflects the
         new failure."""
-        node = self.nodes.get(node_id)
+        node = optional_node(self.nodes, node_id, "gitlink", GitlinkState)
         if node is None:
             return None
         node.state.gitlink_error = str(message)
@@ -225,9 +200,7 @@ class GitlinkOps(SceneDocumentParts):
         gitlink_proposal_markdown/gitlink_preview_text are DELIBERATELY left
         untouched - they remain visible as a historical record of what was
         applied."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
+        node = require_node(self.nodes, node_id, "gitlink", GitlinkState)
         node.state.gitlink_change_state = "applied"
         node.state.gitlink_error = ""
         node.state.gitlink_pending_changes = []
@@ -244,7 +217,7 @@ class GitlinkOps(SceneDocumentParts):
         fingerprint-mismatch refusal path, the local_root-mismatch refusal
         path, and the write-failure path identically - all three are "the
         apply did not happen, here is why"."""
-        node = self.nodes.get(node_id)
+        node = optional_node(self.nodes, node_id, "gitlink", GitlinkState)
         if node is None:
             return None
         node.state.gitlink_change_state = "previewed"

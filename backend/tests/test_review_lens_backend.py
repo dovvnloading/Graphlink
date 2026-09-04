@@ -475,3 +475,33 @@ def test_picker_creates_review_lens_node_and_undo_removes_it():
         assert node_id not in document.nodes
 
     asyncio.run(run())
+
+
+# -- wrong-kind guards, now uniform ------------------------------------------
+# require_node/optional_node (backend/domain/node_access.py) gave three gitlink
+# methods and two fail_*_run methods a kind check they did not have. Before,
+# passing a wrong-kind node id reached `node.state.<kind>_<field>` on a state
+# class without that field and raised AttributeError - which the WS layer does
+# not translate, unlike SceneError. These pin the new, uniform behaviour.
+
+
+def test_a_wrong_kind_node_raises_scene_error_not_attribute_error():
+    doc, _ = _doc_with_review()
+    chat = doc.add_chat_node(0, 0, "c", is_user=True)
+    for call in (
+        lambda: doc.store_code_review_diff(chat.id, pr_url="u", bundle=_bundle()),
+        lambda: doc.fetch_code_review_diff_text(chat.id),
+        lambda: doc.append_code_review_qa(chat.id, "q", "a"),
+    ):
+        with pytest.raises(SceneError):
+            call()
+
+
+def test_fail_run_is_a_quiet_no_op_for_a_wrong_kind_node():
+    """fail_*_run is documented as silent when its node has gone. A node that
+    is present but of another kind is the same situation from the run's point
+    of view, and used to raise AttributeError instead."""
+    doc, _ = _doc_with_review()
+    chat = doc.add_chat_node(0, 0, "c", is_user=True)
+    assert doc.fail_code_review_run(chat.id, "boom") is None
+    assert doc.fail_code_review_run("missing", "boom") is None

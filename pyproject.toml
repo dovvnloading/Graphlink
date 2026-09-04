@@ -356,6 +356,20 @@ files = [
     "backend/events.py",
     "backend/token_counter.py",
     "graphlink_process_env.py",
+    # 2026-09-04, second widening: the first three backend/domain/ entries.
+    #
+    # The blocker was never annotation effort - it was that SceneNode.state is
+    # typed `NodeState | None` against a field-less marker, so every per-kind
+    # field access was unverifiable. backend/domain/node_access.py's
+    # require_node narrows the NODE, which
+    # tests/test_node_state_migration.py permits (it constrains the ACCESS
+    # SHAPE, `<anything>.state.<field>`, not how the node was obtained) where
+    # aliasing the state does not. These three modules check clean because of
+    # it; the rest of backend/domain/ follows as its per-kind groups are
+    # extracted the same way.
+    "backend/domain/node_access.py",
+    "backend/domain/nodes_code_review.py",
+    "backend/domain/nodes_gitlink.py",
     # 2026-09-04: the first widening since this list was written, and the
     # ratchet moving the direction its own comment asks for.
     #
