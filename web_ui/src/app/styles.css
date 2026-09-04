@@ -8512,6 +8512,26 @@ mark.document-view-search-match-current {
   border-radius: 8px;
 }
 
+/* ADR-019 node-view code split: the shell shown while a node kind's chunk
+   loads (lazyNodeViews.tsx). It shipped with NO styling at all, so the
+   fallback collapsed to whatever .scene-node alone gives - React Flow has
+   already positioned and sized the node by then, and an unsized card lets
+   edges snap to a near-zero box for a frame or two. Mirrors
+   .chart-node-placeholder below, which is the same idea for chart chunks. */
+.scene-node-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 260px;
+  min-height: 120px;
+  padding: 16px;
+  color: var(--gl-surface-text-muted);
+  font-size: 11px;
+  text-align: center;
+  border: 1px dashed var(--gl-surface-border);
+  border-radius: 8px;
+}
+
 .chart-node-placeholder {
   display: flex;
   align-items: center;
