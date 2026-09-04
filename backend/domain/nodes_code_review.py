@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import SceneError, SceneNode
+from backend.domain.node_access import optional_node, require_node
 from backend.domain.node_states import CodeReviewState
 
 def _bundle_int(value: object) -> int:
@@ -33,7 +34,7 @@ def _bundle_int(value: object) -> int:
     defence, for a bundle that reached here by any other route (a test, a
     future caller, a hand-built payload)."""
     try:
-        return max(0, int(value))  # type: ignore[arg-type]
+        return max(0, int(value))  # type: ignore[call-overload]
     except (TypeError, ValueError):
         return 0
 
@@ -66,11 +67,7 @@ class CodeReviewOps(SceneDocumentParts):
         or pastes the PR link BEFORE ever clicking Fetch, with no other
         action call site to piggyback on (the setGitlinkLocalRoot
         precedent exactly)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
+        node = require_node(self.nodes, node_id, "code_review", CodeReviewState)
         node.state.code_review_pr_url = str(pr_url)
         return node
 
@@ -97,11 +94,7 @@ class CodeReviewOps(SceneDocumentParts):
         UNCONDITIONALLY (the R5.3 post-review FIX 6 precedent) so the
         frontend's lazy-diff guard can never serve a previous fetch's
         text for this one."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
+        node = require_node(self.nodes, node_id, "code_review", CodeReviewState)
         pr_number_value = _bundle_int(bundle.get("pr_number"))
         node.state.code_review_pr_url = str(pr_url)
         node.state.code_review_repo = str(bundle.get("repo", ""))
@@ -144,11 +137,7 @@ class CodeReviewOps(SceneDocumentParts):
         EXCLUDED from scene_payload() (see CodeReviewState's own comment) -
         this is the only way the frontend ever gets the full text, via the
         read-only fetchCodeReviewDiffText intent."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
+        node = require_node(self.nodes, node_id, "code_review", CodeReviewState)
         return node.state.code_review_diff_text
 
     def start_code_review_run(self, node_id: str) -> SceneNode:
@@ -156,11 +145,7 @@ class CodeReviewOps(SceneDocumentParts):
         prior review visible until the new one lands (stale-while-
         revalidate, the start_gitlink_run precedent - a failed re-run must
         never blank a previously good review)."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
+        node = require_node(self.nodes, node_id, "code_review", CodeReviewState)
         node.state.code_review_error = ""
         return node
 
@@ -187,11 +172,7 @@ class CodeReviewOps(SceneDocumentParts):
         review resets dismissals: finding ids are re-minted per review,
         so a dismissal of the old review's f3 must never hide the new
         review's f3."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
+        node = require_node(self.nodes, node_id, "code_review", CodeReviewState)
         node.state.code_review_title = str(title)
         node.state.code_review_overview = str(overview)
         node.state.code_review_confidence = str(confidence)
@@ -222,7 +203,7 @@ class CodeReviewOps(SceneDocumentParts):
         (the fail_gitlink_run precedent). Deliberately does NOT clear any
         prior review - a failed re-run must never wipe out a previously
         good one; only the error banner reflects the new failure."""
-        node = self.nodes.get(node_id)
+        node = optional_node(self.nodes, node_id, "code_review", CodeReviewState)
         if node is None:
             return None
         node.state.code_review_error = str(message)
@@ -233,11 +214,7 @@ class CodeReviewOps(SceneDocumentParts):
         affordance). Idempotent: unknown ids and repeats are quiet no-ops,
         never errors - dismissal is UI state, and a double-click must not
         be able to fail a run."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
+        node = require_node(self.nodes, node_id, "code_review", CodeReviewState)
         dismissed = str(finding_id)
         known_ids = {
             str(item.get("id")) for item in (
@@ -252,11 +229,7 @@ class CodeReviewOps(SceneDocumentParts):
         """Land one answered follow-up. Capped at the 20 most recent
         entries - the Q&A list is on the wire (unlike the diff text), so
         unbounded growth here would be unbounded wire growth."""
-        node = self.nodes.get(node_id)
-        if node is None:
-            raise SceneError(f"unknown node: {node_id}")
-        if node.kind != "code_review":
-            raise SceneError(f"node is not a code_review node: {node_id}")
+        node = require_node(self.nodes, node_id, "code_review", CodeReviewState)
         node.state.code_review_qa.append({
             "question": str(question),
             "answer": str(answer),
