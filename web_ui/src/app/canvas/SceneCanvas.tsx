@@ -18,24 +18,34 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import type { SceneEdgeRow, SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
 import type { StreamListener } from "../../lib/ws/transport";
 import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
-import { ArtifactNodeView, type ArtifactFlowNode } from "./ArtifactNodeView";
-import { ChartNodeView, type ChartFlowNode } from "./ChartNodeView";
-import { ChatNodeView, type ChatFlowNode } from "./ChatNodeView";
-import { CodeNodeView, type CodeFlowNode } from "./CodeNodeView";
-import { CodeReviewNodeView, type CodeReviewFlowNode } from "./CodeReviewNodeView";
-import { CodeSandboxNodeView, type CodeSandboxFlowNode } from "./CodeSandboxNodeView";
-import { ConversationNodeView, type ConversationFlowNode, type ConversationMessage } from "./ConversationNodeView";
-import { DocumentNodeView, type DocumentFlowNode } from "./DocumentNodeView";
-import { GitlinkNodeView, type GitlinkFlowNode } from "./GitlinkNodeView";
-import { GroupNodeView, type GroupFlowNode } from "./GroupNodeView";
-import { HtmlNodeView, type HtmlFlowNode } from "./HtmlNodeView";
-import { ImageNodeView, type ImageFlowNode } from "./ImageNodeView";
-import { NoteNodeView, type NoteFlowNode } from "./NoteNodeView";
+// ADR-019: the node views are lazily imported, one chunk per kind - see
+// lazyNodeViews.tsx for why the Suspense boundary is per node rather than
+// one around the whole canvas. Their TYPES stay statically imported below:
+// `import type` is erased at build time and pulls nothing into the bundle.
+import {
+  ArtifactNodeView, ChartNodeView, ChatNodeView, CodeNodeView, CodeReviewNodeView,
+  CodeSandboxNodeView, ConversationNodeView, DocumentNodeView, GitlinkNodeView,
+  GroupNodeView, HarnessNodeView, HtmlNodeView, ImageNodeView, NoteNodeView,
+  PlanNodeView, ThinkingNodeView, WebResearchNodeView,
+} from "./lazyNodeViews";
+import type { ArtifactFlowNode } from "./ArtifactNodeView";
+import type { ChartFlowNode } from "./ChartNodeView";
+import type { ChatFlowNode } from "./ChatNodeView";
+import type { CodeFlowNode } from "./CodeNodeView";
+import type { CodeReviewFlowNode } from "./CodeReviewNodeView";
+import type { CodeSandboxFlowNode } from "./CodeSandboxNodeView";
+import type { ConversationFlowNode, ConversationMessage } from "./ConversationNodeView";
+import type { DocumentFlowNode } from "./DocumentNodeView";
+import type { GitlinkFlowNode } from "./GitlinkNodeView";
+import type { GroupFlowNode } from "./GroupNodeView";
+import type { HtmlFlowNode } from "./HtmlNodeView";
+import type { ImageFlowNode } from "./ImageNodeView";
+import type { NoteFlowNode } from "./NoteNodeView";
 import { OrthogonalEdge } from "./OrthogonalEdge";
-import { ThinkingNodeView, type ThinkingFlowNode } from "./ThinkingNodeView";
-import { WebResearchNodeView, type WebResearchFlowNode } from "./WebResearchNodeView";
-import { PlanNodeView, type PlanFlowNode, type PlanStepData } from "./PlanNodeView";
-import { HarnessNodeView, type HarnessFlowNode } from "./HarnessNodeView";
+import type { ThinkingFlowNode } from "./ThinkingNodeView";
+import type { WebResearchFlowNode } from "./WebResearchNodeView";
+import type { PlanFlowNode, PlanStepData } from "./PlanNodeView";
+import type { HarnessFlowNode } from "./HarnessNodeView";
 import {
   FIT_VIEW_MAX_ZOOM,
   GROUP_FALLBACK_HEIGHT,

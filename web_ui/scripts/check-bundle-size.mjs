@@ -126,7 +126,32 @@ const ASSETS_DIR = join(HERE, "..", "dist", "app", "assets");
 // regression ratchet, not the budget. Closing the real gap still needs the
 // 17 eagerly-rendered node views in SceneCanvas.tsx code-split - work no
 // stage owns.
-const LARGEST_CHUNK_CEILING_BYTES = 917_000;
+// Deliberate, commented amendment - 2026-09-04 (ADR-019 section 4).
+//
+// The first time either number in this file has moved DOWN, and the reason
+// every prior amendment gave for not moving it: the eagerly-rendered node
+// views are now code-split. SceneCanvas.tsx registered all 17 *NodeView
+// components through static imports, so every one landed in the initial
+// chunk whether or not the open canvas held a single node of that kind.
+// They now load one chunk per kind, on first render of that kind - see
+// web_ui/src/app/canvas/lazyNodeViews.tsx.
+//
+// Measured: largest chunk 890,541 -> 780,470 bytes (-110,071, -12.4%).
+//
+// Total JS went the other way, 1,445,539 -> 1,456,011 (+10,472, +0.7%),
+// which is expected and is not a regression: splitting redistributes code
+// and adds a small per-chunk overhead. The budget ADR-019 actually sets is
+// on the INITIAL chunk - what the app must parse before it can paint - and
+// that is the number that fell.
+//
+// Both ceilings are re-anchored to ~3% over measured reality, the posture
+// every amendment here has used. Stated plainly, as the raises were: the
+// ADR-019 budget for the initial chunk is 500 KiB (512,000 bytes), and at
+// 780,470 the initial chunk is still ~52% over it - down from ~74%. React
+// and React Flow are the bulk of what remains, and no further split is
+// planned; this closes the gap that was attributed to the node views, not
+// the whole gap.
+const LARGEST_CHUNK_CEILING_BYTES = 804_000;
 // Post-11.6 reality: six chunks (main + katex + highlight.js + the three
 // lazy dialogs) total 1,288,075 bytes - essentially unchanged from the
 // pre-split single-chunk total, as expected: splitting redistributes code
@@ -144,7 +169,10 @@ const LARGEST_CHUNK_CEILING_BYTES = 917_000;
 // 1,423,872, rounded down to a clean number) - this only ever moves the
 // ceiling down again in a later stage that shrinks the total, per this
 // file's own ratchet discipline above.
-const TOTAL_JS_CEILING_BYTES = 1_489_000;
+// 2026-09-04: re-anchored to 1,456,011 with the same ~3% headroom, for the
+// per-chunk overhead the node-view split added. Recorded as a raise, small
+// as it is - the amendment above is what pays for it.
+const TOTAL_JS_CEILING_BYTES = 1_500_000;
 
 // Below this much headroom, say so. Both prior amendments record the same
 // story: the ceiling was set with ~3-5% room, ordinary week-to-week growth
