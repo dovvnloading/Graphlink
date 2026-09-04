@@ -61,10 +61,19 @@ class SceneDocumentParts:
 
         def remove_nodes(self, node_ids: list[str]) -> None: ...
 
+        # ConversationalOps' own, consumed by VisualOps' generated-image
+        # reply. Declared with the real signature, not a *args hedge: the
+        # implementation is now a sibling mixin the checker can read, so an
+        # inexact declaration here would be an incompatible-override error
+        # rather than the useful fiction it was while the body lived in
+        # SceneDocument itself.
         def add_chat_node(
             self, x: float, y: float, content: str, is_user: bool,
-            parent_id: str | None = None, *args: Any, **kwargs: Any,
+            parent_id: str | None = None,
+            content_parts: list[dict[str, Any]] | None = None,
         ) -> SceneNode: ...
+
+        def adopt_pending_system_prompt(self, root_id: str) -> SceneEdge | None: ...
 
         def place_root(self, kind: str) -> tuple[float, float]: ...
 

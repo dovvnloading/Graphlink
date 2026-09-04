@@ -5,6 +5,13 @@ A MIXIN, composed exactly once, by backend/domain/graph.py's SceneDocument.
 Method bodies are relocated VERBATIM from graph.py; only the class wrapper
 and the imports are new. See backend/domain/nodes_code_review.py's own
 docstring for why these per-kind groups are being lifted out.
+
+Import posture, carried over with the code: nothing here imports from
+graphlink_plugins.gitlink - every method below is pure state mutation on
+plain fields. The fingerprint mechanism itself (_fingerprint_changes)
+lives in backend/agents.py, which DOES import from
+graphlink_plugins.gitlink; same precedent as ArtifactAgent and
+web_research.domain already being imported there, not here.
 """
 
 from __future__ import annotations
@@ -15,6 +22,7 @@ from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_access import optional_node, require_node
 from backend.domain.node_states import GitlinkState
+
 
 class GitlinkOps(SceneDocumentParts):
     def add_gitlink_node(self, x: float, y: float, parent_id: str | None) -> SceneNode:
