@@ -34,6 +34,8 @@ from backend.domain.model import (
     SceneNode,
 )
 
+from backend.domain._composed import SceneDocumentParts
+
 # Clearance between neighbouring nodes. Horizontal is a little wider than
 # vertical so sibling fans read as distinct columns; both are large enough
 # that edge routing has room to breathe between cards.
@@ -91,7 +93,7 @@ def _rects_clear(
     )
 
 
-class LayoutOps:
+class LayoutOps(SceneDocumentParts):
     """Placement/layout mixin for SceneDocument (same pattern as GroupOps).
     Reads self.nodes / self.edges / self.measured_sizes."""
 

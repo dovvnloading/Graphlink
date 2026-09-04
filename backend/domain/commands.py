@@ -85,6 +85,8 @@ if TYPE_CHECKING:
     from backend.domain.model import SceneEdge, SceneNode
     from graphlink_navigation_pins import NavigationPinRecord
 
+from backend.domain._composed import SceneDocumentParts
+
 T = TypeVar("T")
 
 # Asset bytes (image/chart PNGs) are the one thing in this module that IS
@@ -444,7 +446,7 @@ def _merge_commands(command_type, provenance, commands, run_id=None):
     return merged
 
 
-class CommandOps:
+class CommandOps(SceneDocumentParts):
     def record_command(
         self,
         command_type: str,

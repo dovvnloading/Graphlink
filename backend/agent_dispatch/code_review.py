@@ -34,8 +34,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from backend.events import SessionBus
 
+from backend.agent_dispatch._composed import DispatcherParts
 
-class CodeReviewDispatchOps:
+
+class CodeReviewDispatchOps(DispatcherParts):
     """Review Lens dispatch: PR-diff fetch plus the Review and Ask surfaces (mixin - see module docstring)."""
 
     async def fetch_code_review_diff(self, *, bus: SessionBus, notifications_state, node, pr_url: str):

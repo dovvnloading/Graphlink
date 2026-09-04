@@ -30,8 +30,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from backend.events import SessionBus
 
+from backend.agent_dispatch._composed import DispatcherParts
 
-class ChatDispatchOps:
+
+class ChatDispatchOps(DispatcherParts):
     """Chat, conversation, and image reply surfaces (mixin - see module docstring)."""
 
     async def start_chat_reply(

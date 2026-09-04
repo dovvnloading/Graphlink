@@ -34,8 +34,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from backend.events import SessionBus
 
+from backend.agent_dispatch._composed import DispatcherParts
 
-class GitlinkDispatchOps:
+
+class GitlinkDispatchOps(DispatcherParts):
     """Gitlink dispatch: repo plumbing plus the Run and Apply surfaces (mixin - see module docstring)."""
 
     async def fetch_gitlink_repositories(self, *, bus: SessionBus, notifications_state, node) -> list[str]:

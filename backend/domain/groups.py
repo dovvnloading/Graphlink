@@ -31,8 +31,10 @@ from backend.domain.model import (
 )
 from backend.domain.node_states import ContainerState, FrameState
 
+from backend.domain._composed import SceneDocumentParts
 
-class GroupOps:
+
+class GroupOps(SceneDocumentParts):
 
     def _member_footprint(self, member: SceneNode) -> tuple[float, float]:
         """One member's (width, height) for bbox purposes, best source first:

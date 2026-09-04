@@ -31,8 +31,10 @@ from backend.domain.model import (
 if TYPE_CHECKING:
     from graphlink_model_catalog import ModelRef
 
+from backend.domain._composed import SceneDocumentParts
 
-class BranchOps:
+
+class BranchOps(SceneDocumentParts):
 
     def mark_branch_comparison_note(self, node_id: str, source_node_ids: list[str]) -> None:
         """ADR-002 Workstream 1 ("Compare Branches"): stamps an already-created
