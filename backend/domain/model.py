@@ -163,15 +163,17 @@ class SceneNode:
     # It is NOT chat-only and has not been for a long time. This comment used
     # to end "Unused (default) for every other kind" while a later line in the
     # same block already contradicted it, and the list has kept growing since.
-    # Verified 2026-09-04 against the SceneNode(...) constructions in
-    # backend/domain/graph.py and backend/session_load.py, TEN kinds populate
-    # it: artifact, chat, document, harness, html, image, note, plan,
-    # thinking, web_research. Pinned by tests/test_shared_node_field_docs.py,
-    # so this list fails the build rather than rotting again.
+    # TWELVE kinds populate it: artifact, chat, container, document, frame,
+    # harness, html, image, note, plan, thinking, web_research. Pinned by
+    # tests/test_shared_node_field_docs.py, which DISCOVERS the modules that
+    # construct a SceneNode rather than naming them - an earlier revision of
+    # this comment said TEN because the gate hard-coded graph.py and
+    # session_load.py and never looked at groups.py, where the frame and
+    # container nodes are built.
     #
     # That shared use is deliberate, and it is why `content` did not move to a
-    # per-kind class in the ADR-002 stage 2.5 migration: a field ten kinds
-    # write would have to be duplicated across ten state classes to live
+    # per-kind class in the ADR-002 stage 2.5 migration: a field twelve kinds
+    # write would have to be duplicated across twelve state classes to live
     # there, which is worse than one core field. Treat it as core, like
     # title - not as a kind-specific leftover.
     content: str = ""
@@ -190,7 +192,7 @@ class SceneNode:
     # It is NOT conversation-only and has not been since the plugin kinds
     # landed. This comment used to say "Unused (default empty list) for every
     # other kind"; verified 2026-09-04 against the restorers in
-    # backend/domain/graph.py and backend/session_load.py, SEVEN kinds
+    # every module under backend/ that builds a SceneNode, SEVEN kinds
     # populate it: artifact, chat, code_sandbox, conversation, gitlink, html,
     # web_research. Any kind that holds a back-and-forth with a model keeps it
     # here. Pinned by tests/test_shared_node_field_docs.py.
