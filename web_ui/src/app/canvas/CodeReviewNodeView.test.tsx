@@ -162,14 +162,33 @@ describe("Walkthrough tab", () => {
     expect(data.onFetchDiffText).toHaveBeenCalledTimes(2);
   });
 
-  it("asking a question fires onAsk and clears the input", () => {
-    const { data } = renderReviewNode({ codeReviewState: "fetched" });
+  it("asking a question fires onAsk but KEEPS the draft until an answer lands", () => {
+    // onAsk is fire-and-forget over the websocket and the intent drops the
+    // request on four paths (node gone, node busy, no diff fetched, model
+    // call failed). Clearing at click time destroyed the typed question on
+    // every one of them, unrecoverably. The draft now survives the click.
+    const { data, rerender } = renderReviewNode({ codeReviewState: "fetched" });
     switchTab("Walkthrough");
     const input = screen.getByLabelText("Ask about this diff") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "Where is auth checked?" } });
     fireEvent.click(screen.getByRole("button", { name: "Ask" }));
     expect(data.onAsk).toHaveBeenCalledWith("Where is auth checked?");
-    expect(input.value).toBe("");
+    expect(input.value).toBe("Where is auth checked?");
+
+    // ...and is cleared by the answer arriving, which is the only
+    // acknowledgement the wire actually carries.
+    const answered = {
+      ...data,
+      codeReviewQa: [{ question: "Where is auth checked?", answer: "In auth.py." }],
+    };
+    rerender(
+      <ReactFlowProvider>
+        <CodeReviewNodeView
+          {...({ id: "cr-1", selected: false, data: answered } as unknown as NodeProps<CodeReviewFlowNode>)}
+        />
+      </ReactFlowProvider>,
+    );
+    expect((screen.getByLabelText("Ask about this diff") as HTMLInputElement).value).toBe("");
   });
 
   it("renders answered Q&A entries", () => {
@@ -236,11 +255,19 @@ describe("Findings tab", () => {
     expect(screen.getByRole("tab", { name: /Findings/ }).textContent).toContain("2");
   });
 
-  it("dismissing a finding fires onDismissFinding and hides it once dismissed", () => {
+  it("dismissing a finding fires onDismissFinding with THAT finding's id", () => {
+    // This test used to click getAllByRole("Dismiss")[0] - which is the
+    // ERROR card, since errors render above findings - and then assert only
+    // that the callback fired at all, so it could not have caught the
+    // callback being wired to the wrong id. Every Dismiss button now carries
+    // an accessible name naming its own finding, which is what makes an
+    // exact query possible here at all.
     const { data } = renderReviewNode({ ...reviewed });
     switchTab("Findings");
-    fireEvent.click(screen.getAllByRole("button", { name: "Dismiss" })[0]);
-    expect(data.onDismissFinding).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss finding: Missing test" }));
+    expect(data.onDismissFinding).toHaveBeenCalledWith("f1");
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error: Hard-coded secret" }));
+    expect(data.onDismissFinding).toHaveBeenCalledWith("e1");
   });
 
   it("a dismissed finding stays hidden with a count line", () => {
@@ -256,8 +283,138 @@ describe("Findings tab", () => {
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
     renderReviewNode({ ...reviewed });
     switchTab("Findings");
-    fireEvent.click(screen.getAllByRole("button", { name: "Copy" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Copy error: Hard-coded secret" }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
     expect(writeText.mock.calls[0][0]).toContain("Hard-coded secret");
+  });
+});
+
+
+// -- audit regression pins ---------------------------------------------------
+
+describe("fallback (pre-screen) review state", () => {
+  const preScreened = {
+    codeReviewState: "reviewed",
+    // The engine deliberately reports no verdict and no score for a review
+    // the model never produced - see _normalize_response's fallback branch.
+    codeReviewVerdict: "none",
+    codeReviewQualityScore: 0,
+    codeReviewRisk: "",
+    codeReviewOverview: "The model review was unavailable, so this is a deterministic pre-screen.",
+    codeReviewScores: { security: "35" },
+    codeReviewErrors: [
+      {
+        id: "e1",
+        severity: "high",
+        tier: "red",
+        kind: "Security",
+        path: "y.py",
+        line: 0,
+        title: "Hard-coded secret-like value added",
+        evidence: "An added line assigns a literal value to a secret-like name.",
+        fix: "Move it to secure configuration.",
+      },
+    ],
+  };
+
+  it("does not claim 'No review yet' while listing its own findings", () => {
+    // The whole empty state used to hang off `verdict === "none"`, which the
+    // fallback also sets - so a pre-screen that HAD found a hard-coded secret
+    // rendered "No review yet - run a review first." directly above it.
+    renderReviewNode({ ...preScreened });
+    switchTab("Findings");
+    expect(screen.queryByText(/No review yet/)).toBeNull();
+    expect(screen.getByText("Not assessed")).toBeTruthy();
+    expect(screen.getByText("Hard-coded secret-like value added")).toBeTruthy();
+  });
+
+  it("still shows the empty state for a node that was never reviewed", () => {
+    renderReviewNode({ codeReviewState: "fetched", codeReviewVerdict: "none" });
+    switchTab("Findings");
+    expect(screen.getByText(/No review yet/)).toBeTruthy();
+    expect(screen.queryByText("Not assessed")).toBeNull();
+  });
+});
+
+describe("scorecard labels", () => {
+  it("renders the engine's own category labels, not the raw wire keys", () => {
+    renderReviewNode({
+      codeReviewState: "reviewed",
+      codeReviewVerdict: "strong",
+      codeReviewScores: { correctness: "80", maintainability: "74" },
+    });
+    switchTab("Findings");
+    expect(screen.getByText("Correctness")).toBeTruthy();
+    expect(screen.getByText("Maintainability")).toBeTruthy();
+    expect(screen.queryByText("correctness")).toBeNull();
+  });
+
+  it("falls back to the raw key for a category it does not know", () => {
+    renderReviewNode({
+      codeReviewState: "reviewed",
+      codeReviewVerdict: "strong",
+      codeReviewScores: { future_category: "50" },
+    });
+    switchTab("Findings");
+    expect(screen.getByText("future_category")).toBeTruthy();
+  });
+});
+
+describe("diff rendering", () => {
+  it("fences a diff containing a triple backtick so it cannot escape the code block", async () => {
+    // A fixed ``` fence is closed by the first ``` line inside it, and
+    // everything after renders as live markdown - reachable from any PR that
+    // touches a README or any file holding a code sample.
+    const hostile = "+```\n+# Not a heading, part of the diff\n+[link](https://example.test)\n";
+    renderReviewNode({
+      codeReviewState: "fetched",
+      codeReviewDiffVersion: 1,
+      onFetchDiffText: vi.fn().mockResolvedValue(hostile),
+    });
+    switchTab("Walkthrough");
+    await waitFor(() => expect(screen.queryByText(/Loading diff/)).toBeNull());
+    // Escaped content would have produced a real <a>; inert content does not.
+    expect(document.querySelector(".code-review-node-diff-markdown a")).toBeNull();
+    expect(document.querySelector(".code-review-node-diff-markdown h1")).toBeNull();
+  });
+});
+
+describe("tab accessibility", () => {
+  it("associates each tab with its panel and moves selection with arrow keys", () => {
+    renderReviewNode({ codeReviewState: "reviewed" });
+    const setup = screen.getByRole("tab", { name: /Setup/ });
+    expect(setup.getAttribute("aria-controls")).toBe("code-review-panel-setup");
+    expect(screen.getByRole("tabpanel").getAttribute("aria-labelledby")).toBe("code-review-tab-setup");
+
+    fireEvent.keyDown(setup, { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: /Walkthrough/ }).getAttribute("aria-selected")).toBe("true");
+    expect(setup.getAttribute("tabindex")).toBe("-1");
+  });
+});
+
+describe("dismissed count line", () => {
+  it("keeps the noun in the singular case", () => {
+    renderReviewNode({
+      codeReviewState: "reviewed",
+      codeReviewVerdict: "strong",
+      codeReviewFindings: [
+        {
+          id: "f1",
+          severity: "low",
+          tier: "gray",
+          category: "Testing",
+          path: "x.py",
+          line: 1,
+          title: "T",
+          evidence: "E",
+          impact: "I",
+          recommendation: "R",
+        },
+      ],
+      codeReviewDismissedIds: ["f1"],
+    });
+    switchTab("Findings");
+    // Used to render "1 dismissed - undo restores it." with the noun gone.
+    expect(screen.getByText(/1 dismissed finding/)).toBeTruthy();
   });
 });

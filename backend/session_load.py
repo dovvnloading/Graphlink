@@ -733,6 +733,17 @@ def _restore_gitlink_payload(payload: dict[str, Any]) -> SceneNode:
     )
 
 
+# The caps CodeReviewOps enforces on every write it owns
+# (backend/domain/nodes_code_review.py). Restated here rather than imported
+# because that module states them as literals too - the pair is pinned by
+# test_review_lens_backend.py so they cannot drift apart silently.
+_CODE_REVIEW_MAX_FILES = 100
+_CODE_REVIEW_MAX_WALKTHROUGH = 8
+_CODE_REVIEW_MAX_FINDINGS = 12
+_CODE_REVIEW_MAX_ERRORS = 10
+_CODE_REVIEW_MAX_QA = 20
+
+
 def _restore_code_review_payload(payload: dict[str, Any]) -> SceneNode:
     x, y = _position(payload)
     pr_state = payload.get("pr_state")
@@ -740,8 +751,20 @@ def _restore_code_review_payload(payload: dict[str, Any]) -> SceneNode:
     review = payload.get("review")
     review = review if isinstance(review, dict) else {}
 
-    def _dict_list(value):
-        return [dict(item) for item in value] if isinstance(value, list) else []
+    def _dict_list(value, limit=None):
+        # `limit` mirrors the caps complete_code_review_run/
+        # append_code_review_qa enforce on every OTHER write to these
+        # fields. Restore had none, so a save file (hand-edited, or written
+        # by a future build with different caps) could put an unbounded
+        # walkthrough/findings/errors/qa list straight into node state and
+        # from there onto every scene republish - the one entry point that
+        # bypassed the bound the domain layer claims to guarantee.
+        # Non-dict entries are dropped for the same reason the domain drops
+        # them.
+        if not isinstance(value, list):
+            return []
+        rows = [dict(item) for item in value if isinstance(item, dict)]
+        return rows[:limit] if limit is not None else rows
 
     scores = review.get("scores")
     scores = {str(k): _non_negative_int(v) for k, v in scores.items()} if isinstance(scores, dict) else {}
@@ -765,15 +788,15 @@ def _restore_code_review_payload(payload: dict[str, Any]) -> SceneNode:
             code_review_additions=_non_negative_int(payload.get("additions")),
             code_review_deletions=_non_negative_int(payload.get("deletions")),
             code_review_changed_files=_non_negative_int(payload.get("changed_files")),
-            code_review_files=_dict_list(payload.get("files")),
+            code_review_files=_dict_list(payload.get("files"), _CODE_REVIEW_MAX_FILES),
             code_review_files_truncated=bool(payload.get("files_truncated", False)),
             code_review_diff_text=str(payload.get("diff_text", "")),
             code_review_diff_truncated=bool(payload.get("diff_truncated", False)),
             code_review_diff_chars=_non_negative_int(payload.get("diff_chars")),
             code_review_diff_version=_non_negative_int(payload.get("diff_version")),
-            code_review_walkthrough=_dict_list(review.get("walkthrough")),
-            code_review_findings=_dict_list(review.get("findings")),
-            code_review_errors=_dict_list(review.get("errors")),
+            code_review_walkthrough=_dict_list(review.get("walkthrough"), _CODE_REVIEW_MAX_WALKTHROUGH),
+            code_review_findings=_dict_list(review.get("findings"), _CODE_REVIEW_MAX_FINDINGS),
+            code_review_errors=_dict_list(review.get("errors"), _CODE_REVIEW_MAX_ERRORS),
             code_review_dismissed_ids=dismissed_ids,
             code_review_title=str(review.get("title", "")),
             code_review_overview=str(review.get("overview", "")),
@@ -783,7 +806,10 @@ def _restore_code_review_payload(payload: dict[str, Any]) -> SceneNode:
             code_review_verdict=str(review.get("verdict", "none") or "none"),
             code_review_risk=str(review.get("risk", "")),
             code_review_quality_summary=str(review.get("quality_summary", "")),
-            code_review_qa=_dict_list(payload.get("qa")),
+            # Tail, not head: append_code_review_qa keeps the MOST RECENT
+            # entries, so restoring the first 20 of a longer list would
+            # silently reverse which turns survive a reload.
+            code_review_qa=_dict_list(payload.get("qa"))[-_CODE_REVIEW_MAX_QA:],
             # A persisted review is static data (findings/scorecard), never
             # a live run handle - restoring the recorded state verbatim is
             # safe, unlike run-handle-bearing kinds that must normalize to

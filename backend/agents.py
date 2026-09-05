@@ -177,11 +177,19 @@ GITLINK_IMPORT_TIMEOUT_SECONDS = 90
 # finish well under this.
 GITLINK_CONTEXT_TIMEOUT_SECONDS = 300
 # Review Lens: one PR-metadata GET + up to two pages of file-listing GETs +
-# one diff download (network-timeout-capped at 60s by diff_fetch itself).
-CODE_REVIEW_DIFF_TIMEOUT_SECONDS = 120
-# Review Lens: one LLM completion over up to 45,000 chars of diff
-# (review_engine's MAX_DIFF_MODEL_CHARS) - same call-count shape as a
-# Gitlink run, with a comparable input size, hence the same watchdog.
+# one diff download. Those are 25s, 25s, 25s and 60s of per-request network
+# timeout respectively (GitHubRestClient.request's default, and diff_fetch's
+# own _DIFF_TIMEOUT_SECONDS), so the work this watchdog bounds can legally
+# take 135 seconds - and the watchdog was 120. A fetch that was merely slow,
+# not stuck, was reported to the user as "stopped responding" while the
+# request it had given up on was still running and about to succeed. The
+# outer bound has to be larger than the sum of the inner ones, with headroom
+# for the JSON parsing and normalization between them.
+CODE_REVIEW_DIFF_TIMEOUT_SECONDS = 180
+# Review Lens: one LLM completion over up to MAX_DIFF_CHARS of diff
+# (review_engine's MAX_DIFF_MODEL_CHARS, which is that same constant) - same
+# call-count shape as a Gitlink run, with a comparable input size, hence the
+# same watchdog.
 CODE_REVIEW_RUN_TIMEOUT_SECONDS = 600
 # Review Lens: one follow-up Q&A completion over the same capped diff.
 CODE_REVIEW_ASK_TIMEOUT_SECONDS = 300

@@ -58,11 +58,22 @@ class GitHubRestClient:
     def request(self, url, params=None, *, expect_json=True, timeout=25):
         response = requests.get(url, headers=self.build_headers(url), params=params or {}, timeout=timeout)
         if response.status_code >= 400:
+            # The error body is only usable if it is a JSON OBJECT. A valid
+            # JSON list or bare string (a proxy or error page can return
+            # either) made `payload.get` raise AttributeError - an uncaught
+            # non-RuntimeError escaping a method every caller wraps expecting
+            # a display-safe RuntimeError. The `response.text` fallback is
+            # also length-bounded now: it is upstream-controlled and went
+            # verbatim into a node's error banner.
             try:
                 payload = response.json()
-                message = payload.get("message") or response.reason
             except ValueError:
-                message = response.text or response.reason
+                payload = None
+            if isinstance(payload, dict):
+                message = payload.get("message") or response.reason
+            else:
+                message = (response.text or "")[:500] or response.reason
+            message = str(message or "")
 
             if response.status_code == 404:
                 raise RuntimeError("GitHub resource not found. Check the repository, branch, and file path.")

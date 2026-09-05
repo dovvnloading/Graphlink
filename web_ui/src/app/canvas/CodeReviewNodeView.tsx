@@ -49,11 +49,14 @@ import { useLodVisibility } from "./useLodVisibility";
  * diff content by way of the model).
  *
  * Dismissal is server-persisted UI state (data.onDismissFinding), not a
- * local hide: a dismissed finding stays dismissed across snapshots,
- * reloads, and re-reviews of the same fetch, and undo restores it (the
- * backend intent is record_command-wrapped). Copy is a best-effort
- * clipboard write with the same .catch() discipline every sibling view
- * applies.
+ * local hide: a dismissed finding stays dismissed across snapshots and
+ * reloads, and undo restores it (the backend intent is
+ * record_command-wrapped). It does NOT survive a re-review -
+ * complete_code_review_run clears the dismissal list on every run, because
+ * finding ids are re-minted per review and a dismissal of the old review's
+ * f3 must not hide the new review's f3. This comment used to claim the
+ * opposite. Copy is a best-effort clipboard write with the same .catch()
+ * discipline every sibling view applies.
  */
 
 export interface CodeReviewFileRow {
@@ -197,10 +200,29 @@ function CodeReviewNodeMenu({
 
 /** Wraps a raw unified diff in a markdown fenced code block tagged `diff`
  * so ReactMarkdown + rehype-highlight can colorize it for free - the same
- * technique GitlinkNodeView's own toDiffFence uses. Never treated as
- * anything but inert text by the pipeline either way. */
+ * technique GitlinkNodeView's own toDiffFence uses.
+ *
+ * The fence is sized to the content, not fixed at three backticks. Per
+ * CommonMark a fenced block ends at the first line whose fence is at least
+ * as long as the opening one, so a hard-coded ``` fence is closed by any
+ * diff line containing ```, and everything after it renders as LIVE
+ * MARKDOWN. That content is a third-party pull request: a PR touching a
+ * README, a docs page, or any file with a code sample is enough to escape
+ * the block by accident, and a hostile one can then emit headings, links,
+ * and images (an image URL is an exfiltration channel) into the node. Using
+ * one more backtick than the longest run in the text makes the block
+ * unclosable from inside, which is what the fence was always assumed to be.
+ *
+ * This does not weaken the "inert text" property the module doc describes -
+ * NodeMarkdown has no rehype-raw and no dangerouslySetInnerHTML, so the
+ * escaped content was never HTML. It was markdown, which is enough. */
 function toDiffFence(diffText: string): string {
-  return "```diff\n" + diffText + "\n```";
+  const longestRun = (diffText.match(/`+/g) ?? []).reduce(
+    (longest, run) => Math.max(longest, run.length),
+    0,
+  );
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return fence + "diff\n" + diffText + "\n" + fence;
 }
 
 function tierLabel(tier: string): string {
@@ -214,6 +236,26 @@ function verdictLabel(verdict: string): string {
   if (verdict === "needs_revision") return "Needs Revision";
   if (verdict === "not_ready") return "Not Ready";
   return "Not Reviewed";
+}
+
+/** The engine's own REVIEW_CATEGORY_LABELS, mirrored. The wire carries the
+ * raw snake_case keys ("correctness"), and the scorecard used to render
+ * those verbatim as user-facing row labels while the engine's markdown
+ * report printed "Correctness" for the same value. Falling back to the raw
+ * key keeps an unknown category visible rather than blanking its row. */
+const CATEGORY_LABELS: Record<string, string> = {
+  correctness: "Correctness",
+  reliability: "Reliability",
+  security: "Security",
+  maintainability: "Maintainability",
+  readability: "Readability",
+  testing: "Testing",
+  performance: "Performance",
+  architecture: "Architecture",
+};
+
+function categoryLabel(key: string): string {
+  return CATEGORY_LABELS[key] ?? key;
 }
 
 function findingLocation(path: string, line: number): string {
@@ -258,11 +300,23 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
     data.onFetchDiff(prUrl);
   }
 
+  // The Ask draft is cleared when an ANSWER LANDS, never at click time.
+  // onAsk is fire-and-forget over the websocket, and the intent drops the
+  // request on four separate paths (node gone, node busy, no diff fetched
+  // yet, model call failed) - each of which used to destroy the typed
+  // question with nothing to show for it and no way to get it back.
+  // codeReviewQa only ever grows on a successful answer, so its length is
+  // the acknowledgement signal.
+  const qaCountRef = useRef(data.codeReviewQa.length);
+  useEffect(() => {
+    if (data.codeReviewQa.length > qaCountRef.current) setQuestionDraft("");
+    qaCountRef.current = data.codeReviewQa.length;
+  }, [data.codeReviewQa.length]);
+
   function askQuestion() {
     const question = questionDraft.trim();
     if (!question) return;
     data.onAsk(question);
-    setQuestionDraft("");
   }
 
   // -- Walkthrough tab: lazy-fetch-once-per-version ----------------------
@@ -349,9 +403,26 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
             key={tab.key}
             type="button"
             role="tab"
+            id={`code-review-tab-${tab.key}`}
+            aria-controls={`code-review-panel-${tab.key}`}
             aria-selected={activeTab === tab.key}
+            // Roving tabindex: only the selected tab is in the tab order,
+            // and Left/Right move between them - the keyboard contract a
+            // role="tablist" promises. Without it the widget announced
+            // itself as a tablist and then behaved like three loose
+            // buttons.
+            tabIndex={activeTab === tab.key ? 0 : -1}
             className={`code-review-node-tab${activeTab === tab.key ? " active" : ""}`}
             onClick={() => setActiveTab(tab.key)}
+            onKeyDown={(event) => {
+              if (event.key !== "ArrowRight" && event.key !== "ArrowLeft") return;
+              event.preventDefault();
+              const index = TABS.findIndex((candidate) => candidate.key === activeTab);
+              const step = event.key === "ArrowRight" ? 1 : TABS.length - 1;
+              const next = TABS[(index + step) % TABS.length];
+              setActiveTab(next.key);
+              document.getElementById(`code-review-tab-${next.key}`)?.focus();
+            }}
           >
             {tab.label}
             {tab.key === "findings" && visibleFindings.length + visibleErrors.length > 0 && (
@@ -364,7 +435,12 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
       </div>
 
       {activeTab === "setup" && (
-        <div className="code-review-node-setup-tab" role="tabpanel">
+        <div
+          className="code-review-node-setup-tab"
+          role="tabpanel"
+          id="code-review-panel-setup"
+          aria-labelledby="code-review-tab-setup"
+        >
           <div className="code-review-node-field-row">
             <span className="code-review-node-field-label">Pull request</span>
             <input
@@ -414,6 +490,18 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
                   {data.codeReviewChangedFiles} files · +{data.codeReviewAdditions}/-{data.codeReviewDeletions}
                 </span>
               </div>
+              {/* codeReviewDiffChars was fetched, put on the wire, and
+                  compared by the memo comparator, but never rendered - so
+                  the comparator's "only the fields this view actually
+                  reads" claim was false, and the one number that says how
+                  much diff the review actually saw was invisible. */}
+              <div className="code-review-node-stat-row">
+                <span className="code-review-node-stat-key">Diff size</span>
+                <span className="code-review-node-stat-value">
+                  {data.codeReviewDiffChars.toLocaleString()} chars
+                  {data.codeReviewDiffTruncated ? " (truncated)" : ""}
+                </span>
+              </div>
               {(data.codeReviewDiffTruncated || data.codeReviewFilesTruncated) && (
                 <p className="code-review-node-banner-warning" role="note">
                   Large pull request: the review covers a truncated excerpt, not the full diff.
@@ -444,7 +532,12 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
       )}
 
       {activeTab === "walkthrough" && (
-        <div className="code-review-node-walkthrough-tab" role="tabpanel">
+        <div
+          className="code-review-node-walkthrough-tab"
+          role="tabpanel"
+          id="code-review-panel-walkthrough"
+          aria-labelledby="code-review-tab-walkthrough"
+        >
           {data.codeReviewWalkthrough.length > 0 ? (
             <ol className="code-review-node-walkthrough-list">
               {data.codeReviewWalkthrough.map((group, index) => (
@@ -464,13 +557,20 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
           {data.codeReviewState !== "draft" &&
             (diffFetchError ? (
               <>
-                <p className="code-review-node-banner-error">{diffFetchError}</p>
-                <button type="button" onClick={runDiffFetch}>
-                  Retry
-                </button>
+                <p className="code-review-node-banner-error" role="alert">{diffFetchError}</p>
+                {/* Wrapped: every button rule in styles.css is scoped to
+                    .code-review-node-inline-row, so this one rendered as a
+                    raw user-agent button in the middle of a styled card. */}
+                <div className="code-review-node-inline-row">
+                  <button type="button" onClick={runDiffFetch}>
+                    Retry
+                  </button>
+                </div>
               </>
             ) : fetchedDiffText === null ? (
-              <p className="code-review-node-empty">Loading diff…</p>
+              <p className="code-review-node-empty" role="status" aria-live="polite">
+                Loading diff…
+              </p>
             ) : (
               // The unified diff through the same NodeMarkdown pipeline as
               // GitlinkNodeView's own proposal diff (fenced ```diff for
@@ -518,7 +618,20 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
       )}
 
       {activeTab === "findings" && (
-        <div className="code-review-node-findings-tab" role="tabpanel">
+        <div
+          className="code-review-node-findings-tab"
+          role="tabpanel"
+          id="code-review-panel-findings"
+          aria-labelledby="code-review-tab-findings"
+        >
+          {/* Three states, not two. `verdict === "none"` alone conflated
+              "never reviewed" with "reviewed, but by the deterministic
+              pre-screen, which does not grade" - the engine deliberately
+              reports no verdict and no score for a fallback review. So a
+              pre-screen that HAD found a hard-coded secret rendered
+              "No review yet - run a review first." directly above its own
+              findings list. codeReviewState is already on the wire and is
+              the field that actually distinguishes them. */}
           {data.codeReviewVerdict !== "none" ? (
             <div className={`code-review-node-verdict code-review-node-verdict-${data.codeReviewVerdict}`} role="status">
               <span className="code-review-node-verdict-label">{verdictLabel(data.codeReviewVerdict)}</span>
@@ -527,21 +640,38 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
                 <span className="code-review-node-verdict-risk">{data.codeReviewRisk} risk</span>
               )}
             </div>
+          ) : data.codeReviewState === "reviewed" ? (
+            <div className="code-review-node-verdict code-review-node-verdict-none" role="status">
+              <span className="code-review-node-verdict-label">Not assessed</span>
+              <span className="code-review-node-verdict-risk">
+                deterministic pre-screen only - run the review again for a graded assessment
+              </span>
+            </div>
           ) : (
             <p className="code-review-node-empty">No review yet - run a review first.</p>
           )}
 
+          {data.codeReviewTitle && (
+            <p className="code-review-node-review-title">{data.codeReviewTitle}</p>
+          )}
           {data.codeReviewOverview && <p className="code-review-node-overview">{data.codeReviewOverview}</p>}
 
           {Object.keys(data.codeReviewScores).length > 0 && (
             <div className="code-review-node-scorecard">
               {Object.entries(data.codeReviewScores).map(([category, score]) => (
                 <div key={category} className="code-review-node-stat-row">
-                  <span className="code-review-node-stat-key">{category}</span>
+                  <span className="code-review-node-stat-key">{categoryLabel(category)}</span>
                   <span className="code-review-node-stat-value">{score}/100</span>
                 </div>
               ))}
             </div>
+          )}
+
+          {data.codeReviewQualitySummary && (
+            <p className="code-review-node-overview">
+              {data.codeReviewQualitySummary}
+              {data.codeReviewConfidence && ` (model confidence: ${data.codeReviewConfidence})`}
+            </p>
           )}
 
           {visibleErrors.map((error) => (
@@ -562,11 +692,16 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
               <div className="code-review-node-inline-row">
                 <button
                   type="button"
+                  aria-label={`Copy error: ${error.title}`}
                   onClick={() => copyText(`[${error.severity}] ${error.title} (${findingLocation(error.path, error.line)}): ${error.evidence} Fix: ${error.fix}`)}
                 >
                   Copy
                 </button>
-                <button type="button" onClick={() => data.onDismissFinding(error.id)}>
+                <button
+                  type="button"
+                  aria-label={`Dismiss error: ${error.title}`}
+                  onClick={() => data.onDismissFinding(error.id)}
+                >
                   Dismiss
                 </button>
               </div>
@@ -592,6 +727,7 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
               <div className="code-review-node-inline-row">
                 <button
                   type="button"
+                  aria-label={`Copy finding: ${finding.title}`}
                   onClick={() =>
                     copyText(
                       `[${finding.severity}] ${finding.title} (${findingLocation(finding.path, finding.line)}): ${finding.evidence} Recommendation: ${finding.recommendation}`,
@@ -600,7 +736,11 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
                 >
                   Copy
                 </button>
-                <button type="button" onClick={() => data.onDismissFinding(finding.id)}>
+                <button
+                  type="button"
+                  aria-label={`Dismiss finding: ${finding.title}`}
+                  onClick={() => data.onDismissFinding(finding.id)}
+                >
                   Dismiss
                 </button>
               </div>
@@ -609,8 +749,8 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
 
           {dismissedCount > 0 && (
             <p className="code-review-node-file-count">
-              {dismissedCount} dismissed{dismissedCount === 1 ? "" : " finding(s)"} - undo restores{" "}
-              {dismissedCount === 1 ? "it" : "them"}.
+              {dismissedCount} dismissed {dismissedCount === 1 ? "finding" : "findings"} - undo
+              restores {dismissedCount === 1 ? "it" : "them"}.
             </p>
           )}
         </div>
@@ -683,12 +823,26 @@ function qaEqual(a: readonly CodeReviewQa[], b: readonly CodeReviewQa[]): boolea
 }
 
 /** ADR-011 stage 11.1: every prop this view actually reads, compared.
+ *
  * `codeReviewPrUrl` is intentionally OMITTED: per this file's own
  * "state-ownership discipline" module doc, it seeds the local URL draft
  * ONCE on mount and is never read again afterward - comparing it would
  * only cause spurious re-renders that render byte-identical output
  * (same reasoning GitlinkNodeView's own comparator applies to
- * gitlinkScopeMode/gitlinkSelectedPaths/gitlinkTaskPrompt). */
+ * gitlinkScopeMode/gitlinkSelectedPaths/gitlinkTaskPrompt).
+ *
+ * `codeReviewFiles` and `codeReviewPrHtmlUrl` are omitted for the opposite
+ * reason: nothing in this view renders them. They ride the wire because
+ * SceneNodeRow declares them (the per-file patch BODIES no longer do - see
+ * _code_review_file_wire in backend/domain/graph.py), and comparing a field
+ * no render path reads would be pure cost.
+ *
+ * Everything else listed below IS read somewhere in this file. That was not
+ * true before: codeReviewTitle, codeReviewConfidence, codeReviewQualitySummary
+ * and codeReviewDiffChars were all compared here while no JSX referenced
+ * them - four fields fetched and threaded through five layers to be thrown
+ * away. They now render, which is the repair that makes this comment
+ * accurate rather than aspirational. */
 function codeReviewNodeDataAreEqual(prev: CodeReviewNodeData, next: CodeReviewNodeData): boolean {
   return (
     prev.codeReviewRepo === next.codeReviewRepo &&

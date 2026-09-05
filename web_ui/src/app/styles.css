@@ -7360,6 +7360,17 @@ mark.document-view-search-match-current {
   gap: 8px;
 }
 
+/* The list-item wrapper the TSX has always emitted but nothing styled, so
+   consecutive Q&A turns ran together with no visible boundary between one
+   answer and the next question. */
+.code-review-node-qa-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 8px;
+  border-left: 2px solid var(--gl-surface-border);
+}
+
 .code-review-node-qa-question {
   font-size: 11px;
   font-weight: 600;
@@ -7407,9 +7418,28 @@ mark.document-view-search-match-current {
   border-color: var(--gl-semantic-status-error, currentColor);
 }
 
+/* The "reviewed, but only by the deterministic pre-screen" state. Reads as
+   deliberately unemphatic - a dashed border rather than a colour - because
+   the point is the absence of a grade, not an alarm. */
+.code-review-node-verdict-none {
+  border-style: dashed;
+  border-color: var(--gl-surface-border);
+}
+
+.code-review-node-verdict-none .code-review-node-verdict-risk {
+  margin-left: 0;
+}
+
 .code-review-node-overview {
   margin: 0;
   font-size: 12px;
+  color: var(--gl-surface-text-primary);
+}
+
+.code-review-node-review-title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
   color: var(--gl-surface-text-primary);
 }
 

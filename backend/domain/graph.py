@@ -100,6 +100,106 @@ def _estimate_tokens(text: str) -> int:
     return TokenEstimator().count_tokens(text)
 
 
+# -- Review Lens nested wire rows ------------------------------------------
+#
+# These five builders exist because the Review Lens node stores its nested
+# rows as the review engine's own snake_case dicts (graphlink_plugins/
+# review_lens/review_engine.py) while the wire contract - and the generated
+# client validator built from it - is camelCase, like every other nested
+# row on SceneNodeRow. scene_payload used to forward them with a bare
+# `dict(row)`, which shipped `patch_truncated`/`previous_path`/
+# `group_title` where CodeReviewFileRow and CodeReviewWalkthroughGroupRow
+# declare `patchTruncated`/`previousPath`/`groupTitle`.
+#
+# That was not a cosmetic mismatch. validateSceneState treats a missing
+# required field as a hard error, and web_ui/src/lib/api-contract/
+# bindTopic.ts DROPS a snapshot that fails validation, so from the first
+# successful PR fetch onward every scene snapshot for the whole session
+# was rejected client-side - the canvas froze for every node, not just
+# this one. Building each row explicitly (the `toolCalls` precedent
+# below) fixes the casing AND guarantees each row carries exactly the
+# contract's fields with the contract's types, so a row that reached the
+# state from an old save file cannot put an unexpected key on the wire.
+#
+# The domain keeps snake_case on purpose: it is what the engine emits and
+# what session_save.py has already written to every existing save file.
+# The conversion belongs at the wire builder, the same place
+# codeReviewScores is coerced to dict[str, str].
+
+
+def _code_review_file_wire(row: dict[str, Any]) -> dict[str, Any]:
+    wire: dict[str, Any] = {
+        "path": str(row.get("path", "")),
+        "status": str(row.get("status", "modified")),
+        "additions": _non_negative_wire_int(row.get("additions")),
+        "deletions": _non_negative_wire_int(row.get("deletions")),
+        # `patch` is DELIBERATELY not forwarded - see the caller's comment.
+        "patch": "",
+        "patchTruncated": bool(row.get("patch_truncated", False)),
+    }
+    # Genuinely absent (not "") for every non-rename, which is why
+    # CodeReviewFileRow.previousPath is the one Optional field on the row.
+    previous = str(row.get("previous_path", "") or "")
+    if previous:
+        wire["previousPath"] = previous
+    return wire
+
+
+def _code_review_walkthrough_wire(row: dict[str, Any]) -> dict[str, Any]:
+    raw_paths = row.get("paths")
+    return {
+        "groupTitle": str(row.get("group_title", "")),
+        "paths": [str(path) for path in raw_paths] if isinstance(raw_paths, list) else [],
+        "explanation": str(row.get("explanation", "")),
+    }
+
+
+def _code_review_finding_wire(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(row.get("id", "")),
+        "severity": str(row.get("severity", "")),
+        "tier": str(row.get("tier", "")),
+        "category": str(row.get("category", "")),
+        "path": str(row.get("path", "")),
+        "line": _non_negative_wire_int(row.get("line")),
+        "title": str(row.get("title", "")),
+        "evidence": str(row.get("evidence", "")),
+        "impact": str(row.get("impact", "")),
+        "recommendation": str(row.get("recommendation", "")),
+    }
+
+
+def _code_review_error_wire(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(row.get("id", "")),
+        "severity": str(row.get("severity", "")),
+        "tier": str(row.get("tier", "")),
+        "kind": str(row.get("kind", "")),
+        "path": str(row.get("path", "")),
+        "line": _non_negative_wire_int(row.get("line")),
+        "title": str(row.get("title", "")),
+        "evidence": str(row.get("evidence", "")),
+        "fix": str(row.get("fix", "")),
+    }
+
+
+def _code_review_qa_wire(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "question": str(row.get("question", "")),
+        "answer": str(row.get("answer", "")),
+    }
+
+
+def _non_negative_wire_int(value: Any) -> int:
+    """int for the wire, never raising. A row can reach the wire from a
+    hand-edited save file as well as from the engine, and a ValueError
+    here would fail the whole scene republish, not just one row."""
+    try:
+        return max(0, int(value))  # type: ignore[call-overload]
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 
 
 @dataclass
@@ -1084,8 +1184,24 @@ class SceneDocument(
             "codeReviewChangedFiles": (
                 n.state.code_review_changed_files if isinstance(n.state, CodeReviewState) else 0
             ),
+            # Rebuilt row by row rather than forwarded as `dict(f)` - see
+            # _code_review_file_wire's own comment for the casing bug that
+            # cost every scene snapshot after a PR fetch.
+            #
+            # `patch` rides as "" on purpose. The per-file patches are
+            # capped at MAX_FILE_PATCH_CHARS (6000) each and MAX_PR_FILES
+            # (100) of them, so forwarding them put up to ~600KB of diff
+            # text on EVERY scene republish - roughly ten times the
+            # 60KB codeReviewDiffText that was excluded from this payload
+            # for exactly that reason (see CodeReviewState's own comment).
+            # No frontend code reads it: CodeReviewNodeView renders the
+            # unified diff it lazily fetches via fetchCodeReviewDiffText,
+            # never these per-file patches. The field stays on the row
+            # because the contract declares it required; the engine still
+            # reads the real patches from node.state, which is where the
+            # fallback pre-screen scans them.
             "codeReviewFiles": (
-                [dict(f) for f in n.state.code_review_files]
+                [_code_review_file_wire(f) for f in n.state.code_review_files]
                 if isinstance(n.state, CodeReviewState)
                 else []
             ),
@@ -1108,17 +1224,17 @@ class SceneDocument(
                 n.state.code_review_diff_version if isinstance(n.state, CodeReviewState) else 0
             ),
             "codeReviewWalkthrough": (
-                [dict(g) for g in n.state.code_review_walkthrough]
+                [_code_review_walkthrough_wire(g) for g in n.state.code_review_walkthrough]
                 if isinstance(n.state, CodeReviewState)
                 else []
             ),
             "codeReviewFindings": (
-                [dict(f) for f in n.state.code_review_findings]
+                [_code_review_finding_wire(f) for f in n.state.code_review_findings]
                 if isinstance(n.state, CodeReviewState)
                 else []
             ),
             "codeReviewErrors": (
-                [dict(e) for e in n.state.code_review_errors]
+                [_code_review_error_wire(e) for e in n.state.code_review_errors]
                 if isinstance(n.state, CodeReviewState)
                 else []
             ),
@@ -1156,7 +1272,7 @@ class SceneDocument(
                 n.state.code_review_quality_summary if isinstance(n.state, CodeReviewState) else ""
             ),
             "codeReviewQa": (
-                [dict(entry) for entry in n.state.code_review_qa]
+                [_code_review_qa_wire(entry) for entry in n.state.code_review_qa]
                 if isinstance(n.state, CodeReviewState)
                 else []
             ),
