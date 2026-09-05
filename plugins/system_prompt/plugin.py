@@ -30,6 +30,8 @@ the shared register_builtin_plugin escape-hatch rationale."""
 from __future__ import annotations
 
 from backend.canvas import SceneDocument
+from backend.domain.node_access import is_node_of
+from backend.domain.node_states import NoteState
 from backend.plugin_sdk import HostContext, PluginRunContext
 
 
@@ -46,17 +48,26 @@ def _execute(
         # the note -> root edge _resolve_branch_system_prompt looks for.
         return _create_pending(document, run_ctx)
     root = document.get_branch_root(parent_node_id)
-    existing = next(
-        (
-            document.nodes[edge.source]
-            for edge in document.edges.values()
-            if edge.target == root.id
-            and edge.source in document.nodes
-            and document.nodes[edge.source].kind == "note"
-            and document.nodes[edge.source].state.is_system_prompt
-        ),
-        None,
-    )
+    if root is None:
+        # get_branch_root returns None only for an id it does not know, and
+        # the guard above already established that this one is in
+        # document.nodes - so this cannot fire today. It is here because the
+        # alternative is an AttributeError on the next line if that ever
+        # stops being true, and because the plugin already has a sensible
+        # answer for "no usable parent": make the prompt unattached.
+        return _create_pending(document, run_ctx)
+    # A loop rather than the generator this used to be: the kind check and
+    # the field read have to happen on the SAME bound node for either a
+    # reader or a checker to see that the second follows from the first.
+    # Identical result - the first match in edge order, or None.
+    existing = None
+    for edge in document.edges.values():
+        if edge.target != root.id or edge.source not in document.nodes:
+            continue
+        candidate = document.nodes[edge.source]
+        if is_node_of(candidate, "note", NoteState) and candidate.state.is_system_prompt:
+            existing = candidate
+            break
     if existing is not None:
         return existing.id
 
@@ -85,7 +96,7 @@ def _create_pending(
         (
             node
             for node in document.nodes.values()
-            if node.kind == "note"
+            if is_node_of(node, "note", NoteState)
             and node.state.is_system_prompt
             and not any(edge.source == node.id for edge in document.edges.values())
         ),
