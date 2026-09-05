@@ -21,6 +21,17 @@ beforeEach(() => {
   global.IntersectionObserver = FakeIntersectionObserver;
 });
 
+// The panel's body arrives through a React.lazy dynamic import. In a built
+// bundle that is a prebuilt chunk; under vitest it is the FIRST transform of
+// react-markdown plus six remark/rehype plugins, and with 93 test files
+// competing for the worker pool that regularly runs past testing-library's
+// 1000ms default - two full-suite runs in three, measured. The wait is long
+// because the test environment is slow to compile the module graph, not
+// because the panel is slow, so the right fix is to wait properly rather
+// than to reach for fake timers or to stub the import away and stop testing
+// the thing that broke.
+const LAZY_BODY_TIMEOUT = { timeout: 15_000 };
+
 function renderPanel(overrides: Partial<React.ComponentProps<typeof DocumentViewPanel>> = {}) {
   const props = {
     isOpen: true,
@@ -39,7 +50,7 @@ describe("DocumentViewPanel", () => {
     // The title is part of the eager shell; the body arrives with the lazy
     // markdown chunk, hence findBy rather than getBy.
     expect(screen.getByText("Document View")).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "Heading" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Heading" }, LAZY_BODY_TIMEOUT)).toBeInTheDocument();
     expect(screen.getByText("A paragraph of body text.")).toBeInTheDocument();
   });
 
@@ -91,7 +102,7 @@ describe("DocumentViewPanel", () => {
 
   it("keeps its content mounted after being closed again, so reopening does not flicker", async () => {
     const { rerender } = renderPanel({ isOpen: true, content: "still here" });
-    expect(await screen.findByText("still here")).toBeInTheDocument();
+    expect(await screen.findByText("still here", undefined, LAZY_BODY_TIMEOUT)).toBeInTheDocument();
 
     rerender(
       <DocumentViewPanel isOpen={false} content="still here" sourceLabel={null} onClose={vi.fn()} />,
@@ -195,7 +206,9 @@ describe("DocumentViewPanel", () => {
       renderPanel({ content: "# One\n\n## Two" });
       // Headings come from a dynamically imported parser, so they land a
       // microtask after mount rather than during it.
-      expect(await screen.findByRole("button", { name: "Outline" })).toBeInTheDocument();
+      expect(
+        await screen.findByRole("button", { name: "Outline" }, LAZY_BODY_TIMEOUT),
+      ).toBeInTheDocument();
     });
 
     it("shows no Outline toggle when the content has fewer than 2 headings", () => {
@@ -459,7 +472,7 @@ describe("DocumentViewPanel", () => {
       const onClose = vi.fn();
       renderPanel({ onClose, content: "# One\n\n## Two" });
 
-      await user.click(await screen.findByRole("button", { name: "Outline" }));
+      await user.click(await screen.findByRole("button", { name: "Outline" }, LAZY_BODY_TIMEOUT));
       expect(screen.getByRole("menu", { name: "Table of contents" })).toBeInTheDocument();
 
       await user.keyboard("{Escape}");
