@@ -78,5 +78,12 @@ def parse_pr_url(pr_url: str) -> tuple[str, str, int]:
 
 
 def canonical_pr_slug(owner: str, repo: str, number: int) -> str:
-    """The short human label shown on the node, e.g. "owner/repo#123"."""
+    """The canonical short form of a PR reference, e.g. "owner/repo#123".
+
+    NOT what the node shows, despite what this docstring said: nothing in
+    the app calls this. CodeReviewNodeView composes the same string itself
+    from codeReviewRepo and codeReviewPrNumber, and the engine builds its
+    own from the payload. Kept because it is the one place the canonical
+    form is actually named, and it is covered - but a caller, not a claim,
+    is what would make that comment true."""
     return f"{owner}/{repo}#{number}"

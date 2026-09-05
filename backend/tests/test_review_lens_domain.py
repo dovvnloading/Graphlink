@@ -32,6 +32,7 @@ from graphlink_plugins.review_lens.diff_fetch import (
 from graphlink_plugins.review_lens.pr_url import canonical_pr_slug, parse_pr_url
 from graphlink_plugins.review_lens.review_engine import (
     MAX_DIFF_MODEL_CHARS,
+    MAX_WALKTHROUGH_GROUPS,
     MAX_WALKTHROUGH_PATHS_PER_GROUP,
     SEVERITY_TIERS,
     ReviewLensAgent,
@@ -272,11 +273,18 @@ def test_walkthrough_groups_by_directory_with_tests_last():
 
 
 def test_walkthrough_caps_groups_and_paths():
-    files = [{"path": f"dir{i}/f.py", "additions": 1, "deletions": 0} for i in range(20)]
+    # Both caps, each exercised past its own limit. The fixture used to put
+    # exactly ONE file in each of 20 directories, so every group held a
+    # single path and the per-group assertion could not fail for any
+    # implementation - MAX_WALKTHROUGH_PATHS_PER_GROUP was uncovered.
+    files = [
+        {"path": f"dir{d}/f{f}.py", "additions": 1, "deletions": 0}
+        for d in range(20)
+        for f in range(MAX_WALKTHROUGH_PATHS_PER_GROUP + 5)
+    ]
     groups = _group_files_for_walkthrough(files)
-    assert len(groups) <= diff_fetch_module.MAX_PR_FILES  # sanity: bounded
-    assert len(groups) <= 8
-    assert all(len(group["paths"]) <= 12 for group in groups)
+    assert len(groups) == MAX_WALKTHROUGH_GROUPS
+    assert all(len(group["paths"]) == MAX_WALKTHROUGH_PATHS_PER_GROUP for group in groups)
 
 
 # =============================================================================
@@ -933,3 +941,25 @@ def test_an_infinite_number_in_the_file_listing_does_not_escape_as_overflow(valu
     row = _normalize_file_entry({"filename": "x.py", "additions": value, "deletions": value})
     assert row["additions"] == 0
     assert row["deletions"] == 0
+
+
+def test_a_mis_encoded_diff_is_marked_not_silently_mojibaked():
+    """latin-1 maps all 256 byte values, so the old chain never reached its
+    errors="replace" tail - a mis-encoded diff came back as plausible-looking
+    wrong characters with no indication anything was wrong, and was then
+    reviewed and persisted as the file's real content."""
+    latin1_bytes = "café diff".encode("latin-1")
+    decoded = diff_fetch_module._decode_text_bytes(latin1_bytes)
+    assert "�" in decoded
+
+
+def test_a_utf8_bom_is_stripped_rather_than_left_in_the_first_hunk():
+    decoded = diff_fetch_module._decode_text_bytes(
+        "﻿diff --git a/x b/x".encode("utf-8")
+    )
+    assert decoded.startswith("diff --git")
+
+
+def test_ordinary_utf8_survives_untouched():
+    text = "café — diff"
+    assert diff_fetch_module._decode_text_bytes(text.encode("utf-8")) == text

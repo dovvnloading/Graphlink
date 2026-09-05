@@ -41,12 +41,29 @@ _KNOWN_FILE_STATUSES = frozenset({"added", "removed", "modified", "renamed", "co
 
 
 def _decode_text_bytes(raw_bytes: bytes) -> str:
-    for encoding in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
-        try:
-            return raw_bytes.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    return raw_bytes.decode("utf-8", errors="replace")
+    """Decode a diff body, preferring UTF-8 and never raising.
+
+    The chain is deliberately SHORT. It used to read
+    ("utf-8", "utf-8-sig", "cp1252", "latin-1") with an errors="replace"
+    tail, three parts of which were unreachable: utf-8-sig can only succeed
+    where utf-8 already did (a BOM is valid UTF-8 - it decodes to U+FEFF
+    rather than failing), and latin-1 maps all 256 byte values, so it never
+    raises and nothing after it can ever run.
+
+    Worse, reaching latin-1 at all means silently mojibaking a diff:
+    every non-ASCII byte becomes a plausible-looking wrong character with
+    no indication anything went wrong, and that text is then reviewed,
+    persisted and shown as if it were the file's real content.
+    errors="replace" is the honest fallback - U+FFFD is visible - so it is
+    now the only fallback. GitHub serves UTF-8; this is the path for a
+    genuinely mis-encoded file inside a diff.
+
+    The BOM is stripped explicitly, since utf-8 leaves it in place as a
+    zero-width character at the head of the first hunk."""
+    try:
+        return raw_bytes.decode("utf-8").lstrip("﻿")
+    except UnicodeDecodeError:
+        return raw_bytes.decode("utf-8", errors="replace")
 
 
 def _truncate(text: str, max_chars: int) -> tuple[str, bool]:

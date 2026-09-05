@@ -490,6 +490,18 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
                   {data.codeReviewChangedFiles} files · +{data.codeReviewAdditions}/-{data.codeReviewDeletions}
                 </span>
               </div>
+              {/* codeReviewDiffChars was fetched, put on the wire, and
+                  compared by the memo comparator, but never rendered - so
+                  the comparator's "only the fields this view actually
+                  reads" claim was false, and the one number that says how
+                  much diff the review actually saw was invisible. */}
+              <div className="code-review-node-stat-row">
+                <span className="code-review-node-stat-key">Diff size</span>
+                <span className="code-review-node-stat-value">
+                  {data.codeReviewDiffChars.toLocaleString()} chars
+                  {data.codeReviewDiffTruncated ? " (truncated)" : ""}
+                </span>
+              </div>
               {(data.codeReviewDiffTruncated || data.codeReviewFilesTruncated) && (
                 <p className="code-review-node-banner-warning" role="note">
                   Large pull request: the review covers a truncated excerpt, not the full diff.
@@ -811,12 +823,26 @@ function qaEqual(a: readonly CodeReviewQa[], b: readonly CodeReviewQa[]): boolea
 }
 
 /** ADR-011 stage 11.1: every prop this view actually reads, compared.
+ *
  * `codeReviewPrUrl` is intentionally OMITTED: per this file's own
  * "state-ownership discipline" module doc, it seeds the local URL draft
  * ONCE on mount and is never read again afterward - comparing it would
  * only cause spurious re-renders that render byte-identical output
  * (same reasoning GitlinkNodeView's own comparator applies to
- * gitlinkScopeMode/gitlinkSelectedPaths/gitlinkTaskPrompt). */
+ * gitlinkScopeMode/gitlinkSelectedPaths/gitlinkTaskPrompt).
+ *
+ * `codeReviewFiles` and `codeReviewPrHtmlUrl` are omitted for the opposite
+ * reason: nothing in this view renders them. They ride the wire because
+ * SceneNodeRow declares them (the per-file patch BODIES no longer do - see
+ * _code_review_file_wire in backend/domain/graph.py), and comparing a field
+ * no render path reads would be pure cost.
+ *
+ * Everything else listed below IS read somewhere in this file. That was not
+ * true before: codeReviewTitle, codeReviewConfidence, codeReviewQualitySummary
+ * and codeReviewDiffChars were all compared here while no JSX referenced
+ * them - four fields fetched and threaded through five layers to be thrown
+ * away. They now render, which is the repair that makes this comment
+ * accurate rather than aspirational. */
 function codeReviewNodeDataAreEqual(prev: CodeReviewNodeData, next: CodeReviewNodeData): boolean {
   return (
     prev.codeReviewRepo === next.codeReviewRepo &&
