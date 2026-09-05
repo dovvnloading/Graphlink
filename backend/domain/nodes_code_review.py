@@ -234,7 +234,10 @@ class CodeReviewOps(SceneDocumentParts):
     def append_code_review_qa(self, node_id: str, question: str, answer: str) -> SceneNode:
         """Land one answered follow-up. Capped at the 20 most recent
         entries - the Q&A list is on the wire (unlike the diff text), so
-        unbounded growth here would be unbounded wire growth."""
+        unbounded growth here would be unbounded wire growth.
+
+        backend/session_load.py enforces the same 20 on restore, which was
+        the one write path into this field with no cap at all."""
         node = require_node(self.nodes, node_id, "code_review", CodeReviewState)
         node.state.code_review_qa.append({
             "question": str(question),

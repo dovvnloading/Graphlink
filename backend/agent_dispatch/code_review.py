@@ -98,18 +98,50 @@ class CodeReviewDispatchOps(DispatcherParts):
         the registry is pure task/cancel_event bookkeeping into the
         shared cancel()/cancel_all() sweep)."""
         from backend import agents as agents_module  # deferred: patch-seam + circular-import safety
+        from backend.domain.model import SceneError
+
+        # Defined ABOVE the busy check on purpose: the check-to-claim stretch
+        # below must contain no statement holding an `await`
+        # (tests/test_dispatch_claim_ordering.py's AST gate scans it
+        # recursively), and this is the same placement _dispatch_chat uses
+        # for its own _finalize.
+        claimed: dict[str, str | None] = {"request_id": None}
+
+        async def _finalize() -> None:
+            # ADR-006 stage 6.2's finalize hook, which this surface was
+            # missing. RunRegistry.cancel() pops the handle and schedules
+            # this the moment a cancel lands; _run's own finally does it on
+            # a normal completion, and release() returning True is the
+            # arbiter so it never happens twice.
+            #
+            # Without it, cancelling a review freed the REGISTRY slot but
+            # left node.pending_request_id claimed, because only _run's
+            # finally cleared that - and _run is parked behind an
+            # uninterruptible asyncio.to_thread. So "Cancel" left the node
+            # visibly busy, with every Review Lens action on it refused,
+            # until the model call returned on its own: up to the full
+            # 600-second watchdog.
+            request_id = claimed["request_id"]
+            if request_id is not None and node.pending_request_id == request_id:
+                node.pending_request_id = None
+            await bus.publish("scene")
+
         if node.pending_request_id and node.pending_request_id != agents_module._NODE_RUN_CLAIM_PLACEHOLDER:
             notifications_state.show("Review Lens is already busy for this node.", "info")
             await bus.publish("notification")
             return
 
         cancel_event = threading.Event()
-        handle = self._runs.claim("code_review_run", node_id=node_id, cancel_event=cancel_event)
+        handle = self._runs.claim(
+            "code_review_run", node_id=node_id, cancel_event=cancel_event, finalize=_finalize,
+        )
         request_id = handle.request_id
+        claimed["request_id"] = request_id
         node.pending_request_id = request_id
         await bus.publish("scene")
 
         async def _run():
+            released = False
             try:
                 result = await asyncio.wait_for(
                     asyncio.to_thread(agents_module._call_review_lens_agent, bundle),
@@ -119,29 +151,63 @@ class CodeReviewDispatchOps(DispatcherParts):
                     notifications_state.show("Review Lens run cancelled.", "info")
                     await bus.publish("notification")
                 else:
-                    on_success(result)
-                    await bus.publish("scene")
+                    try:
+                        on_success(result)
+                    except SceneError:
+                        # The node was deleted while the review ran.
+                        # complete_code_review_run goes through require_node
+                        # and raises; fail_code_review_run's own docstring
+                        # already establishes that a background result
+                        # landing after node deletion is a SILENT no-op, so
+                        # letting this fall through to the generic handler
+                        # below only produced a "Review Lens run failed:
+                        # unknown node: n7" toast for a node the user had
+                        # deliberately removed.
+                        agents_module.logger.info(
+                            "code review result discarded - node deleted mid-run",
+                            extra={"run_id": request_id, "node_id": node_id},
+                        )
+                    else:
+                        await bus.publish("scene")
             except asyncio.TimeoutError:
                 cancel_event.set()
-                notifications_state.show(
+                message = (
                     "Review Lens stopped responding before the request completed. "
-                    "Please try again.",
-                    "error",
+                    "Please try again."
                 )
+                # on_failure as well as the toast. The timeout branch used to
+                # show only a notification, so once that toast was dismissed
+                # (or missed - it fires up to ten minutes after the click)
+                # the node was indistinguishable from one that had never been
+                # run: no error banner, no state change, nothing to say the
+                # review had been attempted and had failed.
+                on_failure(message)
+                notifications_state.show(message, "error")
                 await bus.publish("notification")
+            except asyncio.CancelledError:
+                # Not caught by `except Exception`. Without this the finally
+                # below still runs, but re-raising is required so the event
+                # loop sees the task as cancelled rather than completed.
+                self._runs.release(request_id)
+                released = True
+                if node.pending_request_id == request_id:
+                    node.pending_request_id = None
+                raise
             except Exception as exc:
                 agents_module.logger.exception("code review dispatch failed")
                 on_failure(f"Review Lens run failed: {exc}")
                 notifications_state.show(f"Review Lens run failed: {exc}", "error")
                 await bus.publish("notification")
             finally:
-                self._runs.release(request_id)
-                # Only clear if this task's OWN request_id is still the one
-                # recorded - a stale, already-superseded task finishing
-                # late must never clobber a newer legitimate busy marker.
-                if node.pending_request_id == request_id:
-                    node.pending_request_id = None
-                await bus.publish("scene")
+                if not released:
+                    # release() returns False when cancel() already popped the
+                    # handle - in that case _finalize has already run the end
+                    # transition and this late teardown must not repeat it,
+                    # nor clobber a newer run's busy marker.
+                    if self._runs.release(request_id):
+                        if node.pending_request_id == request_id:
+                            node.pending_request_id = None
+                        await bus.publish("scene")
 
         self._runs.attach_task(handle, asyncio.create_task(_run()))
 
@@ -178,5 +244,15 @@ class CodeReviewDispatchOps(DispatcherParts):
     def cancel_code_review(self, request_id: str) -> bool:
         """kind="code_review_run": see RunRegistry.cancel's own docstring
         for why kind= is passed now that code_review_run shares self._runs
-        with other cancel_event-bearing kinds."""
+        with other cancel_event-bearing kinds.
+
+        Returns False for a request_id this registry does not hold, which
+        for Review Lens specifically means "the busy marker belongs to a
+        fetch or an Ask, not a review run". Those two claim
+        node.pending_request_id through _run_node_blocking_action, which
+        mints a bare uuid4 and never registers it here - they are awaited
+        directly by their intent and own no cancellation primitive. The
+        caller MUST surface that False rather than dropping it: the node's
+        Cancel button is offered for any pending request, so a silently
+        ignored return made it a dead control that looked live."""
         return self._runs.cancel(request_id, kind="code_review_run")

@@ -419,6 +419,28 @@ ignore_missing_imports = true
 # were themselves listed.
 follow_imports = "silent"
 
+[[tool.mypy.overrides]]
+# The Review Lens plugin's own modules, checked BODY AND ALL.
+#
+# Listing a file under `files` above is not the same as checking it. mypy
+# skips the body of any function with no annotations at all by default, and
+# every function in review_engine.py is unannotated - so the largest file in
+# this plugin sat inside the gate with all thirty of its bodies unchecked,
+# and said "Success: no issues found". Turning the flag on here found a real
+# defect immediately (a double `.get()` whose isinstance check narrowed the
+# wrong lookup, in looks_like_a_review).
+#
+# Scoped to these modules rather than set globally: --check-untyped-defs
+# across the whole tree is its own sweep, and this ratchet moves a module at
+# a time (see [tool.mypy]'s own comment).
+module = [
+    "graphlink_plugins.review_lens.*",
+    "backend.agent_dispatch.code_review",
+    "backend.api.intents_code_review",
+    "backend.domain.nodes_code_review",
+]
+check_untyped_defs = true
+
 [tool.ruff.lint.per-file-ignores]
 # backend/canvas.py's own docstring: it deliberately re-imports every
 # backend.domain name "back for its own use, so every existing `from

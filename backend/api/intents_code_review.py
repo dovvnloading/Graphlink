@@ -21,6 +21,8 @@ from __future__ import annotations
 from backend.agents import _NODE_RUN_CLAIM_PLACEHOLDER, AgentDispatcher
 from backend.api._shared import claim_busy_node_or_notify, make_publish_scene
 from backend.domain.graph import SceneDocument
+from backend.domain.node_access import is_node_of
+from backend.domain.node_states import CodeReviewState
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -43,7 +45,7 @@ def register_code_review_intents(
 
     async def fetch_code_review_diff(node_id, pr_url=None):
         node = document.nodes.get(node_id)
-        if node is None or node.kind != "code_review":
+        if not is_node_of(node, "code_review", CodeReviewState):
             notifications.show("This node no longer exists.", "warning")
             await bus.publish("notification")
             return None
@@ -69,7 +71,7 @@ def register_code_review_intents(
 
     async def run_code_review(node_id):
         node = document.nodes.get(node_id)
-        if node is None or node.kind != "code_review":
+        if not is_node_of(node, "code_review", CodeReviewState):
             notifications.show("This node no longer exists.", "warning")
             await bus.publish("notification")
             return None
@@ -132,11 +134,25 @@ def register_code_review_intents(
         return node_id
 
     async def cancel_code_review_request(request_id):
-        agent_dispatcher.cancel_code_review(request_id)
+        # The return value is load-bearing, not decoration. Only a review RUN
+        # is registered as a cancellable run; a diff fetch and an Ask claim
+        # the same node.pending_request_id busy marker through
+        # _run_node_blocking_action, which owns no cancellation primitive.
+        # The node offers Cancel for any pending request, so dropping this
+        # False left the user clicking a button that did nothing and said
+        # nothing. It cannot be hidden at the UI layer either - the wire
+        # carries one opaque pendingRequestId with no kind attached.
+        if not agent_dispatcher.cancel_code_review(request_id):
+            notifications.show(
+                "Only a running review can be cancelled. The pull-request "
+                "fetch will finish on its own.",
+                "info",
+            )
+            await bus.publish("notification")
 
     async def ask_code_review_question(node_id, question):
         node = document.nodes.get(node_id)
-        if node is None or node.kind != "code_review":
+        if not is_node_of(node, "code_review", CodeReviewState):
             notifications.show("This node no longer exists.", "warning")
             await bus.publish("notification")
             return None

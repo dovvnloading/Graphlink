@@ -620,7 +620,9 @@ class CodeReviewState(NodeState):
     - code_review_pr_url: the pasted PR link (user input, verbatim).
     - code_review_repo/pr_number/pr_title/pr_state/pr_html_url/base_ref/
       head_ref/additions/deletions/changed_files: the fetched PR identity,
-      landed by store_code_review_diff (backend/domain/graph.py).
+      landed by store_code_review_diff (backend/domain/
+      nodes_code_review.py - it moved out of graph.py with the rest of
+      CodeReviewOps).
     - code_review_files: per-file rows {path, status, additions,
       deletions, patch, patch_truncated, previous_path?}. Patches are
       capped at fetch time (review_lens/diff_fetch.py's
@@ -642,9 +644,15 @@ class CodeReviewState(NodeState):
     - code_review_scores: per-category ints in memory; the wire field
       (scene_payload()'s "codeReviewScores") is honestly dict[str, str]
       - coerced at the wire builder, mirroring store_gitlink_context's
-      own str-coercion precedent for gitlinkContextStats.
-    - code_review_qa: capped (MAX_QA_ENTRIES, enforced by append_) list
-      of {question, answer} follow-ups answered over the stored diff.
+      own str-coercion precedent for gitlinkContextStats. A fallback
+      (pre-screen) review populates ONLY the categories a heuristic
+      actually lowered, so an empty or partial dict here is expected and
+      means "not graded", never "graded 0".
+    - code_review_qa: the 20 most recent {question, answer} follow-ups
+      answered over the stored diff. The cap is a literal in
+      append_code_review_qa (and matched by session_load's own restore
+      cap); there is no MAX_QA_ENTRIES constant, despite what this comment
+      claimed for as long as the field has existed.
     - code_review_state: draft (no diff yet) | fetched (diff ready) |
       reviewed (a review landed).
     - code_review_error: the current fetch/run/ask error banner text,

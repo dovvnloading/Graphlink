@@ -15,10 +15,20 @@ late-bound), never the mixin methods themselves.
 from __future__ import annotations
 
 import asyncio
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
+
+from graphlink_wire_schema import validate_payload
+
+# The contracts package is not importable as `contracts.*` - the wire
+# dataclasses are imported by bare module name, the same path
+# backend/tests/test_wire_schema_validation.py already establishes.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "contracts"))
+
+from graphlink_scene_payload import SceneNodeRow  # noqa: E402
 
 import backend.agents as agents_module
 from backend.agents import AgentDispatcher
@@ -27,7 +37,9 @@ from backend.domain.model import SceneError
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.plugins import register_plugins
+from backend import session_load as session_load_module
 from backend.session_load import restore_chat_into_document
+from graphlink_plugins.review_lens import diff_fetch as diff_fetch_module
 from backend.session_save import build_chat_data
 from graphlink_settings_store import SettingsManager
 
@@ -201,6 +213,97 @@ def test_wire_row_carries_review_fields_but_not_the_diff_text():
     assert row["codeReviewScores"] == {"correctness": "80"}
     assert row["codeReviewVerdict"] == "strong"
     assert "codeReviewDiffText" not in row
+
+
+def _fully_populated_review_row():
+    """A scene row for a node that has BOTH a fetched PR and a landed
+    review - i.e. every nested list non-empty. The test above passes
+    empty walkthrough/findings/errors lists, which is precisely why the
+    nested-row casing bug below went unnoticed."""
+    doc, node = _doc_with_review()
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle(files=[
+        {"path": "a/x.py", "status": "modified", "additions": 5, "deletions": 1,
+         "patch": "@@ x", "patch_truncated": True},
+        {"path": "a/new.py", "status": "renamed", "additions": 2, "deletions": 0,
+         "patch": "@@ y", "patch_truncated": False, "previous_path": "a/old.py"},
+    ]))
+    doc.complete_code_review_run(
+        node.id, title="T", overview="O", confidence="high",
+        walkthrough=[{"group_title": "G", "paths": ["a/x.py"], "explanation": "E"}],
+        findings=[{"id": "f1", "severity": "medium", "tier": "yellow",
+                   "category": "Maintainability", "path": "a/x.py", "line": 4,
+                   "title": "T", "evidence": "E", "impact": "I", "recommendation": "R"}],
+        errors=[{"id": "e1", "severity": "high", "tier": "red", "kind": "Runtime",
+                 "path": "a/x.py", "line": 9, "title": "T", "evidence": "E", "fix": "F"}],
+        scores={"correctness": 80}, quality_score=80, verdict="strong",
+        risk="low", quality_summary="S",
+    )
+    doc.append_code_review_qa(node.id, "q", "a")
+    return doc.scene_payload()["nodes"][-1]
+
+
+def _contract_shaped(row):
+    """`row` minus the one key that is deliberately on the wire without
+    being declared on SceneNodeRow.
+
+    `contentParts` is a documented, intentional omission (see
+    contracts/graphlink_scene_payload.py's own module docstring): a real
+    backend-only multimodal round-trip field no frontend cast reaches for.
+    It is harmless in production because the GENERATED TypeScript validator
+    ignores fields it does not know, while graphlink_wire_schema.py's
+    validate_payload is strict about extras - so dropping it here keeps this
+    assertion about Review Lens instead of re-litigating that decision. The
+    failure mode this file actually needs to catch is the opposite one: a
+    MISSING required field, which both validators treat as fatal."""
+    return {key: value for key, value in row.items() if key != "contentParts"}
+
+
+def test_a_fully_populated_review_row_validates_against_the_real_wire_contract():
+    # THE test this file was missing. Every other wire assertion here reads
+    # individual scalar keys, so nothing ever compared a real scene_payload()
+    # row against SceneNodeRow itself - and the nested rows were shipping the
+    # engine's snake_case keys (`group_title`, `patch_truncated`,
+    # `previous_path`) where the contract, the generated TypeScript validator,
+    # and CodeReviewNodeView all read camelCase. The generated validator
+    # treats a missing required field as fatal and bindTopic.ts DROPS a
+    # snapshot that fails validation, so the real-world symptom was the whole
+    # canvas freezing from the first successful PR fetch onward.
+    assert validate_payload(_contract_shaped(_fully_populated_review_row()), SceneNodeRow) == []
+
+
+def test_wire_rows_are_camel_case_and_omit_the_per_file_patch_bodies():
+    row = _fully_populated_review_row()
+    assert row["codeReviewWalkthrough"] == [
+        {"groupTitle": "G", "paths": ["a/x.py"], "explanation": "E"}
+    ]
+    assert row["codeReviewFiles"][0]["patchTruncated"] is True
+    # previousPath is present only for the rename, never as "" on the rest.
+    assert "previousPath" not in row["codeReviewFiles"][0]
+    assert row["codeReviewFiles"][1]["previousPath"] == "a/old.py"
+    # Up to ~600KB of patch text per node otherwise rides every republish,
+    # and no frontend code reads it - see _code_review_file_wire's comment.
+    assert [f["patch"] for f in row["codeReviewFiles"]] == ["", ""]
+    assert row["codeReviewFindings"][0]["recommendation"] == "R"
+    assert row["codeReviewErrors"][0]["fix"] == "F"
+    assert row["codeReviewQa"] == [{"question": "q", "answer": "a"}]
+
+
+def test_wire_rows_survive_junk_reaching_the_state_from_an_old_save_file():
+    # Rows can reach node.state from a hand-edited or older save file, not
+    # only from the engine. The wire builder must still emit a contract-shaped
+    # row rather than raising mid-republish and taking the whole scene down.
+    doc, node = _doc_with_review()
+    doc.complete_code_review_run(
+        node.id, title="T", overview="O", confidence="high",
+        walkthrough=[{"unexpected": "key"}],
+        findings=[{"id": "f1", "line": "not-a-number"}],
+        errors=[{}], scores={}, quality_score=0, verdict="none", risk="",
+        quality_summary="",
+    )
+    row = doc.scene_payload()["nodes"][-1]
+    assert validate_payload(_contract_shaped(row), SceneNodeRow) == []
+    assert row["codeReviewWalkthrough"][0]["groupTitle"] == ""
+    assert row["codeReviewFindings"][0]["line"] == 0
 
 
 # -- save/load round trip ------------------------------------------------------
@@ -505,3 +608,100 @@ def test_fail_run_is_a_quiet_no_op_for_a_wrong_kind_node():
     chat = doc.add_chat_node(0, 0, "c", is_user=True)
     assert doc.fail_code_review_run(chat.id, "boom") is None
     assert doc.fail_code_review_run("missing", "boom") is None
+
+
+# -- audit regression pins ----------------------------------------------------
+
+
+def _round_trip(doc, mutate):
+    """build_chat_data -> mutate the code_review payload -> restore. The
+    notes_data/pins_data split matches the round-trip test above."""
+    chat_data = build_chat_data(doc)
+    mutate(next(p for p in chat_data["nodes"] if p.get("node_type") == "code_review"))
+    notes_data = chat_data.pop("notes_data")
+    pins_data = chat_data.pop("pins_data")
+    restored = SceneDocument()
+    restore_chat_into_document(restored, {"data": chat_data}, notes_data, pins_data)
+    return next(n for n in restored.nodes.values() if n.kind == "code_review")
+
+
+def test_restore_enforces_the_same_caps_every_other_write_path_does():
+    """Restore was the one entry point with no caps at all, so a save file
+    could put an unbounded walkthrough/findings/errors/qa list straight into
+    node state - and from there onto every scene republish."""
+    doc, node = _doc_with_review()
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
+
+    def _oversize(payload):
+        payload["files"] = [{"path": f"f{i}.py"} for i in range(400)]
+        payload["review"]["walkthrough"] = [{"group_title": f"g{i}"} for i in range(50)]
+        payload["review"]["findings"] = [{"id": f"f{i}"} for i in range(50)]
+        payload["review"]["errors"] = [{"id": f"e{i}"} for i in range(50)]
+        payload["qa"] = [{"question": f"q{i}", "answer": f"a{i}"} for i in range(50)]
+
+    node = _round_trip(doc, _oversize)
+    assert len(node.state.code_review_files) == 100
+    assert len(node.state.code_review_walkthrough) == 8
+    assert len(node.state.code_review_findings) == 12
+    assert len(node.state.code_review_errors) == 10
+    # The MOST RECENT 20, matching append_code_review_qa - restoring the
+    # first 20 would silently reverse which turns survive a reload.
+    assert len(node.state.code_review_qa) == 20
+    assert node.state.code_review_qa[-1]["question"] == "q49"
+
+
+def test_restore_drops_non_dict_rows_instead_of_raising():
+    doc, node = _doc_with_review()
+    doc.store_code_review_diff(node.id, pr_url="u", bundle=_bundle())
+
+    def _junk(payload):
+        payload["review"]["findings"] = ["not a dict", None, {"id": "f1"}]
+
+    node = _round_trip(doc, _junk)
+    assert node.state.code_review_findings == [{"id": "f1"}]
+
+
+def test_the_restore_caps_match_the_caps_the_domain_enforces():
+    """The two live as literals in different modules on purpose (the domain
+    must not import from session_load or vice versa). This is what stops
+    them drifting apart unnoticed."""
+    doc, node = _doc_with_review()
+    doc.complete_code_review_run(
+        node.id, title="", overview="", confidence="",
+        walkthrough=[{"group_title": f"g{i}"} for i in range(50)],
+        findings=[{"id": f"f{i}"} for i in range(50)],
+        errors=[{"id": f"e{i}"} for i in range(50)],
+        scores={}, quality_score=0, verdict="none", risk="", quality_summary="",
+    )
+    live = doc.nodes[node.id]
+    assert len(live.state.code_review_walkthrough) == session_load_module._CODE_REVIEW_MAX_WALKTHROUGH
+    assert len(live.state.code_review_findings) == session_load_module._CODE_REVIEW_MAX_FINDINGS
+    assert len(live.state.code_review_errors) == session_load_module._CODE_REVIEW_MAX_ERRORS
+    for _ in range(30):
+        doc.append_code_review_qa(node.id, "q", "a")
+    assert len(doc.nodes[node.id].state.code_review_qa) == session_load_module._CODE_REVIEW_MAX_QA
+
+
+def test_the_diff_fetch_watchdog_outlasts_the_network_timeouts_it_bounds():
+    """A fetch makes up to three 25s REST calls plus one 60s diff download,
+    so it can legally take 135s. The watchdog was 120, and reported a merely
+    slow fetch as "stopped responding" while the request it gave up on was
+    still running."""
+    inner_budget = (3 * 25) + diff_fetch_module._DIFF_TIMEOUT_SECONDS
+    assert agents_module.CODE_REVIEW_DIFF_TIMEOUT_SECONDS > inner_budget
+
+
+def test_cancelling_a_fetch_or_ask_says_so_instead_of_doing_nothing_silently():
+    """The node offers Cancel for ANY pending request, but only a review RUN
+    is registered as cancellable - fetch and Ask claim the busy marker
+    through _run_node_blocking_action, which mints a bare uuid4 the registry
+    never sees. The intent used to drop that False on the floor."""
+    class _UncancellableDispatcher(_StubDispatcher):
+        def cancel_code_review(self, request_id):
+            super().cancel_code_review(request_id)
+            return False
+
+    doc, _node = _doc_with_review()
+    bus, notifications = _intent_bus(doc, _UncancellableDispatcher())
+    asyncio.run(bus.dispatch_intent("scene", "cancelCodeReviewRequest", ["req-not-a-run"]))
+    assert "Only a running review can be cancelled" in notifications.message
