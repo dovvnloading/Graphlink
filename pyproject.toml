@@ -389,7 +389,21 @@ files = [
     "graphlink_token_estimator.py",
     "graphlink_version.py",
     "graphlink_wire_schema.py",
+    # 2026-09-05: the three directories a coverage check found sitting outside
+    # the gate - 14 files nobody was checking. plugins/ held six real errors
+    # (an unguarded Optional and two unnarrowed node-state reads in the System
+    # Prompt plugin); mutation_tests/ and tests_e2e/ were already clean.
+    "mutation_tests",
+    "plugins",
+    "tests_e2e",
 ]
+# plugins/ is eight sibling directories each containing a `plugin.py`, with no
+# __init__.py anywhere - the layout the plugin loader discovers by path. Without
+# these two, mypy maps all eight onto one module name and refuses to check any
+# of them ("Duplicate module named 'plugin'"). With them, the module name comes
+# from the path relative to the repo root, so they stay distinct.
+namespace_packages = true
+explicit_package_bases = true
 ignore_missing_imports = true
 # Check the files in `files` fully; use everything they import for type
 # information without reporting errors inside it. Without this, listing
