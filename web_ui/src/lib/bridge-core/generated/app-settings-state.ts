@@ -2,6 +2,10 @@
  * Regenerate with codegen.py; a pytest fails if this file
  * drifts from what regenerating it now would produce. */
 
+import { type ValidationResult, type WireFields, compileFields } from "../wireCheck";
+
+export type { ValidationResult };
+
 export interface ApiModelDescriptor {
   modelId: string;
   provider: string;
@@ -71,347 +75,76 @@ export interface AppSettingsState {
   minCompatibleSchemaVersion?: number | null;
 }
 
-export type ValidationResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; errors: string[] };
+const API_MODEL_DESCRIPTOR_FIELDS: WireFields = [
+  ["modelId", "s", 0],
+  ["provider", "s", 0],
+  ["capabilities", { a: "s" }, 0],
+  ["ready", "b", 0],
+  ["available", "b", 0],
+];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const MCP_SERVER_CONFIG_FIELDS: WireFields = [
+  ["id", "s", 0],
+  ["name", "s", 0],
+  ["command", "s", 0],
+  ["args", { a: "s" }, 0],
+  ["scopes", { a: "s" }, 0],
+  ["approval", "s", 0],
+  ["enabledTools", { a: "s" }, 0],
+  ["enabled", "b", 0],
+  ["timeout", "n", 0],
+  ["envKeys", { a: "s" }, 0],
+];
 
-// Unknown keys are tolerated on purpose. The JSON Schema marks the contract
-// additionalProperties:false because Python and the schema must not drift, but
-// an incoming payload carrying a field this build has never heard of is the
-// normal, expected shape of a NEWER compatible sender - rejecting it here would
-// defeat the additive-forward-compatibility the version negotiation exists to
-// provide. Missing or wrongly-typed KNOWN fields are still hard errors.
+const APP_SETTINGS_STATE_FIELDS: WireFields = [
+  ["schemaVersion", "n", 0],
+  ["revision", "n", 0],
+  ["activeSection", "s", 0],
+  ["showTokenCounter", "b", 0],
+  ["enableSystemPrompt", "b", 0],
+  ["notificationPreferences", { d: "b" }, 0],
+  ["githubTokenConfigured", "b", 0],
+  ["secretsEncryptedAtRest", "b", 0],
+  ["logLevel", "s", 0],
+  ["autoModelPolicy", "s", 0],
+  ["theme", "s", 0],
+  ["hasCompletedOnboarding", "b", 0],
+  ["providerMode", "s", 0],
+  ["activeApiProvider", "s", 0],
+  ["viewingApiProvider", "s", 0],
+  ["apiBaseUrl", "s", 0],
+  ["apiKeyConfigured", { d: "b" }, 0],
+  ["apiKeySource", { d: "s" }, 0],
+  ["apiModels", { d: "s" }, 0],
+  ["apiModelCatalog", { a: { o: API_MODEL_DESCRIPTOR_FIELDS } }, 0],
+  ["apiCatalogStatus", "s", 0],
+  ["apiCatalogMessage", "s", 0],
+  ["geminiStaticModels", { a: "s" }, 0],
+  ["geminiStaticImageModels", { a: "s" }, 0],
+  ["ollamaReasoningLevel", "s", 0],
+  ["ollamaCurrentModel", "s", 0],
+  ["ollamaModelAssignments", { d: "s" }, 0],
+  ["ollamaScannedModels", { a: "s" }, 0],
+  ["ollamaScanSummary", "s", 0],
+  ["ollamaScanStatus", "s", 0],
+  ["ollamaPullStatus", "s", 0],
+  ["ollamaNotice", "s", 0],
+  ["llamaCppReasoningLevel", "s", 0],
+  ["llamaCppChatModelPath", "s", 0],
+  ["llamaCppTitleModelPath", "s", 0],
+  ["llamaCppChatFormat", "s", 0],
+  ["llamaCppNCtx", "n", 0],
+  ["llamaCppNGpuLayers", "n", 0],
+  ["llamaCppNThreads", "n", 0],
+  ["llamaCppScannedModels", { a: "s" }, 0],
+  ["llamaCppScanSummary", "s", 0],
+  ["llamaCppScanStatus", "s", 0],
+  ["llamaCppNotice", "s", 0],
+  ["mcpServers", { a: { o: MCP_SERVER_CONFIG_FIELDS } }, 0],
+  ["minCompatibleSchemaVersion", "n", 1],
+];
 
-function checkApiModelDescriptor(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["modelId"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.modelId: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.modelId` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["provider"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.provider: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.provider` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["capabilities"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.capabilities: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.capabilities` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.capabilities` + `[${i}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["ready"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ready: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.ready` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["available"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.available: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.available` + ": expected boolean"); }
-  }
-}
-
-function checkMcpServerConfig(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["id"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["name"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.name: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.name` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["command"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.command: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.command` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["args"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.args: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.args` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.args` + `[${i}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["scopes"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.scopes: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.scopes` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.scopes` + `[${i}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["approval"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.approval: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.approval` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["enabledTools"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.enabledTools: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.enabledTools` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.enabledTools` + `[${i}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["enabled"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.enabled: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.enabled` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["timeout"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.timeout: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.timeout` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["envKeys"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.envKeys: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.envKeys` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.envKeys` + `[${i}]` + ": expected string"); }); }
-  }
-}
-
-function checkAppSettingsState(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["schemaVersion"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.schemaVersion: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.schemaVersion` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["revision"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.revision: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.revision` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["activeSection"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.activeSection: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.activeSection` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["showTokenCounter"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.showTokenCounter: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.showTokenCounter` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["enableSystemPrompt"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.enableSystemPrompt: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.enableSystemPrompt` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["notificationPreferences"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.notificationPreferences: missing required field`);
-    else { if (!isRecord(fieldValue)) errors.push(`${path}.notificationPreferences` + ": expected object");
-    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "boolean") errors.push(`${path}.notificationPreferences` + `[${JSON.stringify(k)}]` + ": expected boolean"); }); }
-  }
-  {
-    const fieldValue = value["githubTokenConfigured"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.githubTokenConfigured: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.githubTokenConfigured` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["secretsEncryptedAtRest"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.secretsEncryptedAtRest: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.secretsEncryptedAtRest` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["logLevel"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.logLevel: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.logLevel` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["autoModelPolicy"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.autoModelPolicy: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.autoModelPolicy` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["theme"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.theme: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.theme` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["hasCompletedOnboarding"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.hasCompletedOnboarding: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.hasCompletedOnboarding` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["providerMode"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.providerMode: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.providerMode` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["activeApiProvider"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.activeApiProvider: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.activeApiProvider` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["viewingApiProvider"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.viewingApiProvider: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.viewingApiProvider` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["apiBaseUrl"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiBaseUrl: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.apiBaseUrl` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["apiKeyConfigured"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiKeyConfigured: missing required field`);
-    else { if (!isRecord(fieldValue)) errors.push(`${path}.apiKeyConfigured` + ": expected object");
-    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "boolean") errors.push(`${path}.apiKeyConfigured` + `[${JSON.stringify(k)}]` + ": expected boolean"); }); }
-  }
-  {
-    const fieldValue = value["apiKeySource"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiKeySource: missing required field`);
-    else { if (!isRecord(fieldValue)) errors.push(`${path}.apiKeySource` + ": expected object");
-    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.apiKeySource` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["apiModels"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiModels: missing required field`);
-    else { if (!isRecord(fieldValue)) errors.push(`${path}.apiModels` + ": expected object");
-    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.apiModels` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["apiModelCatalog"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiModelCatalog: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.apiModelCatalog` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { checkApiModelDescriptor(item, `${path}.apiModelCatalog` + `[${i}]`, errors); }); }
-  }
-  {
-    const fieldValue = value["apiCatalogStatus"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiCatalogStatus: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.apiCatalogStatus` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["apiCatalogMessage"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.apiCatalogMessage: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.apiCatalogMessage` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["geminiStaticModels"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.geminiStaticModels: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.geminiStaticModels` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.geminiStaticModels` + `[${i}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["geminiStaticImageModels"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.geminiStaticImageModels: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.geminiStaticImageModels` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.geminiStaticImageModels` + `[${i}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["ollamaReasoningLevel"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaReasoningLevel: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaReasoningLevel` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["ollamaCurrentModel"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaCurrentModel: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaCurrentModel` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["ollamaModelAssignments"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaModelAssignments: missing required field`);
-    else { if (!isRecord(fieldValue)) errors.push(`${path}.ollamaModelAssignments` + ": expected object");
-    else Object.entries(fieldValue as Record<string, unknown>).forEach(([k, v]) => { if (typeof v !== "string") errors.push(`${path}.ollamaModelAssignments` + `[${JSON.stringify(k)}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["ollamaScannedModels"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaScannedModels: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.ollamaScannedModels` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.ollamaScannedModels` + `[${i}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["ollamaScanSummary"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaScanSummary: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaScanSummary` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["ollamaScanStatus"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaScanStatus: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaScanStatus` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["ollamaPullStatus"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaPullStatus: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaPullStatus` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["ollamaNotice"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.ollamaNotice: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.ollamaNotice` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["llamaCppReasoningLevel"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppReasoningLevel: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppReasoningLevel` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["llamaCppChatModelPath"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppChatModelPath: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppChatModelPath` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["llamaCppTitleModelPath"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppTitleModelPath: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppTitleModelPath` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["llamaCppChatFormat"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppChatFormat: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppChatFormat` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["llamaCppNCtx"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppNCtx: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.llamaCppNCtx` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["llamaCppNGpuLayers"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppNGpuLayers: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.llamaCppNGpuLayers` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["llamaCppNThreads"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppNThreads: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.llamaCppNThreads` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["llamaCppScannedModels"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppScannedModels: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.llamaCppScannedModels` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.llamaCppScannedModels` + `[${i}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["llamaCppScanSummary"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppScanSummary: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppScanSummary` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["llamaCppScanStatus"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppScanStatus: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppScanStatus` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["llamaCppNotice"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.llamaCppNotice: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.llamaCppNotice` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["mcpServers"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.mcpServers: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.mcpServers` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { checkMcpServerConfig(item, `${path}.mcpServers` + `[${i}]`, errors); }); }
-  }
-  {
-    const fieldValue = value["minCompatibleSchemaVersion"];
-    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.minCompatibleSchemaVersion` + ": expected number"); }
-  }
-}
+const checkAppSettingsState = compileFields(APP_SETTINGS_STATE_FIELDS);
 
 export function validateAppSettingsState(value: unknown): ValidationResult<AppSettingsState> {
   const errors: string[] = [];

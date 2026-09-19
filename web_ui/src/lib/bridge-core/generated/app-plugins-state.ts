@@ -2,6 +2,10 @@
  * Regenerate with codegen.py; a pytest fails if this file
  * drifts from what regenerating it now would produce. */
 
+import { type ValidationResult, type WireFields, compileFields } from "../wireCheck";
+
+export type { ValidationResult };
+
 export interface AppPluginCategory {
   name: string;
   description: string;
@@ -28,109 +32,33 @@ export interface AppPluginsState {
   minCompatibleSchemaVersion?: number | null;
 }
 
-export type ValidationResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; errors: string[] };
+const APP_PLUGIN_ENTRY_FIELDS: WireFields = [
+  ["name", "s", 0],
+  ["description", "s", 0],
+];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const APP_PLUGIN_CATEGORY_FIELDS: WireFields = [
+  ["name", "s", 0],
+  ["description", "s", 0],
+  ["plugins", { a: { o: APP_PLUGIN_ENTRY_FIELDS } }, 0],
+];
 
-// Unknown keys are tolerated on purpose. The JSON Schema marks the contract
-// additionalProperties:false because Python and the schema must not drift, but
-// an incoming payload carrying a field this build has never heard of is the
-// normal, expected shape of a NEWER compatible sender - rejecting it here would
-// defeat the additive-forward-compatibility the version negotiation exists to
-// provide. Missing or wrongly-typed KNOWN fields are still hard errors.
+const APP_PLUGIN_GRANT_FIELDS: WireFields = [
+  ["pluginId", "s", 0],
+  ["name", "s", 0],
+  ["scopes", { a: "s" }, 0],
+  ["granted", "b", 0],
+];
 
-function checkAppPluginCategory(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["name"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.name: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.name` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["description"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.description: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.description` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["plugins"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.plugins: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.plugins` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { checkAppPluginEntry(item, `${path}.plugins` + `[${i}]`, errors); }); }
-  }
-}
+const APP_PLUGINS_STATE_FIELDS: WireFields = [
+  ["schemaVersion", "n", 0],
+  ["revision", "n", 0],
+  ["categories", { a: { o: APP_PLUGIN_CATEGORY_FIELDS } }, 0],
+  ["grants", { a: { o: APP_PLUGIN_GRANT_FIELDS } }, 0],
+  ["minCompatibleSchemaVersion", "n", 1],
+];
 
-function checkAppPluginEntry(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["name"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.name: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.name` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["description"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.description: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.description` + ": expected string"); }
-  }
-}
-
-function checkAppPluginGrant(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["pluginId"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.pluginId: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.pluginId` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["name"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.name: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.name` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["scopes"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.scopes: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.scopes` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { if (typeof item !== "string") errors.push(`${path}.scopes` + `[${i}]` + ": expected string"); }); }
-  }
-  {
-    const fieldValue = value["granted"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.granted: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.granted` + ": expected boolean"); }
-  }
-}
-
-function checkAppPluginsState(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["schemaVersion"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.schemaVersion: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.schemaVersion` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["revision"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.revision: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.revision` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["categories"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.categories: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.categories` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { checkAppPluginCategory(item, `${path}.categories` + `[${i}]`, errors); }); }
-  }
-  {
-    const fieldValue = value["grants"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.grants: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.grants` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { checkAppPluginGrant(item, `${path}.grants` + `[${i}]`, errors); }); }
-  }
-  {
-    const fieldValue = value["minCompatibleSchemaVersion"];
-    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.minCompatibleSchemaVersion` + ": expected number"); }
-  }
-}
+const checkAppPluginsState = compileFields(APP_PLUGINS_STATE_FIELDS);
 
 export function validateAppPluginsState(value: unknown): ValidationResult<AppPluginsState> {
   const errors: string[] = [];

@@ -1,10 +1,11 @@
 // ADR-019 stage 19.2: the bundle-size CI counting gate.
 //
 // Fails the build when the built JS grows past a ratchet ceiling. This is a
-// REGRESSION ratchet pinned ~5% above measured reality, NOT the ADR-019
-// budget itself (initial chunk <= 500 KiB, rest lazy-loaded) - this gate's
-// job is to make sure the number only ever moves DOWN: nobody can add half a
-// megabyte of dependencies without CI saying so.
+// REGRESSION ratchet pinned a few percent above measured reality - and since
+// 2026-09-19, when the initial chunk first fit, that ceiling IS the ADR-019
+// budget (initial chunk <= 500 KiB, rest lazy-loaded; see the last
+// amendment). This gate's job is to make sure the number only ever moves
+// DOWN: nobody can add half a megabyte of dependencies without CI saying so.
 //
 // ADR-011 stage 11.6 landed the code-splitting this file's own prior comment
 // was waiting on (React.lazy for SettingsDialog/ChatLibraryDialog/HelpDialog
@@ -193,7 +194,27 @@ const ASSETS_DIR = join(HERE, "..", "dist", "app", "assets");
 // lib/bridge-core (~84,000), app/canvas (~82,000) and app/chrome (~78,000).
 // Closing the last ~83,500 bytes means splitting app source, not removing a
 // dependency - which is a real option now that it is the only one left.
-const LARGEST_CHUNK_CEILING_BYTES = 613_000;
+//
+// Deliberate, commented amendment - 2026-09-19 (ADR-019 section 4).
+//
+// The initial chunk is UNDER the ADR-019 budget, and this ceiling is now the
+// budget itself: 512,000 bytes, ~3.4% over the measured 495,013 - the same
+// headroom posture as every amendment above, except that from here the
+// ratchet and the budget are the same number.
+//
+// Measured from 599,947 (this branch's starting point: 595,926 on main, plus
+// ~4,000 for the sparse-row defaults table the scene contract now carries).
+// A sourcemap attribution put the largest block of app source in the chunk in
+// one place nobody had looked: the generated wire validators, ~87,000 bytes,
+// 47,908 of them scene-state.ts alone - codegen emitted one unrolled block
+// per field, ~190 bytes each. contracts/codegen.py now emits each payload's
+// shape as a field table (~25 bytes a field) that
+// src/lib/bridge-core/wireCheck.ts compiles into a checker once at load:
+// 599,947 -> 529,180. The remaining ~34,000 came from deferring, on the
+// existing LazySurface terms, every chrome surface only a click or shortcut
+// opens (About, Builder/Harness launch, Command palette, Diagnostics, Global
+// and Knowledge search, Quick switcher, View): 529,180 -> 495,013.
+const LARGEST_CHUNK_CEILING_BYTES = 512_000;
 // Post-11.6 reality: six chunks (main + katex + highlight.js + the three
 // lazy dialogs) total 1,288,075 bytes - essentially unchanged from the
 // pre-split single-chunk total, as expected: splitting redistributes code
@@ -214,7 +235,10 @@ const LARGEST_CHUNK_CEILING_BYTES = 613_000;
 // 2026-09-04: re-anchored to 1,456,011 with the same ~3% headroom, for the
 // per-chunk overhead the node-view split added. Recorded as a raise, small
 // as it is - the amendment above is what pays for it.
-const TOTAL_JS_CEILING_BYTES = 1_500_000;
+// 2026-09-19: moved DOWN to ~3% over the measured 1,397,864 (from
+// 1,461,180) - the validator tables shrank the total, not just moved bytes
+// between chunks, so the ratchet takes the gain.
+const TOTAL_JS_CEILING_BYTES = 1_440_000;
 
 // Below this much headroom, say so. Both prior amendments record the same
 // story: the ceiling was set with ~3-5% room, ordinary week-to-week growth

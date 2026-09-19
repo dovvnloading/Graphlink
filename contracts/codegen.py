@@ -153,11 +153,29 @@ def _annotation_to_ts(annotation: Any) -> str:
 
 
 def typescript_for(dataclass_type: type, *, source: str) -> str:
-    """Emit TS interfaces plus a runtime validator for the payload graph."""
+    """Emit TS interfaces plus a runtime validator for the payload graph.
+
+    The validator is DATA: one `[name, type, optional]` table per dataclass,
+    compiled into a checker once at module load by web_ui/src/lib/bridge-core/
+    wireCheck.ts. It used to be emitted as unrolled code, one block per field -
+    ~190 minified bytes a field, 87 KB across every topic, all of it in the
+    initial chunk. A table row is ~25 bytes; wireCheck.ts's own docstring
+    covers why the compiled checker behaves (and performs) like the unrolled
+    code did."""
     collected: dict[str, dict[str, Any]] = {}
     _collect_object_types(dataclass_type, out=collected)
+    sparse_fields = _root_sparse_fields(dataclass_type)
 
-    lines: list[str] = [_HEADER.format(source=source)]
+    runtime = ["compileFields", "type ValidationResult", "type WireFields"]
+    if sparse_fields:
+        runtime += ["hydrateRow", "isRecord", "wireDefaults"]
+    lines: list[str] = [
+        _HEADER.format(source=source),
+        f'import {{ {", ".join(sorted(runtime, key=lambda n: n.removeprefix("type ")))} }} from "../wireCheck";',
+        "",
+        "export type { ValidationResult };",
+        "",
+    ]
 
     # Interfaces, root last so the file reads bottom-up like the payload nests.
     root_name = _ts_type_name(dataclass_type.__name__)
@@ -181,17 +199,19 @@ def typescript_for(dataclass_type: type, *, source: str) -> str:
         lines.append("}")
         lines.append("")
 
-    lines.append(_VALIDATOR_PREAMBLE)
+    # Field tables, each after every table it references - a const cannot be
+    # read before its declaration runs.
+    for row_type in _dataclasses_dependencies_first(dataclass_type):
+        lines.append(_field_table_for(row_type))
 
-    sparse_fields = _root_sparse_fields(dataclass_type)
     for row_type in dict.fromkeys(row for row, _ in sparse_fields.values()):
         lines.append(_hydrator_for(row_type))
     if sparse_fields:
         lines.append(_root_hydrator_for(root_name, sparse_fields))
 
-    for name in ordered:
-        lines.append(_validator_for(name, collected[name]))
-
+    table = _field_table_name(dataclass_type)
+    lines.append(f"const check{root_name} = compileFields({table});")
+    lines.append("")
     if sparse_fields:
         # The one change a sparse row makes to its root's validator: restore
         # the omitted fields FIRST, then validate - and hand back the restored
@@ -220,11 +240,85 @@ def typescript_for(dataclass_type: type, *, source: str) -> str:
     return "\n".join(lines)
 
 
+def _field_table_name(dataclass_type: type) -> str:
+    """SceneNodeRow -> SCENE_NODE_ROW_FIELDS."""
+    return f"{_screaming_snake(_ts_type_name(dataclass_type.__name__))}_FIELDS"
+
+
+def _dataclasses_dependencies_first(root: type) -> list[type]:
+    """Every dataclass in the payload graph, each after the ones it nests."""
+    import dataclasses
+    import typing
+
+    order: list[type] = []
+
+    def visit(dataclass_type: type, stack: tuple[type, ...]) -> None:
+        if dataclass_type in order:
+            return
+        if dataclass_type in stack:
+            raise ValueError(f"{dataclass_type.__name__} nests itself; a field table cannot express that")
+        hints = typing.get_type_hints(dataclass_type)
+        for field in dataclasses.fields(dataclass_type):
+            for nested in _nested_dataclasses(_strip_optional(hints[field.name])):
+                visit(nested, (*stack, dataclass_type))
+        order.append(dataclass_type)
+
+    visit(root, ())
+    return order
+
+
+def _wire_type(annotation: Any) -> str:
+    """One field's type as a wireCheck.ts WireType literal."""
+    import dataclasses
+    from typing import Literal, get_args, get_origin
+
+    if dataclasses.is_dataclass(annotation) and isinstance(annotation, type):
+        return f"{{ o: {_field_table_name(annotation)} }}"
+    if annotation is str:
+        return '"s"'
+    if annotation is bool:
+        return '"b"'
+    if annotation in (int, float):
+        return '"n"'
+
+    origin = get_origin(annotation)
+    if origin is Literal:
+        return "{ e: [" + ", ".join(json.dumps(v) for v in get_args(annotation)) + "] }"
+    if origin is list:
+        (item,) = get_args(annotation)
+        return f"{{ a: {_wire_type(item)} }}"
+    if origin is dict:
+        _, value = get_args(annotation)
+        return f"{{ d: {_wire_type(value)} }}"
+    raise ValueError(f"cannot render a wire type for: {annotation!r}")
+
+
+def _field_table_for(dataclass_type: type) -> str:
+    """`[name, type, optional]` per field - plus, for a sparse row, the wire
+    default its sender may leave the field out at."""
+    import dataclasses
+    import typing
+
+    hints = typing.get_type_hints(dataclass_type)
+    sparse = omits_defaults(dataclass_type)
+    rows: list[str] = []
+    for field in dataclasses.fields(dataclass_type):
+        annotation = _strip_optional(hints[field.name])
+        optional = 1 if annotation is not hints[field.name] else 0
+        row = f"{json.dumps(field.name)}, {_wire_type(annotation)}, {optional}"
+        default = wire_default(field) if sparse else NO_DEFAULT
+        if default is not NO_DEFAULT:
+            row += f", {json.dumps(default)}"
+        rows.append(f"  [{row}],")
+    return "\n".join([f"const {_field_table_name(dataclass_type)}: WireFields = [", *rows, "];", ""])
+
+
 def _root_sparse_fields(root: type) -> dict[str, tuple[type, bool]]:
     """{root field name: (sparse row type, held as a list)} for every root
-    field that holds a sparse row (graphlink_wire_schema.py's "SPARSE ROWS") directly or as a
-    list. Restoring is only generated at that depth; a sparse row anywhere
-    deeper raises here, so one can never ship with nothing restoring it."""
+    field that holds a sparse row (graphlink_wire_schema.py's "SPARSE ROWS")
+    directly or as a list. Restoring is only generated at that depth; a sparse
+    row anywhere deeper raises here, so one can never ship with nothing
+    restoring it."""
     import dataclasses
     import typing
     from typing import get_args, get_origin
@@ -239,10 +333,7 @@ def _root_sparse_fields(root: type) -> dict[str, tuple[type, bool]]:
         if isinstance(annotation, type) and dataclasses.is_dataclass(annotation) and omits_defaults(annotation):
             direct[field.name] = (annotation, is_list)
 
-    def deeper(dataclass_type: type, seen: set[type]) -> None:
-        if dataclass_type in seen:
-            return
-        seen.add(dataclass_type)
+    for dataclass_type in _dataclasses_dependencies_first(root):
         nested_hints = typing.get_type_hints(dataclass_type)
         for field in dataclasses.fields(dataclass_type):
             for nested in _nested_dataclasses(_strip_optional(nested_hints[field.name])):
@@ -251,9 +342,6 @@ def _root_sparse_fields(root: type) -> dict[str, tuple[type, bool]]:
                         f"{nested.__name__} omits defaults but sits below {root.__name__}.{field.name}; "
                         "codegen only restores sparse rows held directly by the root payload"
                     )
-                deeper(nested, seen)
-
-    deeper(root, set())
     return direct
 
 
@@ -263,7 +351,10 @@ def _strip_optional(annotation: Any) -> Any:
     from typing import get_args, get_origin
 
     if get_origin(annotation) in (_types.UnionType, typing.Union):
-        return next(a for a in get_args(annotation) if a is not type(None))
+        args = [a for a in get_args(annotation) if a is not type(None)]
+        if len(args) != 1:
+            raise ValueError(f"cannot render a wire type for a multi-type union: {annotation!r}")
+        return args[0]
     return annotation
 
 
@@ -273,40 +364,18 @@ def _screaming_snake(name: str) -> str:
 
 
 def _hydrator_for(row_type: type) -> str:
-    """The restore half of a sparse row: its declared defaults as a table,
-    and hydrate<Row>(), which fills in every ABSENT key. A present key -
-    including an explicit null - is data and is left for the validator to
-    judge. Containers restore as fresh empty values (wire_default guarantees
-    every container default is empty), never a shared instance. A row with
-    nothing missing comes back as the SAME object, so re-validating rows that
-    are already whole (the scene store re-checks the whole scene after every
-    patch) allocates nothing and keeps every untouched row's identity."""
-    import dataclasses
-
+    """The restore half of a sparse row: its defaults, read off its own field
+    table, and hydrate<Row>() - see wireCheck.ts's hydrateRow."""
     name = _ts_type_name(row_type.__name__)
-    table = f"{_screaming_snake(name)}_WIRE_DEFAULTS"
-    entries = [
-        f"  [{json.dumps(field.name)}, {json.dumps(default)}],"
-        for field in dataclasses.fields(row_type)
-        if (default := wire_default(field)) is not NO_DEFAULT
-    ]
+    defaults = f"{_screaming_snake(name)}_WIRE_DEFAULTS"
     return "\n".join([
         f"/** {name} crosses the wire sparse: the sender omits every field at its",
         " * declared default (contracts: WIRE_OMITS_DEFAULTS). These are those",
         " * defaults - the value every omitted field is restored to. */",
-        f"export const {table}: ReadonlyArray<readonly [string, unknown]> = [",
-        *entries,
-        "];",
+        f"export const {defaults} = wireDefaults({_field_table_name(row_type)});",
         "",
         f"export function hydrate{name}(value: unknown): unknown {{",
-        "  if (!isRecord(value)) return value;",
-        "  let hydrated: Record<string, unknown> | null = null;",
-        f"  for (const [key, fallback] of {table}) {{",
-        "    if (value[key] !== undefined) continue;",
-        "    hydrated ??= { ...value };",
-        "    hydrated[key] = Array.isArray(fallback) ? [] : isRecord(fallback) ? {} : fallback;",
-        "  }",
-        "  return hydrated ?? value;",
+        f"  return hydrateRow({_field_table_name(row_type)}, {defaults}, value);",
         "}",
         "",
     ])
@@ -342,126 +411,6 @@ def _root_hydrator_for(root_name: str, sparse_fields: dict[str, tuple[type, bool
                 "  }",
             ]
     body += ["  return hydrated ?? value;", "}", ""]
-    return "\n".join(body)
-
-
-_VALIDATOR_PREAMBLE = '''export type ValidationResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; errors: string[] };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// Unknown keys are tolerated on purpose. The JSON Schema marks the contract
-// additionalProperties:false because Python and the schema must not drift, but
-// an incoming payload carrying a field this build has never heard of is the
-// normal, expected shape of a NEWER compatible sender - rejecting it here would
-// defeat the additive-forward-compatibility the version negotiation exists to
-// provide. Missing or wrongly-typed KNOWN fields are still hard errors.
-'''
-
-
-def _ts_check_expr(annotation: Any, *, value_expr: str, path_expr: str) -> str:
-    """Inline runtime check for one value, appending to `errors`.
-
-    `path_expr` is a complete JS expression evaluating to a string. Error
-    messages concatenate onto it rather than interpolating it into another
-    template literal, which would nest backticks and emit valid-but-ugly
-    `${`${path}.id`}` generated code.
-    """
-    import dataclasses
-    from typing import Literal, get_args, get_origin
-
-    if dataclasses.is_dataclass(annotation) and isinstance(annotation, type):
-        name = _ts_type_name(annotation.__name__)
-        return f"check{name}({value_expr}, {path_expr}, errors);"
-
-    origin = get_origin(annotation)
-
-    if origin is Literal:
-        allowed = list(get_args(annotation))
-        allowed_ts = ", ".join(json.dumps(v) for v in allowed)
-        allowed_msg = json.dumps(", ".join(allowed))
-        return (
-            f"if (![{allowed_ts}].includes({value_expr} as string)) "
-            f"errors.push({path_expr} + `: ${{JSON.stringify({value_expr})}} is not one of "
-            f"[` + {allowed_msg} + `]`);"
-        )
-
-    if annotation is str:
-        return (
-            f'if (typeof {value_expr} !== "string") '
-            f'errors.push({path_expr} + ": expected string");'
-        )
-    if annotation is bool:
-        return (
-            f'if (typeof {value_expr} !== "boolean") '
-            f'errors.push({path_expr} + ": expected boolean");'
-        )
-    if annotation in (int, float):
-        return (
-            f'if (typeof {value_expr} !== "number") '
-            f'errors.push({path_expr} + ": expected number");'
-        )
-
-    if origin is list:
-        (item,) = get_args(annotation)
-        inner = _ts_check_expr(
-            item, value_expr="item", path_expr=f"{path_expr} + `[${{i}}]`"
-        )
-        return (
-            f"if (!Array.isArray({value_expr})) "
-            f'errors.push({path_expr} + ": expected array");\n'
-            f"    else ({value_expr} as unknown[]).forEach((item, i) => {{ {inner} }});"
-        )
-
-    if origin is dict:
-        _, value_type = get_args(annotation)
-        # Bracket notation with a JSON-stringified key, not `.${k}` - a dict
-        # key is arbitrary string data (e.g. --gl-* custom property names
-        # today, but this generator has no way to know that won't ever be a
-        # key containing "." or "[0]"), and dot-appending it would make an
-        # error path indistinguishable from a genuinely deeper nested path.
-        # JSON.stringify also makes the key visible verbatim in the message
-        # rather than silently truncated at a special character.
-        inner = _ts_check_expr(
-            value_type, value_expr="v", path_expr=f"{path_expr} + `[${{JSON.stringify(k)}}]`"
-        )
-        return (
-            f"if (!isRecord({value_expr})) "
-            f'errors.push({path_expr} + ": expected object");\n'
-            f"    else Object.entries({value_expr} as Record<string, unknown>)"
-            f".forEach(([k, v]) => {{ {inner} }});"
-        )
-
-    raise ValueError(f"cannot render TS runtime check for: {annotation!r}")
-
-
-def _validator_for(name: str, fields: dict[str, Any]) -> str:
-    body: list[str] = [
-        f"function check{name}(value: unknown, path: string, errors: string[]): void {{",
-        "  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }",
-    ]
-    for field_name, info in fields.items():
-        annotation = info["annotation"]
-        optional = info["optional"]
-        access = f'value[{json.dumps(field_name)}]'
-        field_path = "`${path}." + field_name + "`"
-        check = _ts_check_expr(annotation, value_expr="fieldValue", path_expr=field_path)
-        body.append("  {")
-        body.append(f"    const fieldValue = {access};")
-        if optional:
-            body.append(f"    if (fieldValue !== undefined && fieldValue !== null) {{ {check} }}")
-        else:
-            body.append(
-                f"    if (fieldValue === undefined || fieldValue === null) "
-                f"errors.push(`${{path}}.{field_name}: missing required field`);"
-            )
-            body.append(f"    else {{ {check} }}")
-        body.append("  }")
-    body.append("}")
-    body.append("")
     return "\n".join(body)
 
 
