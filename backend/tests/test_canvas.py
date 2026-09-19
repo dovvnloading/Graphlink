@@ -39,6 +39,7 @@ from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.tests.conftest import (
     chat_slots,
+    client_rows,
     code_sandbox_slots,
     drain_runs,
     gitlink_run_slots,
@@ -315,7 +316,7 @@ def test_scene_payload_includes_chat_fields_defaulted_for_placeholders():
     doc = SceneDocument()
     doc.add_node(0, 0, "plain")
     doc.add_chat_node(1, 1, "real content", True)
-    rows = {n["title"]: n for n in doc.scene_payload()["nodes"]}
+    rows = {n["title"]: n for n in client_rows(doc)}
     assert rows["plain"]["kind"] == "placeholder"
     assert rows["plain"]["content"] == ""
     assert rows["plain"]["isUser"] is False
@@ -427,12 +428,12 @@ def test_set_node_docked_toggles_true_then_false():
 
     doc.set_node_docked(node.id, True)
     assert doc.nodes[node.id].is_docked is True
-    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    row = {n["id"]: n for n in client_rows(doc)}[node.id]
     assert row["isDocked"] is True
 
     doc.set_node_docked(node.id, False)
     assert doc.nodes[node.id].is_docked is False
-    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    row = {n["id"]: n for n in client_rows(doc)}[node.id]
     assert row["isDocked"] is False
 
 
@@ -706,7 +707,7 @@ def test_send_conversation_message_intent_dispatches_a_real_agent_reply():
             # Mid-flight: pendingRequestId surfaces as non-None both on the
             # domain node and in scene_payload.
             assert document.nodes[node_id].pending_request_id is not None
-            rows = {n["id"]: n for n in document.scene_payload()["nodes"]}
+            rows = {n["id"]: n for n in client_rows(document)}
             assert rows[node_id]["pendingRequestId"] is not None
             assert rows[node_id]["pendingRequestId"] == document.nodes[node_id].pending_request_id
 
@@ -722,7 +723,7 @@ def test_send_conversation_message_intent_dispatches_a_real_agent_reply():
         notice = await bus.publish("notification")
         assert notice["visible"] is False, "a real reply landing is not a deferral - no notification fires"
         assert document.nodes[node_id].pending_request_id is None, "cleared again once the reply lands"
-        rows = {n["id"]: n for n in document.scene_payload()["nodes"]}
+        rows = {n["id"]: n for n in client_rows(document)}
         assert rows[node_id]["pendingRequestId"] is None
 
     asyncio.run(run())
@@ -3445,11 +3446,11 @@ def test_scene_payload_includes_artifact_content_for_artifact_kind_rows():
     parent = doc.add_node(1, 1, "parent")
     node = doc.add_artifact_node(2, 2, parent.id)
 
-    rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
+    rows = {n["id"]: n for n in client_rows(doc)}
     assert rows["n0"]["artifactContent"] == ""
 
     doc.complete_artifact_generation(node.id, "the drafted document", "done")
-    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    row = {n["id"]: n for n in client_rows(doc)}[node.id]
     assert row["kind"] == "artifact"
     assert row["artifactContent"] == "the drafted document"
 
@@ -3611,7 +3612,7 @@ def test_store_gitlink_context_excluded_from_scene_payload():
 
     assert node.state.gitlink_context_xml == huge_xml, "the domain object DOES hold the full text"
 
-    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    row = {n["id"]: n for n in client_rows(doc)}[node.id]
     assert "gitlinkContextXml" not in row
     assert row["gitlinkContextSummary"] == "Scanned 3 files."
     assert row["gitlinkScopeMode"] == "selected"
@@ -4258,7 +4259,7 @@ def test_scene_payload_code_sandbox_fields_default_correctly_and_excludes_sandbo
     doc = SceneDocument()
     parent = doc.add_node(0, 0, "parent")
     node = doc.add_code_sandbox_node(0, 0, parent.id)
-    row = {n["id"]: n for n in doc.scene_payload()["nodes"]}[node.id]
+    row = {n["id"]: n for n in client_rows(doc)}[node.id]
     assert "codeSandboxSandboxId" not in row, (
         "the internal sandbox directory-naming key must never reach the wire"
     )
@@ -5800,7 +5801,7 @@ def test_scene_payload_exposes_note_frame_and_container_fields():
     frame = doc.create_frame([m1.id])
     doc.set_group_color(frame.id, "#4a7c59", "#2f5b3c")
 
-    payload_by_id = {n["id"]: n for n in doc.scene_payload()["nodes"]}
+    payload_by_id = {n["id"]: n for n in client_rows(doc)}
 
     note_row = payload_by_id[note.id]
     assert note_row["kind"] == "note"
@@ -5986,8 +5987,7 @@ def test_scene_payload_exposes_all_chart_fields():
     parent = doc.add_node(0, 0, "parent")
     chart = doc.add_chart_node(0, 0, parent.id, "bar", dict(_CHART_DATA), chart_error="degraded")
 
-    payload = doc.scene_payload()
-    row = next(n for n in payload["nodes"] if n["id"] == chart.id)
+    row = next(n for n in client_rows(doc) if n["id"] == chart.id)
 
     assert row["chartType"] == "bar"
     assert row["chartData"] == _CHART_DATA
@@ -6354,17 +6354,20 @@ def test_scene_payload_round_trips_content_parts_with_base64_encoded_image_bytes
     assert isinstance(chat_node.state.content_parts[1]["data"], bytes)
 
 
-def test_scene_payload_content_parts_is_none_not_empty_list_when_unset():
+def test_scene_payload_omits_content_parts_rather_than_sending_an_empty_list_when_unset():
     # R6.3: "no multimodal content" (None) must stay distinguishable on the
     # wire from "multimodal content that happens to be empty" ([]) - the
-    # overwhelmingly common plain-text chat node must get contentParts:
-    # null, never [].
+    # overwhelmingly common plain-text chat node must not get contentParts:
+    # [] - it is left off the row entirely.
     doc = SceneDocument()
     chat_node = doc.add_chat_node(0, 0, "plain text only", True)
     assert chat_node.state.content_parts is None
 
     payload_node = next(n for n in doc.scene_payload()["nodes"] if n["id"] == chat_node.id)
-    assert payload_node["contentParts"] is None
+    # Sparse wire (backend/domain/node_wire.py): None is the default, so the
+    # key is left out - which still distinguishes it from an empty list,
+    # the one value that IS sent.
+    assert "contentParts" not in payload_node
 
 
 # -- R7.5e: Collapse All / Expand All -----------------------------------------
@@ -7034,7 +7037,7 @@ def test_scene_payload_includes_branch_status_and_final_deliverable():
     doc.set_final_deliverable(node.id, True)
     other = doc.add_chat_node(0, 160, "other", True)
 
-    rows = {n["id"]: n for n in doc.scene_payload()["nodes"]}
+    rows = {n["id"]: n for n in client_rows(doc)}
     assert rows[node.id]["branchStatus"] == "accepted"
     assert rows[node.id]["isFinalDeliverable"] is True
     assert rows[other.id]["branchStatus"] == "active"

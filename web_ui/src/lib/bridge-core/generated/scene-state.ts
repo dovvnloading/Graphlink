@@ -358,6 +358,187 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // defeat the additive-forward-compatibility the version negotiation exists to
 // provide. Missing or wrongly-typed KNOWN fields are still hard errors.
 
+/** SceneNodeRow crosses the wire sparse: the sender omits every field at its
+ * declared default (contracts: WIRE_OMITS_DEFAULTS). These are those
+ * defaults - the value every omitted field is restored to. */
+export const SCENE_NODE_ROW_WIRE_DEFAULTS: ReadonlyArray<readonly [string, unknown]> = [
+  ["content", ""],
+  ["isUser", false],
+  ["isCollapsed", false],
+  ["code", ""],
+  ["language", ""],
+  ["attachmentKind", ""],
+  ["filePath", ""],
+  ["mimeType", ""],
+  ["durationSeconds", null],
+  ["byteSize", null],
+  ["previewLabel", ""],
+  ["isDocked", false],
+  ["imageAssetId", ""],
+  ["history", []],
+  ["pendingRequestId", null],
+  ["researchStage", ""],
+  ["researchCompleted", 0],
+  ["researchTotal", 0],
+  ["researchActiveSourceId", null],
+  ["researchError", ""],
+  ["researchResult", null],
+  ["researchRetainToKnowledge", false],
+  ["artifactContent", ""],
+  ["artifactError", ""],
+  ["gitlinkRepo", ""],
+  ["gitlinkBranch", ""],
+  ["gitlinkScopeMode", "selected"],
+  ["gitlinkLocalRoot", ""],
+  ["gitlinkRepoFilePaths", []],
+  ["gitlinkSelectedPaths", []],
+  ["gitlinkTaskPrompt", ""],
+  ["gitlinkContextStats", {}],
+  ["gitlinkContextSummary", ""],
+  ["gitlinkContextVersion", 0],
+  ["gitlinkProposalMarkdown", ""],
+  ["gitlinkPendingChanges", []],
+  ["gitlinkPreviewText", ""],
+  ["gitlinkChangeFingerprint", null],
+  ["gitlinkChangeState", "draft"],
+  ["gitlinkError", ""],
+  ["codeReviewPrUrl", ""],
+  ["codeReviewRepo", ""],
+  ["codeReviewPrNumber", 0],
+  ["codeReviewPrTitle", ""],
+  ["codeReviewPrState", ""],
+  ["codeReviewPrHtmlUrl", ""],
+  ["codeReviewBaseRef", ""],
+  ["codeReviewHeadRef", ""],
+  ["codeReviewAdditions", 0],
+  ["codeReviewDeletions", 0],
+  ["codeReviewChangedFiles", 0],
+  ["codeReviewFiles", []],
+  ["codeReviewFilesTruncated", false],
+  ["codeReviewDiffTruncated", false],
+  ["codeReviewDiffChars", 0],
+  ["codeReviewDiffVersion", 0],
+  ["codeReviewWalkthrough", []],
+  ["codeReviewFindings", []],
+  ["codeReviewErrors", []],
+  ["codeReviewDismissedIds", []],
+  ["codeReviewTitle", ""],
+  ["codeReviewOverview", ""],
+  ["codeReviewConfidence", ""],
+  ["codeReviewScores", {}],
+  ["codeReviewQualityScore", 0],
+  ["codeReviewVerdict", "none"],
+  ["codeReviewRisk", ""],
+  ["codeReviewQualitySummary", ""],
+  ["codeReviewQa", []],
+  ["codeReviewState", "draft"],
+  ["codeReviewError", ""],
+  ["codeSandboxRequirements", ""],
+  ["codeSandboxPrompt", ""],
+  ["codeSandboxCode", ""],
+  ["codeSandboxOutput", ""],
+  ["codeSandboxAnalysis", ""],
+  ["codeSandboxAwaitingApproval", false],
+  ["codeSandboxApprovalRequirements", ""],
+  ["codeSandboxApprovalAllowSourceBuilds", false],
+  ["codeSandboxApprovalIsRepair", false],
+  ["codeSandboxError", ""],
+  ["provider", null],
+  ["model", null],
+  ["isBranchSynthesis", false],
+  ["synthesisInstructions", ""],
+  ["branchStatus", "active"],
+  ["responseIncomplete", false],
+  ["promptTokens", null],
+  ["completionTokens", null],
+  ["estimatedCostUsd", null],
+  ["isFinalDeliverable", false],
+  ["color", null],
+  ["headerColor", null],
+  ["isSystemPrompt", false],
+  ["isSummaryNote", false],
+  ["isBranchComparison", false],
+  ["itemIds", []],
+  ["isLocked", true],
+  ["groupWidth", null],
+  ["groupHeight", null],
+  ["chartType", ""],
+  ["chartData", {}],
+  ["chartError", ""],
+  ["chartWidth", 480.0],
+  ["chartHeight", 340.0],
+  ["chartAspectLocked", true],
+  ["chartSourceNodeId", ""],
+  ["htmlSplitterState", null],
+  ["chatScrollValue", 0.0],
+  ["toolCalls", []],
+  ["overrideProvider", ""],
+  ["overrideModelId", ""],
+  ["indexIntoKnowledge", false],
+  ["planGoal", ""],
+  ["planSteps", []],
+  ["builderActivity", []],
+  ["builderStatus", ""],
+  ["builderMode", ""],
+  ["builderRunId", ""],
+  ["builderMaxSteps", 0],
+  ["builderMaxTokens", 0],
+  ["builderMaxWallSeconds", 0],
+  ["builderSpentSteps", 0],
+  ["builderSpentTokens", 0],
+  ["builderSpentWallSeconds", 0],
+  ["builderAwaitingToolApproval", false],
+  ["builderApprovalToolName", ""],
+  ["builderApprovalSummary", ""],
+  ["builderStatusDetail", ""],
+  ["harnessGoal", ""],
+  ["harnessReply", ""],
+  ["harnessStatus", ""],
+  ["harnessStatusDetail", ""],
+  ["harnessRunId", ""],
+  ["harnessActivity", []],
+  ["harnessContextTokens", 0],
+  ["harnessMaxContextTokens", 0],
+  ["harnessCompactions", 0],
+  ["harnessAwaitingApproval", false],
+  ["harnessApprovalToolName", ""],
+  ["harnessApprovalSummary", ""],
+  ["harnessApprovalSessionOffered", false],
+  ["harnessPlan", []],
+  ["harnessAwaitingQuestion", false],
+  ["harnessQuestion", ""],
+  ["harnessWorkspacePath", ""],
+  ["harnessWorkspaceActive", ""],
+  ["harnessMaxTurns", 0],
+  ["harnessSpentTurns", 0],
+  ["harnessSpentTokens", 0],
+  ["pluginState", {}],
+];
+
+export function hydrateSceneNodeRow(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  let hydrated: Record<string, unknown> | null = null;
+  for (const [key, fallback] of SCENE_NODE_ROW_WIRE_DEFAULTS) {
+    if (value[key] !== undefined) continue;
+    hydrated ??= { ...value };
+    hydrated[key] = Array.isArray(fallback) ? [] : isRecord(fallback) ? {} : fallback;
+  }
+  return hydrated ?? value;
+}
+
+function hydrateSceneState(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  let hydrated: Record<string, unknown> | null = null;
+  {
+    const rows = value["nodes"];
+    if (Array.isArray(rows)) {
+      const restored = rows.map(hydrateSceneNodeRow);
+      if (restored.some((row, i) => row !== rows[i])) (hydrated ??= { ...value })["nodes"] = restored;
+    }
+  }
+  return hydrated ?? value;
+}
+
 function checkSceneNodeRow(value: unknown, path: string, errors: string[]): void {
   if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
   {
@@ -1835,9 +2016,10 @@ function checkSceneState(value: unknown, path: string, errors: string[]): void {
 }
 
 export function validateSceneState(value: unknown): ValidationResult<SceneState> {
+  const hydrated = hydrateSceneState(value);
   const errors: string[] = [];
-  checkSceneState(value, "$", errors);
+  checkSceneState(hydrated, "$", errors);
   return errors.length === 0
-    ? { ok: true, value: value as SceneState }
+    ? { ok: true, value: hydrated as SceneState }
     : { ok: false, errors };
 }

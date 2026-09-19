@@ -28,6 +28,7 @@ from backend.plugin_sdk import (
 from backend.plugins import register_plugins
 from backend.session_load import restore_chat_into_document
 from backend.session_save import build_chat_data
+from backend.tests.conftest import client_row
 from graphlink_settings_store import SettingsManager
 
 # The three demo plugins (hello_node, counter_node, sandboxed_demo) live in
@@ -743,13 +744,13 @@ def test_live_wire_scene_payload_includes_plugin_state_when_serializer_registere
     )
 
     wire = canvas_document.scene_payload()
-    node_wire = next(n for n in wire["nodes"] if n["id"] == node_id)
+    node_wire = next(client_row(n) for n in wire["nodes"] if n["id"] == node_id)
     # Coerced to str on the wire (SceneNodeRow.pluginState is dict[str, str]
     # - see contracts/graphlink_scene_payload.py's own comment) even though
     # `clicks` is a real int in memory and in the save file.
     assert node_wire["pluginState"] == {"clicks": "3", "label": "initial"}
 
-    parent_wire = next(n for n in wire["nodes"] if n["id"] == parent.id)
+    parent_wire = next(client_row(n) for n in wire["nodes"] if n["id"] == parent.id)
     assert parent_wire["pluginState"] == {}
 
 
@@ -764,7 +765,7 @@ def test_live_wire_plugin_state_is_empty_for_a_plugin_kind_with_no_serializer(tm
     )
 
     wire = canvas_document.scene_payload()
-    node_wire = next(n for n in wire["nodes"] if n["id"] == node_id)
+    node_wire = next(client_row(n) for n in wire["nodes"] if n["id"] == node_id)
     assert node_wire["pluginState"] == {}
 
 
@@ -800,7 +801,7 @@ def test_a_plugin_serializer_that_raises_degrades_to_empty_plugin_state_on_the_w
     # Live wire: a raising serializer degrades to {}, never crashes the
     # whole scene publish.
     wire = canvas_document.scene_payload()
-    node_wire = next(n for n in wire["nodes"] if n["id"] == node_id)
+    node_wire = next(client_row(n) for n in wire["nodes"] if n["id"] == node_id)
     assert node_wire["pluginState"] == {}
 
     # Save file: same degrade-not-crash posture - the node's universal

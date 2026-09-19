@@ -41,7 +41,7 @@ from typing import Any, TypedDict
 # added explicitly rather than relying on cwd or an editable install.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from graphlink_wire_schema import json_schema_for
+from graphlink_wire_schema import NO_DEFAULT, json_schema_for, omits_defaults, wire_default
 
 __all__ = ["schema_json_for", "typescript_for", "GENERATED_ARTIFACTS"]
 
@@ -183,20 +183,166 @@ def typescript_for(dataclass_type: type, *, source: str) -> str:
 
     lines.append(_VALIDATOR_PREAMBLE)
 
+    sparse_fields = _root_sparse_fields(dataclass_type)
+    for row_type in dict.fromkeys(row for row, _ in sparse_fields.values()):
+        lines.append(_hydrator_for(row_type))
+    if sparse_fields:
+        lines.append(_root_hydrator_for(root_name, sparse_fields))
+
     for name in ordered:
         lines.append(_validator_for(name, collected[name]))
 
-    lines.append(
-        f"export function validate{root_name}(value: unknown): ValidationResult<{root_name}> {{\n"
-        f"  const errors: string[] = [];\n"
-        f"  check{root_name}(value, \"$\", errors);\n"
-        f"  return errors.length === 0\n"
-        f"    ? {{ ok: true, value: value as {root_name} }}\n"
-        f"    : {{ ok: false, errors }};\n"
-        f"}}\n"
-    )
+    if sparse_fields:
+        # The one change a sparse row makes to its root's validator: restore
+        # the omitted fields FIRST, then validate - and hand back the restored
+        # value, so every reader downstream sees the full row.
+        lines.append(
+            f"export function validate{root_name}(value: unknown): ValidationResult<{root_name}> {{\n"
+            f"  const hydrated = hydrate{root_name}(value);\n"
+            f"  const errors: string[] = [];\n"
+            f"  check{root_name}(hydrated, \"$\", errors);\n"
+            f"  return errors.length === 0\n"
+            f"    ? {{ ok: true, value: hydrated as {root_name} }}\n"
+            f"    : {{ ok: false, errors }};\n"
+            f"}}\n"
+        )
+    else:
+        lines.append(
+            f"export function validate{root_name}(value: unknown): ValidationResult<{root_name}> {{\n"
+            f"  const errors: string[] = [];\n"
+            f"  check{root_name}(value, \"$\", errors);\n"
+            f"  return errors.length === 0\n"
+            f"    ? {{ ok: true, value: value as {root_name} }}\n"
+            f"    : {{ ok: false, errors }};\n"
+            f"}}\n"
+        )
 
     return "\n".join(lines)
+
+
+def _root_sparse_fields(root: type) -> dict[str, tuple[type, bool]]:
+    """{root field name: (sparse row type, held as a list)} for every root
+    field that holds a sparse row (graphlink_wire_schema.py's "SPARSE ROWS") directly or as a
+    list. Restoring is only generated at that depth; a sparse row anywhere
+    deeper raises here, so one can never ship with nothing restoring it."""
+    import dataclasses
+    import typing
+    from typing import get_args, get_origin
+
+    hints = typing.get_type_hints(root)
+    direct: dict[str, tuple[type, bool]] = {}
+    for field in dataclasses.fields(root):
+        annotation = hints[field.name]
+        is_list = get_origin(annotation) is list
+        if is_list:
+            (annotation,) = get_args(annotation)
+        if isinstance(annotation, type) and dataclasses.is_dataclass(annotation) and omits_defaults(annotation):
+            direct[field.name] = (annotation, is_list)
+
+    def deeper(dataclass_type: type, seen: set[type]) -> None:
+        if dataclass_type in seen:
+            return
+        seen.add(dataclass_type)
+        nested_hints = typing.get_type_hints(dataclass_type)
+        for field in dataclasses.fields(dataclass_type):
+            for nested in _nested_dataclasses(_strip_optional(nested_hints[field.name])):
+                if omits_defaults(nested) and not (dataclass_type is root and field.name in direct):
+                    raise ValueError(
+                        f"{nested.__name__} omits defaults but sits below {root.__name__}.{field.name}; "
+                        "codegen only restores sparse rows held directly by the root payload"
+                    )
+                deeper(nested, seen)
+
+    deeper(root, set())
+    return direct
+
+
+def _strip_optional(annotation: Any) -> Any:
+    import types as _types
+    import typing
+    from typing import get_args, get_origin
+
+    if get_origin(annotation) in (_types.UnionType, typing.Union):
+        return next(a for a in get_args(annotation) if a is not type(None))
+    return annotation
+
+
+def _screaming_snake(name: str) -> str:
+    """SceneNodeRow -> SCENE_NODE_ROW."""
+    return "".join(f"_{c}" if c.isupper() and i else c for i, c in enumerate(name)).upper()
+
+
+def _hydrator_for(row_type: type) -> str:
+    """The restore half of a sparse row: its declared defaults as a table,
+    and hydrate<Row>(), which fills in every ABSENT key. A present key -
+    including an explicit null - is data and is left for the validator to
+    judge. Containers restore as fresh empty values (wire_default guarantees
+    every container default is empty), never a shared instance. A row with
+    nothing missing comes back as the SAME object, so re-validating rows that
+    are already whole (the scene store re-checks the whole scene after every
+    patch) allocates nothing and keeps every untouched row's identity."""
+    import dataclasses
+
+    name = _ts_type_name(row_type.__name__)
+    table = f"{_screaming_snake(name)}_WIRE_DEFAULTS"
+    entries = [
+        f"  [{json.dumps(field.name)}, {json.dumps(default)}],"
+        for field in dataclasses.fields(row_type)
+        if (default := wire_default(field)) is not NO_DEFAULT
+    ]
+    return "\n".join([
+        f"/** {name} crosses the wire sparse: the sender omits every field at its",
+        " * declared default (contracts: WIRE_OMITS_DEFAULTS). These are those",
+        " * defaults - the value every omitted field is restored to. */",
+        f"export const {table}: ReadonlyArray<readonly [string, unknown]> = [",
+        *entries,
+        "];",
+        "",
+        f"export function hydrate{name}(value: unknown): unknown {{",
+        "  if (!isRecord(value)) return value;",
+        "  let hydrated: Record<string, unknown> | null = null;",
+        f"  for (const [key, fallback] of {table}) {{",
+        "    if (value[key] !== undefined) continue;",
+        "    hydrated ??= { ...value };",
+        "    hydrated[key] = Array.isArray(fallback) ? [] : isRecord(fallback) ? {} : fallback;",
+        "  }",
+        "  return hydrated ?? value;",
+        "}",
+        "",
+    ])
+
+
+def _root_hydrator_for(root_name: str, sparse_fields: dict[str, tuple[type, bool]]) -> str:
+    body = [
+        f"function hydrate{root_name}(value: unknown): unknown {{",
+        "  if (!isRecord(value)) return value;",
+        "  let hydrated: Record<string, unknown> | null = null;",
+    ]
+    # Only well-shaped fields are restored; anything else is left exactly as
+    # it arrived, for the validator to reject.
+    for field_name, (row_type, is_list) in sparse_fields.items():
+        row = _ts_type_name(row_type.__name__)
+        key = json.dumps(field_name)
+        if is_list:
+            body += [
+                "  {",
+                f"    const rows = value[{key}];",
+                "    if (Array.isArray(rows)) {",
+                f"      const restored = rows.map(hydrate{row});",
+                f"      if (restored.some((row, i) => row !== rows[i])) (hydrated ??= {{ ...value }})[{key}] = restored;",
+                "    }",
+                "  }",
+            ]
+        else:
+            body += [
+                "  {",
+                f"    const row = value[{key}];",
+                f"    const restored = hydrate{row}(row);",
+                f"    if (restored !== row) (hydrated ??= {{ ...value }})[{key}] = restored;",
+                "  }",
+            ]
+    body += ["  return hydrated ?? value;", "}", ""]
+    return "\n".join(body)
 
 
 _VALIDATOR_PREAMBLE = '''export type ValidationResult<T> =

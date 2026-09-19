@@ -57,18 +57,23 @@
         "additionalProperties": false,
         "properties": {
           "artifactContent": {
+            "default": "",
             "type": "string"
           },
           "artifactError": {
+            "default": "",
             "type": "string"
           },
           "attachmentKind": {
+            "default": "",
             "type": "string"
           },
           "branchStatus": {
+            "default": "active",
             "type": "string"
           },
           "builderActivity": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -100,52 +105,68 @@
             "type": "array"
           },
           "builderApprovalSummary": {
+            "default": "",
             "type": "string"
           },
           "builderApprovalToolName": {
+            "default": "",
             "type": "string"
           },
           "builderAwaitingToolApproval": {
+            "default": false,
             "type": "boolean"
           },
           "builderMaxSteps": {
+            "default": 0,
             "type": "integer"
           },
           "builderMaxTokens": {
+            "default": 0,
             "type": "integer"
           },
           "builderMaxWallSeconds": {
+            "default": 0,
             "type": "integer"
           },
           "builderMode": {
+            "default": "",
             "type": "string"
           },
           "builderRunId": {
+            "default": "",
             "type": "string"
           },
           "builderSpentSteps": {
+            "default": 0,
             "type": "integer"
           },
           "builderSpentTokens": {
+            "default": 0,
             "type": "integer"
           },
           "builderSpentWallSeconds": {
+            "default": 0,
             "type": "integer"
           },
           "builderStatus": {
+            "default": "",
             "type": "string"
           },
           "builderStatusDetail": {
+            "default": "",
             "type": "string"
           },
           "byteSize": {
+            "default": null,
             "type": "integer"
           },
           "chartAspectLocked": {
+            "default": true,
             "type": "boolean"
           },
           "chartData": {
             "additionalProperties": false,
+            "default": {},
             "properties": {
               "bins": {
                 "type": "integer"
@@ -212,60 +233,78 @@
             "type": "object"
           },
           "chartError": {
+            "default": "",
             "type": "string"
           },
           "chartHeight": {
+            "default": 340.0,
             "type": "number"
           },
           "chartSourceNodeId": {
+            "default": "",
             "type": "string"
           },
           "chartType": {
+            "default": "",
             "type": "string"
           },
           "chartWidth": {
+            "default": 480.0,
             "type": "number"
           },
           "chatScrollValue": {
+            "default": 0.0,
             "type": "number"
           },
           "code": {
+            "default": "",
             "type": "string"
           },
           "codeReviewAdditions": {
+            "default": 0,
             "type": "integer"
           },
           "codeReviewBaseRef": {
+            "default": "",
             "type": "string"
           },
           "codeReviewChangedFiles": {
+            "default": 0,
             "type": "integer"
           },
           "codeReviewConfidence": {
+            "default": "",
             "type": "string"
           },
           "codeReviewDeletions": {
+            "default": 0,
             "type": "integer"
           },
           "codeReviewDiffChars": {
+            "default": 0,
             "type": "integer"
           },
           "codeReviewDiffTruncated": {
+            "default": false,
             "type": "boolean"
           },
           "codeReviewDiffVersion": {
+            "default": 0,
             "type": "integer"
           },
           "codeReviewDismissedIds": {
+            "default": [],
             "items": {
               "type": "string"
             },
             "type": "array"
           },
           "codeReviewError": {
+            "default": "",
             "type": "string"
           },
           "codeReviewErrors": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -313,6 +352,7 @@
             "type": "array"
           },
           "codeReviewFiles": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -351,9 +391,11 @@
             "type": "array"
           },
           "codeReviewFilesTruncated": {
+            "default": false,
             "type": "boolean"
           },
           "codeReviewFindings": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -405,27 +447,35 @@
             "type": "array"
           },
           "codeReviewHeadRef": {
+            "default": "",
             "type": "string"
           },
           "codeReviewOverview": {
+            "default": "",
             "type": "string"
           },
           "codeReviewPrHtmlUrl": {
+            "default": "",
             "type": "string"
           },
           "codeReviewPrNumber": {
+            "default": 0,
             "type": "integer"
           },
           "codeReviewPrState": {
+            "default": "",
             "type": "string"
           },
           "codeReviewPrTitle": {
+            "default": "",
             "type": "string"
           },
           "codeReviewPrUrl": {
+            "default": "",
             "type": "string"
           },
           "codeReviewQa": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -445,33 +495,42 @@
             "type": "array"
           },
           "codeReviewQualityScore": {
+            "default": 0,
             "type": "integer"
           },
           "codeReviewQualitySummary": {
+            "default": "",
             "type": "string"
           },
           "codeReviewRepo": {
+            "default": "",
             "type": "string"
           },
           "codeReviewRisk": {
+            "default": "",
             "type": "string"
           },
           "codeReviewScores": {
             "additionalProperties": {
               "type": "string"
             },
+            "default": {},
             "type": "object"
           },
           "codeReviewState": {
+            "default": "draft",
             "type": "string"
           },
           "codeReviewTitle": {
+            "default": "",
             "type": "string"
           },
           "codeReviewVerdict": {
+            "default": "none",
             "type": "string"
           },
           "codeReviewWalkthrough": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -498,81 +557,106 @@
             "type": "array"
           },
           "codeSandboxAnalysis": {
+            "default": "",
             "type": "string"
           },
           "codeSandboxApprovalAllowSourceBuilds": {
+            "default": false,
             "type": "boolean"
           },
           "codeSandboxApprovalIsRepair": {
+            "default": false,
             "type": "boolean"
           },
           "codeSandboxApprovalRequirements": {
+            "default": "",
             "type": "string"
           },
           "codeSandboxAwaitingApproval": {
+            "default": false,
             "type": "boolean"
           },
           "codeSandboxCode": {
+            "default": "",
             "type": "string"
           },
           "codeSandboxError": {
+            "default": "",
             "type": "string"
           },
           "codeSandboxOutput": {
+            "default": "",
             "type": "string"
           },
           "codeSandboxPrompt": {
+            "default": "",
             "type": "string"
           },
           "codeSandboxRequirements": {
+            "default": "",
             "type": "string"
           },
           "color": {
+            "default": null,
             "type": "string"
           },
           "completionTokens": {
+            "default": null,
             "type": "integer"
           },
           "content": {
+            "default": "",
             "type": "string"
           },
           "durationSeconds": {
+            "default": null,
             "type": "number"
           },
           "estimatedCostUsd": {
+            "default": null,
             "type": "number"
           },
           "filePath": {
+            "default": "",
             "type": "string"
           },
           "gitlinkBranch": {
+            "default": "",
             "type": "string"
           },
           "gitlinkChangeFingerprint": {
+            "default": null,
             "type": "string"
           },
           "gitlinkChangeState": {
+            "default": "draft",
             "type": "string"
           },
           "gitlinkContextStats": {
             "additionalProperties": {
               "type": "string"
             },
+            "default": {},
             "type": "object"
           },
           "gitlinkContextSummary": {
+            "default": "",
             "type": "string"
           },
           "gitlinkContextVersion": {
+            "default": 0,
             "type": "integer"
           },
           "gitlinkError": {
+            "default": "",
             "type": "string"
           },
           "gitlinkLocalRoot": {
+            "default": "",
             "type": "string"
           },
           "gitlinkPendingChanges": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -599,39 +683,49 @@
             "type": "array"
           },
           "gitlinkPreviewText": {
+            "default": "",
             "type": "string"
           },
           "gitlinkProposalMarkdown": {
+            "default": "",
             "type": "string"
           },
           "gitlinkRepo": {
+            "default": "",
             "type": "string"
           },
           "gitlinkRepoFilePaths": {
+            "default": [],
             "items": {
               "type": "string"
             },
             "type": "array"
           },
           "gitlinkScopeMode": {
+            "default": "selected",
             "type": "string"
           },
           "gitlinkSelectedPaths": {
+            "default": [],
             "items": {
               "type": "string"
             },
             "type": "array"
           },
           "gitlinkTaskPrompt": {
+            "default": "",
             "type": "string"
           },
           "groupHeight": {
+            "default": null,
             "type": "number"
           },
           "groupWidth": {
+            "default": null,
             "type": "number"
           },
           "harnessActivity": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -659,36 +753,47 @@
             "type": "array"
           },
           "harnessApprovalSessionOffered": {
+            "default": false,
             "type": "boolean"
           },
           "harnessApprovalSummary": {
+            "default": "",
             "type": "string"
           },
           "harnessApprovalToolName": {
+            "default": "",
             "type": "string"
           },
           "harnessAwaitingApproval": {
+            "default": false,
             "type": "boolean"
           },
           "harnessAwaitingQuestion": {
+            "default": false,
             "type": "boolean"
           },
           "harnessCompactions": {
+            "default": 0,
             "type": "integer"
           },
           "harnessContextTokens": {
+            "default": 0,
             "type": "integer"
           },
           "harnessGoal": {
+            "default": "",
             "type": "string"
           },
           "harnessMaxContextTokens": {
+            "default": 0,
             "type": "integer"
           },
           "harnessMaxTurns": {
+            "default": 0,
             "type": "integer"
           },
           "harnessPlan": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -708,36 +813,47 @@
             "type": "array"
           },
           "harnessQuestion": {
+            "default": "",
             "type": "string"
           },
           "harnessReply": {
+            "default": "",
             "type": "string"
           },
           "harnessRunId": {
+            "default": "",
             "type": "string"
           },
           "harnessSpentTokens": {
+            "default": 0,
             "type": "integer"
           },
           "harnessSpentTurns": {
+            "default": 0,
             "type": "integer"
           },
           "harnessStatus": {
+            "default": "",
             "type": "string"
           },
           "harnessStatusDetail": {
+            "default": "",
             "type": "string"
           },
           "harnessWorkspaceActive": {
+            "default": "",
             "type": "string"
           },
           "harnessWorkspacePath": {
+            "default": "",
             "type": "string"
           },
           "headerColor": {
+            "default": null,
             "type": "string"
           },
           "history": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -765,45 +881,58 @@
             "type": "array"
           },
           "htmlSplitterState": {
+            "default": null,
             "type": "number"
           },
           "id": {
             "type": "string"
           },
           "imageAssetId": {
+            "default": "",
             "type": "string"
           },
           "indexIntoKnowledge": {
+            "default": false,
             "type": "boolean"
           },
           "isBranchComparison": {
+            "default": false,
             "type": "boolean"
           },
           "isBranchSynthesis": {
+            "default": false,
             "type": "boolean"
           },
           "isCollapsed": {
+            "default": false,
             "type": "boolean"
           },
           "isDocked": {
+            "default": false,
             "type": "boolean"
           },
           "isFinalDeliverable": {
+            "default": false,
             "type": "boolean"
           },
           "isLocked": {
+            "default": true,
             "type": "boolean"
           },
           "isSummaryNote": {
+            "default": false,
             "type": "boolean"
           },
           "isSystemPrompt": {
+            "default": false,
             "type": "boolean"
           },
           "isUser": {
+            "default": false,
             "type": "boolean"
           },
           "itemIds": {
+            "default": [],
             "items": {
               "type": "string"
             },
@@ -813,27 +942,35 @@
             "type": "string"
           },
           "language": {
+            "default": "",
             "type": "string"
           },
           "mimeType": {
+            "default": "",
             "type": "string"
           },
           "model": {
+            "default": null,
             "type": "string"
           },
           "overrideModelId": {
+            "default": "",
             "type": "string"
           },
           "overrideProvider": {
+            "default": "",
             "type": "string"
           },
           "pendingRequestId": {
+            "default": null,
             "type": "string"
           },
           "planGoal": {
+            "default": "",
             "type": "string"
           },
           "planSteps": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -864,28 +1001,36 @@
             "additionalProperties": {
               "type": "string"
             },
+            "default": {},
             "type": "object"
           },
           "previewLabel": {
+            "default": "",
             "type": "string"
           },
           "promptTokens": {
+            "default": null,
             "type": "integer"
           },
           "provider": {
+            "default": null,
             "type": "string"
           },
           "researchActiveSourceId": {
+            "default": null,
             "type": "string"
           },
           "researchCompleted": {
+            "default": 0,
             "type": "integer"
           },
           "researchError": {
+            "default": "",
             "type": "string"
           },
           "researchResult": {
             "additionalProperties": false,
+            "default": null,
             "properties": {
               "answerMarkdown": {
                 "type": "string"
@@ -1015,24 +1160,30 @@
             "type": "object"
           },
           "researchRetainToKnowledge": {
+            "default": false,
             "type": "boolean"
           },
           "researchStage": {
+            "default": "",
             "type": "string"
           },
           "researchTotal": {
+            "default": 0,
             "type": "integer"
           },
           "responseIncomplete": {
+            "default": false,
             "type": "boolean"
           },
           "synthesisInstructions": {
+            "default": "",
             "type": "string"
           },
           "title": {
             "type": "string"
           },
           "toolCalls": {
+            "default": [],
             "items": {
               "additionalProperties": false,
               "properties": {
@@ -1075,142 +1226,7 @@
           "x",
           "y",
           "title",
-          "kind",
-          "content",
-          "isUser",
-          "isCollapsed",
-          "code",
-          "language",
-          "attachmentKind",
-          "filePath",
-          "mimeType",
-          "previewLabel",
-          "isDocked",
-          "imageAssetId",
-          "history",
-          "researchStage",
-          "researchCompleted",
-          "researchTotal",
-          "researchError",
-          "researchRetainToKnowledge",
-          "artifactContent",
-          "artifactError",
-          "gitlinkRepo",
-          "gitlinkBranch",
-          "gitlinkScopeMode",
-          "gitlinkLocalRoot",
-          "gitlinkRepoFilePaths",
-          "gitlinkSelectedPaths",
-          "gitlinkTaskPrompt",
-          "gitlinkContextStats",
-          "gitlinkContextSummary",
-          "gitlinkContextVersion",
-          "gitlinkProposalMarkdown",
-          "gitlinkPendingChanges",
-          "gitlinkPreviewText",
-          "gitlinkChangeState",
-          "gitlinkError",
-          "codeReviewPrUrl",
-          "codeReviewRepo",
-          "codeReviewPrNumber",
-          "codeReviewPrTitle",
-          "codeReviewPrState",
-          "codeReviewPrHtmlUrl",
-          "codeReviewBaseRef",
-          "codeReviewHeadRef",
-          "codeReviewAdditions",
-          "codeReviewDeletions",
-          "codeReviewChangedFiles",
-          "codeReviewFiles",
-          "codeReviewFilesTruncated",
-          "codeReviewDiffTruncated",
-          "codeReviewDiffChars",
-          "codeReviewDiffVersion",
-          "codeReviewWalkthrough",
-          "codeReviewFindings",
-          "codeReviewErrors",
-          "codeReviewDismissedIds",
-          "codeReviewTitle",
-          "codeReviewOverview",
-          "codeReviewConfidence",
-          "codeReviewScores",
-          "codeReviewQualityScore",
-          "codeReviewVerdict",
-          "codeReviewRisk",
-          "codeReviewQualitySummary",
-          "codeReviewQa",
-          "codeReviewState",
-          "codeReviewError",
-          "codeSandboxRequirements",
-          "codeSandboxPrompt",
-          "codeSandboxCode",
-          "codeSandboxOutput",
-          "codeSandboxAnalysis",
-          "codeSandboxAwaitingApproval",
-          "codeSandboxApprovalRequirements",
-          "codeSandboxApprovalAllowSourceBuilds",
-          "codeSandboxApprovalIsRepair",
-          "codeSandboxError",
-          "isBranchSynthesis",
-          "synthesisInstructions",
-          "branchStatus",
-          "responseIncomplete",
-          "isFinalDeliverable",
-          "isSystemPrompt",
-          "isSummaryNote",
-          "isBranchComparison",
-          "itemIds",
-          "isLocked",
-          "chartType",
-          "chartData",
-          "chartError",
-          "chartWidth",
-          "chartHeight",
-          "chartAspectLocked",
-          "chartSourceNodeId",
-          "chatScrollValue",
-          "toolCalls",
-          "overrideProvider",
-          "overrideModelId",
-          "indexIntoKnowledge",
-          "planGoal",
-          "planSteps",
-          "builderActivity",
-          "builderStatus",
-          "builderMode",
-          "builderRunId",
-          "builderMaxSteps",
-          "builderMaxTokens",
-          "builderMaxWallSeconds",
-          "builderSpentSteps",
-          "builderSpentTokens",
-          "builderSpentWallSeconds",
-          "builderAwaitingToolApproval",
-          "builderApprovalToolName",
-          "builderApprovalSummary",
-          "builderStatusDetail",
-          "harnessGoal",
-          "harnessReply",
-          "harnessStatus",
-          "harnessStatusDetail",
-          "harnessRunId",
-          "harnessActivity",
-          "harnessContextTokens",
-          "harnessMaxContextTokens",
-          "harnessCompactions",
-          "harnessAwaitingApproval",
-          "harnessApprovalToolName",
-          "harnessApprovalSummary",
-          "harnessApprovalSessionOffered",
-          "harnessPlan",
-          "harnessAwaitingQuestion",
-          "harnessQuestion",
-          "harnessWorkspacePath",
-          "harnessWorkspaceActive",
-          "harnessMaxTurns",
-          "harnessSpentTurns",
-          "harnessSpentTokens",
-          "pluginState"
+          "kind"
         ],
         "type": "object"
       },

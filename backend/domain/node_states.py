@@ -7,11 +7,13 @@ SceneNode.state. Migration proceeds kind-by-kind (see each state class's
 own relocation note); a kind not yet migrated still keeps its fields
 directly on SceneNode.
 
-Wire-compatibility constraint: SceneDocument.scene_payload() must keep
-emitting the exact same flat per-node shape it does today. This module
-introduces no wire-layer change by itself - it only relocates where a
-field lives in memory; scene_payload's own per-kind read expressions are
-updated in lockstep with each kind's migration, in backend/domain/graph.py.
+Wire-compatibility constraint: the client must keep reading the exact same
+flat per-node shape. This module introduces no wire-layer change by itself -
+it only relocates where a field lives in memory. The row itself is built by
+backend/domain/node_wire.py from one field table per state class here (sent
+sparse, restored to the flat shape client-side - see that module), so a
+field added to a state class that should reach the frontend needs its entry
+in that table too.
 
 kind values with no state class (no kind-specific fields at all, so
 node.state stays None for them permanently): placeholder, thinking,

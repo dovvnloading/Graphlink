@@ -43,6 +43,7 @@ from backend.plugin_sdk import (
 )
 from backend.plugins import plugins_payload, register_plugins
 from backend.session_load import restore_chat_into_document
+from backend.tests.conftest import client_row
 from backend.session_save import build_chat_data
 from graphlink_settings_store import SettingsManager
 
@@ -293,14 +294,14 @@ def test_revoking_a_plugins_grant_stops_its_live_wire_serializer_from_running(tm
 
     # Granted: the live wire carries the plugin's own custom state.
     wire = canvas_document.scene_payload()
-    node_wire = next(n for n in wire["nodes"] if n["id"] == node_id)
+    node_wire = next(client_row(n) for n in wire["nodes"] if n["id"] == node_id)
     assert node_wire["pluginState"] == {"clicks": "3"}
 
     # Revoke - the SAME live node, no re-registration, no session restart.
     settings_manager.set_plugin_grant("statefulgrant1", False)
 
     wire2 = canvas_document.scene_payload()
-    node_wire2 = next(n for n in wire2["nodes"] if n["id"] == node_id)
+    node_wire2 = next(client_row(n) for n in wire2["nodes"] if n["id"] == node_id)
     # Degrades to {} (the same "no plugin state to show" shape a plugin
     # with no serializer at all produces) - proving the wrapper re-checks
     # the CURRENT grant on every publish, not just at registration time.

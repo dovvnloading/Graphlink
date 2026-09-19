@@ -270,8 +270,9 @@ def test_a_sankey_flow_with_a_wrong_typed_field_is_reported_at_its_own_indexed_n
 
 
 def test_a_non_chart_node_s_all_optional_default_chart_data_row_still_validates_with_no_errors():
-    # The non-chart-node majority path: chartData is ALWAYS present on the
-    # wire (never omitted - see SceneNodeRow's own field comment) but every
+    # The non-chart-node majority path: a sparse row omits chartData for a
+    # non-chart node and the client restores it as `{}` (backend/domain/
+    # node_wire.py) - the shape validated here - so it is present, but every
     # one of its fields is None for a node that was never a chart.
     payload = _chart_node_payload(kind="chat", chartType="")
     assert validate_payload(payload, SceneNodeRow) == []

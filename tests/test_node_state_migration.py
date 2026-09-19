@@ -48,6 +48,8 @@ from dataclasses import fields as dataclass_fields
 from pathlib import Path
 
 from backend.domain.graph import SceneDocument
+from backend.domain.node_wire import wire_keys
+from backend.tests.conftest import client_row
 from backend.domain.model import SceneNode
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -421,10 +423,16 @@ def _non_owning_kind_node(doc):
 
 
 def test_scene_payload_key_set_is_unchanged_by_the_migration():
+    # Rows are sparse on the wire (backend/domain/node_wire.py) - a field at
+    # its default is left out - so the pinned set is every key the row
+    # builder can emit, not the keys of any one node's raw row...
+    assert sorted(wire_keys()) == _EXPECTED_SCENE_NODE_WIRE_KEYS
+    # ...and what the client reads once it restores a non-owning node's row
+    # is all of them, bar contentParts, which the contract never declared.
     doc = SceneDocument()
     _non_owning_kind_node(doc)
-    row = doc.scene_payload()["nodes"][-1]
-    assert sorted(row.keys()) == _EXPECTED_SCENE_NODE_WIRE_KEYS
+    row = client_row(doc.scene_payload()["nodes"][-1])
+    assert sorted(row.keys()) == [key for key in _EXPECTED_SCENE_NODE_WIRE_KEYS if key != "contentParts"]
 
 
 # Every migrated field's wire VALUE for a node of a kind that does NOT own
@@ -570,7 +578,8 @@ _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS: dict[str, object] = {
 def test_migrated_field_wire_fallbacks_match_pre_migration_defaults():
     doc = SceneDocument()
     _non_owning_kind_node(doc)
-    row = doc.scene_payload()["nodes"][-1]
+    # As the client reads it: a sparse row's omitted fields restored.
+    row = client_row(doc.scene_payload()["nodes"][-1])
     mismatches = [
         f"{key}: got {row[key]!r}, expected {expected!r}"
         for key, expected in _EXPECTED_NON_OWNING_KIND_WIRE_DEFAULTS.items()
