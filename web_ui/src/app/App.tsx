@@ -25,23 +25,14 @@ import { resolveTreeNavigationTarget, type TreeNavigationDirection } from "./can
 import { requestNewChat } from "./chrome/commands";
 import { isGatedWhileTyping, resolveShortcut, type ShortcutId } from "./chrome/shortcuts";
 import { DocumentViewPanel } from "./canvas/DocumentViewPanel";
-import { AboutDialog } from "./chrome/AboutDialog";
 import { AppBar } from "./chrome/AppBar";
-import { CommandPalette } from "./chrome/CommandPalette";
 import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
-import { DiagnosticsDialog } from "./chrome/DiagnosticsDialog";
-import { GlobalSearchDialog } from "./chrome/GlobalSearchDialog";
-import { KnowledgeSearchDialog } from "./chrome/KnowledgeSearchDialog";
-import { QuickSwitcherDialog } from "./chrome/QuickSwitcherDialog";
-import { BuilderLaunchDialog } from "./chrome/BuilderLaunchDialog";
-import { HarnessLaunchDialog } from "./chrome/HarnessLaunchDialog";
 import { NotificationBanner } from "./chrome/NotificationBanner";
 import { OnboardingDialog } from "./chrome/OnboardingDialog";
 import { PinOverlay } from "./chrome/PinOverlay";
 import { PluginPicker } from "./chrome/PluginPicker";
 import { SearchOverlay } from "./chrome/SearchOverlay";
-import { ViewPopover } from "./chrome/ViewPopover";
 import { OverlayProvider, useOverlays } from "./overlays/overlays";
 
 // ADR-011 stage 11.6: ChatLibraryDialog, HelpDialog (+ its 76-item static
@@ -56,6 +47,35 @@ const ChatLibraryDialog = lazy(() =>
 );
 const HelpDialog = lazy(() => import("./chrome/HelpDialog").then((m) => ({ default: m.HelpDialog })));
 const SettingsDialog = lazy(() => import("./chrome/SettingsDialog").then((m) => ({ default: m.SettingsDialog })));
+// ADR-019's 512,000-byte initial-chunk budget: every other surface that only
+// a click or a shortcut opens, on the same LazySurface terms. Each was
+// checked for work it does while CLOSED, which a deferred mount would
+// silently stop: none has any. OnboardingDialog is the one that does (it
+// opens itself on a fresh machine), so it stays eager - see its mount below.
+// The topic-subscribing ones are safe mounted late: About and Diagnostics
+// are their topic's only subscriber, so their first subscribe still fetches
+// a snapshot, and QuickSwitcher already resubscribes for exactly that reason.
+const AboutDialog = lazy(() => import("./chrome/AboutDialog").then((m) => ({ default: m.AboutDialog })));
+const BuilderLaunchDialog = lazy(() =>
+  import("./chrome/BuilderLaunchDialog").then((m) => ({ default: m.BuilderLaunchDialog })),
+);
+const CommandPalette = lazy(() => import("./chrome/CommandPalette").then((m) => ({ default: m.CommandPalette })));
+const DiagnosticsDialog = lazy(() =>
+  import("./chrome/DiagnosticsDialog").then((m) => ({ default: m.DiagnosticsDialog })),
+);
+const GlobalSearchDialog = lazy(() =>
+  import("./chrome/GlobalSearchDialog").then((m) => ({ default: m.GlobalSearchDialog })),
+);
+const HarnessLaunchDialog = lazy(() =>
+  import("./chrome/HarnessLaunchDialog").then((m) => ({ default: m.HarnessLaunchDialog })),
+);
+const KnowledgeSearchDialog = lazy(() =>
+  import("./chrome/KnowledgeSearchDialog").then((m) => ({ default: m.KnowledgeSearchDialog })),
+);
+const QuickSwitcherDialog = lazy(() =>
+  import("./chrome/QuickSwitcherDialog").then((m) => ({ default: m.QuickSwitcherDialog })),
+);
+const ViewPopover = lazy(() => import("./chrome/ViewPopover").then((m) => ({ default: m.ViewPopover })));
 
 /**
  * The single-app shell (Qt-removal plan R0-R2).
@@ -221,7 +241,18 @@ function GlobalShortcuts({ store }: { store: SceneStore }) {
  * (draft form fields, list scroll position, search text) survives being
  * closed and reopened exactly as it did when these were eagerly mounted.
  */
-function LazySurface({ overlayName, children }: { overlayName: string; children: ReactNode }) {
+function LazySurface({
+  overlayName,
+  children,
+  fallback = <LazyDialogFallback />,
+}: {
+  overlayName: string;
+  children: ReactNode;
+  /** What shows while the chunk loads. The dialog-shaped default suits a
+   * dialog; a popover passes null rather than flash a full scrim for the
+   * few milliseconds a local chunk takes. */
+  fallback?: ReactNode;
+}) {
   const overlays = useOverlays();
   const isOpen = overlays.isOpen(overlayName);
   const [hasOpened, setHasOpened] = useState(isOpen);
@@ -234,7 +265,7 @@ function LazySurface({ overlayName, children }: { overlayName: string; children:
     setHasOpened(true);
   }
   if (!hasOpened) return null;
-  return <Suspense fallback={<LazyDialogFallback />}>{children}</Suspense>;
+  return <Suspense fallback={fallback}>{children}</Suspense>;
 }
 
 /** Minimal Suspense fallback for the first-open chunk fetch above - same
@@ -457,7 +488,9 @@ function App() {
                     </div>
                   </CanvasSearchProvider>
                   <PinOverlay store={sceneStore} />
-                  <ViewPopover store={sceneStore} />
+                  <LazySurface overlayName="view" fallback={null}>
+                    <ViewPopover store={sceneStore} />
+                  </LazySurface>
                   <PluginPicker transport={transport} store={sceneStore} />
                   <div className="app-notification-layer">
                     <NotificationBanner store={composerStore} />
@@ -469,9 +502,15 @@ function App() {
                       showTokenCounter={settingsVisibility.showTokenCounter !== false}
                     />
                   </div>
-                  <CommandPalette store={sceneStore} />
-                  <QuickSwitcherDialog transport={transport} />
-                  <AboutDialog transport={transport} />
+                  <LazySurface overlayName="palette">
+                    <CommandPalette store={sceneStore} />
+                  </LazySurface>
+                  <LazySurface overlayName="quick-switcher">
+                    <QuickSwitcherDialog transport={transport} />
+                  </LazySurface>
+                  <LazySurface overlayName="about">
+                    <AboutDialog transport={transport} />
+                  </LazySurface>
                   {/* ADR-012 stage 12.6: not lazy, unlike Help/Settings/
                       Library just below - it has to be mounted from the
                       start so its own app-settings subscription can decide
@@ -482,11 +521,21 @@ function App() {
                   <LazySurface overlayName="help">
                     <HelpDialog />
                   </LazySurface>
-                  <DiagnosticsDialog transport={transport} />
-                  <KnowledgeSearchDialog transport={transport} />
-                  <GlobalSearchDialog transport={transport} />
-                  <BuilderLaunchDialog transport={transport} store={sceneStore} />
-                  <HarnessLaunchDialog transport={transport} store={sceneStore} />
+                  <LazySurface overlayName="diagnostics">
+                    <DiagnosticsDialog transport={transport} />
+                  </LazySurface>
+                  <LazySurface overlayName="knowledge">
+                    <KnowledgeSearchDialog transport={transport} />
+                  </LazySurface>
+                  <LazySurface overlayName="global-search">
+                    <GlobalSearchDialog transport={transport} />
+                  </LazySurface>
+                  <LazySurface overlayName="builder-launch">
+                    <BuilderLaunchDialog transport={transport} store={sceneStore} />
+                  </LazySurface>
+                  <LazySurface overlayName="harness-launch">
+                    <HarnessLaunchDialog transport={transport} store={sceneStore} />
+                  </LazySurface>
                   <LazySurface overlayName="settings">
                     <SettingsDialog transport={transport} />
                   </LazySurface>

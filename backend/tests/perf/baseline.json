@@ -1,51 +1,51 @@
 {
   "_comment": "ADR-019 stage 19.3: the committed wall-clock baseline check_baseline.py compares fresh measure_baselines.py output against. Regenerate deliberately with `python -m backend.tests.perf.measure_baselines`, review the diff, and commit - never auto-overwritten by the nightly job itself (that would let a real regression quietly become the new normal).",
-  "measured_at": "2026-08-11",
-  "measured_on": "windows, Python 3.12.6, coverage-uninstrumented (see backend/tests/perf/test_loop_watchdog.py's own note on why coverage tracing corrupts these numbers)",
+  "measured_at": "2026-09-19",
+  "measured_on": "GitHub windows-latest - the nightly job's own runner - Python 3.12, coverage-uninstrumented. Each timing is the median of 7 publishes (measure_baselines.TIMING_REPEATS), and the value recorded is the SLOWEST of three workflow_dispatch runs of the same commit (runs 35464350837, 35464989364, 35464993252): runner-to-runner spread on one commit was up to 26% (stress.serialize_ms), so a baseline taken from one fast runner would fail the next slow one on noise. Sizes were identical across all three, as a deterministic metric should be.",
   "workloads": [
     {
       "name": "small",
       "node_count": 25,
       "edge_count": 27,
-      "fixture_build_ms": 0.15,
-      "payload_build_ms": 0.37,
-      "serialize_ms": 0.44,
-      "publish_total_ms": 0.81,
-      "full_snapshot_kib": 76.2,
-      "single_node_payload_kib": 2.984
+      "fixture_build_ms": 0.26,
+      "payload_build_ms": 0.1,
+      "serialize_ms": 0.07,
+      "publish_total_ms": 0.17,
+      "full_snapshot_kib": 15.1,
+      "single_node_payload_kib": 0.529
     },
     {
       "name": "typical",
       "node_count": 100,
       "edge_count": 137,
-      "fixture_build_ms": 0.7,
-      "payload_build_ms": 1.41,
-      "serialize_ms": 1.72,
-      "publish_total_ms": 3.14,
-      "full_snapshot_kib": 380.2,
-      "single_node_payload_kib": 2.604
+      "fixture_build_ms": 2.64,
+      "payload_build_ms": 0.39,
+      "serialize_ms": 0.47,
+      "publish_total_ms": 0.83,
+      "full_snapshot_kib": 135.6,
+      "single_node_payload_kib": 0.168
     },
     {
       "name": "large",
       "node_count": 500,
       "edge_count": 697,
-      "fixture_build_ms": 8.75,
-      "payload_build_ms": 7.07,
-      "serialize_ms": 8.88,
-      "publish_total_ms": 15.95,
-      "full_snapshot_kib": 1902.3,
-      "single_node_payload_kib": 2.604
+      "fixture_build_ms": 35.54,
+      "payload_build_ms": 1.99,
+      "serialize_ms": 2.67,
+      "publish_total_ms": 4.59,
+      "full_snapshot_kib": 679.3,
+      "single_node_payload_kib": 0.168
     },
     {
       "name": "stress",
       "node_count": 2000,
       "edge_count": 1999,
-      "fixture_build_ms": 61.85,
-      "payload_build_ms": 28.3,
-      "serialize_ms": 34.59,
-      "publish_total_ms": 62.89,
-      "full_snapshot_kib": 7645.0,
-      "single_node_payload_kib": 3.769
+      "fixture_build_ms": 131.82,
+      "payload_build_ms": 7.34,
+      "serialize_ms": 11.13,
+      "publish_total_ms": 18.29,
+      "full_snapshot_kib": 2751.5,
+      "single_node_payload_kib": 1.33
     }
   ]
 }

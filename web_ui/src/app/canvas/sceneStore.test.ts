@@ -124,7 +124,9 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
     // WsTransport.handleMessage entirely (see makeFakeTransport above), so
     // nothing here actually enforces version compatibility, but keeping the
     // fixture honest matters for anyone reading it as "what scene actually
-    // looks like on the wire".
+    // looks like on the wire". One exception, on purpose: the node below is
+    // written out WHOLE, as the store holds it. On the wire rows are sparse
+    // (fields at their default left out) - see the SPARSE snapshot test.
     schemaVersion: 2,
     minCompatibleSchemaVersion: 2,
     revision: 3,
@@ -312,6 +314,25 @@ describe("SceneStore", () => {
     expect(store.getScene().dragFactor).toBe(0.5);
   });
 
+  it("accepts a SPARSE snapshot - rows carrying only what differs from the defaults", () => {
+    // What the backend actually sends (backend/domain/node_wire.py): every
+    // field at its contract default is left off the row, and the generated
+    // validator restores it before the store ever sees the row.
+    const { transport, listeners } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.connect();
+
+    listeners.get("scene")!(
+      validScenePayload({ nodes: [{ id: "n0", x: 1, y: 2, title: "A", kind: "chat", isUser: true }] }),
+    );
+    const node = store.getScene().nodes[0];
+    expect(node.isUser).toBe(true);
+    expect(node.content).toBe("");
+    expect(node.branchStatus).toBe("active");
+    expect(node.pendingRequestId).toBeNull();
+    expect(node.history).toEqual([]);
+  });
+
   // ADR-003 stage 3.3 (C9) review-fix: every other test that touches
   // chartData only ever exercises the ALL-FIELDS-absent default ({}) the
   // base validScenePayload() node uses - the runtime validator's
@@ -440,6 +461,45 @@ describe("SceneStore", () => {
       expect(store.getScene().nodes).toHaveLength(1);
       expect(store.getScene().nodes[0].title).toBe("renamed");
       expect(store.getScene().revision).toBe(4);
+    });
+
+    it("restores a sparse upsertNode row's omitted fields before storing it", () => {
+      const { store, patchListeners } = connectedStoreAtRevision3();
+
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "upsertNode", node: { id: "n1", x: 5, y: 6, title: "sparse", kind: "chat", content: "hi" } }],
+      });
+
+      const node = store.getScene().nodes.find((n) => n.id === "n1")!;
+      expect(node.content).toBe("hi");
+      expect(node.isUser).toBe(false);
+      expect(node.isLocked).toBe(true);
+      expect(node.toolCalls).toEqual([]);
+      expect(store.getScene().revision).toBe(4);
+    });
+
+    it("an upsert that leaves a field out resets it to its default, never keeps the old value", () => {
+      // An upsert REPLACES the row. A node that finishes running arrives
+      // without pendingRequestId (null is its default) - if the old value
+      // survived, the node would look busy forever.
+      const { store, patchListeners } = connectedStoreAtRevision3();
+      const existing = store.getScene().nodes[0];
+      patchListeners.get("scene")!({
+        revision: 4,
+        baseRevision: 3,
+        ops: [{ op: "upsertNode", node: { ...existing, pendingRequestId: "req-1" } }],
+      });
+      expect(store.getScene().nodes[0].pendingRequestId).toBe("req-1");
+
+      const { id, x, y, title, kind } = existing;
+      patchListeners.get("scene")!({
+        revision: 5,
+        baseRevision: 4,
+        ops: [{ op: "upsertNode", node: { id, x, y, title, kind } }],
+      });
+      expect(store.getScene().nodes[0].pendingRequestId).toBeNull();
     });
 
     it("adds a node it has never seen, and removes one via removeNodes", () => {

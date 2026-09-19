@@ -16,9 +16,19 @@ remain "not measured" pending that follow-up.
 from __future__ import annotations
 
 import json
+import statistics
 import time
 
 from backend.tests.perf.graph_factory import ALL_WORKLOADS, Workload
+
+# Each timing is the MEDIAN of this many publishes of the same document, not
+# one sample. A single sample of a 2-8ms operation on a shared CI runner
+# swings past check_baseline.py's 20% threshold on scheduling jitter alone -
+# the same noise that made the ungated fixture_build_ms fail 5 of 13 nightly
+# runs - while the median of several moves only when the code does. The first
+# publish also pays one-off warm-up (per-type lookups cached on first use),
+# which the median discards rather than bills to every run.
+TIMING_REPEATS = 7
 
 
 def _measure(workload: Workload) -> dict:
@@ -26,13 +36,21 @@ def _measure(workload: Workload) -> dict:
     doc = workload.build()
     build_s = time.perf_counter() - t0
 
-    t0 = time.perf_counter()
-    payload = doc.scene_payload()
-    payload_build_s = time.perf_counter() - t0
+    payload_samples: list[float] = []
+    serialize_samples: list[float] = []
+    total_samples: list[float] = []
+    for _ in range(TIMING_REPEATS):
+        t0 = time.perf_counter()
+        payload = doc.scene_payload()
+        payload_build_s = time.perf_counter() - t0
 
-    t0 = time.perf_counter()
-    serialized = json.dumps(payload)
-    serialize_s = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        serialized = json.dumps(payload)
+        serialize_s = time.perf_counter() - t0
+
+        payload_samples.append(payload_build_s)
+        serialize_samples.append(serialize_s)
+        total_samples.append(payload_build_s + serialize_s)
 
     total_bytes = len(serialized.encode("utf-8"))
     one_node_bytes = len(json.dumps(payload["nodes"][-1]).encode("utf-8")) if payload["nodes"] else 0
@@ -42,9 +60,9 @@ def _measure(workload: Workload) -> dict:
         "node_count": len(doc.nodes),
         "edge_count": len(doc.edges),
         "fixture_build_ms": round(build_s * 1000, 2),
-        "payload_build_ms": round(payload_build_s * 1000, 2),
-        "serialize_ms": round(serialize_s * 1000, 2),
-        "publish_total_ms": round((payload_build_s + serialize_s) * 1000, 2),
+        "payload_build_ms": round(statistics.median(payload_samples) * 1000, 2),
+        "serialize_ms": round(statistics.median(serialize_samples) * 1000, 2),
+        "publish_total_ms": round(statistics.median(total_samples) * 1000, 2),
         "full_snapshot_kib": round(total_bytes / 1024, 1),
         "single_node_payload_kib": round(one_node_bytes / 1024, 3),
     }

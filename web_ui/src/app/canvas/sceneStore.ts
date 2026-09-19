@@ -18,7 +18,12 @@
 
 import { TOPIC_VALIDATORS, type TopicName } from "../../lib/api-contract/topics";
 import { bindTopic } from "../../lib/api-contract/bindTopic";
-import type { SceneEdgeRow, SceneNodeRow, SceneState } from "../../lib/bridge-core/generated/scene-state";
+import {
+  hydrateSceneNodeRow,
+  type SceneEdgeRow,
+  type SceneNodeRow,
+  type SceneState,
+} from "../../lib/bridge-core/generated/scene-state";
 import type { GridControlState } from "../../lib/bridge-core/generated/grid-control-state";
 import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-state";
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
@@ -285,7 +290,12 @@ export class SceneStore {
         switch (op.op) {
           case "upsertNode": {
             if (!isWireRow<SceneNodeRow>(op.node)) return this.refusePatch("upsertNode.node is not a row", op);
-            const node = op.node;
+            // Rows arrive sparse - every field at its default is omitted
+            // (backend/domain/node_wire.py). Restored here, before anything
+            // reads the row, exactly as validateSceneState restores a
+            // snapshot's; an upsert REPLACES the old row, so a field reset to
+            // its default must come back as the default, not the old value.
+            const node = hydrateSceneNodeRow(op.node) as SceneNodeRow;
             const index = nodes.findIndex((n) => n.id === node.id);
             // ADR-012 stage 12.3: diffed against the row this patch is about
             // to REPLACE (undefined for a genuinely new node, which

@@ -2,6 +2,10 @@
  * Regenerate with codegen.py; a pytest fails if this file
  * drifts from what regenerating it now would produce. */
 
+import { type ValidationResult, type WireFields, compileFields } from "../wireCheck";
+
+export type { ValidationResult };
+
 export interface AppComposerDraft {
   id: string;
   text: string;
@@ -91,343 +95,96 @@ export interface AppComposerState {
   minCompatibleSchemaVersion?: number | null;
 }
 
-export type ValidationResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; errors: string[] };
+const APP_COMPOSER_DRAFT_FIELDS: WireFields = [
+  ["id", "s", 0],
+  ["text", "s", 0],
+  ["contextMode", "s", 0],
+  ["sendMode", { e: ["enter_to_send", "ctrl_enter_to_send"] }, 0],
+];
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const APP_COMPOSER_CONTEXT_ANCHOR_FIELDS: WireFields = [
+  ["id", "s", 0],
+  ["label", "s", 0],
+  ["type", "s", 0],
+];
 
-// Unknown keys are tolerated on purpose. The JSON Schema marks the contract
-// additionalProperties:false because Python and the schema must not drift, but
-// an incoming payload carrying a field this build has never heard of is the
-// normal, expected shape of a NEWER compatible sender - rejecting it here would
-// defeat the additive-forward-compatibility the version negotiation exists to
-// provide. Missing or wrongly-typed KNOWN fields are still hard errors.
+const APP_COMPOSER_ATTACHMENT_FIELDS: WireFields = [
+  ["id", "s", 0],
+  ["name", "s", 0],
+  ["kind", "s", 0],
+  ["byteSize", "n", 0],
+  ["contextLabel", "s", 0],
+  ["tokenCount", "n", 0],
+];
 
-function checkAppComposerDraft(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["id"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["text"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.text: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.text` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["contextMode"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.contextMode: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.contextMode` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["sendMode"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.sendMode: missing required field`);
-    else { if (!["enter_to_send", "ctrl_enter_to_send"].includes(fieldValue as string)) errors.push(`${path}.sendMode` + `: ${JSON.stringify(fieldValue)} is not one of [` + "enter_to_send, ctrl_enter_to_send" + `]`); }
-  }
-}
+const APP_COMPOSER_CONTEXT_FIELDS: WireFields = [
+  ["anchor", { o: APP_COMPOSER_CONTEXT_ANCHOR_FIELDS }, 1],
+  ["items", { a: { o: APP_COMPOSER_ATTACHMENT_FIELDS } }, 0],
+  ["totalTokens", "n", 0],
+  ["reviewAvailable", "b", 0],
+];
 
-function checkAppComposerContext(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["anchor"];
-    if (fieldValue !== undefined && fieldValue !== null) { checkAppComposerContextAnchor(fieldValue, `${path}.anchor`, errors); }
-  }
-  {
-    const fieldValue = value["items"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.items: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.items` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { checkAppComposerAttachment(item, `${path}.items` + `[${i}]`, errors); }); }
-  }
-  {
-    const fieldValue = value["totalTokens"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.totalTokens: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.totalTokens` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["reviewAvailable"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.reviewAvailable: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.reviewAvailable` + ": expected boolean"); }
-  }
-}
+const APP_COMPOSER_MODEL_OPTION_FIELDS: WireFields = [
+  ["id", "s", 0],
+  ["label", "s", 0],
+];
 
-function checkAppComposerContextAnchor(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["id"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["label"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.label: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.label` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["type"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.type: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.type` + ": expected string"); }
-  }
-}
+const APP_COMPOSER_REASONING_OPTION_FIELDS: WireFields = [
+  ["id", "s", 0],
+  ["label", "s", 0],
+  ["description", "s", 0],
+];
 
-function checkAppComposerAttachment(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["id"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["name"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.name: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.name` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["kind"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.kind: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.kind` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["byteSize"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.byteSize: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.byteSize` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["contextLabel"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.contextLabel: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.contextLabel` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["tokenCount"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.tokenCount: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.tokenCount` + ": expected number"); }
-  }
-}
+const APP_COMPOSER_REASONING_FIELDS: WireFields = [
+  ["level", "s", 0],
+  ["label", "s", 0],
+  ["options", { a: { o: APP_COMPOSER_REASONING_OPTION_FIELDS } }, 0],
+];
 
-function checkAppComposerRoute(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["mode"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.mode: missing required field`);
-    else { if (!["ollama", "api", "llama_cpp"].includes(fieldValue as string)) errors.push(`${path}.mode` + `: ${JSON.stringify(fieldValue)} is not one of [` + "ollama, api, llama_cpp" + `]`); }
-  }
-  {
-    const fieldValue = value["provider"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.provider: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.provider` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["modelId"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.modelId: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.modelId` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["modelLabel"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.modelLabel: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.modelLabel` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["modelOptions"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.modelOptions: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.modelOptions` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { checkAppComposerModelOption(item, `${path}.modelOptions` + `[${i}]`, errors); }); }
-  }
-  {
-    const fieldValue = value["reasoning"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.reasoning: missing required field`);
-    else { checkAppComposerReasoning(fieldValue, `${path}.reasoning`, errors); }
-  }
-  {
-    const fieldValue = value["label"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.label: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.label` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["available"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.available: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.available` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["canChange"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.canChange: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.canChange` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["modelValue"];
-    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.modelValue` + ": expected string"); }
-  }
-}
+const APP_COMPOSER_ROUTE_FIELDS: WireFields = [
+  ["mode", { e: ["ollama", "api", "llama_cpp"] }, 0],
+  ["provider", "s", 0],
+  ["modelId", "s", 0],
+  ["modelLabel", "s", 0],
+  ["modelOptions", { a: { o: APP_COMPOSER_MODEL_OPTION_FIELDS } }, 0],
+  ["reasoning", { o: APP_COMPOSER_REASONING_FIELDS }, 0],
+  ["label", "s", 0],
+  ["available", "b", 0],
+  ["canChange", "b", 0],
+  ["modelValue", "s", 1],
+];
 
-function checkAppComposerModelOption(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["id"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["label"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.label: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.label` + ": expected string"); }
-  }
-}
+const APP_COMPOSER_REQUEST_FIELDS: WireFields = [
+  ["id", "s", 1],
+  ["state", { e: ["idle", "preparing", "uploading", "waiting", "generating", "finalizing", "canceled", "failed", "succeeded"] }, 0],
+  ["message", "s", 0],
+  ["canSend", "b", 0],
+  ["canCancel", "b", 0],
+  ["canRetry", "b", 0],
+];
 
-function checkAppComposerReasoning(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["level"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.level: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.level` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["label"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.label: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.label` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["options"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.options: missing required field`);
-    else { if (!Array.isArray(fieldValue)) errors.push(`${path}.options` + ": expected array");
-    else (fieldValue as unknown[]).forEach((item, i) => { checkAppComposerReasoningOption(item, `${path}.options` + `[${i}]`, errors); }); }
-  }
-}
+const APP_COMPOSER_CAPABILITIES_FIELDS: WireFields = [
+  ["attachments", "b", 0],
+  ["contextReview", "b", 0],
+  ["routeSelection", "b", 0],
+  ["modelSelection", "b", 0],
+  ["reasoningSelection", "b", 0],
+  ["settingsShortcut", "b", 0],
+  ["cancellation", "b", 0],
+];
 
-function checkAppComposerReasoningOption(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["id"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.id: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["label"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.label: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.label` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["description"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.description: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.description` + ": expected string"); }
-  }
-}
+const APP_COMPOSER_STATE_FIELDS: WireFields = [
+  ["schemaVersion", "n", 0],
+  ["revision", "n", 0],
+  ["draft", { o: APP_COMPOSER_DRAFT_FIELDS }, 0],
+  ["context", { o: APP_COMPOSER_CONTEXT_FIELDS }, 0],
+  ["route", { o: APP_COMPOSER_ROUTE_FIELDS }, 0],
+  ["request", { o: APP_COMPOSER_REQUEST_FIELDS }, 0],
+  ["capabilities", { o: APP_COMPOSER_CAPABILITIES_FIELDS }, 0],
+  ["minCompatibleSchemaVersion", "n", 1],
+];
 
-function checkAppComposerRequest(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["id"];
-    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "string") errors.push(`${path}.id` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["state"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.state: missing required field`);
-    else { if (!["idle", "preparing", "uploading", "waiting", "generating", "finalizing", "canceled", "failed", "succeeded"].includes(fieldValue as string)) errors.push(`${path}.state` + `: ${JSON.stringify(fieldValue)} is not one of [` + "idle, preparing, uploading, waiting, generating, finalizing, canceled, failed, succeeded" + `]`); }
-  }
-  {
-    const fieldValue = value["message"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.message: missing required field`);
-    else { if (typeof fieldValue !== "string") errors.push(`${path}.message` + ": expected string"); }
-  }
-  {
-    const fieldValue = value["canSend"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.canSend: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.canSend` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["canCancel"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.canCancel: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.canCancel` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["canRetry"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.canRetry: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.canRetry` + ": expected boolean"); }
-  }
-}
-
-function checkAppComposerCapabilities(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["attachments"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.attachments: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.attachments` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["contextReview"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.contextReview: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.contextReview` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["routeSelection"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.routeSelection: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.routeSelection` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["modelSelection"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.modelSelection: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.modelSelection` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["reasoningSelection"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.reasoningSelection: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.reasoningSelection` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["settingsShortcut"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.settingsShortcut: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.settingsShortcut` + ": expected boolean"); }
-  }
-  {
-    const fieldValue = value["cancellation"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.cancellation: missing required field`);
-    else { if (typeof fieldValue !== "boolean") errors.push(`${path}.cancellation` + ": expected boolean"); }
-  }
-}
-
-function checkAppComposerState(value: unknown, path: string, errors: string[]): void {
-  if (!isRecord(value)) { errors.push(`${path}: expected object`); return; }
-  {
-    const fieldValue = value["schemaVersion"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.schemaVersion: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.schemaVersion` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["revision"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.revision: missing required field`);
-    else { if (typeof fieldValue !== "number") errors.push(`${path}.revision` + ": expected number"); }
-  }
-  {
-    const fieldValue = value["draft"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.draft: missing required field`);
-    else { checkAppComposerDraft(fieldValue, `${path}.draft`, errors); }
-  }
-  {
-    const fieldValue = value["context"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.context: missing required field`);
-    else { checkAppComposerContext(fieldValue, `${path}.context`, errors); }
-  }
-  {
-    const fieldValue = value["route"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.route: missing required field`);
-    else { checkAppComposerRoute(fieldValue, `${path}.route`, errors); }
-  }
-  {
-    const fieldValue = value["request"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.request: missing required field`);
-    else { checkAppComposerRequest(fieldValue, `${path}.request`, errors); }
-  }
-  {
-    const fieldValue = value["capabilities"];
-    if (fieldValue === undefined || fieldValue === null) errors.push(`${path}.capabilities: missing required field`);
-    else { checkAppComposerCapabilities(fieldValue, `${path}.capabilities`, errors); }
-  }
-  {
-    const fieldValue = value["minCompatibleSchemaVersion"];
-    if (fieldValue !== undefined && fieldValue !== null) { if (typeof fieldValue !== "number") errors.push(`${path}.minCompatibleSchemaVersion` + ": expected number"); }
-  }
-}
+const checkAppComposerState = compileFields(APP_COMPOSER_STATE_FIELDS);
 
 export function validateAppComposerState(value: unknown): ValidationResult<AppComposerState> {
   const errors: string[] = [];

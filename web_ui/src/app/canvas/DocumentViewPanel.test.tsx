@@ -32,6 +32,12 @@ beforeEach(() => {
 // the thing that broke.
 const LAZY_BODY_TIMEOUT = { timeout: 15_000 };
 
+// ...and each test must be allowed to outlive that wait. Raising only the
+// wait left vitest's own 5000ms per-test timeout in charge, so a first import
+// slower than 5s still failed the test ("Test timed out in 5000ms", a full
+// `npm run check` on 2026-09-19) - the 15s wait could never actually be used.
+vi.setConfig({ testTimeout: 20_000 });
+
 function renderPanel(overrides: Partial<React.ComponentProps<typeof DocumentViewPanel>> = {}) {
   const props = {
     isOpen: true,

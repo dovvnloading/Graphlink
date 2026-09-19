@@ -1273,9 +1273,10 @@ export function toFlowNodes(
           mimeType: n.mimeType,
           // Generated SceneNodeRow marks these `?: number | null` (optional
           // Python field), so the read can be `undefined`; DocumentNodeData
-          // is strictly `number | null` (matches the wire value, which is
-          // always present - the backend dataclass always serializes both
-          // keys). Coalesce here rather than loosening DocumentNodeData.
+          // is strictly `number | null` (matches the restored row, where
+          // both keys are always present - null when the sparse wire row
+          // left them out). Coalesce here rather than loosening
+          // DocumentNodeData.
           durationSeconds: n.durationSeconds ?? null,
           byteSize: n.byteSize ?? null,
           previewLabel: n.previewLabel,

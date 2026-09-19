@@ -143,7 +143,7 @@ additive rule.
 fields (Source/Preview splitter position, chat scroll position) -
 populated for kind=="html"/kind=="chat" respectively, defaulted for
 every other kind. `contentParts` is DELIBERATELY NOT one of these 26:
-it is a real wire field (backend/domain/graph.py's _content_parts_wire)
+it is a real wire field (backend/domain/node_wire.py's _content_parts_wire)
 but SceneCanvas.tsx never reads it today (a backend-only multimodal
 round-trip capability, not a rendered feature) - C9 is specifically
 about fields an unsafe CAST reaches for, and no cast reaches for this
@@ -189,7 +189,7 @@ precedent).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import ClassVar, Literal
 
 
 @dataclass
@@ -464,6 +464,15 @@ class ChartDataRow:
 
 @dataclass
 class SceneNodeRow:
+    # Sparse on the wire: the sender (backend/domain/node_wire.py) leaves out
+    # every field that sits at its default below, and the client restores
+    # them from these same defaults - codegen emits hydrateSceneNodeRow(),
+    # which validateSceneState and the scene store's patch path run before
+    # anything reads a row. So every default here is ALSO the value a node
+    # of another kind reads for the field; change one deliberately.
+    # (graphlink_wire_schema.py: "SPARSE ROWS".)
+    WIRE_OMITS_DEFAULTS: ClassVar[bool] = True
+
     id: str
     x: float
     y: float

@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -265,3 +266,27 @@ def busy_count(dispatcher, kind):
     awaited, single-shot" kind (chart, note) now living in
     AgentDispatcher._runs."""
     return sum(1 for handle in dispatcher._runs.values() if handle.kind == kind)
+
+
+def client_row(row):
+    """One scene node row as the CLIENT reads it. Rows cross the wire sparse
+    (backend/domain/node_wire.py): every field at its contract default is
+    omitted, and the generated hydrateSceneNodeRow restores it before any
+    frontend code reads the row. Tests about what a node looks like to the
+    frontend read this; tests about the bytes read scene_payload() raw.
+    `contentParts` is the one wire key the contract does not declare, so -
+    like the client - this never restores it."""
+    from backend.domain.node_wire import WIRE_DEFAULTS
+
+    restored = {
+        key: json.loads(json.dumps(default))
+        for key, default in WIRE_DEFAULTS.items()
+        if key != "contentParts"
+    }
+    restored.update(row)
+    return restored
+
+
+def client_rows(doc):
+    """scene_payload()'s node rows as the client reads them - see client_row."""
+    return [client_row(row) for row in doc.scene_payload()["nodes"]]
