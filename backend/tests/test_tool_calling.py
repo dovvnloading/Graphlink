@@ -257,7 +257,7 @@ class FakeSDKStream:
         self.close_calls += 1
 
 
-def _openai_chunk(content=None, tool_calls=None):
+def _openai_chunk(content=None, tool_calls=None, finish_reason=None):
     """tool_calls: list of {"index", "id"?, "name"?, "arguments"?} - id/name
     omitted on continuation deltas, matching the real SDK only sending them
     on a call's first delta."""
@@ -273,7 +273,7 @@ def _openai_chunk(content=None, tool_calls=None):
         ]
     return types.SimpleNamespace(
         usage=None,
-        choices=[types.SimpleNamespace(delta=types.SimpleNamespace(**delta_fields))],
+        choices=[types.SimpleNamespace(delta=types.SimpleNamespace(**delta_fields), finish_reason=finish_reason)],
     )
 
 
@@ -299,7 +299,7 @@ def test_openai_capabilities_tools_is_true_unconditionally():
 
 
 def test_openai_stream_translates_tools_into_the_native_function_shape():
-    client, calls = _fake_openai_client([[_openai_chunk(content="hi")]])
+    client, calls = _fake_openai_client([[_openai_chunk(content="hi", finish_reason="stop")]])
     provider = OpenAIProvider(client=client, model="gpt-5")
     list(provider.stream(
         ChatRequest(task=config.TASK_CHAT, messages=[], tools=(ECHO_TOOL,)), CancelToken(),
@@ -324,9 +324,9 @@ def test_openai_round_trips_an_echo_tool_call():
             # JSON buffer, not just a single-chunk pass-through. id/name
             # only appear on the call's first delta, per the real wire shape.
             _openai_chunk(tool_calls=[{"index": 0, "id": "call_abc", "name": "echo", "arguments": '{"message": "hel'}]),
-            _openai_chunk(tool_calls=[{"index": 0, "arguments": 'lo"}'}]),
+            _openai_chunk(tool_calls=[{"index": 0, "arguments": 'lo"}'}], finish_reason="tool_calls"),
         ],
-        [_openai_chunk(content="The echo said: hello")],
+        [_openai_chunk(content="The echo said: hello", finish_reason="stop")],
     ])
     provider = OpenAIProvider(client=client, model="gpt-5")
 
@@ -511,8 +511,11 @@ def test_anthropic_tool_call_turn_reports_usage(monkeypatch):
 # behavior against the PUBLIC REST contract, not an installed library's types.
 
 
-def _gemini_sse_payload(*parts):
-    return {"candidates": [{"content": {"parts": list(parts)}}]}
+def _gemini_sse_payload(*parts, finish_reason=None):
+    candidate = {"content": {"parts": list(parts)}}
+    if finish_reason is not None:
+        candidate["finishReason"] = finish_reason
+    return {"candidates": [candidate]}
 
 
 def test_gemini_capabilities_tools_is_true_unconditionally():
@@ -524,7 +527,7 @@ def test_gemini_stream_translates_tools_into_the_native_function_declarations_sh
 
     def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
         sse_calls.update(body=body)
-        yield _gemini_sse_payload({"text": "hi"})
+        yield _gemini_sse_payload({"text": "hi"}, finish_reason="STOP")
 
     monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
     provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")
@@ -550,7 +553,7 @@ def test_gemini_tool_call_turn_reports_usage(monkeypatch):
         yield {
             "candidates": [{"content": {"parts": [
                 {"functionCall": {"name": "echo", "args": {"message": "hi"}}},
-            ]}}],
+            ]}, "finishReason": "STOP"}],
             "usageMetadata": {"promptTokenCount": 22, "candidatesTokenCount": 6},
         }
 
@@ -575,9 +578,9 @@ def test_gemini_round_trips_an_echo_tool_call(monkeypatch):
             # incremental args accumulation, unlike OpenAI/Anthropic.
             yield {"candidates": [{"content": {"parts": [
                 {"functionCall": {"name": "echo", "args": {"message": "hello"}}},
-            ]}}]}
+            ]}, "finishReason": "STOP"}]}
         else:
-            yield _gemini_sse_payload({"text": "The echo said: hello"})
+            yield _gemini_sse_payload({"text": "The echo said: hello"}, finish_reason="STOP")
 
     monkeypatch.setattr("backend.providers.gemini_provider._gemini_stream_sse", fake_stream_sse)
     provider = GeminiProvider(api_key="k", model="gemini-2.5-pro")

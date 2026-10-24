@@ -1269,7 +1269,7 @@ class FakeSDKStream:
         self.close_calls += 1
 
 
-def _openai_chunk(content=None, reasoning_content=None, choices_empty=False):
+def _openai_chunk(content=None, reasoning_content=None, choices_empty=False, finish_reason=None):
     import types
 
     if choices_empty:
@@ -1278,7 +1278,7 @@ def _openai_chunk(content=None, reasoning_content=None, choices_empty=False):
     if reasoning_content is not None:
         delta_fields["reasoning_content"] = reasoning_content
     return types.SimpleNamespace(
-        choices=[types.SimpleNamespace(delta=types.SimpleNamespace(**delta_fields), finish_reason=None)]
+        choices=[types.SimpleNamespace(delta=types.SimpleNamespace(**delta_fields), finish_reason=finish_reason)]
     )
 
 
@@ -1311,7 +1311,7 @@ def test_openai_stream_yields_incremental_deltas_reasoning_and_a_done_matching_c
         _openai_chunk(choices_empty=True),        # usage-only chunk must be skipped
         _openai_chunk(reasoning_content="hmm "),  # compatible-server thinking delta
         _openai_chunk(content="lo "),
-        _openai_chunk(content="world"),
+        _openai_chunk(content="world", finish_reason="stop"),
     ])
     provider = OpenAIProvider(client=client, model="gpt-5", reasoning_level="high")
     events = list(provider.stream(
@@ -1598,8 +1598,11 @@ def test_anthropic_sse_reader_parses_data_lines_and_always_closes(monkeypatch):
     assert response2.closed is True
 
 
-def _gemini_sse_payload(*parts):
-    return {"candidates": [{"content": {"parts": list(parts)}}]}
+def _gemini_sse_payload(*parts, finish_reason=None):
+    candidate = {"content": {"parts": list(parts)}}
+    if finish_reason is not None:
+        candidate["finishReason"] = finish_reason
+    return {"candidates": [candidate]}
 
 
 def test_gemini_stream_maps_thought_parts_to_reasoning_and_keeps_concatenation_parity(monkeypatch):
@@ -1611,7 +1614,7 @@ def test_gemini_stream_maps_thought_parts_to_reasoning_and_keeps_concatenation_p
         sse_calls.update(url=url, body=body, timeout=timeout)
         yield _gemini_sse_payload({"text": "pondering... ", "thought": True})
         yield _gemini_sse_payload({"text": "Ans"})
-        yield _gemini_sse_payload({"text": "wer."})
+        yield _gemini_sse_payload({"text": "wer."}, finish_reason="STOP")
 
     monkeypatch.setattr(
         "backend.providers.gemini_provider._prepare_gemini_contents",
@@ -2371,7 +2374,7 @@ def test_openai_stream_requests_include_usage_and_captures_the_usage_chunk():
         choices=[],
         usage=types.SimpleNamespace(prompt_tokens=100, completion_tokens=25),
     )
-    stream = FakeSDKStream([_openai_chunk(content="Hi"), usage_chunk])
+    stream = FakeSDKStream([_openai_chunk(content="Hi", finish_reason="stop"), usage_chunk])
     client, stream, captured = _fake_openai_streaming_client(stream)
     from backend.providers import OpenAIProvider
 
@@ -2389,7 +2392,7 @@ def test_openai_stream_retries_once_without_stream_options_when_the_server_rejec
     import types
 
     calls = []
-    stream = FakeSDKStream([_openai_chunk(content="Hi")])
+    stream = FakeSDKStream([_openai_chunk(content="Hi", finish_reason="stop")])
 
     def create(**kwargs):
         calls.append(kwargs)
@@ -2499,7 +2502,7 @@ def test_gemini_stream_captures_usage_metadata_from_the_trailing_frame(monkeypat
     def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
         yield _gemini_sse_payload({"text": "Answer."})
         yield {
-            "candidates": [{"content": {"parts": []}}],
+            "candidates": [{"content": {"parts": []}, "finishReason": "STOP"}],
             "usageMetadata": {"promptTokenCount": 40, "candidatesTokenCount": 8},
         }
 

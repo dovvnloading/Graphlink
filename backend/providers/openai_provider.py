@@ -293,6 +293,14 @@ class OpenAIProvider:
                 **kwargs,
             )
         usage = None
+        # A finished OpenAI-compatible generation always reports why it
+        # stopped: a non-null choices[].finish_reason (stop, length,
+        # tool_calls, content_filter, function_call) on its last content
+        # chunk - which is NOT necessarily the last chunk, since
+        # include_usage appends a usage-only chunk with empty choices after
+        # it, so this records the marker rather than stopping on it. Same
+        # sentinel posture as AnthropicProvider.stream()'s message_stop.
+        saw_finish_reason = False
         try:
             for chunk in stream:
                 if cancel.is_set():
@@ -313,6 +321,10 @@ class OpenAIProvider:
                 choices = getattr(chunk, "choices", None) or []
                 if not choices:
                     continue
+                # Read before the delta-is-None skip below: the finishing
+                # chunk's delta is often empty.
+                if any(getattr(choice, "finish_reason", None) for choice in choices):
+                    saw_finish_reason = True
                 delta = choices[0].delta
                 if delta is None:
                     continue
@@ -347,6 +359,17 @@ class OpenAIProvider:
                         buf["arguments"] += getattr(function, "arguments", None) or ""
         finally:
             stream.close()  # idempotent on an already-closed/exhausted stream
+
+        # An iterator that just stops without a finish_reason (proxy
+        # truncation, a connection closed gracefully mid-answer) delivered a
+        # fragment - returning it as done would commit half a reply, or a
+        # tool call built from torn arguments, as the finished turn. Raising
+        # lets the dispatch layer land the streamed partial flagged
+        # incomplete instead.
+        if not saw_finish_reason:
+            raise RuntimeError(
+                "OpenAI-compatible stream ended unexpectedly before completion. Please try again."
+            )
 
         if tool_call_buffers:
             # ADR-007 stage 7.1: mirrors OllamaProvider.stream()'s own
