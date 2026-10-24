@@ -239,13 +239,18 @@ class DispatcherCoreOps(DispatcherParts):
 
     # -- ADR-008 stage 8.3: the Builder --------------------------------------
 
-    def active_provider_model(self) -> tuple[str, str]:
+    def active_provider_model(self, model_ref=None) -> tuple[str, str]:
         """ADR-006 stage 6.8: the (provider, model) pair a chat dispatch
         would use right now, from THIS session's runtime (default session ->
         module-backed DEFAULT_RUNTIME). intents_chat stamps it onto reply
-        nodes and hands it to the token counter for cost estimation."""
+        nodes and hands it to the token counter for cost estimation.
+        `model_ref` is the dispatch's resolved node/branch/workspace pin
+        (_resolve_model_ref_for_dispatch), when it has one: the pair then
+        names the pinned model that actually runs, not the task's default."""
         from backend import agents as agents_module  # deferred: patch-seam + circular-import safety
-        return agents_module.api_provider.describe_active_model(agents_module.config.TASK_CHAT, self._provider_runtime)
+        return agents_module.api_provider.describe_active_model(
+            agents_module.config.TASK_CHAT, self._provider_runtime, model_ref=model_ref,
+        )
 
     def persona(self) -> str:
         """Mirror legacy graphlink_window.py's `_get_current_system_prompt`:

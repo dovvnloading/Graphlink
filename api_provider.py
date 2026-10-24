@@ -1207,6 +1207,58 @@ def generate_image(prompt: str, size: str = "1024x1024", *, runtime=None) -> byt
             attempt += 1
 
 
+def _resolve_llama_cpp_pinned_model_path(model_id: str, llama_cpp_settings: dict) -> str:
+    """ADR-018: the configured full path a llama.cpp ModelRef pin names.
+
+    A llama.cpp pin identifies its model by BASENAME - the only identity
+    the catalog and describe_active_model expose for llama.cpp - while every
+    llama_cpp_runtime helper resolves the model by TASK. Validating the
+    basename alone therefore let a chat turn pinned to the title slot's
+    model be answered by the chat slot's model, attributed to the pinned
+    one. Resolving to the slot's full path here lets the caller build the
+    provider around exactly that file.
+
+    Both slots holding DIFFERENT files that share the pinned basename is
+    refused rather than guessed at: the pin cannot say which file was meant,
+    and running either would be the same silent substitution this function
+    exists to prevent. The same file in both slots (however spelled or
+    linked) is not ambiguous. Empty slots (no title override configured)
+    never match."""
+    matches: list[str] = []
+    for key in ("chat_model_path", "title_model_path"):
+        path = str(llama_cpp_settings.get(key) or "")
+        if path and Path(path).name == model_id and not any(_is_same_file(path, seen) for seen in matches):
+            # One file configured in both slots is one match; the chat
+            # slot's spelling wins.
+            matches.append(path)
+    if not matches:
+        raise RuntimeError(
+            f"'{model_id}' is not one of this session's configured "
+            "Llama.cpp model paths. Configure it in Settings > Llama.cpp first."
+        )
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"'{model_id}' matches more than one configured Llama.cpp model file "
+            f"({' and '.join(matches)}). Rename one of the files so the "
+            "pinned model names exactly one of them."
+        )
+    return matches[0]
+
+
+def _is_same_file(path_a: str, path_b: str) -> bool:
+    """Whether two configured paths name one file. Normalized spelling
+    first (works for files that are not there yet), then the filesystem's
+    own identity: a symlink, junction, hard link, 8.3 short name or subst/
+    mapped drive reaches the same file under a different spelling, and
+    treating those as two models would refuse a pin that is not ambiguous."""
+    if os.path.normcase(os.path.abspath(path_a)) == os.path.normcase(os.path.abspath(path_b)):
+        return True
+    try:
+        return os.path.samefile(path_a, path_b)
+    except OSError:  # either file missing/unreadable: spelling was the only evidence
+        return False
+
+
 def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
     """ADR-018 stage 18.1: construct the provider a resolved ModelRef names,
     the alternative to chat()/chat_stream()'s own task-keyed branch-select
@@ -1234,7 +1286,10 @@ def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
     state.llama_cpp_settings (chat_model_path/title_model_path) - llama.cpp
     has no "many installed models" catalog the way Ollama does, so free
     model_id selection isn't meaningful there; a mismatch raises the same
-    actionable-error posture as an unconfigured cloud override."""
+    actionable-error posture as an unconfigured cloud override. The match is
+    resolved to that slot's full path and the provider is pinned to it (see
+    _resolve_llama_cpp_pinned_model_path), so the pinned model answers for
+    every task rather than whichever model the task's own slot holds."""
 
     if model_ref.provider == config.LOCAL_PROVIDER_OLLAMA:
         from backend.providers.ollama_provider import OllamaProvider
@@ -1245,18 +1300,10 @@ def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
         )
 
     if model_ref.provider == config.LOCAL_PROVIDER_LLAMACPP:
-        configured_paths = {
-            Path(str(state.llama_cpp_settings.get("chat_model_path") or "")).name,
-            Path(str(state.llama_cpp_settings.get("title_model_path") or "")).name,
-        }
-        if model_ref.model_id not in configured_paths:
-            raise RuntimeError(
-                f"'{model_ref.model_id}' is not one of this session's configured "
-                "Llama.cpp model paths. Configure it in Settings > Llama.cpp first."
-            )
+        pinned_path = _resolve_llama_cpp_pinned_model_path(model_ref.model_id, state.llama_cpp_settings)
         from backend.providers.llama_cpp_provider import LlamaCppProvider
 
-        return LlamaCppProvider(settings=state.llama_cpp_settings)
+        return LlamaCppProvider(settings=state.llama_cpp_settings, model_path=pinned_path)
 
     if model_ref.provider in (config.API_PROVIDER_OPENAI, config.API_PROVIDER_ANTHROPIC, config.API_PROVIDER_GEMINI):
         if not (state.use_api_mode and state.api_provider_type == model_ref.provider and state.api_client):
@@ -2255,12 +2302,37 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
         _translate_chat_exception(exc, state, messages)
 
 
-def describe_active_model(task: str, runtime: "ProviderRuntime | None" = None) -> tuple[str, str]:
+# ModelRef.provider -> the provenance label the unpinned branches of
+# describe_active_model report for that provider. Cloud providers are
+# absent on purpose: API mode already reports the config type string, which
+# is exactly what ModelRef.provider holds.
+_MODEL_REF_PROVENANCE_LABELS = {
+    config.LOCAL_PROVIDER_OLLAMA: "ollama",
+    config.LOCAL_PROVIDER_LLAMACPP: "llama.cpp",
+}
+
+
+def describe_active_model(
+    task: str, runtime: "ProviderRuntime | None" = None, model_ref: "ModelRef | None" = None,
+) -> tuple[str, str]:
     """ADR-006 stage 6.8: (provider, model) for `task` under the given
     runtime's current snapshot (default session when runtime is None) - the
     provenance pair intents_chat stamps onto reply nodes and hands the token
     counter for cost estimation. Local providers report "ollama" /
-    "llama.cpp"; API mode reports the configured provider type string."""
+    "llama.cpp"; API mode reports the configured provider type string.
+
+    `model_ref` (ADR-018): the ref a pinned dispatch resolved. That dispatch
+    runs exactly the ref's model (_provider_for_model_ref), not the task's
+    configured one, so the ref IS the provenance - reported in the same
+    label convention as the unpinned branches, so a pin to the model the
+    task would have used anyway yields identical provenance and the same
+    cost lookup. A llama.cpp ref's model_id is already the basename the
+    unpinned branch reports."""
+    if model_ref is not None:
+        return (
+            _MODEL_REF_PROVENANCE_LABELS.get(model_ref.provider, model_ref.provider),
+            model_ref.model_id,
+        )
     state = (runtime if runtime is not None else DEFAULT_RUNTIME).snapshot()
     if state.use_api_mode:
         return (state.api_provider_type or "", state.api_models.get(task) or "")
