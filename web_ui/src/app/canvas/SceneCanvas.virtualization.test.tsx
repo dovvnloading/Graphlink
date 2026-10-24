@@ -474,6 +474,43 @@ describe("SceneCanvas <ReactFlow> wiring (ADR-011 stages 11.2/11.3)", () => {
       expect(remoteMovedA.position).toEqual({ x: 999, y: 0 });
     });
 
+    it("keeps reconciling scene updates after a group carrying members is dragged and released", () => {
+      // A container's drag appends synthetic position changes for its
+      // members to the very batch that carries React Flow's drag-STOP change
+      // (see dragCorrectionMiddleware). If those member changes are flagged
+      // dragging, the stop batch re-opens the gesture it just closed and
+      // this effect skips every scene publish from then on.
+      const { stateListeners } = mount();
+      const container = { ...chatRow("g", 0), kind: "container", itemIds: ["m1", "m2"], groupWidth: 300, groupHeight: 300 };
+      const members = [chatRow("m1", 20, 20), chatRow("m2", 100, 100)];
+      publish(stateListeners, { nodes: [container, ...members], edges: [] });
+
+      const drag = (change: Partial<NodeChange> & { id: string }) =>
+        act(() => {
+          const raw = [{ type: "position", ...change } as NodeChange];
+          lastProps().onNodesChange(capturedMiddleware ? capturedMiddleware(raw) : raw);
+        });
+
+      drag({ id: "g", dragging: true, position: { x: 10, y: 10 } });
+      expect(lastProps().onlyRenderVisibleElements).toBe(false);
+      drag({ id: "g", dragging: true, position: { x: 40, y: 10 } });
+      drag({ id: "g", dragging: false, position: { x: 40, y: 10 } });
+      // Off-viewport culling resumes: the gesture is over.
+      expect(lastProps().onlyRenderVisibleElements).toBe(true);
+
+      // A later, unrelated publish (a new node) must reach the canvas.
+      publish(stateListeners, {
+        nodes: [{ ...container, x: 40, y: 10 }, chatRow("m1", 60, 30), chatRow("m2", 140, 110), chatRow("c", 900)],
+        edges: [],
+      });
+      expect(capturedStoreApiRef.current!.getState().nodes.map((n: { id: string }) => n.id).sort()).toEqual([
+        "c",
+        "g",
+        "m1",
+        "m2",
+      ]);
+    });
+
     it("lets a remote position win when it is the first scene update after the drop", () => {
       const { stateListeners } = mount();
       publish(stateListeners, { nodes: [chatRow("a", 0), chatRow("b", 200)], edges: [] });

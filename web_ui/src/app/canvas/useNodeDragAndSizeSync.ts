@@ -299,7 +299,11 @@ export function useNodeDragAndSizeSync(
           finalPosition = frame.position;
           frameGuides.push(...frame.guides);
         }
-        memberChanges.push(...applyGroupDragDelta(currentNodes, change.id, finalPosition));
+        // Members inherit this change's own drag flag: on the drag-STOP
+        // change they must settle as not-dragging, or onNodesChange below
+        // re-opens the gesture this very batch closes (see
+        // applyGroupDragDelta's own doc).
+        memberChanges.push(...applyGroupDragDelta(currentNodes, change.id, finalPosition, Boolean(change.dragging)));
         return { ...change, position: finalPosition };
       });
 

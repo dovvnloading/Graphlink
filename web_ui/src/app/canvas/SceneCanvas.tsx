@@ -1990,16 +1990,26 @@ export function groupDragKindOf(node: SceneFlowNode | undefined): "frame" | "con
 // new (already drag-speed-scaled) target position for this tick. Returns one
 // synthetic "position" NodeChange per live member, carrying it by the exact
 // same delta the dragged group node itself is about to move by.
+//
+// `dragging` is the drag flag of the change that produced this delta, and
+// every member change carries it verbatim. The middleware also runs on React
+// Flow's drag-STOP change (dragging unset) and appends these member changes
+// to that same stop batch; onNodesChange reads drag state change by change,
+// so a single member change flagged dragging there re-opens the gesture the
+// stop just closed - draggingRef stays set and the scene-sync effect skips
+// every later scene publish. Required, not defaulted, so no caller can
+// silently reintroduce that.
 export function applyGroupDragDelta(
   nodes: SceneFlowNode[],
   draggedId: string,
   scaledPosition: { x: number; y: number },
+  dragging: boolean,
 ): NodeChange<SceneFlowNode>[] {
   const draggedNode = nodes.find((n) => n.id === draggedId);
   if (!groupDragKindOf(draggedNode) || !draggedNode) return [];
   const deltaX = scaledPosition.x - draggedNode.position.x;
   const deltaY = scaledPosition.y - draggedNode.position.y;
-  return collectGroupMemberDeltaChanges(nodes, draggedNode, deltaX, deltaY, new Set([draggedId]));
+  return collectGroupMemberDeltaChanges(nodes, draggedNode, deltaX, deltaY, dragging, new Set([draggedId]));
 }
 
 // R6.1 follow-up: recurses into any member that is itself a group (a
@@ -2018,6 +2028,7 @@ function collectGroupMemberDeltaChanges(
   groupNode: SceneFlowNode,
   deltaX: number,
   deltaY: number,
+  dragging: boolean,
   visited: Set<string>,
 ): NodeChange<SceneFlowNode>[] {
   const itemIds = (groupNode.data as { itemIds?: string[] }).itemIds ?? [];
@@ -2030,11 +2041,11 @@ function collectGroupMemberDeltaChanges(
     changes.push({
       id: memberId,
       type: "position",
-      dragging: true,
+      dragging,
       position: { x: member.position.x + deltaX, y: member.position.y + deltaY },
     });
     if (member.type === "frame" || member.type === "container") {
-      changes.push(...collectGroupMemberDeltaChanges(nodes, member, deltaX, deltaY, visited));
+      changes.push(...collectGroupMemberDeltaChanges(nodes, member, deltaX, deltaY, dragging, visited));
     }
   }
   return changes;
