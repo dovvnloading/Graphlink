@@ -98,6 +98,39 @@ T = TypeVar("T")
 _AssetSnapshot = "tuple[bytes, str]"
 
 
+@dataclass(frozen=True)
+class ChatPointers:
+    """The document-level chat pointers, as one point-in-time value:
+    SceneDocument.last_chat_node_id (where the Composer's next Send
+    continues from) and final_deliverable_node_id (the one node marked
+    Final Deliverable).
+
+    They are document state a recorded mutator changes - send_message
+    advances the first, set_final_deliverable rewrites the second,
+    delete_chat_node and remove_nodes re-point or clear both - but they
+    live on the document itself, outside nodes/edges/image_assets/pins, so
+    the per-id diff never sees them. Left out of a Command, undoing a Send would remove
+    its node while last_chat_node_id still named it - the next Send then
+    falls back to a detached root - and a Mark Final, which changes nothing
+    the diff can see, would be dropped as a no-op, so Ctrl+Z would undo
+    whatever came before it instead.
+
+    Two strings, so captured WHOLE on every command rather than diffed per
+    field. Frozen, so a held reference is already a safe snapshot (the same
+    reasoning as NavigationPinRecord on Command.pin_before below)."""
+
+    last_chat_node_id: str | None
+    final_deliverable_node_id: str | None
+
+    @classmethod
+    def capture(cls, document: SceneDocumentParts) -> "ChatPointers":
+        return cls(document.last_chat_node_id, document.final_deliverable_node_id)
+
+    def restore(self, document: SceneDocumentParts) -> None:
+        document.last_chat_node_id = self.last_chat_node_id
+        document.final_deliverable_node_id = self.final_deliverable_node_id
+
+
 @dataclass
 class Command:
     """A single invertible mutation, already applied by the time this
@@ -136,6 +169,18 @@ class Command:
     # deleting the last pin - means "watched, this is what it was."
     pin_before: "tuple[NavigationPinRecord, ...] | None" = None
     pin_after: "tuple[NavigationPinRecord, ...] | None" = None
+    # The chat pointers as they stood immediately before and after the
+    # mutator ran. record_command ALWAYS fills both, changed or not - unlike
+    # pin_before/pin_after, which are set only when the store changed - so
+    # invert() puts the pointers back to exactly where they stood when this
+    # command began, even if something moved them after record_command
+    # returned (every pointer move in the app happens inside a mutator, but
+    # undo must not depend on that staying true). That is also why
+    # pointers_after is re-captured by invert() rather than trusted from
+    # record time - see there. None means "not captured" (a Command built by
+    # hand) and is never restored.
+    pointers_before: ChatPointers | None = None
+    pointers_after: ChatPointers | None = None
     # ADR-010 stage 10.5: the agent run this command belongs to, or None for
     # a direct user action. Set for every mutation an agent run produces, so
     # "undo this build" can revert a whole run's worth of commands as a unit
@@ -163,9 +208,13 @@ class Command:
         came out byte-identical to how it went in) - the idempotent-
         connect() case is the motivating example, but any accidental no-op
         call hits this the same way."""
-        return not (
-            self.node_before or self.node_after or self.edge_before or self.edge_after
-        ) and (self.pin_before is None or self.pin_before == self.pin_after)
+        return (
+            not (self.node_before or self.node_after or self.edge_before or self.edge_after)
+            and (self.pin_before is None or self.pin_before == self.pin_after)
+            # Compared by value, not presence: both are always captured, so
+            # only an actual pointer move (Mark Final, a Send) counts.
+            and self.pointers_before == self.pointers_after
+        )
 
     def invert(self, document: SceneDocumentParts) -> None:
         """Restores document state to exactly how it was before this
@@ -184,6 +233,18 @@ class Command:
             # snapshotted as one unit (see record_command's own doc for why
             # per-id scoping doesn't apply to pins the way it does nodes).
             document.pins.reset(list(self.pin_before))
+        if self.pointers_before is not None:
+            # Undo only ever runs this on the command at the top of the
+            # stack, i.e. with the document in this command's after-state -
+            # PLUS any pointer move made once record_command had returned.
+            # Re-capturing here folds such a late move into the after-state
+            # redo restores, so undo-then-redo is the identity on the
+            # pointers too: a redone reply puts the pointer back on the
+            # reply, never on the user's message before it, which would make
+            # the next Send fork a sibling of the reply and drop it from the
+            # history.
+            self.pointers_after = ChatPointers.capture(document)
+            self.pointers_before.restore(document)
 
     def apply(self, document: SceneDocumentParts) -> None:
         """The mirror of invert() - restores to the *_after state. Not
@@ -195,6 +256,8 @@ class Command:
         _restore(document.image_assets, self.asset_after)
         if self.pin_after is not None:
             document.pins.reset(list(self.pin_after))
+        if self.pointers_after is not None:
+            self.pointers_after.restore(document)
 
 
 def _restore(live: dict, snapshot: dict) -> None:
@@ -425,6 +488,15 @@ def _merge_commands(command_type, provenance, commands, run_id=None):
             merged.pin_before = command.pin_before
         if command.pin_after is not None:
             merged.pin_after = command.pin_after
+        # Chat pointers follow the same first-before/last-after rule. They
+        # are deliberately NOT cleared below when they net out: equal
+        # values already make is_noop ignore them, and keeping them means
+        # undoing the group still returns the pointers to where they stood
+        # before it, whatever moved them in between.
+        if command.pointers_before is not None and merged.pointers_before is None:
+            merged.pointers_before = command.pointers_before
+        if command.pointers_after is not None:
+            merged.pointers_after = command.pointers_after
 
     # An id created and then deleted inside the same group (or restored to
     # exactly what it was) nets out to no change at all - dropping those
@@ -551,6 +623,7 @@ class CommandOps(SceneDocumentParts):
         # forgotten - the same reasoning record_command's own doc gives for
         # rejecting a `pin_ids` parameter.
         pin_snapshot_before = self.pins.records
+        pointers_before = ChatPointers.capture(self)
 
         result = mutator()
 
@@ -558,6 +631,7 @@ class CommandOps(SceneDocumentParts):
         edge_ids_after = set(self.edges.keys())
         asset_ids_after = set(self.image_assets.keys())
         pin_snapshot_after = self.pins.records
+        pointers_after = ChatPointers.capture(self)
 
         node_before_out: dict[str, "SceneNode | None"] = {}
         node_after_out: dict[str, "SceneNode | None"] = {}
@@ -623,6 +697,8 @@ class CommandOps(SceneDocumentParts):
             asset_after=asset_after_out,
             pin_before=pin_before_out,
             pin_after=pin_after_out,
+            pointers_before=pointers_before,
+            pointers_after=pointers_after,
             run_id=run_id,
         )
         # A no-op command (an idempotent connect() that created nothing, a

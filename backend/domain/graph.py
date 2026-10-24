@@ -158,6 +158,11 @@ class SceneDocument(
     # R3.3: which chat node the Composer's next Send continues from - the
     # Qt-free stand-in for "the currently active branch" until real node
     # selection exists. None means the next message starts a fresh root.
+    # Saved and restored with the chat (session_save/session_load), and
+    # captured by every undoable Command alongside final_deliverable_node_id
+    # below (ChatPointers, backend/domain/commands.py): losing it on a
+    # reload, or leaving it naming a node an undo removed, makes the next
+    # Send start a detached root instead of continuing the branch.
     last_chat_node_id: str | None = None
     # ADR-002 Workstream 1 ("Branch status and lifecycle"): the one node
     # currently marked as this document's Final Deliverable, or None if
@@ -678,6 +683,35 @@ class SceneDocument(
             self._recompute_group_bounds(group_id)
 
     def remove_nodes(self, node_ids: list[str]) -> None:
+        # The chat pointers must not outlive their node either, the same
+        # rule delete_chat_node applies (branches.py): left naming a removed
+        # node, last_chat_node_id makes send_message fall back to a detached
+        # root, and final_deliverable_node_id marks nothing. The continuation
+        # point moves to the nearest surviving chat-kind ancestor - resolved
+        # HERE, before the loop below deletes the very parent edges the walk
+        # reads. Chat-kind only, the same rule session_load applies to a
+        # saved pointer, so the next Send always continues a conversation.
+        # The mark is cleared rather than moved, as in delete_chat_node: no
+        # ancestor was ever marked by the user. Undo restores both through
+        # the Command's ChatPointers snapshot (commands.py).
+        removing = {node_id for node_id in node_ids if node_id in self.nodes}
+        tip = self.last_chat_node_id
+        retargeted_tip = tip
+        if tip is not None and tip in removing:
+            retargeted_tip = None
+            visited = {tip}
+            parent_edge = self._branch_parent_edge(tip)
+            while parent_edge is not None and parent_edge.source not in visited:
+                ancestor_id = parent_edge.source
+                ancestor = self.nodes.get(ancestor_id)
+                if ancestor_id not in removing and ancestor is not None and ancestor.kind == "chat":
+                    retargeted_tip = ancestor_id
+                    break
+                # visited guards a pre-ADR-009 cycle connect_unchecked can
+                # restore on load - the walk must end, not spin on it.
+                visited.add(ancestor_id)
+                parent_edge = self._branch_parent_edge(ancestor_id)
+
         for node_id in node_ids:
             node = self.nodes.pop(node_id, None)
             if node is not None:
@@ -707,6 +741,10 @@ class SceneDocument(
                 # there is no longer a chart-owned image_assets entry to
                 # clean up here.
                 self._detach_node_from_membership(node_id)
+
+        self.last_chat_node_id = retargeted_tip
+        if self.final_deliverable_node_id is not None and self.final_deliverable_node_id in removing:
+            self.final_deliverable_node_id = None
 
     # -- ADR-014 stage 14.1: Plugin SDK node-creation primitive -------------
 

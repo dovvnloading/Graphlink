@@ -1947,3 +1947,15 @@ def _restore_chat_into_document(
         final_new_id = nodes_by_id[str(raw_final_id)]
         if kind_by_new_id.get(final_new_id) == "chat":
             document.final_deliverable_node_id = final_new_id
+
+    # The Composer's continuation point, translated and validated exactly
+    # like final_deliverable_node_id above: a save written before this key
+    # existed, or one naming a missing/non-chat node, leaves it at
+    # clear_for_load's None - the next Send starts a fresh root, which is
+    # all any load did before - rather than pointing the Composer at a node
+    # that is not a chat message.
+    raw_last_chat_id = chat_data.get("last_chat_node_id")
+    if raw_last_chat_id and str(raw_last_chat_id) in nodes_by_id:
+        last_chat_new_id = nodes_by_id[str(raw_last_chat_id)]
+        if kind_by_new_id.get(last_chat_new_id) == "chat":
+            document.last_chat_node_id = last_chat_new_id
