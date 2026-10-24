@@ -51,6 +51,13 @@ def register_artifact_intents(
         full_history = branch_history + node.history
 
         def _on_reply(new_content, ai_message):
+            if node_id not in document.nodes:
+                # Deleted mid-flight: silent no-op, the same posture as the
+                # chat, image and conversation reply callbacks.
+                # complete_artifact_generation goes through require_node, so
+                # it would raise and the dispatcher would report "Artifact
+                # generation failed" for a request that succeeded.
+                return
             # Same content-mutation shape as intents_chat.py's chatReply /
             # intents_conversation.py's appendConversationAssistantMessage -
             # "agent" provenance since this is a model-produced reply, not a

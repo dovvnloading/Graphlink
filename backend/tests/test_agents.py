@@ -651,6 +651,79 @@ def test_send_message_carries_the_branch_pinned_model_ref_into_dispatch(monkeypa
     asyncio.run(run())
 
 
+def test_a_pinned_send_stamps_the_pinned_model_on_the_reply_not_the_task_default(monkeypatch):
+    # The reply's model badge and the token counter's cost lookup both read
+    # the request-time provenance pair. A pinned dispatch runs the pinned
+    # model, so the pair must name it - a snapshot of the task's default
+    # would badge (and price) the reply as a model that never ran, which is
+    # exactly the side-by-side comparison a pin exists for.
+    _configure_fake_ollama_provider_only(monkeypatch, model="task-default-model")
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, **kwargs):
+        on_chunk("a reply", False)
+        return "a reply"
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    async def run():
+        bus = SessionBus("agents-pinned-provenance-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager())
+        document = register_canvas(bus, notifications, dispatcher, composer_document)
+
+        root = document.add_chat_node(0, 0, "root message", True)
+        document.last_chat_node_id = root.id
+        document.set_model_override(root.id, "Anthropic Claude", "claude-opus-5")
+
+        user_id = await bus.dispatch_intent("scene", "sendMessage", ["continue the branch"])
+        entry = next(iter(chat_slots(dispatcher).values()))
+        await entry["task"]
+
+        reply = document.nodes[document.last_chat_node_id]
+        assert reply.id != user_id
+        assert (reply.state.provider, reply.state.model) == ("Anthropic Claude", "claude-opus-5")
+
+    asyncio.run(run())
+
+
+def test_on_usage_prices_the_reply_against_the_request_time_pair():
+    # _on_usage must not re-read the dispatcher when the usage arrives: a
+    # provider switch mid-stream, or a pinned dispatch, would otherwise
+    # price the reply against a model that did not produce it.
+    from backend.api.intents_chat import _make_on_usage
+
+    document = SceneDocument()
+    node = document.add_chat_node(0, 0, "a reply", False)
+    seen = []
+
+    class _RecordingCounter:
+        def set_real_usage(self, prompt_tokens, completion_tokens, *, provider, model):
+            seen.append(("usage", provider, model))
+
+        def estimate_cost_for(self, prompt_tokens, completion_tokens, *, provider, model):
+            seen.append(("cost", provider, model))
+            return 0.25
+
+    async def _publish():
+        return None
+
+    on_usage = _make_on_usage(
+        document, _RecordingCounter(), _publish, _publish, lambda: node.id,
+        "Anthropic Claude", "claude-opus-5",
+    )
+    asyncio.run(on_usage({"prompt_tokens": 10, "completion_tokens": 5}))
+
+    assert seen == [
+        ("usage", "Anthropic Claude", "claude-opus-5"),
+        ("cost", "Anthropic Claude", "claude-opus-5"),
+    ]
+    assert node.state.estimated_cost_usd == 0.25
+    assert (node.state.prompt_tokens, node.state.completion_tokens) == (10, 5)
+
+
 def test_send_message_omits_model_ref_entirely_when_nothing_is_pinned(monkeypatch):
     # The behavior-preservation half of 18.2: no pin anywhere means
     # _call_chat_agent_stream never even RECEIVES a model_ref kwarg -

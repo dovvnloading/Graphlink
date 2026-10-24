@@ -2001,6 +2001,84 @@ def test_send_message_intent_with_branch_from_node_id_overrides_the_parent():
     asyncio.run(run())
 
 
+@pytest.mark.parametrize(
+    "intent, args_for",
+    [
+        ("removeNodes", lambda node_id: [[node_id]]),
+        ("deleteChatNode", lambda node_id: [node_id]),
+    ],
+)
+def test_send_message_user_node_deleted_mid_flight_is_a_silent_noop(intent, args_for):
+    # The send path's completion callback must match regenerate's (and
+    # intents_conversation's) posture when the node the reply hangs off was
+    # deleted while the model was still generating: a silent no-op, never a
+    # SceneError surfaced as "AI response failed" for a request that
+    # succeeded. Nothing may record or stamp the reply that never landed -
+    # no orphan node, no per-node usage stamp, no session-token growth -
+    # while the request-level output meter still reflects what the model
+    # returned, exactly as regenerate's own deleted-mid-flight path does.
+    async def run():
+        bus, document, recorder, dispatcher = make_bus_with_dispatcher()
+
+        def first_reply(task, messages, **kwargs):
+            return {"message": {"content": "first reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", first_reply):
+            first_user_id = await bus.dispatch_intent("scene", "sendMessage", ["hello"])
+            entry = next(iter(chat_slots(dispatcher).values()))
+            await entry["task"]
+
+        surviving_ids = set(document.nodes)
+        first_reply_id = document.last_chat_node_id
+        assert first_reply_id != first_user_id and len(surviving_ids) == 2
+
+        started = threading.Event()
+        release = threading.Event()
+        late_reply = "a completed reply that has nowhere to land"
+
+        def blocking_chat(task, messages, **kwargs):
+            started.set()
+            release.wait(5)
+            return {
+                "message": {"content": late_reply},
+                "usage": {"prompt_tokens": 321, "completion_tokens": 54},
+            }
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", blocking_chat):
+            follow_up_id = await bus.dispatch_intent("scene", "sendMessage", ["follow up"])
+            await asyncio.to_thread(started.wait, 5)
+            session_tokens_at_delete = document.total_session_tokens
+
+            await bus.dispatch_intent("scene", intent, args_for(follow_up_id))
+            assert follow_up_id not in document.nodes
+            active_after_delete = document.last_chat_node_id
+
+            release.set()
+            entry = next(iter(chat_slots(dispatcher).values()))
+            await entry["task"]
+
+        notice = await bus.publish("notification")
+        assert notice["visible"] is False, "deleted-mid-flight is a silent no-op - no notification fires"
+        assert set(document.nodes) == surviving_ids, "no orphan reply node is created anywhere"
+        assert all(
+            getattr(n.state, "prompt_tokens", None) is None for n in document.nodes.values()
+        ), "the reply's real usage must not be stamped on any surviving node"
+        assert document.total_session_tokens == session_tokens_at_delete, (
+            "a reply that never landed must not grow the persisted session total"
+        )
+        assert document.last_chat_node_id == active_after_delete, "the late reply never moves the active branch"
+        # Request-level meter: the model really returned (and billed) this.
+        assert bus.token_counter.output_tokens == estimate_tokens(late_reply)
+
+    asyncio.run(run())
+
+
 # -- history-to-text flattening (R8a token counter wiring) -------------------
 
 
@@ -4034,6 +4112,96 @@ def test_apply_gitlink_changes_intent_calls_dispatcher_with_only_node_id_and_fin
         assert call["local_root"] == "C:/checkout"
         assert callable(call["on_success"])
         assert callable(call["on_failure"])
+
+    asyncio.run(run())
+
+
+class _CapturingRunDispatcher:
+    """Records the callbacks a run intent hands the dispatcher, so a test can
+    fire them after deleting the node - the mid-flight-delete window."""
+
+    def __init__(self):
+        self.calls = []
+
+    async def start_artifact_reply(self, **kwargs):
+        self.calls.append(kwargs)
+
+    async def start_gitlink_run(self, **kwargs):
+        self.calls.append(kwargs)
+
+    async def start_gitlink_apply(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+def _register_with_capturing_dispatcher(session_id):
+    bus = SessionBus(session_id)
+    notifications = NotificationState()
+    bus.register_topic("notification", notifications.payload)
+    composer_document = ComposerDocument()
+    bus.register_topic("app-composer", composer_document.payload)
+    dispatcher = _CapturingRunDispatcher()
+    document = register_canvas(bus, notifications, dispatcher, composer_document)
+    return bus, document, dispatcher
+
+
+def test_an_artifact_reply_landing_after_its_node_was_deleted_is_a_silent_noop():
+    # complete_artifact_generation goes through require_node; without the
+    # liveness guard the late reply raised SceneError, which the dispatcher
+    # reported as "Artifact generation failed" for a request that succeeded.
+    async def run():
+        bus, document, dispatcher = _register_with_capturing_dispatcher("artifact-midflight-delete-test")
+        root = await bus.dispatch_intent("scene", "addChatNode", [0, 0, "draft me a brief", True])
+        art_node = document.add_artifact_node(0, 0, root)
+        await bus.dispatch_intent("scene", "sendArtifactMessage", [art_node.id, "draft the introduction"])
+        on_reply = dispatcher.calls[0]["on_reply"]
+
+        document.remove_nodes([art_node.id])
+        commands_before = len(document.command_log)
+        on_reply("# The document", "Here is the draft.")
+
+        assert art_node.id not in document.nodes
+        assert len(document.command_log) == commands_before
+
+    asyncio.run(run())
+
+
+def test_a_gitlink_run_landing_after_its_node_was_deleted_is_a_silent_noop():
+    async def run():
+        bus, document, dispatcher = _register_with_capturing_dispatcher("gitlink-run-midflight-delete-test")
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_gitlink_node(0, 0, parent.id)
+        document.store_gitlink_repo_tree(node.id, "octocat/hello-world", "main", ["a.py"])
+        document.store_gitlink_context(
+            node.id, scope_mode="selected", selected_paths=["a.py"], context_xml="<x/>",
+            context_stats={}, context_summary="s",
+        )
+        await bus.dispatch_intent("scene", "runGitlinkChangeSet", [node.id, "add a feature"])
+        on_success = dispatcher.calls[0]["on_success"]
+
+        document.remove_nodes([node.id])
+        on_success("## Proposal", [], "preview", "fp-1", "")
+
+        assert node.id not in document.nodes
+
+    asyncio.run(run())
+
+
+def test_a_gitlink_apply_finishing_after_its_node_was_deleted_does_not_report_a_failure():
+    # The files are already written when on_success runs; raising there
+    # replaced the dispatcher's "Applied N file changes." with "Gitlink
+    # apply failed" for writes that really happened.
+    async def run():
+        bus, document, dispatcher = _register_with_capturing_dispatcher("gitlink-apply-midflight-delete-test")
+        parent = document.add_node(0, 0, "parent")
+        node = document.add_gitlink_node(0, 0, parent.id)
+        document.set_gitlink_local_root(node.id, "C:/checkout")
+        await bus.dispatch_intent("scene", "applyGitlinkChanges", [node.id, "fp-123"])
+        on_success = dispatcher.calls[0]["on_success"]
+
+        document.remove_nodes([node.id])
+        on_success(3)
+
+        assert node.id not in document.nodes
 
     asyncio.run(run())
 
