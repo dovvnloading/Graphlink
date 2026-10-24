@@ -386,7 +386,7 @@ def _non_negative_int(value: Any, default: int = 0) -> int:
     straight into int(), which is exactly the shape that raises."""
     try:
         return max(0, int(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -411,7 +411,7 @@ def _positive_int(value: Any, default: int) -> int:
     default here."""
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return parsed if parsed > 0 else default
 
@@ -931,7 +931,7 @@ def _restore_plan_payload(payload: dict[str, Any]) -> SceneNode:
             # whole session load the way a bare int() would.
             try:
                 elapsed_ms = int(raw.get("elapsedMs", 0) or 0)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 elapsed_ms = 0
             activity.append({
                 "tool": str(raw.get("tool", "")),
@@ -988,7 +988,7 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
         if isinstance(raw, dict) and raw.get("tool"):
             try:
                 elapsed_ms = int(raw.get("elapsedMs", 0) or 0)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 elapsed_ms = 0
             activity.append({
                 "tool": str(raw.get("tool", "")),
@@ -1929,7 +1929,7 @@ def _restore_chat_into_document(
     total_tokens = chat_data.get("total_session_tokens", 0)
     try:
         document.total_session_tokens = int(total_tokens)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         document.total_session_tokens = 0
 
     # ADR-002 Workstream 1 ("Branch status and lifecycle"): translated

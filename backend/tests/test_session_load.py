@@ -183,6 +183,36 @@ def test_plan_node_survives_non_numeric_budget_fields():
     assert node.state.builder_spent_steps == 0
 
 
+@pytest.mark.parametrize("infinite", [float("inf"), float("-inf")])
+def test_infinite_numbers_in_a_saved_chat_degrade_instead_of_failing_the_load(infinite):
+    """chats.db rows are written with json.dumps' default allow_nan=True, and
+    json.loads reads 1e999/Infinity back as float('inf') - int() of that
+    raises OverflowError, not ValueError. A hand-edited or corrupted row must
+    degrade the same way a non-numeric one does: the plan node stays, its
+    caps fall back to their defaults, and the chat itself still opens."""
+    document = _restore(
+        nodes=[{
+            "node_type": "plan", "position": {"x": 0.0, "y": 0.0}, "goal": "ship it",
+            "max_steps": infinite, "spent_tokens": infinite,
+            "activity": [{"tool": "fs.read", "summary": "s", "elapsedMs": infinite}],
+        }, {
+            "node_type": "harness", "position": {"x": 0.0, "y": 0.0}, "goal": "g",
+            "max_turns": infinite, "spent_turns": infinite,
+            "activity": [{"tool": "shell", "summary": "s", "elapsedMs": infinite}],
+        }],
+        total_session_tokens=infinite,
+    )
+    plan = next(n for n in document.nodes.values() if n.kind == "plan")
+    harness = next(n for n in document.nodes.values() if n.kind == "harness")
+    assert plan.state.builder_max_steps == 12
+    assert plan.state.builder_spent_tokens == 0
+    assert [entry["elapsedMs"] for entry in plan.state.builder_activity] == [0]
+    assert harness.state.harness_max_turns == 16
+    assert harness.state.harness_spent_turns == 0
+    assert [entry["elapsedMs"] for entry in harness.state.harness_activity] == [0]
+    assert document.total_session_tokens == 0
+
+
 def test_a_restorer_that_raises_is_logged_not_swallowed_in_silence(caplog):
     """The node is still dropped - one bad row must not fail the whole load -
     but it no longer disappears without a trace."""
