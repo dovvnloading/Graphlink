@@ -87,6 +87,38 @@ describe("NoteNodeView", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
+  it("Ctrl+S while editing pushes the draft before the app-level save handler, and stays in edit mode", () => {
+    // Save is exempt from the while-typing shortcut gate, so Ctrl+S reaches
+    // App's document-level handler (saveChat) with no blur. The draft has
+    // to go out first or the saved session lacks the edit.
+    const { container, onSetContent } = renderNoteNode({ content: "original" });
+    fireEvent.doubleClick(container.querySelector(".note-node-content")!);
+    const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
+    const order: string[] = [];
+    onSetContent.mockImplementation(() => {
+      order.push("commit");
+    });
+    const onDocumentKeyDown = () => {
+      order.push("document keydown");
+    };
+    document.addEventListener("keydown", onDocumentKeyDown);
+    try {
+      fireEvent.change(textarea, { target: { value: "saved edit" } });
+      fireEvent.keyDown(textarea, { key: "s" });
+      expect(onSetContent).not.toHaveBeenCalled();
+      order.length = 0;
+
+      fireEvent.keyDown(textarea, { key: "s", ctrlKey: true });
+    } finally {
+      document.removeEventListener("keydown", onDocumentKeyDown);
+    }
+
+    expect(onSetContent).toHaveBeenCalledTimes(1);
+    expect(onSetContent).toHaveBeenCalledWith("saved edit");
+    expect(order).toEqual(["commit", "document keydown"]);
+    expect(screen.getByRole("textbox")).toBeTruthy();
+  });
+
   it("Escape reverts to the last-committed content and exits edit mode WITHOUT committing", () => {
     const { container, onSetContent } = renderNoteNode({ content: "original" });
     fireEvent.doubleClick(container.querySelector(".note-node-content")!);

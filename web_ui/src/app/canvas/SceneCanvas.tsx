@@ -752,6 +752,11 @@ function makeHtmlFns(id: string, liveRef: { current: DispatcherLive }) {
     // HtmlNodeView (restore) and reported (debounced) via the
     // setHtmlSplitterState intent once a drag settles.
     onSplitterChange: (value: number) => liveRef.current.store.setHtmlSplitterState(id, value),
+    // The edited source, committed by HtmlNodeView on Render and on the
+    // textarea's blur. Persisting it is what lets a remount (off-viewport
+    // culling) or a session load re-seed the card with the user's edit
+    // instead of the source the node was created with.
+    onSourceCommit: (content: string) => liveRef.current.store.setHtmlContent(id, content),
   };
 }
 

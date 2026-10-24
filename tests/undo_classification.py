@@ -146,6 +146,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "addThinkingNode", "A", "content: create"),
     Classified("scene", "addHtmlNode", "A", "content: create"),
     Classified("scene", "setHtmlSplitterState", "B", "view-state: per-node UI splitter position"),
+    Classified("scene", "setHtmlContent", "A", "content: text edit"),
     Classified("scene", "addImageNode", "A", "content: create"),
     Classified("scene", "addConversationNode", "A", "content: create"),
     Classified("scene", "moveNode", "A", "content: move"),

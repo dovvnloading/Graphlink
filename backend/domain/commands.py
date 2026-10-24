@@ -395,6 +395,7 @@ _COMMAND_LABELS = {
     "synthesizeBranches": "Synthesize Branches",
     "generateImageReply": "Generate Image",
     "setNoteContent": "Edit Note",
+    "setHtmlContent": "Edit HTML",
     "setGroupLabel": "Rename Group",
     "setGroupColor": "Recolor",
     "toggleFrameLock": "Lock Frame",

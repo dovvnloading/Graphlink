@@ -1495,6 +1495,15 @@ export class SceneStore {
     this.transport.fireIntent("scene", "setHtmlSplitterState", [nodeId, value], undefined, true);
   }
 
+  // The HTML node's edited source - unlike the view-state setters around it,
+  // real document content (an undoable command server-side, like
+  // setNoteContent). Same fire-and-forget, queueable posture as
+  // setNoteContent: a last-write-wins text field, so the offline queue may
+  // hold it across a reconnect.
+  setHtmlContent(nodeId: string, content: string): void {
+    this.transport.fireIntent("scene", "setHtmlContent", [nodeId, content], undefined, true);
+  }
+
   setChatScrollValue(nodeId: string, value: number): void {
     this.transport.fireIntent("scene", "setChatScrollValue", [nodeId, value], undefined, true);
   }

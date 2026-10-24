@@ -2131,6 +2131,17 @@ describe("toFlowNodes (R6.3 html node splitter state)", () => {
     expect(spy).toHaveBeenCalledWith("html-1", 0.6);
   });
 
+  it("onSourceCommit calls setHtmlContent with this node's own id and the committed source", () => {
+    const scene = baseScene({ nodes: [baseNode({ id: "html-1", kind: "html", content: "<p>hi</p>" })], edges: [] });
+    const store = makeStore();
+    const spy = vi.spyOn(store, "setHtmlContent");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const data = flowNodes.find((n) => n.id === "html-1")!.data as { onSourceCommit: (source: string) => void };
+    data.onSourceCommit("<p>edited</p>");
+    expect(spy).toHaveBeenCalledWith("html-1", "<p>edited</p>");
+  });
+
   // ADR-003 stage 3.3 (C9) review-fix: the "defaults ... to null" test above
   // never actually exercises SceneCanvas.tsx's `n.htmlSplitterState ??
   // null` normalization - baseNode()'s own default is already `null`, so

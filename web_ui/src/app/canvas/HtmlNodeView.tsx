@@ -1,5 +1,6 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
+import { resolveShortcut } from "../chrome/shortcuts";
 import {
   HTML_SPLIT_DEFAULT,
   HTML_SPLIT_MAX,
@@ -67,6 +68,11 @@ export interface HtmlNodeData extends Record<string, unknown> {
   onToggleCollapse: () => void;
   onDelete: () => void;
   onSplitterChange: (value: number) => void;
+  // Persists the edited source (scene/setHtmlContent). Called on Render, on
+  // the source textarea's blur and on the save key pressed inside it, and
+  // only when the source differs from what the server holds - see
+  // commitSource below.
+  onSourceCommit: (content: string) => void;
 }
 
 export type HtmlFlowNode = Node<HtmlNodeData, "html">;
@@ -166,11 +172,74 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
   // Two separate pieces of local state, per the R3.18 spec: `sourceText`
   // tracks every keystroke in the textarea (fine - it never touches the
   // iframe), while `renderedDoc` is only ever reassigned by the Render
-  // button's onClick below, via buildSandboxedHtmlDocument. The iframe's
-  // srcDoc is bound to `renderedDoc` alone, never to `sourceText` - typing
-  // literally cannot reach the iframe through any path in this component.
+  // button's onClick below, via buildSandboxedHtmlDocument, or reseeded
+  // from a server value the card did not write (see prevHtmlContent below).
+  // The iframe's srcDoc is bound to `renderedDoc` alone, never to
+  // `sourceText` - typing literally cannot reach the iframe through any
+  // path in this component.
   const [sourceText, setSourceText] = useState(data.htmlContent);
   const [renderedDoc, setRenderedDoc] = useState(() => buildSandboxedHtmlDocument(data.htmlContent));
+
+  // Off-viewport culling genuinely unmounts this card, so an edit that
+  // never reached the backend is lost on the next remount (and on save).
+  // commitSource persists it on the "the user is done with this edit"
+  // moments: Render, the textarea losing focus, and the save key pressed
+  // inside it (see onSourceKeyDown). Never per keystroke, so the server's
+  // echo of a commit cannot race the cursor.
+  //
+  // `committedSource` is what this card believes the server holds once its
+  // own in-flight commits land, so a blur after Render, or a Render of
+  // untouched source, sends nothing. `pendingCommits` lists, oldest first,
+  // the values this card sent that have not come back as data.htmlContent
+  // yet.
+  const [committedSource, setCommittedSource] = useState(data.htmlContent);
+  const [pendingCommits, setPendingCommits] = useState<readonly string[]>([]);
+  function commitSource() {
+    if (sourceText === committedSource) return;
+    setCommittedSource(sourceText);
+    setPendingCommits((pending) => [...pending, sourceText]);
+    data.onSourceCommit(sourceText);
+  }
+
+  // A new data.htmlContent is either the echo of one of this card's own
+  // commits or a change the card did not make (an undo/redo of a
+  // setHtmlContent, an agent's write, or the echo of a commit sent by an
+  // earlier mount of this card). The echo must never touch the textarea:
+  // the user may already be typing past it. Anything else is shown - the
+  // card otherwise keeps displaying text the server no longer holds, and a
+  // later save writes what the user is not looking at - but only when there
+  // is no uncommitted typing to lose; typing over it simply wins on the
+  // next commit, since committedSource now names the server's value.
+  // Matching an echo drops every older pending entry with it (the scene bus
+  // coalesces publishes, so an intermediate value may never be seen), and
+  // a change the card did not make clears the list: publishes arrive in
+  // server order, so whatever arrives after it is the server's real state.
+  // Adjusted during render, React's documented "adjusting state when a prop
+  // changes" pattern, so the reseed and the new prop land in one render.
+  const [prevHtmlContent, setPrevHtmlContent] = useState(data.htmlContent);
+  if (data.htmlContent !== prevHtmlContent) {
+    setPrevHtmlContent(data.htmlContent);
+    const echoIndex = pendingCommits.indexOf(data.htmlContent);
+    if (echoIndex !== -1) {
+      setPendingCommits(pendingCommits.slice(echoIndex + 1));
+    } else {
+      setPendingCommits([]);
+      setCommittedSource(data.htmlContent);
+      if (sourceText === committedSource) {
+        setSourceText(data.htmlContent);
+        setRenderedDoc(buildSandboxedHtmlDocument(data.htmlContent));
+      }
+    }
+  }
+
+  // Save is exempt from the while-typing shortcut gate (see shortcuts.ts),
+  // so Ctrl+S here reaches App's document-level handler with no blur and no
+  // Render. React's root listener runs before that document listener, so
+  // committing here sends setHtmlContent ahead of saveChat and the saved
+  // session holds what the user sees. The event is left to propagate.
+  function onSourceKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (resolveShortcut(event) === "save-chat") commitSource();
+  }
 
   // R6.3: the Source/Preview split - restored from data.htmlSplitterState on
   // mount (see the component-level useState initializer), then dragged
@@ -258,6 +327,8 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
           style={{ height: sourceHeightPx }}
           value={sourceText}
           onChange={(event) => setSourceText(event.target.value)}
+          onBlur={commitSource}
+          onKeyDown={onSourceKeyDown}
           spellCheck={false}
         />
       </div>
@@ -277,7 +348,10 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
       <button
         type="button"
         className="html-node-render-btn"
-        onClick={() => setRenderedDoc(buildSandboxedHtmlDocument(sourceText))}
+        onClick={() => {
+          setRenderedDoc(buildSandboxedHtmlDocument(sourceText));
+          commitSource();
+        }}
       >
         Render
       </button>
@@ -312,24 +386,31 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
 /** ADR-011 stage 11.1: every prop this view actually reads, compared - it
  * never destructures `id`, so it is intentionally absent (this instance never
  * receives a changed `id` without React Flow remounting it under a new key
- * anyway). `htmlContent` and `htmlSplitterState` are intentionally OMITTED:
- * each seeds local state ONCE via a `useState` initializer on mount
- * (`sourceText`/`renderedDoc` and `splitterValue` respectively) and is never
+ * anyway). `htmlSplitterState` is intentionally OMITTED: it seeds
+ * `splitterValue` ONCE via a `useState` initializer on mount and is never
  * read again afterward by any JSX, effect, or event-handler closure - so
- * comparing them would only cause spurious re-renders that produce
+ * comparing it would only cause spurious re-renders that produce
  * byte-identical output, never fix a missed one (same reasoning
  * WebResearchNodeView's own comparator applies to researchActiveSourceId).
+ * `htmlContent` IS compared: the view reads it on every render to tell the
+ * echo of its own commit (left alone, so it never fights the cursor) from a
+ * change it did not make, such as an undo (shown) - see the prevHtmlContent
+ * block in the component.
  * Everything else - `isCollapsed`, and every callback, including
- * `onSplitterChange`, which IS captured fresh into a real event-handler
- * closure on every render (onSplitterPointerDown's onPointerUp) and so must
- * be compared, not just fields that show up directly in JSX - is a primitive
- * or stable callback reference, so `===` is correct for all of them. */
+ * `onSplitterChange` and `onSourceCommit`, which ARE captured fresh into real
+ * event-handler closures on every render (onSplitterPointerDown's
+ * onPointerUp; the Render button and textarea blur via commitSource) and so
+ * must be compared, not just fields that show up directly in JSX - is a
+ * primitive or stable callback reference, so `===` is correct for all of
+ * them. */
 function htmlNodeDataAreEqual(prev: HtmlNodeData, next: HtmlNodeData): boolean {
   return (
+    prev.htmlContent === next.htmlContent &&
     prev.isCollapsed === next.isCollapsed &&
     prev.onToggleCollapse === next.onToggleCollapse &&
     prev.onDelete === next.onDelete &&
-    prev.onSplitterChange === next.onSplitterChange
+    prev.onSplitterChange === next.onSplitterChange &&
+    prev.onSourceCommit === next.onSourceCommit
   );
 }
 

@@ -1472,6 +1472,18 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "setHtmlSplitterState", args: ["html-1", 0.4] }]);
   });
 
+  it("setHtmlContent sends the scene-topic setHtmlContent intent with [nodeId, content], queueable like setNoteContent", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.setHtmlContent("html-1", "<p>edited</p>");
+    expect(intents).toEqual([{ topic: "scene", intent: "setHtmlContent", args: ["html-1", "<p>edited</p>"] }]);
+    // A last-write-wins text field, so it may wait out a reconnect in the
+    // offline queue rather than being refused.
+    expect(transport.fireIntent).toHaveBeenCalledWith(
+      "scene", "setHtmlContent", ["html-1", "<p>edited</p>"], undefined, true,
+    );
+  });
+
   it("setChatScrollValue sends the scene-topic setChatScrollValue intent with [nodeId, value]", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

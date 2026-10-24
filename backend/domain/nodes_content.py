@@ -193,6 +193,22 @@ class ContentOps(SceneDocumentParts):
         node = require_node(self.nodes, node_id, "html", HtmlState)
         node.state.html_splitter_state = float(value)
 
+    def set_html_content(self, node_id: str, html_content: str) -> None:
+        """Commits an HtmlViewNode's edited source. Without this the stored
+        source could only ever be what add_html_node was given: the card's
+        textarea edits lived in component state alone, so they vanished the
+        moment off-viewport culling unmounted the card and were never saved.
+
+        Stored VERBATIM, exactly as add_html_node stores it (see its own doc
+        - the backend never parses or sanitizes the HTML). The title is left
+        as add_html_node set it: like set_note_content,
+        update_chat_node_content and the builderSetContent tool, an in-place
+        content mutator never recomputes a title post-creation, so an html
+        node's title cannot depend on which of those paths wrote it last.
+        html kind only, matching set_html_splitter_state's guard."""
+        node = require_node(self.nodes, node_id, "html", HtmlState)
+        node.content = str(html_content)
+
     # -- R6.1: notes -----------------------------------------------------------
     #
     # Legacy canvas decorations. Notes are free-floating markdown sticky-
