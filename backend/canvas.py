@@ -164,6 +164,24 @@ def _history_token_text(history: list[dict]) -> str:
     return "\n\n".join(text for text in (_history_turn_text(turn) for turn in history) if text)
 
 
+def _history_image_tokens(history: list[dict]) -> int:
+    """The vision-token cost of every image_bytes part in a
+    chat_branch_history - the half of the context _history_token_text
+    leaves out (an image has no text to tokenize). Passed alongside it to
+    set_context_text so the meter and graphlink_memory.trim_history's
+    budget price images the same way."""
+    from graphlink_token_estimator import estimate_image_tokens
+
+    total = 0
+    for turn in history:
+        content = turn.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "image_bytes":
+                    total += estimate_image_tokens(part.get("data"))
+    return total
+
+
 def _chart_source_text(branch_history: list[dict]) -> str:
     """R6.2: flattens chat_branch_history's own {"role","content"} list (the
     SAME branch walk web_research/code_sandbox/gitlink already reuse via

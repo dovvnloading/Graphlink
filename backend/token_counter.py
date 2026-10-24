@@ -170,8 +170,12 @@ class TokenCounterState:
     def set_output_text(self, text: str) -> None:
         self.output_tokens = estimate_tokens(text)
 
-    def set_context_text(self, text: str) -> None:
-        self.context_tokens = estimate_tokens(text)
+    def set_context_text(self, text: str, image_tokens: int = 0) -> None:
+        """`image_tokens` is the branch's images, priced by
+        graphlink_token_estimator.estimate_image_tokens - the same figure
+        graphlink_memory.trim_history charges against the context budget,
+        so the meter shows what the budget is actually spending."""
+        self.context_tokens = estimate_tokens(text) + max(0, int(image_tokens))
 
     def reset_real_usage(self) -> None:
         """ADR-006 stage 6.8 review fix (stale real usage): called at
