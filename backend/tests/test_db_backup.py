@@ -43,14 +43,14 @@ def _make_real_db(db_path, title="Hello"):
         conn.close()
 
 
-def _write_fake_backup(db_path, timestamp: str) -> None:
+def _write_fake_backup(db_path, timestamp: str, *, prefix: str = BACKUP_FILENAME_PREFIX) -> None:
     """Directly creates a backup FILE with a specific timestamp in its
     name, bypassing take_backup's own clock - the only way to deterministically
     test retention across many synthetic points in time without a real
     sleep between each one."""
     backups_dir = backups_dir_for(db_path)
     backups_dir.mkdir(parents=True, exist_ok=True)
-    path = backups_dir / backup_filename(timestamp)
+    path = backups_dir / backup_filename(timestamp, prefix=prefix)
     conn = sqlite3.connect(path)
     try:
         conn.execute("CREATE TABLE chats (id INTEGER PRIMARY KEY, title TEXT)")
@@ -276,6 +276,67 @@ def test_prune_keeps_one_per_calendar_day_beyond_the_recent_window(db_path):
     # The older, same-day duplicate is the ONE that must be gone.
     assert backup_filename(_ts(day_minus_1_b)) in {p.name for p in deleted}
     assert len(deleted) == len(recent) + len(older) - len(expected_survivors)
+
+
+# backend/knowledge_store.py backs knowledge.db up under "knowledge-"; the
+# retention policy has to be prefix-blind, so every prefix-sensitive prune
+# test below runs under BOTH the default prefix and that real second one.
+_RETENTION_PREFIXES = [BACKUP_FILENAME_PREFIX, "knowledge-"]
+
+
+@pytest.mark.parametrize("prefix", _RETENTION_PREFIXES)
+def test_prune_keeps_every_backup_on_distinct_days_forever_for_any_prefix(db_path, prefix):
+    # One backup per day for KEEP_MOST_RECENT + 4 consecutive UTC days: the
+    # newest N survive via the recent window and each of the 4 older ones is
+    # the sole (so newest) backup of its own day, so the daily-forever
+    # bucket must keep all of them - nothing at all is prunable here.
+    base = datetime(2026, 1, 20, 12, 0, 0, tzinfo=timezone.utc)
+    timestamps = [base - timedelta(days=i) for i in range(KEEP_MOST_RECENT + 4)]
+    for ts in timestamps:
+        _write_fake_backup(db_path, _ts(ts), prefix=prefix)
+
+    deleted = prune_backups(db_path, prefix=prefix)
+
+    assert deleted == []
+    survivor_names = {p.name for p in list_backups(db_path, prefix=prefix)}
+    assert survivor_names == {backup_filename(_ts(ts), prefix=prefix) for ts in timestamps}
+
+
+@pytest.mark.parametrize("prefix", _RETENTION_PREFIXES)
+def test_prune_same_day_burst_keeps_exactly_the_most_recent_N_for_any_prefix(db_path, prefix):
+    # The recent window's own days must count as "covered" under the
+    # caller's prefix too - otherwise the (N+1)th-newest backup looks like
+    # the first one seen for today and survives as an extra daily keeper.
+    now = datetime(2026, 1, 20, 12, 0, 0, tzinfo=timezone.utc)
+    timestamps = [now - timedelta(minutes=i) for i in range(KEEP_MOST_RECENT + 5)]
+    for ts in timestamps:
+        _write_fake_backup(db_path, _ts(ts), prefix=prefix)
+
+    deleted = prune_backups(db_path, prefix=prefix)
+
+    assert len(deleted) == len(timestamps) - KEEP_MOST_RECENT
+    survivor_names = {p.name for p in list_backups(db_path, prefix=prefix)}
+    assert survivor_names == {
+        backup_filename(_ts(ts), prefix=prefix) for ts in timestamps[:KEEP_MOST_RECENT]
+    }
+
+
+def test_take_backup_with_a_custom_prefix_keeps_the_daily_history_it_prunes_against(db_path):
+    # End to end through the real knowledge.db call path: take_backup's own
+    # prune pass (not just a direct prune_backups call) must apply the daily
+    # bucket to "knowledge-" backups instead of collapsing them to the
+    # recent window.
+    _make_real_db(db_path)
+    base = datetime(2026, 1, 20, 12, 0, 0, tzinfo=timezone.utc)
+    older_days = [base - timedelta(days=i) for i in range(1, KEEP_MOST_RECENT + 4)]
+    for ts in older_days:
+        _write_fake_backup(db_path, _ts(ts), prefix="knowledge-")
+
+    new_backup = take_backup(db_path, prefix="knowledge-")
+
+    survivors = list_backups(db_path, prefix="knowledge-")
+    assert new_backup in survivors
+    assert len(survivors) == len(older_days) + 1
 
 
 def test_prune_is_idempotent_a_second_call_deletes_nothing_more(db_path):

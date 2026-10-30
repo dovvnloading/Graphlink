@@ -54,7 +54,9 @@ class SceneDocumentParts:
         # write. Without these BranchOps infers `str` from its own first
         # assignment and then rejects the `= None` two lines later, which
         # is how a field declared `str | None` on SceneDocument itself
-        # produced an error on SceneDocument's own declaration.
+        # produced an error on SceneDocument's own declaration. CommandOps
+        # snapshots and restores the two chat pointers through this same
+        # declaration (commands.py's ChatPointers).
         last_chat_node_id: str | None
         final_deliverable_node_id: str | None
         current_chat_id: int | None

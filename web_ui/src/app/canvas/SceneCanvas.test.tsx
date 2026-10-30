@@ -2131,6 +2131,17 @@ describe("toFlowNodes (R6.3 html node splitter state)", () => {
     expect(spy).toHaveBeenCalledWith("html-1", 0.6);
   });
 
+  it("onSourceCommit calls setHtmlContent with this node's own id and the committed source", () => {
+    const scene = baseScene({ nodes: [baseNode({ id: "html-1", kind: "html", content: "<p>hi</p>" })], edges: [] });
+    const store = makeStore();
+    const spy = vi.spyOn(store, "setHtmlContent");
+
+    const flowNodes = toFlowNodes(scene, store);
+    const data = flowNodes.find((n) => n.id === "html-1")!.data as { onSourceCommit: (source: string) => void };
+    data.onSourceCommit("<p>edited</p>");
+    expect(spy).toHaveBeenCalledWith("html-1", "<p>edited</p>");
+  });
+
   // ADR-003 stage 3.3 (C9) review-fix: the "defaults ... to null" test above
   // never actually exercises SceneCanvas.tsx's `n.htmlSplitterState ??
   // null` normalization - baseNode()'s own default is already `null`, so
@@ -2303,7 +2314,7 @@ describe("applyGroupDragDelta (R6.1 group-drag)", () => {
     ];
 
     // The frame itself moved from (100,100) to (140,130): delta (40,30).
-    const changes = applyGroupDragDelta(nodes, "frame-1", { x: 140, y: 130 });
+    const changes = applyGroupDragDelta(nodes, "frame-1", { x: 140, y: 130 }, true);
 
     expect(changes).toHaveLength(2);
     const typedChanges = changes as unknown as Array<{ id: string; position: { x: number; y: number } }>;
@@ -2318,6 +2329,33 @@ describe("applyGroupDragDelta (R6.1 group-drag)", () => {
     }
   });
 
+  it("member changes carry the producing change's drag flag, so a drag-stop batch never re-opens the gesture", () => {
+    const nodes: SceneFlowNode[] = [
+      {
+        id: "outer-container",
+        type: "container",
+        position: { x: 0, y: 0 },
+        data: { itemIds: ["inner-frame"] },
+      } as unknown as SceneFlowNode,
+      {
+        id: "inner-frame",
+        type: "frame",
+        position: { x: 50, y: 50 },
+        data: { isLocked: true, itemIds: ["leaf-1"] },
+      } as unknown as SceneFlowNode,
+      { id: "leaf-1", type: "chat", position: { x: 70, y: 90 }, data: {} } as unknown as SceneFlowNode,
+    ];
+
+    // React Flow's drag-STOP change carries no dragging flag; every member
+    // change appended to that stop batch - nested ones included - must not
+    // claim dragging either.
+    const changes = applyGroupDragDelta(nodes, "outer-container", { x: 10, y: 20 }, false);
+    expect(changes).toEqual([
+      { id: "inner-frame", type: "position", dragging: false, position: { x: 60, y: 70 } },
+      { id: "leaf-1", type: "position", dragging: false, position: { x: 80, y: 110 } },
+    ]);
+  });
+
   it("an unlocked frame's drag carries no members", () => {
     const nodes: SceneFlowNode[] = [
       {
@@ -2328,7 +2366,7 @@ describe("applyGroupDragDelta (R6.1 group-drag)", () => {
       } as unknown as SceneFlowNode,
       { id: "member-1", type: "chat", position: { x: 120, y: 140 }, data: {} } as unknown as SceneFlowNode,
     ];
-    expect(applyGroupDragDelta(nodes, "frame-1", { x: 140, y: 130 })).toEqual([]);
+    expect(applyGroupDragDelta(nodes, "frame-1", { x: 140, y: 130 }, true)).toEqual([]);
   });
 
   it("a container's drag carries every member by the identical delta unconditionally", () => {
@@ -2341,7 +2379,7 @@ describe("applyGroupDragDelta (R6.1 group-drag)", () => {
       } as unknown as SceneFlowNode,
       { id: "member-1", type: "note", position: { x: 50, y: 50 }, data: {} } as unknown as SceneFlowNode,
     ];
-    const changes = applyGroupDragDelta(nodes, "container-1", { x: -10, y: 5 });
+    const changes = applyGroupDragDelta(nodes, "container-1", { x: -10, y: 5 }, true);
     expect(changes).toEqual([
       { id: "member-1", type: "position", dragging: true, position: { x: 40, y: 55 } },
     ]);
@@ -2351,7 +2389,7 @@ describe("applyGroupDragDelta (R6.1 group-drag)", () => {
     const nodes: SceneFlowNode[] = [
       { id: "chat-1", type: "chat", position: { x: 0, y: 0 }, data: {} } as unknown as SceneFlowNode,
     ];
-    expect(applyGroupDragDelta(nodes, "chat-1", { x: 10, y: 10 })).toEqual([]);
+    expect(applyGroupDragDelta(nodes, "chat-1", { x: 10, y: 10 }, true)).toEqual([]);
   });
 
   it("skips a member id that no longer resolves to a live node", () => {
@@ -2363,7 +2401,7 @@ describe("applyGroupDragDelta (R6.1 group-drag)", () => {
         data: { isLocked: true, itemIds: ["gone"] },
       } as unknown as SceneFlowNode,
     ];
-    expect(applyGroupDragDelta(nodes, "frame-1", { x: 10, y: 10 })).toEqual([]);
+    expect(applyGroupDragDelta(nodes, "frame-1", { x: 10, y: 10 }, true)).toEqual([]);
   });
 
   it("R6.1 follow-up: dragging an outer container cascades into a NESTED group's own members too", () => {
@@ -2390,7 +2428,7 @@ describe("applyGroupDragDelta (R6.1 group-drag)", () => {
     ];
 
     // The outer container moved from (0,0) to (10,20): delta (10,20).
-    const changes = applyGroupDragDelta(nodes, "outer-container", { x: 10, y: 20 });
+    const changes = applyGroupDragDelta(nodes, "outer-container", { x: 10, y: 20 }, true);
 
     const byId = new Map(
       (changes as unknown as Array<{ id: string; position: { x: number; y: number } }>).map((c) => [c.id, c]),
@@ -2417,7 +2455,7 @@ describe("applyGroupDragDelta (R6.1 group-drag)", () => {
       } as unknown as SceneFlowNode,
     ];
 
-    expect(() => applyGroupDragDelta(nodes, "container-a", { x: 5, y: 5 })).not.toThrow();
+    expect(() => applyGroupDragDelta(nodes, "container-a", { x: 5, y: 5 }, true)).not.toThrow();
   });
 });
 

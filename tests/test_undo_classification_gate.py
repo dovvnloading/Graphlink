@@ -279,10 +279,12 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # when Review Lens added scene's own setCodeReviewPrUrl/
     # fetchCodeReviewDiff/fetchCodeReviewDiffText/runCodeReview/
     # cancelCodeReviewRequest/askCodeReviewQuestion/dismissCodeReviewFinding
-    # septet (backend/api/intents_code_review.py).
+    # septet (backend/api/intents_code_review.py), and 186 -> 187 when the
+    # HTML node got a real commit path for its edited source
+    # (scene/setHtmlContent, backend/api/intents_nodes.py).
     real = _collect_real_registrations()
-    assert len(real) == 186, (
-        f"expected exactly 186 real registered intents, found {len(real)} - "
+    assert len(real) == 187, (
+        f"expected exactly 187 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

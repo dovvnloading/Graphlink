@@ -1114,6 +1114,11 @@ def _build_chat_data(
         # SceneDocument.final_deliverable_node_id's own comment for why
         # this is not a per-node field.
         "final_deliverable_node_id": document.final_deliverable_node_id,
+        # The Composer's continuation point, the other document-level chat
+        # pointer, saved the same way. Without it a reopened chat has no
+        # active branch, so the first Send after a load starts a detached
+        # root instead of continuing the conversation.
+        "last_chat_node_id": document.last_chat_node_id,
         "notes_data": [_serialize_note(n) for n in notes],
         "pins_data": [_serialize_pin(r) for r in document.pins.records],
         # The 12 basic connection lists all draw from the SAME classified

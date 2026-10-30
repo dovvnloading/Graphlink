@@ -151,6 +151,11 @@ def register_gitlink_intents(
         await publish_scene()
 
         def _on_success(proposal_markdown, pending_changes, preview_text, fingerprint, local_root):
+            if node_id not in document.nodes:
+                # Deleted mid-run: silent no-op (see intents_artifact.py's
+                # _on_reply). complete_gitlink_run would raise and the run
+                # would be reported as failed.
+                return
             document.complete_gitlink_run(node_id, proposal_markdown, pending_changes,
                                            preview_text, fingerprint, local_root)
 
@@ -178,6 +183,13 @@ def register_gitlink_intents(
             return None
 
         def _on_success(written_files):
+            if node_id not in document.nodes:
+                # The files ARE written by the time this runs. With the node
+                # gone there is nothing left to mark applied, and raising
+                # here would turn the dispatcher's truthful "Applied N file
+                # changes." into "Gitlink apply failed" for writes that
+                # happened.
+                return
             document.complete_gitlink_apply(node_id, written_files)
 
         def _on_failure(message):

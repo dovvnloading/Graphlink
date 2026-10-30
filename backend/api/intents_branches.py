@@ -263,25 +263,25 @@ def register_branches_intents(
                 # A source was deleted mid-flight - same liveness posture as
                 # compare_branches's own on_success guard.
                 return
-            # The synthesis node plus its synthesis metadata as one command.
-            # last_chat_node_id is deliberately set OUTSIDE it: that is
-            # document-level cursor state, not node state, so it is not
-            # something record_command's node/edge diff captures - restoring
-            # it correctly on undo is part of stage 10.2's stack work, where
-            # the cursor semantics actually live.
+            # The synthesis node, its synthesis metadata and the move of the
+            # continuation point onto it, as one command: record_command
+            # snapshots the document's chat pointers alongside the nodes and
+            # edges, so setting last_chat_node_id inside the mutator is what
+            # lets undo put it back on the previous tip and redo bring it
+            # forward to the synthesis node again.
             def _create_synthesis_node():
                 sx, sy = document.place_child(parent.id, "chat")
                 created = document.add_chat_node(sx, sy, text, False, parent_id=parent.id)
                 document.mark_branch_synthesis(
                     created.id, ids, clean_instructions, route.get("provider"), route.get("modelLabel"),
                 )
+                document.last_chat_node_id = created.id
                 return created
 
             node, _command = document.record_command(
                 "synthesizeBranches", "agent", _create_synthesis_node,
                 node_ids=[parent.id, *ids],
             )
-            document.last_chat_node_id = node.id
             result_holder["node_id"] = node.id
             await bus.publish("scene")
 

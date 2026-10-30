@@ -1,5 +1,6 @@
 import { type Node, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState } from "react";
+import { resolveShortcut } from "../chrome/shortcuts";
 import { GroupColorPicker } from "./GroupColorPicker";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeShell } from "./NodeShell";
@@ -94,6 +95,15 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
       skipBlurRef.current = true;
       setDraft(data.content);
       setEditing(false);
+    } else if (resolveShortcut(event) === "save-chat") {
+      // Save is exempt from the while-typing shortcut gate (see
+      // shortcuts.ts), so Ctrl+S reaches App's document-level handler with
+      // no blur. React's root listener runs before that document listener,
+      // so pushing the draft here sends setNoteContent ahead of saveChat and
+      // the saved session holds the note as it reads on screen. Editing
+      // stays open; the eventual blur re-sends the same text, which the
+      // backend records as no change.
+      data.onSetContent(draft);
     }
     // Enter is a plain newline here (multi-line markdown body) - only blur
     // commits, matching the spec's "onBlur commits ... Escape reverts"

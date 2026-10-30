@@ -161,6 +161,12 @@ class GeminiProvider:
             text_parts: list[str] = []
             tool_calls: list[ToolCall] = []
             usage = None
+            # A finished Gemini generation always reports why it stopped: a
+            # candidates[].finishReason (STOP - function-call turns included
+            # - MAX_TOKENS, SAFETY, ...) on its last frame; intermediate
+            # frames carry none. Same sentinel posture as
+            # AnthropicProvider.stream()'s message_stop.
+            saw_finish_reason = False
             sse = _gemini_stream_sse(
                 f"{GEMINI_BASE_URL}/v1beta/models/{self.model_id}:streamGenerateContent?alt=sse",
                 request_body,
@@ -201,6 +207,9 @@ class GeminiProvider:
                             f"The response was blocked by Google's Safety Filters ({block_reason})."
                         )
                     for candidate in payload.get("candidates", []) or []:
+                        # snake_case tolerated, mirroring block_reason above.
+                        if candidate.get("finishReason") or candidate.get("finish_reason"):
+                            saw_finish_reason = True
                         content = candidate.get("content", {}) or {}
                         for part in content.get("parts", []) or []:
                             # ADR-007 stage 7.1: Gemini delivers a function
@@ -231,6 +240,18 @@ class GeminiProvider:
                                 yield ProviderEvent("text", text)
             finally:
                 sse.close()  # idempotent on an already-closed generator
+
+            # An SSE stream that just stops without a finishReason (proxy
+            # truncation, a connection closed gracefully mid-answer)
+            # delivered a fragment - returning it as done would commit half
+            # a reply as the finished turn. Raising lets the dispatch layer
+            # land the streamed partial flagged incomplete instead. Checked
+            # ahead of the empty-response error below: a truncated stream
+            # with no text yet is still a truncation.
+            if not saw_finish_reason:
+                raise RuntimeError(
+                    "Gemini stream ended unexpectedly before completion. Please try again."
+                )
 
             # Deliberate parity with complete(): _extract_gemini_text
             # concatenates EVERY text part, thought or not, and never calls

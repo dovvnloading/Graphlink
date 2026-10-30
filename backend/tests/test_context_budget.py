@@ -412,3 +412,184 @@ def test_oversized_newest_message_is_kept_and_excluded_from_the_summarizer(monke
     assert len(captured["summarize_calls"]) == 1
     summarizer_input = captured["summarize_calls"][0][1]["content"]
     assert "THE ACTUAL QUESTION" not in summarizer_input
+
+
+# -- image vision-token budgeting + exact context_tokens ---------------------
+
+
+def _png_bytes(width: int, height: int, *, noisy: bool = False) -> bytes:
+    """A real PNG of the given dimensions. `noisy` fills it with random
+    pixels so the encoded payload is large (an incompressible image is
+    what makes a payload-as-text count blow up)."""
+    import io
+    import os
+
+    from PIL import Image
+
+    if noisy:
+        image = Image.frombytes("RGB", (width, height), os.urandom(width * height * 3))
+    else:
+        image = Image.new("RGB", (width, height), (120, 30, 200))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def _image_message(data, text: str = "what is in this picture?", role: str = "user") -> dict:
+    return {"role": role, "content": [
+        {"type": "text", "text": text},
+        {"type": "image_bytes", "data": data},
+    ]}
+
+
+def _text_tokens(message: dict) -> int:
+    import json
+
+    return TokenEstimator().count_tokens(json.dumps(message))
+
+
+def test_estimate_image_tokens_follows_the_documented_vision_formula():
+    import graphlink_token_estimator as estimator_module
+
+    # Within every limit: width * height / 750, rounded up.
+    assert estimator_module.estimate_image_tokens(_png_bytes(1000, 800)) == 1067
+    # Long edge over 1568px: scaled to a 1568px long edge first
+    # (2000x500 -> 1568x392 = 614,656 px -> 820 tokens).
+    assert estimator_module.estimate_image_tokens(_png_bytes(2000, 500)) == 820
+    # Over the per-image token ceiling after the long-edge scale: capped.
+    assert (
+        estimator_module.estimate_image_tokens(_png_bytes(1600, 1600))
+        == estimator_module.IMAGE_TOKENS_MAX
+    )
+
+
+def test_estimate_image_tokens_falls_back_to_the_conservative_constant():
+    import graphlink_token_estimator as estimator_module
+
+    fallback = estimator_module.IMAGE_TOKENS_FALLBACK
+    # Never under-budget an image whose size cannot be read: the fallback
+    # is the most any single image can cost under the formula.
+    assert fallback == estimator_module.IMAGE_TOKENS_MAX
+    assert estimator_module.estimate_image_tokens(b"definitely not an image") == fallback
+    assert estimator_module.estimate_image_tokens(b"") == fallback
+    assert estimator_module.estimate_image_tokens(None) == fallback
+
+
+def test_trim_history_budgets_an_image_at_its_vision_cost_not_a_placeholder():
+    message = _image_message(_png_bytes(1000, 800))
+    trimmed, tokens = trim_history([message], TokenEstimator(), max_tokens=1_000_000)
+    assert trimmed == [message]
+    # ~1,067 vision tokens plus a little text - the old placeholder-only
+    # count budgeted this at a few dozen.
+    assert 1067 <= tokens <= 1067 + 60
+
+
+def test_trim_history_excludes_a_base64_image_payload_from_the_text_count():
+    import base64
+
+    # The provider transports also accept image_bytes data as base64 text;
+    # that payload is pixels, not prose, and must cost its vision estimate
+    # (400x300 -> 160 tokens), never ~1 token per 4 characters of base64.
+    encoded = base64.b64encode(_png_bytes(400, 300, noisy=True)).decode("ascii")
+    assert len(encoded) > 100_000
+    trimmed, tokens = trim_history(
+        [_image_message(encoded)], TokenEstimator(), max_tokens=10_000_000
+    )
+    assert len(trimmed) == 1
+    assert 160 <= tokens <= 160 + 60
+
+
+def test_trim_history_unreadable_image_costs_the_conservative_fallback():
+    import graphlink_token_estimator as estimator_module
+
+    message = _image_message(b"\x89PNG but truncated garbage")
+    _, tokens = trim_history([message], TokenEstimator(), max_tokens=1_000_000)
+    fallback = estimator_module.IMAGE_TOKENS_FALLBACK
+    assert fallback <= tokens <= fallback + 60
+
+
+def test_trim_history_trims_an_image_heavy_history_to_fit_a_small_budget():
+    image = _png_bytes(1000, 800)  # ~1,067 vision tokens each
+    history = [
+        _image_message(image, text=f"picture {i}", role="user" if i % 2 == 0 else "assistant")
+        for i in range(8)
+    ]
+    trimmed, tokens = trim_history(
+        history, TokenEstimator(), max_tokens=4_000, system_prompt_estimate=0
+    )
+    # Eight images (~8.5k tokens) cannot fit 4k: only a contiguous newest
+    # suffix survives, and what it reports is genuinely within budget.
+    assert 0 < len(trimmed) < len(history)
+    assert trimmed == history[-len(trimmed):]
+    assert tokens <= 4_000
+    assert tokens >= 1067 * len(trimmed)
+
+
+def test_small_window_chat_worker_drops_images_that_would_overflow(monkeypatch):
+    # The production gate: an 8k-window local model's history budget is
+    # window - reserve (6,000 here). Eight ~1,067-token images must not all
+    # reach the wire.
+    captured = {}
+    monkeypatch.setattr(api_provider, "chat", _fake_chat_capturing(captured))
+    image = _png_bytes(1000, 800)
+    history = [_image_message(image, text=f"picture {i}") for i in range(8)]
+    small_runtime = types.SimpleNamespace(context_window=lambda task: 8_000)
+
+    worker = ChatWorker("")
+    worker.run(history, None, resolved_system_prompt="", runtime=small_runtime)
+
+    sent_images = [
+        part
+        for message in captured["messages"]
+        if isinstance(message.get("content"), list)
+        for part in message["content"]
+        if part.get("type") == "image_bytes"
+    ]
+    assert 0 < len(sent_images) <= 6_000 // 1067
+
+
+def test_trim_history_single_assistant_message_reports_its_own_tokens_once():
+    message = {"role": "assistant", "content": "a lone assistant turn " + "x" * 160}
+    trimmed, tokens = trim_history([message], TokenEstimator(), max_tokens=1_000_000)
+    # Popped as a leading assistant, then restored by the keep-newest
+    # guarantee - counted exactly once, not once per pass.
+    assert trimmed == [message]
+    assert tokens == _text_tokens(message)
+
+
+def test_trim_history_popped_leading_assistant_is_not_counted():
+    assistant = {"role": "assistant", "content": "an earlier answer " + "a" * 200}
+    user = {"role": "user", "content": "the newest question " + "q" * 40}
+    trimmed, tokens = trim_history([assistant, user], TokenEstimator(), max_tokens=1_000_000)
+    assert trimmed == [user]
+    assert tokens == _text_tokens(user)
+
+
+def test_summary_cache_key_digests_image_payloads_instead_of_stringifying_them():
+    # Image turns are now dropped (and summarized) much sooner on small
+    # windows, so a key built from the payload's repr would grow with every
+    # dropped image - the digest keeps it small without merging two images.
+    from graphlink_chat_agent import _summary_cache_key
+
+    big = _png_bytes(1200, 900, noisy=True)
+    other = _png_bytes(1200, 900)
+    key = _summary_cache_key([_image_message(big)])
+
+    assert len(str(key)) < 1_000
+    assert key == _summary_cache_key([_image_message(big)])
+    assert key != _summary_cache_key([_image_message(other)])
+    assert _summary_cache_key([{"role": "user", "content": "plain"}]) == (("user", "plain"),)
+
+
+def test_context_meter_prices_branch_images_like_the_budget_does():
+    from backend.canvas import _history_image_tokens, _history_token_text
+    from backend.token_counter import TokenCounterState, estimate_tokens
+    from graphlink_token_estimator import estimate_image_tokens
+
+    image = _png_bytes(800, 600)
+    history = [{"role": "user", "content": "hello"}, _image_message(image, text="look")]
+    state = TokenCounterState()
+    state.set_context_text(_history_token_text(history), image_tokens=_history_image_tokens(history))
+
+    assert _history_image_tokens(history) == estimate_image_tokens(image) > 100
+    assert state.context_tokens == estimate_tokens(_history_token_text(history)) + estimate_image_tokens(image)

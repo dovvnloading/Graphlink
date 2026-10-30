@@ -2,6 +2,10 @@ import hashlib
 import json
 from dataclasses import dataclass
 
+# Keeps raw bytes out of a JSON-for-token-counting dump. This is NOT an
+# image's budget: graphlink_memory.message_tokens strips image_bytes
+# payloads before dumping and adds their vision-token estimate separately;
+# this placeholder only backstops any other bytes value in a message.
 class _TokenBytesEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, bytes):

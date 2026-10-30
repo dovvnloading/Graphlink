@@ -26,6 +26,7 @@ AgentDispatcher._resolve_branch_system_prompt in backend/agents.py - an
 independent reimplementation against SceneDocument, not this function.
 """
 
+import hashlib
 import json
 import logging
 from collections import OrderedDict
@@ -52,7 +53,26 @@ _SUMMARY_CACHE: "OrderedDict[tuple, str]" = OrderedDict()
 
 
 def _summary_cache_key(messages) -> tuple:
-    return tuple((str(m.get("role")), str(m.get("content"))) for m in messages)
+    return tuple((str(m.get("role")), _content_cache_key(m.get("content"))) for m in messages)
+
+
+def _content_cache_key(content) -> str:
+    """A message's content as a cache-key string, with each image_bytes
+    payload replaced by a digest. str() of the raw payload made the key as
+    large as the image (a 1.26 MB PNG gave a 3.6 MB key, ~15 ms to build)
+    for every dropped image on every send, and the cache keeps up to
+    _SUMMARY_CACHE_MAX_ENTRIES of them; a digest keeps the key small while two
+    different images still never share one."""
+    if not isinstance(content, list):
+        return str(content)
+    parts = []
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "image_bytes":
+            data = part.get("data")
+            payload = data if isinstance(data, (bytes, bytearray)) else str(data).encode("utf-8")
+            part = {**part, "data": hashlib.blake2b(payload, digest_size=16).hexdigest()}
+        parts.append(part)
+    return str(parts)
 
 
 def _longest_cached_prefix(key: tuple) -> tuple:

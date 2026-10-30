@@ -96,7 +96,7 @@ def backup_filename(timestamp: str, *, prefix: str = BACKUP_FILENAME_PREFIX) -> 
     return f"{prefix}{timestamp}{BACKUP_FILENAME_SUFFIX}"
 
 
-def _parse_backup_timestamp(path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> datetime | None:
+def _parse_backup_timestamp(path: Path, *, prefix: str) -> datetime | None:
     """None for anything that isn't one of OUR OWN backup filenames -
     list_backups/prune_backups must never trip over an unrelated file a
     user (or a future feature) happens to drop into the same directory;
@@ -146,6 +146,11 @@ def prune_backups(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> lis
     block every other backup this call would otherwise have pruned, and
     the next prune_backups call (the very next take_backup) will simply
     try it again."""
+    # Every timestamp below must be parsed under the SAME prefix list_backups
+    # matched on: parsed under any other, every backup reads as unparseable,
+    # no day is ever covered, and the daily bucket silently deletes that
+    # database's whole long-term history down to the recent window. That is
+    # why _parse_backup_timestamp has no default prefix to fall back on.
     backups = list_backups(db_path, prefix=prefix)  # newest first
     recent = backups[:KEEP_MOST_RECENT]
     older = backups[KEEP_MOST_RECENT:]
@@ -161,7 +166,7 @@ def prune_backups(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> lis
     # `older` alone.
     covered_days: set[str] = set()
     for path in recent:
-        timestamp = _parse_backup_timestamp(path)
+        timestamp = _parse_backup_timestamp(path, prefix=prefix)
         if timestamp is not None:
             covered_days.add(timestamp.strftime("%Y-%m-%d"))
 
@@ -170,7 +175,7 @@ def prune_backups(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> lis
         # sliced) - the FIRST entry seen for a given day is therefore
         # already the newest one for that day, so a plain "seen this day
         # yet?" check is enough; no separate max-by-day pass is needed.
-        timestamp = _parse_backup_timestamp(path)
+        timestamp = _parse_backup_timestamp(path, prefix=prefix)
         if timestamp is None:
             continue
         day_key = timestamp.strftime("%Y-%m-%d")

@@ -625,6 +625,40 @@ def test_final_deliverable_node_id_serializes_as_none_when_unmarked():
     assert chat_data["final_deliverable_node_id"] is None
 
 
+def _burn_ids(doc: SceneDocument, count: int = 3) -> None:
+    """Advances doc's id counter so its ids cannot coincide with the ones a
+    fresh SceneDocument mints on load - otherwise a pointer saved verbatim,
+    never translated, would still happen to name the right node."""
+    for _ in range(count):
+        doc.remove_nodes([doc.add_node(0, 0).id])
+
+
+def test_last_chat_node_id_serializes_at_the_top_level():
+    doc = SceneDocument()
+    doc.send_message("first")
+    tip = doc.send_message("second")
+    chat_data = build_chat_data(doc)
+    assert chat_data["last_chat_node_id"] == tip.id
+
+
+def test_round_trip_restores_last_chat_node_id_to_the_tips_new_id():
+    doc = SceneDocument()
+    _burn_ids(doc)
+    doc.send_message("first")
+    doc.send_message("second")
+    # Restored after the tip, so "the last chat node restored" is not the tip.
+    doc.add_chat_node(600, 0, "an unrelated root", True)
+
+    doc2 = _round_trip(doc)
+    tip2 = next(n for n in doc2.nodes.values() if n.content == "second")
+    assert doc2.last_chat_node_id == tip2.id
+
+    # The point of the pointer: reopening a chat and sending continues the
+    # branch it was on, rather than starting a fresh root.
+    third = doc2.send_message("third")
+    assert _has_edge(doc2, tip2.id, third.id)
+
+
 def test_round_trip_preserves_synthesize_branches_full_shape():
     doc = SceneDocument()
     root = doc.add_chat_node(0, 0, "root question", True)

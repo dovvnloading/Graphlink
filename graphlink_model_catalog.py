@@ -137,9 +137,13 @@ def _field(value, name: str, default=None):
 
 
 def _as_int(value) -> int | None:
+    # Reads untrusted server numbers (Ollama sizes, context lengths): any
+    # value int() refuses becomes None rather than failing the whole
+    # descriptor. OverflowError covers JSON `1e999`, which parses to
+    # float('inf'); int(nan) is already a ValueError.
     try:
         return int(value) if value is not None else None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 

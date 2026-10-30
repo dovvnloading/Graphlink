@@ -2166,6 +2166,29 @@ def test_loading_a_chat_seeds_the_save_state_so_the_next_tick_is_a_no_op(db_path
     assert writes == [], "a tick right after loadChat must not rewrite the row"
 
 
+def test_reopening_a_saved_chat_continues_the_branch_from_its_saved_tip(db_path):
+    # The real Save -> Load path: before last_chat_node_id was persisted,
+    # the first Send after reopening any chat started a detached root.
+    seed_bus, seed_document, _ = _library_session(db_path)
+    # Advance the id counter so a pointer saved verbatim (untranslated)
+    # could not coincidentally name the right node in the loaded document.
+    for _ in range(3):
+        seed_document.remove_nodes([seed_document.add_node(0, 0).id])
+    seed_document.send_message("first")
+    seed_document.send_message("second")
+    asyncio.run(seed_bus.dispatch_intent("app-chat-library", "saveChat", []))
+    chat_id = seed_document.current_chat_id
+
+    bus, document, _ = _library_session(db_path)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+
+    tip = next(n for n in document.nodes.values() if n.content == "second")
+    assert document.last_chat_node_id == tip.id
+
+    third = document.send_message("third")
+    assert [e.source for e in document.edges.values() if e.target == third.id] == [tip.id]
+
+
 def test_deleting_the_open_chat_clears_the_pointer_and_reenables_autosave(db_path):
     # Audit finding (real bug): deleteChat left current_chat_id dangling and
     # left the content-only digest looking "already saved", so a user who

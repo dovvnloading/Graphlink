@@ -47,6 +47,7 @@ function renderHtmlNode(overrides: Partial<HtmlFlowNode["data"]> = {}) {
   const onToggleCollapse = vi.fn();
   const onDelete = vi.fn();
   const onSplitterChange = vi.fn();
+  const onSourceCommit = vi.fn();
   const props = {
     id: "n0",
     selected: false,
@@ -57,16 +58,27 @@ function renderHtmlNode(overrides: Partial<HtmlFlowNode["data"]> = {}) {
       onToggleCollapse,
       onDelete,
       onSplitterChange,
+      onSourceCommit,
       ...overrides,
     },
   } as unknown as NodeProps<HtmlFlowNode>;
 
-  const { container } = render(
+  const { container, unmount, rerender } = render(
     <ReactFlowProvider>
       <HtmlNodeView {...props} />
     </ReactFlowProvider>,
   );
-  return { onToggleCollapse, onDelete, onSplitterChange, container };
+  // A later scene snapshot for the same mounted card: same callbacks, the
+  // given fields replaced - what toFlowNodes hands React Flow on a publish.
+  function rerenderWith(next: Partial<HtmlFlowNode["data"]>) {
+    const nextProps = { ...props, data: { ...props.data, ...next } } as unknown as NodeProps<HtmlFlowNode>;
+    rerender(
+      <ReactFlowProvider>
+        <HtmlNodeView {...nextProps} />
+      </ReactFlowProvider>,
+    );
+  }
+  return { onToggleCollapse, onDelete, onSplitterChange, onSourceCommit, container, unmount, rerenderWith };
 }
 
 function getSplitter(container: HTMLElement): HTMLDivElement {
@@ -390,6 +402,203 @@ describe("HtmlNodeView splitter (R6.3)", () => {
   });
 });
 
+describe("HtmlNodeView source commit", () => {
+  // The source only ever lived in this card's local state, so an edit was
+  // lost whenever off-viewport culling unmounted the card, and was never
+  // saved. These pin the commit path that persists it.
+  it("clicking Render commits the typed source", async () => {
+    const user = userEvent.setup();
+    const { container, onSourceCommit } = renderHtmlNode({ htmlContent: "<p>original</p>" });
+
+    fireEvent.change(getSourceTextarea(container), { target: { value: "<p>rendered edit</p>" } });
+    expect(onSourceCommit).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Render" }));
+    expect(onSourceCommit).toHaveBeenCalledTimes(1);
+    expect(onSourceCommit).toHaveBeenCalledWith("<p>rendered edit</p>");
+  });
+
+  it("the source textarea losing focus commits the typed source without touching the preview", () => {
+    const { container, onSourceCommit } = renderHtmlNode({ htmlContent: "<p>original</p>" });
+    const textarea = getSourceTextarea(container);
+
+    fireEvent.focus(textarea);
+    fireEvent.change(textarea, { target: { value: "<p>blurred edit</p>" } });
+    fireEvent.blur(textarea);
+
+    expect(onSourceCommit).toHaveBeenCalledTimes(1);
+    expect(onSourceCommit).toHaveBeenCalledWith("<p>blurred edit</p>");
+    // Committing is not rendering: the R3.18 rule that only Render reaches
+    // the iframe still holds.
+    expect(getIframe(container).srcdoc).toBe(buildSandboxedHtmlDocument("<p>original</p>"));
+  });
+
+  it("commits nothing when the source is unchanged from the last committed value", async () => {
+    const user = userEvent.setup();
+    const { container, onSourceCommit } = renderHtmlNode({ htmlContent: "<p>original</p>" });
+    const textarea = getSourceTextarea(container);
+
+    // Untouched: neither trigger sends the seed value back.
+    fireEvent.blur(textarea);
+    await user.click(screen.getByRole("button", { name: "Render" }));
+    expect(onSourceCommit).not.toHaveBeenCalled();
+
+    // Committed once by Render; the blur that follows has nothing new.
+    fireEvent.change(textarea, { target: { value: "<p>edit</p>" } });
+    await user.click(screen.getByRole("button", { name: "Render" }));
+    fireEvent.blur(textarea);
+    expect(onSourceCommit).toHaveBeenCalledTimes(1);
+
+    // Typing back to the ORIGINAL is a real change against what was last
+    // committed, so it is sent.
+    fireEvent.change(textarea, { target: { value: "<p>original</p>" } });
+    fireEvent.blur(textarea);
+    expect(onSourceCommit).toHaveBeenCalledTimes(2);
+    expect(onSourceCommit).toHaveBeenLastCalledWith("<p>original</p>");
+  });
+
+  it("a remount after a commit seeds both the source and the preview from the committed htmlContent", async () => {
+    const user = userEvent.setup();
+    const first = renderHtmlNode({ htmlContent: "<p>original</p>" });
+    fireEvent.change(getSourceTextarea(first.container), { target: { value: "<p>kept</p>" } });
+    await user.click(screen.getByRole("button", { name: "Render" }));
+    expect(first.onSourceCommit).toHaveBeenCalledTimes(1);
+    const committed = first.onSourceCommit.mock.calls[0][0] as string;
+    // Off-viewport culling unmounts the card...
+    first.unmount();
+
+    // ...and it comes back carrying the server's echo of the commit.
+    const second = renderHtmlNode({ htmlContent: committed });
+    expect(getSourceTextarea(second.container).value).toBe("<p>kept</p>");
+    expect(getIframe(second.container).srcdoc).toBe(buildSandboxedHtmlDocument("<p>kept</p>"));
+    // Seeded from the committed value, so there is nothing new to send.
+    fireEvent.blur(getSourceTextarea(second.container));
+    expect(second.onSourceCommit).not.toHaveBeenCalled();
+  });
+
+  it("Ctrl+S in the source textarea commits the typed source before the app-level save handler sees the key", () => {
+    // Save is exempt from the while-typing shortcut gate, so Ctrl+S reaches
+    // App's document-level handler (saveChat) with no blur and no Render.
+    // The commit has to go out first or the saved session lacks the edit.
+    const order: string[] = [];
+    const onSourceCommit = vi.fn(() => {
+      order.push("commit");
+    });
+    const { container } = renderHtmlNode({ htmlContent: "<p>original</p>", onSourceCommit });
+    const textarea = getSourceTextarea(container);
+    const onDocumentKeyDown = () => {
+      order.push("document keydown");
+    };
+    document.addEventListener("keydown", onDocumentKeyDown);
+    try {
+      fireEvent.change(textarea, { target: { value: "<p>saved edit</p>" } });
+      // Neither plain typing nor a different shortcut flushes anything.
+      fireEvent.keyDown(textarea, { key: "s" });
+      fireEvent.keyDown(textarea, { key: "z", ctrlKey: true });
+      expect(onSourceCommit).not.toHaveBeenCalled();
+      order.length = 0;
+
+      fireEvent.keyDown(textarea, { key: "s", ctrlKey: true });
+    } finally {
+      document.removeEventListener("keydown", onDocumentKeyDown);
+    }
+
+    expect(onSourceCommit).toHaveBeenCalledTimes(1);
+    expect(onSourceCommit).toHaveBeenCalledWith("<p>saved edit</p>");
+    expect(order).toEqual(["commit", "document keydown"]);
+    // Already committed, so the blur when focus later leaves sends nothing.
+    fireEvent.blur(textarea);
+    expect(onSourceCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("an undo of a committed edit (htmlContent going back while mounted) shows the restored source in the textarea and preview", async () => {
+    const user = userEvent.setup();
+    const { container, onSourceCommit, rerenderWith } = renderHtmlNode({ htmlContent: "<p>original</p>" });
+
+    fireEvent.change(getSourceTextarea(container), { target: { value: "<p>edit</p>" } });
+    await user.click(screen.getByRole("button", { name: "Render" }));
+    expect(onSourceCommit).toHaveBeenCalledWith("<p>edit</p>");
+    rerenderWith({ htmlContent: "<p>edit</p>" }); // the commit's own echo
+
+    // Ctrl+Z / the AppBar's Undo: the server goes back to the original.
+    rerenderWith({ htmlContent: "<p>original</p>" });
+    expect(getSourceTextarea(container).value).toBe("<p>original</p>");
+    expect(getIframe(container).srcdoc).toBe(buildSandboxedHtmlDocument("<p>original</p>"));
+
+    // The card now agrees with the server, so the untouched source sends
+    // nothing - and re-making the same edit is a real change again.
+    fireEvent.blur(getSourceTextarea(container));
+    expect(onSourceCommit).toHaveBeenCalledTimes(1);
+    fireEvent.change(getSourceTextarea(container), { target: { value: "<p>edit</p>" } });
+    fireEvent.blur(getSourceTextarea(container));
+    expect(onSourceCommit).toHaveBeenCalledTimes(2);
+    expect(onSourceCommit).toHaveBeenLastCalledWith("<p>edit</p>");
+  });
+
+  it("the echo of the card's own commit arriving mid-typing leaves the textarea and preview alone", () => {
+    const { container, onSourceCommit, rerenderWith } = renderHtmlNode({ htmlContent: "<p>original</p>" });
+    const textarea = getSourceTextarea(container);
+
+    fireEvent.change(textarea, { target: { value: "<p>first</p>" } });
+    fireEvent.blur(textarea);
+    expect(onSourceCommit).toHaveBeenCalledWith("<p>first</p>");
+    // The user is back in the field and typing when the echo lands.
+    fireEvent.change(textarea, { target: { value: "<p>first, then more</p>" } });
+    rerenderWith({ htmlContent: "<p>first</p>" });
+
+    expect(getSourceTextarea(container).value).toBe("<p>first, then more</p>");
+    expect(getIframe(container).srcdoc).toBe(buildSandboxedHtmlDocument("<p>original</p>"));
+    fireEvent.blur(getSourceTextarea(container));
+    expect(onSourceCommit).toHaveBeenCalledTimes(2);
+    expect(onSourceCommit).toHaveBeenLastCalledWith("<p>first, then more</p>");
+  });
+
+  it("a late echo of an earlier commit never reverts a newer committed edit", () => {
+    const { container, onSourceCommit, rerenderWith } = renderHtmlNode({ htmlContent: "<p>original</p>" });
+    const textarea = getSourceTextarea(container);
+
+    fireEvent.change(textarea, { target: { value: "<p>one</p>" } });
+    fireEvent.blur(textarea);
+    fireEvent.change(textarea, { target: { value: "<p>two</p>" } });
+    fireEvent.blur(textarea);
+    expect(onSourceCommit).toHaveBeenCalledTimes(2);
+
+    // Both commits are in flight; the first one's echo lands now.
+    rerenderWith({ htmlContent: "<p>one</p>" });
+    expect(getSourceTextarea(container).value).toBe("<p>two</p>");
+    rerenderWith({ htmlContent: "<p>two</p>" });
+    expect(getSourceTextarea(container).value).toBe("<p>two</p>");
+    expect(getIframe(container).srcdoc).toBe(buildSandboxedHtmlDocument("<p>original</p>"));
+    fireEvent.blur(getSourceTextarea(container));
+    expect(onSourceCommit).toHaveBeenCalledTimes(2);
+  });
+
+  it("a remount that beats the commit's echo picks the echo up when it lands", () => {
+    // The card committed, was culled and came back before the server's echo
+    // did, so it seeded the pre-edit value; an echo of a commit this
+    // instance never sent is a real change to show, not one to ignore.
+    const { container, rerenderWith } = renderHtmlNode({ htmlContent: "<p>pre-edit</p>" });
+    rerenderWith({ htmlContent: "<p>committed before the remount</p>" });
+
+    expect(getSourceTextarea(container).value).toBe("<p>committed before the remount</p>");
+    expect(getIframe(container).srcdoc).toBe(buildSandboxedHtmlDocument("<p>committed before the remount</p>"));
+  });
+
+  it("a change the card did not make, arriving over uncommitted typing, never overwrites the typing - the next commit wins", () => {
+    const { container, onSourceCommit, rerenderWith } = renderHtmlNode({ htmlContent: "<p>original</p>" });
+    const textarea = getSourceTextarea(container);
+
+    fireEvent.change(textarea, { target: { value: "<p>typing</p>" } });
+    rerenderWith({ htmlContent: "<p>agent wrote this</p>" });
+
+    expect(getSourceTextarea(container).value).toBe("<p>typing</p>");
+    expect(getIframe(container).srcdoc).toBe(buildSandboxedHtmlDocument("<p>original</p>"));
+    fireEvent.blur(getSourceTextarea(container));
+    expect(onSourceCommit).toHaveBeenCalledTimes(1);
+    expect(onSourceCommit).toHaveBeenCalledWith("<p>typing</p>");
+  });
+});
+
 describe("clampSplitterValue", () => {
   it("passes values already inside [HTML_SPLIT_MIN, HTML_SPLIT_MAX] through unchanged", () => {
     expect(clampSplitterValue(0.5)).toBe(0.5);
@@ -464,6 +673,7 @@ describe("HtmlNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
       onToggleCollapse: vi.fn(),
       onDelete: vi.fn(),
       onSplitterChange: vi.fn(),
+      onSourceCommit: vi.fn(),
       ...overrides,
     };
     return { id: "n0", selected: false, data } as unknown as NodeProps<HtmlFlowNode>;
@@ -491,13 +701,12 @@ describe("HtmlNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
     expect(lodVisibilityCalls.count).toBe(1);
   });
 
-  it("skips re-rendering when only `htmlContent`/`htmlSplitterState` (seed-once fields this view never re-reads) change", () => {
-    // Pins the deliberate omission documented on htmlNodeDataAreEqual: both
-    // fields only seed local state via a useState initializer on mount and
-    // are never read again by any JSX/effect/closure - so a change to either
-    // alone must never re-render (and, per the "typing does NOT change the
-    // iframe" test above, could not visibly affect anything even if it did).
-    const props = baseHtmlProps({ htmlContent: "<p>original</p>", htmlSplitterState: 0.5 });
+  it("skips re-rendering when only `htmlSplitterState` (a seed-once field this view never re-reads) changes", () => {
+    // Pins the deliberate omission documented on htmlNodeDataAreEqual: the
+    // split only seeds local state via a useState initializer on mount and
+    // is never read again by any JSX/effect/closure, so a change to it alone
+    // must never re-render.
+    const props = baseHtmlProps({ htmlSplitterState: 0.5 });
     const { rerender } = render(
       <ReactFlowProvider>
         <HtmlNodeView {...props} />
@@ -507,12 +716,28 @@ describe("HtmlNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
 
     rerender(
       <ReactFlowProvider>
-        <HtmlNodeView
-          {...{ ...props, data: { ...props.data, htmlContent: "<p>different</p>", htmlSplitterState: 0.2 } }}
-        />
+        <HtmlNodeView {...{ ...props, data: { ...props.data, htmlSplitterState: 0.2 } }} />
       </ReactFlowProvider>,
     );
     expect(lodVisibilityCalls.count).toBe(1);
+  });
+
+  it("re-renders when `htmlContent` changes, so a change the card did not make (an undo) can reach it", () => {
+    const props = baseHtmlProps({ htmlContent: "<p>original</p>" });
+    const { container, rerender } = render(
+      <ReactFlowProvider>
+        <HtmlNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <HtmlNodeView {...{ ...props, data: { ...props.data, htmlContent: "<p>different</p>" } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBeGreaterThan(1);
+    expect(getSourceTextarea(container).value).toBe("<p>different</p>");
   });
 
   it("re-renders when `isCollapsed` (a field the view reads) changes", () => {
@@ -549,6 +774,23 @@ describe("HtmlNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
     rerender(
       <ReactFlowProvider>
         <HtmlNodeView {...{ ...props, data: { ...props.data, onSplitterChange: vi.fn() } }} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(2);
+  });
+
+  it("re-renders when `onSourceCommit` is rebound, so the Render/blur handlers never hold a stale commit closure", () => {
+    const props = baseHtmlProps();
+    const { rerender } = render(
+      <ReactFlowProvider>
+        <HtmlNodeView {...props} />
+      </ReactFlowProvider>,
+    );
+    expect(lodVisibilityCalls.count).toBe(1);
+
+    rerender(
+      <ReactFlowProvider>
+        <HtmlNodeView {...{ ...props, data: { ...props.data, onSourceCommit: vi.fn() } }} />
       </ReactFlowProvider>,
     );
     expect(lodVisibilityCalls.count).toBe(2);

@@ -41,11 +41,23 @@ from backend.providers.base import (
 
 
 class LlamaCppProvider:
-    def __init__(self, *, settings: dict):
+    def __init__(self, *, settings: dict, model_path: str | None = None):
         # The whole settings dict (paths, n_ctx, chat_format, reasoning
         # level) is this provider's configuration - captured from the
         # caller's snapshot, same immutability contract as every provider
         # in this package.
+        #
+        # `model_path` (ADR-018 pin, from api_provider._provider_for_model_ref):
+        # every llama_cpp_runtime helper resolves the model BY TASK from the
+        # two configured slots, so a pin is honored by pointing BOTH slots of
+        # this instance's own copy at the pinned file. The client cache key,
+        # the Qwen /think detection and the reasoning capability below then
+        # all see the pinned model for every task, instead of a chat turn
+        # being answered by whatever the chat slot holds. None keeps the
+        # task-keyed resolution untouched; the caller's snapshot is never
+        # mutated.
+        if model_path:
+            settings = {**settings, "chat_model_path": model_path, "title_model_path": model_path}
         self.settings = settings
         self.last_usage: dict | None = None  # ADR-006 stage 6.8 - see complete()
         self.capabilities = ProviderCapabilities(

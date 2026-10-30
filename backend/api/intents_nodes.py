@@ -199,6 +199,16 @@ def register_node_intents(
         document.set_html_splitter_state(node_id, value)
         await publish_scene()
 
+    async def set_html_content(node_id, html_content):
+        # A source edit is document content, not view state like the
+        # splitter above, so it is recorded exactly as setNoteContent is:
+        # one undoable user command naming the node it rewrites in place.
+        document.record_command(
+            "setHtmlContent", "user", lambda: document.set_html_content(node_id, html_content),
+            node_ids=[node_id],
+        )
+        await publish_scene()
+
     async def add_image_node(x, y, image_bytes_base64, prompt, parent_id, mime_type="image/png"):
         # Unlike every prior wrapper, the WS intent transport is JSON, which
         # cannot carry raw bytes - the caller sends base64 text, decoded here
@@ -338,6 +348,7 @@ def register_node_intents(
     bus.register_intent("scene", "addThinkingNode", add_thinking_node)
     bus.register_intent("scene", "addHtmlNode", add_html_node)
     bus.register_intent("scene", "setHtmlSplitterState", set_html_splitter_state)
+    bus.register_intent("scene", "setHtmlContent", set_html_content)
     bus.register_intent("scene", "addImageNode", add_image_node)
     bus.register_intent("scene", "addConversationNode", add_conversation_node)
     bus.register_intent("scene", "moveNode", move_node)

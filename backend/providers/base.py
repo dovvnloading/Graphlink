@@ -249,9 +249,14 @@ def normalize_usage(prompt_tokens, completion_tokens) -> dict | None:
     "completion_tokens": int | None}, or None when the provider reported
     nothing at all. Tolerates non-int server values (returns None fields)."""
     def _as_int(value):
+        # Every provider calls this at its done event, after the reply text
+        # has already streamed, so it must never raise: an exception here
+        # discards the whole reply over a bad counter. OverflowError is the
+        # non-obvious member - JSON `1e999` parses to float('inf') and
+        # int(inf) raises it (int(nan) is the ValueError case).
         try:
             return int(value) if value is not None else None
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
 
     prompt = _as_int(prompt_tokens)

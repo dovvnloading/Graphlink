@@ -183,6 +183,36 @@ def test_plan_node_survives_non_numeric_budget_fields():
     assert node.state.builder_spent_steps == 0
 
 
+@pytest.mark.parametrize("infinite", [float("inf"), float("-inf")])
+def test_infinite_numbers_in_a_saved_chat_degrade_instead_of_failing_the_load(infinite):
+    """chats.db rows are written with json.dumps' default allow_nan=True, and
+    json.loads reads 1e999/Infinity back as float('inf') - int() of that
+    raises OverflowError, not ValueError. A hand-edited or corrupted row must
+    degrade the same way a non-numeric one does: the plan node stays, its
+    caps fall back to their defaults, and the chat itself still opens."""
+    document = _restore(
+        nodes=[{
+            "node_type": "plan", "position": {"x": 0.0, "y": 0.0}, "goal": "ship it",
+            "max_steps": infinite, "spent_tokens": infinite,
+            "activity": [{"tool": "fs.read", "summary": "s", "elapsedMs": infinite}],
+        }, {
+            "node_type": "harness", "position": {"x": 0.0, "y": 0.0}, "goal": "g",
+            "max_turns": infinite, "spent_turns": infinite,
+            "activity": [{"tool": "shell", "summary": "s", "elapsedMs": infinite}],
+        }],
+        total_session_tokens=infinite,
+    )
+    plan = next(n for n in document.nodes.values() if n.kind == "plan")
+    harness = next(n for n in document.nodes.values() if n.kind == "harness")
+    assert plan.state.builder_max_steps == 12
+    assert plan.state.builder_spent_tokens == 0
+    assert [entry["elapsedMs"] for entry in plan.state.builder_activity] == [0]
+    assert harness.state.harness_max_turns == 16
+    assert harness.state.harness_spent_turns == 0
+    assert [entry["elapsedMs"] for entry in harness.state.harness_activity] == [0]
+    assert document.total_session_tokens == 0
+
+
 def test_a_restorer_that_raises_is_logged_not_swallowed_in_silence(caplog):
     """The node is still dropped - one bad row must not fail the whole load -
     but it no longer disappears without a trace."""
@@ -992,6 +1022,51 @@ def test_restore_final_deliverable_node_id_rejects_a_resolved_non_chat_node():
         final_deliverable_node_id="code-1",
     )
     assert document.final_deliverable_node_id is None
+
+
+def test_restore_translates_last_chat_node_id():
+    # Same never-colliding payload id as the final_deliverable test above.
+    document = _restore(
+        nodes=[
+            _chat("legacy-uuid-root", raw_content="root"),
+            _chat("legacy-uuid-tip", raw_content="tip", parent_node_index=0),
+        ],
+        last_chat_node_id="legacy-uuid-tip",
+    )
+    tip = next(n for n in document.nodes.values() if n.content == "tip")
+    assert document.last_chat_node_id == tip.id
+    assert tip.id != "legacy-uuid-tip"
+
+
+def test_restore_without_a_last_chat_node_id_key_loads_exactly_as_before():
+    # Every save written before the pointer was persisted - including the
+    # legacy app's - has no such key.
+    document = _restore(nodes=[_chat("a"), _chat("b")])
+    assert document.last_chat_node_id is None
+    assert len(document.nodes) == 2
+
+
+def test_restore_last_chat_node_id_stale_reference_is_dropped():
+    document = _restore(nodes=[_chat("n0")], last_chat_node_id="does-not-exist")
+    assert document.last_chat_node_id is None
+
+
+def test_restore_last_chat_node_id_rejects_a_resolved_non_chat_node():
+    document = _restore(
+        nodes=[
+            _chat("parent"),
+            {"node_type": "code", "id": "code-1", "code": "print(1)", "language": "python",
+             "position": {"x": 0, "y": 0}, "parent_content_node_index": 0},
+        ],
+        last_chat_node_id="code-1",
+    )
+    assert document.last_chat_node_id is None
+
+
+def test_restore_last_chat_node_id_of_the_wrong_json_shape_is_dropped_not_raised():
+    document = _restore(nodes=[_chat("a")], last_chat_node_id=["not", "an", "id"])
+    assert document.last_chat_node_id is None
+    assert len(document.nodes) == 1
 
 
 # -- SECURITY-FIX: a persisted audio_file part is an arbitrary local path the

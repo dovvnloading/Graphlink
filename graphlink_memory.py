@@ -3,6 +3,7 @@ import json
 import re
 
 from graphlink_prompts import _TokenBytesEncoder
+from graphlink_token_estimator import estimate_image_tokens
 
 
 def clone_history(history):
@@ -28,20 +29,52 @@ def append_history(history, additions):
     return combined
 
 
+def message_tokens(message, token_estimator):
+    """One history message's prompt-token estimate: its text (role, text
+    parts, structure) through the text tokenizer, plus each image_bytes
+    part's vision cost from graphlink_token_estimator.estimate_image_tokens.
+
+    The image payload is taken OUT of the text view before tokenizing - its
+    bytes (or base64 text) say nothing about what the image costs a model,
+    which is a per-image figure derived from its dimensions. A placeholder-
+    only count budgets a full-size image at a few dozen tokens and lets an
+    image-heavy history overflow the window; counting its base64 as text
+    would over-budget it a hundredfold."""
+    content = message.get("content") if isinstance(message, dict) else None
+    image_tokens = 0
+    text_view = message
+    if isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_bytes":
+                image_tokens += estimate_image_tokens(part.get("data"))
+                part = {key: value for key, value in part.items() if key != "data"}
+            text_parts.append(part)
+        text_view = {**message, "content": text_parts}
+    text_tokens = token_estimator.count_tokens(json.dumps(text_view, cls=_TokenBytesEncoder))
+    return text_tokens + image_tokens
+
+
 def trim_history(history, token_estimator, max_tokens=8000, system_prompt_estimate=500, reserve_tokens=0):
     normalized_history = clone_history(history)
     current_tokens = max(0, system_prompt_estimate) + max(0, reserve_tokens)
-    trimmed_history = []
+    # Each kept message travels with its own token count, so every removal
+    # below (the leading-assistant pop) and every re-add (the keep-newest
+    # fallback) moves its tokens with it: the returned context_tokens is
+    # always exactly the sum over the messages actually returned - never a
+    # count that still includes a popped turn or counts the newest twice.
+    kept = []
 
     for message in reversed(normalized_history):
-        message_tokens = token_estimator.count_tokens(json.dumps(message, cls=_TokenBytesEncoder))
-        if current_tokens + message_tokens > max_tokens:
+        tokens = message_tokens(message, token_estimator)
+        if current_tokens + tokens > max_tokens:
             break
-        trimmed_history.insert(0, message)
-        current_tokens += message_tokens
+        kept.append((message, tokens))
+        current_tokens += tokens
+    kept.reverse()
 
-    if trimmed_history and trimmed_history[0].get("role") == "assistant":
-        trimmed_history.pop(0)
+    if kept and kept[0][0].get("role") == "assistant":
+        kept.pop(0)
 
     # ADR-006 stage 6.8 review fix (keep-newest guarantee): the newest
     # message is ALWAYS kept, even when it alone exceeds the budget - the
@@ -49,14 +82,12 @@ def trim_history(history, token_estimator, max_tokens=8000, system_prompt_estima
     # seeing the question at all (and beats it being replaced by a short
     # summary of itself). Applied AFTER the leading-assistant pop so a
     # single oversized newest message survives regardless of role.
-    if not trimmed_history and normalized_history:
+    if not kept and normalized_history:
         newest = normalized_history[-1]
-        trimmed_history = [newest]
-        current_tokens += token_estimator.count_tokens(
-            json.dumps(newest, cls=_TokenBytesEncoder)
-        )
+        kept = [(newest, message_tokens(newest, token_estimator))]
 
-    context_tokens = max(0, current_tokens - system_prompt_estimate - reserve_tokens)
+    trimmed_history = [message for message, _ in kept]
+    context_tokens = sum(tokens for _, tokens in kept)
     return trimmed_history, context_tokens
 
 

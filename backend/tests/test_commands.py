@@ -1140,3 +1140,412 @@ def test_undo_never_resurrects_a_snapshotted_run_owned_harness_status():
     assert document.nodes[node.id].state.harness_status == "interrupted", (
         "redo must not resurrect it either"
     )
+
+
+# -- document-level chat pointers (last_chat_node_id / final_deliverable) ----
+#
+# Both pointers live on SceneDocument itself, outside nodes/edges/assets/pins,
+# so the per-id diff above never sees them change. These pin that a Command
+# carries them anyway: undoing a Send must move the Composer's continuation
+# point back with the node it removes, and a Mark Final that changes nothing
+# BUT the pointer must still be a real, undoable command.
+
+
+def _send(document, text):
+    node, _command = document.record_command(
+        "sendMessage", "user", lambda: document.send_message(text),
+    )
+    return node
+
+
+def _parent_ids(document, node_id):
+    return [e.source for e in document.edges.values() if e.target == node_id]
+
+
+def test_undoing_a_send_moves_the_continuation_point_back_so_the_next_send_is_not_an_orphan(document):
+    first = _send(document, "first")
+    second = _send(document, "second")
+    assert document.last_chat_node_id == second.id
+
+    document.undo()
+    assert second.id not in document.nodes
+    assert document.last_chat_node_id == first.id, (
+        "undo removed the tip node, so the pointer must return to where it was before that send"
+    )
+
+    third = _send(document, "third")
+    assert _parent_ids(document, third.id) == [first.id], (
+        "the next send must continue the branch, not start a detached root"
+    )
+
+
+def test_redoing_a_send_restores_the_continuation_point_too(document):
+    first = _send(document, "first")
+    second = _send(document, "second")
+
+    document.undo()
+    assert document.last_chat_node_id == first.id
+    document.redo()
+    assert second.id in document.nodes
+    assert document.last_chat_node_id == second.id
+
+    third = _send(document, "third")
+    assert _parent_ids(document, third.id) == [second.id]
+
+
+def test_undoing_every_send_returns_the_pointer_to_none(document):
+    _send(document, "first")
+    document.undo()
+    assert document.nodes == {}
+    assert document.last_chat_node_id is None
+
+
+def test_mark_final_deliverable_is_a_real_undoable_redoable_command(document):
+    node = _send(document, "the deliverable")
+    log_length = len(document.command_log)
+
+    _result, command = document.record_command(
+        "setFinalDeliverable", "user", lambda: document.set_final_deliverable(node.id, True),
+    )
+    assert document.final_deliverable_node_id == node.id
+    assert not command.is_noop, "a pointer-only change is still a change"
+    assert len(document.command_log) == log_length + 1
+    assert document.undo_label() == "Mark Final"
+
+    document.undo()
+    assert document.final_deliverable_node_id is None
+    assert node.id in document.nodes, "Ctrl+Z must undo the Mark Final, not the send before it"
+
+    document.redo()
+    assert document.final_deliverable_node_id == node.id
+
+
+def test_moving_the_final_deliverable_mark_undoes_back_to_the_previous_holder(document):
+    first = _send(document, "first")
+    second = _send(document, "second")
+    document.record_command(
+        "setFinalDeliverable", "user", lambda: document.set_final_deliverable(first.id, True),
+    )
+    document.record_command(
+        "setFinalDeliverable", "user", lambda: document.set_final_deliverable(second.id, True),
+    )
+    assert document.final_deliverable_node_id == second.id
+
+    document.undo()
+    assert document.final_deliverable_node_id == first.id
+
+
+def test_re_marking_the_current_final_deliverable_is_still_a_noop(document):
+    node = _send(document, "the deliverable")
+    document.record_command(
+        "setFinalDeliverable", "user", lambda: document.set_final_deliverable(node.id, True),
+    )
+    log_length = len(document.command_log)
+
+    _result, command = document.record_command(
+        "setFinalDeliverable", "user", lambda: document.set_final_deliverable(node.id, True),
+    )
+    assert command.is_noop
+    assert len(document.command_log) == log_length
+
+
+def test_undoing_a_chat_node_delete_restores_both_pointers(document):
+    first = _send(document, "first")
+    second = _send(document, "second")
+    document.record_command(
+        "setFinalDeliverable", "user", lambda: document.set_final_deliverable(second.id, True),
+    )
+
+    document.record_command(
+        "deleteChatNode", "user", lambda: document.delete_chat_node(second.id),
+        node_ids=[second.id],
+    )
+    # delete_chat_node re-points the tip to the parent and clears the mark.
+    assert document.last_chat_node_id == first.id
+    assert document.final_deliverable_node_id is None
+
+    document.undo()
+    assert second.id in document.nodes
+    assert document.last_chat_node_id == second.id
+    assert document.final_deliverable_node_id == second.id
+
+
+def test_composite_restores_the_pointer_from_before_the_whole_group(document):
+    first = _send(document, "first")
+    with document.composite("twoSends", "user"):
+        _send(document, "second")
+        third = _send(document, "third")
+
+    command = document.command_log[-1]
+    command.invert(document)
+    assert document.last_chat_node_id == first.id
+    command.apply(document)
+    assert document.last_chat_node_id == third.id
+
+
+def test_a_composite_whose_pointer_change_nets_out_is_not_logged(document):
+    node = _send(document, "the deliverable")
+    log_length = len(document.command_log)
+
+    with document.composite("markThenUnmark", "user"):
+        document.record_command(
+            "setFinalDeliverable", "user", lambda: document.set_final_deliverable(node.id, True),
+        )
+        document.record_command(
+            "setFinalDeliverable", "user", lambda: document.set_final_deliverable(node.id, False),
+        )
+    assert len(document.command_log) == log_length
+
+
+def test_undoing_an_assistant_reply_returns_the_pointer_to_the_users_message():
+    """The reply landing sets last_chat_node_id AFTER its chatReply command
+    has been recorded (backend/api/intents_chat.py's _on_reply), so the
+    reply command's own mutator never changed the pointer. Undoing that
+    reply must still put the pointer back where it stood before the reply -
+    otherwise it dangles at the node the undo just removed, and the next
+    Send becomes a detached root. The commonest real undo there is: send,
+    read the reply, Ctrl+Z it, send again."""
+    import asyncio
+    from unittest.mock import patch
+
+    import api_provider
+    import graphlink_task_config as task_config
+    from backend.tests.conftest import chat_slots
+    from backend.tests.test_canvas import make_bus_with_dispatcher
+
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+
+        def fake_chat(task, messages, **kwargs):
+            return {"message": {"content": "an assistant reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", fake_chat):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["first"])
+            entry = next(iter(chat_slots(dispatcher).values()))
+            await entry["task"]
+
+        reply_id = document.last_chat_node_id
+        assert reply_id != user_id and reply_id in document.nodes
+        assert document.command_log[-1].command_type == "chatReply"
+
+        await bus.dispatch_intent("scene", "undo", [])
+        assert reply_id not in document.nodes
+        assert document.last_chat_node_id == user_id
+
+        next_node = document.send_message("second")
+        assert _parent_ids(document, next_node.id) == [user_id]
+
+    asyncio.run(run())
+
+
+def test_set_final_deliverable_intent_is_undoable_end_to_end(wired):
+    bus, document = wired
+    node_id = _dispatch(bus, "addChatNode", 0, 0, "the deliverable", False, None)
+    log_length = len(document.command_log)
+
+    _dispatch(bus, "setFinalDeliverable", node_id, True)
+    assert document.final_deliverable_node_id == node_id
+    assert len(document.command_log) == log_length + 1
+    assert document.command_log[-1].label == "Mark Final"
+
+    _dispatch(bus, "undo")
+    assert document.final_deliverable_node_id is None
+    assert node_id in document.nodes
+
+    _dispatch(bus, "redo")
+    assert document.final_deliverable_node_id == node_id
+
+
+def test_redoing_an_assistant_reply_puts_the_pointer_back_on_the_reply():
+    """Undo then redo must leave the document exactly as it was, pointers
+    included. The reply's chatReply command is recorded BEFORE the pointer
+    moves onto the reply (intents_chat.py's _on_reply sets it once
+    record_command has returned), so a redo that trusted the pointer value
+    seen at record time would leave it on the user's message: the next
+    Send would then fork a sibling of the reply instead of continuing from
+    it, and the reply would drop out of that Send's history."""
+    import asyncio
+    from unittest.mock import patch
+
+    import api_provider
+    import graphlink_task_config as task_config
+    from backend.tests.conftest import chat_slots
+    from backend.tests.test_canvas import make_bus_with_dispatcher
+
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+
+        def fake_chat(task, messages, **kwargs):
+            return {"message": {"content": "an assistant reply"}}
+
+        with patch.object(api_provider, "USE_API_MODE", False), \
+                patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
+                patch.dict(task_config.OLLAMA_MODELS, {task_config.TASK_CHAT: "test-model"}), \
+                patch.object(api_provider, "chat", fake_chat):
+            user_id = await bus.dispatch_intent("scene", "sendMessage", ["first"])
+            entry = next(iter(chat_slots(dispatcher).values()))
+            await entry["task"]
+
+        reply_id = document.last_chat_node_id
+        assert reply_id != user_id and reply_id in document.nodes
+
+        await bus.dispatch_intent("scene", "undo", [])
+        assert document.last_chat_node_id == user_id
+        await bus.dispatch_intent("scene", "redo", [])
+        assert reply_id in document.nodes
+        assert document.last_chat_node_id == reply_id, (
+            "redo restored the reply, so the continuation point must be back on it"
+        )
+
+        next_node = document.send_message("second")
+        assert _parent_ids(document, next_node.id) == [reply_id]
+
+    asyncio.run(run())
+
+
+def test_redoing_a_partial_reply_puts_the_pointer_back_on_it(document):
+    """The stream-died path lands its partial reply the same way as a full
+    one - command first, pointer second - so redo must restore the pointer
+    the reply left behind, not the one its command saw."""
+    from backend.api.intents_chat import _land_partial_reply_node
+
+    user = _send(document, "first")
+    _land_partial_reply_node(document, user, "half a rep")
+    partial_id = document.last_chat_node_id
+    assert partial_id != user.id
+
+    document.undo()
+    assert partial_id not in document.nodes
+    assert document.last_chat_node_id == user.id
+    document.redo()
+    assert document.last_chat_node_id == partial_id
+
+    after = _send(document, "second")
+    assert _parent_ids(document, after.id) == [partial_id]
+
+
+def test_undo_then_redo_of_a_synthesis_restores_the_pointer_both_ways(monkeypatch):
+    """Synthesize Branches records its node and only then moves the pointer
+    onto it (intents_branches.py's on_success), the same shape as a reply
+    landing: undo must return the pointer to where it stood before, and
+    redo must put it back on the synthesis node."""
+    import asyncio
+
+    import backend.agents as agents_module
+    from backend.tests.conftest import drain_runs
+    from backend.tests.test_canvas import make_bus_with_dispatcher
+
+    monkeypatch.setattr(
+        agents_module.BranchSynthesisAgent, "get_response",
+        lambda self, text, instructions: "Combined answer drawing on both branches.",
+    )
+
+    async def run():
+        bus, document, _recorder, dispatcher = make_bus_with_dispatcher()
+        root = document.add_chat_node(0, 0, "root question", True)
+        first = document.add_chat_node(0, 160, "first answer", False, parent_id=root.id)
+        second = document.add_chat_node(460, 160, "second answer", False, parent_id=root.id)
+        document.last_chat_node_id = second.id
+        ids_before = set(document.nodes)
+
+        await bus.dispatch_intent(
+            "scene", "synthesizeBranches", [[first.id, second.id], "merge the best of both"],
+        )
+        await drain_runs(dispatcher, "branch_synthesis")
+        (synthesis_id,) = set(document.nodes) - ids_before
+        assert document.last_chat_node_id == synthesis_id
+
+        await bus.dispatch_intent("scene", "undo", [])
+        assert synthesis_id not in document.nodes
+        assert document.last_chat_node_id == second.id
+        await bus.dispatch_intent("scene", "redo", [])
+        assert synthesis_id in document.nodes
+        assert document.last_chat_node_id == synthesis_id
+
+        next_node = document.send_message("follow-up")
+        assert _parent_ids(document, next_node.id) == [synthesis_id]
+
+    asyncio.run(run())
+
+
+def _remove(document, ids):
+    document.record_command(
+        "removeNodes", "user", lambda: document.remove_nodes(list(ids)), node_ids=list(ids),
+    )
+
+
+def test_removing_the_tip_moves_the_continuation_point_to_its_parent(document):
+    a = _send(document, "a")
+    b = _send(document, "b")
+    document.record_command(
+        "setFinalDeliverable", "user", lambda: document.set_final_deliverable(b.id, True),
+    )
+
+    _remove(document, [b.id])
+    assert document.last_chat_node_id == a.id
+    assert document.final_deliverable_node_id is None
+
+    c = _send(document, "c")
+    assert _parent_ids(document, c.id) == [a.id], (
+        "the next send must continue from the removed tip's parent, not start a detached root"
+    )
+
+    document.undo()  # the send of c
+    document.undo()  # the removal
+    assert b.id in document.nodes
+    assert document.last_chat_node_id == b.id
+    assert document.final_deliverable_node_id == b.id
+
+
+def test_removing_the_tip_and_its_parent_together_walks_up_past_both(document):
+    a = _send(document, "a")
+    b = _send(document, "b")
+    c = _send(document, "c")
+
+    _remove(document, [c.id, b.id])
+    assert document.last_chat_node_id == a.id
+
+
+def test_removing_a_whole_branch_returns_the_pointer_to_none(document):
+    a = _send(document, "a")
+    b = _send(document, "b")
+
+    _remove(document, [a.id, b.id])
+    assert document.last_chat_node_id is None
+
+
+def test_removing_a_node_off_the_tips_path_leaves_the_pointer_alone(document):
+    a = _send(document, "a")
+    b = _send(document, "b")
+    side = document.send_message("a sibling of b", branch_from_node_id=a.id)
+    document.last_chat_node_id = b.id
+
+    _remove(document, [side.id])
+    assert document.last_chat_node_id == b.id
+
+
+def test_removing_the_tip_inside_a_legacy_cycle_terminates(document):
+    """connect_unchecked can restore a pre-ADR-009 cycle on load; the walk
+    up from a removed tip must stop rather than spin on it."""
+    a = _send(document, "a")
+    b = _send(document, "b")
+    document.connect_unchecked(b.id, a.id)
+
+    _remove(document, [a.id, b.id])
+    assert document.last_chat_node_id is None
+
+
+def test_remove_nodes_intent_moves_the_pointer_and_undo_restores_it(wired):
+    bus, document = wired
+    a = document.send_message("a")
+    b = document.send_message("b")
+
+    _dispatch(bus, "removeNodes", [b.id])
+    assert document.last_chat_node_id == a.id
+
+    _dispatch(bus, "undo")
+    assert b.id in document.nodes
+    assert document.last_chat_node_id == b.id

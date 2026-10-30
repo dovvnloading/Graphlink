@@ -225,6 +225,12 @@ class OllamaProvider:
             thinking_parts: list[str] = []
             tool_calls: tuple[ToolCall, ...] = ()
             usage = None
+            # A finished Ollama generation always ends on a terminal chunk:
+            # done:true (with its done_reason - stop, length, ...), or the
+            # tool_calls chunk the loop below already treats as terminal.
+            # Same sentinel posture as AnthropicProvider.stream()'s
+            # message_stop.
+            saw_done = False
             # ollama types its streaming chat() as `Iterator[ChatResponse]`,
             # which has no close() - but the object it actually returns is the
             # generator ollama/_client.py's own `_request` builds around
@@ -256,6 +262,7 @@ class OllamaProvider:
                     # inside it - `done` may not even be set the same chunk.
                     if part["message"].get("tool_calls"):
                         tool_calls = self._extract_tool_calls(part["message"])
+                        saw_done = True
                         # review-fix: a tool-calling chunk IS the terminal
                         # chunk (this comment block's own opening line) and
                         # Ollama marks it done with real token counts, same
@@ -270,6 +277,7 @@ class OllamaProvider:
                             )
                         break
                     if part.get("done"):
+                        saw_done = True
                         # ADR-006 stage 6.8: the terminal chunk carries
                         # Ollama's real token counts.
                         usage = normalize_usage(
@@ -278,6 +286,19 @@ class OllamaProvider:
                         break
             finally:
                 stream.close()  # idempotent on an already-exhausted generator
+
+            # An NDJSON stream that just stops without a terminal chunk (a
+            # reverse proxy in front of a remote OLLAMA_HOST, a connection
+            # closed gracefully mid-answer) delivered a fragment - returning
+            # it as done would commit half a reply as the finished turn.
+            # Raised, never `continue`d: the reasoning retry below is for a
+            # model that FINISHED without an answer, and a truncation must
+            # reach the dispatch layer so it lands the streamed partial
+            # flagged incomplete.
+            if not saw_done:
+                raise RuntimeError(
+                    "Ollama stream ended unexpectedly before completion. Please try again."
+                )
 
             if tool_calls:
                 # ADR-007 stage 7.1: a pure tool-call turn is a legitimate,

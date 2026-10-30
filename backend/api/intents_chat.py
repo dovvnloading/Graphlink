@@ -226,15 +226,15 @@ def _land_partial_reply_node(document, parent_node, partial_text):
         ax, ay = document.place_child(parent_node.id, "chat")
         ai = document.add_chat_node(ax, ay, partial_text, False, parent_id=parent_node.id)
         ai.state.response_incomplete = True
+        # Inside the mutator so the command's after-snapshot of the chat
+        # pointers names this node - see _make_send_on_reply's _commit.
+        document.last_chat_node_id = ai.id
         return ai
 
-    ai_node, _command = document.record_command(
-        "chatReply", "agent", _commit, node_ids=[parent_node.id],
-    )
-    document.last_chat_node_id = ai_node.id
+    document.record_command("chatReply", "agent", _commit, node_ids=[parent_node.id])
 
 
-def _snapshot_active_provider_model(agent_dispatcher):
+def _snapshot_active_provider_model(agent_dispatcher, canvas_document=None, node_id=None, bus=None):
     """ADR-006 leftover #3: resolved ONCE at request-dispatch time (call
     this before agent_dispatcher.start_chat_reply is awaited), never at
     completion time - _stamp_reply_provenance used to re-read the live
@@ -242,8 +242,19 @@ def _snapshot_active_provider_model(agent_dispatcher):
     mis-attributes a reply to whatever provider happened to be active when
     the LLM call FINISHED rather than the one that actually generated it
     (a real divergence if the user flips Settings mid-flight). Best-effort:
-    provenance must never fail the reply."""
+    provenance must never fail the reply.
+
+    With `canvas_document`, the node/branch/workspace model pin is resolved
+    by the same rungs _dispatch uses (pass the same canvas_document/node_id/
+    bus the caller hands start_chat_reply), and the pair names THAT model: a
+    reply pinned to one of two configured models must not be badged and
+    priced as the task's default model."""
     try:
+        model_ref = None
+        if canvas_document is not None:
+            model_ref = agent_dispatcher._resolve_model_ref_for_dispatch(canvas_document, node_id, bus=bus)
+        if model_ref is not None:
+            return agent_dispatcher.active_provider_model(model_ref)
         return agent_dispatcher.active_provider_model()
     except Exception:
         return None, None
@@ -259,7 +270,8 @@ def _stamp_reply_provenance(node, provider, model) -> None:
 
 
 def _make_on_usage(
-    document, agent_dispatcher, token_counter, publish_token_counter, publish_scene, node_ref
+    document, token_counter, publish_token_counter, publish_scene, node_ref,
+    provider=None, model=None,
 ):
     """ADR-006 stage 6.8: the shared real-usage completion callback for both
     reply flows (module-level for the same 300-line-cap reason as its
@@ -268,10 +280,16 @@ def _make_on_usage(
     the regenerated node). Records the counter's real usage (with
     provider/model for cost estimation) and stamps the counts on the node.
     Partials and cancels never reach here - no usage exists for dead
-    streams, so they keep the estimator."""
+    streams, so they keep the estimator.
+
+    `provider`/`model` are the request-time pair from
+    _snapshot_active_provider_model, for the same reason
+    _stamp_reply_provenance takes them: re-reading the dispatcher when the
+    usage arrives would price the reply against whatever is active THEN (a
+    provider switch mid-stream) or against the task's default model when
+    the reply ran on a pinned one."""
 
     async def _on_usage(usage):
-        provider, model = agent_dispatcher.active_provider_model()
         token_counter.set_real_usage(
             usage.get("prompt_tokens"), usage.get("completion_tokens"),
             provider=provider, model=model,
@@ -291,6 +309,131 @@ def _make_on_usage(
             await publish_scene()
 
     return _on_usage
+
+
+def _make_send_on_reply(
+    document, node, token_counter, publish_token_counter, reply_ref,
+    provenance_provider=None, provenance_model=None,
+):
+    """send_message's completion callback, built at module level for the
+    same 300-line-cap reason as _make_regenerate_on_reply below. `node` is
+    the user's just-sent chat node; `reply_ref` is send_message's
+    {"node_id": ...} box, filled here once the reply node exists so
+    _on_usage can stamp the real counts onto it. `provenance_provider`/
+    `provenance_model` are the request-time pair from
+    _snapshot_active_provider_model."""
+
+    async def _on_reply(reply_text):
+        # R8a: outputTokens reflects what the model actually returned,
+        # regardless of whether parse_response below finds anything
+        # node-worthy in it (the empty-reply early return below) or the
+        # user's node is still there to hang it off (the liveness check
+        # just below) - the reply happened and consumed real output
+        # tokens either way. Same ahead-of-every-early-return placement
+        # as regenerate's own _on_reply (_make_regenerate_on_reply).
+        token_counter.set_output_text(reply_text)
+        await publish_token_counter()
+        # Deleted mid-flight: silent no-op, the same posture as
+        # regenerate's _on_reply, send_message's own _on_partial,
+        # and intents_conversation.py's _on_reply. The user's node can be
+        # removed (removeNodes/deleteChatNode) while the reply is still
+        # generating - _dispatch runs the LLM call as an un-awaited task,
+        # so the socket is free to process the delete first - and
+        # _build_reply_nodes would then raise SceneError("unknown parent
+        # node"), which _dispatch's generic handler reports as "AI
+        # response failed" for a request that succeeded. Returning here,
+        # BEFORE add_session_tokens and before reply_ref is set, is what
+        # keeps the document's bookkeeping honest: the persisted session
+        # total only grows for replies that land, and _on_usage (which
+        # still runs after this returns) finds reply_ref unset and
+        # stamps no node, while the request-level counter keeps the
+        # real usage the provider billed.
+        if node.id not in document.nodes:
+            return
+        # R6.3: the assistant's reply has completed (regardless of
+        # whether parse_response below finds anything node-worthy in
+        # it) - grow total_session_tokens by its estimated count too,
+        # same as the user's own message text just above.
+        document.add_session_tokens(reply_text)
+        # R4.3b: port legacy handle_response's _parse_response retrofit -
+        # split the flat reply into thinking/text/code parts and create
+        # separate thinking-kind/code-kind CHILD nodes instead of
+        # dumping the raw, unparsed reply into one flat node.
+        parsed_parts = parse_response(reply_text)
+        if not parsed_parts:
+            # Mirrors legacy handle_response's own outer gate
+            # (`if text_content or parsed_parts:`) - a genuinely empty/
+            # whitespace-only reply creates NO node at all, not a
+            # "[Empty Response]" placeholder node. Currently unreachable
+            # in practice (api_provider._compose_reasoned_response raises
+            # rather than returning blank content), but the gate is kept
+            # so a future provider path can never silently diverge from
+            # legacy here. last_chat_node_id is deliberately left
+            # untouched - it already points at the user's own message
+            # node (set by send_message), matching legacy's
+            # own fallback of leaving current_node at user_node when no
+            # assistant node gets created.
+            return
+
+        text_parts = [p["content"] for p in parsed_parts if p["type"] == "text"]
+        text_content = "\n\n".join(text_parts)
+
+        placeholder_text = text_content
+        if not placeholder_text:
+            if any(p["type"] == "code" for p in parsed_parts):
+                placeholder_text = PLACEHOLDER_GENERATED_CONTENT
+            elif any(p["type"] == "thinking" for p in parsed_parts):
+                placeholder_text = PLACEHOLDER_ASSISTANT_REASONING
+            else:
+                # Unreachable given parse_response's own invariants (a
+                # non-empty parts list with no text/code part must
+                # contain a thinking part) - legacy's handle_response has
+                # this exact same dead branch; kept verbatim for
+                # structural parity rather than optimized away.
+                placeholder_text = PLACEHOLDER_EMPTY_RESPONSE
+
+        # ADR-010 stage 10.1: reply node + children as ONE command (see
+        # _build_reply_nodes). "agent" provenance, not "user" - stage 10.5
+        # ("undo this build") is what consumes that distinction.
+        def _commit():
+            ai = _build_reply_nodes(document, node, placeholder_text, parsed_parts)
+            # Always the real chat node's id, never a code/thinking child's -
+            # add_code_node/add_thinking_node are documented (see their own
+            # docstrings) as NOT branch points, and last_chat_node_id
+            # specifically drives the next real send's branch-continuation
+            # (chat_branch_history), which only makes sense pointed at a real
+            # chat node. Set inside the mutator, not after record_command
+            # returns, so the command's after-snapshot of the chat pointers
+            # names this reply: undo puts the continuation point back on the
+            # user's message and redo brings it forward to the reply again.
+            document.last_chat_node_id = ai.id
+            return ai
+
+        ai_node, _command = document.record_command(
+            "chatReply", "agent", _commit, node_ids=[node.id],
+        )
+        # ADR-006 stage 6.8: stamp provider/model provenance on the
+        # reply (previously only branch-synthesis nodes carried it),
+        # and remember the node for _on_usage's per-node token stamp.
+        _stamp_reply_provenance(ai_node, provenance_provider, provenance_model)
+        reply_ref["node_id"] = ai_node.id
+
+        # NOTE: the calls inside _create_reply_nodes above MUST use the
+        # `document.` prefix. Before ADR-002 stage 2.6, a bare
+        # `add_code_node(...)`/`add_thinking_node(...)` here would have
+        # silently resolved to register_canvas's own same-scope async
+        # WS-intent wrapper closures of the same name instead of raising
+        # a NameError - producing an unawaited coroutine that never ran
+        # and never errored, so no node would be created and nothing
+        # would look wrong until the scene state was actually inspected.
+        # Those wrapper closures now live in backend/api/intents_nodes.py,
+        # a different module - a bare call here would raise NameError
+        # immediately instead, a strictly SAFER failure mode than the
+        # original silent one. The `document.` prefix requirement is
+        # kept regardless, since correctness should not depend on which
+        # of the two failure modes happens to be true today.
+
+    return _on_reply
 
 
 def _make_regenerate_on_reply(
@@ -399,7 +542,7 @@ def register_chat_intents(
 ) -> None:
     # Deferred import - see this module's own docstring for why
     # _history_token_text cannot be imported at module level here.
-    from backend.canvas import _history_token_text
+    from backend.canvas import _history_image_tokens, _history_token_text
 
     publish_scene = make_publish_scene(bus)
     publish_token_counter = make_publish_token_counter(bus)
@@ -460,7 +603,9 @@ def register_chat_intents(
         context_history = (
             document.chat_branch_history(context_parent_edge.source) if context_parent_edge else []
         )
-        token_counter.set_context_text(_history_token_text(context_history))
+        token_counter.set_context_text(
+            _history_token_text(context_history), image_tokens=_history_image_tokens(context_history),
+        )
         # 6.8 review fix: a new request starts on estimates - see
         # TokenCounterState.reset_real_usage.
         token_counter.reset_real_usage()
@@ -473,94 +618,14 @@ def register_chat_intents(
         # ADR-006 leftover #3: resolved here, at request-dispatch time - not
         # inside _on_reply below, which only fires once the reply completes
         # (see _snapshot_active_provider_model's own note).
-        request_provider, request_model = _snapshot_active_provider_model(agent_dispatcher)
+        request_provider, request_model = _snapshot_active_provider_model(
+            agent_dispatcher, document, node.id, bus,
+        )
 
-        async def _on_reply(reply_text):
-            # R6.3: the assistant's reply has completed (regardless of
-            # whether parse_response below finds anything node-worthy in
-            # it) - grow total_session_tokens by its estimated count too,
-            # same as the user's own message text just above.
-            document.add_session_tokens(reply_text)
-            # R8a: outputTokens reflects what the model actually returned,
-            # regardless of whether parse_response below finds anything
-            # node-worthy in it (the empty-reply early return just below)
-            # - the reply happened and consumed real output tokens either
-            # way.
-            token_counter.set_output_text(reply_text)
-            await publish_token_counter()
-            # R4.3b: port legacy handle_response's _parse_response retrofit -
-            # split the flat reply into thinking/text/code parts and create
-            # separate thinking-kind/code-kind CHILD nodes instead of
-            # dumping the raw, unparsed reply into one flat node.
-            parsed_parts = parse_response(reply_text)
-            if not parsed_parts:
-                # Mirrors legacy handle_response's own outer gate
-                # (`if text_content or parsed_parts:`) - a genuinely empty/
-                # whitespace-only reply creates NO node at all, not a
-                # "[Empty Response]" placeholder node. Currently unreachable
-                # in practice (api_provider._compose_reasoned_response raises
-                # rather than returning blank content), but the gate is kept
-                # so a future provider path can never silently diverge from
-                # legacy here. last_chat_node_id is deliberately left
-                # untouched - it already points at the user's own message
-                # node (set by send_message just above), matching legacy's
-                # own fallback of leaving current_node at user_node when no
-                # assistant node gets created.
-                return
-
-            text_parts = [p["content"] for p in parsed_parts if p["type"] == "text"]
-            text_content = "\n\n".join(text_parts)
-
-            placeholder_text = text_content
-            if not placeholder_text:
-                if any(p["type"] == "code" for p in parsed_parts):
-                    placeholder_text = PLACEHOLDER_GENERATED_CONTENT
-                elif any(p["type"] == "thinking" for p in parsed_parts):
-                    placeholder_text = PLACEHOLDER_ASSISTANT_REASONING
-                else:
-                    # Unreachable given parse_response's own invariants (a
-                    # non-empty parts list with no text/code part must
-                    # contain a thinking part) - legacy's handle_response has
-                    # this exact same dead branch; kept verbatim for
-                    # structural parity rather than optimized away.
-                    placeholder_text = PLACEHOLDER_EMPTY_RESPONSE
-
-            # ADR-010 stage 10.1: reply node + children as ONE command (see
-            # _build_reply_nodes). "agent" provenance, not "user" - stage 10.5
-            # ("undo this build") is what consumes that distinction.
-            ai_node, _command = document.record_command(
-                "chatReply", "agent",
-                lambda: _build_reply_nodes(document, node, placeholder_text, parsed_parts),
-                node_ids=[node.id],
-            )
-            # ADR-006 stage 6.8: stamp provider/model provenance on the
-            # reply (previously only branch-synthesis nodes carried it),
-            # and remember the node for _on_usage's per-node token stamp.
-            _stamp_reply_provenance(ai_node, request_provider, request_model)
-            reply_ref["node_id"] = ai_node.id
-
-            # NOTE: the calls inside _create_reply_nodes above MUST use the
-            # `document.` prefix. Before ADR-002 stage 2.6, a bare
-            # `add_code_node(...)`/`add_thinking_node(...)` here would have
-            # silently resolved to register_canvas's own same-scope async
-            # WS-intent wrapper closures of the same name instead of raising
-            # a NameError - producing an unawaited coroutine that never ran
-            # and never errored, so no node would be created and nothing
-            # would look wrong until the scene state was actually inspected.
-            # Those wrapper closures now live in backend/api/intents_nodes.py,
-            # a different module - a bare call here would raise NameError
-            # immediately instead, a strictly SAFER failure mode than the
-            # original silent one. The `document.` prefix requirement is
-            # kept regardless, since correctness should not depend on which
-            # of the two failure modes happens to be true today.
-
-            # Always the real chat node's id, never a code/thinking child's -
-            # add_code_node/add_thinking_node are documented above (see their
-            # own docstrings) as NOT branch points, and last_chat_node_id
-            # specifically drives the next real send's branch-continuation
-            # (chat_branch_history), which only makes sense pointed at a real
-            # chat node.
-            document.last_chat_node_id = ai_node.id
+        _on_reply = _make_send_on_reply(
+            document, node, token_counter, publish_token_counter, reply_ref,
+            request_provider, request_model,
+        )
 
         async def _on_partial(partial_text):
             # See _land_partial_reply_node; token accounting mirrors
@@ -573,8 +638,8 @@ def register_chat_intents(
             _land_partial_reply_node(document, node, partial_text)
 
         _on_usage = _make_on_usage(
-            document, agent_dispatcher, token_counter, publish_token_counter,
-            publish_scene, lambda: reply_ref["node_id"],
+            document, token_counter, publish_token_counter, publish_scene,
+            lambda: reply_ref["node_id"], request_provider, request_model,
         )
 
         await agent_dispatcher.start_chat_reply(
@@ -620,7 +685,9 @@ def register_chat_intents(
         # not node_id) - there is no fresh draft text to double-count
         # against, so it's usable directly as contextTokens with no
         # adjustment.
-        token_counter.set_context_text(_history_token_text(history))
+        token_counter.set_context_text(
+            _history_token_text(history), image_tokens=_history_image_tokens(history),
+        )
         # 6.8 review fix: same request-start reset as send_message above.
         token_counter.reset_real_usage()
         await publish_token_counter()
@@ -628,7 +695,9 @@ def register_chat_intents(
         # ADR-006 leftover #3: resolved here, before start_chat_reply is
         # awaited below - not inside _on_reply, which only fires once the
         # reply completes (see _snapshot_active_provider_model's own note).
-        request_provider, request_model = _snapshot_active_provider_model(agent_dispatcher)
+        request_provider, request_model = _snapshot_active_provider_model(
+            agent_dispatcher, document, parent_id, bus,
+        )
         _on_reply = _make_regenerate_on_reply(
             document, bus, notifications, token_counter, publish_token_counter,
             node_to_regenerate, request_provider, request_model,
@@ -641,8 +710,8 @@ def register_chat_intents(
             _land_partial_regenerate(document, node_to_regenerate, partial_text)
 
         _on_usage = _make_on_usage(
-            document, agent_dispatcher, token_counter, publish_token_counter,
-            publish_scene, lambda: node_to_regenerate.id,
+            document, token_counter, publish_token_counter, publish_scene,
+            lambda: node_to_regenerate.id, request_provider, request_model,
         )
 
         await agent_dispatcher.start_chat_reply(
