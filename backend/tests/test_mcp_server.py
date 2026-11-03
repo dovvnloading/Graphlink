@@ -259,6 +259,39 @@ def test_headless_launcher_publishes_only_read_capability(tmp_path, monkeypatch)
     assert observed["socket_closed"] is True
 
 
+def test_headless_refuses_to_boot_when_private_token_staging_fails(tmp_path, monkeypatch, capsys):
+    import backend.headless as headless
+    import backend.app as app_module
+
+    token_file = tmp_path / "headless.token"
+    token_file.write_text("previous-token", encoding="utf-8")
+    closed = []
+
+    class Listener:
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(headless, "_bind_listener", lambda port: Listener())
+
+    def reject_staging(_path):
+        raise OSError("cannot secure token file DACL")
+
+    def forbidden_app(**kwargs):
+        pytest.fail("application must not start with an insecure MCP token file")
+
+    monkeypatch.setattr(headless, "_private_staging", reject_staging)
+    monkeypatch.setattr(app_module, "create_app", forbidden_app)
+
+    result = headless.main([
+        "--port", "0", "--chat-db", str(tmp_path / "chats.db"),
+        "--token-file", str(token_file),
+    ])
+    assert result == 1
+    assert closed == [True], "the listener must close on ACL failure"
+    assert token_file.read_text(encoding="utf-8") == "previous-token"
+    assert "cannot secure MCP token file" in capsys.readouterr().err
+
+
 def test_headless_refuses_busy_data_dir_without_rotating_existing_mcp_token(tmp_path, monkeypatch, capsys):
     import backend.headless as headless
     from backend.instance_lock import exclusive_data_directory
