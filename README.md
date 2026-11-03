@@ -197,6 +197,10 @@ connects to the same backend rather than opening a second copy of the
 application or database. Both the desktop and headless launchers now
 refuse a second process using the same data directory, even on different
 TCP ports.
+Optional permission-scoped canvas editing is available with
+`--allow-mcp-writes` on the backend and a **separate write-token-file**
+on the stdio adapter. It requires scene revisions and operation IDs;
+the default remains read-only.
 See [Headless Graphlink and MCP setup](docs/HEADLESS_MCP.md) for the CLI,
 client configuration, permissions and current limitations.
 
