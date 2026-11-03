@@ -131,6 +131,47 @@ def test_a_ref_the_store_lost_costs_the_picture_not_the_conversation(tmp_path):
     assert image.content == "a cat", "the surrounding conversation must survive intact"
 
 
+def test_corrupt_asset_load_preserves_original_ref_across_save_and_recovers(tmp_path):
+    store = AssetStore(tmp_path / "assets")
+    initial = build_chat_data(_image_doc(), asset_store=store)
+    asset_ref = _only_image_payload(initial)["asset_ref"]
+    notes_data = initial.pop("notes_data")
+    pins_data = initial.pop("pins_data")
+    asset_path = tmp_path / "assets" / asset_ref[:2] / asset_ref
+    corrupted = b"bad image bytes with a different SHA-256"
+    asset_path.write_bytes(corrupted)
+
+    restored = SceneDocument()
+    restore_chat_into_document(
+        restored, {"data": initial}, notes_data, pins_data, asset_store=store,
+    )
+    image = next(node for node in restored.nodes.values() if node.kind == "image")
+    assert image.state.image_asset_id == "", "wrong bytes must not become a renderable image"
+    assert image.state.unresolved_asset_ref == asset_ref
+    assert image.content == "a cat", "a bad image must not break its parent graph"
+
+    # A subsequent autosave-style serialization must keep the ORIGINAL
+    # digest, rather than publishing the corrupt file under a new digest.
+    saved_again = build_chat_data(restored, asset_store=store)
+    assert _only_image_payload(saved_again)["asset_ref"] == asset_ref
+    assert store.get(content_ref(corrupted)) is None
+    assert asset_path.read_bytes() == corrupted
+
+    # Repairing the asset later should make the original saved reference
+    # readable again; no database migration or rewrite of graph refs.
+    assert store.put(PNG) == asset_ref
+    restored_after_repair = SceneDocument()
+    restore_chat_into_document(
+        restored_after_repair,
+        {"data": saved_again},
+        saved_again.pop("notes_data"), saved_again.pop("pins_data"),
+        asset_store=store,
+    )
+    repaired_image = next(n for n in restored_after_repair.nodes.values() if n.kind == "image")
+    assert restored_after_repair.image_assets[repaired_image.state.image_asset_id] == (PNG, "image/png")
+    assert repaired_image.content == "a cat"
+
+
 def test_a_failed_save_does_not_leave_the_store_visible_to_the_next_one():
     # build_chat_data publishes the store through a contextvar; a raising
     # save must reset it, or the next storeless save silently externalizes.
