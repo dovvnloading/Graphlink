@@ -19,6 +19,7 @@ from pathlib import Path
 
 from backend.auth import mint_token
 from backend.control import DEFAULT_CONTROL_PORT, DEFAULT_TOKEN_FILE
+from backend.control_writes import DEFAULT_WRITE_TOKEN_FILE
 
 
 def _private_staging(path: Path) -> tuple[int, str]:
@@ -78,12 +79,18 @@ def _bind_listener(port: int) -> socket.socket:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Graphlink without opening a desktop window")
     parser.add_argument("--port", type=int, default=DEFAULT_CONTROL_PORT, help="127.0.0.1 TCP port (default 8765)")
-    parser.add_argument("--token-file", type=Path, default=DEFAULT_TOKEN_FILE, help="local per-launch token file")
+    parser.add_argument("--token-file", type=Path, default=DEFAULT_TOKEN_FILE, help="local per-launch read token file")
+    parser.add_argument("--allow-mcp-writes", action="store_true", help="opt in to non-destructive MCP graph writes")
+    parser.add_argument("--write-token-file", type=Path, default=DEFAULT_WRITE_TOKEN_FILE, help="separate write token path (requires --allow-mcp-writes)")
     parser.add_argument("--chat-db", type=Path, default=None, help="optional chats.db location")
     parser.add_argument("--settings-file", type=Path, default=None, help="optional settings file")
     args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
+    if args.allow_mcp_writes and (
+        args.token_file.expanduser().resolve() == args.write_token_file.expanduser().resolve()
+    ):
+        parser.error("the read and write capability files must use different paths")
 
     from contextlib import ExitStack
 
@@ -111,9 +118,11 @@ def _run_headless_owned(args: argparse.Namespace) -> int:
     # Preserve the final path component: resolving it here would follow a
     # pre-existing symlink BEFORE _write_token_file can refuse it.
     token_file = args.token_file.expanduser().absolute()
+    write_token_file = args.write_token_file.expanduser().absolute() if args.allow_mcp_writes else None
     listener = _bind_listener(args.port)
     backend_token = mint_token()
     control_read_token = mint_token()
+    control_write_token = mint_token() if args.allow_mcp_writes else None
     try:
         # Never put the WebSocket/administrative credential on disk for
         # external MCP clients. Possession of the file grants only reads.
@@ -122,9 +131,16 @@ def _run_headless_owned(args: argparse.Namespace) -> int:
         except OSError as exc:
             sys.stderr.write(f"Graphlink headless cannot secure MCP token file: {exc}\n")
             return 1
+        if control_write_token is not None and write_token_file is not None:
+            try:
+                _write_token_file(write_token_file, control_write_token)
+            except OSError as exc:
+                sys.stderr.write(f"Graphlink headless cannot secure MCP write token: {exc}\n")
+                return 1
         app = create_app(
             auth_token=backend_token,
             control_read_token=control_read_token,
+            control_write_token=control_write_token,
             chat_db_path=args.chat_db,
             settings_state_file=args.settings_file,
         )
@@ -146,6 +162,13 @@ def _run_headless_owned(args: argparse.Namespace) -> int:
                 token_file.unlink(missing_ok=True)
         except OSError:
             pass
+        if write_token_file is not None and control_write_token is not None:
+            try:
+                if (not write_token_file.is_symlink()
+                        and write_token_file.read_text(encoding="utf-8").strip() == control_write_token):
+                    write_token_file.unlink(missing_ok=True)
+            except OSError:
+                pass
     return 0
 
 
