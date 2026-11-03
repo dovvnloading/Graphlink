@@ -103,6 +103,7 @@ async def _deny_approval(_call: ToolCall) -> bool:
 def _validate_arguments(operation: str, arguments: dict[str, Any]) -> None:
     if set(arguments) - _ALLOWED_FIELDS[operation]:
         raise HTTPException(status_code=422, detail="unexpected graph mutation fields")
+    required: tuple[str, ...]
     if operation == "create_node":
         if arguments.get("kind") not in _ALLOWED_NODE_KINDS:
             raise HTTPException(status_code=422, detail="unsupported node kind for MCP writes")
