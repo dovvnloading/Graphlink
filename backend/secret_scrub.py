@@ -81,7 +81,10 @@ _SECRET_VALUE_PATTERNS = (
 # roots. Deliberately NOT a bare `/...` match - that would eat ordinary
 # prose containing slashes, and URLs, for no gain.
 _PATH_PATTERNS = (
-    re.compile(r"[A-Za-z]:[\\/][^\s\"'<>|]*"),
+    # A Windows drive letter must not be the LAST letter of a URI scheme:
+    # otherwise "https://" matches as "s:/" and destroys the full URL
+    # (including perfectly ordinary nonsecret query parameters).
+    re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"'<>|]*"),
     re.compile(r"\\\\[^\s\"'<>|]+"),
     re.compile(r"/(?:home|Users|root|var|tmp|opt|mnt|media)/[^\s\"'<>|]*"),
 )
