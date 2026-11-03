@@ -38,9 +38,20 @@ Optional flags: `--port`, `--token-file`, `--chat-db`, and
 `--settings-file`. With `--port 0`, the OS chooses a free port;
 use the reported port in the MCP adapter's URL.
 
-**Use only one Graphlink backend for a data directory at a time.**
-Do not separately run the desktop process against the same live database.
-The MCP adapter never starts a second backend.
+**Only one Graphlink backend can own a data directory.** The desktop and
+headless launchers both acquire a nonblocking OS file lock in the directory
+containing the resolved `chats.db`. A second launcher refuses startup
+*before* changing the crash sentinel or rotating the first backend's MCP
+token, even when the two processes use different TCP ports.
+
+The lock file is `<data-directory>/.graphlink.instance.lock`. Leave it in
+place: the OS releases its lock automatically when the process exits or
+crashes; the file itself is intentionally retained so two processes can
+never accidentally lock different replacement files. Graphs and assets
+using separate database filenames **inside the same directory** still share
+one lock. The MCP adapter never starts a second backend. If running truly
+independent instances using different database directories, use separate
+`--settings-file` locations as well to avoid sharing application settings.
 
 ## Configure a local MCP client
 
