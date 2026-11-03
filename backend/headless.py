@@ -66,6 +66,26 @@ def main(argv: list[str] | None = None) -> int:
     if not 0 <= args.port <= 65535:
         parser.error("--port must be between 0 and 65535")
 
+    from contextlib import ExitStack
+
+    from backend.chat_library import DEFAULT_DB_PATH
+    from backend.instance_lock import DataDirectoryInUse, exclusive_data_directory
+
+    # Acquire before socket binding, token rotation, or create_app()
+    # initialization. A refused second instance must not invalidate the
+    # FIRST process's still-live read-only MCP capability token.
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(exclusive_data_directory(
+                args.chat_db if args.chat_db is not None else DEFAULT_DB_PATH
+            ))
+        except (DataDirectoryInUse, OSError) as exc:
+            sys.stderr.write(f"Graphlink headless cannot start: {exc}\\n")
+            return 1
+        return _run_headless_owned(args)
+
+
+def _run_headless_owned(args: argparse.Namespace) -> int:
     import uvicorn
     from backend.app import create_app
 
