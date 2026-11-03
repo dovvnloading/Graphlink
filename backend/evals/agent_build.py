@@ -199,14 +199,13 @@ async def _execute(fixture: EvalFixture) -> dict:
     plan = document.add_plan_node(
         0, 0, str(data.get("goal") or ""), mode=str(data.get("mode", "autopilot")),
     )
-    state = plan.state
-    if not isinstance(state, PlanState):
+    if not isinstance(plan.state, PlanState):
         raise EvalScriptError("add_plan_node returned a node without PlanState")
-    state.plan_steps = [
+    plan.state.plan_steps = [
         {"id": f"s{i + 1}", "title": title, "status": "pending", "detail": ""}
         for i, title in enumerate(data["steps"])
     ]
-    state.builder_status = "awaiting_start"
+    plan.state.builder_status = "awaiting_start"
     approvals: list[str] = []
     statuses: list[str] = []
 
@@ -214,11 +213,11 @@ async def _execute(fixture: EvalFixture) -> dict:
         if not isinstance(run, dict):
             raise EvalScriptError("every run must be an object")
         if "max_steps" in run:
-            state.builder_max_steps = int(run["max_steps"])
+            plan.state.builder_max_steps = int(run["max_steps"])
         if "max_tokens" in run:
-            state.builder_max_tokens = int(run["max_tokens"])
+            plan.state.builder_max_tokens = int(run["max_tokens"])
         if "max_wall_seconds" in run:
-            state.builder_max_wall_seconds = int(run["max_wall_seconds"])
+            plan.state.builder_max_wall_seconds = int(run["max_wall_seconds"])
         script = _ScriptedTurns(run.get("turns"))
         decisions = run.get("approvals", [])
         if not isinstance(decisions, list):
@@ -227,7 +226,9 @@ async def _execute(fixture: EvalFixture) -> dict:
         # restored before any other eval fixture or caller can use a provider.
         with mock.patch.object(api_provider, "chat_turn_with_tools", side_effect=script.respond):
             await _drive_run(document, dispatcher, registry, plan, script, decisions, approvals)
-        statuses.append(state.builder_status)
+        if not isinstance(plan.state, PlanState):
+            raise EvalScriptError("Builder plan state changed unexpectedly")
+        statuses.append(plan.state.builder_status)
 
     return _snapshot(document, plan, approvals, statuses)
 
