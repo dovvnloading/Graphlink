@@ -15,7 +15,9 @@ same-store test and fail on the machine that matters.
 from __future__ import annotations
 
 import json
+import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -54,6 +56,74 @@ def test_putting_the_same_bytes_twice_stores_once_and_returns_one_ref(tmp_path):
     second = store.put(PNG)
     assert first == second == content_ref(PNG)
     assert store.get(first) == PNG
+
+
+def test_concurrent_puts_of_the_same_image_do_not_collide(tmp_path, monkeypatch):
+    """Two independent saves of one image must both commit successfully.
+
+    A barrier inside os.replace keeps the first writer from completing
+    until both have staged their data. With the old shared "<hash>.tmp"
+    filename, one rename succeeds and the other raises FileNotFoundError;
+    independent temporary names make both writes safe and idempotent.
+    """
+    from backend import asset_store as asset_store_module
+
+    root = tmp_path / "assets"
+    stores = [AssetStore(root), AssetStore(root)]
+    at_replace = threading.Barrier(2)
+    real_replace = asset_store_module.os.replace
+
+    def synchronize_replaces(source, destination):
+        at_replace.wait(timeout=10)
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(asset_store_module.os, "replace", synchronize_replaces)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        futures = [workers.submit(store.put, PNG) for store in stores]
+        refs = [future.result(timeout=15) for future in futures]
+
+    ref = content_ref(PNG)
+    assert refs == [ref, ref]
+    assert stores[0].get(ref) == PNG
+    assert [path.name for path in (root / ref[:2]).iterdir()] == [ref]
+
+
+@pytest.mark.parametrize(
+    ("peer_bytes", "should_succeed"),
+    [(PNG, True), (b"wrong image bytes", False), (None, False)],
+)
+def test_windows_replace_denial_only_succeeds_for_identical_committed_asset(
+    tmp_path, monkeypatch, peer_bytes, should_succeed,
+):
+    """Simulate the losing Windows writer after passing the is_file check.
+
+    A second concurrent os.replace can fail with WinError 5 when another
+    writer already installed the same digest. Only matching FINAL bytes
+    justify treating that failure as a completed idempotent save; a
+    different/missing target must still report the original error.
+    """
+    from backend import asset_store as asset_store_module
+
+    store = AssetStore(tmp_path / "assets")
+    ref = content_ref(PNG)
+    target = tmp_path / "assets" / ref[:2] / ref
+
+    def replaced_by_peer(source, destination):
+        assert destination == target
+        if peer_bytes is not None:
+            target.write_bytes(peer_bytes)
+        raise PermissionError("simulated WinError 5 during concurrent os.replace")
+
+    monkeypatch.setattr(asset_store_module.os, "replace", replaced_by_peer)
+    if should_succeed:
+        assert store.put(PNG) == ref
+        assert store.get(ref) == PNG
+    else:
+        with pytest.raises(PermissionError, match="WinError 5"):
+            store.put(PNG)
+        assert store.get(ref) == peer_bytes
+
+    assert list(target.parent.glob("*.tmp")) == []
 
 
 def test_a_ref_the_store_has_never_seen_reads_as_missing_not_an_error(tmp_path):

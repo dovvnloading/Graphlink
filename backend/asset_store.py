@@ -13,12 +13,15 @@ deduplicate for free, a re-save of unchanged bytes is a no-op rather than
 a rewrite, and a corrupted file is detectable by rehashing rather than
 being silently served as if it were fine.
 
-WRITES ARE ATOMIC AND IDEMPOTENT. put() writes to a temp name and
+WRITES ARE ATOMIC AND IDEMPOTENT. put() writes to a UNIQUE temp name and
 os.replace()s into place, so a crash mid-write can only ever leave a temp
 file, never a truncated file wearing a real ref's name that a later read
-would trust. If the target already exists, put() returns immediately
-without rewriting - by construction the existing file already has exactly
-the content being stored, since its name is that content's hash.
+would trust. Unique temp names also let two concurrent saves of the same
+image finish safely instead of colliding on one shared .tmp file.
+Windows may still deny two simultaneous replacements of the SAME target;
+a losing writer accepts that denial only if the winner's final bytes exactly
+match its own. If the target already exists before this write, put() returns
+immediately without rewriting - by construction its name is the bytes' hash.
 
 NOTHING IS EVER DELETED HERE. Garbage collection of unreferenced assets is
 deliberately out of scope: an asset is cheap to keep and catastrophic to
@@ -38,6 +41,7 @@ import hashlib
 import re
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -142,20 +146,47 @@ class AssetStore:
             return ref
 
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(target.name + ".tmp")
+        tmp: Path | None = None
         try:
-            fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "wb") as handle:
+            # Multiple saves can persist the same image simultaneously.
+            # A shared "<hash>.tmp" gets truncated by the second writer;
+            # the first rename then leaves the other writer with no source
+            # file (and can expose bytes before that writer has finished).
+            # Exclusive, per-write temp names avoid both races, while
+            # keeping the final os.replace atomic on the same filesystem.
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=f"{target.name}.",
+                suffix=".tmp",
+                dir=target.parent,
+                delete=False,
+            ) as handle:
+                tmp = Path(handle.name)
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp, target)
-        except BaseException:
             try:
-                tmp.unlink(missing_ok=True)
+                os.replace(tmp, target)
             except OSError:
-                pass
-            raise
+                # On Windows a simultaneous writer can win the rename while
+                # this one gets WinError 5 (access denied) replacing the
+                # destination. This write is still complete IF the winning
+                # asset is byte-for-byte identical. Never hide a genuine
+                # permissions failure or accept a different/corrupt file.
+                try:
+                    already_stored = target.read_bytes() == data
+                except OSError:
+                    already_stored = False
+                if not already_stored:
+                    raise
+        finally:
+            # Also discard our staged file when another writer won. A
+            # successful os.replace has already moved it out of the way.
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
         try:
             os.chmod(target, 0o600)
         except OSError:
