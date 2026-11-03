@@ -126,9 +126,10 @@ class ControlHttpClient:
             with self._opener.open(request, timeout=10) as response:
                 raw = response.read(MAX_RESPONSE_BYTES + 1)
         except urllib.error.HTTPError as exc:
-            if exc.code == 401:
+            status = exc.getcode()
+            if status == 401:
                 raise ControlError("Graphlink rejected the control token (401). Restart the MCP adapter.") from exc
-            raise ControlError(f"Graphlink control endpoint returned HTTP {exc.code}.") from exc
+            raise ControlError(f"Graphlink control endpoint returned HTTP {status}.") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise ControlError("Graphlink headless is unavailable on 127.0.0.1; start its backend first.") from exc
         if len(raw) > MAX_RESPONSE_BYTES:
