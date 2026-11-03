@@ -68,6 +68,15 @@ def test_revision_binds_to_scene_lifetime_even_when_canvas_contents_match():
     assert scene_revision(restarted_scene) != first_revision
 
 
+def test_new_chat_clear_invalidates_revision_even_if_scene_is_equally_empty():
+    document = SceneDocument()
+    before = scene_revision(document)
+    original_payload = document.scene_payload()
+    document.clear_for_load()
+    assert document.scene_payload() == original_payload
+    assert scene_revision(document) != before
+
+
 def test_writes_off_by_default_and_bad_token_configuration_fails_closed(tmp_path):
     app = create_app(
         auth_token=ADMIN, control_read_token=READ,
