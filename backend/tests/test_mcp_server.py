@@ -177,6 +177,51 @@ def test_headless_token_file_refuses_symlinks(tmp_path):
     assert real.read_text() == "original"
 
 
+def test_headless_launcher_publishes_only_read_capability(tmp_path, monkeypatch):
+    """The actual launcher must not publish its WebSocket/admin token."""
+    import backend.headless as headless
+    import backend.app as app_module
+    import uvicorn
+
+    token_file = tmp_path / "published.token"
+    tokens = iter(("backend-admin-secret", "mcp-read-only-secret"))
+    observed = {}
+
+    class Listener:
+        def getsockname(self):
+            return ("127.0.0.1", 8765)
+
+        def close(self):
+            observed["socket_closed"] = True
+
+    listener = Listener()
+
+    def capture_app(**kwargs):
+        observed["config"] = kwargs
+        return object()
+
+    class Server:
+        def __init__(self, config):
+            observed["uvicorn_config"] = config
+
+        def run(self, *, sockets):
+            assert sockets == [listener]
+            observed["file_during_run"] = token_file.read_text(encoding="utf-8").strip()
+
+    monkeypatch.setattr(headless, "mint_token", lambda: next(tokens))
+    monkeypatch.setattr(headless, "_bind_listener", lambda port: listener)
+    monkeypatch.setattr(app_module, "create_app", capture_app)
+    monkeypatch.setattr(uvicorn, "Config", lambda app, **kwargs: app)
+    monkeypatch.setattr(uvicorn, "Server", Server)
+
+    assert headless.main(["--port", "8765", "--token-file", str(token_file)]) == 0
+    assert observed["config"]["auth_token"] == "backend-admin-secret"
+    assert observed["config"]["control_read_token"] == "mcp-read-only-secret"
+    assert observed["file_during_run"] == "mcp-read-only-secret"
+    assert not token_file.exists(), "launcher should clean its own file on normal exit"
+    assert observed["socket_closed"] is True
+
+
 def test_real_fastapi_backend_is_reachable_from_separate_stdio_mcp_process(tmp_path):
     """Subprocess MCP -> authenticated local HTTP -> real Graphlink database.
 
@@ -251,6 +296,30 @@ def test_real_fastapi_backend_is_reachable_from_separate_stdio_mcp_process(tmp_p
         assert graph["graph"]["id"] == saved_id
         assert graph["nodes"][0]["excerpt"] == "hello from real db"
         assert graph["source"] == "saved"
+
+        # Test against Graphlink's REAL legacy MCP stdio client as well,
+        # not only the hand-authored JSON-RPC fixture above. This catches
+        # handshake and tool-schema drift between our two implementations.
+        from backend.mcp_client import McpStdioClient
+
+        client = McpStdioClient(
+            command=sys.executable,
+            args=(
+                "-m", "backend.mcp_server", "--url", f"http://127.0.0.1:{port}",
+                "--token-file", str(token_file),
+            ),
+            cwd=str(Path(__file__).resolve().parents[2]),
+            timeout=10,
+        )
+        try:
+            client.connect()
+            specs = client.list_tools()
+            assert any(spec.name == "graphlink_list_workspaces" for spec in specs)
+            result = client.call_tool("graphlink_get_graph", {"graph_id": saved_id})
+            assert result.is_error is False
+            assert "MCP saved graph" in result.content
+        finally:
+            client.close()
     finally:
         server.should_exit = True
         thread.join(timeout=5)
