@@ -143,6 +143,77 @@ def test_verify_rejects_bytes_that_no_longer_match_their_own_name(tmp_path):
     assert store.verify(ref) is False
 
 
+def test_put_repairs_an_existing_corrupted_asset(tmp_path):
+    store = AssetStore(tmp_path / "assets")
+    ref = store.put(PNG)
+    target = tmp_path / "assets" / ref[:2] / ref
+    target.write_bytes(b"corrupted after first save")
+
+    assert store.verify(ref) is False
+    assert store.put(PNG) == ref
+    assert store.verify(ref) is True
+    assert target.read_bytes() == PNG
+    assert sorted(p.name for p in target.parent.iterdir()) == [ref]
+
+
+def test_put_still_skips_rewriting_an_intact_asset(tmp_path, monkeypatch):
+    from backend import asset_store as asset_store_module
+
+    store = AssetStore(tmp_path / "assets")
+    ref = store.put(PNG)
+
+    def unexpected_replace(*_args):
+        raise AssertionError("an intact content-addressed asset must not be rewritten")
+
+    monkeypatch.setattr(asset_store_module.os, "replace", unexpected_replace)
+    assert store.put(PNG) == ref
+
+
+def test_failed_corrupt_asset_repair_raises_and_cleans_up(tmp_path, monkeypatch):
+    from backend import asset_store as asset_store_module
+
+    store = AssetStore(tmp_path / "assets")
+    ref = store.put(PNG)
+    target = tmp_path / "assets" / ref[:2] / ref
+    corrupted = b"corrupted after first save"
+    target.write_bytes(corrupted)
+    calls = []
+
+    def deny_replace(source, destination):
+        calls.append((source, destination))
+        raise PermissionError("simulated Windows rename denial")
+
+    monkeypatch.setattr(asset_store_module.os, "replace", deny_replace)
+    with pytest.raises(PermissionError, match="Windows rename denial"):
+        store.put(PNG)
+
+    assert len(calls) == 1, "corrupted file must reach the atomic repair path"
+    assert target.read_bytes() == corrupted, "failed repair must not partially overwrite the existing file"
+    assert not list(target.parent.glob("*.tmp")), "failed repair left temporary files behind"
+
+
+def test_import_repairs_a_corrupt_asset_already_in_target_store(tmp_path):
+    source_store = AssetStore(tmp_path / "source-assets")
+    ref = source_store.put(PNG)
+    archive_path = tmp_path / "images.graphlink"
+    export_archive(
+        archive_path,
+        [_chat(data={"nodes": [{"node_type": "image", "asset_ref": ref, "mime_type": "image/png"}]})],
+        live_assets=source_store,
+    )
+
+    target_store = AssetStore(tmp_path / "target-assets")
+    assert target_store.put(PNG) == ref
+    target_path = tmp_path / "target-assets" / ref[:2] / ref
+    target_path.write_bytes(b"corrupted after import")
+    assert target_store.verify(ref) is False
+
+    imported = import_archive(archive_path, target_assets=target_store)
+    assert len(imported) == 1
+    assert target_store.verify(ref) is True
+    assert target_store.get(ref) == PNG
+
+
 # -- export: round-trip ------------------------------------------------------
 
 
