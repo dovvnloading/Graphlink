@@ -188,6 +188,159 @@ def test_http_adapter_surfaces_safe_client_errors_but_hides_server_details(statu
     assert ("Unknown node: expected-id" in str(exc.value)) is included
 
 
+def test_mcp_writes_are_hidden_unless_adapter_explicitly_receives_a_write_token():
+    default = StdioMcpServer(StubControl())
+    default.handle(request(1, "initialize", {"protocolVersion": "2025-11-25"}))
+    assert len(default.handle(request(2, "tools/list"))["result"]["tools"]) == 5
+    assert default.handle(request(3, "tools/call", {
+        "name": "graphlink_create_node", "arguments": {},
+    }))["error"]["code"] == -32602
+
+    class WriteControl(StubControl):
+        can_write = True
+
+        def write(self, path, payload):
+            return {"path": path, "payload": payload}
+
+    enabled = StdioMcpServer(WriteControl())
+    enabled.handle(request(1, "initialize", {"protocolVersion": "2025-11-25"}))
+    listed = enabled.handle(request(2, "tools/list"))["result"]["tools"]
+    assert len(listed) == 9
+    names = {entry["name"] for entry in listed}
+    assert names - {"graphlink_list_workspaces", "graphlink_list_graphs",
+                    "graphlink_get_graph", "graphlink_list_nodes",
+                    "graphlink_read_subgraph"} == {
+        "graphlink_create_node", "graphlink_connect_nodes",
+        "graphlink_set_node_content", "graphlink_save_graph",
+    }
+    assert all(not entry["annotations"]["readOnlyHint"] for entry in listed[5:])
+
+    revision = "a" * 64
+    call = enabled.handle(request(3, "tools/call", {
+        "name": "graphlink_create_node",
+        "arguments": {
+            "operation_id": "mcp-create-0001", "expected_revision": revision,
+            "kind": "chat", "content": "evidence", "is_user": True,
+        },
+    }))
+    assert call["result"]["isError"] is False
+    assert call["result"]["structuredContent"] == {
+        "path": "/api/control/scene/mutate",
+        "payload": {
+            "operation_id": "mcp-create-0001", "expected_revision": revision,
+            "operation": "create_node",
+            "arguments": {"kind": "chat", "content": "evidence", "is_user": True},
+        },
+    }
+    saved = enabled.handle(request(4, "tools/call", {
+        "name": "graphlink_save_graph",
+        "arguments": {"operation_id": "mcp-save-0001", "expected_revision": revision},
+    }))
+    assert saved["result"]["structuredContent"]["path"] == "/api/control/scene/save"
+    assert saved["result"]["structuredContent"]["payload"] == {
+        "operation_id": "mcp-save-0001", "expected_revision": revision,
+    }
+    invalid = enabled.handle(request(5, "tools/call", {
+        "name": "graphlink_save_graph",
+        "arguments": {"operation_id": "bad", "expected_revision": "not-a-hash"},
+    }))
+    assert invalid["error"]["code"] == -32602
+
+
+def test_mcp_write_http_uses_only_the_write_credential():
+    client = ControlHttpClient(
+        "http://127.0.0.1:8765", "read-credential", write_token="write-credential",
+    )
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, count):
+            return b'{"saved":true}'
+
+    class Opener:
+        def open(self, req, *, timeout):
+            calls.append((req.get_method(), req.get_header("Authorization"), req.full_url))
+            assert req.get_header("Content-type") == "application/json"
+            return Response()
+
+    client._opener = Opener()
+    result = client.write("/api/control/scene/save", {
+        "operation_id": "test-write-0001", "expected_revision": "a" * 64,
+    })
+    assert result["saved"] is True
+    assert calls == [("POST", "Bearer write-credential", "http://127.0.0.1:8765/api/control/scene/save")]
+    assert "read-credential" not in str(calls)
+    with pytest.raises(ControlError, match="allowlisted"):
+        client.write("/api/health", {})
+
+
+def test_headless_write_mode_is_opt_in_and_cleans_both_token_files(tmp_path, monkeypatch):
+    import backend.headless as headless
+    import backend.app as app_module
+    import uvicorn
+
+    token_file = tmp_path / "read.token"
+    write_file = tmp_path / "write.token"
+    minted = iter(("private-backend-admin", "read-only-credential", "write-only-credential"))
+    seen = {}
+
+    class Listener:
+        def getsockname(self):
+            return ("127.0.0.1", 8765)
+
+        def close(self):
+            seen["closed"] = True
+
+    class Server:
+        def __init__(self, config):
+            pass
+
+        def run(self, *, sockets):
+            seen["read_file"] = token_file.read_text(encoding="utf-8").strip()
+            seen["write_file"] = write_file.read_text(encoding="utf-8").strip()
+
+    def fake_create_app(**kwargs):
+        seen["app_kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(headless, "mint_token", lambda: next(minted))
+    monkeypatch.setattr(headless, "_bind_listener", lambda port: Listener())
+    monkeypatch.setattr(app_module, "create_app", fake_create_app)
+    monkeypatch.setattr(uvicorn, "Server", Server)
+    monkeypatch.setattr(uvicorn, "Config", lambda app, **kwargs: app)
+    assert headless.main([
+        "--port", "8765", "--chat-db", str(tmp_path / "chats.db"),
+        "--token-file", str(token_file), "--write-token-file", str(write_file),
+        "--allow-mcp-writes",
+    ]) == 0
+    assert seen["app_kwargs"]["auth_token"] == "private-backend-admin"
+    assert seen["app_kwargs"]["control_read_token"] == "read-only-credential"
+    assert seen["app_kwargs"]["control_write_token"] == "write-only-credential"
+    assert seen["read_file"] == "read-only-credential"
+    assert seen["write_file"] == "write-only-credential"
+    assert seen["closed"] is True
+    assert not token_file.exists() and not write_file.exists()
+
+
+def test_headless_rejects_identical_read_write_token_file_paths(tmp_path):
+    import backend.headless as headless
+
+    path = tmp_path / "same-token"
+    with pytest.raises(SystemExit):
+        headless.main([
+            "--port", "0", "--chat-db", str(tmp_path / "chats.db"),
+            "--token-file", str(path), "--write-token-file", str(path),
+            "--allow-mcp-writes",
+        ])
+    assert not path.exists()
+
+
 @pytest.mark.posix_permissions
 def test_headless_token_file_is_private_on_posix(tmp_path):
     if os.name == "nt":

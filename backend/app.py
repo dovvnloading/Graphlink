@@ -406,6 +406,7 @@ def create_app(
     auth_token: str | None = None,
     restrict_sessions: bool = True,
     control_read_token: str | None = None,
+    control_write_token: str | None = None,
 ) -> FastAPI:
     app = FastAPI(title="Graphlink backend", version=BACKEND_VERSION)
     # ADR-004 stage 4.1: the per-launch capability token gating /api/* and
@@ -423,6 +424,13 @@ def create_app(
             raise ValueError("a read-only control token requires an authenticated backend")
         if token_matches(resolved_auth_token, control_read_token):
             raise ValueError("the read-only control token must differ from the backend token")
+    if control_write_token is not None:
+        if (not control_write_token or resolved_auth_token is None
+                or control_read_token is None):
+            raise ValueError("MCP write token requires an authenticated backend and read token")
+        if (token_matches(resolved_auth_token, control_write_token)
+                or token_matches(control_read_token, control_write_token)):
+            raise ValueError("MCP write token must differ from admin and read tokens")
     app.state.auth_token = resolved_auth_token
     if resolved_auth_token is None:
         logger.warning(
@@ -478,6 +486,7 @@ def create_app(
     )
     app.state.bus = bus
     from backend.control import is_readonly_control_request
+    from backend.control_writes import is_write_control_request
 
     @app.middleware("http")
     async def require_capability_token(request: Request, call_next):
@@ -515,7 +524,15 @@ def create_app(
                     extract_presented_token(request.headers.get(AUTH_HEADER), None),
                 )
             )
-            if not full_access and not limited_access:
+            write_access = (
+                control_write_token is not None
+                and is_write_control_request(request.method, request.url.path)
+                and token_matches(
+                    control_write_token,
+                    extract_presented_token(request.headers.get(AUTH_HEADER), None),
+                )
+            )
+            if not full_access and not limited_access and not write_access:
                 # Uniform 401 for missing, malformed or over-scoped tokens.
                 logger.warning("rejected unauthenticated request: %s", request.url.path)
                 return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -610,6 +627,10 @@ def create_app(
     from backend.control import register_control_api
 
     register_control_api(app, bus, chat_db_path if chat_db_path is not None else DEFAULT_DB_PATH)
+    if control_write_token is not None:
+        from backend.control_writes import register_control_write_api
+
+        register_control_write_api(app, bus)
 
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket) -> None:

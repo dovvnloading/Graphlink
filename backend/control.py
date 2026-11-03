@@ -24,6 +24,7 @@ from backend.providers.base import ToolCall
 from backend.session_context import get_session_context
 from backend.tools import GRAPH_READ, RunContext
 from backend.tools_graph import make_list_nodes_handler, make_read_subgraph_handler
+from backend.control_writes import scene_revision
 
 DEFAULT_CONTROL_PORT = 8765
 DEFAULT_TOKEN_FILE = Path.home() / ".graphlink" / "headless.token"
@@ -147,7 +148,7 @@ def register_control_api(app: FastAPI, bus: EventBus, db_path: Path) -> None:
             make_list_nodes_handler(document), "graph.list_nodes",
             {"kind": kind, "query": query, "offset": offset},
         )
-        return {"source": "live", **output}
+        return {"source": "live", **output, "revision": scene_revision(document)}
 
     @app.get("/api/control/scene/subgraph")
     async def read_scene_subgraph(
