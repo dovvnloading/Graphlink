@@ -81,11 +81,11 @@ def main(argv: list[str] | None = None) -> int:
             settings_state_file=args.settings_file,
         )
         port = listener.getsockname()[1]
-        print(
+        sys.stderr.write(
             f"Graphlink headless listening on http://127.0.0.1:{port} "
-            f"(bearer token in {token_file})",
-            file=sys.stderr, flush=True,
+            f"(bearer token in {token_file})\n"
         )
+        sys.stderr.flush()
         server = uvicorn.Server(uvicorn.Config(
             app, host="127.0.0.1", port=port, log_level="warning",
         ))
