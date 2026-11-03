@@ -62,10 +62,10 @@ def _node_reference(value: Any, messages: list[dict]) -> Any:
 
 
 class _ScriptedTurns:
-    def __init__(self, turns: list[dict]) -> None:
+    def __init__(self, turns: Any) -> None:
         if not isinstance(turns, list):
             raise EvalScriptError("runs[].turns must be a list")
-        self.turns = turns
+        self.turns: list[dict] = turns
         self.cursor = 0
         self.fault: str | None = None
 
