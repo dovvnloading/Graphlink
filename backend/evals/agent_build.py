@@ -19,6 +19,7 @@ from typing import Any
 import api_provider
 from backend.builder import register_builder_control_tools, run_build
 from backend.domain.graph import SceneDocument
+from backend.domain.node_states import PlanState
 from backend.evals.fixtures import EvalFixture
 from backend.providers.base import ToolCall
 from backend.run_lifecycle import RunRegistry
@@ -198,6 +199,8 @@ async def _execute(fixture: EvalFixture) -> dict:
     plan = document.add_plan_node(
         0, 0, str(data.get("goal") or ""), mode=str(data.get("mode", "autopilot")),
     )
+    if not isinstance(plan.state, PlanState):
+        raise EvalScriptError("add_plan_node returned a node without PlanState")
     plan.state.plan_steps = [
         {"id": f"s{i + 1}", "title": title, "status": "pending", "detail": ""}
         for i, title in enumerate(data["steps"])
