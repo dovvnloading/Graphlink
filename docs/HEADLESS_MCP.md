@@ -50,8 +50,10 @@ crashes; the file itself is intentionally retained so two processes can
 never accidentally lock different replacement files. Graphs and assets
 using separate database filenames **inside the same directory** still share
 one lock. The MCP adapter never starts a second backend. If running truly
-independent instances using different database directories, use separate
-`--settings-file` locations as well to avoid sharing application settings.
+independent instances using different database directories, use
+**different `--port`, `--token-file`, and `--settings-file` values too**.
+Otherwise the instances may overwrite each other's default MCP token file
+or share settings state even though their chat databases are independent.
 
 ## Configure a local MCP client
 
