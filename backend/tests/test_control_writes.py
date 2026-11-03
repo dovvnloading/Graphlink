@@ -16,6 +16,8 @@ from starlette.websockets import WebSocketDisconnect
 from backend.app import create_app
 from backend.chat_library import get_all_chats, load_chat_row
 from backend.session_context import get_session_context
+from backend.control_writes import scene_revision
+from backend.domain.graph import SceneDocument
 
 ADMIN = "test-full-admin-credential"
 READ = "test-mcp-readonly-credential"
@@ -53,6 +55,17 @@ def _edit(client: TestClient, revision: str, operation: str, args: dict, nonce: 
         "operation_id": nonce, "expected_revision": revision,
         "operation": operation, "arguments": args,
     })
+
+
+def test_revision_binds_to_scene_lifetime_even_when_canvas_contents_match():
+    # A restarted backend has an empty scene again; a pre-restart revision
+    # must NEVER match and allow the same create-node retry to execute.
+    first_process_scene = SceneDocument()
+    restarted_scene = SceneDocument()
+    assert first_process_scene.scene_payload() == restarted_scene.scene_payload()
+    first_revision = scene_revision(first_process_scene)
+    assert scene_revision(first_process_scene) == first_revision
+    assert scene_revision(restarted_scene) != first_revision
 
 
 def test_writes_off_by_default_and_bad_token_configuration_fails_closed(tmp_path):
