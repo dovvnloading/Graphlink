@@ -16,6 +16,7 @@ import pytest
 from backend.headless import _bind_listener, _write_token_file
 from backend.mcp_server import (
     MODERN_VERSION,
+    MAX_INPUT_LINE,
     ControlError,
     ControlHttpClient,
     StdioMcpServer,
@@ -152,6 +153,39 @@ def test_mcp_stdio_recovers_after_invalid_or_oversized_input():
     results = [json.loads(line) for line in sink.getvalue().splitlines()]
     assert [r["error"]["code"] for r in results[:2]] == [-32700, -32700]
     assert results[2]["result"]["protocolVersion"] == "2025-11-25"
+
+
+def test_stdio_rejects_a_complete_line_one_byte_over_the_cap():
+    # Previously the cap was checked only if the oversized chunk lacked
+    # a newline. A complete MAX_INPUT_LINE+1 line slipped through.
+    message = json.dumps(request(1, "initialize", {"protocolVersion": "2024-11-05"}))
+    oversized = message + " " * (MAX_INPUT_LINE - len(message)) + "\n"
+    assert len(oversized) == MAX_INPUT_LINE + 1
+    sink = io.StringIO()
+    serve(StubControl(), io.StringIO(oversized + message + "\n"), sink)
+    responses = [json.loads(line) for line in sink.getvalue().splitlines()]
+    assert responses[0]["error"]["code"] == -32700
+    assert responses[1]["result"]["protocolVersion"] == "2024-11-05"
+
+
+@pytest.mark.parametrize(("status", "included"), [(400, True), (404, True), (500, False)])
+def test_http_adapter_surfaces_safe_client_errors_but_hides_server_details(status, included):
+    import urllib.error
+
+    client = ControlHttpClient("http://127.0.0.1:8765", "read-only-token")
+
+    class StubOpener:
+        def open(self, request, *, timeout):
+            raise urllib.error.HTTPError(
+                request.full_url, status, "error", {},
+                io.BytesIO(b'{"detail":"Unknown node: expected-id"}'),
+            )
+
+    client._opener = StubOpener()
+    with pytest.raises(ControlError) as exc:
+        client.read("/api/control/scene/subgraph", {"root_id": "expected-id"})
+    assert "HTTP " + str(status) in str(exc.value)
+    assert ("Unknown node: expected-id" in str(exc.value)) is included
 
 
 @pytest.mark.posix_permissions
