@@ -194,7 +194,9 @@ Graphlink can run its backend without a desktop window and expose
 server. The MCP adapter uses a limited, **read-only** capability token
 which cannot authorize WebSocket intents or other backend API actions. It
 connects to the same backend rather than opening a second copy of the
-application or database.
+application or database. Both the desktop and headless launchers now
+refuse a second process using the same data directory, even on different
+TCP ports.
 See [Headless Graphlink and MCP setup](docs/HEADLESS_MCP.md) for the CLI,
 client configuration, permissions and current limitations.
 

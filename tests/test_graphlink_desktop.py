@@ -164,6 +164,18 @@ def desktop_harness(tmp_path, monkeypatch):
     """Wires every external dependency main() touches to a controllable
     fake and returns a namespace the test can both configure (webview
     behavior, env var) and assert against (recorded calls)."""
+    # The new real launcher takes its OS lock before any of the fake
+    # dependencies below run. Keep boot integration tests isolated from
+    # the developer's ~/.graphlink directory; lock behavior has dedicated
+    # subprocess coverage in backend/tests/test_instance_lock.py.
+    from contextlib import nullcontext
+
+    from backend import instance_lock as instance_lock_module
+
+    monkeypatch.setattr(
+        instance_lock_module, "exclusive_data_directory", lambda _db: nullcontext()
+    )
+
     state = SimpleNamespace(
         mark_running_calls=0,
         mark_clean_exit_calls=0,
@@ -290,6 +302,43 @@ def desktop_harness(tmp_path, monkeypatch):
     state.fake_server = fake_server
     state.fake_thread = fake_thread
     return state
+
+
+def test_main_refuses_second_owner_before_crash_sentinel_or_socket(desktop_harness, monkeypatch):
+    from backend import instance_lock as instance_lock_module
+
+    def deny_second_instance(_db):
+        raise instance_lock_module.DataDirectoryInUse("another backend holds this directory")
+
+    monkeypatch.setattr(instance_lock_module, "exclusive_data_directory", deny_second_instance)
+    assert graphlink_desktop.main() == 1
+    assert desktop_harness.mark_running_calls == 0
+    assert desktop_harness.mark_clean_exit_calls == 0
+    assert desktop_harness.sweep_scratch_calls == 0
+    assert desktop_harness.bind_listener_requests == []
+    assert desktop_harness.webview_create_window_calls == []
+
+
+def test_main_releases_ownership_even_if_window_start_fails(desktop_harness, monkeypatch):
+    from contextlib import contextmanager
+
+    from backend import instance_lock as instance_lock_module
+
+    events = []
+
+    @contextmanager
+    def owned(_db):
+        events.append("acquired")
+        try:
+            yield
+        finally:
+            events.append("released")
+
+    monkeypatch.setattr(instance_lock_module, "exclusive_data_directory", owned)
+    desktop_harness.webview_start_side_effect = RuntimeError("injected WebView2 failure")
+    assert graphlink_desktop.main() == 1
+    assert events == ["acquired", "released"]
+    assert desktop_harness.mark_clean_exit_calls == 1
 
 
 def test_main_returns_1_when_spa_build_is_missing(desktop_harness, tmp_path, monkeypatch):

@@ -171,7 +171,7 @@ def _shutdown_backend(server: uvicorn.Server, thread: threading.Thread) -> None:
     thread.join(timeout=5.0)
 
 
-def main() -> int:
+def _run_desktop_main() -> int:
     # R6.7 (Qt-removal plan): real rotating-file logging plus unhandled-
     # exception/native-crash capture, replacing the old bare stderr-only
     # basicConfig call - see backend/crash_recovery.py's own docstring for
@@ -318,6 +318,27 @@ def main() -> int:
         _shutdown_backend(server, backend_thread)
         mark_clean_exit()
     return 0
+
+
+def main() -> int:
+    """Own the data directory BEFORE reading settings or marking running.
+
+    This wraps the unchanged desktop bootstrap. A denied second launch must
+    not overwrite running.lock, migrate credentials, start autosave, or
+    reach the listener; the lock remains held until the UI/backend exits.
+    """
+    from contextlib import ExitStack
+
+    from backend.chat_library import DEFAULT_DB_PATH
+    from backend.instance_lock import DataDirectoryInUse, exclusive_data_directory
+
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(exclusive_data_directory(DEFAULT_DB_PATH))
+        except (DataDirectoryInUse, OSError) as exc:
+            logger.error("Graphlink cannot start: %s", exc)
+            return 1
+        return _run_desktop_main()
 
 
 if __name__ == "__main__":

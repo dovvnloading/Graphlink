@@ -248,12 +248,39 @@ def test_headless_launcher_publishes_only_read_capability(tmp_path, monkeypatch)
     monkeypatch.setattr(uvicorn, "Config", lambda app, **kwargs: app)
     monkeypatch.setattr(uvicorn, "Server", Server)
 
-    assert headless.main(["--port", "8765", "--token-file", str(token_file)]) == 0
+    assert headless.main([
+        "--port", "8765", "--token-file", str(token_file),
+        "--chat-db", str(tmp_path / "chats.db"),
+    ]) == 0
     assert observed["config"]["auth_token"] == "backend-admin-secret"
     assert observed["config"]["control_read_token"] == "mcp-read-only-secret"
     assert observed["file_during_run"] == "mcp-read-only-secret"
     assert not token_file.exists(), "launcher should clean its own file on normal exit"
     assert observed["socket_closed"] is True
+
+
+def test_headless_refuses_busy_data_dir_without_rotating_existing_mcp_token(tmp_path, monkeypatch, capsys):
+    import backend.headless as headless
+    from backend.instance_lock import exclusive_data_directory
+
+    database = tmp_path / "data" / "chats.db"
+    token_file = tmp_path / "read-only.token"
+    token_file.write_text("the-first-instance-token", encoding="utf-8")
+
+    # The busy path must terminate BEFORE the new process binds a socket or
+    # replaces the first process's still-live read-only token file.
+    monkeypatch.setattr(
+        headless, "_bind_listener",
+        lambda _port: pytest.fail("busy data directory reached listener binding"),
+    )
+    with exclusive_data_directory(database):
+        status = headless.main([
+            "--port", "0", "--chat-db", str(database),
+            "--token-file", str(token_file),
+        ])
+        assert status == 1
+        assert token_file.read_text(encoding="utf-8") == "the-first-instance-token"
+        assert "already using" in capsys.readouterr().err
 
 
 def test_real_fastapi_backend_is_reachable_from_separate_stdio_mcp_process(tmp_path):
