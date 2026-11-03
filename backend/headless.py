@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.chat_db if args.chat_db is not None else DEFAULT_DB_PATH
             ))
         except (DataDirectoryInUse, OSError) as exc:
-            sys.stderr.write(f"Graphlink headless cannot start: {exc}\\n")
+            sys.stderr.write(f"Graphlink headless cannot start: {exc}\n")
             return 1
         return _run_headless_owned(args)
 
