@@ -213,7 +213,6 @@ def register_control_write_api(app: FastAPI, bus: EventBus) -> None:
                 "graph_id": document.current_chat_id,
                 "updated_at": session.chat_save_state.get("updated_at"),
                 "revision": scene_revision(document),
-                "pending_edits": False,
                 "replayed": False,
             }
             record(body.operation_id, fingerprint, response)
