@@ -111,7 +111,9 @@ class ControlHttpClient:
             raise ValueError("headless capability token is empty")
         self.base_url = f"http://127.0.0.1:{parsed.port}"
         self._token = token
-        self._opener = urllib.request.build_opener(_NoRedirect())
+        # Ignore HTTP(S)_PROXY for localhost: even a misconfigured
+        # environment must not send this capability token to a proxy.
+        self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
 
     def read(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         url = self.base_url + path
