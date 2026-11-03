@@ -233,4 +233,12 @@ def register_control_write_api(app: FastAPI, bus: EventBus) -> None:
                 "replayed": False,
             }
             record(body.operation_id, fingerprint, response)
+            # Saving a brand-new graph changes hasSavedChat in the scene
+            # metadata. The existing saveChat intent publishes the library
+            # and notifications, but not the scene topic; publish it here
+            # so an attached UI sees the new saved identity immediately.
+            # The receipt precedes this await: if a transport publish fails
+            # after the DB commit, replaying this operation_id still reports
+            # the already-successful save instead of writing twice.
+            await session.publish("scene")
             return response
