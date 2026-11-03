@@ -1,9 +1,10 @@
-"""One OS-enforced owner for each Graphlink chat database.
+"""One OS-enforced owner for each Graphlink data directory.
 
 The desktop and headless launchers must not build independent in-memory
 SceneDocuments against the same chats.db: each process would have its own
 autosave state and optimistic-concurrency snapshot. A distinct TCP port does
-not make the database safe to share.
+not make the database safe to share. Locking by the canonical DB *directory*
+also covers separate chats.db paths whose adjacent asset store is shared.
 
 The guard locks a stable companion file (not chats.db itself: SQLite owns
 its own locking and WAL protocol) for the ENTIRE application lifetime.
@@ -31,9 +32,9 @@ class DataDirectoryInUse(RuntimeError):
 
 
 def lock_path_for(db_path: Path | str) -> Path:
-    """Canonicalize database aliases so the same DB maps to one lock file."""
+    """Canonicalize the DB parent shared by SQLite, assets, and backups."""
     path = Path(db_path).expanduser().resolve()
-    return path.with_name(path.name + ".instance.lock")
+    return path.parent / ".graphlink.instance.lock"
 
 
 def _try_lock(fd: int) -> None:
@@ -72,7 +73,7 @@ def _is_contention(exc: OSError) -> bool:
 
 @contextmanager
 def exclusive_data_directory(db_path: Path | str) -> Iterator[Path]:
-    """Claim the database for one running process or refuse immediately.
+    """Claim the data directory for one running process or refuse immediately.
 
     The caller must keep this context OPEN for the entire backend lifetime.
     Permission/filesystem errors fail closed; only real lock contention is
@@ -97,7 +98,7 @@ def exclusive_data_directory(db_path: Path | str) -> Iterator[Path]:
         except OSError as exc:
             if _is_contention(exc):
                 raise DataDirectoryInUse(
-                    f"another Graphlink process is already using {Path(db_path).expanduser()}; "
+                    f"another Graphlink process is already using {lock_path.parent}; "
                     "close it before starting this backend"
                 ) from exc
             raise
