@@ -163,6 +163,13 @@ def register_control_write_api(app: FastAPI, bus: EventBus) -> None:
             busy = session.chat_mutation_guard
             if busy and busy.get("active"):
                 raise HTTPException(status_code=409, detail="canvas load/save or autosave is in progress")
+            if body.operation == "set_node_content":
+                node = document.nodes.get(args["node_id"])
+                if node is not None and node.kind not in _ALLOWED_NODE_KINDS:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="MCP write scope cannot modify this node kind",
+                    )
             handlers = {
                 "create_node": make_create_node_handler,
                 "connect_nodes": make_connect_handler,
