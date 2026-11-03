@@ -217,7 +217,10 @@ class StdioMcpServer:
 
         if method == "initialize":
             requested = params.get("protocolVersion")
-            selected = requested if requested in LEGACY_VERSIONS else LATEST_LEGACY_VERSION
+            selected = (
+                requested if isinstance(requested, str) and requested in LEGACY_VERSIONS
+                else LATEST_LEGACY_VERSION
+            )
             self._legacy_initialized = True
             return {"jsonrpc": "2.0", "id": request_id, "result": {
                 "protocolVersion": selected, "capabilities": {"tools": {}},
