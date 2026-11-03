@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,23 @@ from backend.tools_graph import make_list_nodes_handler, make_read_subgraph_hand
 DEFAULT_CONTROL_PORT = 8765
 DEFAULT_TOKEN_FILE = Path.home() / ".graphlink" / "headless.token"
 _MAX_SAVED_EXCERPT = 500
+
+# Explicit allowlist: adding a control route must never implicitly grant
+# the file-backed MCP token access to that route.
+_READ_ONLY_STATIC_PATHS = frozenset({
+    "/api/control/workspaces",
+    "/api/control/graphs",
+    "/api/control/scene/nodes",
+    "/api/control/scene/subgraph",
+})
+_SAVED_GRAPH_PATH = re.compile(r"/api/control/graphs/[0-9]+\Z")
+
+
+def is_readonly_control_request(method: str, path: str) -> bool:
+    """True only for the five read-only MCP API route shapes."""
+    return method == "GET" and (
+        path in _READ_ONLY_STATIC_PATHS or _SAVED_GRAPH_PATH.fullmatch(path) is not None
+    )
 
 
 def _saved_node_summary(node: dict[str, Any]) -> dict[str, Any]:
