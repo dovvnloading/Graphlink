@@ -254,6 +254,17 @@ def test_expected_revision_blocks_duplicate_save_retries(backend):
     assert different_id.status_code == 409
 
 
+def test_write_scope_rejects_editing_html_or_other_executable_node_kinds(backend):
+    client, app, _ = backend
+    document = get_session_context(app.state.bus.session()).canvas_document
+    html = document.add_html_node(0, 0, "<p>original safe markup</p>")
+    result = _edit(client, _revision(client), "set_node_content", {
+        "node_id": html.id, "content": "<script>window.evil()</script>",
+    }, "no-executable-html-001")
+    assert result.status_code == 403
+    assert "window.evil" not in document.nodes[html.id].content
+
+
 def test_write_token_cannot_skip_permission_via_query_or_bad_method(backend):
     client, _, _ = backend
     rev = _revision(client)
