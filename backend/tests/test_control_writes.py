@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from backend.app import create_app
-from backend.chat_library import get_all_chats, load_chat_row, save_chat_atomically_row
+from backend.chat_library import get_all_chats, load_chat_row
 from backend.session_context import get_session_context
 
 ADMIN = "test-full-admin-credential"
