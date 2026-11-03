@@ -96,7 +96,8 @@ def test_write_token_is_scoped_to_only_two_post_routes(backend):
 
 def test_create_connect_update_and_guarded_save_round_trip(backend):
     client, app, db = backend
-    first = _edit(client, _revision(client), "create_node", {
+    observed = _revision(client)
+    first = _edit(client, observed, "create_node", {
         "kind": "chat", "content": "hypothesis A", "is_user": True,
     }, "create-hypothesis-A")
     assert first.status_code == 200, first.text
@@ -104,8 +105,7 @@ def test_create_connect_update_and_guarded_save_round_trip(backend):
     assert first.json()["saved"] is False
 
     # A lost HTTP response may be retried with the SAME request ID.
-    duplicate = _edit(client, _revision(client) if False else
-                      first.json()["revision"], "create_node", {
+    duplicate = _edit(client, first.json()["revision"], "create_node", {
         "kind": "chat", "content": "hypothesis A", "is_user": True,
     }, "create-hypothesis-A")
     # Different expected revision with the same ID is a conflict rather
