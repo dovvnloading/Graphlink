@@ -48,7 +48,9 @@ def _try_lock(fd: int) -> None:
     else:
         import fcntl
 
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Windows-targeted mypy stubs omit these POSIX-only APIs; this
+        # branch is unreachable on Windows at runtime.
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # type: ignore[attr-defined]
 
 
 def _unlock(fd: int) -> None:
@@ -60,7 +62,7 @@ def _unlock(fd: int) -> None:
     else:
         import fcntl
 
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        fcntl.flock(fd, fcntl.LOCK_UN)  # type: ignore[attr-defined]
 
 
 def _is_contention(exc: OSError) -> bool:
@@ -106,7 +108,7 @@ def exclusive_data_directory(db_path: Path | str) -> Iterator[Path]:
         if os.name != "nt":
             # A pre-existing stale file may have weak mode bits. Tighten
             # permissions only AFTER obtaining ownership of the inode.
-            os.fchmod(fd, 0o600)
+            os.fchmod(fd, 0o600)  # type: ignore[attr-defined]
         yield lock_path
     finally:
         if locked:
