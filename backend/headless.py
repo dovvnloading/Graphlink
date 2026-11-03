@@ -68,7 +68,9 @@ def main(argv: list[str] | None = None) -> int:
     import uvicorn
     from backend.app import create_app
 
-    token_file = args.token_file.expanduser().resolve()
+    # Preserve the final path component: resolving it here would follow a
+    # pre-existing symlink BEFORE _write_token_file can refuse it.
+    token_file = args.token_file.expanduser().absolute()
     listener = _bind_listener(args.port)
     token = mint_token()
     try:
