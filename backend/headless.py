@@ -1,8 +1,9 @@
 """Headless Graphlink: the existing FastAPI backend without a pywebview.
 
 Run python -m backend.headless (see docs/HEADLESS_MCP.md). It binds
-127.0.0.1 exclusively, mints a fresh capability token on every launch,
-writes that token to a restrictive local file for authorized MCP clients,
+127.0.0.1 exclusively, mints distinct full-access and read-only tokens on
+every launch, and writes ONLY the read-only token to a restrictive local
+file for authorized MCP clients,
 and runs the SAME create_app() as the desktop shell. There is no alternate
 SceneDocument, SQLite writer, or agent implementation here.
 """
@@ -72,18 +73,22 @@ def main(argv: list[str] | None = None) -> int:
     # pre-existing symlink BEFORE _write_token_file can refuse it.
     token_file = args.token_file.expanduser().absolute()
     listener = _bind_listener(args.port)
-    token = mint_token()
+    backend_token = mint_token()
+    control_read_token = mint_token()
     try:
-        _write_token_file(token_file, token)
+        # Never put the WebSocket/administrative credential on disk for
+        # external MCP clients. Possession of the file grants only reads.
+        _write_token_file(token_file, control_read_token)
         app = create_app(
-            auth_token=token,
+            auth_token=backend_token,
+            control_read_token=control_read_token,
             chat_db_path=args.chat_db,
             settings_state_file=args.settings_file,
         )
         port = listener.getsockname()[1]
         sys.stderr.write(
             f"Graphlink headless listening on http://127.0.0.1:{port} "
-            f"(bearer token in {token_file})\n"
+            f"(read-only token in {token_file})\n"
         )
         sys.stderr.flush()
         server = uvicorn.Server(uvicorn.Config(
@@ -94,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         listener.close()
         # Do not delete a newer process's token if somebody restarted it.
         try:
-            if not token_file.is_symlink() and token_file.read_text(encoding="utf-8").strip() == token:
+            if not token_file.is_symlink() and token_file.read_text(encoding="utf-8").strip() == control_read_token:
                 token_file.unlink(missing_ok=True)
         except OSError:
             pass
