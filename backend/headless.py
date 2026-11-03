@@ -21,20 +21,39 @@ from backend.auth import mint_token
 from backend.control import DEFAULT_CONTROL_PORT, DEFAULT_TOKEN_FILE
 
 
+def _private_staging(path: Path) -> tuple[int, str]:
+    """Create a secure staging file BEFORE writing any credential bytes.
+
+    Windows os.chmod does not set a file's DACL: the protected user-only
+    security descriptor must be applied at CreateFileW time instead of
+    inheriting permissions from a potentially public custom directory.
+    """
+    if os.name == "nt":
+        from backend.windows_token_file import create_private_windows_staging
+
+        return create_private_windows_staging(path)
+    return tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+
+
 def _write_token_file(path: Path, token: str) -> None:
-    """Publish a per-launch token atomically with 0600 POSIX file permissions."""
+    """Atomically publish a protected token file or fail closed."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.is_symlink():
         raise OSError(f"refusing token-file symlink: {path}")
-    fd, staging = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    fd, staging = _private_staging(path)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(token + "\n")
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(staging, 0o600)
+        if os.name != "nt":
+            os.chmod(staging, 0o600)
+        # Same-directory replacement retains the already-verified DACL of
+        # Windows staging files. No secret is ever written to an ordinary
+        # temporary file with inherited, possibly permissive ACLs.
         os.replace(staging, path)
-        os.chmod(path, 0o600)
+        if os.name != "nt":
+            os.chmod(path, 0o600)
     finally:
         try:
             Path(staging).unlink(missing_ok=True)
@@ -98,7 +117,11 @@ def _run_headless_owned(args: argparse.Namespace) -> int:
     try:
         # Never put the WebSocket/administrative credential on disk for
         # external MCP clients. Possession of the file grants only reads.
-        _write_token_file(token_file, control_read_token)
+        try:
+            _write_token_file(token_file, control_read_token)
+        except OSError as exc:
+            sys.stderr.write(f"Graphlink headless cannot secure MCP token file: {exc}\n")
+            return 1
         app = create_app(
             auth_token=backend_token,
             control_read_token=control_read_token,
