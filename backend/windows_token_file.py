@@ -169,6 +169,15 @@ def _assert_private_dacl(sddl: str, current_sid: str) -> None:
     entries = re.findall(r"\(([^()]*)\)", sddl)
     expected = {current_sid, "SY", "BA"}
     aliases = {"S-1-5-18": "SY", "S-1-5-32-544": "BA"}
+    # ConvertSecurityDescriptorToStringSecurityDescriptorW canonicalizes
+    # the local built-in Administrator SID (...-500) to SDDL "LA" and the
+    # local Guest SID (...-501) to "LG". Accept the alias ONLY when it
+    # represents the actual token user, never as a generally allowed
+    # extra account. The Windows CI runner executes as RID 500.
+    if current_sid.endswith("-500"):
+        aliases["LA"] = current_sid
+    if current_sid.endswith("-501"):
+        aliases["LG"] = current_sid
     actual = set()
     if len(entries) != 3:
         raise OSError("Windows MCP token file has unexpected ACL entries")
