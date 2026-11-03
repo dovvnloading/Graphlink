@@ -160,12 +160,12 @@ def test_corrupt_asset_load_preserves_original_ref_across_save_and_recovers(tmp_
     # Repairing the asset later should make the original saved reference
     # readable again; no database migration or rewrite of graph refs.
     assert store.put(PNG) == asset_ref
+    resaved_notes = saved_again.pop("notes_data")
+    resaved_pins = saved_again.pop("pins_data")
     restored_after_repair = SceneDocument()
     restore_chat_into_document(
-        restored_after_repair,
-        {"data": saved_again},
-        saved_again.pop("notes_data"), saved_again.pop("pins_data"),
-        asset_store=store,
+        restored_after_repair, {"data": saved_again},
+        resaved_notes, resaved_pins, asset_store=store,
     )
     repaired_image = next(n for n in restored_after_repair.nodes.values() if n.kind == "image")
     assert restored_after_repair.image_assets[repaired_image.state.image_asset_id] == (PNG, "image/png")
