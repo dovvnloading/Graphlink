@@ -228,8 +228,8 @@ class StdioMcpServer:
             }}
 
         meta = params.get("_meta")
-        modern = isinstance(meta, dict) and "io.modelcontextprotocol/protocolVersion" in meta
-        if modern:
+        if isinstance(meta, dict) and "io.modelcontextprotocol/protocolVersion" in meta:
+            modern = True
             version = meta["io.modelcontextprotocol/protocolVersion"]
             if version != MODERN_VERSION:
                 return _rpc_error(
@@ -238,8 +238,10 @@ class StdioMcpServer:
                 )
             if not isinstance(meta.get("io.modelcontextprotocol/clientCapabilities"), dict):
                 return _rpc_error(request_id, -32602, "missing modern client capabilities")
-        elif not self._legacy_initialized:
-            return _rpc_error(request_id, -32600, "initialize or server/discover first")
+        else:
+            modern = False
+            if not self._legacy_initialized:
+                return _rpc_error(request_id, -32600, "initialize or server/discover first")
 
         if method == "server/discover":
             if not modern:
@@ -285,6 +287,7 @@ def serve(client: ControlHttpClient, source: TextIO, sink: TextIO) -> None:
         raw = source.readline(MAX_INPUT_LINE + 1)
         if not raw:
             return
+        reply: dict[str, Any] | None
         if len(raw) > MAX_INPUT_LINE and not raw.endswith("\n"):
             # Resynchronize to the next actual line boundary without holding
             # a malicious unbounded JSON-RPC request in memory.
