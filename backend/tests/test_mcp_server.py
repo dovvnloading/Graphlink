@@ -190,9 +190,11 @@ def test_real_fastapi_backend_is_reachable_from_separate_stdio_mcp_process(tmp_p
     from backend.chat_library import get_all_workspaces, save_chat_atomically_row
     from graphlink_process_env import safe_subprocess_env
 
-    token = "test-headless-stdio-token"
+    admin_token = "secret-admin-token-never-published"
+    control_token = "test-headless-stdio-read-only-token"
     token_file = tmp_path / "headless.token"
-    _write_token_file(token_file, token)
+    _write_token_file(token_file, control_token)
+    assert admin_token not in token_file.read_text(encoding="utf-8")
     db = tmp_path / "chats.db"
     workspace = get_all_workspaces(db)[0]
     saved_id, _ = save_chat_atomically_row(
@@ -203,8 +205,8 @@ def test_real_fastapi_backend_is_reachable_from_separate_stdio_mcp_process(tmp_p
 
     app = create_app(
         spa_dir=tmp_path / "missing-spa",
-        auth_token=token, chat_db_path=db,
-        settings_state_file=tmp_path / "session.dat",
+        auth_token=admin_token, control_read_token=control_token,
+        chat_db_path=db, settings_state_file=tmp_path / "session.dat",
     )
     listener = _bind_listener(0)
     port = listener.getsockname()[1]
