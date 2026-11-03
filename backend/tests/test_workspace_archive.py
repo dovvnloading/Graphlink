@@ -381,6 +381,34 @@ def test_export_keeps_plain_and_empty_chat_titles_unchanged(tmp_path):
     assert originals[1]["title"] == ""
 
 
+def test_export_scrubs_url_query_credentials_in_title_content_and_manifest(tmp_path):
+    """Inspect the actual ZIP members; importing alone does not read manifest titles."""
+    archive = tmp_path / "redacted-url.graphlink"
+    credential = "private-test-value-8192"  # not an issuer-shaped credential
+    url = f"https://service.example.test/items?api%5fkey={credential}&limit=10"
+    chat = _chat(
+        title=f"Investigate {url}",
+        data={"nodes": [{"content": f"Evidence: {url}"}]},
+        notes=[{"text": f"Source: {url}"}],
+    )
+
+    export_archive(archive, [chat])
+
+    with zipfile.ZipFile(archive) as zf:
+        chat_json = zf.read("chats/0.json")
+        manifest_json = zf.read("manifest.json")
+        exported = json.loads(chat_json)
+        manifest = json.loads(manifest_json)
+
+    expected_url = "https://service.example.test/items?api%5fkey=[redacted]&limit=10"
+    assert credential.encode("utf-8") not in chat_json + manifest_json
+    assert exported["title"] == f"Investigate {expected_url}"
+    assert exported["data"]["nodes"][0]["content"] == f"Evidence: {expected_url}"
+    assert exported["notes"][0]["text"] == f"Source: {expected_url}"
+    assert manifest["chats"][0]["title"] == exported["title"]
+    assert chat["title"] == f"Investigate {url}", "export mutated the original chat"
+
+
 # -- import: hostile input ---------------------------------------------------
 
 

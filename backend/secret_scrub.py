@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from urllib.parse import unquote_plus
 
 REDACTED = "[redacted]"
 REDACTED_PATH = "[redacted-path]"
@@ -80,10 +81,27 @@ _SECRET_VALUE_PATTERNS = (
 # roots. Deliberately NOT a bare `/...` match - that would eat ordinary
 # prose containing slashes, and URLs, for no gain.
 _PATH_PATTERNS = (
-    re.compile(r"[A-Za-z]:[\\/][^\s\"'<>|]*"),
+    # A Windows drive letter must not be the LAST letter of a URI scheme:
+    # otherwise "https://" matches as "s:/" and destroys the full URL
+    # (including perfectly ordinary nonsecret query parameters).
+    re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s\"'<>|]*"),
     re.compile(r"\\\\[^\s\"'<>|]+"),
     re.compile(r"/(?:home|Users|root|var|tmp|opt|mnt|media)/[^\s\"'<>|]*"),
 )
+
+
+# A short or percent-encoded credential in a URL query may not match any
+# issuer-specific value pattern above. Work from the PARAMETER NAME, not the
+# value's shape; preserve the original URL's casing, escaping and unrelated
+# parameters. This also catches query fragments embedded in free text or
+# relative URLs. The optional "amp;" handles HTML-escaped "&amp;token=..."
+# without having to unescape/re-encode the original string.
+_QUERY_PARAM_RE = re.compile(
+    r"""(?P<prefix>[?&](?:amp;)?)(?P<key>[^?&=#\s<>"'\x60]+)=(?P<value>[^&#\s<>"'\x60]*)""",
+    re.IGNORECASE,
+)
+# URL punctuation in prose/Markdown is not itself part of the credential.
+_QUERY_TRAILING_PUNCTUATION = ".,;!?)]}"
 
 
 def _key_is_secret(key: str) -> bool:
@@ -91,13 +109,36 @@ def _key_is_secret(key: str) -> bool:
     return any(lowered.endswith(suffix) for suffix in _SECRET_KEY_SUFFIXES)
 
 
+def _scrub_query_parameter(match: re.Match[str]) -> str:
+    key = match.group("key")
+    # Names may use case variants, hyphens or percent-encoding, e.g.
+    # API%5FKEY / api-key. Decode ONLY for the decision; rewrite only the
+    # value so a benign query parameter never gets re-serialized.
+    normalized_key = unquote_plus(key).replace("-", "_").replace(".", "_")
+    value = match.group("value")
+    if not value or not _key_is_secret(normalized_key):
+        return match.group(0)
+
+    # Keep scrub_text idempotent, including Markdown URL punctuation after
+    # the marker (e.g. ?token=[redacted]).).
+    if value.startswith(REDACTED) and all(
+        ch in _QUERY_TRAILING_PUNCTUATION for ch in value[len(REDACTED):]
+    ):
+        return match.group(0)
+
+    without_punctuation = value.rstrip(_QUERY_TRAILING_PUNCTUATION)
+    trailing = value[len(without_punctuation):] if without_punctuation else ""
+    return f"{match.group('prefix')}{key}={REDACTED}{trailing}"
+
+
 def scrub_text(text: str) -> str:
-    """Redacts credential-shaped and path-shaped substrings inside one
-    string, leaving the surrounding text intact. Applied to every string
+    """Redacts credentials (including sensitive URL query parameters) and
+    private paths inside one string, leaving surrounding text intact.
+    Applied to every string
     reached by scrub(), not just to values under suspicious keys - an error
     message stored on a node ("failed to read C:\\Users\\ada\\taxes.csv")
     is exactly the kind of incidental leak a key-name filter misses."""
-    result = text
+    result = _QUERY_PARAM_RE.sub(_scrub_query_parameter, text)
     for pattern in _SECRET_VALUE_PATTERNS:
         result = pattern.sub(REDACTED, result)
     for pattern in _PATH_PATTERNS:
