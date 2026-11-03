@@ -28,11 +28,19 @@ written to the token file. By default this file is:
 ```
 
 The launcher prints the listening port and token-file **path**, not the
-token, to stderr. The file is created atomically, with POSIX permission
-mode 0600 where applicable. On Windows, filesystem ACLs still matter:
-keep the file under your own protected user profile and do not share it.
-The read credential still permits access to your private workspace and
-graph contents, so treat it as sensitive even though it cannot write.
+token, to stderr. The file is created atomically with POSIX mode 0600.
+On **Windows**, the staging file is created with an explicit, protected
+access-control list (DACL), granting the current Windows account,
+LocalSystem, and local Administrators full access, with **no inherited
+access** from the chosen token-file directory. Graphlink verifies the
+actual on-disk DACL *before writing the token*. Filesystems that cannot
+provide or verify these access controls cause headless startup to fail
+rather than silently publish a readable credential. Atomic replacement
+preserves that DACL even when rotating an older token file.
+
+Keep the file under your protected user profile and do not share it. The
+read credential still permits access to private workspace and graph
+contents, even though it cannot write.
 
 Optional flags: `--port`, `--token-file`, `--chat-db`, and
 `--settings-file`. With `--port 0`, the OS chooses a free port;
@@ -128,8 +136,11 @@ The tests include a real stdio subprocess connecting to a real loopback
 FastAPI instance, authenticated reads with a restricted credential, denied
 WebSocket and administrative API access for that credential, modern/legacy
 MCP negotiation, invalid arguments, and POSIX token-file permissions.
-The tests also verify that the launcher writes ONLY the read-only token and
-that Graphlink's own legacy MCP client can connect successfully.
+On Windows, real filesystem DACL tests verify protected user/SYSTEM/admin
+access after atomic replacement, rotation and fail-closed behavior when
+DACL verification fails. The tests also verify that the launcher writes
+ONLY the read-only token and that Graphlink's own legacy MCP client
+can connect successfully.
 
 ## Next increments
 
