@@ -13,7 +13,8 @@ from backend.app import create_app
 from backend.chat_library import get_all_workspaces, save_chat_atomically_row
 from backend.session_context import get_session_context
 
-TOKEN = "test-control-capability"
+TOKEN = "test-admin-capability"
+READ_TOKEN = "test-readonly-capability"
 
 
 @pytest.fixture
@@ -21,6 +22,7 @@ def control_app(tmp_path):
     return create_app(
         spa_dir=tmp_path / "missing-spa",
         auth_token=TOKEN,
+        control_read_token=READ_TOKEN,
         chat_db_path=tmp_path / "chats.db",
         settings_state_file=tmp_path / "session.dat",
     )
@@ -46,6 +48,83 @@ def test_control_routes_require_authentication_and_origin_allowlist(control_app)
             "Authorization": f"Bearer {TOKEN}", "Origin": "https://untrusted.example",
         })
         assert result.status_code == 403, path
+
+
+def test_read_only_token_can_use_the_five_approved_get_routes(control_app):
+    client = TestClient(
+        control_app, base_url="http://127.0.0.1", headers={"host": "127.0.0.1"},
+    )
+    reader = {"Authorization": f"Bearer {READ_TOKEN}"}
+    expected_statuses = {
+        "/api/control/workspaces": 200,
+        "/api/control/graphs": 200,
+        "/api/control/graphs/999999": 404,
+        "/api/control/scene/nodes": 200,
+        "/api/control/scene/subgraph?root_id=unknown": 400,
+    }
+    for path, expected in expected_statuses.items():
+        assert client.get(path, headers=reader).status_code == expected, path
+
+
+def test_read_only_token_cannot_call_normal_api_or_future_control_routes(control_app):
+    client = TestClient(
+        control_app, base_url="http://127.0.0.1", headers={"host": "127.0.0.1"},
+    )
+    reader = {"Authorization": f"Bearer {READ_TOKEN}"}
+    for path in (
+        "/api/health",
+        "/api/assets/some-id",
+        "/api/control/private-future-route",
+        "/api/control/graphs/1/export",
+        "/api/control/graphs/-1",
+    ):
+        assert client.get(path, headers=reader).status_code == 401, path
+    assert client.post("/api/control/workspaces", headers=reader).status_code == 401
+    assert client.delete("/api/control/graphs/1", headers=reader).status_code == 401
+    assert client.get("/api/control/workspaces", params={"token": READ_TOKEN}).status_code == 401
+    assert client.get("/api/control/workspaces", headers={
+        "Authorization": f"Bearer {READ_TOKEN}",
+        "Origin": "https://untrusted.example",
+    }).status_code == 403
+    assert client.get("/api/health", headers={"Authorization": f"Bearer {TOKEN}"}).status_code == 200
+
+
+def test_read_only_token_cannot_connect_to_intent_websocket(control_app):
+    client = TestClient(
+        control_app, base_url="http://127.0.0.1", headers={"host": "127.0.0.1"},
+    )
+    from starlette.websockets import WebSocketDisconnect
+
+    # A local process with the *file* token is NOT authorized to dispatch
+    # app-chat-library/saveChat, scene/execute, or ANY WebSocket intent.
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect(f"/ws?token={READ_TOKEN}"):
+            pass
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws", headers={
+            "Authorization": f"Bearer {READ_TOKEN}",
+        }):
+            pass
+
+    with client.websocket_connect(f"/ws?token={TOKEN}") as ws:
+        ws.send_json({"kind": "subscribe", "topics": ["system"]})
+        assert ws.receive_json()["topic"] == "system"
+
+
+def test_a_read_only_token_cannot_equal_or_replace_the_admin_capability(tmp_path, monkeypatch):
+    from backend.auth import DEV_AUTH_TOKEN_ENV
+
+    monkeypatch.delenv(DEV_AUTH_TOKEN_ENV, raising=False)
+    for kwargs in (
+        {"auth_token": TOKEN, "control_read_token": TOKEN},
+        {"auth_token": TOKEN, "control_read_token": ""},
+        {"auth_token": None, "control_read_token": READ_TOKEN},
+    ):
+        with pytest.raises(ValueError, match="read-only control token"):
+            create_app(
+                spa_dir=tmp_path / "missing-spa", chat_db_path=tmp_path / "chats.db",
+                settings_state_file=tmp_path / "session.dat", **kwargs,
+            )
 
 
 def test_control_list_workspaces_and_saved_graphs_are_paged(api, tmp_path):
