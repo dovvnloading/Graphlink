@@ -124,7 +124,10 @@ def test_windows_replace_denial_only_succeeds_for_identical_committed_asset(
         # A wrong-hash file may remain on disk after a denied replacement,
         # but the verified read must not surface its bytes as this ref.
         assert store.get(ref) is None
-        assert target.read_bytes() == peer_bytes if peer_bytes is not None else not target.exists()
+        if peer_bytes is None:
+            assert not target.exists()
+        else:
+            assert target.read_bytes() == peer_bytes
 
     assert list(target.parent.glob("*.tmp")) == []
 
