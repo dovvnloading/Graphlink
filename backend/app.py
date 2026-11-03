@@ -582,6 +582,14 @@ def create_app(
     # backend/assets.py's docstring for the transport decision behind it).
     register_assets(app, bus)
 
+    # Headless/stdio MCP clients use the SAME running EventBus and DB as
+    # the UI. These read-only routes inherit /api bearer-token, loopback
+    # Host and Origin checks; they never dispatch arbitrary intents.
+    from backend.chat_library import DEFAULT_DB_PATH
+    from backend.control import register_control_api
+
+    register_control_api(app, bus, chat_db_path if chat_db_path is not None else DEFAULT_DB_PATH)
+
     @app.websocket("/ws")
     async def ws_endpoint(websocket: WebSocket) -> None:
         origin = websocket.headers.get("origin")

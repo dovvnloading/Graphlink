@@ -187,6 +187,15 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 - **Undo** anything, including a whole agent run in one action.
 - **Export** the whole canvas as a PNG, or export individual nodes — Chat as `.md`, Code as a source file (extension inferred from language, falling back to `.txt`), Image as `.png`.
 
+## Headless automation (MCP)
+
+Graphlink can run its backend without a desktop window and expose
+**read-only** workspace/graph/canvas inspection through a local MCP stdio
+server. The MCP adapter connects to the same authenticated backend process,
+rather than opening a second copy of the application or database.
+See [Headless Graphlink and MCP setup](docs/HEADLESS_MCP.md) for the CLI,
+client configuration, permissions and current limitations.
+
 ## Architecture
 
 Graphlink is a Python (FastAPI) backend paired with a Vite/React/TypeScript single-page app, launched as one native desktop window via `pywebview` — not a browser tab, not Qt.
