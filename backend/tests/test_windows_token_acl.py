@@ -23,6 +23,14 @@ def test_restricted_acl_parser_refuses_unprotected_or_broad_grants():
     sid = "S-1-5-21-100-200-300-1001"
     good = f"D:P(A;;FA;;;{sid})(A;;FA;;;SY)(A;;FA;;;BA)"
     _assert_private_dacl(good, sid)
+    # The API uses these aliases for built-in local identities; other
+    # accounts cannot claim the shorthand to broaden the allowlist.
+    built_in_admin = sid.rsplit("-", 1)[0] + "-500"
+    _assert_private_dacl(good.replace(sid, built_in_admin).replace(
+        built_in_admin, "LA"
+    ), built_in_admin)
+    with pytest.raises(OSError, match="principal"):
+        _assert_private_dacl(good.replace(sid, "LA"), sid)
 
     for wrong in (
         good.replace("D:P", "D:"),
@@ -65,7 +73,7 @@ def test_windows_token_file_has_protected_user_system_admin_acl(tmp_path):
     dacl, user_sid = _on_disk_acl(token_file)
 
     assert dacl.startswith("D:P"), "custom directory permissions must not be inherited"
-    assert user_sid in dacl
+    assert user_sid in dacl or (user_sid.endswith("-500") and ";;;LA)" in dacl)
     assert not any(sid in dacl for sid in (";;;WD)", ";;;BU)", ";;;AU)"))
     assert len(list(token_file.parent.glob(f".{token_file.name}.*"))) == 0
 
