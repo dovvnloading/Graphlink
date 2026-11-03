@@ -134,24 +134,24 @@ read-only by default**, and the existing MCP adapter lists only its five
 read tools until explicitly given a write-token-file path. To enable safe
 non-destructive editing on the **currently open canvas**:
 
-\`\`\`powershell
+```powershell
 python -m backend.headless --port 8765 --allow-mcp-writes
-\`\`\`
+```
 
 Then configure your MCP client to launch the adapter with the explicit
 write capability:
 
-\`\`\`powershell
+```powershell
 python -m backend.mcp_server --url http://127.0.0.1:8765 --write-token-file ~/.graphlink/headless.write.token
-\`\`\`
+```
 
 The headless launcher creates three independent secrets: an administrative
 backend token that is never published, a read-only token in
-\`~/.graphlink/headless.token\`, and a write token in
-\`~/.graphlink/headless.write.token\`. Both files use the same secure
+`~/.graphlink/headless.token`, and a write token in
+`~/.graphlink/headless.write.token`. Both files use the same secure
 atomic creation and Windows DACL/POSIX permission protection. The write
 token authorizes ONLY two named POST routes; it does not authorize
-\`/ws\`, \`/api/health\`, reads, deletion, shell execution, or arbitrary
+`/ws`, `/api/health`, reads, deletion, shell execution, or arbitrary
 intent dispatch. Do not share it with untrusted MCP hosts: when a
 trusted host has the write file, it can change the live canvas.
 
@@ -159,14 +159,14 @@ trusted host has the write file, it can change the live canvas.
 
 | MCP tool | Behavior |
 | --- | --- |
-| \`graphlink_create_node\` | Create a chat, note, code, or document node |
-| \`graphlink_connect_nodes\` | Connect existing canvas node IDs |
-| \`graphlink_set_node_content\` | Replace content of a supported node |
-| \`graphlink_save_graph\` | Save the live graph using Graphlink's normal guarded Save |
+| `graphlink_create_node` | Create a chat, note, code, or document node |
+| `graphlink_connect_nodes` | Connect existing canvas node IDs |
+| `graphlink_set_node_content` | Replace content of chat, note, code, or document nodes |
+| `graphlink_save_graph` | Save the live graph using Graphlink's normal guarded Save |
 
-Every call requires an \`expected_revision\` (64-character hex digest)
-returned by \`graphlink_list_nodes\` and a caller-generated
-\`operation_id\` of 8–100 characters (letters, digits, underscore or
+Every call requires an `expected_revision` (64-character hex digest)
+returned by `graphlink_list_nodes` and a caller-generated
+`operation_id` of 8–100 characters (letters, digits, underscore or
 hyphen). On 409 conflict, re-read the scene before trying a *new*
 operation; never blindly retry with a fresh revision when the first
 call might already have succeeded. To recover a lost response, retry
@@ -176,7 +176,7 @@ reapplying; after a restart, stale-revision checks prevent blind
 duplication. Only 256 recent successes are retained.
 
 **Mutations change the live in-memory canvas and are NOT durable until
-\`graphlink_save_graph\` succeeds.** Save failures and stale revisions
+`graphlink_save_graph` succeeds.** Save failures and stale revisions
 are explicit. These tools do not open a different graph or create a new
 workspace. A separate, reviewed stage will add persisted graph creation,
 selection and deletion with additional authorization and conflict
