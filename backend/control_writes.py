@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import secrets
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Literal
@@ -60,7 +61,16 @@ def is_write_control_request(method: str, path: str) -> bool:
 
 def scene_revision(document) -> str:
     """A reproducible revision covering UI edits, graph identity, and wiring."""
+    # A digest of scene content alone is NOT a safe revision across
+    # restarts: the new process would start on another identical empty
+    # canvas and could accept a pre-crash create-node retry as a NEW write.
+    # Bind the revision to this SceneDocument's lifetime as well.
+    epoch = getattr(document, "_mcp_revision_epoch", None)
+    if epoch is None:
+        epoch = secrets.token_hex(16)
+        setattr(document, "_mcp_revision_epoch", epoch)
     snapshot = {
+        "epoch": epoch,
         "scene": document.scene_payload(),
         "chat_id": document.current_chat_id,
         "workspace_id": document.current_workspace_id,
