@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -88,6 +89,74 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
 )
 TOOLS = tuple({**item, "annotations": {"readOnlyHint": True, "destructiveHint": False}} for item in _TOOL_SPECS)
 _BY_NAME = {item["name"]: item for item in TOOLS}
+_WRITE_FIELDS = {
+    "operation_id": {"type": "string", "minLength": 8, "maxLength": 100, "pattern": "^[A-Za-z0-9_-]+$"},
+    "expected_revision": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+}
+_WRITE_SPECS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "graphlink_create_node",
+        "description": "CREATE a node on the current LIVE canvas; not durable until graphlink_save_graph. Requires an expected revision and a retry-safe operation ID.",
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                **_WRITE_FIELDS,
+                "kind": {"type": "string", "enum": ["chat", "note", "code", "document"]},
+                "parent_id": {"type": "string", "maxLength": 200},
+                "title": {"type": "string", "maxLength": 200},
+                "content": {"type": "string", "maxLength": 20000},
+                "language": {"type": "string", "maxLength": 200},
+                "is_user": {"type": "boolean"},
+            },
+            "required": ["operation_id", "expected_revision", "kind"],
+        },
+    },
+    {
+        "name": "graphlink_connect_nodes",
+        "description": "Connect two existing nodes on the LIVE canvas; save the graph to persist.",
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                **_WRITE_FIELDS,
+                "source_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "target_id": {"type": "string", "minLength": 1, "maxLength": 200},
+            },
+            "required": ["operation_id", "expected_revision", "source_id", "target_id"],
+        },
+    },
+    {
+        "name": "graphlink_set_node_content",
+        "description": "Replace content of a supported LIVE node kind (chat/note/code/document/html/artifact). Requires scene revision.",
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                **_WRITE_FIELDS,
+                "node_id": {"type": "string", "minLength": 1, "maxLength": 200},
+                "content": {"type": "string", "maxLength": 20000},
+            },
+            "required": ["operation_id", "expected_revision", "node_id", "content"],
+        },
+    },
+    {
+        "name": "graphlink_save_graph",
+        "description": "Persist the current LIVE canvas using Graphlink's normal optimistic-concurrency guarded Save; fails on a conflict.",
+        "inputSchema": {
+            "type": "object", "additionalProperties": False,
+            "properties": {**_WRITE_FIELDS},
+            "required": ["operation_id", "expected_revision"],
+        },
+    },
+)
+WRITE_TOOLS = tuple({
+    **spec, "annotations": {
+        "readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
+    },
+} for spec in _WRITE_SPECS)
+_WRITE_BY_NAME = {item["name"]: item for item in WRITE_TOOLS}
+_BY_NAME.update(_WRITE_BY_NAME)
+
+
+
 
 
 class ControlError(Exception):
@@ -101,7 +170,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class ControlHttpClient:
-    def __init__(self, base_url: str, token: str):
+    def __init__(self, base_url: str, token: str, write_token: str | None = None):
         parsed = urllib.parse.urlsplit(base_url)
         if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"
                 or parsed.username or parsed.password or parsed.path not in ("", "/")
@@ -111,6 +180,8 @@ class ControlHttpClient:
             raise ValueError("headless capability token is empty")
         self.base_url = f"http://127.0.0.1:{parsed.port}"
         self._token = token
+        self._write_token = write_token
+        self.can_write = bool(write_token)
         # Ignore HTTP(S)_PROXY for localhost: even a misconfigured
         # environment must not send this capability token to a proxy.
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
@@ -156,6 +227,49 @@ class ControlHttpClient:
         return result
 
 
+    def write(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self._write_token:
+            raise ControlError("MCP write token was not configured")
+        if path not in ("/api/control/scene/mutate", "/api/control/scene/save"):
+            raise ControlError("MCP write target is not allowlisted")
+        request = urllib.request.Request(
+            self.base_url + path,
+            data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self._write_token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with self._opener.open(request, timeout=20) as response:
+                raw = response.read(MAX_RESPONSE_BYTES + 1)
+        except urllib.error.HTTPError as exc:
+            status = exc.getcode()
+            detail = ""
+            if status in (400, 409, 422):
+                try:
+                    body = json.loads(exc.read(2048))
+                    message = body.get("detail") if isinstance(body, dict) else None
+                    if isinstance(message, str):
+                        detail = message[:300]
+                except (ValueError, OSError, UnicodeDecodeError):
+                    pass
+            suffix = f": {detail}" if detail else ""
+            raise ControlError(f"Graphlink write returned HTTP {status}{suffix}.") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise ControlError("Graphlink headless is unavailable; the write may have succeeded. Retry with the SAME operation_id.") from exc
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise ControlError("Graphlink write response is too large")
+        try:
+            result = json.loads(raw)
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ControlError("Graphlink returned invalid JSON for a write") from exc
+        if not isinstance(result, dict):
+            raise ControlError("Graphlink returned an unexpected write result")
+        return result
+
+
 def _validate_args(name: str, arguments: Any) -> dict[str, Any]:
     spec = _BY_NAME.get(name)
     if spec is None:
@@ -177,6 +291,9 @@ def _validate_args(name: str, arguments: Any) -> dict[str, Any]:
                 raise ValueError(f"{key} must be an integer")
             if value < spec_field.get("minimum", value) or value > spec_field.get("maximum", value):
                 raise ValueError(f"{key} is out of range")
+        elif spec_field["type"] == "boolean":
+            if not isinstance(value, bool):
+                raise ValueError(f"{key} must be a boolean")
         else:
             if not isinstance(value, str):
                 raise ValueError(f"{key} must be a string")
@@ -184,6 +301,8 @@ def _validate_args(name: str, arguments: Any) -> dict[str, Any]:
                 raise ValueError(f"{key} has an invalid length")
             if "enum" in spec_field and value not in spec_field["enum"]:
                 raise ValueError(f"{key} must be one of {', '.join(spec_field['enum'])}")
+            if "pattern" in spec_field and not re.fullmatch(spec_field["pattern"], value):
+                raise ValueError(f"{key} does not match its required format")
     return arguments
 
 
@@ -214,6 +333,8 @@ class StdioMcpServer:
     def __init__(self, client: ControlHttpClient):
         self._client = client
         self._legacy_initialized = False
+        self._available_tools = list(TOOLS) + (list(WRITE_TOOLS) if getattr(client, "can_write", False) else [])
+        self._available_names = {item["name"] for item in self._available_tools}
 
     def handle(self, message: Any) -> dict[str, Any] | None:
         if not isinstance(message, dict) or message.get("jsonrpc") != "2.0":
@@ -268,18 +389,34 @@ class StdioMcpServer:
         elif method == "ping":
             result = {}
         elif method == "tools/list":
-            result = {"tools": list(TOOLS)}
+            result = {"tools": self._available_tools}
         elif method == "tools/call":
             name = params.get("name")
-            if not isinstance(name, str) or name not in _BY_NAME:
+            if not isinstance(name, str) or name not in self._available_names:
                 return _rpc_error(request_id, -32602, "unknown MCP tool")
             try:
                 arguments = _validate_args(name, params.get("arguments", {}))
             except ValueError as exc:
                 return _rpc_error(request_id, -32602, str(exc))
             try:
-                path, query = _tool_target(name, arguments)
-                payload = self._client.read(path, query)
+                if name in _WRITE_BY_NAME:
+                    shared = {k: arguments[k] for k in ("operation_id", "expected_revision")}
+                    if name == "graphlink_save_graph":
+                        payload = self._client.write("/api/control/scene/save", shared)
+                    else:
+                        operation = {
+                            "graphlink_create_node": "create_node",
+                            "graphlink_connect_nodes": "connect_nodes",
+                            "graphlink_set_node_content": "set_node_content",
+                        }[name]
+                        rest = {k: v for k, v in arguments.items() if k not in shared}
+                        payload = self._client.write(
+                            "/api/control/scene/mutate",
+                            {**shared, "operation": operation, "arguments": rest},
+                        )
+                else:
+                    path, query = _tool_target(name, arguments)
+                    payload = self._client.read(path, query)
                 result = {
                     "content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=True)}],
                     "structuredContent": payload, "isError": False,
@@ -325,10 +462,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Graphlink read-only MCP stdio adapter")
     parser.add_argument("--url", default=f"http://127.0.0.1:{DEFAULT_CONTROL_PORT}")
     parser.add_argument("--token-file", type=Path, default=DEFAULT_TOKEN_FILE)
+    parser.add_argument("--write-token-file", type=Path, default=None, help="explicit opt-in to MCP graph-write tools")
     options = parser.parse_args(argv)
     try:
+        if (options.write_token_file is not None and
+                options.write_token_file.expanduser().resolve() == options.token_file.expanduser().resolve()):
+            parser.error("read and write token files must differ")
         token = options.token_file.expanduser().read_text(encoding="utf-8").strip()
-        client = ControlHttpClient(options.url, token)
+        write_token = (
+            options.write_token_file.expanduser().read_text(encoding="utf-8").strip()
+            if options.write_token_file is not None else None
+        )
+        client = ControlHttpClient(options.url, token, write_token=write_token)
     except (OSError, ValueError) as exc:
         parser.error(f"cannot configure Graphlink MCP: {exc}")
     serve(client, sys.stdin, sys.stdout)
