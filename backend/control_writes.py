@@ -105,7 +105,8 @@ def _validate_arguments(operation: str, arguments: dict[str, Any]) -> None:
         raise HTTPException(status_code=422, detail="unexpected graph mutation fields")
     required: tuple[str, ...]
     if operation == "create_node":
-        if arguments.get("kind") not in _ALLOWED_NODE_KINDS:
+        kind = arguments.get("kind")
+        if not isinstance(kind, str) or kind not in _ALLOWED_NODE_KINDS:
             raise HTTPException(status_code=422, detail="unsupported node kind for MCP writes")
         required = ("kind",)
     elif operation == "connect_nodes":
