@@ -20,8 +20,9 @@ would trust. Unique temp names also let two concurrent saves of the same
 image finish safely instead of colliding on one shared .tmp file.
 Windows may still deny two simultaneous replacements of the SAME target;
 a losing writer accepts that denial only if the winner's final bytes exactly
-match its own. If the target already exists before this write, put() returns
-immediately without rewriting - by construction its name is the bytes' hash.
+match its own. If the target already exists before this write, put() first
+verifies the file's content hash rather than trusting its name alone. A
+corrupt existing asset is repaired by the same atomic replacement path.
 
 NOTHING IS EVER DELETED HERE. Garbage collection of unreferenced assets is
 deliberately out of scope: an asset is cheap to keep and catastrophic to
@@ -142,7 +143,12 @@ class AssetStore:
             # Raised, not asserted - `python -O` strips an assert, and this
             # one guards the line below from writing to None.
             raise ValueError(f"asset ref {ref!r} does not map to a storage path")
-        if target.is_file():
+        # A name matching the desired digest is not proof that the bytes
+        # still match it: interrupted external copies, disk corruption, or a
+        # hand-edited asset can leave a bad blob under a valid ref. Verify
+        # before taking the idempotent fast path so later saves/imports can
+        # repair that blob using the existing atomic replacement below.
+        if target.is_file() and self.verify(ref):
             return ref
 
         target.parent.mkdir(parents=True, exist_ok=True)
