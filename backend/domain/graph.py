@@ -465,6 +465,14 @@ class SceneDocument(
         reset a few lines later in restore_chat instead - reset here too so
         a load that fails partway through never leaves a stale value from
         the PREVIOUS session)."""
+        # MCP writes require an observed, graph-identity-bound revision.
+        # A new blank canvas can be byte-identical to the old blank canvas
+        # (including chat/workspace IDs), so content hashing alone cannot
+        # distinguish a newChat/load that discarded the previous draft.
+        # Drop the lazily allocated per-canvas nonce at EVERY load/clear.
+        # The next scene_revision() allocates a fresh one; any old MCP
+        # revision now rejects instead of targeting the wrong blank scene.
+        self.__dict__.pop("_mcp_revision_epoch", None)
         self.nodes.clear()
         self.edges.clear()
         self.image_assets.clear()
