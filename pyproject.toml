@@ -30,7 +30,7 @@ dependencies = [
     "ollama",
     "openai>=1.0.0",
     "Pillow",
-    "pypdf",
+    "pypdf>=6.21.4",
     "python-docx",
     "requests",
     "tiktoken",
