@@ -126,7 +126,7 @@ _WRITE_SPECS: tuple[dict[str, Any], ...] = (
     },
     {
         "name": "graphlink_set_node_content",
-        "description": "Replace content of a supported LIVE node kind (chat/note/code/document/html/artifact). Requires scene revision.",
+        "description": "Replace content of a supported LIVE node kind (chat/note/code/document only). Requires scene revision.",
         "inputSchema": {
             "type": "object", "additionalProperties": False,
             "properties": {
@@ -180,6 +180,8 @@ class ControlHttpClient:
             raise ValueError("headless capability token is empty")
         self.base_url = f"http://127.0.0.1:{parsed.port}"
         self._token = token
+        if write_token is not None and not write_token:
+            raise ValueError("explicit MCP write token is empty")
         self._write_token = write_token
         self.can_write = bool(write_token)
         # Ignore HTTP(S)_PROXY for localhost: even a misconfigured
