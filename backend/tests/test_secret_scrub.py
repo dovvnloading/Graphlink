@@ -177,6 +177,22 @@ def test_ordinary_prose_with_slashes_is_not_mangled():
     assert scrub_text(text) == text
 
 
+def test_http_url_schemes_are_not_mistaken_for_windows_drive_paths():
+    urls = (
+        "https://api.example.test/data?page=2&limit=10",
+        "http://api.example.test/search?q=ordinary",
+    )
+    for url in urls:
+        assert scrub_text(url) == url
+        assert REDACTED_PATH not in scrub_text(url)
+
+    # A real drive-letter path must remain protected, including forward
+    # slashes and paths in the same message as a real URL.
+    text = "See https://api.example.test/help and C:/Users/ada/private.txt"
+    cleaned = scrub_text(text)
+    assert cleaned == "See https://api.example.test/help and [redacted-path]"
+
+
 # -- purity ------------------------------------------------------------------
 
 
