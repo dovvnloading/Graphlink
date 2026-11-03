@@ -1,11 +1,10 @@
 """ADR-016 stage 16.5 eval harness CLI.
 
     python -m backend.evals            # default: scripted responses, deterministic, no network
-    python -m backend.evals --live     # real, already-configured provider - see README.md
+    python -m backend.evals --live     # real provider for chart/structured output only
 
-Prints a pass/fail/not_implemented table and exits nonzero if ANY result has
-status == "failed". A "not_implemented" result (the agent_build dimension,
-today) is expected/informational and never affects the exit code.
+Prints a pass/fail table and exits nonzero if any result is failed.
+Builder always executes against an offline scripted provider.
 """
 
 from __future__ import annotations
@@ -49,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--live",
         action="store_true",
-        help="skip the scripted-response patch and call the real, already-configured provider",
+        help="use the configured provider for chart/structured output (Builder remains offline)",
     )
     args = parser.parse_args(argv)
 
