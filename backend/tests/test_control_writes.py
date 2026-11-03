@@ -214,6 +214,8 @@ def test_stale_revision_and_busy_guard_reject_without_side_effects(backend):
     {"kind": "chat", "content": "x", "unexpected": True},
     {"kind": "chat", "content": "x" * 20001},
     {"kind": "chat", "is_user": "True"},
+    {"kind": ["chat"], "content": "invalid kind type"},
+    {"kind": {"name": "chat"}, "content": "invalid kind type"},
     {"kind": "document", "title": "missing parent"},
 ])
 def test_invalid_mutations_are_rejected_before_domain_change(backend, args):
