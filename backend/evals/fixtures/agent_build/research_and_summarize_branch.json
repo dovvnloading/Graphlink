@@ -2,8 +2,186 @@
   "name": "research_and_summarize_branch",
   "kind": "agent_build",
   "input": {
-    "goal": "Research a topic and produce a cited summary + chart branch on the canvas."
+    "goal": "Capture a question, finding and cited-summary placeholder as connected nodes (offline).",
+    "mode": "autopilot",
+    "steps": [
+      "Capture the question and finding",
+      "Create and connect a summary"
+    ],
+    "runs": [
+      {
+        "turns": [
+          {
+            "tool_calls": [
+              {
+                "id": "question",
+                "name": "graph.create_node",
+                "arguments": {
+                  "kind": "chat",
+                  "content": "What changed in the deployment?"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          },
+          {
+            "tool_calls": [
+              {
+                "id": "finding",
+                "name": "graph.create_node",
+                "arguments": {
+                  "kind": "note",
+                  "content": "Finding: cache misses increased"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          },
+          {
+            "tool_calls": [
+              {
+                "id": "edge1",
+                "name": "graph.connect",
+                "arguments": {
+                  "source_id": "$node:question",
+                  "target_id": "$node:finding"
+                }
+              },
+              {
+                "id": "done1",
+                "name": "builder.complete_step",
+                "arguments": {
+                  "summary": "Question and finding connected"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          },
+          {
+            "tool_calls": [
+              {
+                "id": "summary",
+                "name": "graph.create_node",
+                "arguments": {
+                  "kind": "note",
+                  "content": "Summary: investigate cache invalidation"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          },
+          {
+            "tool_calls": [
+              {
+                "id": "edge2",
+                "name": "graph.connect",
+                "arguments": {
+                  "source_id": "$node:finding",
+                  "target_id": "$node:summary"
+                }
+              },
+              {
+                "id": "done2",
+                "name": "builder.complete_step",
+                "arguments": {
+                  "summary": "Summary connected to evidence"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          }
+        ]
+      }
+    ]
   },
-  "scripted_response": null,
-  "expected": null
+  "expected": {
+    "status": "done",
+    "run_statuses": [
+      "done"
+    ],
+    "steps": [
+      {
+        "title": "Capture the question and finding",
+        "status": "done",
+        "detail": "Question and finding connected"
+      },
+      {
+        "title": "Create and connect a summary",
+        "status": "done",
+        "detail": "Summary connected to evidence"
+      }
+    ],
+    "nodes": [
+      {
+        "kind": "chat",
+        "content": "What changed in the deployment?"
+      },
+      {
+        "kind": "note",
+        "content": "Finding: cache misses increased"
+      },
+      {
+        "kind": "note",
+        "content": "Summary: investigate cache invalidation"
+      }
+    ],
+    "edges": [
+      {
+        "from": "What changed in the deployment?",
+        "to": "Finding: cache misses increased"
+      },
+      {
+        "from": "Finding: cache misses increased",
+        "to": "Summary: investigate cache invalidation"
+      }
+    ],
+    "activity": [
+      {
+        "tool": "graph.create_node",
+        "outcome": "ok"
+      },
+      {
+        "tool": "graph.create_node",
+        "outcome": "ok"
+      },
+      {
+        "tool": "graph.connect",
+        "outcome": "ok"
+      },
+      {
+        "tool": "builder.complete_step",
+        "outcome": "ok"
+      },
+      {
+        "tool": "graph.create_node",
+        "outcome": "ok"
+      },
+      {
+        "tool": "graph.connect",
+        "outcome": "ok"
+      },
+      {
+        "tool": "builder.complete_step",
+        "outcome": "ok"
+      }
+    ],
+    "approvals": [],
+    "spent_steps": 2,
+    "spent_tokens": 125
+  }
 }
