@@ -18,8 +18,10 @@ From the Graphlink repository root, after installing requirements:
 python -m backend.headless --port 8765
 ```
 
-The backend binds **only 127.0.0.1** and generates a fresh random bearer
-token for each launch. By default it writes the token to:
+The backend binds **only 127.0.0.1** and generates **two independent random
+credentials** on each launch. The full-access WebSocket/backend credential
+stays in the backend process; ONLY the limited MCP-read credential is
+written to the token file. By default this file is:
 
 ```text
 ~/.graphlink/headless.token
@@ -29,6 +31,8 @@ The launcher prints the listening port and token-file **path**, not the
 token, to stderr. The file is created atomically, with POSIX permission
 mode 0600 where applicable. On Windows, filesystem ACLs still matter:
 keep the file under your own protected user profile and do not share it.
+The read credential still permits access to your private workspace and
+graph contents, so treat it as sensitive even though it cannot write.
 
 Optional flags: `--port`, `--token-file`, `--chat-db`, and
 `--settings-file`. With `--port 0`, the OS chooses a free port;
@@ -90,11 +94,16 @@ explicitly marked read-only. Large results are paginated or excerpted;
 `more` and `truncated` tell the caller when additional pages or a
 future detailed-read tool will be needed.
 
-The underlying HTTP endpoints live under `/api/control/` and inherit
-Graphlink's existing bearer-token, Origin, and trusted-loopback-Host checks.
-The MCP adapter accepts only `http://127.0.0.1:<port>` URLs, ignores
-proxy environment variables, and refuses redirects to avoid forwarding
-the bearer token to another origin.
+The read-only token is valid **only** for GET requests to the five exact
+control route shapes under `/api/control/`. It does not authorize the
+`/ws` intent connection, `/api/health`, assets, other API endpoints, any
+non-GET operation, or a future control endpoint that wasn't explicitly
+allowlisted. The read token must be sent in the Authorization Bearer
+**header**, not a URL query parameter. The backend also retains its
+existing Origin and trusted-loopback-Host checks. The MCP adapter accepts
+only `http://127.0.0.1:<port>` URLs, ignores proxy environment variables,
+and refuses redirects to prevent forwarding the limited credential to
+another origin.
 
 ## Verification
 
@@ -103,9 +112,11 @@ python -m pytest -q backend/tests/test_control_api.py backend/tests/test_mcp_ser
 ```
 
 The tests include a real stdio subprocess connecting to a real loopback
-FastAPI instance, successful authenticated reads, forbidden unauthenticated
-requests, modern/legacy MCP negotiation, invalid arguments, and POSIX token
-file permissions.
+FastAPI instance, authenticated reads with a restricted credential, denied
+WebSocket and administrative API access for that credential, modern/legacy
+MCP negotiation, invalid arguments, and POSIX token-file permissions.
+The tests also verify that the launcher writes ONLY the read-only token and
+that Graphlink's own legacy MCP client can connect successfully.
 
 ## Next increments
 

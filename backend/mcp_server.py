@@ -129,7 +129,20 @@ class ControlHttpClient:
             status = exc.getcode()
             if status == 401:
                 raise ControlError("Graphlink rejected the control token (401). Restart the MCP adapter.") from exc
-            raise ControlError(f"Graphlink control endpoint returned HTTP {status}.") from exc
+            # For expected bad-input/missing-resource responses, keep a
+            # short actionable detail instead of reducing every error to
+            # "HTTP 400". Never reflect 5xx bodies or credentials.
+            detail = ""
+            if status in (400, 404, 422):
+                try:
+                    body = json.loads(exc.read(2048))
+                    message = body.get("detail") if isinstance(body, dict) else None
+                    if isinstance(message, str):
+                        detail = message[:300]
+                except (ValueError, OSError, UnicodeDecodeError):
+                    pass
+            suffix = f": {detail}" if detail else ""
+            raise ControlError(f"Graphlink control endpoint returned HTTP {status}{suffix}.") from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise ControlError("Graphlink headless is unavailable on 127.0.0.1; start its backend first.") from exc
         if len(raw) > MAX_RESPONSE_BYTES:
@@ -289,9 +302,10 @@ def serve(client: ControlHttpClient, source: TextIO, sink: TextIO) -> None:
         if not raw:
             return
         reply: dict[str, Any] | None
-        if len(raw) > MAX_INPUT_LINE and not raw.endswith("\n"):
-            # Resynchronize to the next actual line boundary without holding
-            # a malicious unbounded JSON-RPC request in memory.
+        if len(raw) > MAX_INPUT_LINE:
+            # Even a newline-terminated line just ONE byte beyond the
+            # input cap must be refused. Resynchronize when a longer line
+            # exceeded readline's bounded chunk.
             while raw and not raw.endswith("\n"):
                 raw = source.readline(MAX_INPUT_LINE + 1)
             reply = _rpc_error(None, -32700, "MCP message too large")

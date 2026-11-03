@@ -191,8 +191,10 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 
 Graphlink can run its backend without a desktop window and expose
 **read-only** workspace/graph/canvas inspection through a local MCP stdio
-server. The MCP adapter connects to the same authenticated backend process,
-rather than opening a second copy of the application or database.
+server. The MCP adapter uses a limited, **read-only** capability token
+which cannot authorize WebSocket intents or other backend API actions. It
+connects to the same backend rather than opening a second copy of the
+application or database.
 See [Headless Graphlink and MCP setup](docs/HEADLESS_MCP.md) for the CLI,
 client configuration, permissions and current limitations.
 

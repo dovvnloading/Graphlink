@@ -16,6 +16,7 @@ import pytest
 from backend.headless import _bind_listener, _write_token_file
 from backend.mcp_server import (
     MODERN_VERSION,
+    MAX_INPUT_LINE,
     ControlError,
     ControlHttpClient,
     StdioMcpServer,
@@ -154,6 +155,39 @@ def test_mcp_stdio_recovers_after_invalid_or_oversized_input():
     assert results[2]["result"]["protocolVersion"] == "2025-11-25"
 
 
+def test_stdio_rejects_a_complete_line_one_byte_over_the_cap():
+    # Previously the cap was checked only if the oversized chunk lacked
+    # a newline. A complete MAX_INPUT_LINE+1 line slipped through.
+    message = json.dumps(request(1, "initialize", {"protocolVersion": "2024-11-05"}))
+    oversized = message + " " * (MAX_INPUT_LINE - len(message)) + "\n"
+    assert len(oversized) == MAX_INPUT_LINE + 1
+    sink = io.StringIO()
+    serve(StubControl(), io.StringIO(oversized + message + "\n"), sink)
+    responses = [json.loads(line) for line in sink.getvalue().splitlines()]
+    assert responses[0]["error"]["code"] == -32700
+    assert responses[1]["result"]["protocolVersion"] == "2024-11-05"
+
+
+@pytest.mark.parametrize(("status", "included"), [(400, True), (404, True), (500, False)])
+def test_http_adapter_surfaces_safe_client_errors_but_hides_server_details(status, included):
+    import urllib.error
+
+    client = ControlHttpClient("http://127.0.0.1:8765", "read-only-token")
+
+    class StubOpener:
+        def open(self, request, *, timeout):
+            raise urllib.error.HTTPError(
+                request.full_url, status, "error", {},
+                io.BytesIO(b'{"detail":"Unknown node: expected-id"}'),
+            )
+
+    client._opener = StubOpener()
+    with pytest.raises(ControlError) as exc:
+        client.read("/api/control/scene/subgraph", {"root_id": "expected-id"})
+    assert "HTTP " + str(status) in str(exc.value)
+    assert ("Unknown node: expected-id" in str(exc.value)) is included
+
+
 @pytest.mark.posix_permissions
 def test_headless_token_file_is_private_on_posix(tmp_path):
     if os.name == "nt":
@@ -177,6 +211,51 @@ def test_headless_token_file_refuses_symlinks(tmp_path):
     assert real.read_text() == "original"
 
 
+def test_headless_launcher_publishes_only_read_capability(tmp_path, monkeypatch):
+    """The actual launcher must not publish its WebSocket/admin token."""
+    import backend.headless as headless
+    import backend.app as app_module
+    import uvicorn
+
+    token_file = tmp_path / "published.token"
+    tokens = iter(("backend-admin-secret", "mcp-read-only-secret"))
+    observed = {}
+
+    class Listener:
+        def getsockname(self):
+            return ("127.0.0.1", 8765)
+
+        def close(self):
+            observed["socket_closed"] = True
+
+    listener = Listener()
+
+    def capture_app(**kwargs):
+        observed["config"] = kwargs
+        return object()
+
+    class Server:
+        def __init__(self, config):
+            observed["uvicorn_config"] = config
+
+        def run(self, *, sockets):
+            assert sockets == [listener]
+            observed["file_during_run"] = token_file.read_text(encoding="utf-8").strip()
+
+    monkeypatch.setattr(headless, "mint_token", lambda: next(tokens))
+    monkeypatch.setattr(headless, "_bind_listener", lambda port: listener)
+    monkeypatch.setattr(app_module, "create_app", capture_app)
+    monkeypatch.setattr(uvicorn, "Config", lambda app, **kwargs: app)
+    monkeypatch.setattr(uvicorn, "Server", Server)
+
+    assert headless.main(["--port", "8765", "--token-file", str(token_file)]) == 0
+    assert observed["config"]["auth_token"] == "backend-admin-secret"
+    assert observed["config"]["control_read_token"] == "mcp-read-only-secret"
+    assert observed["file_during_run"] == "mcp-read-only-secret"
+    assert not token_file.exists(), "launcher should clean its own file on normal exit"
+    assert observed["socket_closed"] is True
+
+
 def test_real_fastapi_backend_is_reachable_from_separate_stdio_mcp_process(tmp_path):
     """Subprocess MCP -> authenticated local HTTP -> real Graphlink database.
 
@@ -190,9 +269,11 @@ def test_real_fastapi_backend_is_reachable_from_separate_stdio_mcp_process(tmp_p
     from backend.chat_library import get_all_workspaces, save_chat_atomically_row
     from graphlink_process_env import safe_subprocess_env
 
-    token = "test-headless-stdio-token"
+    admin_token = "secret-admin-token-never-published"
+    control_token = "test-headless-stdio-read-only-token"
     token_file = tmp_path / "headless.token"
-    _write_token_file(token_file, token)
+    _write_token_file(token_file, control_token)
+    assert admin_token not in token_file.read_text(encoding="utf-8")
     db = tmp_path / "chats.db"
     workspace = get_all_workspaces(db)[0]
     saved_id, _ = save_chat_atomically_row(
@@ -203,8 +284,8 @@ def test_real_fastapi_backend_is_reachable_from_separate_stdio_mcp_process(tmp_p
 
     app = create_app(
         spa_dir=tmp_path / "missing-spa",
-        auth_token=token, chat_db_path=db,
-        settings_state_file=tmp_path / "session.dat",
+        auth_token=admin_token, control_read_token=control_token,
+        chat_db_path=db, settings_state_file=tmp_path / "session.dat",
     )
     listener = _bind_listener(0)
     port = listener.getsockname()[1]
@@ -249,6 +330,30 @@ def test_real_fastapi_backend_is_reachable_from_separate_stdio_mcp_process(tmp_p
         assert graph["graph"]["id"] == saved_id
         assert graph["nodes"][0]["excerpt"] == "hello from real db"
         assert graph["source"] == "saved"
+
+        # Test against Graphlink's REAL legacy MCP stdio client as well,
+        # not only the hand-authored JSON-RPC fixture above. This catches
+        # handshake and tool-schema drift between our two implementations.
+        from backend.mcp_client import McpStdioClient
+
+        client = McpStdioClient(
+            command=sys.executable,
+            args=(
+                "-m", "backend.mcp_server", "--url", f"http://127.0.0.1:{port}",
+                "--token-file", str(token_file),
+            ),
+            cwd=str(Path(__file__).resolve().parents[2]),
+            timeout=10,
+        )
+        try:
+            client.connect()
+            specs = client.list_tools()
+            assert any(spec.name == "graphlink_list_workspaces" for spec in specs)
+            result = client.call_tool("graphlink_get_graph", {"graph_id": saved_id})
+            assert result.is_error is False
+            assert "MCP saved graph" in result.content
+        finally:
+            client.close()
     finally:
         server.should_exit = True
         thread.join(timeout=5)
