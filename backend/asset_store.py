@@ -200,25 +200,32 @@ class AssetStore:
         return ref
 
     def get(self, ref: str) -> bytes | None:
-        """The bytes for `ref`, or None if this store has never seen it.
+        """Return only bytes whose SHA-256 matches `ref`.
 
-        None rather than an exception because a missing asset must degrade
-        to "this image does not render" rather than "this chat will not
-        load" - a chat's text is worth far more than one of its pictures,
-        and an import from a bundle whose assets were stripped is a
-        legitimate, survivable state."""
+        A file can exist at the right path yet contain corrupt or replaced
+        bytes. Never return those bytes to session_load: doing so would
+        re-save the corrupted image under a NEW, valid content hash and
+        erase the original ref from the chat. Missing, unreadable, and
+        corrupt files all return None so the graph itself remains loadable
+        and ImageState.unresolved_asset_ref can preserve the old ref.
+        """
         target = self._path_for(ref)
         if target is None or not target.is_file():
             return None
         try:
-            return target.read_bytes()
+            data = target.read_bytes()
         except OSError:
             logger.warning("could not read asset %s - treating as missing", target)
             return None
+        if content_ref(data) != ref:
+            logger.warning("asset %s failed SHA-256 verification - treating as missing", target)
+            return None
+        return data
 
     def verify(self, ref: str) -> bool:
-        """True only if the stored bytes still hash to their own name -
-        the integrity check content addressing makes possible. Used by the
-        import path, which is reading files it did not write."""
-        data = self.get(ref)
-        return data is not None and content_ref(data) == ref
+        """True only if the referenced bytes exist and match their hash.
+
+        get() already verifies every successful read, so hashing the same
+        asset again here would be redundant.
+        """
+        return self.get(ref) is not None

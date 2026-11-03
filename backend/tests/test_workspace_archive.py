@@ -121,7 +121,13 @@ def test_windows_replace_denial_only_succeeds_for_identical_committed_asset(
     else:
         with pytest.raises(PermissionError, match="WinError 5"):
             store.put(PNG)
-        assert store.get(ref) == peer_bytes
+        # A wrong-hash file may remain on disk after a denied replacement,
+        # but the verified read must not surface its bytes as this ref.
+        assert store.get(ref) is None
+        if peer_bytes is None:
+            assert not target.exists()
+        else:
+            assert target.read_bytes() == peer_bytes
 
     assert list(target.parent.glob("*.tmp")) == []
 
@@ -141,6 +147,24 @@ def test_verify_rejects_bytes_that_no_longer_match_their_own_name(tmp_path):
     # Corrupt the stored file behind the store's back.
     (tmp_path / "assets" / ref[:2] / ref).write_bytes(b"tampered")
     assert store.verify(ref) is False
+
+
+def test_get_refuses_corrupt_bytes_without_mutating_the_stored_file(tmp_path):
+    store = AssetStore(tmp_path / "assets")
+    ref = store.put(PNG)
+    target = tmp_path / "assets" / ref[:2] / ref
+    target.write_bytes(b"truncated or otherwise corrupted bytes")
+
+    assert store.exists(ref), "the file still exists at its original hash path"
+    assert store.get(ref) is None, "get must never deliver wrong bytes under a trusted hash"
+    assert store.verify(ref) is False
+    assert target.read_bytes() == b"truncated or otherwise corrupted bytes"
+
+    # Once the correct image bytes become available again, the earlier
+    # atomic-repair behavior must still restore the original content ref.
+    assert store.put(PNG) == ref
+    assert store.get(ref) == PNG
+    assert store.verify(ref) is True
 
 
 def test_put_repairs_an_existing_corrupted_asset(tmp_path):
@@ -300,6 +324,36 @@ def test_assets_are_carried_as_real_files_not_base64_in_the_json(tmp_path):
         asset_members = [n for n in zf.namelist() if n.startswith("assets/")]
         assert asset_members == [f"assets/{ref}.png"]
         assert zf.read(asset_members[0]) == PNG
+
+
+def test_export_skips_a_corrupt_live_asset_and_recovers_after_repair(tmp_path):
+    store = AssetStore(tmp_path / "assets")
+    ref = store.put(PNG)
+    path = tmp_path / "assets" / ref[:2] / ref
+    path.write_bytes(b"corrupted on disk")
+    chat = _chat(data={"nodes": [
+        {"node_type": "image", "asset_ref": ref, "mime_type": "image/png"},
+    ]})
+
+    bad_archive = tmp_path / "corrupt-source.graphlink"
+    export_archive(bad_archive, [chat], live_assets=store)
+
+    with zipfile.ZipFile(bad_archive) as zf:
+        assert not [name for name in zf.namelist() if name.startswith("assets/")]
+        assert json.loads(zf.read("manifest.json"))["assetCount"] == 0
+        assert json.loads(zf.read("chats/0.json"))["data"]["nodes"][0]["asset_ref"] == ref
+
+    # The export must not silently bless damaged bytes, or rewrite the
+    # original graph's reference to a new digest for those damaged bytes.
+    assert store.get(ref) is None
+    assert chat["data"]["nodes"][0]["asset_ref"] == ref
+
+    store.put(PNG)
+    repaired_archive = tmp_path / "repaired-source.graphlink"
+    export_archive(repaired_archive, [chat], live_assets=store)
+    with zipfile.ZipFile(repaired_archive) as zf:
+        assert zf.read(f"assets/{ref}.png") == PNG
+        assert json.loads(zf.read("manifest.json"))["assetCount"] == 1
 
 
 def test_an_asset_missing_from_the_store_does_not_abort_the_whole_export(tmp_path):
