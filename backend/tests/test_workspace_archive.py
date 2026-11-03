@@ -341,6 +341,46 @@ def test_no_secret_or_local_path_survives_into_the_archive(tmp_path):
     assert "ada" not in parsed, "leaked the operator's account name"
 
 
+@pytest.mark.parametrize("sensitive_value", [SECRET, HOME_PATH])
+def test_export_scrubs_sensitive_chat_titles_in_payload_and_manifest(tmp_path, sensitive_value):
+    """A title is exported twice (chat JSON and manifest index); neither may leak."""
+    archive = tmp_path / "sensitive-title.graphlink"
+    title = f"Debugging {sensitive_value} in production"
+    chat = _chat(title=title)
+
+    export_archive(archive, [chat])
+
+    # Inspect actual members, not just import_archive's parsed chats. The
+    # manifest is shareable and visible even without opening a chat file.
+    with zipfile.ZipFile(archive) as zf:
+        exported = json.loads(zf.read("chats/0.json"))
+        manifest = json.loads(zf.read("manifest.json"))
+        combined = zf.read("chats/0.json") + zf.read("manifest.json")
+
+    assert sensitive_value.encode("utf-8") not in combined
+    assert exported["title"] != title
+    assert exported["title"].startswith("Debugging ")
+    assert exported["title"].endswith(" in production")
+    assert manifest["chats"][0]["title"] == exported["title"]
+    assert import_archive(archive)[0]["title"] == exported["title"]
+    assert chat["title"] == title, "export must not modify the original conversation"
+
+
+def test_export_keeps_plain_and_empty_chat_titles_unchanged(tmp_path):
+    archive = tmp_path / "plain-titles.graphlink"
+    originals = [_chat(title="Quarterly planning"), _chat(title="")]
+    export_archive(archive, originals)
+
+    with zipfile.ZipFile(archive) as zf:
+        exported_titles = [json.loads(zf.read(f"chats/{i}.json"))["title"] for i in range(2)]
+        manifest = json.loads(zf.read("manifest.json"))
+
+    assert exported_titles == ["Quarterly planning", "Untitled"]
+    assert [entry["title"] for entry in manifest["chats"]] == exported_titles
+    assert originals[0]["title"] == "Quarterly planning"
+    assert originals[1]["title"] == ""
+
+
 # -- import: hostile input ---------------------------------------------------
 
 

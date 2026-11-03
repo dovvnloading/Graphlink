@@ -159,7 +159,10 @@ def export_archive(
         with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for position, chat in enumerate(chats):
                 payload = {
-                    "title": chat.get("title") or "Untitled",
+                    # Titles can contain pasted credentials/paths just like
+                    # message bodies. This one sanitized value also feeds
+                    # manifest.json's chat index below.
+                    "title": scrub(chat.get("title") or "Untitled"),
                     "data": scrub(chat.get("data") or {}),
                     "notes": scrub(chat.get("notes") or []),
                     "pins": scrub(chat.get("pins") or []),
