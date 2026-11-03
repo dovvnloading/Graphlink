@@ -17,10 +17,11 @@ WRITES ARE ATOMIC AND IDEMPOTENT. put() writes to a UNIQUE temp name and
 os.replace()s into place, so a crash mid-write can only ever leave a temp
 file, never a truncated file wearing a real ref's name that a later read
 would trust. Unique temp names also let two concurrent saves of the same
-image finish safely instead of colliding on one shared .tmp file. If the
-target already exists, put() returns immediately without rewriting - by
-construction the existing file already has exactly the content being stored,
-since its name is that content's hash.
+image finish safely instead of colliding on one shared .tmp file.
+Windows may still deny two simultaneous replacements of the SAME target;
+a losing writer accepts that denial only if the winner's final bytes exactly
+match its own. If the target already exists before this write, put() returns
+immediately without rewriting - by construction its name is the bytes' hash.
 
 NOTHING IS EVER DELETED HERE. Garbage collection of unreferenced assets is
 deliberately out of scope: an asset is cheap to keep and catastrophic to
@@ -164,14 +165,28 @@ class AssetStore:
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp, target)
-        except BaseException:
+            try:
+                os.replace(tmp, target)
+            except OSError:
+                # On Windows a simultaneous writer can win the rename while
+                # this one gets WinError 5 (access denied) replacing the
+                # destination. This write is still complete IF the winning
+                # asset is byte-for-byte identical. Never hide a genuine
+                # permissions failure or accept a different/corrupt file.
+                try:
+                    already_stored = target.read_bytes() == data
+                except OSError:
+                    already_stored = False
+                if not already_stored:
+                    raise
+        finally:
+            # Also discard our staged file when another writer won. A
+            # successful os.replace has already moved it out of the way.
             if tmp is not None:
                 try:
                     tmp.unlink(missing_ok=True)
                 except OSError:
                     pass
-            raise
         try:
             os.chmod(target, 0o600)
         except OSError:
