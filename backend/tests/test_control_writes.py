@@ -257,7 +257,8 @@ def test_expected_revision_blocks_duplicate_save_retries(backend):
 def test_write_scope_rejects_editing_html_or_other_executable_node_kinds(backend):
     client, app, _ = backend
     document = get_session_context(app.state.bus.session()).canvas_document
-    html = document.add_html_node(0, 0, "<p>original safe markup</p>")
+    parent = document.add_chat_node(0, 0, "parent", is_user=True)
+    html = document.add_html_node(20, 0, "<p>original safe markup</p>", parent.id)
     result = _edit(client, _revision(client), "set_node_content", {
         "node_id": html.id, "content": "<script>window.evil()</script>",
     }, "no-executable-html-001")
