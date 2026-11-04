@@ -19,6 +19,7 @@ from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_access import optional_node, require_node
 from backend.domain.node_states import (
+    ARTIFACT_MAX_CHARS,
     ArtifactState,
     CodeSandboxState,
     WebResearchState,
@@ -187,6 +188,23 @@ class AgentRunOps(SceneDocumentParts):
         already do for ConversationNode."""
         return self.append_artifact_user_message(node_id, text)
 
+    def set_artifact_content(self, node_id: str, new_content: str, expected_content: str) -> SceneNode:
+        """Commit a user's Markdown edit using optimistic concurrency.
+
+        A stale browser view must not overwrite a newer model reply, undo,
+        or another editor. The client sends the content it actually edited
+        as expected_content; mismatches fail without touching the document.
+        This operation is wrapped in an undoable user command by the API.
+        """
+        node = require_node(self.nodes, node_id, "artifact", ArtifactState)
+        if not isinstance(new_content, str) or len(new_content) > ARTIFACT_MAX_CHARS:
+            raise SceneError(f"Artifact content must be text of at most {ARTIFACT_MAX_CHARS} characters.")
+        if not isinstance(expected_content, str) or node.state.artifact_content != expected_content:
+            raise SceneError("Artifact changed since editing began; copy your draft and reopen the latest document.")
+        node.state.artifact_content = new_content
+        node.state.artifact_error = ""
+        return node
+
     def complete_artifact_generation(self, node_id: str, new_content, ai_message: str) -> SceneNode:
         """Land a successful generation turn: WHOLE-DOCUMENT REPLACE (never an
         append/merge - the model returns the entire document every turn, see
@@ -198,7 +216,9 @@ class AgentRunOps(SceneDocumentParts):
         stage-stepper/persisted-error field here for a mid-flight delete to
         race against)."""
         node = require_node(self.nodes, node_id, "artifact", ArtifactState)
-        node.state.artifact_content = str(new_content)
+        if not isinstance(new_content, str) or len(new_content) > ARTIFACT_MAX_CHARS:
+            raise SceneError(f"Generated Artifact exceeds the {ARTIFACT_MAX_CHARS}-character limit; the existing document was preserved.")
+        node.state.artifact_content = new_content
         node.state.artifact_error = ""
         node.history.append({"role": "assistant", "content": str(ai_message)})
         return node
