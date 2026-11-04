@@ -431,7 +431,9 @@ class TestShellSessions:
         second_root.mkdir()
         script = first_root / "echo_loop.py"
         script.write_text(
-            "import sys\\nfor line in sys.stdin:\\n print(line.strip(), flush=True)\\n",
+            "import sys\n"
+            "for line in sys.stdin:\n"
+            "    print(line.strip(), flush=True)\n",
             encoding="utf-8",
         )
         first_ctx = _tool_ctx(first_root)
