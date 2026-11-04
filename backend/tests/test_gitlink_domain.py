@@ -189,6 +189,95 @@ def test_request_expect_json_false_returns_raw_content_bytes(monkeypatch):
     assert client.request("https://example.com/x", expect_json=False) == b"raw-bytes-here"
 
 
+def test_bounded_archive_download_rejects_oversize_stream_without_reading_content(monkeypatch):
+    """A forged small Content-Length is not a defense against an oversized stream."""
+    calls = []
+
+    class StreamResponse:
+        status_code = 200
+        headers = {"Content-Length": "1"}
+
+        @property
+        def content(self):
+            raise AssertionError("bounded downloads must never buffer response.content")
+
+        def iter_content(self, chunk_size):
+            assert chunk_size <= 65536
+            yield b"ab"
+            yield b"cdef"
+
+        def close(self):
+            calls.append("closed")
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return StreamResponse()
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    client = GitHubRestClient(_FakeSettingsManagerWithToken("ghp_secret"))
+    with pytest.raises(RuntimeError, match="compressed size limit"):
+        client.request("https://api.github.com/repos/o/r/zipball/main",
+                       expect_json=False, max_bytes=5)
+    assert calls[0][1]["stream"] is True
+    assert calls[0][1]["allow_redirects"] is False
+    assert calls[-1] == "closed"
+
+
+def test_bounded_archive_download_refuses_redirects_to_local_or_attacker_host(monkeypatch):
+    requested = []
+
+    class RedirectResponse:
+        status_code = 302
+        headers = {"Location": "http://127.0.0.1:8765/api/health"}
+
+        def close(self):
+            pass
+
+    def fake_get(url, **kwargs):
+        requested.append((url, kwargs))
+        return RedirectResponse()
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    client = GitHubRestClient(_FakeSettingsManagerWithToken("ghp_secret"))
+    with pytest.raises(RuntimeError, match="untrusted destination"):
+        client.request("https://api.github.com/repos/o/r/zipball/main",
+                       expect_json=False, max_bytes=4096)
+    assert len(requested) == 1, "a rejected redirect must not trigger an outbound request"
+    assert "Authorization" in requested[0][1]["headers"]
+
+
+def test_bounded_archive_download_pins_redirects_to_github_and_strips_token(monkeypatch):
+    headers_seen = []
+    closed = []
+
+    class StreamResponse:
+        def __init__(self, status_code, headers, data=b""):
+            self.status_code = status_code
+            self.headers = headers
+            self._data = data
+
+        def iter_content(self, chunk_size):
+            yield self._data
+
+        def close(self):
+            closed.append(self.status_code)
+
+    def fake_get(url, **kwargs):
+        headers_seen.append((url, kwargs["headers"]))
+        if len(headers_seen) == 1:
+            return StreamResponse(302, {"Location": "https://codeload.github.com/o/r/legacy.zip/abc"})
+        return StreamResponse(200, {}, b"zip-contents")
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    client = GitHubRestClient(_FakeSettingsManagerWithToken("ghp_secret"))
+    payload = client.request("https://api.github.com/repos/o/r/zipball/main",
+                             expect_json=False, max_bytes=100)
+    assert payload == b"zip-contents"
+    assert "Authorization" in headers_seen[0][1]
+    assert "Authorization" not in headers_seen[1][1]
+    assert closed == [302, 200]
+
+
 def test_request_404_raises_friendly_not_found_message(monkeypatch):
     monkeypatch.setattr(
         github_client_module.requests, "get",
@@ -1006,6 +1095,71 @@ def test_download_repository_snapshot_extracts_zip_and_moves_to_target(tmp_path)
     assert zip_call["expect_json"] is False
     assert zip_call["timeout"] == 60
     assert zip_call["max_bytes"] == repository_module.MAX_REPO_ARCHIVE_DOWNLOAD_BYTES
+
+
+@pytest.mark.parametrize(("entries", "expected_error"), [
+    ({"../escape.txt": b"x"}, "unsafe file path"),
+    ({"/etc/passwd": b"x"}, "unsafe file path"),
+    ({"C:/windows/hosts": b"x"}, "unsafe file path"),
+    ({"a.txt": b"ok", "B.txt": b"extra"}, "one top-level directory"),
+])
+def test_repository_import_rejects_unsafe_archive_names_before_extraction(tmp_path, entries, expected_error):
+    client = _FakeGithubClient({
+        "https://api.github.com/repos/o/r/zipball/main": _zip_bytes(entries),
+    })
+    target = tmp_path / "checkout"
+    with pytest.raises(RuntimeError, match=expected_error):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
+    assert not target.exists()
+
+
+def test_repository_import_rejects_excessive_entry_sizes_and_counts(tmp_path, monkeypatch):
+    monkeypatch.setattr(repository_module, "MAX_REPO_ARCHIVE_MEMBER_BYTES", 4)
+    target = tmp_path / "checkout"
+    client = _FakeGithubClient({
+        "https://api.github.com/repos/o/r/zipball/main": _zip_bytes({"huge.txt": b"12345"}),
+    })
+    with pytest.raises(RuntimeError, match="member exceeds"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
+    assert not target.exists()
+
+    monkeypatch.setattr(repository_module, "MAX_REPO_ARCHIVE_MEMBER_BYTES", 100)
+    monkeypatch.setattr(repository_module, "MAX_REPO_ARCHIVE_UNPACKED_BYTES", 5)
+    client = _FakeGithubClient({
+        "https://api.github.com/repos/o/r/zipball/main": _zip_bytes({
+            "a.txt": b"aaa", "b.txt": b"bbb",
+        }),
+    })
+    with pytest.raises(RuntimeError, match="total extraction size"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
+
+    monkeypatch.setattr(repository_module, "MAX_REPO_ARCHIVE_UNPACKED_BYTES", 100)
+    monkeypatch.setattr(repository_module, "MAX_REPO_ARCHIVE_MEMBERS", 1)
+    with pytest.raises(RuntimeError, match="too many entries"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
+    assert not target.exists()
+
+
+def test_repository_import_rejects_case_collisions_and_symlink_entries(tmp_path):
+    import stat
+
+    base_url = "https://api.github.com/repos/o/r/zipball/main"
+    for mode in ("collision", "symlink"):
+        buffer = BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            if mode == "collision":
+                archive.writestr("repo-abc123/A.py", b"one")
+                archive.writestr("repo-abc123/a.py", b"two")
+            else:
+                link = zipfile.ZipInfo("repo-abc123/link")
+                link.create_system = 3  # POSIX mode bits in external_attr.
+                link.external_attr = (stat.S_IFLNK | 0o777) << 16
+                archive.writestr(link, b"../../outside")
+        target = tmp_path / mode
+        client = _FakeGithubClient({base_url: buffer.getvalue()})
+        with pytest.raises(RuntimeError, match="duplicate file paths|symbolic-link"):
+            GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
+        assert not target.exists()
 
 
 def test_download_repository_snapshot_quotes_branch_name_fully():
