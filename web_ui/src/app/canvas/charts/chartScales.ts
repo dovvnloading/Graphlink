@@ -137,9 +137,16 @@ export interface HistogramBin {
  * for the final bin (a value exactly equal to the max lands in the last
  * bin rather than overflowing). */
 export function computeHistogramBins(values: number[], bins: number): HistogramBin[] {
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const width = (max - min) / bins || 1;
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  // Like matplotlib's histogram, widen a constant-valued dataset around
+  // that value. The old `|| 1` bin width expanded only to the RIGHT:
+  // [7, 7, 7] appeared over [7, 7+bins], with the true mean/median on the
+  // left boundary instead of centered in the graph.
+  const padding = rawMin === rawMax ? Math.max(0.5, Math.abs(rawMin) * 0.05) : 0;
+  const min = rawMin - padding;
+  const max = rawMax + padding;
+  const width = (max - min) / bins;
   const counts = new Array(bins).fill(0);
   for (const value of values) {
     let index = Math.floor((value - min) / width);

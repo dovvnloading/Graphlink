@@ -117,6 +117,20 @@ describe("computeHistogramBins", () => {
     expect(bins[bins.length - 1].x1).toBe(9);
   });
 
+  it("centers constant-valued histograms around the real data point", () => {
+    const bins = computeHistogramBins([7, 7, 7], 4);
+    expect(bins).toHaveLength(4);
+    expect(bins[0].x0).toBeLessThan(7);
+    expect(bins[bins.length - 1].x1).toBeGreaterThan(7);
+    expect((bins[0].x0 + bins[bins.length - 1].x1) / 2).toBeCloseTo(7);
+    expect(bins.reduce((sum, bin) => sum + bin.count, 0)).toBe(3);
+    expect(bins[0].count).toBe(0);
+
+    const zero = computeHistogramBins([0, 0], 2);
+    expect(zero[0].x0).toBeLessThan(0);
+    expect(zero[1].x1).toBeGreaterThan(0);
+  });
+
   it("puts a value exactly equal to the max into the last bin, not an overflow bin", () => {
     const bins = computeHistogramBins([0, 10], 2);
     expect(bins).toHaveLength(2);
