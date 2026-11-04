@@ -20,6 +20,82 @@ from __future__ import annotations
 
 import base64
 import os
+from urllib.parse import urljoin
+
+import requests
+
+# Generated images can be larger than the web-research text fetch limit,
+# but must not be allowed to exhaust the application process.
+MAX_PROVIDER_IMAGE_BYTES = 16 * 1024 * 1024
+
+
+def _fetch_provider_image_url(image_url: str) -> bytes:
+    """Fetch provider-returned image data using a validated, pinned socket.
+
+    A URL preflight followed by urllib.request.urlopen is not an SSRF
+    boundary: urllib resolves the host AGAIN and automatically follows
+    redirects to unrelated destinations. Reuse web research's pinned
+    adapter and validate each redirect BEFORE making another request.
+    """
+    from graphlink_plugins.web_research.fetch_policy import FetchPolicy, URLPolicyError
+    from graphlink_plugins.web_research.providers import _PinnedHTTPAdapter
+
+    policy = FetchPolicy(max_bytes=MAX_PROVIDER_IMAGE_BYTES)
+    current_url = image_url
+    with requests.Session() as session:
+        # Never inherit an ambient proxy that could route the validated
+        # destination elsewhere or receive user credentials.
+        session.trust_env = False
+        for hop in range(policy.max_redirects + 1):
+            try:
+                target = policy.validate(current_url)
+            except URLPolicyError as exc:
+                raise RuntimeError(
+                    f"Image endpoint returned a URL blocked by fetch policy: {exc}"
+                ) from exc
+
+            session.mount("https://", _PinnedHTTPAdapter(target.pinned_ip))
+            try:
+                response = session.get(
+                    target.canonical_url,
+                    timeout=(policy.connect_timeout_seconds, policy.read_timeout_seconds),
+                    allow_redirects=False,
+                    stream=True,
+                )
+            except requests.RequestException as exc:
+                raise RuntimeError("Image endpoint image download failed.") from exc
+
+            try:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    if hop >= policy.max_redirects:
+                        raise RuntimeError("Image endpoint exceeded the redirect limit.")
+                    location = response.headers.get("Location")
+                    if not location:
+                        raise RuntimeError("Image endpoint returned an empty redirect.")
+                    current_url = urljoin(target.canonical_url, location)
+                    continue
+
+                try:
+                    response.raise_for_status()
+                    claimed_size = response.headers.get("Content-Length", "")
+                    if str(claimed_size).isdigit() and int(claimed_size) > MAX_PROVIDER_IMAGE_BYTES:
+                        raise RuntimeError("Image endpoint image exceeds the download limit.")
+                    chunks = []
+                    total = 0
+                    for chunk in response.iter_content(chunk_size=65536):
+                        if not chunk:
+                            continue
+                        total += len(chunk)
+                        if total > MAX_PROVIDER_IMAGE_BYTES:
+                            raise RuntimeError("Image endpoint image exceeds the download limit.")
+                        chunks.append(chunk)
+                    return b"".join(chunks)
+                except requests.RequestException as exc:
+                    raise RuntimeError("Image endpoint image download failed.") from exc
+            finally:
+                response.close()
+
+    raise RuntimeError("Image endpoint exceeded the redirect limit.")
 
 
 def _read_attachment_bytes(file_path: str, attachment_kind: str) -> bytes:
@@ -64,33 +140,7 @@ def _extract_openai_image_bytes(response) -> bytes:
     if not image_url and isinstance(first_item, dict):
         image_url = first_item.get("url")
     if image_url:
-        # SECURITY-FIX: image_url comes verbatim from the image endpoint's
-        # response - the OpenAI-compatible base_url is user-configurable and,
-        # under the threat model, a hostile or MITM'd provider response
-        # (boundary (d)) is untrusted. urllib.request.urlopen installs the
-        # file://, data: and ftp: handlers by default, so an unchecked URL
-        # here let a response body read an arbitrary LOCAL file (proven:
-        # file:///.../secret returned the file's bytes) or hit an internal
-        # host - classic SSRF - with the bytes then persisted and served
-        # back. The web_research subsystem already solved exactly this for
-        # LLM-reached URLs; reuse its audited FetchPolicy (https-only,
-        # rejects private/loopback/link-local/metadata addresses) rather
-        # than rolling a second, weaker check here.
-        from graphlink_plugins.web_research.fetch_policy import FetchPolicy, URLPolicyError
-
-        try:
-            FetchPolicy().validate(image_url)
-        except URLPolicyError as exc:
-            raise RuntimeError(
-                f"Image endpoint returned a URL blocked by fetch policy: {exc}"
-            ) from exc
-        try:
-            with _mod.urllib.request.urlopen(image_url, timeout=120) as resp:
-                return resp.read()
-        except Exception as exc:
-            raise RuntimeError(
-                f"Image endpoint returned a URL, but the image download failed: {exc}"
-            ) from exc
+        return _fetch_provider_image_url(str(image_url))
 
     raise RuntimeError("Image endpoint response did not include b64_json or a URL.")
 
