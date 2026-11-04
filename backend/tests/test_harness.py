@@ -244,6 +244,18 @@ class TestFsTools:
         assert listing.is_error and "narrower pattern" in listing.content
         assert grep.is_error and "narrower pattern" in grep.content
 
+    def test_regex_backtracking_is_interrupted_by_search_timeout(self, workspace_root, monkeypatch):
+        from backend.harness import tools_fs as fs
+
+        ws = ensure_workspace("ws1")
+        (ws / "worst-case.txt").write_text("a" * 2000 + "!", encoding="utf-8")
+        monkeypatch.setattr(fs, "_GREP_MATCH_TIMEOUT_SECONDS", 0.002)
+        registry = self._registry()
+        result = asyncio.run(registry.invoke(
+            call("1", "fs.grep", pattern="(a+)+$"), make_ctx("ws1"),
+        ))
+        assert result.is_error and "timed out" in result.content
+
     def test_read_output_is_capped(self, workspace_root, monkeypatch):
         from backend.harness import tools_fs as tools_fs_module
 

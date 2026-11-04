@@ -18,8 +18,9 @@ never a crash.
 
 from __future__ import annotations
 
-import re
+import time
 
+import regex as re
 from pathlib import Path
 
 from backend.harness.workspace import WorkspaceError, resolve_under_root, workspace_dir
@@ -44,6 +45,12 @@ _GREP_CAP_MATCHES = 100
 _GREP_LINE_CAP = 400
 _GREP_FILE_SIZE_CAP = 2_000_000  # bytes; larger files are skipped, and say so
 _GREP_PATTERN_CAP = 500
+# Python stdlib re has no timeout. An attacker-controlled pattern such as
+# (a+)+$ against a matching file can run for hours under an auto-approved
+# read scope. The regex engine is already pinned in the dependency lock;
+# enforce both per-search and aggregate budgets.
+_GREP_MATCH_TIMEOUT_SECONDS = 0.05
+_GREP_TOTAL_BUDGET_SECONDS = 3.0
 
 FS_READ_SPEC = ToolSpec(
     name="fs.read",
@@ -249,8 +256,11 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         file_glob = str(call.arguments.get("glob") or "**/*")
         matches: list[str] = []
         skipped_large = 0
+        started = time.monotonic()
         try:
             for resolved, relative in _iter_under_root(root, file_glob):
+                if time.monotonic() - started > _GREP_TOTAL_BUDGET_SECONDS:
+                    return ToolResult(content="fs.grep exceeded its search time budget.", is_error=True)
                 if len(matches) >= _GREP_CAP_MATCHES:
                     break
                 if not resolved.is_file():
@@ -265,7 +275,13 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
                 if "\x00" in text[:1024]:
                     continue  # binary
                 for line_number, line in enumerate(text.splitlines(), start=1):
-                    if expression.search(line):
+                    if time.monotonic() - started > _GREP_TOTAL_BUDGET_SECONDS:
+                        return ToolResult(content="fs.grep exceeded its search time budget.", is_error=True)
+                    try:
+                        found = expression.search(line, timeout=_GREP_MATCH_TIMEOUT_SECONDS)
+                    except TimeoutError:
+                        return ToolResult(content="fs.grep regular expression timed out; simplify the pattern.", is_error=True)
+                    if found:
                         snippet = line if len(line) <= _GREP_LINE_CAP else line[:_GREP_LINE_CAP] + "…"
                         matches.append(f"{relative}:{line_number}: {snippet}")
                         if len(matches) >= _GREP_CAP_MATCHES:
