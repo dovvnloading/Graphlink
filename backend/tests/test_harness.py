@@ -189,6 +189,54 @@ class TestFsTools:
         result = asyncio.run(go())
         assert result.is_error and "outside" in result.content
 
+    def test_large_workspace_file_is_refused_before_unbounded_read(self, workspace_root, monkeypatch):
+        from backend.harness import tools_fs as tools_fs_module
+
+        monkeypatch.setattr(tools_fs_module, "_READ_FILE_CAP_BYTES", 32)
+        ws = ensure_workspace("ws1")
+        (ws / "large.txt").write_bytes(b"x" * 64)
+        registry = self._registry()
+        result = asyncio.run(
+            registry.invoke(call("1", "fs.read", path="large.txt"), make_ctx("ws1"))
+        )
+        assert result.is_error and "read limit" in result.content
+
+    def test_listing_does_not_materialize_every_glob_match_before_cap(self, workspace_root, monkeypatch):
+        from pathlib import Path
+
+        ws = ensure_workspace("ws1")
+        real_glob = Path.glob
+
+        def synthetic_glob(self, pattern):
+            if self != ws or pattern != "*.txt":
+                yield from real_glob(self, pattern)
+                return
+            for i in range(502):
+                if i == 501:
+                    raise AssertionError("listing eagerly enumerated beyond its 500-entry cap")
+                yield ws / f"fake_{i}.txt"
+
+        monkeypatch.setattr(Path, "glob", synthetic_glob)
+        registry = self._registry()
+        result = asyncio.run(
+            registry.invoke(call("1", "fs.list", pattern="*.txt"), make_ctx("ws1"))
+        )
+        assert not result.is_error
+        assert "capped at 500 entries" in result.content
+
+    def test_grep_restricts_scanned_file_count_without_matches(self, workspace_root, monkeypatch):
+        from backend.harness import tools_fs as tools_fs_module
+
+        monkeypatch.setattr(tools_fs_module, "_GREP_SCANNED_FILE_CAP", 2)
+        ws = ensure_workspace("ws1")
+        for i in range(3):
+            (ws / f"file_{i}.txt").write_text("no match here", encoding="utf-8")
+        registry = self._registry()
+        result = asyncio.run(
+            registry.invoke(call("1", "fs.grep", pattern="missing_marker"), make_ctx("ws1"))
+        )
+        assert not result.is_error and "search capped at 2 files" in result.content
+
     def test_read_output_is_capped(self, workspace_root, monkeypatch):
         from backend.harness import tools_fs as tools_fs_module
 
@@ -362,6 +410,33 @@ class TestWriteTools:
         assert not wrote.is_error and not edited.is_error
         assert (ws / "out" / "a.txt").read_text(encoding="utf-8") == "alpha gamma"
         assert decisions == ["fs.write", "fs.edit"]
+
+    def test_edit_large_file_fails_without_changing_it(self, workspace_root, monkeypatch):
+        from backend.harness import tools_fs as tools_fs_module
+
+        monkeypatch.setattr(tools_fs_module, "_READ_FILE_CAP_BYTES", 32)
+        ws = ensure_workspace("ws1")
+        (ws / "oversized.txt").write_text("a" * 64, encoding="utf-8")
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+
+        result = asyncio.run(registry.invoke(
+            call("1", "fs.edit", path="oversized.txt", old_string="a", new_string="b"), ctx,
+        ))
+        assert result.is_error and "read limit" in result.content
+        assert (ws / "oversized.txt").read_text(encoding="utf-8") == "a" * 64
+
+    def test_edit_invalid_utf8_returns_tool_error(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        (ws / "binary.txt").write_bytes(b"start\xffend")
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+
+        result = asyncio.run(registry.invoke(
+            call("1", "fs.edit", path="binary.txt", old_string="start", new_string="x"), ctx,
+        ))
+        assert result.is_error and "Could not read file" in result.content
+        assert (ws / "binary.txt").read_bytes() == b"start\xffend"
 
     def test_denied_write_leaves_disk_untouched(self, workspace_root):
         ws = ensure_workspace("ws1")
