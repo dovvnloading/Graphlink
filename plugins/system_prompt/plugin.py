@@ -138,7 +138,7 @@ def _execute(
     **to** that note, which would create an ineffective prompt-of-a-prompt.
     """
     selected = document.nodes.get(parent_node_id) if parent_node_id else None
-    if _is_prompt_note(selected):
+    if selected is not None and _is_prompt_note(selected):
         return selected.id
 
     root = _branch_root(document, selected)
