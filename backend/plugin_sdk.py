@@ -833,6 +833,12 @@ class PluginRegistry:
         # declared scopes list - the registry held no manifest at all before
         # this stage, since nothing needed one past discovery time.
         self.manifests: dict[str, PluginManifest] = {}
+        # Metadata discovery is inert for third-party packages. Only bundled
+        # first-party plugins and explicitly approved third-party plugins may
+        # reach Python imports or worker startup. Track actual activation
+        # separately from parsed manifests (which the grants UI must show).
+        self.loaded_plugin_ids: set[str] = set()
+        self.failed_plugin_ids: set[str] = set()
         # ADR-014 stage 14.5: plugin_id -> its RESIDENT worker subprocess
         # client, populated ONLY for a successfully-discovered
         # out-of-process plugin (see _discover_out_of_process_plugin's own
@@ -1292,7 +1298,7 @@ def _discover_out_of_process_plugin(
     return host, worker_client
 
 
-_REGISTRY_CACHE: dict[Path, PluginRegistry] = {}
+_REGISTRY_CACHE: dict[tuple[Path, bool], PluginRegistry] = {}
 # ADR-014 review-fix: guards the whole check-then-scan-then-set sequence
 # below against a concurrent-first-caller race. discover_plugins() is
 # UNREACHABLE via any real production call path today with more than one OS
@@ -1529,22 +1535,57 @@ def _merge_into_registry(
     registry.intents.extend(host._intents)
 
 
+def _load_declared_plugin(
+    registry: PluginRegistry, manifest: PluginManifest, builtin_names: frozenset[str],
+) -> None:
+    """Execute registration only for trusted bundled code or a consented plugin.
+
+    Importing a Python module executes its top-level code; starting an
+    out-of-process worker does the same inside that worker. Neither operation
+    belongs in the metadata-only phase for an unapproved extension.
+    """
+    worker_client = None
+    try:
+        if manifest.runtime_isolation == "out-of-process":
+            host, worker_client = _discover_out_of_process_plugin(manifest, manifest.source_dir)
+        else:
+            module = _import_entry_module(manifest, manifest.source_dir)
+            _module_name, _, fn_name = manifest.entry_point.partition(":")
+            register_fn = getattr(module, fn_name)
+            host = HostContext(manifest.id)
+            register_fn(host)
+        _merge_into_registry(registry, host, builtin_names)
+    except Exception:
+        if worker_client is not None:
+            worker_client.close()
+        raise
+    registry.loaded_plugin_ids.add(manifest.id)
+    if worker_client is not None:
+        registry.worker_clients[manifest.id] = worker_client
+
+
 def discover_plugins(
     plugins_root: Path = DEFAULT_PLUGINS_ROOT, *, builtin_names: frozenset[str] = frozenset(),
+    load_unapproved_for_tests: bool = False,
 ) -> PluginRegistry:
-    """Real filesystem scan + import, memoized by resolved path so a
-    process that calls this many times (every create_app() in a pytest
-    run, via register_plugins) only pays the real cost once. Tests that
-    need isolation pass a distinct tmp_path-derived plugins_root - a fresh
-    key, never touching the shared cache entry for the real repo path.
+    """Discover manifests without running unapproved third-party Python.
 
-    ADR-014 review-fix: the whole check-then-scan-then-set body now runs
-    under _REGISTRY_CACHE_LOCK - see that lock's own module-level comment
-    for the concurrent-first-caller race this closes and why holding it for
-    the full scan (not just the dict access) is the right, simplest fix."""
+    The eight bundled first-party integrations are trusted application code
+    and retain their existing registration behavior. Every other manifest is
+    *data only* until activate_granted_plugins checks the persisted consent.
+    This keeps a row in Settings > Plugins without importing plugin.py or
+    starting a worker merely to enumerate it.
+
+    load_unapproved_for_tests is an explicit, unsafe opt-in for isolated
+    SDK test fixtures exercising the historical eager-registration contract.
+    Production callers must never enable it. Secure and fixture registries
+    have separate cache entries so an eager test cannot contaminate the
+    secure registry for the same root.
+    """
     resolved = plugins_root.resolve()
+    cache_key = (resolved, load_unapproved_for_tests)
     with _REGISTRY_CACHE_LOCK:
-        cached = _REGISTRY_CACHE.get(resolved)
+        cached = _REGISTRY_CACHE.get(cache_key)
         if cached is not None:
             return cached
 
@@ -1555,37 +1596,49 @@ def discover_plugins(
                 try:
                     manifest = _load_manifest(manifest_path, plugin_dir)
                     _check_sdk_api_version(manifest)
-                    # ADR-014 stage 14.5: the ONLY branch point discovery
-                    # gained this stage. "in-process" (every plugin before
-                    # this stage, and every plugin that omits [runtime]
-                    # entirely) keeps the EXACT pre-14.5 path - import the
-                    # module into the host process, call its real
-                    # register(host) directly - byte-identical to before.
-                    # "out-of-process" never imports the plugin's module
-                    # into this process at all; see
-                    # _discover_out_of_process_plugin's own docstring.
-                    worker_client = None
-                    if manifest.runtime_isolation == "out-of-process":
-                        host, worker_client = _discover_out_of_process_plugin(manifest, plugin_dir)
-                    else:
-                        module = _import_entry_module(manifest, plugin_dir)
-                        _module_name, _, fn_name = manifest.entry_point.partition(":")
-                        register_fn = getattr(module, fn_name)
-                        host = HostContext(manifest.id)
-                        register_fn(host)
-                    try:
-                        _merge_into_registry(registry, host, builtin_names)
-                    except Exception:
-                        if worker_client is not None:
-                            worker_client.close()
-                        raise
+                    is_bundled = (
+                        resolved == DEFAULT_PLUGINS_ROOT.resolve()
+                        and manifest.id in _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS
+                    )
+                    if is_bundled or load_unapproved_for_tests:
+                        _load_declared_plugin(registry, manifest, builtin_names)
                     registry.manifests[manifest.id] = manifest
-                    if worker_client is not None:
-                        registry.worker_clients[manifest.id] = worker_client
                 except Exception as exc:
                     registry.load_errors.append(
                         PluginLoadError(plugin_dir.name, f"{type(exc).__name__}: {exc}")
                     )
                     logger.warning("plugin discovery: skipping %s (%s)", plugin_dir.name, exc)
-        _REGISTRY_CACHE[resolved] = registry
+        _REGISTRY_CACHE[cache_key] = registry
         return registry
+
+
+def activate_granted_plugins(
+    registry: PluginRegistry, settings_manager,
+    *, builtin_names: frozenset[str] = frozenset(),
+) -> None:
+    """Activate previously discovered extensions only after an explicit grant.
+
+    In-place activation preserves references held by the session, Builder,
+    and serializers to the memoized registry. The discovery lock also
+    serializes concurrent grant requests so no worker starts twice.
+    """
+    grants = settings_manager.get_plugin_grants()
+    with _REGISTRY_CACHE_LOCK:
+        for plugin_id, granted in grants.items():
+            if (
+                not granted
+                or plugin_id in registry.loaded_plugin_ids
+                or plugin_id in registry.failed_plugin_ids
+            ):
+                continue
+            manifest = registry.manifests.get(plugin_id)
+            if manifest is None:
+                continue
+            try:
+                _load_declared_plugin(registry, manifest, builtin_names)
+            except Exception as exc:
+                registry.failed_plugin_ids.add(plugin_id)
+                registry.load_errors.append(
+                    PluginLoadError(plugin_id, f"{type(exc).__name__}: {exc}")
+                )
+                logger.warning("approved plugin activation failed: %s (%s)", plugin_id, exc)

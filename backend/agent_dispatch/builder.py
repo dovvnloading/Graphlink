@@ -171,11 +171,12 @@ class BuilderDispatchOps(DispatcherParts):
         from backend import agents as agents_module  # deferred: patch-seam + circular-import safety
         if self._settings_manager is None:
             return
-        from backend.plugin_sdk import discover_plugins
+        from backend.plugin_sdk import activate_granted_plugins, discover_plugins
         from backend.plugins import register_plugin_tools
 
         try:
             plugin_registry = discover_plugins()
+            activate_granted_plugins(plugin_registry, self._settings_manager)
             register_plugin_tools(registry, plugin_registry, self._settings_manager, document)
         except Exception:
             agents_module.logger.exception("could not register plugin-declared tools")
