@@ -109,7 +109,7 @@ def test_ungranted_generic_plugin_denies_node_creation_with_a_clear_notification
         tmp_path / "plugins", "denyme", scopes_toml='[scopes]\ngrants = ["graph.mutate"]',
         picker_name="Deny Me Node",
     )
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
 
@@ -134,7 +134,7 @@ def test_granting_the_same_plugin_then_allows_the_identical_dispatch_to_succeed(
         tmp_path / "plugins", "allowme", scopes_toml='[scopes]\ngrants = ["graph.mutate"]',
         picker_name="Allow Me Node",
     )
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
 
@@ -172,7 +172,7 @@ def test_ungranted_plugin_denies_even_with_no_parent_selected_grant_checked_firs
         tmp_path / "plugins", "denyme2", scopes_toml='[scopes]\ngrants = ["graph.mutate"]',
         picker_name="Deny Me Two",
     )
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
 
     result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Deny Me Two"]))
@@ -186,7 +186,7 @@ def test_a_plugin_with_no_scopes_table_still_requires_an_explicit_grant(tmp_path
     # Omitting [scopes] entirely -> scopes_grants == frozenset(), which is
     # NOT the same as "trusted" - install-time consent is still required.
     _write_grant_test_plugin(tmp_path / "plugins", "noscopes", picker_name="No Scopes Node")
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     assert registry.manifests["noscopes"].scopes_grants == frozenset()
 
     bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
@@ -282,7 +282,7 @@ def test_revoking_a_plugins_grant_stops_its_live_wire_serializer_from_running(tm
     _write_grant_test_plugin(
         tmp_path / "plugins", "statefulgrant1", register_body=_stateful_grant_py_body("Grant Widget 1"),
     )
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
     settings_manager.set_plugin_grant("statefulgrant1", True)
     parent = canvas_document.add_node(10, 20, "parent")
@@ -312,7 +312,7 @@ def test_ungranted_plugins_serializer_is_skipped_on_save_when_settings_manager_i
     _write_grant_test_plugin(
         tmp_path / "plugins", "statefulgrant2", register_body=_stateful_grant_py_body("Grant Widget 2"),
     )
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
     settings_manager.set_plugin_grant("statefulgrant2", True)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
@@ -345,7 +345,7 @@ def test_ungranted_plugins_deserializer_is_skipped_on_load_when_settings_manager
     _write_grant_test_plugin(
         tmp_path / "plugins", "statefulgrant3", register_body=_stateful_grant_py_body("Grant Widget 3"),
     )
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
     settings_manager.set_plugin_grant("statefulgrant3", True)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
@@ -393,7 +393,7 @@ def test_unknown_scope_in_manifest_is_rejected_at_discovery_fail_soft_per_plugin
         picker_name="Good Sibling Node",
     )
 
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "badscope"
@@ -430,7 +430,7 @@ def test_grants_value_that_is_a_bare_string_not_a_list_is_rejected_at_discovery_
         picker_name="Good Sibling Two Node",
     )
 
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "badgrantstype"
@@ -451,7 +451,7 @@ def test_grants_list_containing_a_non_string_element_is_rejected_at_discovery_fa
         picker_name="Bad Grants Element Node",
     )
 
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "badgrantselement"
@@ -607,7 +607,7 @@ def _write_intent_plugin(plugins_root, plugin_id):
 
 def test_invoke_plugin_intent_denies_an_ungranted_plugins_custom_intent(tmp_path):
     _write_intent_plugin(tmp_path / "plugins", "intentplug")
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     assert len(registry.intents) == 1
     bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
 
@@ -623,7 +623,7 @@ def test_invoke_plugin_intent_denies_an_ungranted_plugins_custom_intent(tmp_path
 
 def test_invoke_plugin_intent_allows_the_same_dispatch_once_granted(tmp_path):
     _write_intent_plugin(tmp_path / "plugins", "intentplug2")
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
 
     denied = asyncio.run(
@@ -640,7 +640,7 @@ def test_invoke_plugin_intent_allows_the_same_dispatch_once_granted(tmp_path):
 
 
 def test_invoke_plugin_intent_shows_a_warning_for_an_unknown_plugin_or_intent_name(tmp_path):
-    registry = discover_plugins(tmp_path / "empty-plugins")
+    registry = discover_plugins(tmp_path / "empty-plugins", load_unapproved_for_tests=True)
     bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
 
     result = asyncio.run(
@@ -706,7 +706,7 @@ def test_set_plugin_grant_intent_persists_and_republishes_the_app_plugins_topic(
         tmp_path / "plugins", "livegrant", scopes_toml='[scopes]\ngrants = ["graph.mutate"]',
         picker_name="Live Grant Node",
     )
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
 
     class Recorder:
@@ -786,7 +786,7 @@ def test_grants_payload_has_one_row_per_distinct_plugin_id_not_per_picker_entry(
         """),
         encoding="utf-8",
     )
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     settings_manager = SettingsManager(tmp_path / "store" / "session.dat")
 
     payload = plugins_payload(registry, settings_manager)
