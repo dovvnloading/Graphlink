@@ -19,6 +19,7 @@ function baseData(overrides: Partial<ArtifactFlowNode["data"]> = {}): ArtifactFl
     onToggleCollapse: vi.fn(),
     onDelete: vi.fn(),
     onSubmit: vi.fn(),
+    onSetContent: vi.fn(),
     onCancel: vi.fn(),
     ...overrides,
   };
@@ -357,6 +358,7 @@ describe("ArtifactNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
     ["onToggleCollapse", { onToggleCollapse: vi.fn() }],
     ["onDelete", { onDelete: vi.fn() }],
     ["onSubmit", { onSubmit: vi.fn() }],
+    ["onSetContent", { onSetContent: vi.fn() }],
     ["onCancel", { onCancel: vi.fn() }],
   ] as const)("returns false when data.%s changes and nothing else does", (_name, override) => {
     const a = props();
@@ -416,5 +418,53 @@ describe("ArtifactNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
     );
     expect(root.className).not.toBe("CORRUPTED");
     expect(root.className).toContain("selected");
+  });
+});
+
+
+describe("ArtifactNodeView editor and export", () => {
+  it("opens a real Markdown editor populated with the saved document", async () => {
+    const user = userEvent.setup();
+    renderArtifactNode({ artifactContent: "# My draft" });
+    await user.click(screen.getByRole("button", { name: "Edit Markdown" }));
+    expect(screen.getByRole("textbox", { name: "Edit document Markdown" })).toHaveValue("# My draft");
+    expect(screen.getByRole("button", { name: "Save changes" })).toBeInTheDocument();
+  });
+
+  it("saves with the original document as the optimistic-concurrency precondition", async () => {
+    const user = userEvent.setup();
+    const onSetContent = vi.fn((_newContent, _expected, settled) => settled(true));
+    renderArtifactNode({ artifactContent: "# Old", onSetContent });
+    await user.click(screen.getByRole("button", { name: "Edit Markdown" }));
+    const editor = screen.getByRole("textbox", { name: "Edit document Markdown" });
+    await user.clear(editor);
+    await user.type(editor, "# New");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(onSetContent).toHaveBeenCalledWith("# New", "# Old", expect.any(Function));
+    expect(screen.queryByRole("textbox", { name: "Edit document Markdown" })).toBeNull();
+  });
+
+  it("keeps uncommitted draft visible after a rejected save", async () => {
+    const user = userEvent.setup();
+    const onSetContent = vi.fn((_newContent, _expected, settled) => settled(false));
+    renderArtifactNode({ artifactContent: "Original", onSetContent });
+    await user.click(screen.getByRole("button", { name: "Edit Markdown" }));
+    const editor = screen.getByRole("textbox", { name: "Edit document Markdown" });
+    await user.clear(editor);
+    await user.type(editor, "Not lost");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(editor).toHaveValue("Not lost");
+    expect(screen.getByRole("alert")).toHaveTextContent("Save failed");
+  });
+
+  it("does not allow manual editing while an Artifact generation is running", () => {
+    renderArtifactNode({ artifactContent: "Old", pendingRequestId: "running" });
+    expect(screen.getByRole("button", { name: "Edit Markdown" })).toBeDisabled();
+  });
+
+  it("shows a source export affordance and document word count", () => {
+    renderArtifactNode({ artifactContent: "# Hello world" });
+    expect(screen.getByRole("button", { name: "Download .md" })).toBeEnabled();
+    expect(screen.getByText("3 words")).toBeInTheDocument();
   });
 });
