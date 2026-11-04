@@ -1,0 +1,94 @@
+{
+  "name": "tool_error_recovery",
+  "kind": "agent_build",
+  "input": {
+    "goal": "An invalid tool call must not mutate the canvas",
+    "mode": "autopilot",
+    "steps": [
+      "Recover from a tool error"
+    ],
+    "runs": [
+      {
+        "turns": [
+          {
+            "tool_calls": [
+              {
+                "id": "bad",
+                "name": "graph.create_node",
+                "arguments": {
+                  "kind": "document",
+                  "title": "Orphan",
+                  "content": "Invalid without parent"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          },
+          {
+            "tool_calls": [
+              {
+                "id": "good",
+                "name": "graph.create_node",
+                "arguments": {
+                  "kind": "note",
+                  "content": "Recovered safely"
+                }
+              },
+              {
+                "id": "complete",
+                "name": "builder.complete_step",
+                "arguments": {
+                  "summary": "Recovered after tool feedback"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "status": "done",
+    "run_statuses": [
+      "done"
+    ],
+    "steps": [
+      {
+        "title": "Recover from a tool error",
+        "status": "done",
+        "detail": "Recovered after tool feedback"
+      }
+    ],
+    "nodes": [
+      {
+        "kind": "note",
+        "content": "Recovered safely"
+      }
+    ],
+    "edges": [],
+    "activity": [
+      {
+        "tool": "graph.create_node",
+        "outcome": "error"
+      },
+      {
+        "tool": "graph.create_node",
+        "outcome": "ok"
+      },
+      {
+        "tool": "builder.complete_step",
+        "outcome": "ok"
+      }
+    ],
+    "approvals": [],
+    "spent_steps": 1,
+    "spent_tokens": 50
+  }
+}

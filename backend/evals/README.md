@@ -1,11 +1,9 @@
 # Local evals harness (ADR-016 stage 16.5)
 
-A lightweight, local eval harness: golden fixtures + optional live-provider
-run for the agent/chart/structured-output paths (see
-`doc/adr/ADR-016-observability-and-cost.md`, section "4. Evals harness").
-Kept off-CI on purpose: the default mode is deterministic and CI-safe (see
-`backend/tests/test_evals_harness.py`), but the point of the harness is to
-be reproducible locally with either a scripted response or a real model.
+A local eval harness: golden fixtures for chart generation, structured
+output, and the real Builder execution loop. Its offline mode is deterministic
+and runs in CI through `backend/tests/test_evals_harness.py`. Charts and
+structured output can also be exercised against a configured live provider.
 
 ## The three dimensions
 
@@ -18,35 +16,28 @@ be reproducible locally with either a scripted response or a real model.
   `graphlink_chart_data.canonicalize_chart_data`.
 - **structured_output** - drives the real `backend.structured_output.respond_json`
   against a JSON Schema + scripted model response.
-- **agent_build** - ADR-008's Builder agent tool-use loop does not exist as
-  shipped code yet (design-doc only - see
-  `doc/adr/ADR-008-agentic-graph-construction.md`, stages 8.1-8.6). This
-  dimension always reports `status="not_implemented"`, on every fixture,
-  and never raises - it exists as honest scaffolding for when the loop
-  actually ships.
+- **agent_build** - executes the actual `backend.builder.run_build`
+  coroutine against a real `SceneDocument`, `ToolRegistry`, and
+  `RunRegistry`. Only the model's tool-call turns are scripted. It checks
+  node and edge output, completed steps, approvals, tool outcomes, budgets,
+  and transitions across resume. The eval registry has **no network, code
+  execution, provider or MCP tools**, so it stays offline even with `--live`.
 
 ## Running it
 
+``bash
+python -m backend.evals            # fully scripted, deterministic, offline
+python -m backend.evals --live     # live chart/structured-output model calls only
+python -m pytest -q backend/tests/test_evals_harness.py
 ```
-python -m backend.evals            # default: scripted responses, deterministic, no network
-python -m backend.evals --live     # real, already-configured provider
-```
 
-Default mode patches `api_provider.chat` with `unittest.mock.patch.object`
-so it never touches a real provider or the network - safe to run anytime,
-on any machine, with no configuration. It exits nonzero if any fixture's
-`status == "failed"`. `status == "not_implemented"` (the whole agent_build
-dimension, today) is informational and never fails the exit code.
-
-`--live` skips the patch and calls straight through to whatever provider is
-actually configured for this machine (a real API key, or a running Ollama/
-llama.cpp instance) - this is the "optional LLM-judge" mode the ADR
-mentions; there is no separate judging model wired in beyond that
-straight call-through, and a live run's result depends on that day's real
-model output, so it is not expected to be as stable as the default mode.
-
-The same fixtures also run under `pytest` in default (patched) mode - see
-`backend/tests/test_evals_harness.py`, part of the normal CI suite.
+The CLI exits nonzero if any fixture fails. In default mode chart and
+structured-output calls patch `api_provider.chat`; Builder calls patch
+`api_provider.chat_turn_with_tools` while exercising the real Builder
+coroutine and graph tools. No configured provider, API key, or network is
+needed. `--live` does not change Builder scoring, since live agent execution
+would involve permission and side-effect risks. There is no LLM-as-judge;
+all dimensions compare observed results against exact expectations.
 
 ## Fixture shape
 
@@ -64,9 +55,10 @@ Each fixture is one JSON file under `backend/evals/fixtures/<kind>/`, where
 ```
 
 - `name` is optional (falls back to the filename minus `.json`).
-- `scripted_response` and `expected` may both be `null` (used by the
-  `agent_build` placeholder fixture, since that dimension never reads
-  either field).
+- `scripted_response` contains the raw text returned by chart or
+  structured-output models. Builder fixtures set it to `null` and use
+  scripted tool turns inside `input.runs` instead. All shipped fixtures
+  require an explicit `expected` object.
 
 ### chart fixtures
 
@@ -102,9 +94,64 @@ the parsed dict `respond_json` should return.
 
 ### agent_build fixtures
 
-`input` can be anything descriptive (for example `{"goal": "..."}`) - the
-scorer never inspects it. These fixtures exist to name the builds this
-dimension will eventually cover, not to be scored today.
+Builder input declares a goal, mode, ordered step titles, and one or more
+execution runs. Each run has its own ordered model turns, optional approval
+answers, and optional budget overrides (`max_steps`, `max_tokens`,
+`max_wall_seconds`). A second run executes the same plan node, preserving
+spent budgets and completed steps, so a pause/resume test is real.
+
+```json
+{
+  "name": "example_note",
+  "kind": "agent_build",
+  "input": {
+    "goal": "Write a note",
+    "mode": "autopilot",
+    "steps": ["Create the note"],
+    "runs": [{
+      "turns": [{
+        "usage": {"prompt_tokens": 20, "completion_tokens": 5},
+        "tool_calls": [
+          {"id": "create", "name": "graph.create_node",
+           "arguments": {"kind": "note", "content": "Hello"}},
+          {"id": "done", "name": "builder.complete_step",
+           "arguments": {"summary": "Note written"}}
+        ]
+      }]
+    }]
+  },
+  "scripted_response": null,
+  "expected": {
+    "status": "done", "run_statuses": ["done"],
+    "steps": [{"title": "Create the note", "status": "done", "detail": "Note written"}],
+    "nodes": [{"kind": "note", "content": "Hello"}],
+    "edges": [],
+    "activity": [
+      {"tool": "graph.create_node", "outcome": "ok"},
+      {"tool": "builder.complete_step", "outcome": "ok"}
+    ],
+    "approvals": [], "spent_steps": 1, "spent_tokens": 25
+  }
+}
+```
+
+`expected` must include all nine scoring fields above. Node and edge lists
+are order-independent; activity, approval prompts and step progress are
+order-sensitive. To additionally check the final banner, set
+`status_detail_contains`. For a co-pilot run, specify `"approvals": [true,
+false]` in the order approvals are requested, and assert the names of those
+requests in `expected.approvals`.
+
+For tools that need an earlier created node's id, use a string like
+`"$node:create"` in a later turn's arguments. The eval provider resolves
+it from the *actual* `graph.create_node` tool response, so fixture steps
+cannot depend on a guessed node id. A reference in the same turn as its
+create call is invalid. Running out of scripted turns, leaving turns unused,
+or requesting a tool outside the offline allowlist fails the evaluation.
+
+These are **execution-state and graph-output tests**, not an assessment of
+a live model's ability to reason. The scripted model controls tool choice;
+the real Builder owns all mutations, approvals, budgets and checkpoints.
 
 ## Adding a fixture
 
@@ -114,5 +161,5 @@ dimension will eventually cover, not to be scored today.
 3. For a chart fixture, derive `expected` by actually running
    `canonicalize_chart_data` (see above) - never hand-write it.
 4. Run `python -m backend.evals` and confirm your new fixture shows `PASS`.
-5. If it should be part of CI, add or extend a case in
-   `backend/tests/test_evals_harness.py`.
+5. For Builder fixtures, include all required expected graph/state fields
+   and one or more fully scripted runs. The shipped fixture suite is CI-gated.

@@ -1,14 +1,12 @@
 """ADR-016 stage 16.5 eval scorers: one function per eval dimension, plus
 ``run_all`` to run every shipped fixture across all three.
 
-Default (``live=False``) mode patches ``api_provider.chat`` with
-``unittest.mock.patch.object`` so a run is fully deterministic and safe on
-any machine, with no configured provider and no network - this is the mode
-backend/tests/test_evals_harness.py exercises, and the mode
-``python -m backend.evals`` uses unless ``--live`` is passed. ``patch.object``
-is used (not pytest's own ``monkeypatch`` fixture) specifically because this
-module must also work as a plain script outside pytest - see
-backend/evals/README.md.
+Chart/structured-output fixtures patch ``api_provider.chat`` with
+``unittest.mock.patch.object``. Builder fixtures instead run the production
+``run_build`` coroutine with a scripted ``chat_turn_with_tools`` seam and
+real graph/registry/approval state; the latter deliberately remains offline
+even under ``--live`` (there are no network or code-execution tools registered).
+All default fixtures are deterministic and runnable without provider keys.
 
 ``live=True`` skips the patch and lets api_provider.chat() reach whatever
 provider is actually configured (a real API key, or a running Ollama/
@@ -31,9 +29,8 @@ from graphlink_chart_data import CHART_JSON_SCHEMAS, ChartDataError, canonicaliz
 from backend.evals.fixtures import EvalFixture, load_fixtures
 from backend.structured_output import StructuredOutputError, respond_json
 
-# Valid EvalResult.status values. "not_implemented" is informational, never
-# a failure - see run_agent_build_fixture and backend/evals/__main__.py's
-# exit-code logic.
+# Valid EvalResult statuses. Keep the legacy not_implemented label for
+# compatibility with consumers of old eval results; no shipped fixture uses it.
 _STATUSES = ("passed", "failed", "not_implemented")
 
 
@@ -136,27 +133,24 @@ def run_structured_output_fixture(fixture: EvalFixture, *, live: bool = False) -
     return EvalResult(fixture.name, "structured_output", "passed", "parsed object matched the golden fixture")
 
 
-# -- agent_build (ADR-008 stub) ----------------------------------------------
+# -- agent_build (real Builder loop) -----------------------------------------
 
 
 def run_agent_build_fixture(fixture: EvalFixture, *, live: bool = False) -> EvalResult:
-    """ADR-008's Builder agent tool-use loop (plan -> propose tool call ->
-    execute -> observe -> checkpoint) does not exist as shipped code - it is
-    design-doc text only (doc/adr/ADR-008-agentic-graph-construction.md,
-    stages 8.1-8.6, all pending: no create_node/run_node tool, no loop, no
-    checkpoints). Scoring "did the build succeed" against nothing to run is
-    not meaningful, so this dimension is honest scaffolding: it ALWAYS
-    reports not_implemented, on every fixture, regardless of input - never a
-    fake pass, and never an exception that would misread as a harness bug
-    once a real loop lands here. ``live`` is accepted for interface
-    symmetry with the other two runners but has no effect."""
-    return EvalResult(
-        fixture.name,
-        "agent_build",
-        "not_implemented",
-        "ADR-008 Builder agent loop is not implemented yet - this dimension is "
-        "scaffolding only, see doc/adr/ADR-008-agentic-graph-construction.md",
-    )
+    """Exercise the actual Builder against offline scripted tool turns.
+
+    The live flag intentionally has no effect here: unlike chart prompting,
+    Builder evals are side-effect-sensitive and always use their restricted
+    local ToolRegistry. A missing/invalid fixture must FAIL, not silently
+    count as a passing or unimplemented evaluation.
+    """
+    from backend.evals.agent_build import evaluate_builder
+
+    try:
+        passed, detail = evaluate_builder(fixture)
+    except Exception as exc:
+        return EvalResult(fixture.name, "agent_build", "failed", f"Builder evaluation error: {exc}")
+    return EvalResult(fixture.name, "agent_build", "passed" if passed else "failed", detail)
 
 
 # -- run everything -----------------------------------------------------
