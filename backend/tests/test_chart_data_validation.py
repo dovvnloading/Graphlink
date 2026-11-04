@@ -50,7 +50,7 @@ def test_canonicalize_chart_data_rejects_wrong_containers_and_non_finite_numbers
 
 def test_numeric_validation_reports_overflow_as_chart_data_error():
     with pytest.raises(ChartDataError, match="finite"):
-        canonicalize_chart_data(_bar_data(values=[10**1000]), "bar")
+        canonicalize_chart_data(_bar_data(values=[10**1000, 2, 3]), "bar")
 
 
 def test_sankey_rejects_non_finite_aggregate_and_node_throughput():
