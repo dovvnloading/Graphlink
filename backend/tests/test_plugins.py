@@ -93,7 +93,7 @@ def test_get_plugin_categories_appends_more_plugins_only_if_uncategorized():
     # category ("More Plugins"), which is what proves the catch-all
     # activates for genuinely uncategorized entries. No SHIPPED plugin is
     # uncategorized any more - see this module's own header comment.
-    grouped = get_plugin_categories(discover_plugins(FIXTURE_PLUGINS_ROOT))
+    grouped = get_plugin_categories(discover_plugins(FIXTURE_PLUGINS_ROOT, load_unapproved_for_tests=True))
     more_plugins = next(c for c in grouped if c["name"] == "More Plugins")
     plugin_names = {p["name"] for p in more_plugins["plugins"]}
     assert {"Hello Node", "Counter Node"} <= plugin_names
