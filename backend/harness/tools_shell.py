@@ -244,6 +244,12 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
         if action != "list" and not name:
             return ToolResult(content=f"shell.session '{action}' needs a session name.", is_error=True)
         try:
+            workspace = _workspace_for(ctx)
+            # Rebinding a harness from a trusted user directory to scratch
+            # must not leave an old interactive shell accessible via stdin.
+            # Do this for EVERY action, not only start: an immediate 'write'
+            # after a rebind used to skip root validation entirely.
+            await asyncio.to_thread(session_registry.bind_root, workspace_id, workspace)
             if action == "list":
                 rows = session_registry.names(workspace_id)
                 if not rows:
@@ -262,7 +268,6 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
                     return ToolResult(
                         content=f"Command longer than {_COMMAND_CAP_CHARS} characters.", is_error=True,
                     )
-                workspace = _workspace_for(ctx)
                 session = await asyncio.to_thread(
                     session_registry.start, workspace_id, name, command, workspace,
                 )
@@ -281,13 +286,13 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
                 text = call.arguments.get("input")
                 if not isinstance(text, str) or not text:
                     return ToolResult(content="shell.session 'write' needs non-empty input.", is_error=True)
-                session = session_registry.get(workspace_id, name)
+                session = session_registry.get(workspace_id, name, expected_root=workspace)
                 await asyncio.to_thread(session.write, text)
                 output = await _settle(session)
                 return ToolResult(content=output or f"Wrote to {name!r} (no output yet).")
 
             if action == "read":
-                session = session_registry.get(workspace_id, name)
+                session = session_registry.get(workspace_id, name, expected_root=workspace)
                 output = session.read_new()
                 status = "running" if session.running else f"exited ({session.exit_code})"
                 return ToolResult(content=f"[{status}]\n{output}".rstrip())
