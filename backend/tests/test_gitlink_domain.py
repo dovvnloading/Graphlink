@@ -1059,15 +1059,29 @@ def test_repository_snapshot_rejects_oversized_download(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("hostile_path", [
-    "repo-abc/../../escape.txt", "/absolute.txt", "repo-abc/\\escaped.txt",
+    "repo-abc/../../escape.txt", "/absolute.txt", "repo-abc//double.txt",
 ])
 def test_repository_snapshot_rejects_hostile_zip_paths(tmp_path, hostile_path):
     url = "https://api.github.com/repos/o/r/zipball/main"
-    client = _FakeGithubClient({url: _zip_bytes({hostile_path: b"content"}, top_dir="")})
-    # _zip_bytes prefixes a slash for the empty top_dir; both absolute
-    # and traversal names are invalid regardless of that wrapper.
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr(hostile_path, b"content")
+    client = _FakeGithubClient({url: buffer.getvalue()})
     with pytest.raises(RuntimeError, match="unsafe ZIP path"):
         GitlinkRepository(client).download_repository_snapshot("o/r", "main", tmp_path / "checkout")
+
+
+def test_repository_snapshot_accepts_normal_directory_entries(tmp_path):
+    url = "https://api.github.com/repos/o/r/zipball/main"
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("repo-abc/", b"")
+        archive.writestr("repo-abc/sub/", b"")
+        archive.writestr("repo-abc/sub/file.txt", b"test")
+    client = _FakeGithubClient({url: buffer.getvalue()})
+    target = tmp_path / "checkout"
+    GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
+    assert (target / "sub" / "file.txt").read_bytes() == b"test"
 
 
 def test_download_repository_snapshot_quotes_branch_name_fully():
