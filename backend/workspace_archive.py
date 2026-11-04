@@ -43,6 +43,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,6 +80,27 @@ MAX_MEMBER_BYTES = 256 * 1024 * 1024
 # across every real member, checked in the same infolist() pass that
 # already enforces the per-member cap.
 MAX_TOTAL_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+
+
+_WINDOWS_REPLACE_BACKOFF_SECONDS = (0.01, 0.03, 0.06, 0.1)
+
+
+def _is_transient_windows_replace_error(exc: PermissionError) -> bool:
+    """WinError 5/32 can mean another exporter has the same target open."""
+    return os.name == "nt" and getattr(exc, "winerror", None) in (5, 32)
+
+
+def _publish_archive(staging: Path, target: Path) -> None:
+    """Retry only transient Windows sharing collisions, never permanent denial."""
+    for attempt in range(len(_WINDOWS_REPLACE_BACKOFF_SECONDS) + 1):
+        try:
+            os.replace(staging, target)
+            return
+        except PermissionError as exc:
+            if (not _is_transient_windows_replace_error(exc)
+                    or attempt >= len(_WINDOWS_REPLACE_BACKOFF_SECONDS)):
+                raise
+            time.sleep(_WINDOWS_REPLACE_BACKOFF_SECONDS[attempt])
 
 
 class ArchiveError(Exception):
@@ -223,7 +245,7 @@ def export_archive(
             archive.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2))
         # Publish only after ZipFile has closed successfully. Keep cleanup
         # in this same try so a rename failure also leaves no staged file.
-        os.replace(tmp_path, archive_path)
+        _publish_archive(tmp_path, archive_path)
         return archive_path
     finally:
         try:
