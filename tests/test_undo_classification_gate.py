@@ -281,10 +281,12 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # cancelCodeReviewRequest/askCodeReviewQuestion/dismissCodeReviewFinding
     # septet (backend/api/intents_code_review.py), and 186 -> 187 when the
     # HTML node got a real commit path for its edited source
-    # (scene/setHtmlContent, backend/api/intents_nodes.py).
+    # (scene/setHtmlContent, backend/api/intents_nodes.py), and 187 -> 188
+    # when Artifact/Drafter gained undoable, conflict-checked Markdown editing
+    # (scene/setArtifactContent, backend/api/intents_artifact.py).
     real = _collect_real_registrations()
-    assert len(real) == 187, (
-        f"expected exactly 187 real registered intents, found {len(real)} - "
+    assert len(real) == 188, (
+        f"expected exactly 188 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"
