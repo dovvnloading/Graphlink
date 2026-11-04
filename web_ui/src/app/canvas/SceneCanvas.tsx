@@ -908,6 +908,8 @@ function makeArtifactFns(id: string, liveRef: { current: DispatcherLive }) {
     },
     onDelete: () => liveRef.current.store.removeNodes([id]),
     onSubmit: (text: string) => liveRef.current.store.sendArtifactMessage(id, text),
+    onSetContent: (content: string, expectedContent: string, onSettled: (success: boolean) => void) =>
+      liveRef.current.store.setArtifactContent(id, content, expectedContent, onSettled),
     onCancel: () => {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.cancelArtifactRequest(n.pendingRequestId);
