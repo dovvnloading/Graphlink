@@ -967,6 +967,9 @@ def _build_chat_data(
     pattern precisely."""
     if plugin_registry is None:
         plugin_registry = discover_plugins()
+    if settings_manager is not None:
+        from backend.plugin_sdk import activate_granted_plugins
+        activate_granted_plugins(plugin_registry, settings_manager)
     # ADR-014 stage 14.2: a plugin-registered node kind (namespaced
     # "plugin_id.kind", so it can never collide with _REGULAR_KINDS) is
     # now ALSO a "regular" node for save purposes - included in the exact
