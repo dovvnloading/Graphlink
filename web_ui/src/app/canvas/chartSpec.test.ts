@@ -87,8 +87,8 @@ describe("canonicalizeChartSpec", () => {
 
   it("does not collide when a sankey node name contains a separator", () => {
     const flows = [
-      { source: "A\\u0000B", target: "C", value: 1 },
-      { source: "A", target: "B\\u0000C", value: 2 },
+      { source: "A\u0000B", target: "C", value: 1 },
+      { source: "A", target: "B\u0000C", value: 2 },
     ];
     const result = canonicalizeChartSpec({ type: "sankey", flows }, "sankey");
     expect(result.flows).toHaveLength(2);
