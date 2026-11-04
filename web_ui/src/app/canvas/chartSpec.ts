@@ -43,7 +43,15 @@ function cleanText(value: unknown, fieldName: string, opts: { default?: string; 
 }
 
 function finiteNumber(value: unknown, fieldName: string): number {
-  if (typeof value === "boolean") throw new ChartSpecError(`${fieldName} must be a finite number`);
+  // Number(null), Number(""), Number([]), and Number("0x10") all succeed
+  // in JavaScript, but Python's float(value) rejects these inputs. Keep
+  // this defensive frontend validator aligned with the backend parser.
+  if (typeof value !== "number" && typeof value !== "string") {
+    throw new ChartSpecError(`${fieldName} must be a finite number`);
+  }
+  if (typeof value === "string" && !/^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$/.test(value.trim())) {
+    throw new ChartSpecError(`${fieldName} must be a finite number`);
+  }
   const num = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(num)) throw new ChartSpecError(`${fieldName} must be a finite number`);
   return num;
@@ -205,13 +213,29 @@ export function canonicalizeChartSpec(data: unknown, chartType?: string | null):
     const target = cleanText(flowRecord.target, `Sankey target at index ${index}`);
     const value = finiteNumber(flowRecord.value, `Sankey value at index ${index}`);
     if (value <= 0) throw new ChartSpecError(`Sankey value at index ${index} must be greater than zero`);
-    const key = `${source} ${target}`;
+    // A pair's boundary must be unambiguous even if a user-provided
+    // source/target contains the delimiter (NUL is valid in JSON strings).
+    const key = JSON.stringify([source, target]);
     const existing = aggregated.get(key);
-    aggregated.set(key, { source, target, value: (existing?.value ?? 0) + value });
+    const total = (existing?.value ?? 0) + value;
+    if (!Number.isFinite(total)) throw new ChartSpecError("Sankey flow totals must be finite");
+    aggregated.set(key, { source, target, value: total });
   });
   const flows = [...aggregated.values()].sort((a, b) =>
     a.source === b.source ? a.target.localeCompare(b.target) : a.source.localeCompare(b.source),
   );
+  // Distinct edges can also overflow source or sink node throughput.
+  const outgoingTotals = new Map<string, number>();
+  const incomingTotals = new Map<string, number>();
+  for (const flow of flows) {
+    const out = (outgoingTotals.get(flow.source) ?? 0) + flow.value;
+    const input = (incomingTotals.get(flow.target) ?? 0) + flow.value;
+    if (!Number.isFinite(out) || !Number.isFinite(input)) {
+      throw new ChartSpecError("Sankey node totals must be finite");
+    }
+    outgoingTotals.set(flow.source, out);
+    incomingTotals.set(flow.target, input);
+  }
   assertAcyclic(flows);
   result.flows = flows;
   return result;

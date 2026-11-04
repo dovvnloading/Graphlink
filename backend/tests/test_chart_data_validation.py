@@ -48,6 +48,27 @@ def test_canonicalize_chart_data_rejects_wrong_containers_and_non_finite_numbers
         assert "finite" in str(exc)
 
 
+def test_numeric_validation_reports_overflow_as_chart_data_error():
+    with pytest.raises(ChartDataError, match="finite"):
+        canonicalize_chart_data(_bar_data(values=[10**1000]), "bar")
+
+
+def test_sankey_rejects_non_finite_aggregate_and_node_throughput():
+    # Each input is individually finite; summing can still become infinity
+    # and poison both the generated SVG and the matplotlib PNG renderer.
+    with pytest.raises(ChartDataError, match="flow totals must be finite"):
+        canonicalize_chart_data({"type": "sankey", "flows": [
+            {"source": "A", "target": "B", "value": 1e308},
+            {"source": "A", "target": "B", "value": 1e308},
+        ]})
+
+    with pytest.raises(ChartDataError, match="node totals must be finite"):
+        canonicalize_chart_data({"type": "sankey", "flows": [
+            {"source": "A", "target": "B", "value": 1e308},
+            {"source": "A", "target": "C", "value": 1e308},
+        ]})
+
+
 def test_canonicalize_chart_data_aggregates_duplicate_sankey_flows_and_rejects_cycles():
     canonical = canonicalize_chart_data(
         {

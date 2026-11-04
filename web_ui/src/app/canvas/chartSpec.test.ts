@@ -39,6 +39,14 @@ describe("canonicalizeChartSpec", () => {
     expect(() => canonicalizeChartSpec(barData({ values: [1, NaN, 3] }), "bar")).toThrow(/finite/);
   });
 
+  it("does not accept JavaScript-only Number coercions Python would reject", () => {
+    for (const value of [null, true, false, [], [5], {}, "", "  ", "0x10", "0b11"]) {
+      expect(() => canonicalizeChartSpec(barData({ values: [value, 2, 3] }), "bar")).toThrow(/finite/);
+    }
+    expect(canonicalizeChartSpec(barData({ values: [" 1.25 ", "3e2", -4] }), "bar").values)
+      .toEqual([1.25, 300, -4]);
+  });
+
   it("rejects mismatched labels/values length", () => {
     expect(() => canonicalizeChartSpec(barData({ values: [1, 2] }), "bar")).toThrow(/same length/);
   });
@@ -75,6 +83,27 @@ describe("canonicalizeChartSpec", () => {
       "sankey",
     );
     expect(canonical.flows).toEqual([{ source: "A", target: "B", value: 3 }]);
+  });
+
+  it("does not collide when a sankey node name contains a separator", () => {
+    const flows = [
+      { source: "A\\u0000B", target: "C", value: 1 },
+      { source: "A", target: "B\\u0000C", value: 2 },
+    ];
+    const result = canonicalizeChartSpec({ type: "sankey", flows }, "sankey");
+    expect(result.flows).toHaveLength(2);
+    expect(result.flows).toEqual(expect.arrayContaining(flows));
+  });
+
+  it("rejects overflow after adding duplicate or distinct sankey flows", () => {
+    expect(() => canonicalizeChartSpec({ type: "sankey", flows: [
+      { source: "A", target: "B", value: 1e308 },
+      { source: "A", target: "B", value: 1e308 },
+    ] }, "sankey")).toThrow(/flow totals must be finite/);
+    expect(() => canonicalizeChartSpec({ type: "sankey", flows: [
+      { source: "A", target: "B", value: 1e308 },
+      { source: "A", target: "C", value: 1e308 },
+    ] }, "sankey")).toThrow(/node totals must be finite/);
   });
 
   it("rejects a sankey cycle", () => {
