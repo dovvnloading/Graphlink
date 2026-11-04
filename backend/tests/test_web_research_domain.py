@@ -717,3 +717,96 @@ class TestRunProgressEvents:
         service = _service()
         result = service.run(_request())  # progress=None (the default)
         assert result.answer_markdown  # the run still completes normally
+
+
+# Regression: a real Stop raises RequestCancelled, not ResearchFailure(code="cancelled").
+# The latter was already covered above but did not catch the broad except Exception.
+
+
+def test_request_cancelled_in_search_is_not_reported_as_search_failed():
+    search = FakeSearchProvider([_search_result("s1")], error=RequestCancelled("stop"))
+    service = _service(search=search)
+    with pytest.raises(RequestCancelled):
+        service.run(_request())
+
+
+def test_cancellation_after_empty_search_does_not_report_no_results():
+    class CancellingSearch(FakeSearchProvider):
+        def search(self, query, *, limits, token):
+            token.cancel()
+            return []
+
+    service = _service(search=CancellingSearch([]))
+    with pytest.raises(RequestCancelled):
+        service.run(_request())
+
+
+def test_request_cancelled_mid_fetch_is_not_a_failed_source():
+    results = [_search_result("s1"), _search_result("s2")]
+    fetcher = FakeFetcher(errors={"s1": RequestCancelled("stop")})
+    service = _service(search=FakeSearchProvider(results), fetcher=fetcher)
+    with pytest.raises(RequestCancelled):
+        service.run(_request())
+    assert fetcher.calls == ["s1"]
+
+
+def test_cancellation_during_summary_cannot_produce_a_completed_result():
+    class CancellingModel(FakeModel):
+        def summarize(self, query, history, evidence, *, limits, token):
+            answer = super().summarize(query, history, evidence, limits=limits, token=token)
+            token.cancel()
+            return answer
+
+    with pytest.raises(RequestCancelled):
+        _service(model=CancellingModel()).run(_request())
+
+
+def test_abbreviated_hash_source_marker_is_rewritten_to_the_exact_id():
+    source_id = "s1-abcdef0123"
+    service = _service(
+        search=FakeSearchProvider([_search_result(source_id)]),
+        extractor=FakeExtractor(),
+        model=FakeModel(answer="A supported claim [s1]."),
+    )
+    result = service.run(_request())
+    assert result.answer_markdown == f"A supported claim [{source_id}]."
+    assert result.sources[0].citation_count == 1
+    assert result.citations[0].marker == f"[{source_id}]"
+    assert not result.warnings
+
+
+def test_unsupported_model_citations_are_removed_and_flagged():
+    source_id = "s1-abcdef0123"
+    service = _service(
+        search=FakeSearchProvider([_search_result(source_id)]),
+        extractor=FakeExtractor(),
+        model=FakeModel(answer="Supported [s1]. Invented [s999]."),
+    )
+    result = service.run(_request())
+    assert f"[{source_id}]" in result.answer_markdown
+    assert "[s999]" not in result.answer_markdown
+    assert any("unsupported citations" in warning for warning in result.warnings)
+    assert result.sources[0].citation_count == 1
+
+
+def test_unrecognized_citations_alone_cannot_suppress_the_source_fallback():
+    service = _service(model=FakeModel(answer="Unsupported assertion [s999]."))
+    result = service.run(_request())
+    assert "[s999]" not in result.answer_markdown
+    assert "### Sources" in result.answer_markdown
+    assert "[s1]" in result.answer_markdown
+    assert result.sources[0].citation_count == 0
+    assert any("did not emit inline citations" in warning for warning in result.warnings)
+
+
+def test_rejected_sources_cannot_be_cited_by_abbreviated_marker():
+    results = [_search_result("s1-abcdef0123"), _search_result("s2-123abc4560")]
+    model = FakeModel(
+        assessments={"s2-123abc4560": SourceAssessment(accepted=False, reason="off_topic")},
+        answer="Right [s1]. Wrong [s2].",
+    )
+    service = _service(search=FakeSearchProvider(results), extractor=FakeExtractor(), model=model)
+    result = service.run(_request())
+    assert "[s1-abcdef0123]" in result.answer_markdown
+    assert "[s2]" not in result.answer_markdown
+    assert "s2-123abc4560" not in {citation.source_id for citation in result.citations}
