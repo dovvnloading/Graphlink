@@ -701,9 +701,14 @@ def test_parallel_exports_use_independent_staging_files(tmp_path, monkeypatch):
     archive = tmp_path / "parallel.graphlink"
     barrier = threading.Barrier(2)
     real_replace = archive_module.os.replace
+    attempted = threading.local()
 
     def synchronized_replace(source, destination):
-        barrier.wait(timeout=10)
+        # Only synchronize EACH thread's first publish attempt. A Windows
+        # retry must not wait at the barrier again after its peer exited.
+        if not getattr(attempted, "first", False):
+            attempted.first = True
+            barrier.wait(timeout=10)
         return real_replace(source, destination)
 
     monkeypatch.setattr(archive_module.os, "replace", synchronized_replace)
@@ -715,6 +720,52 @@ def test_parallel_exports_use_independent_staging_files(tmp_path, monkeypatch):
         assert [future.result(timeout=15) for future in futures] == [archive, archive]
 
     assert import_archive(archive)[0]["title"] in {"first", "second"}
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_export_retries_one_windows_sharing_violation(tmp_path, monkeypatch):
+    from backend import workspace_archive as archive_module
+
+    archive = tmp_path / "retry.graphlink"
+    real_replace = archive_module.os.replace
+    attempts = []
+
+    def temporarily_locked(source, destination):
+        attempts.append((source, destination))
+        if len(attempts) == 1:
+            error = PermissionError("simulated WinError 5")
+            error.winerror = 5
+            raise error
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(archive_module.os, "replace", temporarily_locked)
+    monkeypatch.setattr(archive_module.time, "sleep", lambda _seconds: None)
+    assert export_archive(archive, [_chat(title="my exact export")]) == archive
+    assert import_archive(archive)[0]["title"] == "my exact export"
+    assert len(attempts) == 2
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_export_does_not_mask_permanent_windows_access_denial(tmp_path, monkeypatch):
+    from backend import workspace_archive as archive_module
+
+    archive = tmp_path / "denied.graphlink"
+    real_replace = archive_module.os.replace
+    export_archive(archive, [_chat(title="existing")])
+    attempts = []
+
+    def permanently_locked(source, destination):
+        attempts.append((source, destination))
+        error = PermissionError("simulated permanent WinError 5")
+        error.winerror = 5
+        raise error
+
+    monkeypatch.setattr(archive_module.os, "replace", permanently_locked)
+    monkeypatch.setattr(archive_module.time, "sleep", lambda _seconds: None)
+    with pytest.raises(PermissionError, match="permanent"):
+        export_archive(archive, [_chat(title="new")])
+    assert len(attempts) == 6, "retry must be bounded"
+    assert import_archive(archive)[0]["title"] == "existing"
     assert not list(tmp_path.glob("*.tmp"))
 
 
