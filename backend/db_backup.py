@@ -51,6 +51,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -63,6 +64,28 @@ _TIMESTAMP_FORMAT = "%Y%m%dT%H%M%SZ"
 # See this module's own docstring ("RETENTION POLICY") for the full
 # reasoning behind this exact number.
 KEEP_MOST_RECENT = 10
+
+# Windows can temporarily refuse replacing an already-open destination
+# while two same-second backups race to publish their complete snapshots.
+# Keep the same closed staging DB, retry a few times, and fail loudly if
+# the sharing violation does not clear. No retry for unrelated failures.
+_WINDOWS_PUBLISH_BACKOFF_SECONDS = (0.01, 0.03, 0.06, 0.1)
+
+
+def _is_transient_windows_publish_error(exc: PermissionError) -> bool:
+    return os.name == "nt" and getattr(exc, "winerror", None) in (5, 32)
+
+
+def _publish_backup(staging: Path, destination: Path) -> None:
+    for attempt in range(len(_WINDOWS_PUBLISH_BACKOFF_SECONDS) + 1):
+        try:
+            os.replace(staging, destination)
+            return
+        except PermissionError as exc:
+            if (not _is_transient_windows_publish_error(exc)
+                    or attempt == len(_WINDOWS_PUBLISH_BACKOFF_SECONDS)):
+                raise
+            time.sleep(_WINDOWS_PUBLISH_BACKOFF_SECONDS[attempt])
 
 
 # ADR-017 stage 17.1 note: every function below now accepts an optional
@@ -252,7 +275,7 @@ def take_backup(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> Path 
             os.chmod(tmp_path, 0o600)
         except OSError:
             logger.warning("could not chmod %s to 0600 - continuing", tmp_path)
-        os.replace(tmp_path, final_path)
+        _publish_backup(tmp_path, final_path)
     finally:
         # Also clean up if SQLite backup or the atomic rename failed.
         tmp_path.unlink(missing_ok=True)
