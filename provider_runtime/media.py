@@ -117,10 +117,21 @@ def _read_attachment_bytes(file_path: str, attachment_kind: str) -> bytes:
 
 
 def _decode_base64_image(image_data: str) -> bytes:
+    # Provider-supplied base64 is untrusted just like provider-supplied URLs.
+    # Bound the ENCODED string before decoding: a giant JSON blob must not
+    # allocate a second, equally giant decoded buffer in this process.
+    if not isinstance(image_data, (str, bytes)):
+        raise RuntimeError("Generated image payload is not base64 text.")
+    max_base64_chars = 4 * ((MAX_PROVIDER_IMAGE_BYTES + 2) // 3) + 4
+    if len(image_data) > max_base64_chars:
+        raise RuntimeError("Generated image payload exceeds the download limit.")
     try:
-        return base64.b64decode(image_data)
+        decoded = base64.b64decode(image_data)
     except Exception as exc:
         raise RuntimeError(f"Failed to decode generated image payload: {exc}") from exc
+    if len(decoded) > MAX_PROVIDER_IMAGE_BYTES:
+        raise RuntimeError("Generated image payload exceeds the download limit.")
+    return decoded
 
 
 def _extract_openai_image_bytes(response) -> bytes:
