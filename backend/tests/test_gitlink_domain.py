@@ -1101,7 +1101,6 @@ def test_download_repository_snapshot_extracts_zip_and_moves_to_target(tmp_path)
     ({"../escape.txt": b"x"}, "unsafe file path"),
     ({"/etc/passwd": b"x"}, "unsafe file path"),
     ({"C:/windows/hosts": b"x"}, "unsafe file path"),
-    ({"a.txt": b"ok", "B.txt": b"extra"}, "one top-level directory"),
 ])
 def test_repository_import_rejects_unsafe_archive_names_before_extraction(tmp_path, entries, expected_error):
     client = _FakeGithubClient({
@@ -1109,6 +1108,20 @@ def test_repository_import_rejects_unsafe_archive_names_before_extraction(tmp_pa
     })
     target = tmp_path / "checkout"
     with pytest.raises(RuntimeError, match=expected_error):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
+    assert not target.exists()
+
+
+def test_repository_import_refuses_multiple_top_level_directories(tmp_path):
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("repo-one/a.py", b"a")
+        archive.writestr("repo-two/b.py", b"b")
+    client = _FakeGithubClient({
+        "https://api.github.com/repos/o/r/zipball/main": buffer.getvalue(),
+    })
+    target = tmp_path / "checkout"
+    with pytest.raises(RuntimeError, match="one top-level directory"):
         GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
     assert not target.exists()
 
