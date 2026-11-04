@@ -817,6 +817,41 @@ def test_scan_local_repo_paths_never_sends_dotenv_or_private_keys(tmp_path):
     assert scan_local_repo_paths(tmp_path) == [".env.example", "README.md"]
 
 
+def test_full_repo_scan_and_cached_inventory_do_not_leak_symlinked_dotenv(tmp_path):
+    secret = "unique-private-credential-8492"
+    (tmp_path / ".env").write_text(f"API_KEY={secret}", encoding="utf-8")
+    (tmp_path / "README.md").write_text("normal repo file", encoding="utf-8")
+    alias = tmp_path / "config.txt"
+    try:
+        alias.symlink_to(tmp_path / ".env")
+    except (OSError, NotImplementedError):
+        pytest.skip("Creating file symlinks needs privileges on this platform")
+
+    # A fresh full scan must not enumerate the symlink, even if its name
+    # looks like ordinary source code.
+    assert scan_local_repo_paths(tmp_path) == ["README.md"]
+
+    # Old session files can carry a cached tree from BEFORE the new
+    # inventory filtering, so test the actual context builder too.
+    repository = GitlinkRepository(_FakeGithubClient({}))
+    bundle = repository.build_context_bundle(
+        repo_name="o/r", branch_name="main", scope_mode="full",
+        selected_paths=[], repo_file_paths=["config.txt", "README.md"],
+        local_root=tmp_path,
+    )
+    assert secret not in bundle.context_xml
+    assert "normal repo file" in bundle.context_xml
+    assert "Sensitive or symlinked file excluded" in bundle.context_xml
+
+    # Explicitly selecting that file is a separate opt-in, unchanged.
+    selected = repository.build_context_bundle(
+        repo_name="o/r", branch_name="main", scope_mode="selected",
+        selected_paths=["config.txt"], repo_file_paths=["README.md"],
+        local_root=tmp_path,
+    )
+    assert secret in selected.context_xml
+
+
 def test_scan_local_repo_paths_returns_sorted_case_insensitive(tmp_path):
     for name in ("Zebra.py", "apple.py", "Banana.py"):
         (tmp_path / name).write_text("x")
