@@ -957,6 +957,18 @@ export class SceneStore {
     this.transport.fireIntent("scene", "sendArtifactMessage", [nodeId, text]);
   }
 
+  setArtifactContent(
+    nodeId: string, content: string, expectedContent: string,
+    onSettled: (success: boolean) => void,
+  ): void {
+    // Never queue stale document writes while offline: the server checks
+    // expectedContent, and the editor holds the unsaved draft on failure.
+    this.transport.fireIntent(
+      "scene", "setArtifactContent", [nodeId, content, expectedContent],
+      undefined, false, undefined, onSettled,
+    );
+  }
+
   cancelArtifactRequest(requestId: string): void {
     this.transport.fireIntent("scene", "cancelArtifactRequest", [requestId]);
   }
