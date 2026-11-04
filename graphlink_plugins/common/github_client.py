@@ -11,7 +11,7 @@ real per-plugin UI side effects and are not part of this extraction - they call 
 this client instead of duplicating its logic.
 """
 
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 
 import requests
 
@@ -27,32 +27,6 @@ import requests
 # could redirect the saved token to any host it names. Only these two real
 # GitHub hosts ever legitimately need the token attached.
 _ALLOWED_TOKEN_HOSTS = frozenset({"api.github.com", "raw.githubusercontent.com"})
-# GitHub's authenticated zipball API normally redirects to codeload. That
-# redirect must be allowed for downloading, but NEVER receive the saved token.
-_ALLOWED_DOWNLOAD_HOSTS = _ALLOWED_TOKEN_HOSTS | {"codeload.github.com", "objects.githubusercontent.com"}
-_MAX_DOWNLOAD_REDIRECTS = 3
-
-
-def _is_safe_github_url(url: str, hosts: frozenset[str] | set[str]) -> bool:
-    try:
-        parsed = urlparse(url)
-        return (
-            parsed.scheme == "https" and parsed.hostname in hosts
-            and parsed.port in (None, 443)
-            and not parsed.username and not parsed.password
-        )
-    except (TypeError, ValueError):
-        return False
-
-
-def is_trusted_github_url(url: str) -> bool:
-    """Only authenticated HTTPS URLs on known GitHub hosts are trusted.
-
-    A provider-returned download_url can be an attacker-controlled string.
-    A hostname-only allowlist mistakenly authorized cleartext HTTP requests
-    and unusual ports on an otherwise matching hostname.
-    """
-    return _is_safe_github_url(url, _ALLOWED_TOKEN_HOSTS)
 
 
 class GitHubRestClient:
@@ -74,71 +48,14 @@ class GitHubRestClient:
         # a caller that already knows it's only ever talking to a trusted
         # host - or a caller with no URL at all yet - is unaffected;
         # request() below always passes the real target URL.
-        if url is not None and not is_trusted_github_url(url):
+        if url is not None and urlparse(url).hostname not in _ALLOWED_TOKEN_HOSTS:
             return headers
         token = self.get_token()
         if token:
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    def _download_bounded(self, url, params, timeout, max_bytes):
-        """Stream GitHub binaries with limits and explicit safe redirects.
-
-        requests.get(...).content eagerly allocates the ENTIRE response.
-        Gitlink uses this path for repository ZIPs and raw-source fallbacks:
-        an oversized or highly compressed remote response must not exhaust
-        local RAM before our ZIP import size checks get a chance to run.
-        """
-        if not is_trusted_github_url(url):
-            raise RuntimeError("GitHub download URL is not a trusted HTTPS address.")
-        if not isinstance(max_bytes, int) or max_bytes <= 0:
-            raise ValueError("max_bytes must be a positive integer")
-        current_url = url
-        for hop in range(_MAX_DOWNLOAD_REDIRECTS + 1):
-            response = requests.get(
-                current_url,
-                headers=self.build_headers(current_url),
-                params=params if hop == 0 else {},
-                timeout=timeout,
-                stream=True,
-                allow_redirects=False,
-            )
-            try:
-                if response.status_code in (301, 302, 303, 307, 308):
-                    location = response.headers.get("Location")
-                    if hop >= _MAX_DOWNLOAD_REDIRECTS or not location:
-                        raise RuntimeError("GitHub download exceeded its redirect limit.")
-                    redirected = urljoin(current_url, location)
-                    if not _is_safe_github_url(redirected, _ALLOWED_DOWNLOAD_HOSTS):
-                        raise RuntimeError("GitHub download redirected to an unsafe URL.")
-                    current_url = redirected
-                    continue
-                if response.status_code >= 400:
-                    if response.status_code == 404:
-                        raise RuntimeError("GitHub resource not found. Check the repository, branch, and file path.")
-                    if response.status_code == 401:
-                        raise RuntimeError("GitHub rejected the saved token. Update it in Settings > Integrations.")
-                    raise RuntimeError(f"GitHub download returned HTTP {response.status_code}.")
-                if response.status_code < 200 or response.status_code >= 300:
-                    raise RuntimeError(f"GitHub download returned HTTP {response.status_code}.")
-                content_length = response.headers.get("Content-Length", "")
-                if content_length.isdigit() and int(content_length) > max_bytes:
-                    raise RuntimeError("GitHub download exceeds the configured size limit.")
-                body = bytearray()
-                for chunk in response.iter_content(chunk_size=65536):
-                    if len(body) + len(chunk) > max_bytes:
-                        raise RuntimeError("GitHub download exceeds the configured size limit.")
-                    body.extend(chunk)
-                return bytes(body)
-            finally:
-                response.close()
-        raise RuntimeError("GitHub download exceeded its redirect limit.")
-
-    def request(self, url, params=None, *, expect_json=True, timeout=25, max_bytes=None):
-        if max_bytes is not None:
-            if expect_json:
-                raise ValueError("bounded downloads are intended for binary content")
-            return self._download_bounded(url, params or {}, timeout, max_bytes)
+    def request(self, url, params=None, *, expect_json=True, timeout=25):
         response = requests.get(url, headers=self.build_headers(url), params=params or {}, timeout=timeout)
         if response.status_code >= 400:
             # The error body is only usable if it is a JSON OBJECT. A valid

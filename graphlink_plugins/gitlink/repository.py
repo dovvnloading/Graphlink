@@ -21,14 +21,12 @@ helper, not a second source of truth for repo/branch/local_root.
 import base64
 import html
 import shutil
-import stat
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 from urllib.parse import quote
 
-from graphlink_plugins.common.github_client import is_trusted_github_url
 from graphlink_plugins.gitlink.agent import (
     _clean_text,
     _decode_text_bytes,
@@ -54,46 +52,6 @@ IGNORED_LOCAL_DIR_NAMES = {
 
 MAX_CONTEXT_CHARS = 180000
 MAX_MANIFEST_ENTRIES = 1200
-
-# A GitHub zipball contains repository-controlled bytes. Even a small ZIP
-# can decompress to many gigabytes: bound both the downloaded blob and its
-# claimed decompressed footprint BEFORE extractall writes files to disk.
-MAX_REPOSITORY_ARCHIVE_BYTES = 64 * 1024 * 1024
-MAX_REPOSITORY_SOURCE_FILE_BYTES = 4 * 1024 * 1024
-MAX_REPOSITORY_UNPACKED_BYTES = 512 * 1024 * 1024
-MAX_REPOSITORY_MEMBER_BYTES = 64 * 1024 * 1024
-MAX_REPOSITORY_ENTRIES = 12000
-
-
-def _validate_repository_archive(archive: zipfile.ZipFile) -> None:
-    members = archive.infolist()
-    if len(members) > MAX_REPOSITORY_ENTRIES:
-        raise RuntimeError("Repository snapshot contains too many ZIP members.")
-    seen: set[str] = set()
-    total_size = 0
-    for member in members:
-        name = member.filename
-        # A normal ZIP directory entry ends in "/" - accept that trailing
-        # delimiter while still rejecting empty/interior path components.
-        normalized = name[:-1] if member.is_dir() else name
-        parts = PurePosixPath(normalized).parts
-        # extractall() silently sanitizes traversal rather than failing:
-        # different hostile member names can then collide on the same file.
-        if (not normalized or normalized.startswith("/") or "\\" in normalized
-                or any(part in ("", ".", "..") for part in normalized.split("/"))
-                or not parts or ":" in parts[0] or len(name) > 1024):
-            raise RuntimeError("Repository snapshot contains an unsafe ZIP path.")
-        if name in seen:
-            raise RuntimeError("Repository snapshot contains duplicate ZIP members.")
-        seen.add(name)
-        mode = member.external_attr >> 16
-        if stat.S_IFMT(mode) == stat.S_IFLNK:
-            raise RuntimeError("Repository snapshot contains a symbolic-link entry.")
-        if member.file_size > MAX_REPOSITORY_MEMBER_BYTES:
-            raise RuntimeError("Repository snapshot contains an oversized ZIP member.")
-        total_size += member.file_size
-        if total_size > MAX_REPOSITORY_UNPACKED_BYTES:
-            raise RuntimeError("Repository snapshot exceeds the decompressed size limit.")
 
 
 def default_import_root(repo_name, branch_name):
@@ -274,30 +232,17 @@ class GitlinkRepository:
         )
         if isinstance(content_payload, list):
             raise RuntimeError(f"`{repo_path}` resolves to a directory, not a file.")
-        if not isinstance(content_payload, dict):
-            raise RuntimeError("GitHub returned an invalid file metadata response.")
 
         if content_payload.get("encoding") == "base64" and content_payload.get("content"):
             return _decode_text_bytes(base64.b64decode(content_payload["content"]))
 
         download_url = content_payload.get("download_url")
         if download_url:
-            # GitHub's contents response is data, not a grant to fetch an
-            # arbitrary URL. Even without a forwarded credential, accepting
-            # a file's download_url as an unrestricted network destination
-            # would let a modified/provider-controlled response hit LAN or
-            # metadata endpoints. Only GitHub's known HTTPS content hosts
-            # are legitimate file-download fallbacks.
-            if not isinstance(download_url, str) or not is_trusted_github_url(download_url):
-                raise RuntimeError("GitHub returned an unsafe file download URL.")
             # Route through github_client rather than a raw requests.get: the
             # bypassed call sent no Authorization header and got none of the
             # client's 401/403/404 friendly-error mapping - a real gap for
             # private-repo file fetches on this (rarer) fallback branch.
-            raw_bytes = self.github_client.request(
-                download_url, expect_json=False, timeout=25,
-                max_bytes=MAX_REPOSITORY_SOURCE_FILE_BYTES,
-            )
+            raw_bytes = self.github_client.request(download_url, expect_json=False, timeout=25)
             return _decode_text_bytes(raw_bytes)
 
         raise RuntimeError(f"GitHub did not return file contents for `{repo_path}`.")
@@ -311,11 +256,8 @@ class GitlinkRepository:
             f"https://api.github.com/repos/{repo_name}/zipball/{quote(branch_name, safe='')}",
             expect_json=False,
             timeout=60,
-            max_bytes=MAX_REPOSITORY_ARCHIVE_BYTES,
         )
 
-        if len(archive_bytes) > MAX_REPOSITORY_ARCHIVE_BYTES:
-            raise RuntimeError("Repository snapshot exceeds the download size limit.")
         with tempfile.TemporaryDirectory(prefix="gitlink_import_") as temp_dir:
             temp_path = Path(temp_dir)
             archive_path = temp_path / "repo.zip"
@@ -324,7 +266,6 @@ class GitlinkRepository:
             archive_path.write_bytes(archive_bytes)
 
             with zipfile.ZipFile(archive_path) as archive:
-                _validate_repository_archive(archive)
                 archive.extractall(extract_root)
 
             extracted_dirs = [item for item in extract_root.iterdir() if item.is_dir()]
