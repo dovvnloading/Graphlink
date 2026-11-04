@@ -163,10 +163,12 @@ def _is_metadata_path(path: Path) -> bool:
     return any(part.casefold() in _PROTECTED_METADATA_DIRS for part in path.parts)
 
 
-def _read_bounded_text(path: Path, *, errors: str = "strict", max_bytes: int = _MAX_FS_FILE_BYTES) -> str:
+def _read_bounded_text(path: Path, *, errors: str = "strict", max_bytes: int | None = None) -> str:
     # read_text() allocates the full file before the caller applies any
     # output cap. Reading one byte beyond the limit also catches files
     # growing between an earlier stat() and the actual read.
+    if max_bytes is None:
+        max_bytes = _MAX_FS_FILE_BYTES
     with path.open("rb") as stream:
         data = stream.read(max_bytes + 1)
     if len(data) > max_bytes:
