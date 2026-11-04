@@ -26,7 +26,7 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from graphlink_plugins.gitlink.agent import (
     _clean_text,
@@ -132,7 +132,8 @@ def scan_local_repo_paths(local_root):
 
     collected = []
     for file_path in root_path.rglob("*"):
-        if not file_path.is_file():
+        # Never auto-enumerate a symlink alias into a private file.
+        if file_path.is_symlink() or not file_path.is_file():
             continue
         relative = file_path.relative_to(root_path).as_posix()
         if any(part in IGNORED_LOCAL_DIR_NAMES for part in PurePosixPath(relative).parts):
@@ -150,7 +151,8 @@ def resolve_scope_paths(scope_mode, selected_paths, repo_file_paths, local_root=
         return list(selected_paths)
 
     if repo_file_paths:
-        return list(repo_file_paths)
+        # Reapply privacy policy to stale or imported inventories.
+        return [path for path in repo_file_paths if _is_repo_text_path(path)]
     if local_root:
         return scan_local_repo_paths(local_root)
     raise RuntimeError("Load the file tree first so Gitlink knows which repository files to stitch together.")
@@ -273,12 +275,28 @@ class GitlinkRepository:
         )
         if isinstance(content_payload, list):
             raise RuntimeError(f"`{repo_path}` resolves to a directory, not a file.")
+        if not isinstance(content_payload, dict):
+            raise RuntimeError("GitHub returned an invalid file response.")
 
         if content_payload.get("encoding") == "base64" and content_payload.get("content"):
             return _decode_text_bytes(base64.b64decode(content_payload["content"]))
 
         download_url = content_payload.get("download_url")
         if download_url:
+            # URLs in an API response are not trusted network destinations.
+            try:
+                parsed_download = urlsplit(str(download_url))
+                trusted_download = (
+                    parsed_download.scheme == "https"
+                    and parsed_download.hostname in {"api.github.com", "raw.githubusercontent.com"}
+                    and parsed_download.port in (None, 443)
+                    and parsed_download.username is None
+                    and parsed_download.password is None
+                )
+            except ValueError:
+                trusted_download = False
+            if not trusted_download:
+                raise RuntimeError("GitHub file response contains an unsafe download URL.")
             # Route through github_client rather than a raw requests.get: the
             # bypassed call sent no Authorization header and got none of the
             # client's 401/403/404 friendly-error mapping - a real gap for
@@ -338,6 +356,18 @@ class GitlinkRepository:
             source_origin = "github"
             try:
                 if local_root is not None:
+                    if scope_mode != "selected":
+                        # Full Repo Access sends context to a model without
+                        # per-file approval. Reject secret and symlink aliases.
+                        root = Path(local_root).expanduser().resolve()
+                        resolved = _safe_local_target(root, normalized_path)
+                        resolved_name = resolved.relative_to(root).as_posix()
+                        if (not _is_repo_text_path(normalized_path)
+                                or not _is_repo_text_path(resolved_name)
+                                or (root / normalized_path).is_symlink()):
+                            raise RuntimeError(
+                                "Sensitive or symlinked file excluded from automatic repository context."
+                            )
                     source_text = read_local_repo_file(local_root, normalized_path)
                     source_origin = "local"
                 else:
