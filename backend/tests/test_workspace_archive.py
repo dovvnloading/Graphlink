@@ -569,7 +569,7 @@ def test_backslash_members_are_rejected_with_archive_error(tmp_path):
     archive = tmp_path / "backslash.graphlink"
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
-        zf.writestr(r"chats\\0.json", json.dumps(_chat()))
+        zf.writestr(r"chats\0.json", json.dumps(_chat()))
     with pytest.raises(ArchiveError, match="unsupported path separators"):
         read_archive(archive)
 
