@@ -1832,3 +1832,25 @@ describe("SceneStore", () => {
   });
 });
 
+
+
+describe("Artifact manual editing transport", () => {
+  it("sends the base document as a compare-and-swap guard, without offline queuing", () => {
+    const fake = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(fake.transport);
+    const settled = vi.fn();
+    store.setArtifactContent("n0", "# New", "# Old", settled);
+    expect(fake.intents).toEqual([{
+      topic: "scene",
+      intent: "setArtifactContent",
+      args: ["n0", "# New", "# Old"],
+    }]);
+    expect(fake.transport.fireIntent).toHaveBeenCalledWith(
+      "scene", "setArtifactContent", ["n0", "# New", "# Old"],
+      undefined, false, undefined, settled,
+    );
+    expect(fake.fireIntentSettlers).toHaveLength(1);
+    fake.fireIntentSettlers[0](false);
+    expect(settled).toHaveBeenCalledWith(false);
+  });
+});
