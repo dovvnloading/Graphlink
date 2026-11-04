@@ -1,6 +1,7 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
 import { CollapseToggleButton } from "./CollapseToggleButton";
+import { downloadTextFile } from "./downloadTextFile";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
@@ -54,6 +55,7 @@ export interface ArtifactNodeData extends Record<string, unknown> {
   onToggleCollapse: () => void;
   onDelete: () => void;
   onSubmit: (text: string) => void;
+  onSetContent: (content: string, expectedContent: string, onSettled: (success: boolean) => void) => void;
   onCancel: () => void;
 }
 
@@ -154,6 +156,7 @@ export function artifactNodePropsAreEqual(
     a.onToggleCollapse === b.onToggleCollapse &&
     a.onDelete === b.onDelete &&
     a.onSubmit === b.onSubmit &&
+    a.onSetContent === b.onSetContent &&
     a.onCancel === b.onCancel &&
     historyEqual(a.history, b.history)
   );
@@ -172,10 +175,54 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
   // re-synced from - unlike WebResearchNodeView's query input, an
   // instruction is a one-shot message, not persisted node state).
   const [draft, setDraft] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [editDraft, setEditDraft] = useState("");
+  const [editBase, setEditBase] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState("");
+  const staleEdit = editing && data.artifactContent !== editBase;
+  const displayedDocument = editing ? editDraft : data.artifactContent;
+  const wordCount = displayedDocument.trim() ? displayedDocument.trim().split(/\s+/).length : 0;
+
+  function beginEdit() {
+    if (data.pendingRequestId) return;
+    setEditBase(data.artifactContent);
+    setEditDraft(data.artifactContent);
+    setEditError("");
+    setEditing(true);
+  }
+
+  function saveEdit() {
+    if (saving || data.pendingRequestId) return;
+    if (data.artifactContent !== editBase) {
+      setEditError("The document changed while you were editing. Download your draft before reopening the latest version.");
+      return;
+    }
+    if (editDraft.length > 256_000) {
+      setEditError("This draft exceeds the 256,000-character limit. Shorten it before saving.");
+      return;
+    }
+    if (editDraft === editBase) {
+      setEditing(false);
+      return;
+    }
+    setSaving(true);
+    data.onSetContent(editDraft, editBase, (success) => {
+      setSaving(false);
+      if (success) {
+        setEditing(false);
+        setEditError("");
+      } else {
+        // Keep the entire unsaved buffer visible on an offline refusal,
+        // stale-write conflict or any other server rejection.
+        setEditError("Save failed. Your edits remain here; retry or download the draft.");
+      }
+    });
+  }
 
   function submit() {
     const text = draft.trim();
-    if (!text) return;
+    if (!text || editing || data.pendingRequestId) return;
     data.onSubmit(text);
     setDraft("");
   }
@@ -231,8 +278,55 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
         </div>
       )}
 
+      <div className="artifact-node-toolbar">
+        <span className="artifact-node-word-count">{wordCount.toLocaleString()} words</span>
+        {editing ? (
+          <>
+            <button type="button" disabled={saving || busy || staleEdit} onClick={saveEdit}>
+              {saving ? "Saving…" : "Save changes"}
+            </button>
+            <button type="button" disabled={saving} onClick={() => setEditing(false)}>
+              Cancel edit
+            </button>
+          </>
+        ) : (
+          <button type="button" disabled={busy} onClick={beginEdit}>
+            Edit Markdown
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={!displayedDocument}
+          onClick={() => downloadTextFile(displayedDocument, "artifact.md")}
+        >
+          Download .md
+        </button>
+      </div>
+      {staleEdit && (
+        <p className="artifact-node-edit-warning" role="alert">
+          This document changed while you were editing. Download your draft and reopen the current version.
+        </p>
+      )}
+      {editError && editing && (
+        <p className="artifact-node-edit-warning" role="alert">{editError}</p>
+      )}
       <div className="artifact-node-document">
-        {hasContent ? (
+        {editing ? (
+          <textarea
+            className="artifact-node-editor nodrag"
+            aria-label="Edit document Markdown"
+            value={editDraft}
+            onChange={(event) => { setEditDraft(event.target.value); setEditError(""); }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                saveEdit();
+              }
+            }}
+            disabled={saving}
+            spellCheck
+          />
+        ) : hasContent ? (
           <div className="chat-node-content artifact-node-document-content">
             <NodeMarkdown content={data.artifactContent} />
           </div>
@@ -276,7 +370,7 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
           <button
             type="button"
             className="artifact-node-submit-btn"
-            disabled={!draft.trim() || busy}
+            disabled={!draft.trim() || busy || editing}
             onClick={submit}
           >
             {submitLabel}
