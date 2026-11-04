@@ -57,3 +57,141 @@ def test_a_b64_json_response_never_touches_the_network_or_the_policy():
     payload = base64.b64encode(b"PNGBYTES").decode("ascii")
     resp = SimpleNamespace(data=[SimpleNamespace(b64_json=payload)])
     assert api_provider._extract_openai_image_bytes(resp) == b"PNGBYTES"
+
+
+
+class _FakeImageResponse:
+    def __init__(self, *, status=200, location=None, chunks=None, content_length=None):
+        self.status_code = status
+        self.headers = {}
+        if location is not None:
+            self.headers["Location"] = location
+        if content_length is not None:
+            self.headers["Content-Length"] = str(content_length)
+        self._chunks = chunks if chunks is not None else [b"\\x89PNG\\r\\n\\x1a\\n" + b"image"]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+    def raise_for_status(self):
+        return None
+
+    def iter_content(self, chunk_size=1024):
+        yield from self._chunks
+
+
+class _FakeImageSession:
+    def __init__(self, responses):
+        self.trust_env = True
+        self.responses = list(responses)
+        self.mounts = []
+        self.calls = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return None
+
+    def mount(self, prefix, adapter):
+        self.mounts.append((prefix, adapter))
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self.responses.pop(0)
+
+
+def _install_pinned_image_session(monkeypatch, responses):
+    import requests
+
+    session = _FakeImageSession(responses)
+    monkeypatch.setattr(requests, "Session", lambda: session)
+    return session
+
+
+def test_provider_image_download_uses_pinned_socket_and_no_proxy(monkeypatch):
+    from graphlink_plugins.web_research.fetch_policy import FetchPolicy, ValidatedTarget
+
+    monkeypatch.setattr(
+        FetchPolicy, "validate",
+        lambda self, url: ValidatedTarget(url, "93.184.216.34"),
+    )
+    session = _install_pinned_image_session(monkeypatch, [_FakeImageResponse()])
+    # A regression to the old urllib.urlopen route must fail this test.
+    monkeypatch.setattr(api_provider.urllib.request, "urlopen", lambda *a, **k: pytest.fail("un-pinned urllib connection"))
+    actual = api_provider._extract_openai_image_bytes(
+        _response_with_url("https://public.example/picture.png")
+    )
+    assert actual.startswith(b"\\x89PNG")
+    assert session.trust_env is False
+    assert len(session.calls) == 1
+    url, kwargs = session.calls[0]
+    assert url == "https://public.example/picture.png"
+    assert kwargs["allow_redirects"] is False
+    assert kwargs["stream"] is True
+    assert session.mounts[0][0] == "https://"
+    assert session.mounts[0][1]._pinned_ip == "93.184.216.34"
+
+
+@pytest.mark.parametrize("location", [
+    "https://127.0.0.1/private",
+    "https://169.254.169.254/latest/meta-data",
+    "http://public.example/insecure.png",
+])
+def test_provider_image_redirects_are_revalidated_before_connect(monkeypatch, location):
+    from graphlink_plugins.web_research.fetch_policy import FetchPolicy
+
+    # Public host resolution is local and deterministic; IP literals still
+    # use FetchPolicy's real private-address rejection.
+    monkeypatch.setattr(
+        FetchPolicy, "_resolve_addresses",
+        lambda self, parsed: ["93.184.216.34"],
+    )
+    session = _install_pinned_image_session(
+        monkeypatch, [_FakeImageResponse(status=302, location=location)]
+    )
+    with pytest.raises(RuntimeError, match="blocked by fetch policy"):
+        api_provider._extract_openai_image_bytes(
+            _response_with_url("https://public.example/picture.png")
+        )
+    assert len(session.calls) == 1
+
+
+def test_provider_image_download_rejects_actual_stream_size_over_cap(monkeypatch):
+    from graphlink_plugins.web_research.fetch_policy import FetchPolicy, ValidatedTarget
+    from provider_runtime.media import _IMAGE_DOWNLOAD_MAX_BYTES
+
+    monkeypatch.setattr(
+        FetchPolicy, "validate",
+        lambda self, url: ValidatedTarget(url, "93.184.216.34"),
+    )
+    session = _install_pinned_image_session(
+        monkeypatch,
+        [_FakeImageResponse(chunks=[b"x" * (_IMAGE_DOWNLOAD_MAX_BYTES + 1)])],
+    )
+    with pytest.raises(RuntimeError, match="size limit"):
+        api_provider._extract_openai_image_bytes(
+            _response_with_url("https://public.example/picture.png")
+        )
+    assert len(session.calls) == 1
+
+
+def test_provider_image_download_rejects_reported_large_content_length(monkeypatch):
+    from graphlink_plugins.web_research.fetch_policy import FetchPolicy, ValidatedTarget
+    from provider_runtime.media import _IMAGE_DOWNLOAD_MAX_BYTES
+
+    monkeypatch.setattr(
+        FetchPolicy, "validate",
+        lambda self, url: ValidatedTarget(url, "93.184.216.34"),
+    )
+    _install_pinned_image_session(
+        monkeypatch,
+        [_FakeImageResponse(content_length=_IMAGE_DOWNLOAD_MAX_BYTES + 1)],
+    )
+    with pytest.raises(RuntimeError, match="size limit"):
+        api_provider._extract_openai_image_bytes(
+            _response_with_url("https://public.example/picture.png")
+        )

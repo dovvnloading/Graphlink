@@ -111,7 +111,12 @@ def read_instructions(workspace: Path) -> str:
     try:
         if not path.is_file():
             return ""
-        text = path.read_text(encoding="utf-8", errors="replace")
+        # Read only what the system prompt can actually use. A workspace
+        # (including a cloned, untrusted repository) can contain a multi-GB
+        # AGENTS.md; reading it in full before truncating can exhaust RAM
+        # every time a harness run begins.
+        with path.open("r", encoding="utf-8", errors="replace") as source:
+            text = source.read(INSTRUCTIONS_BUDGET_CHARS + 1)
     except OSError:
         # An unreadable instruction file must never be the reason a run
         # cannot start - the same degrade-and-continue posture every
