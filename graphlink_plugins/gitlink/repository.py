@@ -21,6 +21,7 @@ helper, not a second source of truth for repo/branch/local_root.
 import base64
 import html
 import shutil
+import stat
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -52,6 +53,45 @@ IGNORED_LOCAL_DIR_NAMES = {
 
 MAX_CONTEXT_CHARS = 180000
 MAX_MANIFEST_ENTRIES = 1200
+
+# An untrusted repository can contain a ZIP bomb: bound both the compressed
+# HTTP body and the number/size of entries extracted onto the user's disk.
+MAX_REPO_ARCHIVE_DOWNLOAD_BYTES = 128 * 1024 * 1024
+MAX_REPO_ARCHIVE_MEMBER_BYTES = 128 * 1024 * 1024
+MAX_REPO_ARCHIVE_UNPACKED_BYTES = 512 * 1024 * 1024
+MAX_REPO_ARCHIVE_MEMBERS = 20_000
+
+
+def _validate_repository_archive(archive: zipfile.ZipFile) -> str:
+    """Preflight the entire remote archive, before extracting any entry."""
+    infos = archive.infolist()
+    if not infos or len(infos) > MAX_REPO_ARCHIVE_MEMBERS:
+        raise RuntimeError("Repository archive has too many entries or is empty.")
+    roots: set[str] = set()
+    seen: set[str] = set()
+    total = 0
+    for info in infos:
+        name = info.filename
+        parts = name.rstrip("/").split("/")
+        if (not name or name.startswith("/") or "\\" in name
+                or any(part in ("", ".", "..") or ":" in part for part in parts)
+                or (not info.is_dir() and len(parts) < 2)):
+            raise RuntimeError("Repository archive contains an unsafe file path.")
+        key = "/".join(parts).casefold()
+        if key in seen:
+            raise RuntimeError("Repository archive contains duplicate file paths.")
+        seen.add(key)
+        if info.flag_bits & 1 or stat.S_IFMT(info.external_attr >> 16) == stat.S_IFLNK:
+            raise RuntimeError("Repository archive contains encrypted or symbolic-link entries.")
+        if info.file_size > MAX_REPO_ARCHIVE_MEMBER_BYTES:
+            raise RuntimeError("Repository archive member exceeds the extraction size limit.")
+        total += info.file_size
+        if total > MAX_REPO_ARCHIVE_UNPACKED_BYTES:
+            raise RuntimeError("Repository archive exceeds the total extraction size limit.")
+        roots.add(parts[0])
+    if len(roots) != 1:
+        raise RuntimeError("Repository archive must contain one top-level directory.")
+    return next(iter(roots))
 
 
 def default_import_root(repo_name, branch_name):
@@ -256,6 +296,7 @@ class GitlinkRepository:
             f"https://api.github.com/repos/{repo_name}/zipball/{quote(branch_name, safe='')}",
             expect_json=False,
             timeout=60,
+            max_bytes=MAX_REPO_ARCHIVE_DOWNLOAD_BYTES,
         )
 
         with tempfile.TemporaryDirectory(prefix="gitlink_import_") as temp_dir:
@@ -266,10 +307,10 @@ class GitlinkRepository:
             archive_path.write_bytes(archive_bytes)
 
             with zipfile.ZipFile(archive_path) as archive:
+                root_name = _validate_repository_archive(archive)
                 archive.extractall(extract_root)
 
-            extracted_dirs = [item for item in extract_root.iterdir() if item.is_dir()]
-            extracted_root = extracted_dirs[0] if extracted_dirs else extract_root
+            extracted_root = extract_root / root_name
 
             if target_root.exists():
                 return target_root

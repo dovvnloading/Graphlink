@@ -11,7 +11,7 @@ real per-plugin UI side effects and are not part of this extraction - they call 
 this client instead of duplicating its logic.
 """
 
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -27,6 +27,8 @@ import requests
 # could redirect the saved token to any host it names. Only these two real
 # GitHub hosts ever legitimately need the token attached.
 _ALLOWED_TOKEN_HOSTS = frozenset({"api.github.com", "raw.githubusercontent.com"})
+_ARCHIVE_DOWNLOAD_HOSTS = frozenset({"api.github.com", "codeload.github.com"})
+_MAX_ARCHIVE_REDIRECTS = 3
 
 
 class GitHubRestClient:
@@ -55,7 +57,9 @@ class GitHubRestClient:
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    def request(self, url, params=None, *, expect_json=True, timeout=25):
+    def request(self, url, params=None, *, expect_json=True, timeout=25, max_bytes=None):
+        if max_bytes is not None:
+            return self._download_bounded(url, params, timeout, expect_json, max_bytes)
         response = requests.get(url, headers=self.build_headers(url), params=params or {}, timeout=timeout)
         if response.status_code >= 400:
             # The error body is only usable if it is a JSON OBJECT. A valid
@@ -86,3 +90,53 @@ class GitHubRestClient:
         if not expect_json:
             return response.content
         return response.json()
+
+    def _download_bounded(self, url, params, timeout, expect_json, max_bytes):
+        """Bound Gitlink archive memory use and restrict every redirect hop."""
+        if expect_json or type(max_bytes) is not int or max_bytes <= 0:
+            raise ValueError("bounded downloads require a positive byte cap and expect_json=False")
+        current_url = url
+        for hop in range(_MAX_ARCHIVE_REDIRECTS + 1):
+            try:
+                parsed = urlparse(current_url)
+                allowed = (
+                    parsed.scheme == "https" and parsed.hostname in _ARCHIVE_DOWNLOAD_HOSTS
+                    and parsed.username is None and parsed.password is None
+                )
+            except ValueError:
+                allowed = False
+            if not allowed:
+                raise RuntimeError("GitHub archive download was redirected to an untrusted destination.")
+            # Never forward API credentials to the distinct codeload host.
+            response = requests.get(
+                current_url, headers=self.build_headers(current_url),
+                params=params or {} if hop == 0 else {},
+                timeout=timeout, stream=True, allow_redirects=False,
+            )
+            try:
+                if 300 <= response.status_code < 400:
+                    location = response.headers.get("Location")
+                    if not location:
+                        raise RuntimeError("GitHub archive download redirected without a destination.")
+                    current_url = urljoin(current_url, location)
+                    continue
+                if response.status_code >= 400:
+                    if response.status_code == 401:
+                        raise RuntimeError("GitHub rejected the saved token. Update it in Settings > Integrations.")
+                    if response.status_code == 404:
+                        raise RuntimeError("GitHub repository or branch was not found.")
+                    raise RuntimeError(f"GitHub archive download failed (HTTP {response.status_code}).")
+                length = response.headers.get("Content-Length", "")
+                if length.isdecimal() and int(length) > max_bytes:
+                    raise RuntimeError("GitHub archive download exceeds the compressed size limit.")
+                data = bytearray()
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    if len(data) + len(chunk) > max_bytes:
+                        raise RuntimeError("GitHub archive download exceeds the compressed size limit.")
+                    data.extend(chunk)
+                return bytes(data)
+            finally:
+                response.close()
+        raise RuntimeError("GitHub archive download exceeded the redirect limit.")

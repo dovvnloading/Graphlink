@@ -899,8 +899,8 @@ class _FakeGithubClient:
         self.responses = responses  # url -> value, or url -> callable
         self.calls = []
 
-    def request(self, url, params=None, *, expect_json=True, timeout=25):
-        self.calls.append({"url": url, "params": params, "expect_json": expect_json, "timeout": timeout})
+    def request(self, url, params=None, *, expect_json=True, timeout=25, max_bytes=None):
+        self.calls.append({"url": url, "params": params, "expect_json": expect_json, "timeout": timeout, "max_bytes": max_bytes})
         if url not in self.responses:
             raise AssertionError(f"unscripted request to {url}")
         value = self.responses[url]
@@ -959,7 +959,7 @@ def test_fetch_github_file_text_url_quotes_the_repo_path():
     captured_urls = []
 
     class _RecordingClient:
-        def request(self, url, params=None, *, expect_json=True, timeout=25):
+        def request(self, url, params=None, *, expect_json=True, timeout=25, max_bytes=None):
             captured_urls.append(url)
             return {"encoding": "base64", "content": "aGk="}
 
@@ -1005,6 +1005,7 @@ def test_download_repository_snapshot_extracts_zip_and_moves_to_target(tmp_path)
     zip_call = next(c for c in client.calls if c["url"] == zip_url)
     assert zip_call["expect_json"] is False
     assert zip_call["timeout"] == 60
+    assert zip_call["max_bytes"] == repository_module.MAX_REPO_ARCHIVE_DOWNLOAD_BYTES
 
 
 def test_download_repository_snapshot_quotes_branch_name_fully():
@@ -1013,7 +1014,7 @@ def test_download_repository_snapshot_quotes_branch_name_fully():
     captured_urls = []
 
     class _RecordingClient:
-        def request(self, url, params=None, *, expect_json=True, timeout=25):
+        def request(self, url, params=None, *, expect_json=True, timeout=25, max_bytes=None):
             captured_urls.append(url)
             return _zip_bytes({"f.txt": b"x"})
 
