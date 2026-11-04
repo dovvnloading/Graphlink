@@ -26,7 +26,7 @@ import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from graphlink_plugins.gitlink.agent import (
     _clean_text,
@@ -308,11 +308,24 @@ class GitlinkRepository:
         if isinstance(content_payload, list):
             raise RuntimeError(f"`{repo_path}` resolves to a directory, not a file.")
 
+        if not isinstance(content_payload, dict):
+            raise RuntimeError("GitHub returned an invalid file response.")
         if content_payload.get("encoding") == "base64" and content_payload.get("content"):
             return _decode_text_bytes(base64.b64decode(content_payload["content"]))
 
         download_url = content_payload.get("download_url")
         if download_url:
+            # download_url is supplied by an HTTP response, not by the
+            # code's own fixed GitHub API hostname. A compromised proxy or
+            # malformed API response must not make this local-first app
+            # fetch an arbitrary intranet/localhost URL or send a token
+            # over HTTP.
+            parsed_download = urlsplit(str(download_url))
+            if (parsed_download.scheme != "https"
+                    or parsed_download.hostname not in {"api.github.com", "raw.githubusercontent.com"}
+                    or parsed_download.port not in (None, 443)
+                    or parsed_download.username or parsed_download.password):
+                raise RuntimeError("GitHub file response contains an unsafe download URL.")
             # Route through github_client rather than a raw requests.get: the
             # bypassed call sent no Authorization header and got none of the
             # client's 401/403/404 friendly-error mapping - a real gap for
