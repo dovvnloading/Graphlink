@@ -196,6 +196,27 @@ def prune_backups(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> lis
     return deleted
 
 
+def _valid_completed_backup(path: Path) -> bool:
+    """Only trust a competing writer's *committed* SQLite backup.
+
+    Windows can deny replacing a destination while another backup process
+    has just published or opened it. The original snapshot is acceptable
+    only when it already exists and SQLite reports an intact database.
+    Use read-only mode: a failed check must never create a new empty file
+    wearing the final backup name.
+    """
+    if not path.is_file():
+        return False
+    try:
+        conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=2)
+        try:
+            return conn.execute("PRAGMA quick_check(1)").fetchone() == ("ok",)
+        finally:
+            conn.close()
+    except (OSError, ValueError, sqlite3.DatabaseError):
+        return False
+
+
 def take_backup(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> Path | None:
     """Snapshots db_path into backups_dir_for(db_path) via SQLite's own
     online backup API - see this module's own docstring for why that API,
@@ -252,7 +273,18 @@ def take_backup(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> Path 
             os.chmod(tmp_path, 0o600)
         except OSError:
             logger.warning("could not chmod %s to 0600 - continuing", tmp_path)
-        os.replace(tmp_path, final_path)
+        try:
+            os.replace(tmp_path, final_path)
+        except PermissionError as exc:
+            # Concurrent calls have independent staging files but still
+            # choose the SAME final name within one second. Windows can
+            # reject the second os.replace with WinError 5/32 even after
+            # the first writer committed a valid snapshot. Do not mistake
+            # that collision for a backup failure, but NEVER swallow a
+            # real permissions error or a corrupt/incomplete destination.
+            if getattr(exc, "winerror", None) not in (5, 32) or not _valid_completed_backup(final_path):
+                raise
+            logger.info("concurrent backup already committed at %s", final_path)
     finally:
         # Also clean up if SQLite backup or the atomic rename failed.
         tmp_path.unlink(missing_ok=True)
