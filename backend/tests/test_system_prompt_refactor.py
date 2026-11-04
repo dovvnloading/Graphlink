@@ -67,12 +67,12 @@ def test_selecting_an_attached_prompt_does_not_create_prompt_of_prompt(prompt_wo
 
 def test_pending_prompt_is_attached_to_existing_branch_preserving_content_and_undo(prompt_workspace):
     bus, document, _ = prompt_workspace
+    # Start with an established branch, then author a prompt independently.
+    # This is the explicit-attachment path (a new root would adopt it
+    # automatically on creation instead).
+    root = document.add_chat_node(100.0, 200.0, "Hi", is_user=True)
     pending_id = _pick(bus, None, 15.0, 25.0)
     document.set_note_content(pending_id, "Use terse responses.")
-    root = document.add_chat_node(100.0, 200.0, "Hi", is_user=True)
-    # Creating an independent parentless root automatically adopts a pending
-    # prompt. Detach the edge to exercise the picker-based assignment path.
-    document.remove_edges([edge.id for edge in document.edges.values() if edge.source == pending_id])
     assert not _links(document)
     before = len(document.command_log)
 
