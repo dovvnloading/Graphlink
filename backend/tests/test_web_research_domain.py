@@ -810,3 +810,25 @@ def test_rejected_sources_cannot_be_cited_by_abbreviated_marker():
     assert "[s1-abcdef0123]" in result.answer_markdown
     assert "[s2]" not in result.answer_markdown
     assert "s2-123abc4560" not in {citation.source_id for citation in result.citations}
+
+
+def test_cancelled_final_source_rejection_is_not_misreported_as_no_sources():
+    class CancellingAssessment(FakeModel):
+        def assess_source(self, query, document, *, limits, token):
+            token.cancel()
+            return SourceAssessment(accepted=False, reason="irrelevant")
+
+    service = _service(model=CancellingAssessment())
+    with pytest.raises(RequestCancelled):
+        service.run(_request())
+
+
+def test_cancelled_final_source_error_is_not_misreported_as_no_sources():
+    class CancellingFetcher(FakeFetcher):
+        def fetch(self, result, *, limits, token):
+            token.cancel()
+            raise ResearchFailure("network unavailable", code="fetch_network_error")
+
+    service = _service(fetcher=CancellingFetcher())
+    with pytest.raises(RequestCancelled):
+        service.run(_request())
