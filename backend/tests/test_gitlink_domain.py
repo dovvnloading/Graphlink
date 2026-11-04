@@ -145,6 +145,16 @@ def test_build_headers_includes_bearer_token_when_present():
 # -- _ALLOWED_TOKEN_HOSTS' own comment in github_client.py.
 
 
+def test_build_headers_never_sends_a_token_over_http_or_to_custom_port():
+    client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_xyz"))
+    for url in (
+        "http://api.github.com/repos/o/r",
+        "https://api.github.com:444/repos/o/r",
+        "https://user:password@api.github.com/repos/o/r",
+    ):
+        assert "Authorization" not in client.build_headers(url)
+
+
 def test_build_headers_omits_the_token_for_a_non_github_host():
     client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_xyz"))
     headers = client.build_headers("https://evil.example/x")
@@ -306,6 +316,26 @@ def test_decode_text_bytes_falls_back_to_cp1252_for_smart_quotes():
     # (both plain and BOM-sniffed), so this must fall through to cp1252.
     raw = b"\x93hello\x94"
     assert _decode_text_bytes(raw) == "\u201chello\u201d"
+
+
+@pytest.mark.parametrize("path", [
+    ".env", ".env.local", ".env.production", "src/.env.test",
+    ".npmrc", ".pypirc", ".netrc", ".git-credentials",
+    ".ssh/id_ed25519", ".aws/credentials", "config/.azure/token.txt",
+    "private.key", "server.pem", "service-account.json",
+    "secrets.yaml", "credentials.json", "terraform.tfstate",
+])
+def test_full_repo_inventory_refuses_obvious_secrets(path):
+    assert _is_repo_text_path(path) is False
+
+
+@pytest.mark.parametrize("path", [
+    ".env.example", ".env.sample", ".env.template",
+    "src/credential_helpers.py", "src/example.keys.txt",
+    "README.md", ".github/workflows/ci.yml",
+])
+def test_full_repo_inventory_still_includes_safe_templates_and_source(path):
+    assert _is_repo_text_path(path) is True
 
 
 def test_is_repo_text_path_excludes_known_binary_suffixes_case_insensitively():
@@ -741,6 +771,16 @@ def test_scan_local_repo_paths_excludes_ignored_dirs_and_binary_suffixes(tmp_pat
     assert result == ["src/main.py"]
 
 
+def test_scan_local_repo_paths_never_sends_dotenv_or_private_keys(tmp_path):
+    (tmp_path / ".env").write_text("OPENAI_API_KEY=secret")
+    (tmp_path / ".npmrc").write_text("token=secret")
+    (tmp_path / "README.md").write_text("Public guide")
+    (tmp_path / ".env.example").write_text("OPENAI_API_KEY=your-key")
+    (tmp_path / ".ssh").mkdir()
+    (tmp_path / ".ssh" / "id_ed25519").write_text("private key")
+    assert scan_local_repo_paths(tmp_path) == [".env.example", "README.md"]
+
+
 def test_scan_local_repo_paths_returns_sorted_case_insensitive(tmp_path):
     for name in ("Zebra.py", "apple.py", "Banana.py"):
         (tmp_path / name).write_text("x")
@@ -978,6 +1018,22 @@ def test_fetch_github_file_text_falls_back_to_download_url():
     assert download_call["timeout"] == 25
 
 
+@pytest.mark.parametrize("unsafe_url", [
+    "http://api.github.com/repos/o/r/file",
+    "http://127.0.0.1/private",
+    "https://127.0.0.1/private",
+    "https://evil.example/download",
+    "https://api.github.com:8443/file",
+])
+def test_github_file_fallback_rejects_untrusted_download_origin(unsafe_url):
+    contents_url = "https://api.github.com/repos/o/r/contents/file.txt"
+    client = _FakeGithubClient({contents_url: {"download_url": unsafe_url}})
+    repo = GitlinkRepository(client)
+    with pytest.raises(RuntimeError, match="unsafe download URL"):
+        repo.fetch_github_file_text("o/r", "main", "file.txt")
+    assert [row["url"] for row in client.calls] == [contents_url]
+
+
 def test_fetch_github_file_text_raises_when_no_content_or_download_url():
     url = "https://api.github.com/repos/o/r/contents/empty.txt"
     client = _FakeGithubClient({url: {}})
@@ -1041,7 +1097,6 @@ def test_download_repository_snapshot_extracts_zip_and_moves_to_target(tmp_path)
 
 @pytest.mark.parametrize(("entries", "expected"), [
     ({"../escape.txt": b"pwned"}, "unsafe file paths"),
-    ({r"sub\\outside.txt": b"bad"}, "unsafe file paths"),
     ({".git/hooks/pre-commit": b"bad"}, ".git metadata"),
 ])
 def test_download_snapshot_rejects_unsafe_member_paths(tmp_path, entries, expected):
@@ -1052,6 +1107,18 @@ def test_download_snapshot_rejects_unsafe_member_paths(tmp_path, entries, expect
         repo.download_repository_snapshot("o/r", "main", tmp_path / "checkout")
     assert not (tmp_path / "escape.txt").exists()
     assert not (tmp_path / "checkout").exists()
+
+
+def test_snapshot_member_validator_rejects_literal_backslashes_on_every_platform():
+    # On Windows zipfile normalizes path separators on read/write, so
+    # mutate the decoded ZipInfo (without reconstructing it) to exercise
+    # the validator's literal-backslash guard on all platforms.
+    import graphlink_plugins.gitlink.repository as module
+
+    with zipfile.ZipFile(BytesIO(_zip_bytes({"safe.txt": b"ok"}))) as archive:
+        archive.infolist()[0].filename = r"repo-abc123\\..\\outside.txt"
+        with pytest.raises(RuntimeError, match="unsafe file paths"):
+            module._checked_snapshot_members(archive)
 
 
 def test_download_snapshot_rejects_zip_bombs_by_total_size(tmp_path, monkeypatch):
