@@ -1029,6 +1029,47 @@ def test_download_repository_snapshot_extracts_zip_and_moves_to_target(tmp_path)
     assert zip_call["timeout"] == 60
 
 
+def test_repository_snapshot_rejects_zip_bomb_before_any_file_is_extracted(tmp_path, monkeypatch):
+    monkeypatch.setattr(repository_module, "MAX_REPOSITORY_UNPACKED_BYTES", 30)
+    url = "https://api.github.com/repos/o/r/zipball/main"
+    archive_bytes = _zip_bytes({"huge.txt": b"x" * 40})
+    client = _FakeGithubClient({url: archive_bytes})
+    target = tmp_path / "checkout"
+    with pytest.raises(RuntimeError, match="decompressed size limit"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
+    assert not target.exists()
+
+
+def test_repository_snapshot_rejects_large_single_member(tmp_path, monkeypatch):
+    monkeypatch.setattr(repository_module, "MAX_REPOSITORY_MEMBER_BYTES", 12)
+    url = "https://api.github.com/repos/o/r/zipball/main"
+    client = _FakeGithubClient({url: _zip_bytes({"large.txt": b"x" * 20})})
+    target = tmp_path / "checkout"
+    with pytest.raises(RuntimeError, match="oversized ZIP member"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
+    assert not target.exists()
+
+
+def test_repository_snapshot_rejects_oversized_download(tmp_path, monkeypatch):
+    monkeypatch.setattr(repository_module, "MAX_REPOSITORY_ARCHIVE_BYTES", 5)
+    url = "https://api.github.com/repos/o/r/zipball/main"
+    client = _FakeGithubClient({url: _zip_bytes({"test.txt": b"x"})})
+    with pytest.raises(RuntimeError, match="download size limit"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", tmp_path / "checkout")
+
+
+@pytest.mark.parametrize("hostile_path", [
+    "repo-abc/../../escape.txt", "/absolute.txt", "repo-abc/\\escaped.txt",
+])
+def test_repository_snapshot_rejects_hostile_zip_paths(tmp_path, hostile_path):
+    url = "https://api.github.com/repos/o/r/zipball/main"
+    client = _FakeGithubClient({url: _zip_bytes({hostile_path: b"content"}, top_dir="")})
+    # _zip_bytes prefixes a slash for the empty top_dir; both absolute
+    # and traversal names are invalid regardless of that wrapper.
+    with pytest.raises(RuntimeError, match="unsafe ZIP path"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", tmp_path / "checkout")
+
+
 def test_download_repository_snapshot_quotes_branch_name_fully():
     # safe='' -> even "/" in a branch name must be percent-escaped, unlike
     # fetch_github_file_text's repo-path quoting (safe='/').

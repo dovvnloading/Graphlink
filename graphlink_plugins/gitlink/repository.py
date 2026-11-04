@@ -21,6 +21,7 @@ helper, not a second source of truth for repo/branch/local_root.
 import base64
 import html
 import shutil
+import stat
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -53,6 +54,42 @@ IGNORED_LOCAL_DIR_NAMES = {
 
 MAX_CONTEXT_CHARS = 180000
 MAX_MANIFEST_ENTRIES = 1200
+
+# A GitHub zipball contains repository-controlled bytes. Even a small ZIP
+# can decompress to many gigabytes: bound both the downloaded blob and its
+# claimed decompressed footprint BEFORE extractall writes files to disk.
+MAX_REPOSITORY_ARCHIVE_BYTES = 64 * 1024 * 1024
+MAX_REPOSITORY_UNPACKED_BYTES = 512 * 1024 * 1024
+MAX_REPOSITORY_MEMBER_BYTES = 64 * 1024 * 1024
+MAX_REPOSITORY_ENTRIES = 12000
+
+
+def _validate_repository_archive(archive: zipfile.ZipFile) -> None:
+    members = archive.infolist()
+    if len(members) > MAX_REPOSITORY_ENTRIES:
+        raise RuntimeError("Repository snapshot contains too many ZIP members.")
+    seen: set[str] = set()
+    total_size = 0
+    for member in members:
+        name = member.filename
+        parts = PurePosixPath(name).parts
+        # extractall() silently sanitizes traversal rather than failing:
+        # different hostile member names can then collide on the same file.
+        if (not name or name.startswith("/") or "\\" in name
+                or any(part in ("", ".", "..") for part in name.split("/"))
+                or not parts or ":" in parts[0] or len(name) > 1024):
+            raise RuntimeError("Repository snapshot contains an unsafe ZIP path.")
+        if name in seen:
+            raise RuntimeError("Repository snapshot contains duplicate ZIP members.")
+        seen.add(name)
+        mode = member.external_attr >> 16
+        if stat.S_IFMT(mode) == stat.S_IFLNK:
+            raise RuntimeError("Repository snapshot contains a symbolic-link entry.")
+        if member.file_size > MAX_REPOSITORY_MEMBER_BYTES:
+            raise RuntimeError("Repository snapshot contains an oversized ZIP member.")
+        total_size += member.file_size
+        if total_size > MAX_REPOSITORY_UNPACKED_BYTES:
+            raise RuntimeError("Repository snapshot exceeds the decompressed size limit.")
 
 
 def default_import_root(repo_name, branch_name):
@@ -269,6 +306,8 @@ class GitlinkRepository:
             timeout=60,
         )
 
+        if len(archive_bytes) > MAX_REPOSITORY_ARCHIVE_BYTES:
+            raise RuntimeError("Repository snapshot exceeds the download size limit.")
         with tempfile.TemporaryDirectory(prefix="gitlink_import_") as temp_dir:
             temp_path = Path(temp_dir)
             archive_path = temp_path / "repo.zip"
@@ -277,6 +316,7 @@ class GitlinkRepository:
             archive_path.write_bytes(archive_bytes)
 
             with zipfile.ZipFile(archive_path) as archive:
+                _validate_repository_archive(archive)
                 archive.extractall(extract_root)
 
             extracted_dirs = [item for item in extract_root.iterdir() if item.is_dir()]
