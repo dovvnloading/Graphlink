@@ -27,6 +27,14 @@ from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import FS_READ, FS_WRITE, RunContext, ToolRegistry, ToolResult
 
 _READ_CAP_CHARS = 40_000
+# A result cap isn't a disk-read cap: fs.read previously loaded an entire
+# arbitrarily large file into RAM before trimming its output to 40K chars.
+# fs.edit did the same before a replacement. Bound input before decoding.
+_MAX_FS_FILE_BYTES = 8 * 1024 * 1024
+# Path.glob can enumerate millions of entries before fs.list applies its
+# output cap. Bound discovery before sorting; require a narrower glob.
+_MAX_GLOB_DISCOVERY = 10_000
+_PROTECTED_METADATA_DIRS = frozenset({".git", ".hg", ".svn"})
 # H2 write bounds: a single fs.write/fs.edit call's content ceiling. Wire
 # input is untrusted model output - the same bounds-everywhere posture
 # every other cap in this file takes.
@@ -140,14 +148,36 @@ def _bound_root(ctx: RunContext) -> Path | None:
     return None
 
 
+def _is_metadata_path(path: Path) -> bool:
+    # .git/hooks and .git/config can turn a mundane file edit into code
+    # execution on the NEXT git command. Do not let the FS_READ auto scope
+    # send private VCS metadata to a model, or FS_WRITE modify hooks.
+    return any(part.casefold() in _PROTECTED_METADATA_DIRS for part in path.parts)
+
+
+def _read_bounded_text(path: Path, *, errors: str = "strict") -> str:
+    # read_text() allocates the full file before the caller applies any
+    # output cap. Reading one byte beyond the limit also catches files
+    # growing between an earlier stat() and the actual read.
+    with path.open("rb") as stream:
+        data = stream.read(_MAX_FS_FILE_BYTES + 1)
+    if len(data) > _MAX_FS_FILE_BYTES:
+        raise WorkspaceError(f"File exceeds the {_MAX_FS_FILE_BYTES}-byte harness read limit.")
+    return data.decode("utf-8", errors=errors)
+
+
 def _iter_under_root(root: Path, pattern: str):
-    """Root-relative iteration; resolve_under_root re-checks every yielded
-    candidate so a glob cannot be a traversal primitive (Path.glob itself
-    refuses '..' segments, but the double-check keeps confinement a single-
-    choke-point property rather than a per-caller convention)."""
-    for path in sorted(root.glob(pattern or "**/*")):
+    """Bounded and stable root-relative iteration, excluding VCS metadata."""
+    discovered: list[tuple[Path, str]] = []
+    for path in root.glob(pattern or "**/*"):
         resolved = resolve_under_root(root, str(path))
-        yield resolved, resolved.relative_to(root).as_posix()
+        if _is_metadata_path(resolved):
+            continue
+        discovered.append((resolved, resolved.relative_to(root).as_posix()))
+        if len(discovered) > _MAX_GLOB_DISCOVERY:
+            raise WorkspaceError("Too many files match the glob; use a narrower pattern.")
+    for item in sorted(discovered, key=lambda row: row[1]):
+        yield item
 
 
 def register_harness_fs_tools(registry: ToolRegistry) -> None:
@@ -159,11 +189,13 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             target = resolve_under_root(root, str(call.arguments.get("path") or ""))
         except WorkspaceError as exc:
             return ToolResult(content=str(exc), is_error=True)
+        if _is_metadata_path(target):
+            return ToolResult(content="VCS metadata is not accessible through harness filesystem tools.", is_error=True)
         if not target.is_file():
             return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
         try:
-            text = target.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
+            text = _read_bounded_text(target, errors="replace")
+        except (OSError, WorkspaceError) as exc:
             return ToolResult(content=f"Could not read file: {exc}", is_error=True)
         lines = text.splitlines()
         try:
@@ -268,6 +300,8 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             return ToolResult(content=str(exc), is_error=True)
         if target == root:
             return ToolResult(content="path names the workspace root, not a file.", is_error=True)
+        if _is_metadata_path(target):
+            return ToolResult(content="VCS metadata cannot be modified by harness filesystem tools.", is_error=True)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
@@ -291,11 +325,13 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             target = resolve_under_root(root, str(call.arguments.get("path") or ""))
         except WorkspaceError as exc:
             return ToolResult(content=str(exc), is_error=True)
+        if _is_metadata_path(target):
+            return ToolResult(content="VCS metadata cannot be modified by harness filesystem tools.", is_error=True)
         if not target.is_file():
             return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
         try:
-            text = target.read_text(encoding="utf-8")
-        except OSError as exc:
+            text = _read_bounded_text(target)
+        except (OSError, UnicodeError, WorkspaceError) as exc:
             return ToolResult(content=f"Could not read file: {exc}", is_error=True)
         occurrences = text.count(old_string)
         if occurrences == 0:
