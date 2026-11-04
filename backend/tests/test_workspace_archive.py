@@ -300,6 +300,41 @@ def test_an_older_archive_without_tags_favorite_archived_defaults_them_back_rath
     assert chats[0]["archived"] is False
 
 
+def test_export_and_import_preserve_twelve_graphs_in_index_order(tmp_path):
+    archive = tmp_path / "twelve.graphlink"
+    expected = [f"Graph {i}" for i in range(12)]
+    export_archive(archive, [_chat(title=name) for name in expected])
+    assert [chat["title"] for chat in import_archive(archive)] == expected
+
+
+def test_older_archive_without_manifest_index_uses_numeric_order(tmp_path):
+    archive = tmp_path / "old-twelve.graphlink"
+    expected = [f"Graph {i}" for i in range(12)]
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+        for i, name in enumerate(expected):
+            zf.writestr(f"chats/{i}.json", json.dumps(_chat(title=name)))
+    assert [chat["title"] for chat in import_archive(archive)] == expected
+
+
+@pytest.mark.parametrize("manifest_fields", [
+    {"chats": "invalid"},
+    {"chats": [{"member": "chats/1.json"}]},
+    {"chats": [{"member": "chats/0.json"}, {"member": "chats/0.json"}]},
+    {"chatCount": 2},
+    {"chatCount": True},
+])
+def test_archive_rejects_inconsistent_manifest_indexes_and_counts(tmp_path, manifest_fields):
+    archive = tmp_path / "bad-index.graphlink"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({
+            "formatVersion": FORMAT_VERSION, **manifest_fields,
+        }))
+        zf.writestr("chats/0.json", json.dumps(_chat()))
+    with pytest.raises(ArchiveError, match="(index|count)"):
+        read_archive(archive)
+
+
 def test_assets_round_trip_into_a_DIFFERENT_store_the_second_machine_case(tmp_path):
     source_store = AssetStore(tmp_path / "source-assets")
     ref = source_store.put(PNG)
