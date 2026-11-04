@@ -146,10 +146,19 @@ def test_provider_image_redirects_are_revalidated_before_connect(monkeypatch, lo
 
     # Public host resolution is local and deterministic; IP literals still
     # use FetchPolicy's real private-address rejection.
-    monkeypatch.setattr(
-        FetchPolicy, "_resolve_addresses",
-        lambda self, parsed: ["93.184.216.34"],
-    )
+    import ipaddress
+
+    def resolve_public_host_only(self, parsed):
+        # Preserve literal IP addresses for the REAL FetchPolicy check:
+        # replacing private IP literals with our fake public address would
+        # make this test itself silently defeat the protection under test.
+        try:
+            ipaddress.ip_address(parsed.hostname)
+        except ValueError:
+            return ["93.184.216.34"]
+        return [parsed.hostname]
+
+    monkeypatch.setattr(FetchPolicy, "_resolve_addresses", resolve_public_host_only)
     session = _install_pinned_image_session(
         monkeypatch, [_FakeImageResponse(status=302, location=location)]
     )
