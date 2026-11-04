@@ -84,13 +84,22 @@ class _FakeHTTPResponse:
     mirroring test_web_research_providers_fetcher.py's _FakeResponse
     convention for this codebase."""
 
-    def __init__(self, status_code=200, json_body=None, text="", reason="", content=b"", json_raises=False):
+    def __init__(self, status_code=200, json_body=None, text="", reason="", content=b"", json_raises=False, headers=None):
         self.status_code = status_code
         self._json_body = json_body
         self.text = text
         self.reason = reason
         self.content = content
         self._json_raises = json_raises
+        self.headers = headers or {}
+        self.closed = False
+
+    def iter_content(self, chunk_size=65536):
+        for start in range(0, len(self.content), chunk_size):
+            yield self.content[start:start + chunk_size]
+
+    def close(self):
+        self.closed = True
 
     def json(self):
         if self._json_raises:
@@ -148,23 +157,92 @@ def test_request_does_not_leak_the_token_to_a_download_url_naming_a_hostile_host
     # the saved token.
     captured = {}
 
-    def fake_get(url, headers=None, params=None, timeout=None):
+    def fake_get(url, headers=None, params=None, timeout=None, **kwargs):
         captured.update(url=url, headers=headers)
         return _FakeHTTPResponse(status_code=200, content=b"file bytes")
 
     monkeypatch.setattr(github_client_module.requests, "get", fake_get)
     client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_secret"))
 
-    client.request("https://evil.example/steal-my-token", expect_json=False)
+    with pytest.raises(RuntimeError, match="untrusted GitHub download URL"):
+        client.request("https://evil.example/steal-my-token", expect_json=False)
 
-    assert captured["url"] == "https://evil.example/steal-my-token"
-    assert "Authorization" not in captured["headers"]
+    assert captured == {}, "untrusted URL must not be fetched at all"
+
+
+def test_untrusted_github_download_urls_fail_before_network(monkeypatch):
+    def unexpected_get(*_args, **_kwargs):
+        raise AssertionError("an untrusted destination reached the network")
+
+    monkeypatch.setattr(github_client_module.requests, "get", unexpected_get)
+    client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_secret"))
+    for url in (
+        "http://api.github.com/repos/o/r",
+        "http://127.0.0.1:8765/api/health",
+        "https://127.0.0.1:8765/api/health",
+        "https://api.github.com.evil.test/steal",
+        "https://api.github.com:444/repos/o/r",
+        "https://user:pass@api.github.com/repos/o/r",
+    ):
+        with pytest.raises(RuntimeError, match="untrusted GitHub download URL"):
+            client.request(url)
+    assert "Authorization" not in client.build_headers("http://api.github.com/repos/o/r")
+
+
+def test_untrusted_redirect_is_rejected_before_the_second_get(monkeypatch):
+    seen = []
+    responses = []
+
+    def fake_get(url, **kwargs):
+        seen.append((url, kwargs))
+        resp = _FakeHTTPResponse(302, headers={"Location": "http://127.0.0.1:8765/api/health"})
+        responses.append(resp)
+        return resp
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_secret"))
+    with pytest.raises(RuntimeError, match="untrusted GitHub download URL"):
+        client.request("https://api.github.com/repos/o/r/zipball/main", expect_json=False)
+    assert len(seen) == 1
+    assert seen[0][1]["allow_redirects"] is False
+    assert responses[0].closed
+
+
+def test_github_codeload_redirect_does_not_receive_the_api_token(monkeypatch):
+    calls = []
+    responses = [
+        _FakeHTTPResponse(302, headers={"Location": "https://codeload.github.com/o/r/zip/main"}),
+        _FakeHTTPResponse(200, content=b"zip-bytes"),
+    ]
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return responses[len(calls) - 1]
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_secret"))
+    assert client.request("https://api.github.com/repos/o/r/zipball/main", expect_json=False) == b"zip-bytes"
+    assert calls[0][1]["headers"]["Authorization"] == "Bearer ghp_secret"
+    assert "Authorization" not in calls[1][1]["headers"]
+    assert calls[1][0] == "https://codeload.github.com/o/r/zip/main"
+    assert all(response.closed for response in responses)
+
+
+def test_binary_download_enforces_its_size_limit_even_without_content_length(monkeypatch):
+    monkeypatch.setattr(github_client_module, "MAX_DOWNLOAD_BYTES", 10)
+    monkeypatch.setattr(
+        github_client_module.requests, "get",
+        lambda *_a, **_kw: _FakeHTTPResponse(200, content=b"x" * 11),
+    )
+    client = GitHubRestClient()
+    with pytest.raises(RuntimeError, match="maximum permitted size"):
+        client.request("https://raw.githubusercontent.com/o/r/main/big.txt", expect_json=False)
 
 
 def test_request_success_returns_parsed_json_and_forwards_params_and_timeout(monkeypatch):
     captured = {}
 
-    def fake_get(url, headers=None, params=None, timeout=None):
+    def fake_get(url, headers=None, params=None, timeout=None, **kwargs):
         captured.update(url=url, headers=headers, params=params, timeout=timeout)
         return _FakeHTTPResponse(status_code=200, json_body={"ok": True})
 
@@ -186,7 +264,7 @@ def test_request_expect_json_false_returns_raw_content_bytes(monkeypatch):
         lambda *a, **k: _FakeHTTPResponse(status_code=200, content=b"raw-bytes-here"),
     )
     client = GitHubRestClient(settings_manager=None)
-    assert client.request("https://example.com/x", expect_json=False) == b"raw-bytes-here"
+    assert client.request("https://raw.githubusercontent.com/o/r/main/file", expect_json=False) == b"raw-bytes-here"
 
 
 def test_request_404_raises_friendly_not_found_message(monkeypatch):
@@ -1023,6 +1101,48 @@ def test_download_repository_snapshot_quotes_branch_name_fully():
             "o/r", "feature/my-branch", Path(tmp) / "out"
         )
     assert captured_urls[0].endswith("/zipball/feature%2Fmy-branch")
+
+
+def test_snapshot_rejects_zip_bomb_before_extracting_any_member(tmp_path, monkeypatch):
+    monkeypatch.setattr(repository_module, "MAX_SNAPSHOT_UNCOMPRESSED_BYTES", 100)
+    url = "https://api.github.com/repos/o/r/zipball/main"
+    client = _FakeGithubClient({url: _zip_bytes({"big.txt": b"x" * 101})})
+    target = tmp_path / "checkout"
+
+    with pytest.raises(RuntimeError, match="expands beyond the allowed size"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
+    assert not target.exists()
+
+
+def test_snapshot_rejects_parent_traversal_in_zip_members(tmp_path):
+    url = "https://api.github.com/repos/o/r/zipball/main"
+    client = _FakeGithubClient({url: _zip_bytes({"../../escape.txt": b"bad"})})
+    with pytest.raises(RuntimeError, match="unsafe path"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", tmp_path / "checkout")
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_snapshot_rejects_symlink_entries(tmp_path):
+    import stat
+
+    url = "https://api.github.com/repos/o/r/zipball/main"
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        info = zipfile.ZipInfo("repo-abc123/outside-link")
+        info.create_system = 3
+        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(info, "../outside")
+    client = _FakeGithubClient({url: buffer.getvalue()})
+    with pytest.raises(RuntimeError, match="symbolic link"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", tmp_path / "checkout")
+
+
+def test_snapshot_rejects_oversized_download_even_when_http_client_is_stubbed(tmp_path, monkeypatch):
+    monkeypatch.setattr(repository_module, "MAX_SNAPSHOT_ZIP_BYTES", 8)
+    url = "https://api.github.com/repos/o/r/zipball/main"
+    client = _FakeGithubClient({url: _zip_bytes({"small.txt": b"hello"})})
+    with pytest.raises(RuntimeError, match="download limit"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", tmp_path / "checkout")
 
 
 def test_download_repository_snapshot_handles_concurrent_creation_race(tmp_path):
