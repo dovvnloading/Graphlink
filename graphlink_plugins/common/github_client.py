@@ -15,6 +15,11 @@ from urllib.parse import urlparse
 
 import requests
 
+# Gitlink's GitHub ZIP downloads are untrusted. Never load arbitrarily
+# large binary HTTP responses into memory via requests.Response.content.
+MAX_BINARY_RESPONSE_BYTES = 64 * 1024 * 1024
+_BINARY_CHUNK_BYTES = 64 * 1024
+
 # SECURITY-FIX: fetch_github_file_text (graphlink_plugins/gitlink/repository.py)
 # passes a `download_url` taken verbatim from a GitHub contents-API response
 # straight into request() - unlike every other call site in this codebase,
@@ -56,7 +61,17 @@ class GitHubRestClient:
         return headers
 
     def request(self, url, params=None, *, expect_json=True, timeout=25):
-        response = requests.get(url, headers=self.build_headers(url), params=params or {}, timeout=timeout)
+        response = requests.get(
+            url, headers=self.build_headers(url), params=params or {},
+            timeout=timeout, **({"stream": True} if not expect_json else {}),
+        )
+        try:
+            return self._decode_response(response, expect_json=expect_json)
+        finally:
+            response.close()
+
+    @staticmethod
+    def _decode_response(response, *, expect_json: bool):
         if response.status_code >= 400:
             # The error body is only usable if it is a JSON OBJECT. A valid
             # JSON list or bare string (a proxy or error page can return
@@ -84,5 +99,19 @@ class GitHubRestClient:
             raise RuntimeError(message)
 
         if not expect_json:
-            return response.content
+            length = response.headers.get("Content-Length")
+            if length is not None:
+                try:
+                    if int(length) > MAX_BINARY_RESPONSE_BYTES:
+                        raise RuntimeError("GitHub download exceeds the 64 MiB safety limit.")
+                except ValueError:
+                    pass  # Unparseable Content-Length is not trusted.
+            data = bytearray()
+            for chunk in response.iter_content(chunk_size=_BINARY_CHUNK_BYTES):
+                if not chunk:
+                    continue
+                if len(data) + len(chunk) > MAX_BINARY_RESPONSE_BYTES:
+                    raise RuntimeError("GitHub download exceeds the 64 MiB safety limit.")
+                data.extend(chunk)
+            return bytes(data)
         return response.json()
