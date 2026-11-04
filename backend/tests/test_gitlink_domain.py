@@ -84,13 +84,23 @@ class _FakeHTTPResponse:
     mirroring test_web_research_providers_fetcher.py's _FakeResponse
     convention for this codebase."""
 
-    def __init__(self, status_code=200, json_body=None, text="", reason="", content=b"", json_raises=False):
+    def __init__(self, status_code=200, json_body=None, text="", reason="", content=b"", json_raises=False,
+                 headers=None):
         self.status_code = status_code
         self._json_body = json_body
         self.text = text
         self.reason = reason
         self.content = content
         self._json_raises = json_raises
+        self.headers = headers or {}
+        self.closed = False
+
+    def iter_content(self, chunk_size):
+        for index in range(0, len(self.content), chunk_size):
+            yield self.content[index : index + chunk_size]
+
+    def close(self):
+        self.closed = True
 
     def json(self):
         if self._json_raises:
@@ -148,7 +158,7 @@ def test_request_does_not_leak_the_token_to_a_download_url_naming_a_hostile_host
     # the saved token.
     captured = {}
 
-    def fake_get(url, headers=None, params=None, timeout=None):
+    def fake_get(url, headers=None, params=None, timeout=None, stream=False):
         captured.update(url=url, headers=headers)
         return _FakeHTTPResponse(status_code=200, content=b"file bytes")
 
@@ -164,7 +174,7 @@ def test_request_does_not_leak_the_token_to_a_download_url_naming_a_hostile_host
 def test_request_success_returns_parsed_json_and_forwards_params_and_timeout(monkeypatch):
     captured = {}
 
-    def fake_get(url, headers=None, params=None, timeout=None):
+    def fake_get(url, headers=None, params=None, timeout=None, stream=False):
         captured.update(url=url, headers=headers, params=params, timeout=timeout)
         return _FakeHTTPResponse(status_code=200, json_body={"ok": True})
 
@@ -187,6 +197,28 @@ def test_request_expect_json_false_returns_raw_content_bytes(monkeypatch):
     )
     client = GitHubRestClient(settings_manager=None)
     assert client.request("https://example.com/x", expect_json=False) == b"raw-bytes-here"
+
+
+def test_binary_download_refuses_large_content_length_before_buffering(monkeypatch):
+    from graphlink_plugins.common import github_client as module
+
+    monkeypatch.setattr(module, "MAX_BINARY_RESPONSE_BYTES", 8)
+    response = _FakeHTTPResponse(content=b"not read", headers={"Content-Length": "123"})
+    monkeypatch.setattr(module.requests, "get", lambda *a, **k: response)
+    with pytest.raises(RuntimeError, match="safety limit"):
+        GitHubRestClient().request("https://api.github.com/raw", expect_json=False)
+    assert response.closed
+
+
+def test_binary_download_refuses_oversized_stream_without_content_length(monkeypatch):
+    from graphlink_plugins.common import github_client as module
+
+    monkeypatch.setattr(module, "MAX_BINARY_RESPONSE_BYTES", 8)
+    response = _FakeHTTPResponse(content=b"123456789012")
+    monkeypatch.setattr(module.requests, "get", lambda *a, **k: response)
+    with pytest.raises(RuntimeError, match="safety limit"):
+        GitHubRestClient().request("https://api.github.com/raw", expect_json=False)
+    assert response.closed
 
 
 def test_request_404_raises_friendly_not_found_message(monkeypatch):
