@@ -701,9 +701,19 @@ def test_parallel_exports_use_independent_staging_files(tmp_path, monkeypatch):
     archive = tmp_path / "parallel.graphlink"
     barrier = threading.Barrier(2)
     real_replace = archive_module.os.replace
+    first_attempts: set[str] = set()
+    gate_lock = threading.Lock()
 
     def synchronized_replace(source, destination):
-        barrier.wait(timeout=10)
+        # Only synchronize each staging ZIP's FIRST publication attempt:
+        # on Windows, a transient file lock can require a bounded
+        # os.replace retry, which must not wait for an already-finished
+        # second worker at this barrier again.
+        with gate_lock:
+            first = str(source) not in first_attempts
+            first_attempts.add(str(source))
+        if first:
+            barrier.wait(timeout=10)
         return real_replace(source, destination)
 
     monkeypatch.setattr(archive_module.os, "replace", synchronized_replace)
