@@ -19,9 +19,9 @@ never a crash.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import regex as re
-from pathlib import Path
 
 from backend.harness.workspace import WorkspaceError, resolve_under_root, workspace_dir
 from backend.providers.base import ToolCall, ToolSpec
