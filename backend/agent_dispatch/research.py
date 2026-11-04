@@ -358,6 +358,10 @@ class ResearchDispatchOps(DispatcherParts):
                 # Recorded on the node as well as toasted: the toast says
                 # something failed, the node says WHICH one.
                 record_failure(message)
+                # The error is stored on the Artifact node. Publish a scene
+                # update as well as a toast so the in-card banner appears
+                # immediately rather than waiting for a later unrelated event.
+                await bus.publish("scene")
                 notifications_state.show(message, "error")
                 await bus.publish("notification")
             except Exception as exc:
@@ -370,6 +374,10 @@ class ResearchDispatchOps(DispatcherParts):
                 agents_module.logger.exception("artifact dispatch failed")
                 message = f"Artifact generation failed: {exc}"
                 record_failure(message)
+                # The error is stored on the Artifact node. Publish a scene
+                # update as well as a toast so the in-card banner appears
+                # immediately rather than waiting for a later unrelated event.
+                await bus.publish("scene")
                 notifications_state.show(message, "error")
                 await bus.publish("notification")
             finally:
