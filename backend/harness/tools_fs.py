@@ -44,6 +44,7 @@ _LIST_CAP_ENTRIES = 500
 _GREP_CAP_MATCHES = 100
 _GREP_LINE_CAP = 400
 _GREP_FILE_SIZE_CAP = 2_000_000  # bytes; larger files are skipped, and say so
+_GREP_SCANNED_FILE_CAP = 5_000  # bounded scan even for zero matches
 _GREP_PATTERN_CAP = 500
 # Python stdlib re has no timeout. An attacker-controlled pattern such as
 # (a+)+$ against a matching file can run for hours under an auto-approved
@@ -162,14 +163,14 @@ def _is_metadata_path(path: Path) -> bool:
     return any(part.casefold() in _PROTECTED_METADATA_DIRS for part in path.parts)
 
 
-def _read_bounded_text(path: Path, *, errors: str = "strict") -> str:
+def _read_bounded_text(path: Path, *, errors: str = "strict", max_bytes: int = _MAX_FS_FILE_BYTES) -> str:
     # read_text() allocates the full file before the caller applies any
     # output cap. Reading one byte beyond the limit also catches files
     # growing between an earlier stat() and the actual read.
     with path.open("rb") as stream:
-        data = stream.read(_MAX_FS_FILE_BYTES + 1)
-    if len(data) > _MAX_FS_FILE_BYTES:
-        raise WorkspaceError(f"File exceeds the {_MAX_FS_FILE_BYTES}-byte harness read limit.")
+        data = stream.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise WorkspaceError(f"File exceeds the {max_bytes}-byte harness read limit.")
     return data.decode("utf-8", errors=errors)
 
 
@@ -256,6 +257,8 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         file_glob = str(call.arguments.get("glob") or "**/*")
         matches: list[str] = []
         skipped_large = 0
+        scanned_files = 0
+        scan_capped = False
         started = time.monotonic()
         try:
             for resolved, relative in _iter_under_root(root, file_glob):
@@ -265,11 +268,18 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
                     break
                 if not resolved.is_file():
                     continue
+                if scanned_files >= _GREP_SCANNED_FILE_CAP:
+                    scan_capped = True
+                    break
+                scanned_files += 1
                 try:
-                    if resolved.stat().st_size > _GREP_FILE_SIZE_CAP:
-                        skipped_large += 1
-                        continue
-                    text = resolved.read_text(encoding="utf-8", errors="replace")
+                    # The file may grow after stat(); bound actual read bytes.
+                    text = _read_bounded_text(
+                        resolved, errors="replace", max_bytes=_GREP_FILE_SIZE_CAP,
+                    )
+                except WorkspaceError:
+                    skipped_large += 1
+                    continue
                 except OSError:
                     continue
                 if "\x00" in text[:1024]:
@@ -289,13 +299,20 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         except (WorkspaceError, OSError, ValueError) as exc:
             return ToolResult(content=f"Could not search: {exc}", is_error=True)
         if not matches:
-            note = f" ({skipped_large} file(s) skipped as too large)" if skipped_large else ""
+            notes = []
+            if skipped_large:
+                notes.append(f"{skipped_large} file(s) skipped as too large")
+            if scan_capped:
+                notes.append(f"search capped at {_GREP_SCANNED_FILE_CAP} files")
+            note = f" ({'; '.join(notes)})" if notes else ""
             return ToolResult(content=f"No matches{note}.")
         footer = ""
         if len(matches) >= _GREP_CAP_MATCHES:
             footer = f"\n…[capped at {_GREP_CAP_MATCHES} matches]"
         if skipped_large:
             footer += f"\n[{skipped_large} file(s) skipped as too large]"
+        if scan_capped:
+            footer += f"\n[search capped at {_GREP_SCANNED_FILE_CAP} files]"
         return ToolResult(content="\n".join(matches) + footer)
 
     async def fs_write(call: ToolCall, ctx: RunContext) -> ToolResult:
@@ -357,8 +374,11 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
                 content=f"old_string occurs {occurrences} times - include more surrounding context so it is unique.",
                 is_error=True,
             )
+        replacement = text.replace(old_string, new_string, 1)
+        if len(replacement.encode("utf-8")) > _MAX_FS_FILE_BYTES:
+            return ToolResult(content="Edited file would exceed the permitted size.", is_error=True)
         try:
-            target.write_text(text.replace(old_string, new_string, 1), encoding="utf-8")
+            target.write_text(replacement, encoding="utf-8")
         except OSError as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Edited {call.arguments.get('path')}.")
