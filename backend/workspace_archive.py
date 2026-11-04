@@ -280,7 +280,35 @@ def read_archive(archive_path: Path) -> dict[str, Any]:
                     "Update Graphlink and try again."
                 )
 
-            chat_names = sorted(n for n in names if n.startswith(CHATS_PREFIX))
+            chat_names = [n for n in names if n.startswith(CHATS_PREFIX)]
+            for name in chat_names:
+                suffix = name[len(CHATS_PREFIX):]
+                if not suffix.endswith(".json") or not suffix[:-5].isdigit():
+                    raise ArchiveError(f"{archive_path.name} has an invalid chat member name ({name})")
+
+            # Export records the intended order in the manifest. Sorting
+            # filenames as strings turns chats/10.json into a predecessor of
+            # chats/2.json, unexpectedly reordering every workspace with
+            # more than nine graphs. Old exports without an index fall back
+            # to numeric member order, not lexicographic member order.
+            index = manifest.get("chats")
+            if index is not None:
+                if not isinstance(index, list) or any(
+                    not isinstance(entry, dict) or not isinstance(entry.get("member"), str)
+                    for entry in index
+                ):
+                    raise ArchiveError(f"{archive_path.name} has an invalid chat index")
+                ordered_names = [entry["member"] for entry in index]
+                if len(ordered_names) != len(set(ordered_names)) or set(ordered_names) != set(chat_names):
+                    raise ArchiveError(f"{archive_path.name} has an inconsistent chat index")
+                chat_names = ordered_names
+            else:
+                chat_names.sort(key=lambda name: int(name[len(CHATS_PREFIX):-5]))
+            if "chatCount" in manifest and (
+                type(manifest["chatCount"]) is not int or manifest["chatCount"] != len(chat_names)
+            ):
+                raise ArchiveError(f"{archive_path.name} has an inconsistent chat count")
+
             chats: list[dict[str, Any]] = []
             for name in chat_names:
                 try:
