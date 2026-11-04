@@ -43,6 +43,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -223,7 +224,18 @@ def export_archive(
             archive.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2))
         # Publish only after ZipFile has closed successfully. Keep cleanup
         # in this same try so a rename failure also leaves no staged file.
-        os.replace(tmp_path, archive_path)
+        # Windows sometimes refuses a racing replacement when the other
+        # export has just published its ZIP to this same path (WinError 5).
+        # The staging ZIP is already complete, so bounded retries are safe;
+        # only the final atomic rename is retried, never ZIP generation.
+        for attempt in range(7):
+            try:
+                os.replace(tmp_path, archive_path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 6:
+                    raise
+                time.sleep(min(0.05 * (attempt + 1), 0.20))
         return archive_path
     finally:
         try:
