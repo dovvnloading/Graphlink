@@ -101,9 +101,10 @@ def _safe_member_name(name: str) -> str:
         raise ArchiveError(f"archive entry escapes the archive: {name!r}")
     if len(normalized) > 1 and normalized[1] == ":":
         raise ArchiveError(f"archive entry is an absolute path: {name!r}")
-    # ZIP stores forward slashes. A backslash is a literal filename
-    # character to zipfile, so normalizing it here but later calling
-    # archive.read(normalized) would try to read a NON-EXISTENT member.
+    # ZIP stores forward slashes. On POSIX, zipfile preserves a literal
+    # backslash in a member name, and normalizing only for validation
+    # would make archive.read(normalized) target a nonexistent member.
+    # On Windows, zipfile already normalizes separators during decoding.
     if "\\" in name:
         raise ArchiveError(f"archive entry has unsupported path separators: {name!r}")
     return normalized

@@ -601,16 +601,25 @@ def test_duplicate_zip_member_names_are_rejected(tmp_path):
 
 
 def test_backslash_members_are_rejected_with_archive_error(tmp_path):
+    import os
+
+    from backend.workspace_archive import _safe_member_name
+
+    # The validation helper refuses a literal backslash on EVERY platform.
+    with pytest.raises(ArchiveError, match="unsupported path separators"):
+        _safe_member_name(r"chats\0.json")
+
+    # On Windows, zipfile.ZipInfo normalizes os.sep to "/" even while
+    # READING a raw ZIP with literal backslash bytes in its central
+    # directory. The archive reader never sees the original backslash;
+    # its normalized name is already safe. Exercise the archive path on
+    # POSIX, where zipfile preserves the hostile member name unchanged.
+    if os.name == "nt":
+        return
     archive = tmp_path / "backslash.graphlink"
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
-        zf.writestr("chats/0.json", json.dumps(_chat()))
-    # On Windows, zipfile normalizes backslashes to forward slashes WHILE
-    # writing. Patch the raw ZIP entry names instead so the input actually
-    # contains the same malicious member on every host platform.
-    data = archive.read_bytes()
-    assert data.count(b"chats/0.json") == 2  # local + central entry
-    archive.write_bytes(data.replace(b"chats/0.json", b"chats\\0.json"))
+        zf.writestr(r"chats\0.json", json.dumps(_chat()))
     with pytest.raises(ArchiveError, match="unsupported path separators"):
         read_archive(archive)
 
