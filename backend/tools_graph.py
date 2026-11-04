@@ -42,6 +42,7 @@ from collections.abc import Callable
 from typing import Any
 
 from backend.domain.graph import SceneDocument, SceneError
+from backend.domain.model import SceneNode
 from graphlink_scratch_dirs import HARNESS_WORKSPACE_ROOT, remove_scratch_dir_for_id
 from backend.domain.node_states import (
     ArtifactState,
@@ -303,6 +304,21 @@ def _error(message: str) -> ToolResult:
     return ToolResult(content=message, is_error=True)
 
 
+def _readable_node_content(node: SceneNode) -> str:
+    """Read the body shown by the actual node, not just its core field.
+
+    Code and artifact nodes keep their user-visible text in typed state.
+    Their SceneNode.content is normally empty (or a separate instruction),
+    so inspecting and searching that field alone silently loses the code
+    and drafted document.
+    """
+    if node.kind == "code" and isinstance(node.state, CodeState):
+        return node.state.code
+    if node.kind == "artifact" and isinstance(node.state, ArtifactState):
+        return node.state.artifact_content
+    return node.content or ""
+
+
 def make_create_node_handler(document: SceneDocument):
     async def handler(call: ToolCall, ctx: RunContext) -> ToolResult:
         args = call.arguments
@@ -468,6 +484,7 @@ def make_read_subgraph_handler(document: SceneDocument):
         walk_down = direction in ("down", "both")
         walk_up = direction in ("up", "both")
         seen = {root_id}
+        visit_order = [root_id]
         frontier = [root_id]
         edges_out: list[dict[str, str]] = []
         # "both" can reach the SAME edge twice (once from each endpoint, on
@@ -491,6 +508,7 @@ def make_read_subgraph_handler(document: SceneDocument):
                             nodes_truncated = True
                             continue  # neither node nor edge included past the cap
                         seen.add(neighbour)
+                        visit_order.append(neighbour)
                         next_frontier.append(neighbour)
                     if (edge.source, edge.target) not in seen_edges:
                         seen_edges.add((edge.source, edge.target))
@@ -500,9 +518,9 @@ def make_read_subgraph_handler(document: SceneDocument):
                 break
 
         nodes_out: list[dict[str, Any]] = []
-        for node_id in seen:
+        for node_id in visit_order:
             node = document.nodes[node_id]
-            content = node.content or ""
+            content = _readable_node_content(node)
             nodes_out.append({
                 "id": node.id,
                 "kind": node.kind,
@@ -546,7 +564,7 @@ def make_list_nodes_handler(document: SceneDocument):
             if kind_filter and node.kind != kind_filter:
                 continue
             if query:
-                haystack = ((node.title or "") + " " + (node.content or "")).lower()
+                haystack = ((node.title or "") + " " + _readable_node_content(node)).lower()
                 if query not in haystack:
                     continue
             matches.append(node)
@@ -554,7 +572,7 @@ def make_list_nodes_handler(document: SceneDocument):
         page = matches[offset : offset + _LIST_MAX_NODES]
         nodes_out = []
         for node in page:
-            content = node.content or ""
+            content = _readable_node_content(node)
             nodes_out.append({
                 "id": node.id,
                 "kind": node.kind,

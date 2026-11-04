@@ -262,6 +262,25 @@ class TestReadSubgraph:
         assert len(child_row["content"]) == 1000
         assert {"source": root.id, "target": child.id} in payload["edges"]
 
+    def test_reads_code_and_artifact_bodies_in_stable_breadth_first_order(self):
+        document = SceneDocument()
+        root = document.add_chat_node(0, 0, "root", True)
+        code = document.add_code_node(0, 200, "print('actual source')", "python", root.id)
+        artifact = document.add_artifact_node(0, 400, root.id)
+        document.complete_artifact_generation(artifact.id, "Actual drafted document", "Finished")
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        payload = json.loads(invoke(registry, ctx, "graph.read_subgraph", {
+            "root_id": root.id,
+        }).content)
+        assert [node["id"] for node in payload["nodes"]] == [
+            root.id, code.id, artifact.id,
+        ]
+        assert payload["nodes"][1]["content"] == "print('actual source')"
+        assert payload["nodes"][2]["content"] == "Actual drafted document"
+        assert payload["nodes"][1]["truncated"] is False
+
     def test_depth_limits_the_walk(self):
         document = SceneDocument()
         a = document.add_chat_node(0, 0, "a", True)
@@ -691,6 +710,27 @@ class TestListNodes:
         }).content)
 
         assert [n["id"] for n in payload["nodes"]] == [note.id]
+
+    def test_query_searches_code_and_artifact_bodies_not_just_core_content(self):
+        document, chat, _code, _note = self.seed()
+        source = "print('hello')\\n# keyword_only_in_code_body"
+        code = document.add_code_node(0, 500, source, "python", chat.id)
+        artifact = document.add_artifact_node(0, 700, chat.id)
+        document.complete_artifact_generation(
+            artifact.id, "keyword_only_in_draft_body", "Finished",
+        )
+        registry = make_registry(document)
+        ctx, _ = make_ctx()
+
+        for query, expected, body in (
+            ("keyword_only_in_code_body", code.id, source),
+            ("keyword_only_in_draft_body", artifact.id, "keyword_only_in_draft_body"),
+        ):
+            payload = json.loads(invoke(registry, ctx, "graph.list_nodes", {
+                "query": query,
+            }).content)
+            assert [row["id"] for row in payload["nodes"]] == [expected]
+            assert payload["nodes"][0]["excerpt"] == body
 
     def test_query_matches_title_too(self):
         document = SceneDocument()

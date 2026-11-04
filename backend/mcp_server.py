@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, BinaryIO, TextIO
 
 from backend.control import DEFAULT_CONTROL_PORT, DEFAULT_TOKEN_FILE
 
@@ -80,7 +80,7 @@ _TOOL_SPECS: tuple[dict[str, Any], ...] = (
             "type": "object", "additionalProperties": False,
             "properties": {
                 "root_id": {"type": "string", "minLength": 1, "maxLength": 200},
-                "depth": {"type": "integer", "minimum": 1, "maximum": 8},
+                "depth": {"type": "integer", "minimum": 1, "maximum": 3},
                 "direction": {"type": "string", "enum": ["down", "up", "both"]},
             },
             "required": ["root_id"],
@@ -434,18 +434,27 @@ class StdioMcpServer:
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
-def serve(client: ControlHttpClient, source: TextIO, sink: TextIO) -> None:
+def serve(client: ControlHttpClient, source: TextIO | BinaryIO, sink: TextIO) -> None:
     server = StdioMcpServer(client)
     while True:
         raw = source.readline(MAX_INPUT_LINE + 1)
         if not raw:
             return
         reply: dict[str, Any] | None
-        if len(raw) > MAX_INPUT_LINE:
-            # Even a newline-terminated line just ONE byte beyond the
-            # input cap must be refused. Resynchronize when a longer line
-            # exceeded readline's bounded chunk.
-            while raw and not raw.endswith("\n"):
+        # In production stdin is binary: limit actual wire bytes and allow
+        # malformed UTF-8 to yield a parse error instead of terminating the
+        # MCP process. Text streams remain supported for embedding/tests.
+        byte_length = (
+            len(raw) if isinstance(raw, bytes)
+            else len(raw.encode("utf-8", errors="surrogatepass"))
+        )
+        if byte_length > MAX_INPUT_LINE:
+            # Drain the remainder of an oversized message before reading
+            # the next one. Counting Unicode code points here would permit
+            # multibyte UTF-8 lines far larger than the claimed byte cap.
+            while raw and not (
+                raw.endswith(b"\n") if isinstance(raw, bytes) else raw.endswith("\n")
+            ):
                 raw = source.readline(MAX_INPUT_LINE + 1)
             reply = _rpc_error(None, -32700, "MCP message too large")
         else:
@@ -478,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
         client = ControlHttpClient(options.url, token, write_token=write_token)
     except (OSError, ValueError) as exc:
         parser.error(f"cannot configure Graphlink MCP: {exc}")
-    serve(client, sys.stdin, sys.stdout)
+    serve(client, sys.stdin.buffer, sys.stdout)
     return 0
 
 

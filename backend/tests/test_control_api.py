@@ -198,6 +198,9 @@ def test_live_graph_tools_read_the_same_session_as_the_ui(api, control_app):
     assert branch.status_code == 200
     assert {n["id"] for n in branch.json()["nodes"]} == {parent.id, child.id}
     assert {"source": parent.id, "target": child.id} in branch.json()["edges"]
+    assert api.get("/api/control/scene/subgraph", params={
+        "root_id": parent.id, "depth": 4,
+    }).status_code == 422, "depth must not be silently clamped to 3"
     assert api.get("/api/control/scene/subgraph", params={"root_id": "unknown"}).status_code == 400
     assert api.get("/api/control/scene/subgraph", params={
         "root_id": parent.id, "direction": "sideways",
