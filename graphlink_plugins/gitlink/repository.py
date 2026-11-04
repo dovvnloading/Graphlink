@@ -296,7 +296,7 @@ class GitlinkRepository:
             except ValueError:
                 trusted_download = False
             if not trusted_download:
-                raise RuntimeError("GitHub file response contains an unsafe download URL.")
+                raise RuntimeError("GitHub file response contains an unsafe download URL (untrusted destination).")
             # Route through github_client rather than a raw requests.get: the
             # bypassed call sent no Authorization header and got none of the
             # client's 401/403/404 friendly-error mapping - a real gap for
