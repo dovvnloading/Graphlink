@@ -29,6 +29,26 @@ import requests
 _ALLOWED_TOKEN_HOSTS = frozenset({"api.github.com", "raw.githubusercontent.com"})
 
 
+def is_trusted_github_url(url: str) -> bool:
+    """Only authenticated HTTPS URLs on known GitHub hosts are trusted.
+
+    A provider-returned download_url can be an attacker-controlled string.
+    A hostname-only allowlist mistakenly authorized cleartext HTTP requests
+    and unusual ports on an otherwise matching hostname.
+    """
+    try:
+        parsed = urlparse(url)
+        return (
+            parsed.scheme == "https"
+            and parsed.hostname in _ALLOWED_TOKEN_HOSTS
+            and parsed.port in (None, 443)
+            and not parsed.username
+            and not parsed.password
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 class GitHubRestClient:
     def __init__(self, settings_manager=None):
         self.settings_manager = settings_manager
@@ -48,7 +68,7 @@ class GitHubRestClient:
         # a caller that already knows it's only ever talking to a trusted
         # host - or a caller with no URL at all yet - is unaffected;
         # request() below always passes the real target URL.
-        if url is not None and urlparse(url).hostname not in _ALLOWED_TOKEN_HOSTS:
+        if url is not None and not is_trusted_github_url(url):
             return headers
         token = self.get_token()
         if token:

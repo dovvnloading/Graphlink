@@ -27,6 +27,7 @@ from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 from urllib.parse import quote
 
+from graphlink_plugins.common.github_client import is_trusted_github_url
 from graphlink_plugins.gitlink.agent import (
     _clean_text,
     _decode_text_bytes,
@@ -232,12 +233,22 @@ class GitlinkRepository:
         )
         if isinstance(content_payload, list):
             raise RuntimeError(f"`{repo_path}` resolves to a directory, not a file.")
+        if not isinstance(content_payload, dict):
+            raise RuntimeError("GitHub returned an invalid file metadata response.")
 
         if content_payload.get("encoding") == "base64" and content_payload.get("content"):
             return _decode_text_bytes(base64.b64decode(content_payload["content"]))
 
         download_url = content_payload.get("download_url")
         if download_url:
+            # GitHub's contents response is data, not a grant to fetch an
+            # arbitrary URL. Even without a forwarded credential, accepting
+            # a file's download_url as an unrestricted network destination
+            # would let a modified/provider-controlled response hit LAN or
+            # metadata endpoints. Only GitHub's known HTTPS content hosts
+            # are legitimate file-download fallbacks.
+            if not isinstance(download_url, str) or not is_trusted_github_url(download_url):
+                raise RuntimeError("GitHub returned an unsafe file download URL.")
             # Route through github_client rather than a raw requests.get: the
             # bypassed call sent no Authorization header and got none of the
             # client's 401/403/404 friendly-error mapping - a real gap for

@@ -161,6 +161,28 @@ def test_request_does_not_leak_the_token_to_a_download_url_naming_a_hostile_host
     assert "Authorization" not in captured["headers"]
 
 
+@pytest.mark.parametrize("url", [
+    "http://api.github.com/repos/o/r",
+    "https://api.github.com:444/repos/o/r",
+    "https://raw.githubusercontent.com:9999/o/r/file",
+    "https://api.github.com@evil.example/repos/o/r",
+    "https://evil.example/repos/o/r",
+])
+def test_github_token_never_sent_to_untrusted_url_variants(url):
+    client = GitHubRestClient(settings_manager=_FakeSettingsManagerWithToken("ghp_secret"))
+    assert "Authorization" not in client.build_headers(url)
+
+
+def test_gitlink_rejects_malicious_download_url_without_fetching_it():
+    contents_url = "https://api.github.com/repos/o/r/contents/src/app.py"
+    for hostile in ("http://127.0.0.1:8080/secret", "http://api.github.com/o/r",
+                    "https://evil.example/steal", "file:///etc/passwd"):
+        client = _FakeGithubClient({contents_url: {"download_url": hostile}})
+        with pytest.raises(RuntimeError, match="unsafe file download URL"):
+            GitlinkRepository(client).fetch_github_file_text("o/r", "main", "src/app.py")
+        assert len(client.calls) == 1, "must not fetch a hostile download URL"
+
+
 def test_request_success_returns_parsed_json_and_forwards_params_and_timeout(monkeypatch):
     captured = {}
 

@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import base64
 import os
+import time
+from urllib.parse import urljoin
 
 
 def _read_attachment_bytes(file_path: str, attachment_kind: str) -> bytes:
@@ -64,35 +66,98 @@ def _extract_openai_image_bytes(response) -> bytes:
     if not image_url and isinstance(first_item, dict):
         image_url = first_item.get("url")
     if image_url:
-        # SECURITY-FIX: image_url comes verbatim from the image endpoint's
-        # response - the OpenAI-compatible base_url is user-configurable and,
-        # under the threat model, a hostile or MITM'd provider response
-        # (boundary (d)) is untrusted. urllib.request.urlopen installs the
-        # file://, data: and ftp: handlers by default, so an unchecked URL
-        # here let a response body read an arbitrary LOCAL file (proven:
-        # file:///.../secret returned the file's bytes) or hit an internal
-        # host - classic SSRF - with the bytes then persisted and served
-        # back. The web_research subsystem already solved exactly this for
-        # LLM-reached URLs; reuse its audited FetchPolicy (https-only,
-        # rejects private/loopback/link-local/metadata addresses) rather
-        # than rolling a second, weaker check here.
-        from graphlink_plugins.web_research.fetch_policy import FetchPolicy, URLPolicyError
-
-        try:
-            FetchPolicy().validate(image_url)
-        except URLPolicyError as exc:
-            raise RuntimeError(
-                f"Image endpoint returned a URL blocked by fetch policy: {exc}"
-            ) from exc
-        try:
-            with _mod.urllib.request.urlopen(image_url, timeout=120) as resp:
-                return resp.read()
-        except Exception as exc:
-            raise RuntimeError(
-                f"Image endpoint returned a URL, but the image download failed: {exc}"
-            ) from exc
+        # This is an untrusted URL supplied by the provider, not a locally
+        # chosen download address. The downloader MUST use the validated IP
+        # for the socket and re-validate each redirect before connecting.
+        return _download_provider_image_url(image_url)
 
     raise RuntimeError("Image endpoint response did not include b64_json or a URL.")
+
+
+def _download_provider_image_url(image_url: str, *, policy=None) -> bytes:
+    """Download a provider-returned image without an SSRF or unbounded-read gap.
+
+    Validating an URL and THEN using urllib.request.urlopen() was unsafe:
+    urllib follows redirects automatically, resolves DNS again (so a
+    validate-then-connect DNS rebinding can hit loopback), reads an unbounded
+    body into memory, and inherits ambient proxy settings. Reuse the web
+    research fetcher's HTTPS/TLS-hostname-preserving *pinned IP* adapter;
+    validate every redirect target before its own socket is opened.
+    """
+    import requests
+
+    from graphlink_plugins.web_research.fetch_policy import FetchPolicy, URLPolicyError
+    from graphlink_plugins.web_research.providers import _PinnedHTTPAdapter
+
+    policy = policy if policy is not None else FetchPolicy(
+        max_bytes=20 * 1024 * 1024,
+        total_timeout_seconds=45.0,
+    )
+    if _PinnedHTTPAdapter is None:
+        raise RuntimeError("Image downloading requires the requests package.")
+    started = time.monotonic()
+    current_url = image_url
+
+    with requests.Session() as session:
+        # Provider-supplied URLs must not inherit proxy credentials, HTTP
+        # proxy addresses, netrc auth, or other process-local settings.
+        session.trust_env = False
+        for hop in range(policy.max_redirects + 1):
+            if time.monotonic() - started > policy.total_timeout_seconds:
+                raise RuntimeError("Image download exceeded the total time limit.")
+            try:
+                target = policy.validate(current_url)
+            except URLPolicyError as exc:
+                raise RuntimeError(
+                    f"Image endpoint returned a URL blocked by fetch policy: {exc}"
+                ) from exc
+
+            session.mount("https://", _PinnedHTTPAdapter(target.pinned_ip))
+            try:
+                response = session.get(
+                    target.canonical_url,
+                    timeout=(policy.connect_timeout_seconds, policy.read_timeout_seconds),
+                    allow_redirects=False,
+                    stream=True,
+                )
+            except requests.RequestException as exc:
+                raise RuntimeError("Image endpoint download failed.") from exc
+
+            try:
+                if response.status_code in (301, 302, 303, 307, 308):
+                    location = response.headers.get("Location")
+                    if hop >= policy.max_redirects or not location:
+                        raise RuntimeError("Image endpoint returned an invalid redirect.")
+                    current_url = urljoin(target.canonical_url, location)
+                    # No request to current_url occurs until the next
+                    # iteration validates its scheme, host and IP.
+                    continue
+                if response.status_code < 200 or response.status_code >= 300:
+                    raise RuntimeError(f"Image endpoint returned HTTP {response.status_code}.")
+                content_length = response.headers.get("Content-Length", "")
+                if content_length.isdigit() and int(content_length) > policy.max_bytes:
+                    raise RuntimeError("Image endpoint response exceeds the image size limit.")
+
+                body = bytearray()
+                try:
+                    # One-byte reads bound the interval between timeout
+                    # checks under slow-drip servers (urllib3 buffers the
+                    # actual socket reads, avoiding one syscall per byte).
+                    for chunk in response.iter_content(chunk_size=1):
+                        if time.monotonic() - started > policy.total_timeout_seconds:
+                            raise RuntimeError("Image download exceeded the total time limit.")
+                        if len(body) + len(chunk) > policy.max_bytes:
+                            raise RuntimeError("Image endpoint response exceeds the image size limit.")
+                        body.extend(chunk)
+                except requests.RequestException as exc:
+                    raise RuntimeError("Image endpoint download failed.") from exc
+                if time.monotonic() - started > policy.total_timeout_seconds:
+                    raise RuntimeError("Image download exceeded the total time limit.")
+                return bytes(body)
+            finally:
+                response.close()
+
+    raise RuntimeError("Image endpoint exceeded the redirect limit.")
 
 
 def _guess_image_mime_type(image_data: bytes) -> str:
