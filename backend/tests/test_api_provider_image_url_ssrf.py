@@ -51,6 +51,35 @@ def test_private_or_non_https_urls_are_refused(url):
         api_provider._extract_openai_image_bytes(_response_with_url(url))
 
 
+def test_inline_base64_payload_above_limit_is_rejected_before_decode(monkeypatch):
+    import provider_runtime.media as media
+
+    monkeypatch.setattr(media, "MAX_PROVIDER_IMAGE_BYTES", 10)
+    oversized = base64.b64encode(b"012345678901").decode("ascii")
+
+    def unexpected_decode(_value):
+        raise AssertionError("oversized base64 was decoded before validation")
+
+    monkeypatch.setattr(media.base64, "b64decode", unexpected_decode)
+    with pytest.raises(RuntimeError, match="download limit"):
+        api_provider._extract_openai_image_bytes(
+            SimpleNamespace(data=[SimpleNamespace(b64_json=oversized)])
+        )
+
+
+def test_inline_base64_payload_is_rejected_after_decode_if_payload_exceeds_limit(monkeypatch):
+    import provider_runtime.media as media
+
+    monkeypatch.setattr(media, "MAX_PROVIDER_IMAGE_BYTES", 10)
+    # Base64 length can be within the loose encoded ceiling while decoded
+    # bytes are still over the actual limit.
+    oversized = base64.b64encode(b"01234567890").decode("ascii")
+    with pytest.raises(RuntimeError, match="download limit"):
+        api_provider._extract_openai_image_bytes(
+            SimpleNamespace(data=[SimpleNamespace(b64_json=oversized)])
+        )
+
+
 def test_a_b64_json_response_never_touches_the_network_or_the_policy():
     # The common OpenAI path returns inline base64 and must still work with
     # no URL validation involved at all.
