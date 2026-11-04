@@ -21,6 +21,7 @@ helper, not a second source of truth for repo/branch/local_root.
 import base64
 import html
 import shutil
+import stat
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -52,6 +53,80 @@ IGNORED_LOCAL_DIR_NAMES = {
 
 MAX_CONTEXT_CHARS = 180000
 MAX_MANIFEST_ENTRIES = 1200
+
+# A GitHub zipball is third-party data, not a trusted backup. Limit both
+# compressed input and extraction so a ZIP bomb cannot exhaust RAM or disk.
+MAX_SNAPSHOT_ARCHIVE_BYTES = 64 * 1024 * 1024
+MAX_SNAPSHOT_MEMBER_BYTES = 16 * 1024 * 1024
+MAX_SNAPSHOT_TOTAL_BYTES = 256 * 1024 * 1024
+MAX_SNAPSHOT_ENTRIES = 10_000
+_EXTRACT_CHUNK_BYTES = 64 * 1024
+
+
+def _checked_snapshot_members(archive: zipfile.ZipFile) -> tuple[list[zipfile.ZipInfo], str]:
+    """Require one repository root, bounded entries and safe regular files."""
+    infos = archive.infolist()
+    if not infos or len(infos) > MAX_SNAPSHOT_ENTRIES:
+        raise RuntimeError("Repository snapshot is empty or has too many entries.")
+    root_name: str | None = None
+    seen: set[str] = set()
+    total_bytes = 0
+    for info in infos:
+        filename = info.filename
+        parts = filename.rstrip("/").split("/")
+        if (not filename or filename.startswith(("/", "\\"))
+                or "\\" in filename or "\x00" in filename
+                or any(not part or part in (".", "..") or ":" in part
+                       or part.rstrip(" .") != part for part in parts)):
+            raise RuntimeError("Repository snapshot contains unsafe file paths.")
+        if any(part.casefold() == ".git" for part in parts):
+            raise RuntimeError("Repository snapshot must not contain .git metadata.")
+        if root_name is None:
+            root_name = parts[0]
+        if parts[0] != root_name or (len(parts) == 1 and not info.is_dir()):
+            raise RuntimeError("Repository snapshot must contain one top-level directory.")
+        key = "/".join(parts).casefold()
+        if key in seen:
+            raise RuntimeError("Repository snapshot contains duplicate file paths.")
+        seen.add(key)
+        # No symlink/device/socket entries, including UNIX-mode ZIP metadata.
+        mode = stat.S_IFMT(info.external_attr >> 16)
+        if mode not in (0, stat.S_IFREG, stat.S_IFDIR):
+            raise RuntimeError("Repository snapshot contains unsupported file types.")
+        if info.is_dir() and mode == stat.S_IFREG:
+            raise RuntimeError("Repository snapshot directory has invalid file type.")
+        if not info.is_dir():
+            if info.file_size > MAX_SNAPSHOT_MEMBER_BYTES:
+                raise RuntimeError("Repository snapshot contains a file exceeding 16 MiB.")
+            total_bytes += info.file_size
+            if total_bytes > MAX_SNAPSHOT_TOTAL_BYTES:
+                raise RuntimeError("Repository snapshot expands beyond the 256 MiB limit.")
+    if root_name is None:
+        raise RuntimeError("Repository snapshot has no root directory.")
+    return infos, root_name
+
+
+def _extract_checked_snapshot(archive: zipfile.ZipFile, extract_root: Path) -> Path:
+    """Stream a validated ZIP through bounded writes inside the temp root."""
+    infos, root_name = _checked_snapshot_members(archive)
+    for info in infos:
+        parts = info.filename.rstrip("/").split("/")
+        target = extract_root.joinpath(*parts)
+        if info.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        extracted = 0
+        with archive.open(info) as source, target.open("xb") as destination:
+            while chunk := source.read(_EXTRACT_CHUNK_BYTES):
+                extracted += len(chunk)
+                if extracted > info.file_size or extracted > MAX_SNAPSHOT_MEMBER_BYTES:
+                    raise RuntimeError("Repository snapshot entry exceeded its declared size.")
+                destination.write(chunk)
+        if extracted != info.file_size:
+            raise RuntimeError("Repository snapshot contains an incomplete entry.")
+    return extract_root / root_name
+
 
 
 def default_import_root(repo_name, branch_name):
@@ -258,6 +333,9 @@ class GitlinkRepository:
             timeout=60,
         )
 
+        if not isinstance(archive_bytes, bytes) or len(archive_bytes) > MAX_SNAPSHOT_ARCHIVE_BYTES:
+            raise RuntimeError("Repository snapshot exceeds the 64 MiB download limit.")
+
         with tempfile.TemporaryDirectory(prefix="gitlink_import_") as temp_dir:
             temp_path = Path(temp_dir)
             archive_path = temp_path / "repo.zip"
@@ -265,11 +343,11 @@ class GitlinkRepository:
             extract_root.mkdir(parents=True, exist_ok=True)
             archive_path.write_bytes(archive_bytes)
 
-            with zipfile.ZipFile(archive_path) as archive:
-                archive.extractall(extract_root)
-
-            extracted_dirs = [item for item in extract_root.iterdir() if item.is_dir()]
-            extracted_root = extracted_dirs[0] if extracted_dirs else extract_root
+            try:
+                with zipfile.ZipFile(archive_path) as archive:
+                    extracted_root = _extract_checked_snapshot(archive, extract_root)
+            except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+                raise RuntimeError("GitHub returned an invalid repository ZIP archive.") from exc
 
             if target_root.exists():
                 return target_root
