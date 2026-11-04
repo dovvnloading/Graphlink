@@ -27,6 +27,9 @@ from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import FS_READ, FS_WRITE, RunContext, ToolRegistry, ToolResult
 
 _READ_CAP_CHARS = 40_000
+# A small output excerpt must not require first loading gigabytes from
+# untrusted workspace files into the backend event loop's memory.
+_READ_FILE_CAP_BYTES = 8 * 1024 * 1024
 # H2 write bounds: a single fs.write/fs.edit call's content ceiling. Wire
 # input is untrusted model output - the same bounds-everywhere posture
 # every other cap in this file takes.
@@ -35,6 +38,7 @@ _LIST_CAP_ENTRIES = 500
 _GREP_CAP_MATCHES = 100
 _GREP_LINE_CAP = 400
 _GREP_FILE_SIZE_CAP = 2_000_000  # bytes; larger files are skipped, and say so
+_GREP_SCANNED_FILE_CAP = 5_000  # prevent unlimited scans with no matches
 _GREP_PATTERN_CAP = 500
 
 FS_READ_SPEC = ToolSpec(
@@ -141,13 +145,30 @@ def _bound_root(ctx: RunContext) -> Path | None:
 
 
 def _iter_under_root(root: Path, pattern: str):
-    """Root-relative iteration; resolve_under_root re-checks every yielded
-    candidate so a glob cannot be a traversal primitive (Path.glob itself
-    refuses '..' segments, but the double-check keeps confinement a single-
-    choke-point property rather than a per-caller convention)."""
-    for path in sorted(root.glob(pattern or "**/*")):
+    """Stream matches without materializing the entire workspace in RAM.
+
+    The old sorted(root.glob(...)) built a list of every matching file
+    BEFORE fs.list's 500-entry cap could apply. Very large/untrusted
+    workspaces could exhaust memory just by asking for a directory listing.
+    Resolve each path independently to retain symlink/traversal confinement.
+    """
+    for path in root.glob(pattern or "**/*"):
         resolved = resolve_under_root(root, str(path))
         yield resolved, resolved.relative_to(root).as_posix()
+
+
+def _read_bounded_text(path: Path, maximum_bytes: int, *, errors: str) -> str:
+    """Limit bytes while reading, not just by checking stat before opening.
+
+    A file may grow between stat() and read(); a bounded read cannot
+    ingest an arbitrarily large file even when it changes concurrently.
+    """
+    with path.open("rb") as stream:
+        raw = stream.read(maximum_bytes + 1)
+    if len(raw) > maximum_bytes:
+        raise ValueError(f"File exceeds the {maximum_bytes}-byte read limit.")
+    # Mirrors Path.read_text/TextIOWrapper universal-newline handling.
+    return raw.decode("utf-8", errors=errors).replace("\r\n", "\n").replace("\r", "\n")
 
 
 def register_harness_fs_tools(registry: ToolRegistry) -> None:
@@ -162,8 +183,8 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         if not target.is_file():
             return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
         try:
-            text = target.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
+            text = _read_bounded_text(target, _READ_FILE_CAP_BYTES, errors="replace")
+        except (OSError, ValueError) as exc:
             return ToolResult(content=f"Could not read file: {exc}", is_error=True)
         lines = text.splitlines()
         try:
@@ -217,17 +238,23 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         file_glob = str(call.arguments.get("glob") or "**/*")
         matches: list[str] = []
         skipped_large = 0
+        scanned_files = 0
+        scan_capped = False
         try:
             for resolved, relative in _iter_under_root(root, file_glob):
                 if len(matches) >= _GREP_CAP_MATCHES:
                     break
                 if not resolved.is_file():
                     continue
+                if scanned_files >= _GREP_SCANNED_FILE_CAP:
+                    scan_capped = True
+                    break
+                scanned_files += 1
                 try:
-                    if resolved.stat().st_size > _GREP_FILE_SIZE_CAP:
-                        skipped_large += 1
-                        continue
-                    text = resolved.read_text(encoding="utf-8", errors="replace")
+                    text = _read_bounded_text(resolved, _GREP_FILE_SIZE_CAP, errors="replace")
+                except ValueError:
+                    skipped_large += 1
+                    continue
                 except OSError:
                     continue
                 if "\x00" in text[:1024]:
@@ -241,13 +268,20 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         except (WorkspaceError, OSError, ValueError) as exc:
             return ToolResult(content=f"Could not search: {exc}", is_error=True)
         if not matches:
-            note = f" ({skipped_large} file(s) skipped as too large)" if skipped_large else ""
-            return ToolResult(content=f"No matches{note}.")
+            notes = []
+            if skipped_large:
+                notes.append(f"{skipped_large} file(s) skipped as too large")
+            if scan_capped:
+                notes.append(f"search capped at {_GREP_SCANNED_FILE_CAP} files")
+            suffix = f" ({'; '.join(notes)})" if notes else ""
+            return ToolResult(content=f"No matches{suffix}.")
         footer = ""
         if len(matches) >= _GREP_CAP_MATCHES:
             footer = f"\n…[capped at {_GREP_CAP_MATCHES} matches]"
         if skipped_large:
             footer += f"\n[{skipped_large} file(s) skipped as too large]"
+        if scan_capped:
+            footer += f"\n[search capped at {_GREP_SCANNED_FILE_CAP} files]"
         return ToolResult(content="\n".join(matches) + footer)
 
     async def fs_write(call: ToolCall, ctx: RunContext) -> ToolResult:
@@ -294,8 +328,8 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         if not target.is_file():
             return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
         try:
-            text = target.read_text(encoding="utf-8")
-        except OSError as exc:
+            text = _read_bounded_text(target, _READ_FILE_CAP_BYTES, errors="strict")
+        except (OSError, ValueError) as exc:
             return ToolResult(content=f"Could not read file: {exc}", is_error=True)
         occurrences = text.count(old_string)
         if occurrences == 0:
@@ -305,8 +339,11 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
                 content=f"old_string occurs {occurrences} times - include more surrounding context so it is unique.",
                 is_error=True,
             )
+        replacement = text.replace(old_string, new_string, 1)
+        if len(replacement.encode("utf-8")) > _READ_FILE_CAP_BYTES:
+            return ToolResult(content="Edited file would exceed the permitted size.", is_error=True)
         try:
-            target.write_text(text.replace(old_string, new_string, 1), encoding="utf-8")
+            target.write_text(replacement, encoding="utf-8")
         except OSError as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Edited {call.arguments.get('path')}.")
