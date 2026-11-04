@@ -396,6 +396,7 @@ _COMMAND_LABELS = {
     "generateImageReply": "Generate Image",
     "setNoteContent": "Edit Note",
     "setHtmlContent": "Edit HTML",
+    "setArtifactContent": "Edit Artifact",
     "setGroupLabel": "Rename Group",
     "setGroupColor": "Recolor",
     "toggleFrameLock": "Lock Frame",
