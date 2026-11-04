@@ -184,7 +184,12 @@ def resolve_scope_paths(scope_mode, selected_paths, repo_file_paths, local_root=
         return list(selected_paths)
 
     if repo_file_paths:
-        return list(repo_file_paths)
+        # Cached repository inventories can come from an older saved chat
+        # or an imported session. Re-apply the privacy filter at the point
+        # FULL mode decides which files to read, not just when a fresh tree
+        # is enumerated; otherwise a stale list can silently send .env
+        # credentials to the configured external model.
+        return [path for path in repo_file_paths if _is_repo_text_path(path)]
     if local_root:
         return scan_local_repo_paths(local_root)
     raise RuntimeError("Load the file tree first so Gitlink knows which repository files to stitch together.")
