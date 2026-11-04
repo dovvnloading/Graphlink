@@ -49,7 +49,7 @@ function finiteNumber(value: unknown, fieldName: string): number {
   if (typeof value !== "number" && typeof value !== "string") {
     throw new ChartSpecError(`${fieldName} must be a finite number`);
   }
-  if (typeof value === "string" && !/^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?$/.test(value.trim())) {
+  if (typeof value === "string" && !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value.trim())) {
     throw new ChartSpecError(`${fieldName} must be a finite number`);
   }
   const num = typeof value === "number" ? value : Number(value);
