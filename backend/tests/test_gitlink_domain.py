@@ -239,6 +239,37 @@ def test_binary_download_enforces_its_size_limit_even_without_content_length(mon
         client.request("https://raw.githubusercontent.com/o/r/main/big.txt", expect_json=False)
 
 
+def test_download_declared_length_cap_is_enforced_without_reading_body(monkeypatch):
+    monkeypatch.setattr(github_client_module, "MAX_DOWNLOAD_BYTES", 10)
+    response = _FakeHTTPResponse(200, content=b"x", headers={"Content-Length": "100"})
+
+    def fake_get(*_args, **_kwargs):
+        return response
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    with pytest.raises(RuntimeError, match="maximum permitted size"):
+        GitHubRestClient().request(
+            "https://raw.githubusercontent.com/o/r/main/file", expect_json=False,
+        )
+    assert response.closed
+
+
+def test_github_redirect_count_is_bounded(monkeypatch):
+    count = 0
+
+    def fake_get(*_args, **_kwargs):
+        nonlocal count
+        count += 1
+        return _FakeHTTPResponse(302, headers={"Location": "/repos/o/r/zipball/main"})
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    with pytest.raises(RuntimeError, match="redirect limit"):
+        GitHubRestClient().request(
+            "https://api.github.com/repos/o/r/zipball/main", expect_json=False,
+        )
+    assert count == github_client_module._MAX_REDIRECTS + 1
+
+
 def test_request_success_returns_parsed_json_and_forwards_params_and_timeout(monkeypatch):
     captured = {}
 
@@ -1143,6 +1174,17 @@ def test_snapshot_rejects_oversized_download_even_when_http_client_is_stubbed(tm
     client = _FakeGithubClient({url: _zip_bytes({"small.txt": b"hello"})})
     with pytest.raises(RuntimeError, match="download limit"):
         GitlinkRepository(client).download_repository_snapshot("o/r", "main", tmp_path / "checkout")
+
+
+def test_snapshot_rejects_too_many_entries_before_extraction(tmp_path, monkeypatch):
+    monkeypatch.setattr(repository_module, "MAX_SNAPSHOT_ENTRIES", 1)
+    url = "https://api.github.com/repos/o/r/zipball/main"
+    client = _FakeGithubClient({url: _zip_bytes({"one.txt": b"1", "two.txt": b"2"})})
+    target = tmp_path / "checkout"
+
+    with pytest.raises(RuntimeError, match="too many entries"):
+        GitlinkRepository(client).download_repository_snapshot("o/r", "main", target)
+    assert not target.exists()
 
 
 def test_download_repository_snapshot_handles_concurrent_creation_race(tmp_path):
