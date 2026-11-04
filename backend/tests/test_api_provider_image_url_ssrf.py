@@ -57,3 +57,143 @@ def test_a_b64_json_response_never_touches_the_network_or_the_policy():
     payload = base64.b64encode(b"PNGBYTES").decode("ascii")
     resp = SimpleNamespace(data=[SimpleNamespace(b64_json=payload)])
     assert api_provider._extract_openai_image_bytes(resp) == b"PNGBYTES"
+
+
+class _FakeImageResponse:
+    def __init__(self, status_code=200, *, headers=None, body=b"PNG data"):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.body = body
+        self.closed = False
+        self.read_started = False
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            import requests
+            raise requests.HTTPError(f"HTTP {self.status_code}")
+
+    def iter_content(self, chunk_size=65536):
+        self.read_started = True
+        for offset in range(0, len(self.body), chunk_size):
+            yield self.body[offset:offset + chunk_size]
+
+    def close(self):
+        self.closed = True
+
+
+def _fake_image_network(monkeypatch, response_by_url, public_ips):
+    """Network-free fixture: validates URLs separately from the pinned socket."""
+    import provider_runtime.media as media
+    from graphlink_plugins.web_research.fetch_policy import FetchPolicy, URLPolicyError, ValidatedTarget
+    from graphlink_plugins.web_research import providers as provider_module
+
+    class RecordingAdapter:
+        def __init__(self, pinned_ip):
+            self.ip = pinned_ip
+
+    class RecordingSession:
+        def __init__(self):
+            self.trust_env = True
+            self.mounts = []
+            self.requests = []
+            self.closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.closed = True
+
+        def mount(self, scheme, adapter):
+            self.mounts.append((scheme, adapter.ip))
+
+        def get(self, url, **kwargs):
+            self.requests.append((url, kwargs))
+            return response_by_url[url]
+
+    session = RecordingSession()
+
+    def validate(_policy, url):
+        if url not in public_ips:
+            raise URLPolicyError("Source resolves to a non-public network address.")
+        return ValidatedTarget(canonical_url=url, pinned_ip=public_ips[url])
+
+    monkeypatch.setattr(FetchPolicy, "validate", validate)
+    monkeypatch.setattr(provider_module, "_PinnedHTTPAdapter", RecordingAdapter)
+    monkeypatch.setattr(media.requests, "Session", lambda: session)
+    return session
+
+
+def test_generated_image_redirect_to_private_host_is_denied_before_second_get(monkeypatch):
+    first_url = "https://images.example.test/generated.png"
+    first = _FakeImageResponse(302, headers={"Location": "https://127.0.0.1/private"})
+    session = _fake_image_network(monkeypatch, {first_url: first}, {first_url: "93.184.216.34"})
+
+    with pytest.raises(RuntimeError, match="blocked by fetch policy"):
+        api_provider._extract_openai_image_bytes(_response_with_url(first_url))
+
+    assert [entry[0] for entry in session.requests] == [first_url]
+    assert session.requests[0][1]["allow_redirects"] is False
+    assert session.trust_env is False
+    assert first.closed and session.closed
+
+
+def test_generated_image_download_pins_each_redirect_to_validated_public_ip(monkeypatch):
+    first_url = "https://images.example.test/generated.png"
+    last_url = "https://cdn.example.test/image.png"
+    first = _FakeImageResponse(302, headers={"Location": last_url})
+    last = _FakeImageResponse(body=b"valid image bytes")
+    session = _fake_image_network(
+        monkeypatch,
+        {first_url: first, last_url: last},
+        {first_url: "93.184.216.34", last_url: "8.8.8.8"},
+    )
+
+    payload = api_provider._extract_openai_image_bytes(_response_with_url(first_url))
+
+    assert payload == b"valid image bytes"
+    assert session.mounts == [("https://", "93.184.216.34"), ("https://", "8.8.8.8")]
+    assert [request[0] for request in session.requests] == [first_url, last_url]
+    assert all(request[1]["stream"] and not request[1]["allow_redirects"] for request in session.requests)
+    assert first.closed and last.closed and session.closed
+
+
+def test_generated_image_download_rejects_stream_over_limit(monkeypatch):
+    import provider_runtime.media as media
+
+    url = "https://images.example.test/generated.png"
+    response = _FakeImageResponse(body=b"01234567890")
+    monkeypatch.setattr(media, "MAX_PROVIDER_IMAGE_BYTES", 10)
+    session = _fake_image_network(monkeypatch, {url: response}, {url: "93.184.216.34"})
+
+    with pytest.raises(RuntimeError, match="download limit"):
+        api_provider._extract_openai_image_bytes(_response_with_url(url))
+
+    assert response.closed and session.closed
+
+
+def test_generated_image_download_rejects_claimed_oversize_before_read(monkeypatch):
+    import provider_runtime.media as media
+
+    url = "https://images.example.test/generated.png"
+    response = _FakeImageResponse(headers={"Content-Length": "100"}, body=b"small")
+    monkeypatch.setattr(media, "MAX_PROVIDER_IMAGE_BYTES", 10)
+    _fake_image_network(monkeypatch, {url: response}, {url: "93.184.216.34"})
+
+    with pytest.raises(RuntimeError, match="download limit"):
+        api_provider._extract_openai_image_bytes(_response_with_url(url))
+
+    assert not response.read_started
+    assert response.closed
+
+
+def test_generated_image_redirects_are_bounded(monkeypatch):
+    url = "https://images.example.test/generated.png"
+    redirect = _FakeImageResponse(302, headers={"Location": url})
+    session = _fake_image_network(monkeypatch, {url: redirect}, {url: "93.184.216.34"})
+
+    with pytest.raises(RuntimeError, match="redirect limit"):
+        api_provider._extract_openai_image_bytes(_response_with_url(url))
+
+    assert len(session.requests) == 4
+    assert redirect.closed
