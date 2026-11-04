@@ -57,6 +57,7 @@ MAX_MANIFEST_ENTRIES = 1200
 # An untrusted repository can contain a ZIP bomb: bound both the compressed
 # HTTP body and the number/size of entries extracted onto the user's disk.
 MAX_REPO_ARCHIVE_DOWNLOAD_BYTES = 128 * 1024 * 1024
+MAX_REPO_FILE_DOWNLOAD_BYTES = 2 * 1024 * 1024
 MAX_REPO_ARCHIVE_MEMBER_BYTES = 128 * 1024 * 1024
 MAX_REPO_ARCHIVE_UNPACKED_BYTES = 512 * 1024 * 1024
 MAX_REPO_ARCHIVE_MEMBERS = 20_000
@@ -282,7 +283,13 @@ class GitlinkRepository:
             # bypassed call sent no Authorization header and got none of the
             # client's 401/403/404 friendly-error mapping - a real gap for
             # private-repo file fetches on this (rarer) fallback branch.
-            raw_bytes = self.github_client.request(download_url, expect_json=False, timeout=25)
+            # An API-supplied URL is not itself a trusted network
+            # destination. Bound the body before buffering it and enforce
+            # the HTTP client's HTTPS/GitHub-only redirect policy.
+            raw_bytes = self.github_client.request(
+                download_url, expect_json=False, timeout=25,
+                max_bytes=MAX_REPO_FILE_DOWNLOAD_BYTES,
+            )
             return _decode_text_bytes(raw_bytes)
 
         raise RuntimeError(f"GitHub did not return file contents for `{repo_path}`.")

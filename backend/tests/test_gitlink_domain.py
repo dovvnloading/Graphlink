@@ -278,6 +278,38 @@ def test_bounded_archive_download_pins_redirects_to_github_and_strips_token(monk
     assert closed == [302, 200]
 
 
+def test_bounded_github_download_refuses_untrusted_initial_url_without_connecting(monkeypatch):
+    attempted = []
+
+    def fake_get(url, **kwargs):
+        attempted.append(url)
+        raise AssertionError("must reject the URL before any network request")
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    client = GitHubRestClient()
+    with pytest.raises(RuntimeError, match="untrusted destination"):
+        client.request("http://127.0.0.1:8765/private", expect_json=False, max_bytes=100)
+    assert attempted == []
+
+
+def test_untrusted_contents_download_url_cannot_trigger_local_network_request(monkeypatch):
+    requested = []
+    contents_url = "https://api.github.com/repos/o/r/contents/file.py"
+
+    def fake_get(url, **kwargs):
+        requested.append(url)
+        assert url == contents_url, "an API-supplied URL must not contact loopback"
+        return _FakeHTTPResponse(
+            json_body={"download_url": "http://127.0.0.1:8765/api/control/graphs"},
+        )
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    repository = GitlinkRepository(GitHubRestClient())
+    with pytest.raises(RuntimeError, match="untrusted destination"):
+        repository.fetch_github_file_text("o/r", "main", "file.py")
+    assert requested == [contents_url]
+
+
 def test_request_404_raises_friendly_not_found_message(monkeypatch):
     monkeypatch.setattr(
         github_client_module.requests, "get",
@@ -1033,6 +1065,7 @@ def test_fetch_github_file_text_falls_back_to_download_url():
     download_call = next(c for c in client.calls if c["url"] == download_url)
     assert download_call["expect_json"] is False
     assert download_call["timeout"] == 25
+    assert download_call["max_bytes"] == repository_module.MAX_REPO_FILE_DOWNLOAD_BYTES
 
 
 def test_fetch_github_file_text_raises_when_no_content_or_download_url():

@@ -27,7 +27,7 @@ import requests
 # could redirect the saved token to any host it names. Only these two real
 # GitHub hosts ever legitimately need the token attached.
 _ALLOWED_TOKEN_HOSTS = frozenset({"api.github.com", "raw.githubusercontent.com"})
-_ARCHIVE_DOWNLOAD_HOSTS = frozenset({"api.github.com", "codeload.github.com"})
+_BOUNDED_GITHUB_HOSTS = frozenset({"api.github.com", "codeload.github.com", "raw.githubusercontent.com"})
 _MAX_ARCHIVE_REDIRECTS = 3
 
 
@@ -92,7 +92,7 @@ class GitHubRestClient:
         return response.json()
 
     def _download_bounded(self, url, params, timeout, expect_json, max_bytes):
-        """Bound Gitlink archive memory use and restrict every redirect hop."""
+        """Bound GitHub binary downloads and restrict each redirect hop."""
         if expect_json or type(max_bytes) is not int or max_bytes <= 0:
             raise ValueError("bounded downloads require a positive byte cap and expect_json=False")
         current_url = url
@@ -100,7 +100,7 @@ class GitHubRestClient:
             try:
                 parsed = urlparse(current_url)
                 allowed = (
-                    parsed.scheme == "https" and parsed.hostname in _ARCHIVE_DOWNLOAD_HOSTS
+                    parsed.scheme == "https" and parsed.hostname in _BOUNDED_GITHUB_HOSTS
                     and parsed.username is None and parsed.password is None
                 )
             except ValueError:
