@@ -32,6 +32,11 @@ _BOUNDED_GITHUB_HOSTS = frozenset({"api.github.com", "codeload.github.com", "raw
 _MAX_ARCHIVE_REDIRECTS = 3
 
 
+def _download_clock() -> float:
+    """Isolated clock seam for deadline tests; never replace global time."""
+    return time.monotonic()
+
+
 class GitHubRestClient:
     def __init__(self, settings_manager=None):
         self.settings_manager = settings_manager
@@ -97,13 +102,13 @@ class GitHubRestClient:
         if expect_json or type(max_bytes) is not int or max_bytes <= 0:
             raise ValueError("bounded downloads require a positive byte cap and expect_json=False")
         current_url = url
-        started = time.monotonic()
+        started = _download_clock()
         # One read timeout resets for every socket.recv and is not a total
         # budget: a server dribbling bytes forever can evade it. Bound the
         # whole chain, including redirect hops, to an explicit deadline.
         total_budget = min(120.0, max(10.0, float(timeout) * 1.5))
         for hop in range(_MAX_ARCHIVE_REDIRECTS + 1):
-            if time.monotonic() - started > total_budget:
+            if _download_clock() - started > total_budget:
                 raise RuntimeError("GitHub download exceeded the total time limit.")
             try:
                 parsed = urlparse(current_url)
@@ -144,14 +149,14 @@ class GitHubRestClient:
                 # even against a slow-drip server, with the underlying
                 # socket still buffered for normal fast downloads.
                 for chunk in response.iter_content(chunk_size=1):
-                    if time.monotonic() - started > total_budget:
+                    if _download_clock() - started > total_budget:
                         raise RuntimeError("GitHub download exceeded the total time limit.")
                     if not chunk:
                         continue
                     if len(data) + len(chunk) > max_bytes:
                         raise RuntimeError("GitHub archive download exceeds the compressed size limit.")
                     data.extend(chunk)
-                if time.monotonic() - started > total_budget:
+                if _download_clock() - started > total_budget:
                     raise RuntimeError("GitHub download exceeded the total time limit.")
                 return bytes(data)
             finally:

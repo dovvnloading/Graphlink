@@ -247,7 +247,7 @@ def test_bounded_github_download_enforces_total_deadline_during_slow_stream(monk
         return SlowlyStreamingResponse()
 
     monkeypatch.setattr(github_client_module.requests, "get", fake_get)
-    monkeypatch.setattr(github_client_module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(github_client_module, "_download_clock", lambda: next(clock))
     with pytest.raises(RuntimeError, match="total time limit"):
         GitHubRestClient().request(
             "https://api.github.com/repos/o/r/zipball/main",
