@@ -55,7 +55,7 @@ def test_inline_base64_payload_above_limit_is_rejected_before_decode(monkeypatch
     import provider_runtime.media as media
 
     monkeypatch.setattr(media, "MAX_PROVIDER_IMAGE_BYTES", 10)
-    oversized = base64.b64encode(b"012345678901").decode("ascii")
+    oversized = base64.b64encode(b"012345678901234567890123456789").decode("ascii")
 
     def unexpected_decode(_value):
         raise AssertionError("oversized base64 was decoded before validation")
