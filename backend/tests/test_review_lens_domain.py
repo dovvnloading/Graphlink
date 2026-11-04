@@ -110,6 +110,10 @@ class _FakeDiffResponse:
     def __init__(self, text, status_code=200):
         self.content = text.encode("utf-8")
         self.status_code = status_code
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     def iter_content(self, chunk_size=65536):
         for start in range(0, len(self.content), chunk_size):
@@ -139,6 +143,21 @@ def _run_bundle(monkeypatch, client, diff_text="diff --git a/x.py b/x.py\n+x = 1
         ),
     )
     return fetch_pr_review_bundle(client, "o", "r", 3)
+
+
+def test_streamed_diff_is_closed_after_success_and_http_error(monkeypatch):
+    client = _FakeClient(_metadata(), [[{"filename": "x.py"}]])
+    response = _FakeDiffResponse("diff --git a/x.py b/x.py")
+    monkeypatch.setattr(diff_fetch_module.requests, "get", lambda *a, **k: response)
+    bundle = fetch_pr_review_bundle(client, "o", "r", 3)
+    assert bundle["diff_text"] == "diff --git a/x.py b/x.py"
+    assert response.closed
+
+    failure = _FakeDiffResponse("", status_code=404)
+    monkeypatch.setattr(diff_fetch_module.requests, "get", lambda *a, **k: failure)
+    with pytest.raises(RuntimeError, match="resource not found"):
+        fetch_pr_review_bundle(client, "o", "r", 3)
+    assert failure.closed
 
 
 def test_fetch_bundle_assembles_metadata_files_and_diff(monkeypatch):

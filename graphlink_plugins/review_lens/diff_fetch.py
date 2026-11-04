@@ -142,17 +142,23 @@ def _fetch_unified_diff(client, metadata_url: str) -> tuple[str, bool]:
         )
     except Exception as exc:
         raise RuntimeError(f"Could not download the pull-request diff: {exc}") from exc
-    if 300 <= response.status_code < 400:
-        raise RuntimeError("GitHub redirected the diff download unexpectedly. Check the pull-request URL.")
-    if response.status_code == 404:
-        raise RuntimeError("GitHub resource not found. Check the repository and pull-request number.")
-    if response.status_code == 401:
-        raise RuntimeError("GitHub rejected the saved token. Update it in Settings > Integrations.")
-    if response.status_code == 403:
-        raise RuntimeError("GitHub refused the diff download (rate limit or permissions). Add a token or try again later.")
-    if response.status_code >= 400:
-        raise RuntimeError(f"GitHub refused the diff download (HTTP {response.status_code}).")
-    return _truncate(_decode_text_bytes(_read_capped(response)), MAX_DIFF_CHARS)
+    try:
+        if 300 <= response.status_code < 400:
+            raise RuntimeError("GitHub redirected the diff download unexpectedly. Check the pull-request URL.")
+        if response.status_code == 404:
+            raise RuntimeError("GitHub resource not found. Check the repository and pull-request number.")
+        if response.status_code == 401:
+            raise RuntimeError("GitHub rejected the saved token. Update it in Settings > Integrations.")
+        if response.status_code == 403:
+            raise RuntimeError("GitHub refused the diff download (rate limit or permissions). Add a token or try again later.")
+        if response.status_code >= 400:
+            raise RuntimeError(f"GitHub refused the diff download (HTTP {response.status_code}).")
+        return _truncate(_decode_text_bytes(_read_capped(response)), MAX_DIFF_CHARS)
+    finally:
+        # stream=True holds a live socket until closed. The capped-read
+        # path deliberately stops early without draining the response;
+        # leaving it open leaks sockets every time a large PR is reviewed.
+        response.close()
 
 
 def _read_capped(response) -> bytes:

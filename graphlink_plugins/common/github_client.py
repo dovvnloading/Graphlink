@@ -56,8 +56,20 @@ class GitHubRestClient:
         # a caller that already knows it's only ever talking to a trusted
         # host - or a caller with no URL at all yet - is unaffected;
         # request() below always passes the real target URL.
-        if url is not None and urlparse(url).hostname not in _ALLOWED_TOKEN_HOSTS:
-            return headers
+        if url is not None:
+            try:
+                target = urlparse(url)
+                trusted = (
+                    target.scheme == "https"
+                    and target.hostname in _ALLOWED_TOKEN_HOSTS
+                    and target.port in (None, 443)
+                    and target.username is None
+                    and target.password is None
+                )
+            except ValueError:
+                trusted = False
+            if not trusted:
+                return headers
         token = self.get_token()
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -114,6 +126,7 @@ class GitHubRestClient:
                 parsed = urlparse(current_url)
                 allowed = (
                     parsed.scheme == "https" and parsed.hostname in _BOUNDED_GITHUB_HOSTS
+                    and parsed.port in (None, 443)
                     and parsed.username is None and parsed.password is None
                 )
             except ValueError:

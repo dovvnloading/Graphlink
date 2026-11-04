@@ -440,7 +440,7 @@ def test_is_repo_text_path_excludes_known_binary_suffixes_case_insensitively():
 def test_is_repo_text_path_includes_normal_source_files():
     assert _is_repo_text_path("src/module.py") is True
     assert _is_repo_text_path("README.md") is True
-    assert _is_repo_text_path("") is True
+    assert _is_repo_text_path("") is False  # Empty names are not eligible inventory entries.
 
 
 def test_normalize_repo_path_converts_backslashes_and_normalizes():

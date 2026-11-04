@@ -425,6 +425,43 @@ class TestShellSessions:
         finally:
             sessions.stop_all()
 
+    def test_rebinding_workspace_kills_old_interactive_process(self, tmp_path):
+        registry, sessions, first_root = self._setup(tmp_path)
+        second_root = tmp_path / "new-workspace"
+        second_root.mkdir()
+        script = first_root / "echo_loop.py"
+        script.write_text(
+            "import sys\n"
+            "for line in sys.stdin:\n"
+            "    print(line.strip(), flush=True)\n",
+            encoding="utf-8",
+        )
+        first_ctx = _tool_ctx(first_root)
+        try:
+            started = _invoke(registry, "shell.session", {
+                "action": "start", "name": "old-project",
+                "command": f'"{sys.executable}" -u "{script}"',
+            }, first_ctx)
+            assert not started.is_error, started.content
+            old_process = sessions.get("ws-h6", "old-project")
+            assert old_process.running
+
+            # A new run bound to a different directory must not be able
+            # to feed commands to the previous project's subprocess,
+            # even though it retains the same durable harness ID.
+            new_ctx = _tool_ctx(second_root)
+            rejected = _invoke(registry, "shell.session", {
+                "action": "write", "name": "old-project",
+                "input": "would run in the old trusted project",
+            }, new_ctx)
+            assert rejected.is_error and "no session named" in rejected.content
+            assert not old_process.running
+            assert "No shell sessions" in _invoke(
+                registry, "shell.session", {"action": "list"}, new_ctx,
+            ).content
+        finally:
+            sessions.stop_all()
+
     def test_a_command_that_dies_immediately_reports_it_as_an_error(self, tmp_path):
         registry, sessions, workspace = self._setup(tmp_path)
         try:

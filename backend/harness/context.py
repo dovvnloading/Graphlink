@@ -26,6 +26,7 @@ state instead of replaying turns that were already dropped.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import graphlink_task_config as config
@@ -107,11 +108,21 @@ def read_instructions(workspace: Path) -> str:
     human-facing panel, neither of which reads this file. A workspace
     that talks the model into wanting something still has to get a
     person to click Approve."""
-    path = workspace / INSTRUCTIONS_FILENAME
+    path = workspace.resolve() / INSTRUCTIONS_FILENAME
     try:
-        if not path.is_file():
+        # A checkout can contain AGENTS.md as a symlink to a PRIVATE FILE
+        # outside the workspace. This file enters the model's system
+        # prompt automatically, without any fs.read approval; never follow
+        # symlinks here. O_NOFOLLOW closes the final-component check/open
+        # race on POSIX; the explicit check also covers Windows.
+        if path.is_symlink() or not path.is_file():
             return ""
-        text = path.read_text(encoding="utf-8", errors="replace")
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        # Read only what the prompt can use. No unbounded read of a
+        # malicious or accidentally enormous instruction file.
+        with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as source:
+            text = source.read(INSTRUCTIONS_BUDGET_CHARS + 1)
     except OSError:
         # An unreadable instruction file must never be the reason a run
         # cannot start - the same degrade-and-continue posture every

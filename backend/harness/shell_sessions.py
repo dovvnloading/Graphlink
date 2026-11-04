@@ -211,10 +211,34 @@ class ShellSessionRegistry:
     def __init__(self, backend: "ShellBackend | None" = None) -> None:
         self._backend = backend or LocalSubprocessBackend()
         self._by_workspace: dict[str, dict[str, ShellSession]] = {}
+        self._roots: dict[str, Path] = {}
         self._lock = threading.RLock()
+
+    def bind_root(self, workspace_id: str, cwd: Path) -> None:
+        """Retire processes when the same node binds to a different root.
+
+        A harness can switch from a previously trusted project folder back
+        to managed scratch between runs. The old sessions used to remain
+        reachable by name under the same workspace_id, so a new run could
+        write stdin to a process STILL running in the old trusted folder.
+        """
+        resolved = cwd.resolve()
+        with self._lock:
+            if self._roots.get(workspace_id) == resolved:
+                return
+            retired = self._by_workspace.pop(workspace_id, {})
+            self._roots[workspace_id] = resolved
+        for session in retired.values():
+            session.stop()
 
     def start(self, workspace_id: str, name: str, command: str, cwd: Path) -> ShellSession:
         with self._lock:
+            resolved = cwd.resolve()
+            bound = self._roots.setdefault(workspace_id, resolved)
+            if bound != resolved:
+                raise ShellSessionError(
+                    "Harness workspace root changed; retry in the currently bound workspace."
+                )
             sessions = self._by_workspace.setdefault(workspace_id, {})
             existing = sessions.get(name)
             if existing is not None:
@@ -237,8 +261,11 @@ class ShellSessionRegistry:
             sessions[name] = session
             return session
 
-    def get(self, workspace_id: str, name: str) -> ShellSession:
+    def get(self, workspace_id: str, name: str, expected_root: Path | None = None) -> ShellSession:
         with self._lock:
+            if (expected_root is not None
+                    and self._roots.get(workspace_id) != expected_root.resolve()):
+                raise ShellSessionError("The workspace root changed; old shell sessions are unavailable.")
             session = self._by_workspace.get(workspace_id, {}).get(name)
         if session is None:
             raise ShellSessionError(f"no session named {name!r} in this workspace")
@@ -260,6 +287,7 @@ class ShellSessionRegistry:
         """Node-delete teardown: every session in one workspace."""
         with self._lock:
             sessions = self._by_workspace.pop(workspace_id, {})
+            self._roots.pop(workspace_id, None)
         for session in sessions.values():
             session.stop()
 
@@ -268,6 +296,7 @@ class ShellSessionRegistry:
         with self._lock:
             everything = list(self._by_workspace.values())
             self._by_workspace.clear()
+            self._roots.clear()
         for sessions in everything:
             for session in sessions.values():
                 session.stop()
