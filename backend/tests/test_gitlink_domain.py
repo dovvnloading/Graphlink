@@ -411,6 +411,15 @@ def test_normalize_repo_path_rejects_any_dot_git_segment(path):
         _normalize_repo_path(path)
 
 
+@pytest.mark.parametrize("path", [
+    ".hg/hgrc", "vendor/.HG/hgrc", ".svn/entries", ".bzr/branch/branch.conf",
+    "CVS/Root", "src/cvs/Entries",
+])
+def test_normalize_repo_path_rejects_other_vcs_control_metadata(path):
+    with pytest.raises(RuntimeError, match="version-control metadata"):
+        _normalize_repo_path(path)
+
+
 def test_normalize_repo_path_still_allows_a_file_merely_named_like_git():
     # Only the exact ".git" segment is refused - ".gitignore", "git/", and
     # "legit.git.txt" are ordinary repo content.
@@ -430,6 +439,33 @@ def test_apply_change_set_refuses_to_write_into_dot_git(tmp_path):
         ])
     assert not (tmp_path / ".git" / "hooks" / "pre-commit").exists()
     assert (tmp_path / ".git" / "config").read_text(encoding="utf-8") == "[core]\n"
+
+
+def test_apply_change_set_refuses_mercurial_hook_configuration(tmp_path):
+    from graphlink_plugins.gitlink.repository import apply_change_set
+
+    (tmp_path / ".hg").mkdir()
+    (tmp_path / ".hg" / "hgrc").write_text("[ui]\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="version-control metadata"):
+        apply_change_set(tmp_path, [
+            {"path": ".hg/hgrc", "operation": "update",
+             "content": "[hooks]\nprecommit = python:evil.run\n"},
+        ])
+    assert (tmp_path / ".hg" / "hgrc").read_text(encoding="utf-8") == "[ui]\n"
+
+
+@pytest.mark.parametrize("metadata", [".git", ".hg"])
+def test_safe_local_target_rejects_symlink_aliases_into_vcs_metadata(tmp_path, metadata):
+    control = tmp_path / metadata
+    control.mkdir()
+    alias = tmp_path / "ordinary_src"
+    try:
+        alias.symlink_to(control, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("Directory symlinks require privileges on this platform")
+    with pytest.raises(RuntimeError, match="version-control metadata"):
+        _safe_local_target(tmp_path, "ordinary_src/config")
+    assert not (control / "config").exists()
 
 
 def test_safe_local_target_resolves_inside_root(tmp_path):
