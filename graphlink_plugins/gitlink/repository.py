@@ -72,11 +72,14 @@ def _validate_repository_archive(archive: zipfile.ZipFile) -> None:
     total_size = 0
     for member in members:
         name = member.filename
-        parts = PurePosixPath(name).parts
+        # A normal ZIP directory entry ends in "/" - accept that trailing
+        # delimiter while still rejecting empty/interior path components.
+        normalized = name[:-1] if member.is_dir() else name
+        parts = PurePosixPath(normalized).parts
         # extractall() silently sanitizes traversal rather than failing:
         # different hostile member names can then collide on the same file.
-        if (not name or name.startswith("/") or "\\" in name
-                or any(part in ("", ".", "..") for part in name.split("/"))
+        if (not normalized or normalized.startswith("/") or "\\" in normalized
+                or any(part in ("", ".", "..") for part in normalized.split("/"))
                 or not parts or ":" in parts[0] or len(name) > 1024):
             raise RuntimeError("Repository snapshot contains an unsafe ZIP path.")
         if name in seen:
