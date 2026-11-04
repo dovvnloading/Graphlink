@@ -805,6 +805,22 @@ def test_resolve_scope_paths_full_mode_prefers_repo_file_paths():
     assert result == ["a.py", "b.py"]
 
 
+def test_full_repo_mode_filters_secret_paths_even_in_stale_saved_inventory():
+    paths = [
+        "src/app.py", ".env", ".env.local", "src/.npmrc",
+        ".aws/credentials", "secrets.json", "README.md", ".env.example",
+    ]
+    assert resolve_scope_paths("full", selected_paths=[], repo_file_paths=paths) == [
+        "src/app.py", "README.md", ".env.example",
+    ]
+
+
+def test_explicitly_selected_secret_path_is_not_silently_dropped():
+    # Explicit file selection is an intentional opt-in; the automatic
+    # full-repository sweep is where the privacy guard must apply.
+    assert resolve_scope_paths("selected", [".env"], repo_file_paths=["README.md"]) == [".env"]
+
+
 def test_resolve_scope_paths_full_mode_falls_back_to_local_scan(tmp_path):
     (tmp_path / "only.py").write_text("x")
     result = resolve_scope_paths("full", selected_paths=[], repo_file_paths=[], local_root=tmp_path)
