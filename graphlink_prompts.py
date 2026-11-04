@@ -249,7 +249,8 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         ("note-explainer", 1, "ee3201aec9c750884374a9e01ba3fe544a576ede662b329807a050ff205866b5"),
         ("web-research-query", 1, "8ac34972ab12b8574177839d28f1b0a3adcadee56af06d9039b3ce9639b8bd67"),
         ("web-research-validation", 1, "6736a24ac6b339cac2268fd1b81ced90185b5537f53406ec2a811a8b8615a3d0"),
-        ("web-research-summary", 1, "134042eb24b70209e74f886bc991b4a34dd150f13d2817e1e91b67adf35250ea"),
+        # v2: require exact source IDs rather than abbreviating hashed citation markers.
+        ("web-research-summary", 2, "60aaa2517e4ecd028b330ada32a9924e01e1b4b0303952f32d10917c05167921"),
         # PLAN-2026-08-24 H5: was "pycoder-analysis" (Py-Coder retired,
         # class renamed PyCoderAnalysisAgent -> CodeAnalysisAgent, moved to
         # graphlink_plugins/common/python_repl.py) - text and hash both

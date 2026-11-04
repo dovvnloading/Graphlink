@@ -9,6 +9,7 @@ from .domain import (
     EvidenceChunk,
     ProgressCallback,
     ProgressEvent,
+    RequestCancelled,
     ResearchFailure,
     ResearchLimits,
     ResearchResult,
@@ -81,6 +82,50 @@ class WebResearchService:
     def _citation_markers(answer: str) -> set[str]:
         return {marker.lower() for marker in re.findall(r"\[(s\d+(?:-[a-f0-9]+)?)\]", answer, flags=re.IGNORECASE)}
 
+    @classmethod
+    def _normalize_answer_citations(
+        cls, answer: str, sources: list[ResearchSource]
+    ) -> tuple[str, set[str], set[str]]:
+        """Keep only citations to accepted evidence and canonicalize shorthand.
+
+        Search results use s1-<hash> source IDs but the model can emit [s1]
+        even when its evidence provided [s1-<hash>]. Map unique short names
+        to their exact accepted source, never to a rejected source. Unknown
+        citations are removed so they cannot masquerade as verified links.
+        """
+        exact = {
+            source.source_id.lower(): source.source_id
+            for source in sources if source.status == "accepted"
+        }
+        aliases: dict[str, str] = {}
+        ambiguous: set[str] = set()
+        for source_id in exact.values():
+            short, separator, _ = source_id.partition("-")
+            short = short.lower()
+            if not separator or not re.fullmatch(r"s\d+", short):
+                continue
+            if short in aliases:
+                ambiguous.add(short)
+            else:
+                aliases[short] = source_id
+        for short in ambiguous:
+            aliases.pop(short, None)
+
+        unsupported: set[str] = set()
+
+        def rewrite(match: re.Match[str]) -> str:
+            marker = match.group(1).lower()
+            exact_source = exact.get(marker) or aliases.get(marker)
+            if exact_source is None:
+                unsupported.add(marker)
+                return ""
+            return f"[{exact_source}]"
+
+        normalized = re.sub(
+            r"\[(s\d+(?:-[a-f0-9]+)?)\]", rewrite, answer, flags=re.IGNORECASE,
+        )
+        return normalized, cls._citation_markers(normalized), unsupported
+
     @staticmethod
     def _retain_documents(accepted_documents, source_records, collection_id: int = 0) -> None:
         """ADR-017 stage 17.5: opt-in retention of this run's accepted
@@ -138,10 +183,11 @@ class WebResearchService:
         self._emit(request, progress, ResearchStage.SEARCHING, "Searching for relevant sources.")
         try:
             search_results = self.search_provider.search(effective_query, limits=request.limits, token=token)
-        except ResearchFailure:
+        except (ResearchFailure, RequestCancelled):
             raise
         except Exception as exc:
             raise ResearchFailure("The search provider failed.", code="search_failed") from exc
+        token.raise_if_cancelled()
         if not search_results:
             raise ResearchFailure("No search results were found for this query.", code="no_search_results", retryable=False)
 
@@ -174,6 +220,9 @@ class WebResearchService:
                 source.content_hash = document.content_hash
                 self._emit(request, progress, ResearchStage.VALIDATING, f"Assessing source {index} of {len(candidates)}.", index, len(candidates), result.source_id)
                 assessment = self.model.assess_source(effective_query, document, limits=request.limits, token=token)
+                # A model may return after Stop without raising itself.
+                # Do not classify a cancelled final source as rejected.
+                token.raise_if_cancelled()
                 if not assessment.accepted:
                     source.status = "rejected"
                     source.error_code = assessment.reason or "source_rejected"
@@ -183,6 +232,10 @@ class WebResearchService:
                 accepted_documents.append(document)
                 if document.truncated:
                     warnings.append(f"Source {index} was truncated to stay within limits.")
+            except RequestCancelled:
+                # Cancellation during fetch, extraction or assessment is not
+                # a recoverable per-source error. Abort the whole run.
+                raise
             except ResearchFailure as exc:
                 if exc.code == "cancelled":
                     raise
@@ -196,6 +249,10 @@ class WebResearchService:
                 source.error_message = "The source failed during research."
                 warnings.append(f"Source {index} could not be used.")
 
+        # A source adapter can set Stop and then return/raise a different
+        # failure; cancellation takes precedence over a terminal no-source
+        # error, including when this was the last source in the loop.
+        token.raise_if_cancelled()
         if not accepted_documents:
             raise ResearchFailure("No usable source content could be retrieved.", code="no_usable_sources", retryable=True)
 
@@ -208,7 +265,10 @@ class WebResearchService:
         evidence_payload = [f"[{chunk.source_id}] {chunk.text}" for chunk in chunks]
         self._emit(request, progress, ResearchStage.SYNTHESIZING, "Synthesizing a cited answer.", len(candidates), len(candidates))
         answer = self.model.summarize(query, request.branch_history, evidence_payload, limits=request.limits, token=token)
-        markers = self._citation_markers(answer)
+        token.raise_if_cancelled()
+        answer, markers, unsupported = self._normalize_answer_citations(answer, source_records)
+        if unsupported:
+            warnings.append("The model emitted unsupported citations; those markers were removed.")
         citations = []
         for source in source_records:
             if source.status != "accepted":
@@ -217,7 +277,7 @@ class WebResearchService:
             source.citation_count = 1 if source_marker in markers else 0
             citations.append({"source_id": source.source_id, "marker": f"[{source.source_id}]"})
         if not markers:
-            warnings.append("The model did not emit inline citations; source references are shown below.")
+            warnings.append("The model did not emit inline citations to accepted sources; source references are shown below.")
             answer = answer.rstrip() + "\n\n### Sources\n" + "\n".join(f"- [{source.source_id}] {source.title}" for source in source_records if source.status == "accepted")
 
         from .domain import ResearchCitation
