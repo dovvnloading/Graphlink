@@ -186,6 +186,39 @@ def test_idempotent_replay_returns_prior_result_and_never_duplicates(backend):
     assert "DIFFERENT" not in str(get_session_context(app.state.bus.session()).canvas_document.scene_payload())
 
 
+def test_receipt_replay_is_refused_after_loading_another_canvas(backend):
+    client, app, _ = backend
+    observed = _revision(client)
+    args = {"kind": "note", "content": "belongs to the old canvas"}
+    first = _edit(client, observed, "create_node", args, "canvas-lifetime-create-001")
+    assert first.status_code == 200, first.text
+    document = get_session_context(app.state.bus.session()).canvas_document
+    assert len(document.nodes) == 1
+
+    document.clear_for_load()
+    assert not document.nodes
+    # The same request fingerprint and operation ID must NOT replay a
+    # success referring to a node absent from this newly loaded canvas.
+    replay = _edit(client, observed, "create_node", args, "canvas-lifetime-create-001")
+    assert replay.status_code == 409
+    assert not document.nodes
+
+
+def test_receipt_for_save_does_not_replay_on_a_different_canvas(backend):
+    client, app, _ = backend
+    first = _edit(client, _revision(client), "create_node", {
+        "kind": "chat", "content": "old canvas",
+    }, "canvas-lifetime-create-002")
+    assert first.status_code == 200
+    body = {"operation_id": "canvas-lifetime-save-001", "expected_revision": first.json()["revision"]}
+    saved = client.post("/api/control/scene/save", headers=_auth(WRITE), json=body)
+    assert saved.status_code == 200, saved.text
+
+    get_session_context(app.state.bus.session()).canvas_document.clear_for_load()
+    replay = client.post("/api/control/scene/save", headers=_auth(WRITE), json=body)
+    assert replay.status_code == 409
+
+
 def test_stale_revision_and_busy_guard_reject_without_side_effects(backend):
     client, app, _ = backend
     rev = _revision(client)
