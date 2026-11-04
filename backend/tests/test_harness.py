@@ -256,6 +256,114 @@ class TestFsTools:
         ))
         assert result.is_error and "timed out" in result.content
 
+
+    def test_grep_preserves_regular_expression_matches(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        (ws / "logs.txt").write_text("WARN 503: retry\nINFO 200: ok\n", encoding="utf-8")
+        result = asyncio.run(self._registry().invoke(
+            call("1", "fs.grep", pattern=r"^(?:WARN|ERROR)\s+\d{3}:"),
+            make_ctx("ws1"),
+        ))
+        assert not result.is_error
+        assert "logs.txt:1: WARN 503: retry" in result.content
+        assert "logs.txt:2:" not in result.content
+
+    def test_grep_file_budget_bounds_many_fast_regex_calls(self, workspace_root, monkeypatch):
+        from types import SimpleNamespace
+        from backend.harness import tools_fs as fs
+
+        ws = ensure_workspace("ws1")
+        (ws / "many.txt").write_text("unmatched\n" * 10, encoding="utf-8")
+        clock = -0.01
+        timeouts = []
+
+        def monotonic():
+            nonlocal clock
+            clock += 0.01
+            return clock
+
+        class RecordingPattern:
+            def search(self, _line, *, timeout, concurrent):
+                assert concurrent is True
+                timeouts.append(timeout)
+                return None
+
+        monkeypatch.setattr(fs, "time", SimpleNamespace(monotonic=monotonic))
+        monkeypatch.setattr(fs, "re", SimpleNamespace(compile=lambda _: RecordingPattern(), error=Exception))
+        monkeypatch.setattr(fs, "_GREP_FILE_BUDGET_SECONDS", 0.06)
+        monkeypatch.setattr(fs, "_GREP_TOTAL_BUDGET_SECONDS", 10.0)
+        result = asyncio.run(self._registry().invoke(
+            call("1", "fs.grep", pattern="unmatched"), make_ctx("ws1"),
+        ))
+        assert result.is_error and "per-file regex time budget" in result.content
+        assert len(timeouts) >= 2
+        assert all(0 < timeout <= fs._GREP_MATCH_TIMEOUT_SECONDS for timeout in timeouts)
+        assert any(timeout < fs._GREP_MATCH_TIMEOUT_SECONDS for timeout in timeouts)
+
+    def test_grep_passes_remaining_total_budget_to_engine(self, workspace_root, monkeypatch):
+        from types import SimpleNamespace
+        from backend.harness import tools_fs as fs
+
+        ws = ensure_workspace("ws1")
+        (ws / "many.txt").write_text("first\nsecond\n", encoding="utf-8")
+        clock = -0.01
+        timeouts = []
+
+        def monotonic():
+            nonlocal clock
+            clock += 0.01
+            return clock
+
+        class RecordingPattern:
+            def search(self, _line, *, timeout, concurrent):
+                assert concurrent is True
+                timeouts.append(timeout)
+                return None
+
+        monkeypatch.setattr(fs, "time", SimpleNamespace(monotonic=monotonic))
+        monkeypatch.setattr(fs, "re", SimpleNamespace(compile=lambda _: RecordingPattern(), error=Exception))
+        monkeypatch.setattr(fs, "_GREP_FILE_BUDGET_SECONDS", 1.0)
+        monkeypatch.setattr(fs, "_GREP_TOTAL_BUDGET_SECONDS", 0.04)
+        result = asyncio.run(self._registry().invoke(
+            call("1", "fs.grep", pattern="absent"), make_ctx("ws1"),
+        ))
+        assert result.is_error and "search time budget" in result.content
+        assert len(timeouts) == 1
+        assert 0 < timeouts[0] < fs._GREP_MATCH_TIMEOUT_SECONDS
+
+    def test_grep_yields_event_loop_during_slow_matching(self, workspace_root, monkeypatch):
+        from types import SimpleNamespace
+        from backend.harness import tools_fs as fs
+
+        ws = ensure_workspace("ws1")
+        (ws / "slow.txt").write_text("one line\n", encoding="utf-8")
+        started = threading.Event()
+        release = threading.Event()
+
+        class SlowPattern:
+            def search(self, _line, *, timeout, concurrent):
+                assert concurrent is True
+                started.set()
+                release.wait(1.0)
+                return None
+
+        monkeypatch.setattr(fs, "re", SimpleNamespace(compile=lambda _: SlowPattern(), error=Exception))
+        registry = self._registry()
+
+        async def go():
+            task = asyncio.create_task(registry.invoke(
+                call("1", "fs.grep", pattern="slow"), make_ctx("ws1"),
+            ))
+            try:
+                seen = await asyncio.wait_for(asyncio.to_thread(started.wait, 1.5), timeout=2.0)
+                assert seen and not task.done(), "synchronous grep blocked the event loop"
+            finally:
+                release.set()
+            return await task
+
+        result = asyncio.run(go())
+        assert not result.is_error and "No matches" in result.content
+
     def test_read_output_is_capped(self, workspace_root, monkeypatch):
         from backend.harness import tools_fs as tools_fs_module
 

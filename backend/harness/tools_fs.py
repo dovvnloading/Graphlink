@@ -18,6 +18,7 @@ never a crash.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -49,8 +50,9 @@ _GREP_PATTERN_CAP = 500
 # Python stdlib re has no timeout. An attacker-controlled pattern such as
 # (a+)+$ against a matching file can run for hours under an auto-approved
 # read scope. The regex engine is already pinned in the dependency lock;
-# enforce both per-search and aggregate budgets.
+# enforce per-match, per-file and aggregate deadlines.
 _GREP_MATCH_TIMEOUT_SECONDS = 0.05
+_GREP_FILE_BUDGET_SECONDS = 0.25  # cumulative scanning of many individually quick lines
 _GREP_TOTAL_BUDGET_SECONDS = 3.0
 
 FS_READ_SPEC = ToolSpec(
@@ -243,7 +245,7 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         suffix = f"\n…[capped at {_LIST_CAP_ENTRIES} entries]" if truncated else ""
         return ToolResult(content="\n".join(entries) + suffix)
 
-    async def fs_grep(call: ToolCall, ctx: RunContext) -> ToolResult:
+    def _fs_grep_sync(call: ToolCall, ctx: RunContext) -> ToolResult:
         root = _bound_root(ctx)
         if root is None:
             return ToolResult(content="No harness workspace is bound to this run.", is_error=True)
@@ -261,10 +263,10 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         skipped_large = 0
         scanned_files = 0
         scan_capped = False
-        started = time.monotonic()
+        search_deadline = time.monotonic() + _GREP_TOTAL_BUDGET_SECONDS
         try:
             for resolved, relative in _iter_under_root(root, file_glob):
-                if time.monotonic() - started > _GREP_TOTAL_BUDGET_SECONDS:
+                if time.monotonic() >= search_deadline:
                     return ToolResult(content="fs.grep exceeded its search time budget.", is_error=True)
                 if len(matches) >= _GREP_CAP_MATCHES:
                     break
@@ -286,12 +288,27 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
                     continue
                 if "\x00" in text[:1024]:
                     continue  # binary
+                file_deadline = time.monotonic() + _GREP_FILE_BUDGET_SECONDS
                 for line_number, line in enumerate(text.splitlines(), start=1):
-                    if time.monotonic() - started > _GREP_TOTAL_BUDGET_SECONDS:
+                    now = time.monotonic()
+                    if now >= search_deadline:
                         return ToolResult(content="fs.grep exceeded its search time budget.", is_error=True)
+                    if now >= file_deadline:
+                        return ToolResult(content="fs.grep exceeded its per-file regex time budget.", is_error=True)
                     try:
-                        found = expression.search(line, timeout=_GREP_MATCH_TIMEOUT_SECONDS)
+                        found = expression.search(
+                            line,
+                            timeout=min(_GREP_MATCH_TIMEOUT_SECONDS, file_deadline - now, search_deadline - now),
+                            concurrent=True,  # immutable line; release the GIL while matching
+                        )
                     except TimeoutError:
+                        # The regex engine, not a thread timeout, interrupts
+                        # both pathological matches and exhausted deadlines.
+                        now = time.monotonic()
+                        if now >= search_deadline:
+                            return ToolResult(content="fs.grep exceeded its search time budget.", is_error=True)
+                        if now >= file_deadline:
+                            return ToolResult(content="fs.grep exceeded its per-file regex time budget.", is_error=True)
                         return ToolResult(content="fs.grep regular expression timed out; simplify the pattern.", is_error=True)
                     if found:
                         snippet = line if len(line) <= _GREP_LINE_CAP else line[:_GREP_LINE_CAP] + "…"
@@ -316,6 +333,12 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         if scan_capped:
             footer += f"\n[search capped at {_GREP_SCANNED_FILE_CAP} files]"
         return ToolResult(content="\n".join(matches) + footer)
+
+    async def fs_grep(call: ToolCall, ctx: RunContext) -> ToolResult:
+        # Glob, file I/O and regex searches are synchronous and may be costly.
+        # Run them off the FastAPI event loop. Threading only provides
+        # responsiveness; the regex engine's timeout enforces the CPU bound.
+        return await asyncio.to_thread(_fs_grep_sync, call, ctx)
 
     async def fs_write(call: ToolCall, ctx: RunContext) -> ToolResult:
         root = _bound_root(ctx)
