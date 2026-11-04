@@ -21,7 +21,7 @@ import pytest
 import requests
 
 from graphlink_plugins.web_research.crawl_etiquette import CrawlEtiquette, RobotsDisallowedError
-from graphlink_plugins.web_research.domain import CancellationToken, ResearchFailure, ResearchLimits, SearchResult
+from graphlink_plugins.web_research.domain import CancellationToken, RequestCancelled, ResearchFailure, ResearchLimits, SearchResult
 from graphlink_plugins.web_research.fetch_policy import FetchPolicy, URLPolicyError
 from graphlink_plugins.web_research import providers as providers_module
 from graphlink_plugins.web_research.providers import RequestsDocumentFetcher, _PinnedHTTPAdapter
@@ -578,3 +578,56 @@ class TestPinnedHTTPAdapterConnectionLogic:
         assert kwargs["host"] == "93.184.216.34"
         assert kwargs["pool_kwargs"]["assert_hostname"] == "example.com"
         assert kwargs["pool_kwargs"]["server_hostname"] == "example.com"
+
+
+
+class TestCancellationPropagationAcrossFetcherBoundary:
+    def test_stop_during_response_body_is_not_converted_to_fetch_failed(self, limits):
+        token = CancellationToken()
+        response = _FakeResponse(status_code=200, body=b"hello")
+
+        def cancel_during_read(chunk_size):
+            token.cancel()
+            yield b"hello"
+
+        response.iter_content = cancel_during_read
+        session = _FakeSession([response])
+        etiquette = MagicMock(spec=CrawlEtiquette)
+        etiquette.gate.return_value = 0.0
+        fetcher = RequestsDocumentFetcher(
+            policy=_real_policy_with_fake_resolver("93.184.216.34"),
+            etiquette=etiquette,
+        )
+
+        with patch.object(providers_module, "requests") as fake_requests:
+            fake_requests.Session.return_value = session
+            fake_requests.RequestException = Exception
+            with pytest.raises(RequestCancelled):
+                fetcher.fetch(_search_result(), limits=limits, token=token)
+
+        assert response.closed
+        assert len(session.get_calls) == 1
+
+    def test_stop_during_robots_lookup_prevents_the_page_fetch(self, limits):
+        token = CancellationToken()
+        robots = _FakeResponse(status_code=200, body=b"User-agent: *\\nDisallow:\\n")
+
+        def cancel_during_robots(chunk_size):
+            token.cancel()
+            yield b"U"
+
+        robots.iter_content = cancel_during_robots
+        session = _FakeSession([robots])
+        fetcher = RequestsDocumentFetcher(
+            policy=_real_policy_with_fake_resolver("93.184.216.34"),
+            etiquette=CrawlEtiquette(default_crawl_delay_seconds=0),
+        )
+
+        with patch.object(providers_module, "requests") as fake_requests:
+            fake_requests.Session.return_value = session
+            fake_requests.RequestException = Exception
+            with pytest.raises(RequestCancelled):
+                fetcher.fetch(_search_result(), limits=limits, token=token)
+
+        assert robots.closed
+        assert [url for url, _ in session.get_calls] == ["https://example.com/robots.txt"]
