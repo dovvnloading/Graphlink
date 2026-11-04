@@ -178,6 +178,47 @@ class TestFsTools:
         assert not read.is_error and "beta target line" in read.content
         assert not grep.is_error and "notes/a.txt:2:" in grep.content
 
+    def test_grep_refuses_catastrophic_backtracking_instead_of_hanging(self, workspace_root, monkeypatch):
+        from backend.harness import tools_fs as fs_module
+
+        monkeypatch.setattr(fs_module, "_GREP_MATCH_TIMEOUT_SECONDS", 0.001)
+        ws = ensure_workspace("ws1")
+        (ws / "hostile.txt").write_text("a" * 2000 + "!", encoding="utf-8")
+        registry = self._registry()
+        result = asyncio.run(registry.invoke(
+            call("regex-dos", "fs.grep", pattern=r"(a+)+$", glob="hostile.txt"),
+            make_ctx("ws1"),
+        ))
+        assert result.is_error
+        assert "regex time limit" in result.content
+
+    def test_fs_list_bounds_glob_candidates_before_sorting(self, workspace_root, monkeypatch):
+        from backend.harness import tools_fs as fs_module
+
+        monkeypatch.setattr(fs_module, "_GLOB_MAX_CANDIDATES", 3)
+        ws = ensure_workspace("ws1")
+        for index in range(4):
+            (ws / f"file{index}.txt").write_text("content", encoding="utf-8")
+        registry = self._registry()
+        result = asyncio.run(registry.invoke(
+            call("glob-cap", "fs.list", pattern="*.txt"), make_ctx("ws1"),
+        ))
+        assert result.is_error
+        assert "narrow the pattern" in result.content
+
+    def test_fs_read_refuses_a_file_larger_than_its_input_byte_cap(self, workspace_root, monkeypatch):
+        from backend.harness import tools_fs as fs_module
+
+        monkeypatch.setattr(fs_module, "_READ_FILE_SIZE_CAP", 32)
+        ws = ensure_workspace("ws1")
+        (ws / "huge.txt").write_text("a" * 1000, encoding="utf-8")
+        registry = self._registry()
+        result = asyncio.run(registry.invoke(
+            call("huge-file", "fs.read", path="huge.txt"), make_ctx("ws1"),
+        ))
+        assert result.is_error
+        assert "read limit" in result.content
+
     def test_escape_attempts_come_back_as_tool_errors(self, workspace_root):
         ensure_workspace("ws1")
         registry = self._registry()
