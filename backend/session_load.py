@@ -1812,6 +1812,9 @@ def _restore_chat_into_document(
 
     if plugin_registry is None:
         plugin_registry = discover_plugins()
+    if settings_manager is not None:
+        from backend.plugin_sdk import activate_granted_plugins
+        activate_granted_plugins(plugin_registry, settings_manager)
 
     document.clear_for_load()
 
