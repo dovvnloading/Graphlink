@@ -223,6 +223,40 @@ def test_bounded_archive_download_rejects_oversize_stream_without_reading_conten
     assert calls[-1] == "closed"
 
 
+def test_bounded_github_download_enforces_total_deadline_during_slow_stream(monkeypatch):
+    """An incoming trickle must not reset the per-recv timeout forever."""
+    requests_seen = []
+    closed = []
+    clock = iter([0.0, 0.0, 2.0, 12.0])
+
+    class SlowlyStreamingResponse:
+        status_code = 200
+        headers = {}
+
+        def iter_content(self, chunk_size):
+            assert chunk_size == 1
+            yield b"a"
+            yield b"b"
+            pytest.fail("the stream exceeded the deadline and should have stopped")
+
+        def close(self):
+            closed.append(True)
+
+    def fake_get(url, **kwargs):
+        requests_seen.append(url)
+        return SlowlyStreamingResponse()
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    monkeypatch.setattr(github_client_module.time, "monotonic", lambda: next(clock))
+    with pytest.raises(RuntimeError, match="total time limit"):
+        GitHubRestClient().request(
+            "https://api.github.com/repos/o/r/zipball/main",
+            expect_json=False, max_bytes=1000, timeout=1,
+        )
+    assert len(requests_seen) == 1
+    assert closed == [True]
+
+
 def test_bounded_archive_download_refuses_redirects_to_local_or_attacker_host(monkeypatch):
     requested = []
 
