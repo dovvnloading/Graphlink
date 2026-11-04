@@ -50,6 +50,7 @@ import logging
 import os
 import shutil
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -220,42 +221,41 @@ def take_backup(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> Path 
     timestamp = _timestamp_now()
     final_name = backup_filename(timestamp, prefix=prefix)
     final_path = backups_dir / final_name
-    tmp_path = backups_dir / f".{final_name}.tmp"
+    # Every concurrent backup needs its OWN staging file. The old fixed
+    # ".<timestamp>.tmp" was shared by overlapping saves within the same
+    # second: both SQLite backup connections wrote into one database file,
+    # risking "database is locked" and invalid backup snapshots.
+    fd, staging = tempfile.mkstemp(
+        prefix=f".{final_name}.", suffix=".tmp", dir=backups_dir,
+    )
+    os.close(fd)
+    tmp_path = Path(staging)
 
-    # A stale .tmp from a previous crash mid-backup must never make
-    # sqlite3.connect(tmp_path) below open (and back up INTO) a leftover
-    # partial file - always start this backup from a clean slate.
-    if tmp_path.exists():
-        try:
-            tmp_path.unlink()
-        except OSError:
-            logger.warning("could not remove stale temp backup %s - continuing", tmp_path)
-
-    source_conn = sqlite3.connect(db_path, timeout=30)
     try:
-        dest_conn = sqlite3.connect(tmp_path, timeout=30)
+        source_conn = sqlite3.connect(db_path, timeout=30)
         try:
-            # chats.db holds real conversation content - same 0600
-            # sensitivity as the live file (backend/chat_library.py's own
-            # _connect docstring). Chmod'd immediately after the
-            # destination file is created, before .backup() writes any
-            # page data into it - mirrors _save_state's own "chmod before
-            # content lands" ordering.
+            dest_conn = sqlite3.connect(tmp_path, timeout=30)
             try:
-                os.chmod(tmp_path, 0o600)
-            except OSError:
-                logger.warning("could not chmod %s to 0600 before writing - continuing", tmp_path)
-            source_conn.backup(dest_conn)
+                # The staging file is private before SQLite writes content.
+                # Keep the existing chmod posture for both POSIX and Windows.
+                try:
+                    os.chmod(tmp_path, 0o600)
+                except OSError:
+                    logger.warning("could not chmod %s to 0600 before writing - continuing", tmp_path)
+                source_conn.backup(dest_conn)
+            finally:
+                dest_conn.close()
         finally:
-            dest_conn.close()
-    finally:
-        source_conn.close()
+            source_conn.close()
 
-    try:
-        os.chmod(tmp_path, 0o600)
-    except OSError:
-        logger.warning("could not chmod %s to 0600 - continuing", tmp_path)
-    os.replace(tmp_path, final_path)
+        try:
+            os.chmod(tmp_path, 0o600)
+        except OSError:
+            logger.warning("could not chmod %s to 0600 - continuing", tmp_path)
+        os.replace(tmp_path, final_path)
+    finally:
+        # Also clean up if SQLite backup or the atomic rename failed.
+        tmp_path.unlink(missing_ok=True)
 
     prune_backups(db_path, prefix=prefix)
     return final_path
