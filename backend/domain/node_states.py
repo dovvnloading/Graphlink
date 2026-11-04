@@ -69,6 +69,11 @@ class HtmlState(NodeState):
     html_splitter_state: float | None = None
 
 
+# Bound model-authored and manually edited draft size before persisting it.
+# Full-document generation cannot reliably reproduce arbitrarily large input.
+ARTIFACT_MAX_CHARS = 256_000
+
+
 @dataclass
 class ArtifactState(NodeState):
     """Relocated verbatim from SceneNode.artifact_content (former
