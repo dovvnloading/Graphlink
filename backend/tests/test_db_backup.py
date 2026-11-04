@@ -120,6 +120,68 @@ def test_concurrent_backups_have_independent_sqlite_staging_files(db_path, monke
         conn.close()
 
 
+def test_windows_replace_collision_accepts_a_verified_completed_backup(db_path, monkeypatch):
+    """A same-second backup already committed by another writer is safe to reuse."""
+    import backend.db_backup as backup_module
+
+    _make_real_db(db_path, title="Keep Me")
+    winner = take_backup(db_path)
+    assert winner is not None
+
+    def deny_replace(_source, _destination):
+        error = PermissionError("simulated WinError 5")
+        error.winerror = 5
+        raise error
+
+    monkeypatch.setattr(backup_module.os, "replace", deny_replace)
+    assert take_backup(db_path) == winner
+    assert not list(backups_dir_for(db_path).glob("*.tmp"))
+    conn = sqlite3.connect(winner)
+    try:
+        assert conn.execute("PRAGMA quick_check(1)").fetchone() == ("ok",)
+        assert conn.execute("SELECT title FROM chats").fetchall() == [("Keep Me",)]
+    finally:
+        conn.close()
+
+
+def test_windows_replace_collision_rejects_corrupted_winner(db_path, monkeypatch):
+    """A permission error must NOT be hidden when the final file is corrupt."""
+    import backend.db_backup as backup_module
+
+    _make_real_db(db_path)
+    winner = take_backup(db_path)
+    assert winner is not None
+    winner.write_bytes(b"not an SQLite backup")
+
+    def deny_replace(_source, _destination):
+        error = PermissionError("simulated WinError 5")
+        error.winerror = 5
+        raise error
+
+    monkeypatch.setattr(backup_module.os, "replace", deny_replace)
+    with pytest.raises(PermissionError, match="simulated WinError 5"):
+        take_backup(db_path)
+    assert winner.read_bytes() == b"not an SQLite backup"
+    assert not list(backups_dir_for(db_path).glob("*.tmp"))
+
+
+def test_windows_replace_collision_rejects_permission_error_without_a_winner(db_path, monkeypatch):
+    """An arbitrary access denial is not the same as successful concurrency."""
+    import backend.db_backup as backup_module
+
+    _make_real_db(db_path)
+
+    def deny_replace(_source, _destination):
+        error = PermissionError("simulated WinError 5")
+        error.winerror = 5
+        raise error
+
+    monkeypatch.setattr(backup_module.os, "replace", deny_replace)
+    with pytest.raises(PermissionError, match="simulated WinError 5"):
+        take_backup(db_path)
+    assert not list(backups_dir_for(db_path).glob("*.tmp"))
+
+
 def test_take_backup_filename_matches_the_documented_convention(db_path):
     _make_real_db(db_path)
     backup_path = take_backup(db_path)
