@@ -713,7 +713,7 @@ class TestListNodes:
 
     def test_query_searches_code_and_artifact_bodies_not_just_core_content(self):
         document, chat, _code, _note = self.seed()
-        source = "print('hello')\\n# keyword_only_in_code_body"
+        source = "print('hello')\n# keyword_only_in_code_body"
         code = document.add_code_node(0, 500, source, "python", chat.id)
         artifact = document.add_artifact_node(0, 700, chat.id)
         document.complete_artifact_generation(
