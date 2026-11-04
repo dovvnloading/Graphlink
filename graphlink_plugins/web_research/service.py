@@ -220,6 +220,9 @@ class WebResearchService:
                 source.content_hash = document.content_hash
                 self._emit(request, progress, ResearchStage.VALIDATING, f"Assessing source {index} of {len(candidates)}.", index, len(candidates), result.source_id)
                 assessment = self.model.assess_source(effective_query, document, limits=request.limits, token=token)
+                # A model may return after Stop without raising itself.
+                # Do not classify a cancelled final source as rejected.
+                token.raise_if_cancelled()
                 if not assessment.accepted:
                     source.status = "rejected"
                     source.error_code = assessment.reason or "source_rejected"
@@ -246,6 +249,10 @@ class WebResearchService:
                 source.error_message = "The source failed during research."
                 warnings.append(f"Source {index} could not be used.")
 
+        # A source adapter can set Stop and then return/raise a different
+        # failure; cancellation takes precedence over a terminal no-source
+        # error, including when this was the last source in the loop.
+        token.raise_if_cancelled()
         if not accepted_documents:
             raise ResearchFailure("No usable source content could be retrieved.", code="no_usable_sources", retryable=True)
 
