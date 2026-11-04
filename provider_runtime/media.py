@@ -43,10 +43,20 @@ def _read_attachment_bytes(file_path: str, attachment_kind: str) -> bytes:
 
 
 def _decode_base64_image(image_data: str) -> bytes:
+    # Encoded inline images are untrusted input just like downloaded URLs.
+    # Check encoded size before allocating the decoded copy.
+    if not isinstance(image_data, (str, bytes)):
+        raise RuntimeError("Generated image payload is not base64 text.")
+    max_encoded_chars = 4 * ((_MAX_PROVIDER_IMAGE_BYTES + 2) // 3) + 4
+    if len(image_data) > max_encoded_chars:
+        raise RuntimeError("Generated image payload exceeds the download limit.")
     try:
-        return base64.b64decode(image_data)
+        decoded = base64.b64decode(image_data)
     except Exception as exc:
         raise RuntimeError(f"Failed to decode generated image payload: {exc}") from exc
+    if len(decoded) > _MAX_PROVIDER_IMAGE_BYTES:
+        raise RuntimeError("Generated image payload exceeds the download limit.")
+    return decoded
 
 
 # A provider response is untrusted: an arbitrarily large image or one
