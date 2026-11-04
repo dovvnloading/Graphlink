@@ -113,6 +113,18 @@ def test_mcp_rejects_invalid_tool_arguments_before_http(invalid):
     assert result["error"]["code"] == -32602
 
 
+def test_read_subgraph_schema_rejects_depth_above_actual_backend_cap():
+    server = StdioMcpServer(StubControl())
+    tools = server.handle(request(1, "tools/list", modern_params()))["result"]["tools"]
+    spec = next(item for item in tools if item["name"] == "graphlink_read_subgraph")
+    assert spec["inputSchema"]["properties"]["depth"]["maximum"] == 3
+    invalid = server.handle(request(2, "tools/call", modern_params(
+        name="graphlink_read_subgraph",
+        arguments={"root_id": "n1", "depth": 4},
+    )))
+    assert invalid["error"]["code"] == -32602
+
+
 def test_unknown_and_unauthorized_mcp_calls_are_not_raw_intent_dispatch():
     server = StdioMcpServer(StubControl())
     for name in ("graphlink_delete_node", "shell.exec", "graphlink_run_harness"):
@@ -166,6 +178,32 @@ def test_stdio_rejects_a_complete_line_one_byte_over_the_cap():
     responses = [json.loads(line) for line in sink.getvalue().splitlines()]
     assert responses[0]["error"]["code"] == -32700
     assert responses[1]["result"]["protocolVersion"] == "2024-11-05"
+
+
+def test_stdio_rejects_multibyte_utf8_line_over_byte_cap():
+    message = json.dumps(request(1, "initialize", {
+        "protocolVersion": "2025-11-25",
+    }))
+    # This fits in MAX_INPUT_LINE Unicode characters but not wire bytes.
+    oversized = message + ("é" * (MAX_INPUT_LINE // 2)) + "\n"
+    assert len(oversized) <= MAX_INPUT_LINE
+    assert len(oversized.encode("utf-8")) > MAX_INPUT_LINE
+    sink = io.StringIO()
+    serve(StubControl(), io.StringIO(oversized + message + "\n"), sink)
+    replies = [json.loads(line) for line in sink.getvalue().splitlines()]
+    assert replies[0]["error"]["code"] == -32700
+    assert replies[1]["result"]["protocolVersion"] == "2025-11-25"
+
+
+def test_stdio_recovers_after_invalid_utf8_in_binary_input():
+    message = json.dumps(request(1, "initialize", {
+        "protocolVersion": "2025-11-25",
+    })).encode("utf-8")
+    sink = io.StringIO()
+    serve(StubControl(), io.BytesIO(b"\xff\n" + message + b"\n"), sink)
+    replies = [json.loads(line) for line in sink.getvalue().splitlines()]
+    assert replies[0]["error"]["code"] == -32700
+    assert replies[1]["result"]["protocolVersion"] == "2025-11-25"
 
 
 @pytest.mark.parametrize(("status", "included"), [(400, True), (404, True), (500, False)])

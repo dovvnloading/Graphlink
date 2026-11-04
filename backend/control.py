@@ -23,7 +23,7 @@ from backend.events import DEFAULT_SESSION_ID, EventBus
 from backend.providers.base import ToolCall
 from backend.session_context import get_session_context
 from backend.tools import GRAPH_READ, RunContext
-from backend.tools_graph import make_list_nodes_handler, make_read_subgraph_handler
+from backend.tools_graph import _READ_MAX_DEPTH, make_list_nodes_handler, make_read_subgraph_handler
 from backend.control_writes import scene_revision
 
 DEFAULT_CONTROL_PORT = 8765
@@ -153,7 +153,7 @@ def register_control_api(app: FastAPI, bus: EventBus, db_path: Path) -> None:
     @app.get("/api/control/scene/subgraph")
     async def read_scene_subgraph(
         root_id: str = Query(min_length=1, max_length=200),
-        depth: int = Query(default=3, ge=1, le=8),
+        depth: int = Query(default=_READ_MAX_DEPTH, ge=1, le=_READ_MAX_DEPTH),
         direction: str = Query(default="down", pattern="^(down|up|both)$"),
     ) -> dict[str, Any]:
         document = get_session_context(bus.session(DEFAULT_SESSION_ID)).canvas_document
