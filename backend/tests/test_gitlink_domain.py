@@ -183,6 +183,79 @@ def test_gitlink_rejects_malicious_download_url_without_fetching_it():
         assert len(client.calls) == 1, "must not fetch a hostile download URL"
 
 
+class _FakeStreamingGitHubResponse:
+    def __init__(self, status, body=b"", headers=None):
+        self.status_code = status
+        self.body = body
+        self.headers = headers or {}
+        self.closed = False
+
+    def iter_content(self, chunk_size):
+        for index in range(0, len(self.body), chunk_size):
+            yield self.body[index:index + chunk_size]
+
+    def close(self):
+        self.closed = True
+
+
+def test_bounded_github_download_stops_oversized_stream(monkeypatch):
+    received = _FakeStreamingGitHubResponse(200, body=b"abcde")
+    called = []
+
+    def fake_get(url, **kwargs):
+        called.append((url, kwargs))
+        return received
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    client = GitHubRestClient(_FakeSettingsManagerWithToken("ghp_secret"))
+    with pytest.raises(RuntimeError, match="size limit"):
+        client.request("https://api.github.com/repos/o/r/zipball/main",
+                       expect_json=False, max_bytes=4)
+    assert called[0][1]["stream"] is True
+    assert called[0][1]["allow_redirects"] is False
+    assert received.closed
+
+
+def test_bounded_github_download_allows_codeload_redirect_without_token(monkeypatch):
+    first = _FakeStreamingGitHubResponse(302, headers={
+        "Location": "https://codeload.github.com/o/r/legacy.zip/main",
+    })
+    second = _FakeStreamingGitHubResponse(200, body=b"ZIP!")
+    responses = [first, second]
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return responses.pop(0)
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    client = GitHubRestClient(_FakeSettingsManagerWithToken("ghp_secret"))
+    assert client.request("https://api.github.com/repos/o/r/zipball/main",
+                          expect_json=False, max_bytes=128) == b"ZIP!"
+    assert calls[0][1]["headers"]["Authorization"] == "Bearer ghp_secret"
+    assert "Authorization" not in calls[1][1]["headers"]
+    assert first.closed and second.closed
+
+
+def test_bounded_github_download_rejects_local_redirect_without_request(monkeypatch):
+    first = _FakeStreamingGitHubResponse(302, headers={
+        "Location": "http://127.0.0.1:8080/internal",
+    })
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        return first
+
+    monkeypatch.setattr(github_client_module.requests, "get", fake_get)
+    client = GitHubRestClient(_FakeSettingsManagerWithToken("ghp_secret"))
+    with pytest.raises(RuntimeError, match="unsafe URL"):
+        client.request("https://api.github.com/repos/o/r/zipball/main",
+                       expect_json=False, max_bytes=128)
+    assert calls == ["https://api.github.com/repos/o/r/zipball/main"]
+    assert first.closed
+
+
 def test_request_success_returns_parsed_json_and_forwards_params_and_timeout(monkeypatch):
     captured = {}
 
@@ -921,8 +994,11 @@ class _FakeGithubClient:
         self.responses = responses  # url -> value, or url -> callable
         self.calls = []
 
-    def request(self, url, params=None, *, expect_json=True, timeout=25):
-        self.calls.append({"url": url, "params": params, "expect_json": expect_json, "timeout": timeout})
+    def request(self, url, params=None, *, expect_json=True, timeout=25, max_bytes=None):
+        self.calls.append({
+            "url": url, "params": params, "expect_json": expect_json,
+            "timeout": timeout, "max_bytes": max_bytes,
+        })
         if url not in self.responses:
             raise AssertionError(f"unscripted request to {url}")
         value = self.responses[url]
@@ -966,6 +1042,7 @@ def test_fetch_github_file_text_falls_back_to_download_url():
     download_call = next(c for c in client.calls if c["url"] == download_url)
     assert download_call["expect_json"] is False
     assert download_call["timeout"] == 25
+    assert download_call["max_bytes"] == repository_module.MAX_REPOSITORY_SOURCE_FILE_BYTES
 
 
 def test_fetch_github_file_text_raises_when_no_content_or_download_url():
@@ -981,7 +1058,7 @@ def test_fetch_github_file_text_url_quotes_the_repo_path():
     captured_urls = []
 
     class _RecordingClient:
-        def request(self, url, params=None, *, expect_json=True, timeout=25):
+        def request(self, url, params=None, *, expect_json=True, timeout=25, max_bytes=None):
             captured_urls.append(url)
             return {"encoding": "base64", "content": "aGk="}
 
@@ -1027,6 +1104,7 @@ def test_download_repository_snapshot_extracts_zip_and_moves_to_target(tmp_path)
     zip_call = next(c for c in client.calls if c["url"] == zip_url)
     assert zip_call["expect_json"] is False
     assert zip_call["timeout"] == 60
+    assert zip_call["max_bytes"] == repository_module.MAX_REPOSITORY_ARCHIVE_BYTES
 
 
 def test_repository_snapshot_rejects_zip_bomb_before_any_file_is_extracted(tmp_path, monkeypatch):
@@ -1090,7 +1168,7 @@ def test_download_repository_snapshot_quotes_branch_name_fully():
     captured_urls = []
 
     class _RecordingClient:
-        def request(self, url, params=None, *, expect_json=True, timeout=25):
+        def request(self, url, params=None, *, expect_json=True, timeout=25, max_bytes=None):
             captured_urls.append(url)
             return _zip_bytes({"f.txt": b"x"})
 

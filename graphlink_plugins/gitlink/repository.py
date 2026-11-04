@@ -59,6 +59,7 @@ MAX_MANIFEST_ENTRIES = 1200
 # can decompress to many gigabytes: bound both the downloaded blob and its
 # claimed decompressed footprint BEFORE extractall writes files to disk.
 MAX_REPOSITORY_ARCHIVE_BYTES = 64 * 1024 * 1024
+MAX_REPOSITORY_SOURCE_FILE_BYTES = 4 * 1024 * 1024
 MAX_REPOSITORY_UNPACKED_BYTES = 512 * 1024 * 1024
 MAX_REPOSITORY_MEMBER_BYTES = 64 * 1024 * 1024
 MAX_REPOSITORY_ENTRIES = 12000
@@ -293,7 +294,10 @@ class GitlinkRepository:
             # bypassed call sent no Authorization header and got none of the
             # client's 401/403/404 friendly-error mapping - a real gap for
             # private-repo file fetches on this (rarer) fallback branch.
-            raw_bytes = self.github_client.request(download_url, expect_json=False, timeout=25)
+            raw_bytes = self.github_client.request(
+                download_url, expect_json=False, timeout=25,
+                max_bytes=MAX_REPOSITORY_SOURCE_FILE_BYTES,
+            )
             return _decode_text_bytes(raw_bytes)
 
         raise RuntimeError(f"GitHub did not return file contents for `{repo_path}`.")
@@ -307,6 +311,7 @@ class GitlinkRepository:
             f"https://api.github.com/repos/{repo_name}/zipball/{quote(branch_name, safe='')}",
             expect_json=False,
             timeout=60,
+            max_bytes=MAX_REPOSITORY_ARCHIVE_BYTES,
         )
 
         if len(archive_bytes) > MAX_REPOSITORY_ARCHIVE_BYTES:
