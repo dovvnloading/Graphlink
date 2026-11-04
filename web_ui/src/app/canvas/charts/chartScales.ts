@@ -162,11 +162,15 @@ export function computeHistogramBins(values: number[], bins: number): HistogramB
 }
 
 export function mean(values: number[]): number {
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+  // All values are individually finite (canonical chart validation), but
+  // summing them before dividing can overflow: [1e308, 1e308] used to
+  // produce Infinity and an invalid SVG mean reference line.
+  return values.reduce((sum, value) => sum + value / values.length, 0);
 }
 
 export function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+  // Halve BEFORE adding to avoid overflowing two large finite values.
+  return sorted.length % 2 === 0 ? sorted[mid - 1] / 2 + sorted[mid] / 2 : sorted[mid];
 }

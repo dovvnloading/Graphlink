@@ -148,4 +148,11 @@ describe("mean/median", () => {
     expect(median([1, 3, 2])).toBe(2);
     expect(median([1, 2, 3, 4])).toBe(2.5);
   });
+
+  it("avoids infinite summary statistics for large finite chart values", () => {
+    expect(mean([1e308, 1e308])).toBe(1e308);
+    expect(median([1e308, 1e308])).toBe(1e308);
+    expect(mean([1e308, -1e308])).toBe(0);
+    expect(median([1e308, -1e308])).toBe(0);
+  });
 });
