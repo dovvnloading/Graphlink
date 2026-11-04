@@ -157,6 +157,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_artifact.py (scene) -----------------------------
     Classified("scene", "sendArtifactMessage", "A", "content: user instruction + agent reply, both recorded"),
+    Classified("scene", "setArtifactContent", "A", "content: revision-checked, undoable Markdown edit"),
     Classified("scene", "cancelArtifactRequest", "B", "run-lifecycle: cancel"),
 
     # -- backend/api/intents_conversation.py (scene) -------------------------
