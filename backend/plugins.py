@@ -48,6 +48,8 @@ from backend.notifications import NotificationState
 from backend.plugin_sdk import (
     PluginRegistry,
     PluginRunContext,
+    _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS,
+    activate_granted_plugins,
     discover_plugins,
     intent_input_schema,
     resolve_intent_call_args,
@@ -254,7 +256,14 @@ def _plugin_grants_payload(
     if plugin_registry is None:
         return []
     grants_state = settings_manager.get_plugin_grants() if settings_manager is not None else {}
-    plugin_ids = sorted({entry.plugin_id for entry in plugin_registry.picker_entries.values()})
+    # Discover manifests without importing plugin code: unapproved extensions
+    # must be visible here for the user to grant them before activation.
+    # Built-in IDs are trusted first-party integrations, not consent rows.
+    plugin_ids = sorted(
+        (set(plugin_registry.manifests) |
+         {entry.plugin_id for entry in plugin_registry.picker_entries.values()})
+        - _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS
+    )
     rows = []
     for plugin_id in plugin_ids:
         manifest = plugin_registry.manifests.get(plugin_id)
@@ -686,6 +695,7 @@ def register_plugins(
     # separately-supplied reserved-name set.
     if plugin_registry is None:
         plugin_registry = discover_plugins()
+    activate_granted_plugins(plugin_registry, settings_manager)
 
     # ADR-014 stage 14.2: populate the live-wire half of the Plugin SDK's
     # generic persistence seam - see SceneDocument.plugin_node_serializers'
@@ -767,7 +777,18 @@ def register_plugins(
         # granted state immediately, same "mutate then re-publish this
         # topic" shape every other settings-store write in this codebase
         # already uses (e.g. setMcpServers).
-        settings_manager.set_plugin_grant(str(plugin_id).strip(), bool(granted))
+        plugin_id = str(plugin_id).strip()
+        settings_manager.set_plugin_grant(plugin_id, bool(granted))
+        if granted:
+            # The grant is the first moment an untrusted module may be
+            # imported or its worker launched. Refresh the serializers for
+            # node kinds that only became available after this approval.
+            activate_granted_plugins(plugin_registry, settings_manager)
+            for kind, kind_spec in plugin_registry.node_kinds.items():
+                if kind_spec.serialize is not None:
+                    canvas_document.plugin_node_serializers[kind] = _grant_gated_serialize(
+                        kind_spec.plugin_id, kind_spec.serialize, settings_manager,
+                    )
         await bus.publish("app-plugins")
 
     bus.register_intent("app-plugins", "setPluginGrant", set_plugin_grant, args_schema=SetPluginGrantArgs)
