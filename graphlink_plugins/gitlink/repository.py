@@ -21,6 +21,7 @@ helper, not a second source of truth for repo/branch/local_root.
 import base64
 import html
 import shutil
+import stat
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -52,6 +53,38 @@ IGNORED_LOCAL_DIR_NAMES = {
 
 MAX_CONTEXT_CHARS = 180000
 MAX_MANIFEST_ENTRIES = 1200
+# A GitHub zipball can contain highly compressible untrusted repository
+# content. Bound both compressed and expanded sizes before extraction.
+MAX_SNAPSHOT_ZIP_BYTES = 64 * 1024 * 1024
+MAX_SNAPSHOT_ENTRIES = 10_000
+MAX_SNAPSHOT_FILE_BYTES = 64 * 1024 * 1024
+MAX_SNAPSHOT_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+
+
+def _validate_snapshot_zip(archive):
+    """Validate every member before any extracted content reaches disk."""
+    infos = archive.infolist()
+    if len(infos) > MAX_SNAPSHOT_ENTRIES:
+        raise RuntimeError("Gitlink repository ZIP has too many entries.")
+    total_bytes = 0
+    names = set()
+    for info in infos:
+        name = info.filename
+        parts = PurePosixPath(name).parts
+        if (not name or "\\" in name or name.startswith("/")
+                or ".." in parts or not parts
+                or any(":" in part for part in parts)):
+            raise RuntimeError("Gitlink repository ZIP contains an unsafe path.")
+        if name in names:
+            raise RuntimeError("Gitlink repository ZIP contains duplicate entries.")
+        names.add(name)
+        if stat.S_IFMT(info.external_attr >> 16) == stat.S_IFLNK:
+            raise RuntimeError("Gitlink repository ZIP contains a symbolic link.")
+        if info.file_size > MAX_SNAPSHOT_FILE_BYTES:
+            raise RuntimeError("Gitlink repository ZIP contains an oversized file.")
+        total_bytes += info.file_size
+        if total_bytes > MAX_SNAPSHOT_UNCOMPRESSED_BYTES:
+            raise RuntimeError("Gitlink repository ZIP expands beyond the allowed size.")
 
 
 def default_import_root(repo_name, branch_name):
@@ -258,6 +291,9 @@ class GitlinkRepository:
             timeout=60,
         )
 
+        if not isinstance(archive_bytes, bytes) or len(archive_bytes) > MAX_SNAPSHOT_ZIP_BYTES:
+            raise RuntimeError("Gitlink repository ZIP exceeds the download limit.")
+
         with tempfile.TemporaryDirectory(prefix="gitlink_import_") as temp_dir:
             temp_path = Path(temp_dir)
             archive_path = temp_path / "repo.zip"
@@ -266,6 +302,7 @@ class GitlinkRepository:
             archive_path.write_bytes(archive_bytes)
 
             with zipfile.ZipFile(archive_path) as archive:
+                _validate_snapshot_zip(archive)
                 archive.extractall(extract_root)
 
             extracted_dirs = [item for item in extract_root.iterdir() if item.is_dir()]
