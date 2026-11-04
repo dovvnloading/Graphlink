@@ -750,7 +750,6 @@ def test_export_does_not_mask_permanent_windows_access_denial(tmp_path, monkeypa
     from backend import workspace_archive as archive_module
 
     archive = tmp_path / "denied.graphlink"
-    real_replace = archive_module.os.replace
     export_archive(archive, [_chat(title="existing")])
     attempts = []
 
