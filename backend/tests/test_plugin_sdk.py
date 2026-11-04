@@ -104,7 +104,7 @@ def _write_plugin(
 def test_discover_plugins_finds_imports_and_populates_the_registry(tmp_path):
     _write_plugin(tmp_path, "acme_greeter", kind="greet", picker_name="Acme Greeter")
 
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     assert registry.load_errors == []
     assert "acme_greeter.greet" in registry.node_kinds
@@ -126,7 +126,7 @@ def test_malformed_manifest_missing_plugin_table_is_skipped_good_sibling_still_l
     )
     _write_plugin(tmp_path, "good_one", kind="greet", picker_name="Good One Entry")
 
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "broken_one"
@@ -140,7 +140,7 @@ def test_malformed_manifest_id_mismatch_with_directory_name_is_skipped(tmp_path)
     _write_plugin(tmp_path, "dir_name_one", id_field="a_totally_different_id")
     _write_plugin(tmp_path, "good_two", kind="greet", picker_name="Good Two Entry")
 
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "dir_name_one"
@@ -152,7 +152,7 @@ def test_malformed_manifest_sdk_api_version_out_of_range_is_skipped(tmp_path):
     _write_plugin(tmp_path, "future_plugin", sdk_api_version=999)
     _write_plugin(tmp_path, "good_three", kind="greet", picker_name="Good Three Entry")
 
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "future_plugin"
@@ -177,7 +177,7 @@ def test_picker_name_collision_with_a_reserved_name_is_recorded_not_silently_mer
     # registry entry of its own yet.
     _write_plugin(tmp_path, "colliding_plugin", kind="greet", picker_name="Reserved Name")
 
-    registry = discover_plugins(tmp_path, builtin_names=frozenset({"Reserved Name"}))
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True, builtin_names=frozenset({"Reserved Name"}))
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "colliding_plugin"
@@ -203,7 +203,7 @@ def test_picker_name_collision_with_a_real_builtin_action_name_is_recorded_not_s
 
     shutil.copytree(DEFAULT_PLUGINS_ROOT / "web_research", tmp_path / "web_research")
 
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "web_research"
@@ -218,7 +218,7 @@ def test_picker_name_collision_between_two_plugins_is_recorded_first_wins_not_ov
     _write_plugin(tmp_path, "plugin_a", dir_name="plugin_a", kind="greet", picker_name="Shared Name")
     _write_plugin(tmp_path, "plugin_b", dir_name="plugin_b", kind="greet", picker_name="Shared Name")
 
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "plugin_b"
@@ -360,7 +360,7 @@ def test_a_third_party_plugin_using_the_builtin_hatch_becomes_a_load_error_at_di
     )
     _write_plugin(tmp_path, "sneaky", py_body=py_body, toml_body=None)
 
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     # Refused at the source: no builtin action, no picker row, surfaced as a
     # load error rather than a silently-registered, consent-invisible action.
@@ -396,7 +396,7 @@ def test_builtin_action_name_collision_between_two_plugins_is_recorded_first_win
     _write_plugin(tmp_path, "gitlink", py_body=py_body_a, toml_body=None)
     _write_plugin(tmp_path, "web_research", py_body=py_body_b, toml_body=None)
 
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "web_research"
@@ -414,7 +414,7 @@ def test_builtin_action_name_collision_with_a_picker_entry_name_is_recorded(tmp_
     # collision is the one recorded as an error.
     _write_plugin(tmp_path, "web_research", py_body=py_body_builtin, toml_body=None)
 
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     assert len(registry.load_errors) == 1
     assert registry.load_errors[0].plugin_dir == "web_research"
@@ -433,7 +433,7 @@ def test_resolve_builtin_action_returns_none_for_unknown_name(tmp_path):
     )
     _write_plugin(tmp_path, "web_research", py_body=py_body, toml_body=None)
 
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     resolved = registry.resolve_builtin_action("Real")
     assert resolved is not None
@@ -447,14 +447,14 @@ def test_resolve_builtin_action_returns_none_for_unknown_name(tmp_path):
 def test_discover_plugins_is_memoized_by_resolved_path(tmp_path):
     _write_plugin(tmp_path, "memo_plugin", kind="greet", picker_name="Memo Entry")
 
-    first = discover_plugins(tmp_path)
+    first = discover_plugins(tmp_path, load_unapproved_for_tests=True)
     # Mutate the manifest on disk AFTER the first call - a second call that
     # actually rescanned would either pick up the new picker name or blow up
     # on the now-different sdk_api_version. A truly memoized call returns
     # the exact same object, untouched by this mutation.
     _write_plugin(tmp_path, "memo_plugin", kind="greet", picker_name="Mutated Entry Should Not Appear")
 
-    second = discover_plugins(tmp_path)
+    second = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     assert second is first
     assert "Memo Entry" in second.picker_entries
@@ -495,7 +495,7 @@ def _make_wired_bus(plugin_registry, tmp_path):
 
 def test_execute_plugin_end_to_end_creates_a_real_node_with_content_and_parent_edge(tmp_path):
     _write_plugin(tmp_path, "e2e_plugin", kind="thing", picker_name="E2E Thing")
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
@@ -516,7 +516,7 @@ def test_execute_plugin_end_to_end_creates_a_real_node_with_content_and_parent_e
 
 def test_execute_plugin_requires_a_valid_parent_for_a_discovered_plugin(tmp_path):
     _write_plugin(tmp_path, "needs_parent_plugin", kind="thing", picker_name="Needs Parent Thing")
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
 
     result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Needs Parent Thing"]))
@@ -533,7 +533,7 @@ def test_execute_plugin_requires_a_valid_parent_for_a_discovered_plugin(tmp_path
 
 def test_undo_reverts_a_plugin_created_node_and_its_parent_edge(tmp_path):
     _write_plugin(tmp_path, "undo_plugin", kind="thing", picker_name="Undo Thing")
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
 
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
@@ -629,7 +629,7 @@ def test_plugin_node_with_no_serializer_round_trips_title_and_content_only(tmp_p
     # in session_save.py's own _REGULAR_KINDS), so it would vanish on
     # reload regardless of anything this stage changes.
     _write_plugin(tmp_path, "no_state_plugin", kind="thing", picker_name="No State Thing")
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
 
@@ -663,7 +663,7 @@ def test_plugin_node_with_real_state_round_trips_custom_fields_through_save_and_
         tmp_path, "stateful_plugin", py_body=_STATEFUL_PY_BODY, kind="widget",
         picker_name="Stateful Widget",
     )
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
 
@@ -701,7 +701,7 @@ def test_plugin_node_whose_kind_is_no_longer_registered_is_dropped_not_crashed(t
     # to every other kind (this module's own docstring documents 5 kinds
     # R5-closeout deleted with the exact same tolerant behavior).
     _write_plugin(tmp_path, "temporary_plugin", kind="thing", picker_name="Temporary Thing")
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
     node_id = asyncio.run(
@@ -712,7 +712,7 @@ def test_plugin_node_whose_kind_is_no_longer_registered_is_dropped_not_crashed(t
     chat_data = build_chat_data(canvas_document, plugin_registry=registry)
     notes_data = chat_data.pop("notes_data")
     pins_data = chat_data.pop("pins_data")
-    empty_registry = discover_plugins(tmp_path / "does_not_exist")
+    empty_registry = discover_plugins(tmp_path / "does_not_exist", load_unapproved_for_tests=True)
 
     doc2 = SceneDocument()
     restore_chat_into_document(
@@ -735,7 +735,7 @@ def test_live_wire_scene_payload_includes_plugin_state_when_serializer_registere
         tmp_path, "stateful_plugin", py_body=_STATEFUL_PY_BODY, kind="widget",
         picker_name="Stateful Widget",
     )
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
 
@@ -756,7 +756,7 @@ def test_live_wire_scene_payload_includes_plugin_state_when_serializer_registere
 
 def test_live_wire_plugin_state_is_empty_for_a_plugin_kind_with_no_serializer(tmp_path):
     _write_plugin(tmp_path, "no_state_plugin", kind="thing", picker_name="No State Thing")
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
 
@@ -789,7 +789,7 @@ def test_a_plugin_serializer_that_raises_degrades_to_empty_plugin_state_on_the_w
             )
     """)
     _write_plugin(tmp_path, "raising_plugin", py_body=raising_body, kind="boom", picker_name="Boom Thing")
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
 
@@ -839,7 +839,7 @@ def test_a_plugin_serializer_that_raises_logs_a_warning_on_the_save_path_too(tmp
             )
     """)
     _write_plugin(tmp_path, "raising_plugin", py_body=raising_body, kind="boom", picker_name="Boom Thing")
-    registry = discover_plugins(tmp_path)
+    registry = discover_plugins(tmp_path, load_unapproved_for_tests=True)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_node(10, 20, "parent")
 
@@ -871,7 +871,7 @@ def test_a_plugin_serializer_that_raises_logs_a_warning_on_the_save_path_too(tmp
 
 
 def test_real_hello_node_plugin_round_trips_through_save_and_reload(tmp_path):
-    registry = discover_plugins(FIXTURE_PLUGINS_ROOT)
+    registry = discover_plugins(FIXTURE_PLUGINS_ROOT, load_unapproved_for_tests=True)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
 
@@ -889,7 +889,7 @@ def test_real_hello_node_plugin_round_trips_through_save_and_reload(tmp_path):
 
 
 def test_real_counter_node_plugin_round_trips_its_custom_state_through_save_and_reload(tmp_path):
-    registry = discover_plugins(FIXTURE_PLUGINS_ROOT)
+    registry = discover_plugins(FIXTURE_PLUGINS_ROOT, load_unapproved_for_tests=True)
     bus, notifications, canvas_document = _make_wired_bus(registry, tmp_path)
     parent = canvas_document.add_chat_node(10, 20, "parent", is_user=False)
 
