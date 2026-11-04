@@ -35,4 +35,5 @@ Pillow
 pypdf>=6.21.4
 python-docx
 requests
+regex  # bounded regex execution for harness fs.grep
 tiktoken

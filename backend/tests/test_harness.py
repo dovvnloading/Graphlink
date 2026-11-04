@@ -189,6 +189,73 @@ class TestFsTools:
         result = asyncio.run(go())
         assert result.is_error and "outside" in result.content
 
+    def test_oversized_file_is_refused_before_decode(self, workspace_root, monkeypatch):
+        from backend.harness import tools_fs as fs
+
+        ws = ensure_workspace("ws1")
+        (ws / "big.txt").write_bytes(b"a" * 65)
+        monkeypatch.setattr(fs, "_MAX_FS_FILE_BYTES", 64)
+        registry = self._registry()
+        ctx = make_ctx("ws1")
+
+        async def go():
+            return await registry.invoke(call("1", "fs.read", path="big.txt"), ctx)
+
+        result = asyncio.run(go())
+        assert result.is_error and "read limit" in result.content
+
+    def test_vcs_metadata_is_not_readable_or_listed(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        (ws / ".git" / "hooks").mkdir(parents=True)
+        (ws / ".git" / "config").write_text("secret", encoding="utf-8")
+        (ws / "readme.txt").write_text("visible", encoding="utf-8")
+        registry = self._registry()
+        ctx = make_ctx("ws1")
+
+        async def go():
+            return (
+                await registry.invoke(call("1", "fs.read", path=".git/config"), ctx),
+                await registry.invoke(call("2", "fs.list", pattern="**/*"), ctx),
+                await registry.invoke(call("3", "fs.grep", pattern="secret"), ctx),
+            )
+
+        read, listing, grep = asyncio.run(go())
+        assert read.is_error and "metadata" in read.content
+        assert "readme.txt" in listing.content and ".git" not in listing.content
+        assert "secret" not in grep.content
+
+    def test_glob_discovery_has_a_bounded_work_budget(self, workspace_root, monkeypatch):
+        from backend.harness import tools_fs as fs
+
+        ws = ensure_workspace("ws1")
+        for i in range(3):
+            (ws / f"f{i}.txt").write_text("match", encoding="utf-8")
+        monkeypatch.setattr(fs, "_MAX_GLOB_DISCOVERY", 2)
+        registry = self._registry()
+        ctx = make_ctx("ws1")
+
+        async def go():
+            return (
+                await registry.invoke(call("1", "fs.list", pattern="*.txt"), ctx),
+                await registry.invoke(call("2", "fs.grep", pattern="match"), ctx),
+            )
+
+        listing, grep = asyncio.run(go())
+        assert listing.is_error and "narrower pattern" in listing.content
+        assert grep.is_error and "narrower pattern" in grep.content
+
+    def test_regex_backtracking_is_interrupted_by_search_timeout(self, workspace_root, monkeypatch):
+        from backend.harness import tools_fs as fs
+
+        ws = ensure_workspace("ws1")
+        (ws / "worst-case.txt").write_text("a" * 2000 + "!", encoding="utf-8")
+        monkeypatch.setattr(fs, "_GREP_MATCH_TIMEOUT_SECONDS", 0.002)
+        registry = self._registry()
+        result = asyncio.run(registry.invoke(
+            call("1", "fs.grep", pattern="(a+)+$"), make_ctx("ws1"),
+        ))
+        assert result.is_error and "timed out" in result.content
+
     def test_read_output_is_capped(self, workspace_root, monkeypatch):
         from backend.harness import tools_fs as tools_fs_module
 
@@ -362,6 +429,42 @@ class TestWriteTools:
         assert not wrote.is_error and not edited.is_error
         assert (ws / "out" / "a.txt").read_text(encoding="utf-8") == "alpha gamma"
         assert decisions == ["fs.write", "fs.edit"]
+
+    def test_filesystem_writes_cannot_modify_vcs_hooks(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        hooks = ws / ".git" / "hooks"
+        hooks.mkdir(parents=True)
+        hook = hooks / "pre-commit"
+        hook.write_text("original", encoding="utf-8")
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+
+        async def go():
+            return (
+                await registry.invoke(call("1", "fs.write", path=".git/hooks/pre-commit", content="bad"), ctx),
+                await registry.invoke(call("2", "fs.edit", path=".git/hooks/pre-commit",
+                                           old_string="original", new_string="bad"), ctx),
+                await registry.invoke(call("3", "fs.write", path=".GIT/config", content="bad"), ctx),
+            )
+
+        results = asyncio.run(go())
+        assert all(row.is_error and "metadata" in row.content for row in results)
+        assert hook.read_text(encoding="utf-8") == "original"
+
+    def test_edit_refuses_oversized_input_without_touching_it(self, workspace_root, monkeypatch):
+        from backend.harness import tools_fs as fs
+
+        ws = ensure_workspace("ws1")
+        path = ws / "big.txt"
+        path.write_text("x" * 65, encoding="utf-8")
+        monkeypatch.setattr(fs, "_MAX_FS_FILE_BYTES", 64)
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+        result = asyncio.run(registry.invoke(
+            call("1", "fs.edit", path="big.txt", old_string="x", new_string="y"), ctx,
+        ))
+        assert result.is_error and "read limit" in result.content
+        assert path.read_text(encoding="utf-8") == "x" * 65
 
     def test_denied_write_leaves_disk_untouched(self, workspace_root):
         ws = ensure_workspace("ws1")
