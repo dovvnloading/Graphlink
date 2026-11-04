@@ -701,9 +701,19 @@ def test_parallel_exports_use_independent_staging_files(tmp_path, monkeypatch):
     archive = tmp_path / "parallel.graphlink"
     barrier = threading.Barrier(2)
     real_replace = archive_module.os.replace
+    calls_lock = threading.Lock()
+    first_arrivals = 0
 
     def synchronized_replace(source, destination):
-        barrier.wait(timeout=10)
+        nonlocal first_arrivals
+        # Synchronize the FIRST two writers only: a transient Windows
+        # sharing-denial retry is a third call and must not wait for a new
+        # partner at this barrier after both initial writers have passed.
+        with calls_lock:
+            first_arrivals += 1
+            first = first_arrivals <= 2
+        if first:
+            barrier.wait(timeout=10)
         return real_replace(source, destination)
 
     monkeypatch.setattr(archive_module.os, "replace", synchronized_replace)
@@ -715,6 +725,47 @@ def test_parallel_exports_use_independent_staging_files(tmp_path, monkeypatch):
         assert [future.result(timeout=15) for future in futures] == [archive, archive]
 
     assert import_archive(archive)[0]["title"] in {"first", "second"}
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_export_retries_transient_windows_sharing_denial_without_losing_data(tmp_path, monkeypatch):
+    from backend import workspace_archive as archive_module
+
+    original = archive_module.os.replace
+    attempts = []
+
+    def fail_twice(source, target):
+        attempts.append((source, target))
+        if len(attempts) <= 2:
+            raise PermissionError("simulated Windows sharing violation")
+        return original(source, target)
+
+    monkeypatch.setattr(archive_module, "_is_transient_windows_replace_error", lambda exc: True)
+    monkeypatch.setattr(archive_module, "_WINDOWS_REPLACE_BACKOFF_SECONDS", (0.0, 0.0))
+    monkeypatch.setattr(archive_module.os, "replace", fail_twice)
+    target = tmp_path / "out.graphlink"
+
+    assert export_archive(target, [_chat(title="correct archive")]) == target
+    assert len(attempts) == 3
+    assert import_archive(target)[0]["title"] == "correct archive"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_export_does_not_swallow_permanent_windows_rename_denial(tmp_path, monkeypatch):
+    from backend import workspace_archive as archive_module
+
+    target = tmp_path / "out.graphlink"
+    original = b"preexisting content"
+    target.write_bytes(original)
+
+    def deny_replace(source, destination):
+        raise PermissionError("permanent permission denial")
+
+    monkeypatch.setattr(archive_module, "_is_transient_windows_replace_error", lambda exc: False)
+    monkeypatch.setattr(archive_module.os, "replace", deny_replace)
+    with pytest.raises(PermissionError, match="permanent permission"):
+        export_archive(target, [_chat()])
+    assert target.read_bytes() == original
     assert not list(tmp_path.glob("*.tmp"))
 
 
