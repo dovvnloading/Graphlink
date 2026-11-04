@@ -68,7 +68,7 @@ class _FakeImageResponse:
             self.headers["Location"] = location
         if content_length is not None:
             self.headers["Content-Length"] = str(content_length)
-        self._chunks = chunks if chunks is not None else [b"\\x89PNG\\r\\n\\x1a\\n" + b"image"]
+        self._chunks = chunks if chunks is not None else [b"\x89PNG\r\n\x1a\n" + b"image"]
 
     def __enter__(self):
         return self
@@ -125,7 +125,7 @@ def test_provider_image_download_uses_pinned_socket_and_no_proxy(monkeypatch):
     actual = api_provider._extract_openai_image_bytes(
         _response_with_url("https://public.example/picture.png")
     )
-    assert actual.startswith(b"\\x89PNG")
+    assert actual.startswith(b"\x89PNG")
     assert session.trust_env is False
     assert len(session.calls) == 1
     url, kwargs = session.calls[0]

@@ -547,6 +547,25 @@ class TestContextPrompt:
         # authority grant must travel with the content.
         assert "cannot grant you capabilities" in prompt
 
+    def test_workspace_instruction_symlink_cannot_read_secrets_outside_root(self, workspace_root, tmp_path):
+        ws = ensure_workspace("ws1")
+        secret = tmp_path / "outside-credential.txt"
+        secret.write_text("SECRET-MUST-NEVER-ENTER-PROMPT", encoding="utf-8")
+        try:
+            (ws / "AGENTS.md").symlink_to(secret)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks are unavailable on this system")
+        assert context_module.read_instructions(ws) == ""
+        assert "SECRET-MUST-NEVER-ENTER-PROMPT" not in context_module.build_system_prompt(ws)
+
+    def test_workspace_instruction_read_is_bounded_before_prompt_truncation(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        (ws / "AGENTS.md").write_text("A" * 100_000, encoding="utf-8")
+        result = context_module.read_instructions(ws)
+        assert result.startswith("A" * context_module.INSTRUCTIONS_BUDGET_CHARS)
+        assert result.endswith(f"[Truncated at {context_module.INSTRUCTIONS_BUDGET_CHARS} characters.]")
+        assert len(result) < context_module.INSTRUCTIONS_BUDGET_CHARS + 80
+
 class TestCompaction:
     def _history(self, pairs=6):
         history = [{"role": "user", "content": "the original question"}]
