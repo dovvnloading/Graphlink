@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 from urllib.parse import urlsplit
 
+from .domain import RequestCancelled
+
 
 class RobotsDisallowedError(ValueError):
     """Raised when robots.txt disallows fetching a URL for our user agent."""
@@ -75,6 +77,10 @@ class CrawlEtiquette:
         parser = urllib.robotparser.RobotFileParser()
         try:
             outcome = fetch(self._robots_url(url))
+        except RequestCancelled:
+            # Stop is a control signal, not a transient robots.txt outage.
+            # Failing open here would obscure the user's cancellation.
+            raise
         except Exception:
             outcome = None
 
