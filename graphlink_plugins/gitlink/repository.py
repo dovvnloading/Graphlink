@@ -166,7 +166,11 @@ def scan_local_repo_paths(local_root):
 
     collected = []
     for file_path in root_path.rglob("*"):
-        if not file_path.is_file():
+        # Auto-enumerating symbolic links allows a harmless-looking name
+        # (src/config.txt) to alias .env or cloud credentials elsewhere
+        # within the checkout. Selected-file mode can still explicitly
+        # read a symlink; full-repo inventory must not follow it.
+        if file_path.is_symlink() or not file_path.is_file():
             continue
         relative = file_path.relative_to(root_path).as_posix()
         if any(part in IGNORED_LOCAL_DIR_NAMES for part in PurePosixPath(relative).parts):
@@ -386,8 +390,21 @@ class GitlinkRepository:
             source_origin = "github"
             try:
                 if local_root is not None:
-                    source_text = read_local_repo_file(local_root, normalized_path)
                     source_origin = "local"
+                    if scope_mode != "selected":
+                        # A stale saved graph's repo_file_paths can include
+                        # a symlink alias even after fresh scans started
+                        # omitting links. Verify the *resolved target* is
+                        # safe before reading any bytes for the model.
+                        root = Path(local_root).expanduser().resolve()
+                        resolved = _safe_local_target(root, normalized_path)
+                        target_rel = resolved.relative_to(root).as_posix()
+                        if (not _is_repo_text_path(target_rel)
+                                or (root / normalized_path).is_symlink()):
+                            raise RuntimeError(
+                                "Sensitive or symlinked file excluded from automatic repository context."
+                            )
+                    source_text = read_local_repo_file(local_root, normalized_path)
                 else:
                     source_text = self.fetch_github_file_text(repo_name, branch_name, normalized_path)
                 visible_text, source_truncated = _truncate_for_context(source_text)
