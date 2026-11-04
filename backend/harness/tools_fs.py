@@ -18,9 +18,11 @@ never a crash.
 
 from __future__ import annotations
 
-import re
+import time
 
 from pathlib import Path
+
+import regex
 
 from backend.harness.workspace import WorkspaceError, resolve_under_root, workspace_dir
 from backend.providers.base import ToolCall, ToolSpec
@@ -36,6 +38,13 @@ _GREP_CAP_MATCHES = 100
 _GREP_LINE_CAP = 400
 _GREP_FILE_SIZE_CAP = 2_000_000  # bytes; larger files are skipped, and say so
 _GREP_PATTERN_CAP = 500
+# The previous glob helper sorted every matching path BEFORE applying the
+# 500-result cap. A huge workspace could exhaust RAM on an auto-approved
+# fs.list/fs.grep call, even when the response itself was tiny.
+_GLOB_MAX_CANDIDATES = 10_000
+_READ_FILE_SIZE_CAP = 8 * 1024 * 1024
+_GREP_MATCH_TIMEOUT_SECONDS = 0.025
+_GREP_TOTAL_TIMEOUT_SECONDS = 5.0
 
 FS_READ_SPEC = ToolSpec(
     name="fs.read",
@@ -141,13 +150,30 @@ def _bound_root(ctx: RunContext) -> Path | None:
 
 
 def _iter_under_root(root: Path, pattern: str):
-    """Root-relative iteration; resolve_under_root re-checks every yielded
-    candidate so a glob cannot be a traversal primitive (Path.glob itself
-    refuses '..' segments, but the double-check keeps confinement a single-
-    choke-point property rather than a per-caller convention)."""
-    for path in sorted(root.glob(pattern or "**/*")):
+    """Root-relative, bounded glob enumeration with stable result order.
+
+    Limit candidates BEFORE sorting them; the previous sorted(glob(...))
+    could exhaust memory while fs.list advertised only 500 returned paths.
+    """
+    candidates: list[Path] = []
+    for path in root.glob(pattern or "**/*"):
+        if len(candidates) >= _GLOB_MAX_CANDIDATES:
+            raise WorkspaceError(
+                f"Glob found more than {_GLOB_MAX_CANDIDATES} entries; narrow the pattern."
+            )
+        candidates.append(path)
+    for path in sorted(candidates):
         resolved = resolve_under_root(root, str(path))
         yield resolved, resolved.relative_to(root).as_posix()
+
+
+def _bounded_text(path: Path, max_bytes: int, *, errors: str = "strict") -> str:
+    """Read at most the configured byte cap, even if a file changes mid-read."""
+    with path.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(f"File exceeds the {max_bytes}-byte read limit.")
+    return data.decode("utf-8", errors=errors)
 
 
 def register_harness_fs_tools(registry: ToolRegistry) -> None:
@@ -162,8 +188,8 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         if not target.is_file():
             return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
         try:
-            text = target.read_text(encoding="utf-8", errors="replace")
-        except OSError as exc:
+            text = _bounded_text(target, _READ_FILE_SIZE_CAP, errors="replace")
+        except (OSError, ValueError) as exc:
             return ToolResult(content=f"Could not read file: {exc}", is_error=True)
         lines = text.splitlines()
         try:
@@ -211,29 +237,44 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         if len(raw_pattern) > _GREP_PATTERN_CAP:
             return ToolResult(content=f"Pattern longer than {_GREP_PATTERN_CAP} characters.", is_error=True)
         try:
-            expression = re.compile(raw_pattern)
-        except re.error as exc:
+            expression = regex.compile(raw_pattern)
+        except regex.error as exc:
             return ToolResult(content=f"Invalid regular expression: {exc}", is_error=True)
         file_glob = str(call.arguments.get("glob") or "**/*")
         matches: list[str] = []
         skipped_large = 0
+        deadline = time.monotonic() + _GREP_TOTAL_TIMEOUT_SECONDS
         try:
             for resolved, relative in _iter_under_root(root, file_glob):
+                if time.monotonic() >= deadline:
+                    return ToolResult(content="fs.grep exceeded the search time limit.", is_error=True)
                 if len(matches) >= _GREP_CAP_MATCHES:
                     break
                 if not resolved.is_file():
                     continue
                 try:
-                    if resolved.stat().st_size > _GREP_FILE_SIZE_CAP:
-                        skipped_large += 1
-                        continue
-                    text = resolved.read_text(encoding="utf-8", errors="replace")
+                    text = _bounded_text(resolved, _GREP_FILE_SIZE_CAP, errors="replace")
+                except ValueError:
+                    skipped_large += 1
+                    continue
                 except OSError:
                     continue
                 if "\x00" in text[:1024]:
                     continue  # binary
                 for line_number, line in enumerate(text.splitlines(), start=1):
-                    if expression.search(line):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return ToolResult(content="fs.grep exceeded the search time limit.", is_error=True)
+                    try:
+                        # Python's stdlib re.search has no timeout. A
+                        # catastrophic nested-quantifier pattern such as
+                        # (a+)+$ can otherwise lock the event loop forever.
+                        matched = expression.search(
+                            line, timeout=min(_GREP_MATCH_TIMEOUT_SECONDS, remaining),
+                        )
+                    except TimeoutError:
+                        return ToolResult(content="fs.grep pattern exceeded the regex time limit.", is_error=True)
+                    if matched:
                         snippet = line if len(line) <= _GREP_LINE_CAP else line[:_GREP_LINE_CAP] + "…"
                         matches.append(f"{relative}:{line_number}: {snippet}")
                         if len(matches) >= _GREP_CAP_MATCHES:
@@ -294,8 +335,8 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         if not target.is_file():
             return ToolResult(content=f"Not a file: {call.arguments.get('path')!r}.", is_error=True)
         try:
-            text = target.read_text(encoding="utf-8")
-        except OSError as exc:
+            text = _bounded_text(target, _READ_FILE_SIZE_CAP)
+        except (OSError, ValueError, UnicodeError) as exc:
             return ToolResult(content=f"Could not read file: {exc}", is_error=True)
         occurrences = text.count(old_string)
         if occurrences == 0:
