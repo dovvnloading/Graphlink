@@ -87,6 +87,39 @@ def test_take_backup_creates_a_real_openable_sqlite_file_with_the_same_data(db_p
     assert rows == [("Real Chat",)]
 
 
+def test_concurrent_backups_have_independent_sqlite_staging_files(db_path, monkeypatch):
+    """Two overlapping backup calls must never write the same temp DB."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import backend.db_backup as backup_module
+
+    _make_real_db(db_path, title="Keep Me")
+    barrier = threading.Barrier(2)
+    real_replace = backup_module.os.replace
+    sources = []
+
+    def concurrent_replace(source, destination):
+        sources.append(source)
+        barrier.wait(timeout=15)
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(backup_module.os, "replace", concurrent_replace)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(take_backup, db_path) for _ in range(2)]
+        paths = [future.result(timeout=20) for future in futures]
+
+    assert paths[0] == paths[1]  # Same one-second backup name, atomic winner.
+    assert sources[0] != sources[1], "backups must use separate temp paths"
+    assert not list(backups_dir_for(db_path).glob("*.tmp"))
+    conn = sqlite3.connect(paths[0])
+    try:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("SELECT title FROM chats").fetchall() == [("Keep Me",)]
+    finally:
+        conn.close()
+
+
 def test_take_backup_filename_matches_the_documented_convention(db_path):
     _make_real_db(db_path)
     backup_path = take_backup(db_path)

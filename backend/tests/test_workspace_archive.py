@@ -132,6 +132,14 @@ def test_windows_replace_denial_only_succeeds_for_identical_committed_asset(
     assert list(target.parent.glob("*.tmp")) == []
 
 
+@pytest.mark.parametrize("invalid_ref", [None, 123, [], {}, True])
+def test_asset_store_rejects_non_string_references_as_missing(tmp_path, invalid_ref):
+    store = AssetStore(tmp_path / "assets")
+    assert store.get(invalid_ref) is None
+    assert store.exists(invalid_ref) is False
+    assert store.verify(invalid_ref) is False
+
+
 def test_a_ref_the_store_has_never_seen_reads_as_missing_not_an_error(tmp_path):
     # A missing picture must degrade to "no image", never to "this chat
     # will not load".
@@ -290,6 +298,41 @@ def test_an_older_archive_without_tags_favorite_archived_defaults_them_back_rath
     assert chats[0]["tags"] == []
     assert chats[0]["favorite"] is False
     assert chats[0]["archived"] is False
+
+
+def test_export_and_import_preserve_twelve_graphs_in_index_order(tmp_path):
+    archive = tmp_path / "twelve.graphlink"
+    expected = [f"Graph {i}" for i in range(12)]
+    export_archive(archive, [_chat(title=name) for name in expected])
+    assert [chat["title"] for chat in import_archive(archive)] == expected
+
+
+def test_older_archive_without_manifest_index_uses_numeric_order(tmp_path):
+    archive = tmp_path / "old-twelve.graphlink"
+    expected = [f"Graph {i}" for i in range(12)]
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+        for i, name in enumerate(expected):
+            zf.writestr(f"chats/{i}.json", json.dumps(_chat(title=name)))
+    assert [chat["title"] for chat in import_archive(archive)] == expected
+
+
+@pytest.mark.parametrize("manifest_fields", [
+    {"chats": "invalid"},
+    {"chats": [{"member": "chats/1.json"}]},
+    {"chats": [{"member": "chats/0.json"}, {"member": "chats/0.json"}]},
+    {"chatCount": 2},
+    {"chatCount": True},
+])
+def test_archive_rejects_inconsistent_manifest_indexes_and_counts(tmp_path, manifest_fields):
+    archive = tmp_path / "bad-index.graphlink"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({
+            "formatVersion": FORMAT_VERSION, **manifest_fields,
+        }))
+        zf.writestr("chats/0.json", json.dumps(_chat()))
+    with pytest.raises(ArchiveError, match="(index|count)"):
+        read_archive(archive)
 
 
 def test_assets_round_trip_into_a_DIFFERENT_store_the_second_machine_case(tmp_path):
@@ -509,6 +552,78 @@ def test_an_archive_whose_members_sum_past_the_aggregate_cap_is_refused(tmp_path
         read_archive(archive)
 
 
+@pytest.mark.parametrize("bad_manifest", [[], None, 3, "text", True])
+def test_archive_rejects_non_object_manifest_with_archive_error(tmp_path, bad_manifest):
+    archive = tmp_path / "bad-manifest.graphlink"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps(bad_manifest))
+    with pytest.raises(ArchiveError, match="invalid manifest"):
+        read_archive(archive)
+
+
+@pytest.mark.parametrize("version", [True, False, 0, -1, 1.0])
+def test_archive_rejects_non_positive_or_non_integer_versions(tmp_path, version):
+    archive = tmp_path / "bad-version.graphlink"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"formatVersion": version}))
+    with pytest.raises(ArchiveError, match="usable format version"):
+        read_archive(archive)
+
+
+@pytest.mark.parametrize("bad_chat", [None, [], "oops", 17, {"title": "Incomplete"},
+    {"title": "T", "data": [], "notes": []},
+    {"title": "T", "data": {}, "notes": "not-a-list"},
+    {"title": "T", "data": {}, "favorite": "false"}])
+def test_invalid_chat_is_refused_before_any_asset_is_written(tmp_path, bad_chat):
+    good_ref = content_ref(PNG)
+    archive = tmp_path / "bad-chat.graphlink"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+        zf.writestr("chats/0.json", json.dumps(bad_chat))
+        zf.writestr(f"assets/{good_ref}.png", PNG)
+    store = AssetStore(tmp_path / "assets")
+    with pytest.raises(ArchiveError, match="invalid chat entry"):
+        import_archive(archive, target_assets=store)
+    assert store.get(good_ref) is None
+
+
+def test_duplicate_zip_member_names_are_rejected(tmp_path):
+    import warnings
+
+    archive = tmp_path / "duplicate.graphlink"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(archive, "w") as zf:
+            zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+            zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+    with pytest.raises(ArchiveError, match="duplicate archive entries"):
+        read_archive(archive)
+
+
+def test_backslash_members_are_rejected_with_archive_error(tmp_path):
+    import os
+
+    from backend.workspace_archive import _safe_member_name
+
+    # The validation helper refuses a literal backslash on EVERY platform.
+    with pytest.raises(ArchiveError, match="unsupported path separators"):
+        _safe_member_name(r"chats\0.json")
+
+    # On Windows, zipfile.ZipInfo normalizes os.sep to "/" even while
+    # READING a raw ZIP with literal backslash bytes in its central
+    # directory. The archive reader never sees the original backslash;
+    # its normalized name is already safe. Exercise the archive path on
+    # POSIX, where zipfile preserves the hostile member name unchanged.
+    if os.name == "nt":
+        return
+    archive = tmp_path / "backslash.graphlink"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+        zf.writestr(r"chats\0.json", json.dumps(_chat()))
+    with pytest.raises(ArchiveError, match="unsupported path separators"):
+        read_archive(archive)
+
+
 def test_an_archive_within_the_aggregate_cap_is_unaffected(tmp_path, monkeypatch):
     import backend.workspace_archive as workspace_archive_module
     monkeypatch.setattr(workspace_archive_module, "MAX_TOTAL_UNCOMPRESSED_BYTES", 1_000_000)
@@ -576,6 +691,31 @@ def test_reading_an_archive_writes_nothing_anywhere(tmp_path):
 
 
 # -- export atomicity --------------------------------------------------------
+
+
+def test_parallel_exports_use_independent_staging_files(tmp_path, monkeypatch):
+    # Two export workers can finish their ZIP writes together. A shared
+    # .tmp path causes the second rename to fail or publishes partial data.
+    from backend import workspace_archive as archive_module
+
+    archive = tmp_path / "parallel.graphlink"
+    barrier = threading.Barrier(2)
+    real_replace = archive_module.os.replace
+
+    def synchronized_replace(source, destination):
+        barrier.wait(timeout=10)
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(archive_module.os, "replace", synchronized_replace)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(export_archive, archive, [_chat(title="first")]),
+            pool.submit(export_archive, archive, [_chat(title="second")]),
+        ]
+        assert [future.result(timeout=15) for future in futures] == [archive, archive]
+
+    assert import_archive(archive)[0]["title"] in {"first", "second"}
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_a_failed_export_leaves_no_file_wearing_the_real_name(tmp_path):

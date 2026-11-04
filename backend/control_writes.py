@@ -130,7 +130,10 @@ def _validate_arguments(operation: str, arguments: dict[str, Any]) -> None:
 
 def register_control_write_api(app: FastAPI, bus: EventBus) -> None:
     """Mount only approved writes; called only when a write token is configured."""
-    receipts: OrderedDict[str, tuple[str, dict[str, Any]]] = OrderedDict()
+    # A successful operation receipt is valid only for the identical
+    # canvas snapshot (including its lifetime epoch). A different graph or
+    # an intervening edit must not replay a stale success.
+    receipts: OrderedDict[str, tuple[str, dict[str, Any], str]] = OrderedDict()
     write_lock = asyncio.Lock()
 
     def replay_or_conflict(operation_id: str, fingerprint: str) -> dict[str, Any] | None:
@@ -139,10 +142,17 @@ def register_control_write_api(app: FastAPI, bus: EventBus) -> None:
             return None
         if entry[0] != fingerprint:
             raise HTTPException(status_code=409, detail="operation_id reused with different input")
+        document = get_session_context(bus.session(DEFAULT_SESSION_ID)).canvas_document
+        if scene_revision(document) != entry[2]:
+            # Without this, a retry after loading another canvas would
+            # report a successful write/save to the PREVIOUS canvas, and
+            # return a node ID that does not exist in the current one.
+            raise HTTPException(status_code=409, detail="canvas changed since operation; reread graphlink_list_nodes")
         return {**entry[1], "replayed": True}
 
     def record(operation_id: str, fingerprint: str, result: dict[str, Any]) -> None:
-        receipts[operation_id] = (fingerprint, result)
+        document = get_session_context(bus.session(DEFAULT_SESSION_ID)).canvas_document
+        receipts[operation_id] = (fingerprint, result, scene_revision(document))
         receipts.move_to_end(operation_id)
         if len(receipts) > _MAX_RECEIPTS:
             receipts.popitem(last=False)

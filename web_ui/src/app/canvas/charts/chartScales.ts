@@ -137,9 +137,16 @@ export interface HistogramBin {
  * for the final bin (a value exactly equal to the max lands in the last
  * bin rather than overflowing). */
 export function computeHistogramBins(values: number[], bins: number): HistogramBin[] {
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const width = (max - min) / bins || 1;
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  // Like matplotlib's histogram, widen a constant-valued dataset around
+  // that value. The old `|| 1` bin width expanded only to the RIGHT:
+  // [7, 7, 7] appeared over [7, 7+bins], with the true mean/median on the
+  // left boundary instead of centered in the graph.
+  const padding = rawMin === rawMax ? Math.max(0.5, Math.abs(rawMin) * 0.05) : 0;
+  const min = rawMin - padding;
+  const max = rawMax + padding;
+  const width = (max - min) / bins;
   const counts = new Array(bins).fill(0);
   for (const value of values) {
     let index = Math.floor((value - min) / width);
@@ -155,11 +162,15 @@ export function computeHistogramBins(values: number[], bins: number): HistogramB
 }
 
 export function mean(values: number[]): number {
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
+  // All values are individually finite (canonical chart validation), but
+  // summing them before dividing can overflow: [1e308, 1e308] used to
+  // produce Infinity and an invalid SVG mean reference line.
+  return values.reduce((sum, value) => sum + value / values.length, 0);
 }
 
 export function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+  // Halve BEFORE adding to avoid overflowing two large finite values.
+  return sorted.length % 2 === 0 ? sorted[mid - 1] / 2 + sorted[mid] / 2 : sorted[mid];
 }

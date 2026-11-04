@@ -126,7 +126,7 @@ class AssetStore:
         this process did not necessarily write, so a crafted value like
         "../../.ssh/id_rsa" must be rejected here, at the one place a ref
         becomes a path, rather than trusted into `root / ref[:2] / ref`."""
-        if not _CONTENT_REF_RE.fullmatch(ref or ""):
+        if not isinstance(ref, str) or not _CONTENT_REF_RE.fullmatch(ref):
             return None
         return self.root / ref[:2] / ref
 

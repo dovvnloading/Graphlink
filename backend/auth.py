@@ -93,10 +93,17 @@ def resolve_configured_token(explicit_token: str | None) -> str | None:
          reaches case 1 - so "shipped with auth accidentally off" is a
          test failure, not a silent regression.
     """
-    if explicit_token:
+    if explicit_token is not None:
+        # Only None means "intentionally unauthenticated". A caller that
+        # passes an empty string meant to enable auth must never silently
+        # start a completely unprotected API/WebSocket backend.
+        if not isinstance(explicit_token, str) or not explicit_token.strip():
+            raise ValueError("explicit capability token must be non-empty")
         return explicit_token
     env_token = os.environ.get(DEV_AUTH_TOKEN_ENV)
-    if env_token:
+    if env_token is not None:
+        if not env_token.strip():
+            raise ValueError(f"{DEV_AUTH_TOKEN_ENV} must be non-empty when configured")
         return env_token
     return None
 
