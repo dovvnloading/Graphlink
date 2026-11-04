@@ -181,8 +181,8 @@ def test_read_loop_never_accepts_boolean_as_a_numeric_rpc_request_id():
 
     client = McpStdioClient(command="unused")
     output = (
-        '{"jsonrpc":"2.0","id":true,"result":{"incorrect":true}}\\n'
-        '{"jsonrpc":"2.0","id":1,"result":{"correct":true}}\\n'
+        '{"jsonrpc":"2.0","id":true,"result":{"incorrect":true}}\n'
+        '{"jsonrpc":"2.0","id":1,"result":{"correct":true}}\n'
     )
     client._process = SimpleNamespace(stdout=io.StringIO(output))
     client._pending_id = 1
