@@ -1039,6 +1039,68 @@ def test_download_repository_snapshot_extracts_zip_and_moves_to_target(tmp_path)
     assert zip_call["timeout"] == 60
 
 
+@pytest.mark.parametrize(("entries", "expected"), [
+    ({"../escape.txt": b"pwned"}, "unsafe file paths"),
+    ({r"sub\\outside.txt": b"bad"}, "unsafe file paths"),
+    ({".git/hooks/pre-commit": b"bad"}, ".git metadata"),
+])
+def test_download_snapshot_rejects_unsafe_member_paths(tmp_path, entries, expected):
+    zip_url = "https://api.github.com/repos/o/r/zipball/main"
+    archive = _zip_bytes(entries)
+    repo = GitlinkRepository(_FakeGithubClient({zip_url: archive}))
+    with pytest.raises(RuntimeError, match=expected):
+        repo.download_repository_snapshot("o/r", "main", tmp_path / "checkout")
+    assert not (tmp_path / "escape.txt").exists()
+    assert not (tmp_path / "checkout").exists()
+
+
+def test_download_snapshot_rejects_zip_bombs_by_total_size(tmp_path, monkeypatch):
+    import graphlink_plugins.gitlink.repository as module
+
+    monkeypatch.setattr(module, "MAX_SNAPSHOT_TOTAL_BYTES", 20)
+    zip_url = "https://api.github.com/repos/o/r/zipball/main"
+    archive = _zip_bytes({"one.txt": b"a" * 15, "two.txt": b"b" * 15})
+    repo = GitlinkRepository(_FakeGithubClient({zip_url: archive}))
+    with pytest.raises(RuntimeError, match="expands beyond"):
+        repo.download_repository_snapshot("o/r", "main", tmp_path / "checkout")
+    assert not (tmp_path / "checkout").exists()
+
+
+def test_download_snapshot_rejects_too_many_members(tmp_path, monkeypatch):
+    import graphlink_plugins.gitlink.repository as module
+
+    monkeypatch.setattr(module, "MAX_SNAPSHOT_ENTRIES", 1)
+    zip_url = "https://api.github.com/repos/o/r/zipball/main"
+    repo = GitlinkRepository(_FakeGithubClient({zip_url: _zip_bytes({"a": b"1", "b": b"2"})}))
+    with pytest.raises(RuntimeError, match="too many entries"):
+        repo.download_repository_snapshot("o/r", "main", tmp_path / "checkout")
+
+
+def test_download_snapshot_rejects_symlink_members(tmp_path):
+    import stat
+
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        info = zipfile.ZipInfo("repo-sha/symlink")
+        info.create_system = 3
+        info.external_attr = (stat.S_IFLNK | 0o777) << 16
+        archive.writestr(info, "../../outside")
+    zip_url = "https://api.github.com/repos/o/r/zipball/main"
+    repo = GitlinkRepository(_FakeGithubClient({zip_url: buffer.getvalue()}))
+    with pytest.raises(RuntimeError, match="unsupported file types"):
+        repo.download_repository_snapshot("o/r", "main", tmp_path / "checkout")
+
+
+def test_download_snapshot_rejects_large_compressed_payload(tmp_path, monkeypatch):
+    import graphlink_plugins.gitlink.repository as module
+
+    monkeypatch.setattr(module, "MAX_SNAPSHOT_ARCHIVE_BYTES", 20)
+    zip_url = "https://api.github.com/repos/o/r/zipball/main"
+    repo = GitlinkRepository(_FakeGithubClient({zip_url: _zip_bytes({"file.txt": b"hello"})}))
+    with pytest.raises(RuntimeError, match="download limit"):
+        repo.download_repository_snapshot("o/r", "main", tmp_path / "checkout")
+
+
 def test_download_repository_snapshot_quotes_branch_name_fully():
     # safe='' -> even "/" in a branch name must be percent-escaped, unlike
     # fetch_github_file_text's repo-path quoting (safe='/').
