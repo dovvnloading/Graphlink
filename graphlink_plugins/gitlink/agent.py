@@ -42,6 +42,12 @@ TEXT_FILE_EXCLUSION_SUFFIXES = (
 
 MAX_FILE_CONTEXT_CHARS = 24000
 
+# Repositories from Git, Mercurial, Subversion, Bazaar and CVS can contain
+# command hooks/configuration under these directories. Model-suggested edits
+# must never modify executable VCS metadata, not even through a symlinked
+# alias inside the selected checkout.
+_FORBIDDEN_VCS_PARTS = frozenset({".git", ".hg", ".svn", ".bzr", "cvs"})
+
 # These files frequently contain live credentials, signing keys or cloud
 # access configuration. "Full Repo Access" automatically sends repository
 # text to an external model, so exclude obvious secrets at the inventory
@@ -146,6 +152,8 @@ def _normalize_repo_path(path_text):
     # segment, not just the first, so a submodule's nested .git is covered.
     if any(part.lower() == ".git" for part in normalized.parts):
         raise RuntimeError("Repository paths may not reference the .git directory.")
+    if any(part.casefold() in _FORBIDDEN_VCS_PARTS for part in normalized.parts):
+        raise RuntimeError("Repository paths may not reference version-control metadata.")
     return normalized.as_posix()
 
 
@@ -154,6 +162,11 @@ def _safe_local_target(root_path, repo_path):
     target = (root / Path(*PurePosixPath(_normalize_repo_path(repo_path)).parts)).resolve()
     if target != root and root not in target.parents:
         raise RuntimeError("Resolved file path escaped the selected repository root.")
+    # Checking only the proposed name is insufficient: a symlink named
+    # src/cache may point INSIDE the root to .git/hooks or .hg, where the
+    # containment guard passes. Validate the canonical destination too.
+    if any(part.casefold() in _FORBIDDEN_VCS_PARTS for part in target.relative_to(root).parts):
+        raise RuntimeError("Resolved file path references version-control metadata.")
     return target
 
 
