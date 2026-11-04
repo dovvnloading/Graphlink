@@ -34,5 +34,6 @@ Pillow
 # Security floor: 6.21.4 fixes the 7 CVEs reported by pip-audit for 6.21.2.
 pypdf>=6.21.4
 python-docx
+regex
 requests
 tiktoken
