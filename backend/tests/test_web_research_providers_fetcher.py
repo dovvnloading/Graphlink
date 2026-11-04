@@ -601,7 +601,7 @@ class TestCancellationPropagationAcrossFetcherBoundary:
 
         with patch.object(providers_module, "requests") as fake_requests:
             fake_requests.Session.return_value = session
-            fake_requests.RequestException = Exception
+            fake_requests.RequestException = requests.RequestException
             with pytest.raises(RequestCancelled):
                 fetcher.fetch(_search_result(), limits=limits, token=token)
 
@@ -625,7 +625,7 @@ class TestCancellationPropagationAcrossFetcherBoundary:
 
         with patch.object(providers_module, "requests") as fake_requests:
             fake_requests.Session.return_value = session
-            fake_requests.RequestException = Exception
+            fake_requests.RequestException = requests.RequestException
             with pytest.raises(RequestCancelled):
                 fetcher.fetch(_search_result(), limits=limits, token=token)
 
