@@ -58,7 +58,9 @@ test("saves a node, clears the canvas, then reloads it from the chat library", a
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
 
   await page.locator('[data-overlay-trigger="plugins"]').click();
-  await page.getByRole("option", { name: "System Prompt" }).click();
+  // Plugin actions are native buttons (not ARIA listbox options).
+  await page.getByRole("dialog", { name: "Plugins" })
+    .getByRole("button", { name: /^System Prompt/ }).click();
   await expect(page.locator(".react-flow__node-note")).toHaveCount(1);
   // The note is the ONLY node on the canvas - nothing else to persist, so
   // the reload assertion below is unambiguous.

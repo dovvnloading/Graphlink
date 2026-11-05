@@ -157,4 +157,89 @@ describe("PluginPicker", () => {
     await user.click(screen.getByText("System Prompt"));
     expect(intents).toContainEqual(["app-plugins", "executePlugin", ["System Prompt", null, 900, 900]]);
   });
+
+  it("searches all categories regardless of the previously selected category and preserves execution args", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open plugins"));
+    await user.click(screen.getByRole("button", { name: "Build & Execution" }));
+
+    await user.type(screen.getByRole("searchbox", { name: "Search plugins" }), "conversation");
+    expect(screen.getByText("Conversation Node")).toBeInTheDocument();
+    expect(screen.getByText("Branch Foundations")).toBeInTheDocument();
+    expect(screen.queryByText("Virtual Environment Runner")).toBeNull();
+
+    await user.click(screen.getByText("Conversation Node"));
+    expect(intents).toContainEqual([
+      "app-plugins", "executePlugin", ["Conversation Node", null, 0, 0],
+    ]);
+  });
+
+  it("finds plugins by task description and restores the previous category on clearing", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open plugins"));
+    const input = screen.getByRole("searchbox", { name: "Search plugins" });
+
+    await user.type(input, "python");
+    expect(screen.getByText("Virtual Environment Runner")).toBeInTheDocument();
+    expect(screen.queryByText("System Prompt")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(input).toHaveFocus();
+    expect(screen.getByText("System Prompt")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Branch Foundations" })).toBeInTheDocument();
+  });
+
+  it("focuses search when opened; arrow navigation uses native buttons, Enter activates once", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open plugins"));
+    const input = screen.getByRole("searchbox", { name: "Search plugins" });
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("list", { name: "Branch Foundations plugins" })).toBeInTheDocument();
+
+    const first = screen.getByRole("button", { name: /System Prompt/ });
+    const second = screen.getByRole("button", { name: /Conversation Node/ });
+    await user.keyboard("{ArrowDown}");
+    expect(first).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(second).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(first).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(input).toHaveFocus();
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(intents).toHaveLength(1);
+    expect(intents[0]).toEqual(["app-plugins", "executePlugin", ["System Prompt", null, 0, 0]]);
+    expect(screen.queryByRole("searchbox", { name: "Search plugins" })).toBeNull();
+  });
+
+  it("Enter from a nonempty search activates its highest-ranked match", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open plugins"));
+    await user.type(screen.getByRole("searchbox", { name: "Search plugins" }), "node{Enter}");
+    expect(intents).toHaveLength(1);
+    expect(intents[0]).toEqual(["app-plugins", "executePlugin", ["Conversation Node", null, 0, 0]]);
+  });
+
+  it("shows no-match feedback and does not execute a plugin from an empty result set", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open plugins"));
+    await user.type(screen.getByRole("searchbox", { name: "Search plugins" }), "doesnotexist{Enter}");
+    expect(screen.getByText("No plugins match this search.")).toBeInTheDocument();
+    expect(intents).toHaveLength(0);
+  });
+
+  it("resets the query after reopening and restores focus to the opener when closed", async () => {
+    const { user } = setup();
+    const opener = screen.getByRole("button", { name: "open plugins" });
+    await user.click(opener);
+    await user.type(screen.getByRole("searchbox", { name: "Search plugins" }), "python");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("searchbox", { name: "Search plugins" })).toBeNull();
+    expect(opener).toHaveFocus();
+
+    await user.click(opener);
+    expect(screen.getByRole("searchbox", { name: "Search plugins" })).toHaveValue("");
+    expect(screen.getByText("System Prompt")).toBeInTheDocument();
+  });
+
 });
