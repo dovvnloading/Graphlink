@@ -125,3 +125,52 @@ def test_corrupt_legacy_import_cannot_inject_unbounded_pending_proposal():
     payload["proposal_base_sha256"] = "bogus"
     assert _artifact_proposal_from_payload(payload) == {}
     assert _restore_artifact_payload({"content": "old"}).state.artifact_proposal_id == ""
+
+
+def test_api_generation_stages_then_requires_explicit_accept():
+    import asyncio
+
+    from backend.canvas import register_canvas
+    from backend.composer import ComposerDocument
+    from backend.events import SessionBus
+    from backend.notifications import NotificationState
+
+    class Dispatcher:
+        def __init__(self):
+            self.call = None
+
+        async def start_artifact_reply(self, **kwargs):
+            self.call = kwargs
+            kwargs["node"].pending_request_id = "active"
+
+        def is_node_run_live(self, request_id):
+            return request_id == "active"
+
+        def cancel_artifact(self, request_id):
+            return True
+
+    async def run():
+        bus = SessionBus("artifact-proposal-api")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer = ComposerDocument()
+        bus.register_topic("app-composer", composer.payload)
+        dispatcher = Dispatcher()
+        document = register_canvas(bus, notifications, dispatcher, composer)
+        node = document.add_artifact_node(0, 0, None)
+
+        assert await bus.dispatch_intent("scene", "sendArtifactMessage", [node.id, "Draft a page"]) == node.id
+        assert dispatcher.call is not None
+        dispatcher.call["on_reply"]("# Suggested Page", "I drafted a page.")
+        assert node.state.artifact_content == ""
+        assert node.state.artifact_proposal_id
+        proposal = await bus.dispatch_intent("scene", "fetchArtifactProposal", [node.id])
+        assert proposal["content"] == "# Suggested Page"
+        # Unreviewed AI work cannot be replaced by a second send.
+        assert await bus.dispatch_intent("scene", "sendArtifactMessage", [node.id, "More"]) is None
+        assert len(dispatcher.call["node"].history) == 2
+        await bus.dispatch_intent("scene", "acceptArtifactProposal", [node.id, proposal["proposalId"]])
+        assert node.state.artifact_content == "# Suggested Page"
+        assert node.state.artifact_proposal_id == ""
+
+    asyncio.run(run())
