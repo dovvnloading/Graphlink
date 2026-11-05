@@ -7272,6 +7272,49 @@ mark.document-view-search-match-current {
   gap: 7px;
 }
 
+.gitlink-node-review-selection-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+.gitlink-node-review-selection-bar button {
+  padding: 4px 7px;
+  font: inherit;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.gitlink-node-review-selection-bar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.gitlink-node-review-selection-bar button:focus-visible,
+.gitlink-node-review-file input:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+
+.gitlink-node-review-file {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 5px;
+}
+
+.gitlink-node-review-file input {
+  flex-shrink: 0;
+  accent-color: var(--gl-surface-text-primary);
+  cursor: pointer;
+}
+
 .gitlink-node-review-files {
   display: flex;
   flex-wrap: wrap;
