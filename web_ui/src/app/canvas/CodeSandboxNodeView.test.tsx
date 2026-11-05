@@ -670,6 +670,16 @@ describe("Virtual Environment Runner manual Python editing", () => {
     expect(screen.getByRole("button", { name: "Download .py" })).toBeEnabled();
   });
 
+  it("runs saved Python directly without re-submitting an old generation prompt", async () => {
+    const user = userEvent.setup();
+    const data = renderCodeSandboxNode({
+      codeSandboxPrompt: "Generate something from an old task",
+      codeSandboxCode: "print(42)",
+    });
+    await user.click(screen.getByRole("button", { name: "Run saved script" }));
+    expect(data.onRun).toHaveBeenCalledWith("");
+  });
+
   it("disables manual editing when code is already being run or approved", () => {
     renderCodeSandboxNode({ codeSandboxCode: "print(1)", pendingRequestId: "busy" });
     expect(screen.getByRole("button", { name: "Edit Python" })).toBeDisabled();
