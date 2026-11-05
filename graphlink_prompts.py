@@ -255,7 +255,7 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         ("note-explainer", 1, "ee3201aec9c750884374a9e01ba3fe544a576ede662b329807a050ff205866b5"),
         # Targeted Artifact edit protocol v1. Changing the schema-facing
         # system text requires an explicit version bump and new hash.
-        ("artifact-section-patch", 1, "22938afefc82c4fb49736f95651e2910d71392d78932ca17fd6624bca3749f54"),
+        ("artifact-section-patch", 2, "7bf6c90796aacd3b81e90e73026057c9b9fa092d9b52beb8e11738fdef252a5d"),
         ("web-research-query", 1, "8ac34972ab12b8574177839d28f1b0a3adcadee56af06d9039b3ce9639b8bd67"),
         ("web-research-validation", 1, "6736a24ac6b339cac2268fd1b81ced90185b5537f53406ec2a811a8b8615a3d0"),
         # v2: require exact source IDs rather than abbreviating hashed citation markers.
