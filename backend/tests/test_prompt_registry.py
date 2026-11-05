@@ -33,6 +33,7 @@ EXPECTED_PROMPT_IDS = frozenset(
         "note-branch-comparison",
         "note-branch-synthesis",
         "note-explainer",
+        "artifact-section-patch",
         "web-research-query",
         "web-research-validation",
         "web-research-summary",

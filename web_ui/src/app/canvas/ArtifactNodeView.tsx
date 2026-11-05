@@ -487,7 +487,9 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
               submit();
             }
           }}
-          placeholder="Describe what to generate or refine…"
+          placeholder={data.artifactContent.length >= 6000
+            ? "Name a section heading to refine, e.g. Improve Risks…"
+            : "Describe what to generate or refine…"}
           aria-label="Instruction"
           rows={1}
           spellCheck

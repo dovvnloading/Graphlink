@@ -478,6 +478,15 @@ describe("ArtifactNodeView editor and export", () => {
 });
 
 
+describe("Artifact targeted editing guidance", () => {
+  it("names a section heading in the prompt hint for long documents", () => {
+    renderArtifactNode({ artifactContent: "# Risks\\n" + "x".repeat(6500) });
+    expect(screen.getByRole("textbox", { name: "Instruction" })).toHaveAttribute(
+      "placeholder", expect.stringContaining("section heading"),
+    );
+  });
+});
+
 describe("ArtifactNodeView proposal review", () => {
   const proposal = {
     proposalId: "proposal-1",
