@@ -12,6 +12,8 @@ export interface ArtifactDiffPreview {
   after: string;
   omittedBeforeLines: number;
   omittedAfterLines: number;
+  clippedBeforeChars: boolean;
+  clippedAfterChars: boolean;
   changed: boolean;
 }
 
@@ -26,6 +28,8 @@ export function artifactDiffPreview(
       after: "",
       omittedBeforeLines: 0,
       omittedAfterLines: 0,
+      clippedBeforeChars: false,
+      clippedAfterChars: false,
       changed: false,
     };
   }
@@ -48,13 +52,17 @@ export function artifactDiffPreview(
   const beforeChanged = beforeLines.slice(leading, beforeLines.length - trailing);
   const afterChanged = afterLines.slice(leading, afterLines.length - trailing);
   const cap = Math.max(1, Math.min(200, maximumShownLines));
+  const beforeExcerpt = beforeChanged.slice(0, cap).join("\n");
+  const afterExcerpt = afterChanged.slice(0, cap).join("\n");
   return {
     leadingUnchangedLines: leading,
     trailingUnchangedLines: trailing,
-    before: beforeChanged.slice(0, cap).join("\n").slice(0, 5000),
-    after: afterChanged.slice(0, cap).join("\n").slice(0, 5000),
+    before: beforeExcerpt.slice(0, 5000),
+    after: afterExcerpt.slice(0, 5000),
     omittedBeforeLines: Math.max(0, beforeChanged.length - cap),
     omittedAfterLines: Math.max(0, afterChanged.length - cap),
+    clippedBeforeChars: beforeExcerpt.length > 5000,
+    clippedAfterChars: afterExcerpt.length > 5000,
     changed: true,
   };
 }
