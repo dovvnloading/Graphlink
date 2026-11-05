@@ -23,6 +23,13 @@ describe("Artifact proposal change-region preview", () => {
     expect(diff.after).toBe("after\nkeep\nafter");
   });
 
+  it("flags character clipping on a single very long line", () => {
+    const diff = artifactDiffPreview("old", "X".repeat(6000));
+    expect(diff.after.length).toBe(5000);
+    expect(diff.clippedAfterChars).toBe(true);
+    expect(diff.clippedBeforeChars).toBe(false);
+  });
+
   it("bounds display rows without discarding the actual proposal", () => {
     const before = Array.from({ length: 100 }, (_, i) => `before-${i}`).join("\n");
     const after = Array.from({ length: 100 }, (_, i) => `after-${i}`).join("\n");
