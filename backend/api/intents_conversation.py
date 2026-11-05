@@ -10,7 +10,7 @@ from __future__ import annotations
 from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
-from backend.domain.model import SceneError
+from backend.domain.model import SceneError, SceneNode
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -38,7 +38,7 @@ def register_conversation_intents(
             raise SceneError(f"node is not a conversation node: {node_id}")
         # Store the narrowed, non-optional object under a stable name for
         # callbacks that run after this scope returns.
-        bound_node = node
+        bound_node: SceneNode = node
 
         accepted = False
         sent_history: list[dict] = []
