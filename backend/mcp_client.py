@@ -384,7 +384,9 @@ class McpStdioClient:
 
     def call_tool(self, name: str, arguments: dict) -> ToolResult:
         response = self._call("tools/call", {"name": name, "arguments": dict(arguments or {})})
-        content = response.get("content", []) if isinstance(response, dict) else []
+        content = response.get("content", [])
+        if not isinstance(content, list):
+            raise McpError("tools/call returned an invalid content list")
         # MCP's own content-block shape (a list of {"type": "text", "text":
         # ...} - the ADR's own ToolSpec docstring already documents the
         # OpenAPI-schema caveat for the request side; this is the mirror
@@ -398,6 +400,11 @@ class McpStdioClient:
             if isinstance(block, dict) and block.get("type") == "text"
         ]
         result_text = "\n".join(text_parts)
+        if not text_parts and isinstance(response.get("structuredContent"), (dict, list)):
+            # Modern MCP tools may return structuredContent without any
+            # accompanying text blocks. Previously this looked like an
+            # empty success even though the server returned useful data.
+            result_text = json.dumps(response["structuredContent"], ensure_ascii=True)
         if len(result_text) > MAX_TOOL_RESULT_CHARS:
             result_text = (
                 result_text[:MAX_TOOL_RESULT_CHARS]
@@ -469,7 +476,10 @@ class McpStdioClient:
                 # queuing then skipping past it in _call, is what actually
                 # bounds the queue.
                 pending_id = self._pending_id
-                if pending_id is not None and isinstance(payload, dict) and payload.get("id") == pending_id:
+                if (pending_id is not None and isinstance(payload, dict)
+                        and type(payload.get("id")) is int and payload["id"] == pending_id):
+                    # bool is a subclass of int in Python, but JSON-RPC
+                    # prohibits boolean ids. True must not satisfy id=1.
                     self._responses.put(payload)
         finally:
             self._responses.put(_READER_CLOSED)
@@ -601,7 +611,15 @@ class McpStdioClient:
                         if len(message_text) > 2000:
                             message_text = message_text[:2000] + "…[truncated]"
                         raise McpError(f"{method} failed: {message_text}")
-                    return payload.get("result", {}) or {}
+                    result = payload.get("result", {})
+                    if result is None:
+                        return {}
+                    if not isinstance(result, dict):
+                        # A malformed third-party MCP server can return a
+                        # JSON scalar/array. Callers expect a result object;
+                        # make it a recoverable McpError, not an AttributeError.
+                        raise McpError(f"MCP server returned a non-object result for {method!r}")
+                    return result
             finally:
                 self._pending_id = None
 

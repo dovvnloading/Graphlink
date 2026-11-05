@@ -96,6 +96,63 @@ def test_an_empty_secret_field_stays_empty_rather_than_becoming_redacted():
     assert scrub({"openai_api_key": None})["openai_api_key"] is None
 
 
+# -- secret-bearing URL parameters -------------------------------------------
+
+
+def test_sensitive_url_query_parameters_are_redacted_even_for_short_opaque_values():
+    cases = (
+        (
+            "https://api.example.test/data?api_key=plain123&limit=10",
+            "https://api.example.test/data?api_key=[redacted]&limit=10",
+        ),
+        (
+            "https://api.example.test/data?page=2&token=opaque123&password=short",
+            "https://api.example.test/data?page=2&token=[redacted]&password=[redacted]",
+        ),
+        (
+            "https://api.example.test/data?access_token=opaque%26encoded&sort=asc#details",
+            "https://api.example.test/data?access_token=[redacted]&sort=asc#details",
+        ),
+        (
+            "https://api.example.test/data?API%5FKEY=%70%72%69%76%61%74%65&limit=5",
+            "https://api.example.test/data?API%5FKEY=[redacted]&limit=5",
+        ),
+        (
+            "https://api.example.test/data?api-key=another123&amp;AUTH_TOKEN=hidden",
+            "https://api.example.test/data?api-key=[redacted]&amp;AUTH_TOKEN=[redacted]",
+        ),
+        (
+            "See (https://api.example.test/data?refresh_token=opaque123).",
+            "See (https://api.example.test/data?refresh_token=[redacted]).",
+        ),
+        (
+            "/local/callback?private_key=not-issuer-shaped&view=summary",
+            "/local/callback?private_key=[redacted]&view=summary",
+        ),
+    )
+    for original, expected in cases:
+        assert scrub_text(original) == expected
+        assert scrub_text(expected) == expected, "URL query redaction must be idempotent"
+
+
+def test_public_url_query_parameters_and_empty_credentials_are_left_intact():
+    public = "https://api.example.test/data?page=2&limit=10&sort=asc"
+    assert scrub_text(public) == public
+    empty = "https://api.example.test/data?token=&page=3"
+    assert scrub_text(empty) == empty
+
+
+def test_sensitive_url_query_values_are_redacted_in_nested_payloads():
+    url = "https://service.example.test/items?api%5fkey=plainvalue&limit=3"
+    payload = {"sources": [{"metadata": {"url": url, "notes": ["Open " + url]}}]}
+    cleaned = scrub(payload)
+    assert cleaned["sources"][0]["metadata"]["url"] == (
+        "https://service.example.test/items?api%5fkey=[redacted]&limit=3"
+    )
+    assert "plainvalue" not in json.dumps(cleaned)
+    assert payload["sources"][0]["metadata"]["url"] == url
+
+
 # -- absolute paths ----------------------------------------------------------
 
 
@@ -118,6 +175,22 @@ def test_ordinary_prose_with_slashes_is_not_mangled():
     # that eats normal text makes exports useless and gets disabled.
     text = "use the and/or operator, see the read/write docs"
     assert scrub_text(text) == text
+
+
+def test_http_url_schemes_are_not_mistaken_for_windows_drive_paths():
+    urls = (
+        "https://api.example.test/data?page=2&limit=10",
+        "http://api.example.test/search?q=ordinary",
+    )
+    for url in urls:
+        assert scrub_text(url) == url
+        assert REDACTED_PATH not in scrub_text(url)
+
+    # A real drive-letter path must remain protected, including forward
+    # slashes and paths in the same message as a real URL.
+    text = "See https://api.example.test/help and C:/Users/ada/private.txt"
+    cleaned = scrub_text(text)
+    assert cleaned == "See https://api.example.test/help and [redacted-path]"
 
 
 # -- purity ------------------------------------------------------------------

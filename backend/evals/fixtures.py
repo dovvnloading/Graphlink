@@ -13,7 +13,7 @@ from pathlib import Path
 FIXTURES_ROOT = Path(__file__).resolve().parent / "fixtures"
 
 # The three ADR-016 eval dimensions - see backend/evals/__init__.py's own
-# docstring for what real code (or, for agent_build, honest stub) backs each.
+# docstring for the production paths each fixture exercises.
 VALID_KINDS = ("chart", "structured_output", "agent_build")
 
 
@@ -29,10 +29,8 @@ class EvalFixture:
 def load_fixtures(kind: str) -> list[EvalFixture]:
     """Reads every ``*.json`` file under ``backend/evals/fixtures/<kind>/``
     and returns one :class:`EvalFixture` per file, sorted by filename for a
-    stable, reproducible run order. A ``kind`` directory that does not exist
-    yet is not an error - it simply contributes zero fixtures (mirrors the
-    agent_build dimension today, which ships scaffolding but no goldens are
-    required for it to be meaningful)."""
+    stable, reproducible run order. A missing kind directory contributes no
+    fixtures; the CI suite separately requires populated Builder goldens."""
     if kind not in VALID_KINDS:
         raise ValueError(f"Unknown eval fixture kind: {kind!r} (expected one of {VALID_KINDS})")
 

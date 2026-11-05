@@ -465,6 +465,14 @@ class SceneDocument(
         reset a few lines later in restore_chat instead - reset here too so
         a load that fails partway through never leaves a stale value from
         the PREVIOUS session)."""
+        # MCP writes require an observed, graph-identity-bound revision.
+        # A new blank canvas can be byte-identical to the old blank canvas
+        # (including chat/workspace IDs), so content hashing alone cannot
+        # distinguish a newChat/load that discarded the previous draft.
+        # Drop the lazily allocated per-canvas nonce at EVERY load/clear.
+        # The next scene_revision() allocates a fresh one; any old MCP
+        # revision now rejects instead of targeting the wrong blank scene.
+        self.__dict__.pop("_mcp_revision_epoch", None)
         self.nodes.clear()
         self.edges.clear()
         self.image_assets.clear()
@@ -506,6 +514,30 @@ class SceneDocument(
         self._published_view = None
         self._published_meta = None
 
+    def unattached_system_prompt_notes(self) -> list[SceneNode]:
+        """Return prompt notes with NO incident edges, in node insertion order.
+
+        This is the single predicate used by both implicit adoption (when a
+        new parentless chat root appears) and the System Prompt picker.
+        Looking only at outgoing edges is insufficient: a prompt note that
+        is already somebody else's child can have no outgoing edges, but
+        connecting it to a root can create a cycle or steal an unrelated
+        note. An unattached prompt must have neither incoming nor outgoing
+        links. Construct the endpoint set once: O(nodes + edges) instead of
+        rescanning all edges for each candidate note.
+        """
+        linked_ids = {
+            node_id
+            for edge in self.edges.values()
+            for node_id in (edge.source, edge.target)
+        }
+        return [
+            node for node in self.nodes.values()
+            if node.kind == "note"
+            and getattr(node.state, "is_system_prompt", False)
+            and node.id not in linked_ids
+        ]
+
     def adopt_pending_system_prompt(self, root_id: str) -> SceneEdge | None:
         """Connects an unattached system-prompt note to a new branch root.
 
@@ -526,14 +558,7 @@ class SceneDocument(
         root = self.nodes.get(root_id)
         if root is None:
             return None
-        sources = {edge.source for edge in self.edges.values()}
-        pending = [
-            node
-            for node in self.nodes.values()
-            if node.kind == "note"
-            and getattr(node.state, "is_system_prompt", False)
-            and node.id not in sources
-        ]
+        pending = self.unattached_system_prompt_notes()
         if len(pending) != 1:
             return None
         already_attached = any(

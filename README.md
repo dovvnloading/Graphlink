@@ -98,6 +98,10 @@ Attach these specialist nodes to a branch from the plugin picker:
 | HTML Renderer | Build & Execution | Renders HTML from a parent branch directly inside the app. |
 | Artifact / Drafter | Workflow & Drafting | A split-pane surface for drafting and refining long-form Markdown. |
 
+Use the search field at the top of the plugin picker to find plugins across all categories by name or task. Use the Up/Down arrows to move between results, Enter to launch a result, or Escape to close the picker. Plugin permissions are still checked by the backend.
+
+**HTML Renderer:** Edit the **Source** pane, then press **Render** or **Ctrl+Enter** (**Cmd+Enter** on macOS) inside the editor. An **out-of-date** indicator distinguishes the saved preview from unsent edits; clicking Render again also restarts interactive HTML/JavaScript previews without creating an extra source edit. Resize Source and Preview using the divider with the mouse or focus it and use Arrow keys (5% steps), PageUp/PageDown (20% steps), or Home/End. The iframe remains isolated with its existing strict Content Security Policy: inline scripts can run inside the preview but cannot access Graphlink's origin or make network requests through the document's restricted resource policies. Do not use the preview for trusted browsing or unrestricted website testing.
+
 ## Getting Started
 
 ### Requirements
@@ -186,6 +190,25 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 - **Ingest** documents into the local knowledge base, then search it from a node — or search across every workspace at once with Global Search.
 - **Undo** anything, including a whole agent run in one action.
 - **Export** the whole canvas as a PNG, or export individual nodes — Chat as `.md`, Code as a source file (extension inferred from language, falling back to `.txt`), Image as `.png`.
+
+Gitlink's **Proposal** tab offers **All files / individual file** diff review and **per-file approval checkboxes**. All files start selected. Uncheck individual files (or use **Select all / Select none**), then **Apply selected** to write only the chosen files. The confirmation names the exact selection; **unchecked changes are discarded after a successful Apply** so regenerate the proposal to apply them later. The backend verifies the fingerprint of the full, server-held proposal, freezes only the selected rows, and never accepts replacement file content from the UI. When a local checkout is configured during generation, Gitlink records byte-exact original-file baselines and rechecks every selected target before writing. If a selected file has changed, appeared, or disappeared since review, Apply stops without overwriting it. Older saved proposals without baselines must also be regenerated before applying.
+
+## Headless automation (MCP)
+
+Graphlink can run its backend without a desktop window and expose
+**read-only** workspace/graph/canvas inspection through a local MCP stdio
+server. The MCP adapter uses a limited, **read-only** capability token
+which cannot authorize WebSocket intents or other backend API actions. It
+connects to the same backend rather than opening a second copy of the
+application or database. Both the desktop and headless launchers now
+refuse a second process using the same data directory, even on different
+TCP ports.
+Optional permission-scoped canvas editing is available with
+`--allow-mcp-writes` on the backend and a **separate write-token-file**
+on the stdio adapter. It requires scene revisions and operation IDs;
+the default remains read-only.
+See [Headless Graphlink and MCP setup](docs/HEADLESS_MCP.md) for the CLI,
+client configuration, permissions and current limitations.
 
 ## Architecture
 

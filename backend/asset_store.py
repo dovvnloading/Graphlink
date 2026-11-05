@@ -13,12 +13,16 @@ deduplicate for free, a re-save of unchanged bytes is a no-op rather than
 a rewrite, and a corrupted file is detectable by rehashing rather than
 being silently served as if it were fine.
 
-WRITES ARE ATOMIC AND IDEMPOTENT. put() writes to a temp name and
+WRITES ARE ATOMIC AND IDEMPOTENT. put() writes to a UNIQUE temp name and
 os.replace()s into place, so a crash mid-write can only ever leave a temp
 file, never a truncated file wearing a real ref's name that a later read
-would trust. If the target already exists, put() returns immediately
-without rewriting - by construction the existing file already has exactly
-the content being stored, since its name is that content's hash.
+would trust. Unique temp names also let two concurrent saves of the same
+image finish safely instead of colliding on one shared .tmp file.
+Windows may still deny two simultaneous replacements of the SAME target;
+a losing writer accepts that denial only if the winner's final bytes exactly
+match its own. If the target already exists before this write, put() first
+verifies the file's content hash rather than trusting its name alone. A
+corrupt existing asset is repaired by the same atomic replacement path.
 
 NOTHING IS EVER DELETED HERE. Garbage collection of unreferenced assets is
 deliberately out of scope: an asset is cheap to keep and catastrophic to
@@ -38,6 +42,7 @@ import hashlib
 import re
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -121,7 +126,7 @@ class AssetStore:
         this process did not necessarily write, so a crafted value like
         "../../.ssh/id_rsa" must be rejected here, at the one place a ref
         becomes a path, rather than trusted into `root / ref[:2] / ref`."""
-        if not _CONTENT_REF_RE.fullmatch(ref or ""):
+        if not isinstance(ref, str) or not _CONTENT_REF_RE.fullmatch(ref):
             return None
         return self.root / ref[:2] / ref
 
@@ -138,24 +143,56 @@ class AssetStore:
             # Raised, not asserted - `python -O` strips an assert, and this
             # one guards the line below from writing to None.
             raise ValueError(f"asset ref {ref!r} does not map to a storage path")
-        if target.is_file():
+        # A name matching the desired digest is not proof that the bytes
+        # still match it: interrupted external copies, disk corruption, or a
+        # hand-edited asset can leave a bad blob under a valid ref. Verify
+        # before taking the idempotent fast path so later saves/imports can
+        # repair that blob using the existing atomic replacement below.
+        if target.is_file() and self.verify(ref):
             return ref
 
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(target.name + ".tmp")
+        tmp: Path | None = None
         try:
-            fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "wb") as handle:
+            # Multiple saves can persist the same image simultaneously.
+            # A shared "<hash>.tmp" gets truncated by the second writer;
+            # the first rename then leaves the other writer with no source
+            # file (and can expose bytes before that writer has finished).
+            # Exclusive, per-write temp names avoid both races, while
+            # keeping the final os.replace atomic on the same filesystem.
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=f"{target.name}.",
+                suffix=".tmp",
+                dir=target.parent,
+                delete=False,
+            ) as handle:
+                tmp = Path(handle.name)
                 handle.write(data)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(tmp, target)
-        except BaseException:
             try:
-                tmp.unlink(missing_ok=True)
+                os.replace(tmp, target)
             except OSError:
-                pass
-            raise
+                # On Windows a simultaneous writer can win the rename while
+                # this one gets WinError 5 (access denied) replacing the
+                # destination. This write is still complete IF the winning
+                # asset is byte-for-byte identical. Never hide a genuine
+                # permissions failure or accept a different/corrupt file.
+                try:
+                    already_stored = target.read_bytes() == data
+                except OSError:
+                    already_stored = False
+                if not already_stored:
+                    raise
+        finally:
+            # Also discard our staged file when another writer won. A
+            # successful os.replace has already moved it out of the way.
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
         try:
             os.chmod(target, 0o600)
         except OSError:
@@ -163,25 +200,32 @@ class AssetStore:
         return ref
 
     def get(self, ref: str) -> bytes | None:
-        """The bytes for `ref`, or None if this store has never seen it.
+        """Return only bytes whose SHA-256 matches `ref`.
 
-        None rather than an exception because a missing asset must degrade
-        to "this image does not render" rather than "this chat will not
-        load" - a chat's text is worth far more than one of its pictures,
-        and an import from a bundle whose assets were stripped is a
-        legitimate, survivable state."""
+        A file can exist at the right path yet contain corrupt or replaced
+        bytes. Never return those bytes to session_load: doing so would
+        re-save the corrupted image under a NEW, valid content hash and
+        erase the original ref from the chat. Missing, unreadable, and
+        corrupt files all return None so the graph itself remains loadable
+        and ImageState.unresolved_asset_ref can preserve the old ref.
+        """
         target = self._path_for(ref)
         if target is None or not target.is_file():
             return None
         try:
-            return target.read_bytes()
+            data = target.read_bytes()
         except OSError:
             logger.warning("could not read asset %s - treating as missing", target)
             return None
+        if content_ref(data) != ref:
+            logger.warning("asset %s failed SHA-256 verification - treating as missing", target)
+            return None
+        return data
 
     def verify(self, ref: str) -> bool:
-        """True only if the stored bytes still hash to their own name -
-        the integrity check content addressing makes possible. Used by the
-        import path, which is reading files it did not write."""
-        data = self.get(ref)
-        return data is not None and content_ref(data) == ref
+        """True only if the referenced bytes exist and match their hash.
+
+        get() already verifies every successful read, so hashing the same
+        asset again here would be redundant.
+        """
+        return self.get(ref) is not None

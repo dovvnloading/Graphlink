@@ -1,0 +1,121 @@
+{
+  "name": "step_budget_resume",
+  "kind": "agent_build",
+  "input": {
+    "goal": "Finish two steps across a budget pause and resume",
+    "mode": "autopilot",
+    "steps": [
+      "Create first note",
+      "Create second note"
+    ],
+    "runs": [
+      {
+        "max_steps": 1,
+        "turns": [
+          {
+            "tool_calls": [
+              {
+                "id": "first",
+                "name": "graph.create_node",
+                "arguments": {
+                  "kind": "note",
+                  "content": "First result"
+                }
+              },
+              {
+                "id": "complete1",
+                "name": "builder.complete_step",
+                "arguments": {
+                  "summary": "First note saved"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          }
+        ]
+      },
+      {
+        "max_steps": 2,
+        "turns": [
+          {
+            "tool_calls": [
+              {
+                "id": "second",
+                "name": "graph.create_node",
+                "arguments": {
+                  "kind": "note",
+                  "content": "Second result"
+                }
+              },
+              {
+                "id": "complete2",
+                "name": "builder.complete_step",
+                "arguments": {
+                  "summary": "Second note saved"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "status": "done",
+    "run_statuses": [
+      "paused",
+      "done"
+    ],
+    "steps": [
+      {
+        "title": "Create first note",
+        "status": "done",
+        "detail": "First note saved"
+      },
+      {
+        "title": "Create second note",
+        "status": "done",
+        "detail": "Second note saved"
+      }
+    ],
+    "nodes": [
+      {
+        "kind": "note",
+        "content": "First result"
+      },
+      {
+        "kind": "note",
+        "content": "Second result"
+      }
+    ],
+    "edges": [],
+    "activity": [
+      {
+        "tool": "graph.create_node",
+        "outcome": "ok"
+      },
+      {
+        "tool": "builder.complete_step",
+        "outcome": "ok"
+      },
+      {
+        "tool": "graph.create_node",
+        "outcome": "ok"
+      },
+      {
+        "tool": "builder.complete_step",
+        "outcome": "ok"
+      }
+    ],
+    "approvals": [],
+    "spent_steps": 2,
+    "spent_tokens": 50
+  }
+}

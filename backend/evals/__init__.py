@@ -1,7 +1,7 @@
 """ADR-016 stage 16.5: local evals harness (goldens + optional judge) for the
 agent/chart/structured-output paths.
 
-Local-only, reproducible, off-CI by default. Three dimensions:
+Offline-by-default and covered by CI through test_evals_harness.py. Three dimensions:
 
 - **chart**: does ``respond_json`` (ADR-013 stage 13.3) + ``canonicalize_chart_data``
   turn a scripted model response into the exact canonical chart payload
@@ -9,16 +9,13 @@ Local-only, reproducible, off-CI by default. Three dimensions:
 - **structured_output**: does ``backend.structured_output.respond_json`` parse
   a scripted model response into the exact expected dict for a given JSON
   Schema? Real, working code.
-- **agent_build**: ADR-008's Builder agent tool-use loop (plan -> propose
-  tool call -> execute -> observe -> checkpoint) is design-doc text only
-  today - no ``create_node``/``run_node`` tool, no loop, no checkpoints ship
-  yet (see doc/adr/ADR-008-agentic-graph-construction.md, stages 8.1-8.6, all
-  pending). This dimension is honest scaffolding: it always reports
-  ``not_implemented``, never a fake pass and never an exception.
+- **agent_build**: real ``backend.builder.run_build`` with scripted model turns,
+  real graph tools, approval gates, state/budgets, and graph-output scoring.
+  No network/code-execution tools are registered in these deterministic tests.
 
-Run it: ``python -m backend.evals`` (add ``--live`` to hit a real,
-already-configured provider instead of a scripted/patched response - see
-backend/evals/README.md).
+Run it: ``python -m backend.evals``. The ``--live`` option uses a real
+provider for chart/structured-output fixtures; Builder stays offline and
+scripted for safety. See backend/evals/README.md.
 """
 
 from backend.evals.fixtures import EvalFixture, load_fixtures

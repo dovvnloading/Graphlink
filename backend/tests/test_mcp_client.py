@@ -145,6 +145,55 @@ def test_list_tools_returns_normalized_toolspecs(fake_fs_server):
         client.close()
 
 
+def test_invalid_mcp_result_shape_raises_mcp_error(monkeypatch):
+    client = McpStdioClient(command="unused")
+    monkeypatch.setattr(client, "_write", lambda _message: None)
+    client._responses.put({"jsonrpc": "2.0", "id": 1, "result": ["not an object"]})
+
+    with pytest.raises(McpError, match="non-object result"):
+        client._call("tools/list", {})
+
+
+@pytest.mark.parametrize("invalid_content", [None, "text", {"type": "text"}, 7])
+def test_call_tool_rejects_non_list_content(monkeypatch, invalid_content):
+    client = McpStdioClient(command="unused")
+    monkeypatch.setattr(client, "_call", lambda *_: {"content": invalid_content})
+
+    with pytest.raises(McpError, match="invalid content list"):
+        client.call_tool("read_file", {})
+
+
+def test_structured_only_mcp_response_preserves_its_useful_data(monkeypatch):
+    client = McpStdioClient(command="unused")
+    payload = {"items": [1, 2], "ok": True}
+    monkeypatch.setattr(client, "_call", lambda *_: {
+        "content": [], "structuredContent": payload, "isError": False,
+    })
+
+    result = client.call_tool("get_structured_data", {})
+    assert result.is_error is False
+    assert json.loads(result.content) == payload
+
+
+def test_read_loop_never_accepts_boolean_as_a_numeric_rpc_request_id():
+    import io
+    from types import SimpleNamespace
+
+    client = McpStdioClient(command="unused")
+    output = (
+        '{"jsonrpc":"2.0","id":true,"result":{"incorrect":true}}\n'
+        '{"jsonrpc":"2.0","id":1,"result":{"correct":true}}\n'
+    )
+    client._process = SimpleNamespace(stdout=io.StringIO(output))
+    client._pending_id = 1
+    client._read_loop()
+
+    # Exactly one genuine matching reply, followed by the read-loop EOF
+    # sentinel. Python True == 1 must not let the first forged id through.
+    assert client._responses.qsize() == 2
+    assert client._responses.get_nowait()["result"] == {"correct": True}
+
+
 def test_call_tool_returns_the_text_content_as_a_tool_result(fake_fs_server, tmp_path):
     target = tmp_path / "hello.txt"
     target.write_text("hello from disk", encoding="utf-8")

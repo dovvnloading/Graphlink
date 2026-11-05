@@ -31,7 +31,9 @@ mutagen
 ollama
 openai>=1.0.0
 Pillow
-pypdf
+# Security floor: 6.21.4 fixes the 7 CVEs reported by pip-audit for 6.21.2.
+pypdf>=6.21.4
 python-docx
 requests
+regex  # bounded regex execution for harness fs.grep
 tiktoken

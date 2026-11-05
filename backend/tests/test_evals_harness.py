@@ -7,6 +7,7 @@ every CI run.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 
 import pytest
@@ -142,40 +143,75 @@ def test_a_deliberately_wrong_structured_output_fixture_scores_failed():
     assert result.status == "failed"
 
 
-# -- agent_build stub -----------------------------------------------------
+# -- real Builder evals -------------------------------------------------------
 
 
-def test_run_agent_build_fixture_always_reports_not_implemented_and_names_adr_008():
-    fixture = EvalFixture(
-        name="anything",
-        kind="agent_build",
-        input={"goal": "whatever"},
-        scripted_response=None,
-        expected=None,
-    )
-    result = run_agent_build_fixture(fixture)
-    assert result.status == "not_implemented"
-    assert "ADR-008" in result.detail
+def _builder_fixture(name: str) -> EvalFixture:
+    return {f.name: f for f in load_fixtures("agent_build")}[name]
 
 
-def test_run_agent_build_fixture_never_raises_regardless_of_input_shape():
-    """The stub must never look hard enough at fixture content to crash on
-    it - not even garbage scripted_response/expected values."""
-    fixture = EvalFixture(
-        name="garbage",
-        kind="agent_build",
-        input={},
-        scripted_response="not json at all {{{",
-        expected={"whatever": object()},
-    )
-    result = run_agent_build_fixture(fixture)
-    assert result.status == "not_implemented"
-
-
-def test_run_agent_build_fixture_never_scores_passed_or_failed():
-    for fixture in load_fixtures("agent_build"):
+def test_every_shipped_builder_fixture_scores_passed():
+    fixtures = load_fixtures("agent_build")
+    assert len(fixtures) >= 5, "the Builder scenarios must not be placeholders"
+    for fixture in fixtures:
         result = run_agent_build_fixture(fixture)
-        assert result.status == "not_implemented"
+        assert result.status == "passed", (fixture.name, result.detail)
+        assert "real Builder" in result.detail
+
+
+def test_builder_eval_detects_wrong_graph_output():
+    original = _builder_fixture("research_and_summarize_branch")
+    wrong = dict(original.expected)
+    wrong["nodes"] = [{"kind": "note", "content": "fabricated result"}]
+
+    result = run_agent_build_fixture(dataclasses.replace(original, expected=wrong))
+    assert result.status == "failed"
+    assert "nodes did not match" in result.detail
+
+
+def test_builder_eval_detects_an_exhausted_model_script():
+    original = _builder_fixture("tool_error_recovery")
+    bad_input = copy.deepcopy(original.input)
+    bad_input["runs"][0]["turns"].pop()
+
+    result = run_agent_build_fixture(dataclasses.replace(original, input=bad_input))
+    assert result.status == "failed"
+    assert "script exhausted" in result.detail
+
+
+def test_builder_eval_rejects_an_unexpected_approval():
+    original = _builder_fixture("copilot_denial")
+    bad_input = copy.deepcopy(original.input)
+    bad_input["runs"][0]["approvals"] = []
+
+    result = run_agent_build_fixture(dataclasses.replace(original, input=bad_input))
+    assert result.status == "failed"
+    assert "approval script mismatch" in result.detail
+
+
+def test_builder_eval_rejects_unsafe_tool_names_before_invocation():
+    original = _builder_fixture("tool_error_recovery")
+    bad_input = copy.deepcopy(original.input)
+    bad_input["runs"][0]["turns"][0]["tool_calls"][0]["name"] = "run_node"
+
+    result = run_agent_build_fixture(dataclasses.replace(original, input=bad_input))
+    assert result.status == "failed"
+    assert "outside the offline eval allowlist" in result.detail
+
+
+def test_builder_eval_invalid_fixture_is_failed_not_na_or_exception():
+    fixture = EvalFixture(
+        name="missing-script", kind="agent_build", input={"goal": "hello"},
+        scripted_response=None, expected=None,
+    )
+    result = run_agent_build_fixture(fixture)
+    assert result.status == "failed"
+    assert "expected result object" in result.detail
+
+
+def test_builder_eval_stays_offline_even_when_live_flag_is_requested():
+    result = run_agent_build_fixture(_builder_fixture("step_budget_resume"), live=True)
+    assert result.status == "passed", result.detail
 
 
 # -- run_all ----------------------------------------------------------------
@@ -192,19 +228,9 @@ def test_run_all_covers_every_shipped_fixture_with_no_crashes():
     assert all(r.status in ("passed", "failed", "not_implemented") for r in results)
 
 
-def test_run_all_shipped_chart_and_structured_output_fixtures_all_pass():
-    """The goldens actually shipped in backend/evals/fixtures/ must be
-    correct, not just loadable - a regression in canonicalize_chart_data or
-    respond_json should show up here."""
+def test_run_all_every_shipped_fixture_passes_including_builder():
+    """All dimensions now score real behavior and reject broken goldens."""
     results = run_all()
-    scored = [r for r in results if r.kind != "agent_build"]
-    assert scored, "expected at least one non-agent_build fixture"
-    failures = [(r.fixture_name, r.detail) for r in scored if r.status != "passed"]
+    failures = [(r.kind, r.fixture_name, r.detail) for r in results if r.status != "passed"]
     assert failures == []
-
-
-def test_run_all_agent_build_fixtures_are_all_not_implemented():
-    results = run_all()
-    agent_build_results = [r for r in results if r.kind == "agent_build"]
-    assert agent_build_results
-    assert all(r.status == "not_implemented" for r in agent_build_results)
+    assert any(r.kind == "agent_build" for r in results)

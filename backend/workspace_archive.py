@@ -41,6 +41,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import tempfile
+import time
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,6 +82,27 @@ MAX_MEMBER_BYTES = 256 * 1024 * 1024
 MAX_TOTAL_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
 
 
+_WINDOWS_REPLACE_BACKOFF_SECONDS = (0.01, 0.03, 0.06, 0.1)
+
+
+def _is_transient_windows_replace_error(exc: PermissionError) -> bool:
+    """WinError 5/32 can mean another exporter has the same target open."""
+    return os.name == "nt" and getattr(exc, "winerror", None) in (5, 32)
+
+
+def _publish_archive(staging: Path, target: Path) -> None:
+    """Retry only transient Windows sharing collisions, never permanent denial."""
+    for attempt in range(len(_WINDOWS_REPLACE_BACKOFF_SECONDS) + 1):
+        try:
+            os.replace(staging, target)
+            return
+        except PermissionError as exc:
+            if (not _is_transient_windows_replace_error(exc)
+                    or attempt >= len(_WINDOWS_REPLACE_BACKOFF_SECONDS)):
+                raise
+            time.sleep(_WINDOWS_REPLACE_BACKOFF_SECONDS[attempt])
+
+
 class ArchiveError(Exception):
     """Any refusal to read an archive. Carries a message written for the
     user, since every raise site here ends up in a notification."""
@@ -99,6 +123,12 @@ def _safe_member_name(name: str) -> str:
         raise ArchiveError(f"archive entry escapes the archive: {name!r}")
     if len(normalized) > 1 and normalized[1] == ":":
         raise ArchiveError(f"archive entry is an absolute path: {name!r}")
+    # ZIP stores forward slashes. On POSIX, zipfile preserves a literal
+    # backslash in a member name, and normalizing only for validation
+    # would make archive.read(normalized) target a nonexistent member.
+    # On Windows, zipfile already normalizes separators during decoding.
+    if "\\" in name:
+        raise ArchiveError(f"archive entry has unsupported path separators: {name!r}")
     return normalized
 
 
@@ -150,7 +180,13 @@ def export_archive(
     with a warning rather than aborting the whole export - one missing
     picture must not cost the user every conversation in the archive."""
     archive_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = archive_path.with_name(archive_path.name + ".tmp")
+    # Concurrent exports must not write the same .tmp path (or one can
+    # replace the other's incomplete ZIP). The final rename is still atomic.
+    fd, staging = tempfile.mkstemp(
+        prefix=f".{archive_path.name}.", suffix=".tmp", dir=archive_path.parent,
+    )
+    os.close(fd)
+    tmp_path = Path(staging)
 
     index: list[dict[str, Any]] = []
     written_refs: set[str] = set()
@@ -159,7 +195,10 @@ def export_archive(
         with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for position, chat in enumerate(chats):
                 payload = {
-                    "title": chat.get("title") or "Untitled",
+                    # Titles can contain pasted credentials/paths just like
+                    # message bodies. This one sanitized value also feeds
+                    # manifest.json's chat index below.
+                    "title": scrub(chat.get("title") or "Untitled"),
                     "data": scrub(chat.get("data") or {}),
                     "notes": scrub(chat.get("notes") or []),
                     "pins": scrub(chat.get("pins") or []),
@@ -204,18 +243,15 @@ def export_archive(
                 "chats": index,
             }
             archive.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2))
-    except BaseException:
+        # Publish only after ZipFile has closed successfully. Keep cleanup
+        # in this same try so a rename failure also leaves no staged file.
+        _publish_archive(tmp_path, archive_path)
+        return archive_path
+    finally:
         try:
             tmp_path.unlink(missing_ok=True)
         except OSError:
             pass
-        raise
-
-    # Atomic publish, same discipline as db_backup/take_backup: a crash
-    # mid-write leaves a .tmp, never a truncated file wearing the real
-    # name that a user would reasonably believe is a complete backup.
-    tmp_path.replace(archive_path)
-    return archive_path
 
 
 def read_archive(archive_path: Path) -> dict[str, Any]:
@@ -230,6 +266,10 @@ def read_archive(archive_path: Path) -> dict[str, Any]:
     try:
         with zipfile.ZipFile(archive_path) as archive:
             names = [_safe_member_name(info.filename) for info in archive.infolist() if not info.is_dir()]
+            if len(names) != len(set(names)):
+                # zipfile.read(name) chooses one of the duplicate entries,
+                # making the manifest and actual data ambiguous.
+                raise ArchiveError(f"{archive_path.name} contains duplicate archive entries")
             total_uncompressed_bytes = 0
             for info in archive.infolist():
                 if info.file_size > MAX_MEMBER_BYTES:
@@ -251,8 +291,10 @@ def read_archive(archive_path: Path) -> dict[str, Any]:
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 raise ArchiveError(f"{archive_path.name} has an unreadable manifest") from exc
 
+            if not isinstance(manifest, dict):
+                raise ArchiveError(f"{archive_path.name} has an invalid manifest (expected an object)")
             format_version = manifest.get("formatVersion")
-            if not isinstance(format_version, int):
+            if type(format_version) is not int or format_version < 1:
                 raise ArchiveError(f"{archive_path.name} has no usable format version")
             if format_version > FORMAT_VERSION:
                 raise ArchiveError(
@@ -261,12 +303,52 @@ def read_archive(archive_path: Path) -> dict[str, Any]:
                     "Update Graphlink and try again."
                 )
 
+            chat_names = [n for n in names if n.startswith(CHATS_PREFIX)]
+            for name in chat_names:
+                suffix = name[len(CHATS_PREFIX):]
+                if not suffix.endswith(".json") or not suffix[:-5].isdigit():
+                    raise ArchiveError(f"{archive_path.name} has an invalid chat member name ({name})")
+
+            # Export records the intended order in the manifest. Sorting
+            # filenames as strings turns chats/10.json into a predecessor of
+            # chats/2.json, unexpectedly reordering every workspace with
+            # more than nine graphs. Old exports without an index fall back
+            # to numeric member order, not lexicographic member order.
+            index = manifest.get("chats")
+            if index is not None:
+                if not isinstance(index, list) or any(
+                    not isinstance(entry, dict) or not isinstance(entry.get("member"), str)
+                    for entry in index
+                ):
+                    raise ArchiveError(f"{archive_path.name} has an invalid chat index")
+                ordered_names = [entry["member"] for entry in index]
+                if len(ordered_names) != len(set(ordered_names)) or set(ordered_names) != set(chat_names):
+                    raise ArchiveError(f"{archive_path.name} has an inconsistent chat index")
+                chat_names = ordered_names
+            else:
+                chat_names.sort(key=lambda name: int(name[len(CHATS_PREFIX):-5]))
+            if "chatCount" in manifest and (
+                type(manifest["chatCount"]) is not int or manifest["chatCount"] != len(chat_names)
+            ):
+                raise ArchiveError(f"{archive_path.name} has an inconsistent chat count")
+
             chats: list[dict[str, Any]] = []
-            for name in sorted(n for n in names if n.startswith(CHATS_PREFIX)):
+            for name in chat_names:
                 try:
-                    chats.append(json.loads(archive.read(name)))
+                    chat = json.loads(archive.read(name))
                 except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                     raise ArchiveError(f"{archive_path.name} has an unreadable chat entry ({name})") from exc
+                # Validate all chat shapes before import_archive writes even
+                # one asset. JSON scalars/lists used to crash at setdefault()
+                # after asset writes, with a raw AttributeError instead of a
+                # useful ArchiveError. These are the fields the importer uses.
+                if (not isinstance(chat, dict)
+                        or not isinstance(chat.get("title"), str)
+                        or not isinstance(chat.get("data"), dict)
+                        or any(not isinstance(chat.get(key, []), list) for key in ("notes", "pins", "tags"))
+                        or any(not isinstance(chat.get(key, False), bool) for key in ("favorite", "archived"))):
+                    raise ArchiveError(f"{archive_path.name} has an invalid chat entry ({name})")
+                chats.append(chat)
 
             assets: dict[str, bytes] = {}
             for name in (n for n in names if n.startswith(ASSETS_PREFIX)):

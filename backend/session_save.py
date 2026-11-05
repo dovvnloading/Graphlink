@@ -405,6 +405,12 @@ def _serialize_artifact_node(raw_node: SceneNode) -> dict[str, Any]:
         "node_type": "artifact",
         "instruction": node.content,
         "content": node.state.artifact_content,
+        # A proposal awaiting human review is user-visible work, not volatile
+        # run status. Persist it across save/reload without applying it.
+        "proposal_id": node.state.artifact_proposal_id,
+        "proposal_content": node.state.artifact_proposal_content,
+        "proposal_base_sha256": node.state.artifact_proposal_base_sha256,
+        "proposal_summary": node.state.artifact_proposal_summary,
         "conversation_history": _serialize_history(node.history),
         "is_collapsed": bool(node.is_collapsed),
     }
@@ -967,6 +973,9 @@ def _build_chat_data(
     pattern precisely."""
     if plugin_registry is None:
         plugin_registry = discover_plugins()
+    if settings_manager is not None:
+        from backend.plugin_sdk import activate_granted_plugins
+        activate_granted_plugins(plugin_registry, settings_manager)
     # ADR-014 stage 14.2: a plugin-registered node kind (namespaced
     # "plugin_id.kind", so it can never collide with _REGULAR_KINDS) is
     # now ALSO a "regular" node for save purposes - included in the exact

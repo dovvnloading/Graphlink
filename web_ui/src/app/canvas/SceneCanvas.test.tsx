@@ -74,6 +74,7 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     researchRetainToKnowledge: false,
     artifactContent: "",
     artifactError: "",
+    artifactProposalId: "",
     gitlinkRepo: "",
     gitlinkBranch: "",
     gitlinkScopeMode: "selected",
@@ -883,7 +884,7 @@ describe("toFlowNodes (R5.3 gitlink node)", () => {
       onBuildContext: (scopeMode: string, selectedPaths: string[]) => void;
       onFetchContext: () => Promise<string>;
       onRun: (taskPrompt: string) => void;
-      onApply: (fingerprint: string) => void;
+      onApply: (fingerprint: string, selectedPaths: string[]) => void;
     };
 
     data.onFetchRepositories();
@@ -902,8 +903,8 @@ describe("toFlowNodes (R5.3 gitlink node)", () => {
     expect(fetchContextSpy).toHaveBeenCalledWith("gl-1");
     data.onRun("Add a health-check endpoint");
     expect(runSpy).toHaveBeenCalledWith("gl-1", "Add a health-check endpoint");
-    data.onApply("fp-1");
-    expect(applySpy).toHaveBeenCalledWith("gl-1", "fp-1");
+    data.onApply("fp-1", ["src/file.py"]);
+    expect(applySpy).toHaveBeenCalledWith("gl-1", "fp-1", ["src/file.py"]);
   });
 
   it("onCancel fires cancelGitlinkRequest with pendingRequestId when set, and is a no-op otherwise", () => {

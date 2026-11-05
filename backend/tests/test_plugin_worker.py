@@ -92,7 +92,7 @@ def sandboxed_demo_is_discoverable(monkeypatch):
 
     monkeypatch.setattr(
         "backend.plugin_sdk.discover_plugins",
-        lambda *args, **kwargs: _discover(FIXTURE_PLUGINS_ROOT),
+        lambda *args, **kwargs: _discover(FIXTURE_PLUGINS_ROOT, load_unapproved_for_tests=True),
     )
 
 
@@ -268,7 +268,7 @@ def test_unknown_runtime_isolation_is_rejected_at_discovery_fail_soft_per_plugin
         encoding="utf-8",
     )
 
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         assert len(registry.load_errors) == 1
         assert registry.load_errors[0].plugin_dir == "badruntime2"
@@ -284,7 +284,7 @@ def test_unknown_runtime_isolation_is_rejected_at_discovery_fail_soft_per_plugin
 def test_discovery_of_an_out_of_process_plugin_spawns_a_real_worker_and_collects_registrations(tmp_path):
     _write_out_of_process_plugin(tmp_path / "plugins", "oop_basic", py_body=_SIMPLE_NODE_PY_BODY)
 
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         assert registry.load_errors == []
         assert "oop_basic" in registry.worker_clients
@@ -299,7 +299,7 @@ def test_discovery_of_an_out_of_process_plugin_spawns_a_real_worker_and_collects
 
 def test_out_of_process_plugins_picker_entry_appears_in_plugins_payload_like_an_in_process_ones_would(tmp_path):
     _write_out_of_process_plugin(tmp_path / "plugins", "oop_payload", py_body=_SIMPLE_NODE_PY_BODY)
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         settings_manager = SettingsManager(tmp_path / "store" / "session.dat")
         payload = plugins_payload(registry, settings_manager)
@@ -333,7 +333,7 @@ def test_out_of_process_plugin_worker_cannot_see_a_planted_host_secret_env_var(t
     plugins_root.mkdir()
     shutil.copytree(FIXTURE_PLUGINS_ROOT / "sandboxed_demo", plugins_root / "sandboxed_demo")
 
-    registry = discover_plugins(plugins_root)
+    registry = discover_plugins(plugins_root, load_unapproved_for_tests=True)
     try:
         bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
         settings_manager.set_plugin_grant("sandboxed_demo", True)
@@ -361,7 +361,7 @@ def test_out_of_process_plugin_worker_cannot_see_a_planted_host_secret_env_var(t
 
 def test_ungranted_out_of_process_plugin_denies_node_creation_same_shape_as_in_process(tmp_path):
     _write_out_of_process_plugin(tmp_path / "plugins", "oop_deny", py_body=_SIMPLE_NODE_PY_BODY)
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
         parent = canvas_document.add_node(10, 20, "parent")
@@ -382,7 +382,7 @@ def test_ungranted_out_of_process_plugin_denies_node_creation_same_shape_as_in_p
 
 def test_granting_an_out_of_process_plugin_then_allows_node_creation_to_succeed(tmp_path):
     _write_out_of_process_plugin(tmp_path / "plugins", "oop_allow", py_body=_SIMPLE_NODE_PY_BODY)
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
         parent = canvas_document.add_node(10, 20, "parent")
@@ -426,7 +426,7 @@ def test_a_worker_that_crashes_during_register_produces_a_discovery_time_load_er
         tmp_path / "plugins", "oop_good_sibling", py_body=_SIMPLE_NODE_PY_BODY,
     )
 
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         assert len(registry.load_errors) == 1
         assert registry.load_errors[0].plugin_dir == "oop_crash_register"
@@ -689,7 +689,7 @@ def _run(coro):
 
 def test_register_plugin_tools_registers_a_namespaced_tool_with_the_manifests_scopes(tmp_path):
     _write_out_of_process_plugin(tmp_path / "plugins", "tool_plug", py_body=_INTENT_PY_BODY)
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         settings_manager = SettingsManager(tmp_path / "store" / "session.dat")
         canvas_document = SceneDocument()
@@ -705,7 +705,7 @@ def test_register_plugin_tools_registers_a_namespaced_tool_with_the_manifests_sc
 
 def test_register_plugin_tools_denies_insufficient_scopes_before_the_handler_runs(tmp_path):
     _write_out_of_process_plugin(tmp_path / "plugins", "tool_plug2", py_body=_INTENT_PY_BODY)
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         settings_manager = SettingsManager(tmp_path / "store" / "session.dat")
         settings_manager.set_plugin_grant("tool_plug2", True)  # granted, but scope is still missing
@@ -732,7 +732,7 @@ def test_register_plugin_tools_denies_insufficient_scopes_before_the_handler_run
 
 def test_register_plugin_tools_with_sufficient_scopes_but_no_settings_grant_is_denied(tmp_path):
     _write_out_of_process_plugin(tmp_path / "plugins", "tool_plug3", py_body=_INTENT_PY_BODY)
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         settings_manager = SettingsManager(tmp_path / "store" / "session.dat")  # never granted
         canvas_document = SceneDocument()
@@ -758,7 +758,7 @@ def test_register_plugin_tools_with_scopes_and_grant_reaches_the_out_of_process_
     plugin's own _do_thing, running inside its worker subprocess - and its
     real string return value makes it all the way back as ToolResult.content."""
     _write_out_of_process_plugin(tmp_path / "plugins", "tool_plug4", py_body=_INTENT_PY_BODY)
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         settings_manager = SettingsManager(tmp_path / "store" / "session.dat")
         settings_manager.set_plugin_grant("tool_plug4", True)
@@ -806,7 +806,7 @@ def test_register_plugin_tools_works_for_an_in_process_plugins_intent_too(tmp_pa
     )
     (plugin_dir / "plugin.py").write_text(_INTENT_PY_BODY, encoding="utf-8")
 
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         assert "inproc_tool_plug" not in registry.worker_clients  # no worker for an in-process plugin
         settings_manager = SettingsManager(tmp_path / "store" / "session.dat")
@@ -961,7 +961,7 @@ def test_discover_plugins_concurrent_first_callers_share_one_registry_and_spawn_
 
     def _discover():
         barrier.wait(timeout=10)  # maximizes the chance both threads race the SAME empty cache
-        results.append(discover_plugins(plugins_root))
+        results.append(discover_plugins(plugins_root, load_unapproved_for_tests=True))
 
     t1 = threading.Thread(target=_discover)
     t2 = threading.Thread(target=_discover)
@@ -1036,7 +1036,7 @@ def test_out_of_process_plugin_node_state_round_trips_through_save_and_reload(tm
     _write_out_of_process_plugin(
         tmp_path / "plugins", "oop_widget", py_body=_STATEFUL_OOP_PY_BODY,
     )
-    registry = discover_plugins(tmp_path / "plugins")
+    registry = discover_plugins(tmp_path / "plugins", load_unapproved_for_tests=True)
     try:
         bus, notifications, canvas_document, settings_manager = _wired_bus(registry, tmp_path)
         settings_manager.set_plugin_grant("oop_widget", True)

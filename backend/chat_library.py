@@ -42,7 +42,7 @@ import os
 import re
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -2458,7 +2458,7 @@ def make_save_chat(
     make_load_chat's own docstring (immediately above) for why this is a
     top-level factory rather than a closure defined inline."""
 
-    async def save_chat():
+    async def save_chat() -> bool:
         # R6.5: replicates ChatSessionManager.save_current_chat's own
         # orchestration (manager.py:83-133) - serialize -> resolve title/
         # chat_id -> one atomic DB write -> adopt the resolved chat_id.
@@ -2471,7 +2471,7 @@ def make_save_chat(
         # this file's own ORIGINAL, WRONG assumption - does not hold once a
         # session can have more than one attached WS connection).
         if canvas_document is None:
-            return
+            return False
 
         has_any_nodes = bool(canvas_document.nodes)
         if not has_any_nodes and canvas_document.current_chat_id is None:
@@ -2481,7 +2481,7 @@ def make_save_chat(
             if notifications is not None:
                 notifications.show("Nothing was added to the chat canvas yet.", "warning")
                 await bus.publish("notification")
-            return
+            return False
 
         try:
             chat_data = build_chat_data(
@@ -2491,7 +2491,7 @@ def make_save_chat(
             if notifications is not None:
                 notifications.show(f"Failed to prepare chat save payload: {exc}", "error")
                 await bus.publish("notification")
-            return
+            return False
 
         notes_data = chat_data.pop("notes_data", [])
         pins_data = chat_data.pop("pins_data", [])
@@ -2558,12 +2558,12 @@ def make_save_chat(
             if notifications is not None:
                 notifications.show(LOST_RACE_MESSAGE_MANUAL, "warning")
                 await bus.publish("notification")
-            return
+            return False
         except Exception as exc:
             if notifications is not None:
                 notifications.show(f"Failed to save the chat session.\nError: {exc}", "error")
                 await bus.publish("notification")
-            return
+            return False
 
         canvas_document.current_chat_id = int(new_chat_id)
         # Audit fix: record what this manual Save just put on disk, so the
@@ -2574,6 +2574,10 @@ def make_save_chat(
         if notifications is not None:
             notifications.show(f'Saved "{title}".', "success")
             await bus.publish("notification")
+        # The exportWorkspace intent needs a real outcome, not a fire-and-
+        # forget notification: never export a stale DB row after a failed
+        # save or an optimistic-concurrency conflict.
+        return True
 
     return save_chat
 
@@ -2678,7 +2682,13 @@ def _safe_export_filename(name: str) -> str:
     return safe or "workspace"
 
 
-def make_export_workspace(bus: SessionBus, resolved_path: Path, notifications: NotificationState | None):
+def make_export_workspace(
+    bus: SessionBus,
+    resolved_path: Path,
+    notifications: NotificationState | None,
+    canvas_document: SceneDocument | None = None,
+    save_current_chat: Callable[[], Awaitable[bool | None]] | None = None,
+):
     """Factory for register_chat_library's own exportWorkspace intent -
     lifted out to a top-level function purely to keep register_chat_library
     itself under ADR-002's 300-line registration-function cap (stage 2.7),
@@ -2692,12 +2702,14 @@ def make_export_workspace(bus: SessionBus, resolved_path: Path, notifications: N
     built, tested, and simply never wired to a real intent until now - see
     that module's own docstring).
 
-    Read-only against chats.db and never touches canvas_document, so - like
-    register_chat_library's own createWorkspace/renameWorkspace/
-    archiveWorkspace/setWorkspaceDefaultModel closures - this needs neither
-    _serialize_mutating_intent's reentrancy guard nor an app-chat-library
-    republish; nothing this function does changes what that topic's own
-    snapshot would report.
+    Export must include the live canvas when its autosave interval has not
+    elapsed. After the native Save dialog is accepted, it calls the SAME
+    serialized saveChat handler as the user's Save button, including its
+    optimistic-concurrency token and shared autosave/user-intent guard.
+    If that save fails, it refuses to export stale data with a success toast.
+    A new, unsaved graph counts as exportable content in its chosen workspace
+    (or Default if no workspace was selected). Other workspaces' exports
+    never save the active graph. Cancelled dialogs never trigger a save.
 
     The native SAVE dialog (native_dialogs.pick_save_file) is what actually
     decides the destination - a cancelled dialog is a silent no-op, the SAME
@@ -2713,7 +2725,28 @@ def make_export_workspace(bus: SessionBus, resolved_path: Path, notifications: N
 
         all_chats = await asyncio.to_thread(get_all_chats, resolved_path)
         graph_ids = [int(row["id"]) for row in all_chats if int(row["workspaceId"]) == int(workspace_id)]
-        if not graph_ids:
+        default_workspace_id = next(
+            (int(w["id"]) for w in workspaces if w["name"] == "Default"), None
+        )
+
+        def active_graph_in_workspace(rows: list[dict[str, Any]]) -> bool:
+            if canvas_document is None or not (canvas_document.nodes or canvas_document.current_chat_id):
+                return False
+            current_id = canvas_document.current_chat_id
+            if current_id is not None:
+                # An existing graph's workspace on disk wins over a stale
+                # in-memory workspace hint; saving cannot move an existing
+                # graph between workspaces.
+                active_row = next((r for r in rows if int(r["id"]) == int(current_id)), None)
+                if active_row is not None:
+                    return int(active_row["workspaceId"]) == int(workspace_id)
+            assigned_workspace = canvas_document.current_workspace_id
+            if assigned_workspace is None:
+                assigned_workspace = default_workspace_id
+            return assigned_workspace == int(workspace_id)
+
+        has_active_graph = active_graph_in_workspace(all_chats)
+        if not graph_ids and not has_active_graph:
             if notifications is not None:
                 notifications.show(f'"{workspace["name"]}" has no graphs to export.', "warning")
                 await bus.publish("notification")
@@ -2731,6 +2764,21 @@ def make_export_workspace(bus: SessionBus, resolved_path: Path, notifications: N
             return
         if not target:
             return
+
+        # Saving before the dialog would create a graph even when the user
+        # cancels. Saving AFTER confirmation also captures edits made while
+        # the native dialog was open. Re-check workspace ownership: another
+        # window may have switched graphs during that await.
+        if active_graph_in_workspace(all_chats) and save_current_chat is not None:
+            if await save_current_chat() is not True:
+                # The save handler (or the shared busy guard) already
+                # published the concrete warning/error. No success toast
+                # and no stale archive may be produced.
+                return
+            # The Save may have INSERTed a brand-new graph. Refresh IDs and
+            # metadata AFTER it completes so that graph joins this export.
+            all_chats = await asyncio.to_thread(get_all_chats, resolved_path)
+            graph_ids = [int(row["id"]) for row in all_chats if int(row["workspaceId"]) == int(workspace_id)]
 
         # REVIEW-FIX: export used to hardcode {title, data, notes, pins} -
         # tags/favorite/archived never rode along, even though they're
@@ -3126,7 +3174,10 @@ def register_chat_library(
         )
         await bus.publish("app-chat-library")
 
-    export_workspace = make_export_workspace(bus, resolved_path, notifications)
+    export_workspace = make_export_workspace(
+        bus, resolved_path, notifications, canvas_document,
+        _serialize_mutating_intent(save_chat),
+    )
 
     bus.register_intent("app-chat-library", "renameChat", _serialize_mutating_intent(rename))
     # Serialized like every other mutating intent here. It was the one

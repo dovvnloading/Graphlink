@@ -1,0 +1,54 @@
+{
+  "name": "token_budget",
+  "kind": "agent_build",
+  "input": {
+    "goal": "A token budget stops tools before they mutate",
+    "mode": "autopilot",
+    "steps": [
+      "Stay under budget"
+    ],
+    "runs": [
+      {
+        "max_tokens": 10,
+        "turns": [
+          {
+            "tool_calls": [
+              {
+                "id": "too-late",
+                "name": "graph.create_node",
+                "arguments": {
+                  "kind": "note",
+                  "content": "Should not exist"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "status": "paused",
+    "run_statuses": [
+      "paused"
+    ],
+    "steps": [
+      {
+        "title": "Stay under budget",
+        "status": "pending",
+        "detail": ""
+      }
+    ],
+    "nodes": [],
+    "edges": [],
+    "activity": [],
+    "approvals": [],
+    "spent_steps": 1,
+    "spent_tokens": 25,
+    "status_detail_contains": "Token budget"
+  }
+}

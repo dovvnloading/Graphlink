@@ -908,6 +908,13 @@ function makeArtifactFns(id: string, liveRef: { current: DispatcherLive }) {
     },
     onDelete: () => liveRef.current.store.removeNodes([id]),
     onSubmit: (text: string) => liveRef.current.store.sendArtifactMessage(id, text),
+    onSetContent: (content: string, expectedContent: string, onSettled: (success: boolean) => void) =>
+      liveRef.current.store.setArtifactContent(id, content, expectedContent, onSettled),
+    onFetchProposal: () => liveRef.current.store.fetchArtifactProposal(id),
+    onAcceptProposal: (proposalId: string, settled: (success: boolean) => void) =>
+      liveRef.current.store.acceptArtifactProposal(id, proposalId, settled),
+    onDiscardProposal: (proposalId: string, settled: (success: boolean) => void) =>
+      liveRef.current.store.discardArtifactProposal(id, proposalId, settled),
     onCancel: () => {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.cancelArtifactRequest(n.pendingRequestId);
@@ -935,7 +942,8 @@ function makeGitlinkFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.cancelGitlinkRequest(n.pendingRequestId);
     },
-    onApply: (fingerprint: string) => liveRef.current.store.applyGitlinkChanges(id, fingerprint),
+    onApply: (fingerprint: string, selectedPaths: string[]) =>
+      liveRef.current.store.applyGitlinkChanges(id, fingerprint, selectedPaths),
   };
 }
 
@@ -968,6 +976,8 @@ function makeCodeSandboxFns(id: string, liveRef: { current: DispatcherLive }) {
     onDelete: () => liveRef.current.store.removeNodes([id]),
     onSetRequirements: (requirementsText: string) =>
       liveRef.current.store.setCodeSandboxRequirements(id, requirementsText),
+    onSetCode: (code: string, expectedCode: string, settled: (success: boolean) => void) =>
+      liveRef.current.store.setCodeSandboxCode(id, code, expectedCode, settled),
     onToggleAllowSourceBuilds: (allow: boolean) => liveRef.current.store.setCodeSandboxAllowSourceBuilds(id, allow),
     onRun: (inputText: string) => liveRef.current.store.runCodeSandbox(id, inputText),
     onCancel: () => {
@@ -1604,6 +1614,7 @@ export function toFlowNodes(
         data: {
           artifactContent: n.artifactContent,
           artifactError: n.artifactError,
+          artifactProposalId: n.artifactProposalId,
           history: n.history,
           isCollapsed: n.isCollapsed,
           pendingRequestId: n.pendingRequestId ?? null,

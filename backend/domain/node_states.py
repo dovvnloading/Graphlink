@@ -69,6 +69,11 @@ class HtmlState(NodeState):
     html_splitter_state: float | None = None
 
 
+# Bound model-authored and manually edited draft size before persisting it.
+# Full-document generation cannot reliably reproduce arbitrarily large input.
+ARTIFACT_MAX_CHARS = 256_000
+
+
 @dataclass
 class ArtifactState(NodeState):
     """Relocated verbatim from SceneNode.artifact_content (former
@@ -91,6 +96,18 @@ class ArtifactState(NodeState):
     # absent from session_save.py/session_load.py too, so a failure is not
     # something a reloaded session resurrects.
     artifact_error: str = ""
+
+    # Only the opaque identifier appears on the scene wire. The candidate
+    # body is lazily fetched through an explicit intent, avoiding an extra
+    # 256K characters on every canvas snapshot or patch.
+    #
+    # Unlike a running-job status, an awaiting-review proposal is user
+    # content: all four fields are saved so reconnect/restart cannot silently
+    # discard generated work before a human accepts or rejects it.
+    artifact_proposal_id: str = ""
+    artifact_proposal_content: str = ""
+    artifact_proposal_base_sha256: str = ""
+    artifact_proposal_summary: str = ""
 
 
 @dataclass
@@ -491,6 +508,14 @@ class GitlinkState(NodeState):
     gitlink_change_state: str = "draft"
     gitlink_error: str = ""
 
+
+
+# User-authored and model-produced Python is approved before execution,
+# but must also be bounded before entering live node state and saved scenes.
+# A venv isolates Python dependencies, NOT the host's user permissions.
+CODE_SANDBOX_MAX_CODE_CHARS = 100_000
+CODE_SANDBOX_MAX_REQUIREMENTS_CHARS = 16_384
+CODE_SANDBOX_MAX_PROMPT_CHARS = 12_000
 
 
 @dataclass

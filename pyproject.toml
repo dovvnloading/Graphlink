@@ -30,9 +30,10 @@ dependencies = [
     "ollama",
     "openai>=1.0.0",
     "Pillow",
-    "pypdf",
+    "pypdf>=6.21.4",
     "python-docx",
     "requests",
+    "regex",  # timeout-capable pattern engine for auto-approved harness fs.grep
     "tiktoken",
     # ADR-014 stage 14.1: backend/plugin_sdk.py parses plugin.toml via
     # stdlib tomllib, which is only available from Python 3.11 onward -

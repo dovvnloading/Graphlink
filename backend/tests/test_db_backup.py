@@ -87,6 +87,113 @@ def test_take_backup_creates_a_real_openable_sqlite_file_with_the_same_data(db_p
     assert rows == [("Real Chat",)]
 
 
+def test_concurrent_backups_have_independent_sqlite_staging_files(db_path, monkeypatch):
+    """Two overlapping backup calls must never write the same temp DB."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    import backend.db_backup as backup_module
+
+    _make_real_db(db_path, title="Keep Me")
+    barrier = threading.Barrier(2)
+    real_replace = backup_module.os.replace
+    sources = []
+    gate = threading.Lock()
+    attempts = 0
+
+    def concurrent_replace(source, destination):
+        nonlocal attempts
+        # A Windows sharing-violation retry creates a third os.replace
+        # call; don't block that retry waiting for another barrier partner.
+        with gate:
+            attempts += 1
+            first_attempt = attempts <= 2
+            if first_attempt:
+                sources.append(source)
+        if first_attempt:
+            barrier.wait(timeout=15)
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(backup_module.os, "replace", concurrent_replace)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(take_backup, db_path) for _ in range(2)]
+        paths = [future.result(timeout=20) for future in futures]
+
+    assert paths[0] == paths[1]  # Same one-second backup name, atomic winner.
+    assert sources[0] != sources[1], "backups must use separate temp paths"
+    assert not list(backups_dir_for(db_path).glob("*.tmp"))
+    conn = sqlite3.connect(paths[0])
+    try:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("SELECT title FROM chats").fetchall() == [("Keep Me",)]
+    finally:
+        conn.close()
+
+
+def test_backup_publish_retries_transient_windows_sharing_denials(db_path, monkeypatch):
+    import backend.db_backup as backup_module
+
+    _make_real_db(db_path, title="Preserved row")
+    real_replace = backup_module.os.replace
+    attempted = []
+
+    def deny_twice(source, destination):
+        attempted.append((source, destination))
+        if len(attempted) <= 2:
+            raise PermissionError("simulated Windows sharing violation")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(backup_module, "_is_transient_windows_publish_error", lambda exc: True)
+    monkeypatch.setattr(backup_module, "_WINDOWS_PUBLISH_BACKOFF_SECONDS", (0.0, 0.0))
+    monkeypatch.setattr(backup_module.os, "replace", deny_twice)
+    backup = take_backup(db_path)
+    assert len(attempted) == 3
+    assert backup is not None
+    with sqlite3.connect(backup) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert conn.execute("SELECT title FROM chats").fetchall() == [("Preserved row",)]
+    assert not list(backups_dir_for(db_path).glob("*.tmp"))
+
+
+def test_backup_publish_permanent_denial_does_not_report_success(db_path, monkeypatch):
+    import backend.db_backup as backup_module
+
+    _make_real_db(db_path)
+    attempts = []
+
+    def deny(source, destination):
+        attempts.append((source, destination))
+        raise PermissionError("permanent access denied")
+
+    monkeypatch.setattr(backup_module, "_is_transient_windows_publish_error", lambda exc: False)
+    monkeypatch.setattr(backup_module.os, "replace", deny)
+    with pytest.raises(PermissionError, match="permanent access denied"):
+        take_backup(db_path)
+    assert len(attempts) == 1
+    assert not list(backups_dir_for(db_path).glob("*.tmp"))
+    assert not list_backups(db_path)
+
+
+def test_backup_publish_exhausted_transient_denial_still_raises(db_path, monkeypatch):
+    import backend.db_backup as backup_module
+
+    _make_real_db(db_path)
+    attempts = []
+
+    def deny(source, destination):
+        attempts.append((source, destination))
+        raise PermissionError("persistent Windows sharing violation")
+
+    monkeypatch.setattr(backup_module, "_is_transient_windows_publish_error", lambda exc: True)
+    monkeypatch.setattr(backup_module, "_WINDOWS_PUBLISH_BACKOFF_SECONDS", (0.0, 0.0))
+    monkeypatch.setattr(backup_module.os, "replace", deny)
+    with pytest.raises(PermissionError, match="persistent Windows sharing"):
+        take_backup(db_path)
+    assert len(attempts) == 3
+    assert not list(backups_dir_for(db_path).glob("*.tmp"))
+    assert not list_backups(db_path)
+
+
 def test_take_backup_filename_matches_the_documented_convention(db_path):
     _make_real_db(db_path)
     backup_path = take_backup(db_path)

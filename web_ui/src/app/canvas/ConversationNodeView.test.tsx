@@ -30,7 +30,7 @@ import { ConversationNodeView, type ConversationFlowNode } from "./ConversationN
 function renderConversationNode(overrides: Partial<ConversationFlowNode["data"]> = {}) {
   const onToggleCollapse = vi.fn();
   const onDelete = vi.fn();
-  const onSend = vi.fn();
+  const onSend = vi.fn().mockResolvedValue(true);
   const onDeleteMessage = vi.fn();
   const onCancel = vi.fn();
   const onOpenDocumentView = vi.fn();
@@ -82,7 +82,7 @@ function ZoomSetter({ zoom }: { zoom: number }) {
 function renderConversationNodeAtZoom(zoom: number, overrides: Partial<ConversationFlowNode["data"]> = {}) {
   const onToggleCollapse = vi.fn();
   const onDelete = vi.fn();
-  const onSend = vi.fn();
+  const onSend = vi.fn().mockResolvedValue(true);
   const onDeleteMessage = vi.fn();
   const onCancel = vi.fn();
   const onOpenDocumentView = vi.fn();
@@ -770,5 +770,72 @@ describe("ConversationNodeView React.memo comparator (ADR-011 stage 11.1)", () =
       </ReactFlowProvider>,
     );
     expect(lodVisibilityCalls.count).toBe(2);
+  });
+});
+
+
+describe("Conversation admission and large-history UX", () => {
+  it("retains the draft when the server refuses admission", async () => {
+    const user = userEvent.setup();
+    const { onSend } = renderConversationNode();
+    onSend.mockResolvedValue(false);
+    const input = screen.getByRole("textbox", { name: "Message" });
+    await user.type(input, "Important unsent work");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("not sent");
+    expect(input).toHaveValue("Important unsent work");
+  });
+
+  it("keeps offline text and shows an actionable retry message", async () => {
+    const user = userEvent.setup();
+    const { onSend } = renderConversationNode();
+    onSend.mockRejectedValue(new Error("offline"));
+    const input = screen.getByRole("textbox", { name: "Message" });
+    await user.type(input, "offline note");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("draft is preserved");
+    expect(input).toHaveValue("offline note");
+  });
+
+  it("prevents double sends while admission acknowledgement is pending", async () => {
+    const user = userEvent.setup();
+    const { onSend } = renderConversationNode();
+    let finish!: (accepted: boolean) => void;
+    onSend.mockReturnValue(new Promise<boolean>((resolve) => { finish = resolve; }));
+    const input = screen.getByRole("textbox", { name: "Message" });
+    await user.type(input, "once only");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(screen.getByRole("button", { name: "Sending…" })).toBeDisabled();
+    expect(onSend).toHaveBeenCalledOnce();
+    await act(async () => { finish(true); });
+    expect(input).toHaveValue("");
+  });
+
+  it("renders 40 recent messages then reveals more with absolute delete indices", async () => {
+    const user = userEvent.setup();
+    const history = Array.from({ length: 95 }, (_, i) => ({
+      role: i % 2 ? "assistant" as const : "user" as const,
+      content: "Conversation item " + i,
+      incomplete: false,
+    }));
+    const { onDeleteMessage } = renderConversationNode({ history });
+    expect(screen.queryByText("Conversation item 0")).toBeNull();
+    expect(screen.getByText("Conversation item 94")).toBeInTheDocument();
+    expect(screen.getByText("95 messages")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Show earlier messages/ }));
+    expect(screen.getByText("Conversation item 15")).toBeInTheDocument();
+    expect(screen.queryByText("Conversation item 14")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Show earlier messages/ }));
+    expect(screen.getByText("Conversation item 0")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Delete message 1 from history" }));
+    expect(onDeleteMessage).toHaveBeenCalledWith(0);
+  });
+
+  it("does not send a message longer than the accepted input limit", () => {
+    const { onSend } = renderConversationNode();
+    const input = screen.getByRole("textbox", { name: "Message" });
+    fireEvent.change(input, { target: { value: "x".repeat(16_001) } });
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(onSend).not.toHaveBeenCalled();
   });
 });

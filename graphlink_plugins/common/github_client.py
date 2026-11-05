@@ -11,7 +11,8 @@ real per-plugin UI side effects and are not part of this extraction - they call 
 this client instead of duplicating its logic.
 """
 
-from urllib.parse import urlparse
+import time
+from urllib.parse import urljoin, urlparse
 
 import requests
 
@@ -27,6 +28,13 @@ import requests
 # could redirect the saved token to any host it names. Only these two real
 # GitHub hosts ever legitimately need the token attached.
 _ALLOWED_TOKEN_HOSTS = frozenset({"api.github.com", "raw.githubusercontent.com"})
+_BOUNDED_GITHUB_HOSTS = frozenset({"api.github.com", "codeload.github.com", "raw.githubusercontent.com"})
+_MAX_ARCHIVE_REDIRECTS = 3
+
+
+def _download_clock() -> float:
+    """Isolated clock seam for deadline tests; never replace global time."""
+    return time.monotonic()
 
 
 class GitHubRestClient:
@@ -48,14 +56,28 @@ class GitHubRestClient:
         # a caller that already knows it's only ever talking to a trusted
         # host - or a caller with no URL at all yet - is unaffected;
         # request() below always passes the real target URL.
-        if url is not None and urlparse(url).hostname not in _ALLOWED_TOKEN_HOSTS:
-            return headers
+        if url is not None:
+            try:
+                target = urlparse(url)
+                trusted = (
+                    target.scheme == "https"
+                    and target.hostname in _ALLOWED_TOKEN_HOSTS
+                    and target.port in (None, 443)
+                    and target.username is None
+                    and target.password is None
+                )
+            except ValueError:
+                trusted = False
+            if not trusted:
+                return headers
         token = self.get_token()
         if token:
             headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    def request(self, url, params=None, *, expect_json=True, timeout=25):
+    def request(self, url, params=None, *, expect_json=True, timeout=25, max_bytes=None):
+        if max_bytes is not None:
+            return self._download_bounded(url, params, timeout, expect_json, max_bytes)
         response = requests.get(url, headers=self.build_headers(url), params=params or {}, timeout=timeout)
         if response.status_code >= 400:
             # The error body is only usable if it is a JSON OBJECT. A valid
@@ -86,3 +108,70 @@ class GitHubRestClient:
         if not expect_json:
             return response.content
         return response.json()
+
+    def _download_bounded(self, url, params, timeout, expect_json, max_bytes):
+        """Bound GitHub binary downloads and restrict each redirect hop."""
+        if expect_json or type(max_bytes) is not int or max_bytes <= 0:
+            raise ValueError("bounded downloads require a positive byte cap and expect_json=False")
+        current_url = url
+        started = _download_clock()
+        # One read timeout resets for every socket.recv and is not a total
+        # budget: a server dribbling bytes forever can evade it. Bound the
+        # whole chain, including redirect hops, to an explicit deadline.
+        total_budget = min(120.0, max(10.0, float(timeout) * 1.5))
+        for hop in range(_MAX_ARCHIVE_REDIRECTS + 1):
+            if _download_clock() - started > total_budget:
+                raise RuntimeError("GitHub download exceeded the total time limit.")
+            try:
+                parsed = urlparse(current_url)
+                allowed = (
+                    parsed.scheme == "https" and parsed.hostname in _BOUNDED_GITHUB_HOSTS
+                    and parsed.port in (None, 443)
+                    and parsed.username is None and parsed.password is None
+                )
+            except ValueError:
+                allowed = False
+            if not allowed:
+                raise RuntimeError("GitHub archive download was redirected to an untrusted destination.")
+            # Never forward API credentials to the distinct codeload host.
+            response = requests.get(
+                current_url, headers=self.build_headers(current_url),
+                params=params or {} if hop == 0 else {},
+                timeout=timeout, stream=True, allow_redirects=False,
+            )
+            try:
+                if 300 <= response.status_code < 400:
+                    location = response.headers.get("Location")
+                    if not location:
+                        raise RuntimeError("GitHub archive download redirected without a destination.")
+                    current_url = urljoin(current_url, location)
+                    continue
+                if response.status_code >= 400:
+                    if response.status_code == 401:
+                        raise RuntimeError("GitHub rejected the saved token. Update it in Settings > Integrations.")
+                    if response.status_code == 404:
+                        raise RuntimeError("GitHub repository or branch was not found.")
+                    raise RuntimeError(f"GitHub archive download failed (HTTP {response.status_code}).")
+                length = response.headers.get("Content-Length", "")
+                if length.isdecimal() and int(length) > max_bytes:
+                    raise RuntimeError("GitHub archive download exceeds the compressed size limit.")
+                data = bytearray()
+                # urllib3's buffered read(amt) may wait for *amt* bytes
+                # while restarting its per-recv timeout on every byte.
+                # Read one byte at a time so the total deadline is checked
+                # even against a slow-drip server, with the underlying
+                # socket still buffered for normal fast downloads.
+                for chunk in response.iter_content(chunk_size=1):
+                    if _download_clock() - started > total_budget:
+                        raise RuntimeError("GitHub download exceeded the total time limit.")
+                    if not chunk:
+                        continue
+                    if len(data) + len(chunk) > max_bytes:
+                        raise RuntimeError("GitHub archive download exceeds the compressed size limit.")
+                    data.extend(chunk)
+                if _download_clock() - started > total_budget:
+                    raise RuntimeError("GitHub download exceeded the total time limit.")
+                return bytes(data)
+            finally:
+                response.close()
+        raise RuntimeError("GitHub archive download exceeded the redirect limit.")

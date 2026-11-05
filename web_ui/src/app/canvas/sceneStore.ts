@@ -804,8 +804,15 @@ export class SceneStore {
   // in R4.") over the same notification WS topic the Composer/ChatNode's
   // own sendMessage already flows through - nothing new to wire on the
   // frontend for that half of it.
-  sendConversationMessage(id: string, text: string): void {
-    this.transport.fireIntent("scene", "sendConversationMessage", [id, text]);
+  async sendConversationMessage(id: string, text: string): Promise<boolean> {
+    // Only a confirmed admission may clear the editor draft. A chat can be
+    // refused because the Composer is busy or no provider is configured;
+    // request() returns the accepted node ID, or null on refusal, and does
+    // not queue a stale send for replay after disconnection.
+    const accepted: unknown = await this.transport.request(
+      "scene", "sendConversationMessage", [id, text],
+    );
+    return accepted === id;
   }
 
   // No live caller yet this increment (same posture as addThinkingNode when
@@ -957,6 +964,56 @@ export class SceneStore {
     this.transport.fireIntent("scene", "sendArtifactMessage", [nodeId, text]);
   }
 
+  setArtifactContent(
+    nodeId: string, content: string, expectedContent: string,
+    onSettled: (success: boolean) => void,
+  ): void {
+    // Never queue stale document writes while offline: the server checks
+    // expectedContent, and the editor holds the unsaved draft on failure.
+    this.transport.fireIntent(
+      "scene", "setArtifactContent", [nodeId, content, expectedContent],
+      undefined, false, undefined, onSettled,
+    );
+  }
+
+  async fetchArtifactProposal(nodeId: string): Promise<{
+    proposalId: string; content: string; baseSha256: string; baseMatchesCurrent: boolean; summary: string;
+  } | null> {
+    // Proposal Markdown can be large, so it must be fetched by explicit
+    // review. Do not silently accept arbitrary unvalidated WS data.
+    const value: unknown = await this.transport.request("scene", "fetchArtifactProposal", [nodeId]);
+    if (value === null) return null;
+    if (!isPlainObject(value) ||
+        typeof value.proposalId !== "string" ||
+        typeof value.content !== "string" || value.content.length > 256_000 ||
+        typeof value.baseSha256 !== "string" ||
+        typeof value.baseMatchesCurrent !== "boolean" ||
+        typeof value.summary !== "string") {
+      throw new Error("Artifact proposal response was malformed.");
+    }
+    return {
+      proposalId: value.proposalId,
+      content: value.content,
+      baseSha256: value.baseSha256,
+      baseMatchesCurrent: value.baseMatchesCurrent,
+      summary: value.summary,
+    };
+  }
+
+  acceptArtifactProposal(nodeId: string, proposalId: string, onSettled: (success: boolean) => void): void {
+    this.transport.fireIntent(
+      "scene", "acceptArtifactProposal", [nodeId, proposalId],
+      undefined, false, undefined, onSettled,
+    );
+  }
+
+  discardArtifactProposal(nodeId: string, proposalId: string, onSettled: (success: boolean) => void): void {
+    this.transport.fireIntent(
+      "scene", "discardArtifactProposal", [nodeId, proposalId],
+      undefined, false, undefined, onSettled,
+    );
+  }
+
   cancelArtifactRequest(requestId: string): void {
     this.transport.fireIntent("scene", "cancelArtifactRequest", [requestId]);
   }
@@ -1025,12 +1082,11 @@ export class SceneStore {
     this.transport.fireIntent("scene", "cancelGitlinkRequest", [requestId]);
   }
 
-  // fingerprint is passed through verbatim - the caller (GitlinkNodeView's
-  // Apply confirmation) must pass exactly the server's own last-sent
-  // gitlinkChangeFingerprint, never anything computed client-side; this
-  // store method has no opinion on that, it just forwards the argument.
-  applyGitlinkChanges(nodeId: string, fingerprint: string): void {
-    this.transport.fireIntent("scene", "applyGitlinkChanges", [nodeId, fingerprint]);
+  // Pass only the server's full-proposal fingerprint and selected FILE PATHS.
+  // The backend determines all file contents and validates membership,
+  // optimistic baselines, local root, and the approval fingerprint.
+  applyGitlinkChanges(nodeId: string, fingerprint: string, selectedPaths: string[]): void {
+    this.transport.fireIntent("scene", "applyGitlinkChanges", [nodeId, fingerprint, selectedPaths]);
   }
 
   // Review Lens node - seven intents backing the Setup/Walkthrough/
@@ -1080,6 +1136,18 @@ export class SceneStore {
   // that's currently sensible to allow (see its own Run-enablement comment).
   setCodeSandboxRequirements(nodeId: string, requirementsText: string): void {
     this.transport.fireIntent("scene", "setCodeSandboxRequirements", [nodeId, requirementsText], undefined, true);
+  }
+
+  setCodeSandboxCode(
+    nodeId: string, code: string, expectedCode: string,
+    onSettled: (success: boolean) => void,
+  ): void {
+    // Human code writes cannot be replayed after a disconnect: the server
+    // checks expectedCode and refuses edits during approval or execution.
+    this.transport.fireIntent(
+      "scene", "setCodeSandboxCode", [nodeId, code, expectedCode],
+      undefined, false, undefined, onSettled,
+    );
   }
 
   // ADR-005 stage 5.5: the approval panel's own source-build opt-in

@@ -139,7 +139,10 @@ def _finite_number(value, field_name):
         raise ChartDataError(f"{field_name} must be a finite number")
     try:
         number = float(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
+        # json.loads can produce arbitrarily large Python integers.
+        # float(10**1000) raises OverflowError, not ValueError; a chart
+        # request must report a validation failure rather than a 500.
         raise ChartDataError(f"{field_name} must be a finite number") from exc
     if not math.isfinite(number):
         raise ChartDataError(f"{field_name} must be a finite number")
@@ -325,7 +328,20 @@ def canonicalize_chart_data(data, chart_type=None):
         if value <= 0:
             raise ChartDataError(f"Sankey value at index {index} must be greater than zero")
         key = (source, target)
-        aggregated[key] = aggregated.get(key, 0.0) + value
+        combined = aggregated.get(key, 0.0) + value
+        if not math.isfinite(combined):
+            raise ChartDataError("Sankey flow totals must be finite")
+        aggregated[key] = combined
+
+    # Different edges can still overflow a node's total throughput, even
+    # when every individual edge and duplicate-pair sum is finite.
+    outgoing_totals = {}
+    incoming_totals = {}
+    for (source, target), value in aggregated.items():
+        outgoing_totals[source] = outgoing_totals.get(source, 0.0) + value
+        incoming_totals[target] = incoming_totals.get(target, 0.0) + value
+        if not math.isfinite(outgoing_totals[source]) or not math.isfinite(incoming_totals[target]):
+            raise ChartDataError("Sankey node totals must be finite")
 
     result["flows"] = [
         {"source": source, "target": target, "value": value}

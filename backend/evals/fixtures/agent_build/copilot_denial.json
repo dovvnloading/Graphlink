@@ -1,0 +1,82 @@
+{
+  "name": "copilot_denial",
+  "kind": "agent_build",
+  "input": {
+    "goal": "A mutation must not occur without consent",
+    "mode": "copilot",
+    "steps": [
+      "Attempt a guarded mutation"
+    ],
+    "runs": [
+      {
+        "approvals": [
+          false
+        ],
+        "turns": [
+          {
+            "tool_calls": [
+              {
+                "id": "blocked",
+                "name": "graph.create_node",
+                "arguments": {
+                  "kind": "note",
+                  "content": "Never create this note"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          },
+          {
+            "tool_calls": [
+              {
+                "id": "stop",
+                "name": "builder.abort",
+                "arguments": {
+                  "reason": "Approval denied"
+                }
+              }
+            ],
+            "usage": {
+              "prompt_tokens": 20,
+              "completion_tokens": 5
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "expected": {
+    "status": "failed",
+    "run_statuses": [
+      "failed"
+    ],
+    "steps": [
+      {
+        "title": "Attempt a guarded mutation",
+        "status": "failed",
+        "detail": ""
+      }
+    ],
+    "nodes": [],
+    "edges": [],
+    "activity": [
+      {
+        "tool": "graph.create_node",
+        "outcome": "error"
+      },
+      {
+        "tool": "builder.abort",
+        "outcome": "ok"
+      }
+    ],
+    "approvals": [
+      "graph.create_node"
+    ],
+    "spent_steps": 1,
+    "spent_tokens": 50,
+    "status_detail_contains": "Approval denied"
+  }
+}

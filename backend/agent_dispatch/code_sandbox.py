@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from backend.events import SessionBus
 
 from backend.agent_dispatch._composed import DispatcherParts
+from backend.domain.node_states import CODE_SANDBOX_MAX_CODE_CHARS
 
 
 class CodeSandboxDispatchOps(DispatcherParts):
@@ -213,6 +214,10 @@ class CodeSandboxDispatchOps(DispatcherParts):
                         notifications_state.show("Sandbox execution cancelled.", "info")
                         await bus.publish("notification")
                         return
+                    if not isinstance(initial_response, str) or len(initial_response) > CODE_SANDBOX_MAX_CODE_CHARS:
+                        on_failure("Generated Python response exceeds the safe size limit.")
+                        await bus.publish("scene")
+                        return
                     extracted = agents_module._extract_python_block(initial_response)
                     if not extracted:
                         on_success(
@@ -225,6 +230,11 @@ class CodeSandboxDispatchOps(DispatcherParts):
                     current_code = extracted
                 elif not current_code:
                     on_failure("Provide a task prompt or Python code before running the sandbox.")
+                    await bus.publish("scene")
+                    return
+
+                if len(current_code) > CODE_SANDBOX_MAX_CODE_CHARS:
+                    on_failure("Python script exceeds the safe approval and execution size limit.")
                     await bus.publish("scene")
                     return
 
@@ -358,6 +368,10 @@ class CodeSandboxDispatchOps(DispatcherParts):
                         current_code = await asyncio.to_thread(
                             agents_module._call_sandbox_repair_agent, current_code, last_error, manifest, prompt_text or None
                         )
+                        if not isinstance(current_code, str) or len(current_code) > CODE_SANDBOX_MAX_CODE_CHARS:
+                            on_failure("Repaired Python script exceeds the safe approval size limit.")
+                            await bus.publish("scene")
+                            return
                         if not _should_continue():
                             notifications_state.show("Sandbox execution cancelled.", "info")
                             await bus.publish("notification")

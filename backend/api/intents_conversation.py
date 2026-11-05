@@ -10,6 +10,7 @@ from __future__ import annotations
 from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
+from backend.domain.model import SceneError, SceneNode
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 
@@ -23,60 +24,50 @@ def register_conversation_intents(
     publish_scene = make_publish_scene(bus)
 
     async def send_conversation_message(node_id, text):
-        # R4.3: the real user-message-send action for a conversation node -
-        # appends a real user message, then dispatches a real agent reply
-        # through AgentDispatcher.start_conversation_reply, the ConversationNode
-        # counterpart of send_message's ChatNode dispatch (backend/api/
-        # intents_chat.py, ADR-002 stage 2.6). The reply lands via _on_reply
-        # calling document.append_conversation_assistant_message directly -
-        # same established relationship as send_message's own _on_reply
-        # calling document.add_chat_node directly.
-        # ADR-010 close-out: appends real message content to node.history -
-        # same shape as the already-wrapped sendMessage. node_ids names the
-        # target node since it survives (the id never leaves self.nodes, so
-        # only the in-place before/after diff catches an appended message).
-        node, _command = document.record_command(
-            "sendConversationMessage", "user",
-            lambda: document.send_conversation_message(node_id, text),
-            node_ids=[node_id],
-        )
-        await publish_scene()
+        """Commit only admitted user turns and bind replies to their context.
+
+        A shared chat request may be refused because the Composer is busy
+        or the provider is unconfigured. Both checks happen in _dispatch
+        BEFORE its synchronous on_claim hook; no phantom unsent message is
+        saved and the UI can retain the user's text on refusal.
+        """
+        node = document.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "conversation":
+            raise SceneError(f"node is not a conversation node: {node_id}")
+        # Store the narrowed, non-optional object under a stable name for
+        # callbacks that run after this scope returns.
+        bound_node: SceneNode = node
+
+        accepted = False
+        sent_history: list[dict] = []
+
+        def _on_claim() -> list[dict]:
+            nonlocal accepted, sent_history
+            document.record_command(
+                "sendConversationMessage", "user",
+                lambda: document.send_conversation_message(node_id, text),
+                node_ids=[node_id],
+            )
+            sent_history = [message.copy() for message in bound_node.history]
+            accepted = True
+            # A frozen snapshot is passed to the provider, not the mutable
+            # live history whose messages may later be edited or deleted.
+            return [message.copy() for message in sent_history]
+
+        def _still_current() -> bool:
+            return (
+                document.nodes.get(node_id) is bound_node
+                and bound_node.pending_request_id is not None
+                and bound_node.history == sent_history
+            )
 
         def _on_reply(reply_text):
-            # R4.3b: deliberate, confirmed-correct omission, NOT an oversight -
-            # ConversationNode is exempt from the response_parsing retrofit
-            # applied to send_message's _on_reply (backend/api/intents_chat.py).
-            # The true legacy
-            # handler for a conversation node's reply is
-            # graphlink_window_actions.py's WindowActionsMixin.
-            # handle_conversation_node_response (NOT handle_response), which
-            # just calls target_node.add_ai_message(response_text) directly -
-            # it never calls self._parse_response and never creates any
-            # child node. A ConversationNode is a self-contained mega-node
-            # with a flat plain-text-only history and no child-node concept
-            # at all in legacy.
-            #
-            # REVIEW-FIX: this liveness guard was missing here, unlike
-            # _on_partial three lines below - a genuinely separate gap from
-            # the response_parsing omission the paragraph above documents.
-            # The node can be deleted (removeNodes - a ConversationNode is
-            # never a branch point/reparented, so it goes through the
-            # generic delete path, not deleteChatNode) while its reply is
-            # still generating: AgentDispatcher._dispatch schedules the LLM
-            # call as an un-awaited task, so the same WS connection is free
-            # to process a delete before the reply lands. Without this
-            # guard, a genuinely SUCCESSFUL reply then raised SceneError
-            # ("unknown node") out of append_conversation_assistant_message,
-            # which _dispatch's generic except-Exception handler turned into
-            # a misleading "AI response failed" notification for a request
-            # that had not failed at all - discarding real model output and
-            # lying about why. Matches _on_partial's own established
-            # posture: skipping is safe, the user retries via the
-            # conversation's own send box.
-            if document.nodes.get(node_id) is None:
+            # A cancelled request or changed history must not append an
+            # answer to a different question, restored node, or undo state.
+            if not _still_current():
                 return
-            # "agent" provenance, not "user" - this reply is model-produced,
-            # same posture as intents_chat.py's own chatReply command.
             document.record_command(
                 "appendConversationAssistantMessage", "agent",
                 lambda: document.append_conversation_assistant_message(node_id, reply_text),
@@ -84,15 +75,9 @@ def register_conversation_intents(
             )
 
         def _on_partial(partial_text):
-            # ADR-006 stage 6.4 (H5): the stream died mid-reply - preserve
-            # the accumulated text as a real assistant message flagged
-            # incomplete instead of losing it. Liveness guard: if the node
-            # was deleted while the reply was in flight, the append would
-            # raise SceneError out of _dispatch's cleanup path; skipping is
-            # the same posture as the terminal callbacks in agents.py.
-            # "agent" provenance, same as _on_reply - the partial IS model
-            # output. The user retries via the conversation's own send box.
-            if document.nodes.get(node_id) is None:
+            # Partial output only belongs to the exact still-live context
+            # that produced it; the dispatcher handles request cancellation.
+            if not _still_current():
                 return
             document.record_command(
                 "appendConversationAssistantMessage", "agent",
@@ -105,12 +90,18 @@ def register_conversation_intents(
         await agent_dispatcher.start_conversation_reply(
             bus=bus,
             notifications_state=notifications,
-            node=node,
-            conversation_history=node.history,
+            node=bound_node,
+            conversation_history=bound_node.history,
             on_reply=_on_reply,
             on_partial=_on_partial,
+            on_claim=_on_claim,
+            canvas_document=document,
+            node_id=node_id,
         )
-        return node.id
+        if not accepted:
+            return None
+        await publish_scene()
+        return node_id
 
     async def append_conversation_assistant_message(node_id, text):
         # Unlike send_conversation_message, this represents a real reply

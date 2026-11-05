@@ -21,11 +21,12 @@ helper, not a second source of truth for repo/branch/local_root.
 import base64
 import html
 import shutil
+import stat
 import tempfile
 import zipfile
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from graphlink_plugins.gitlink.agent import (
     _clean_text,
@@ -52,6 +53,46 @@ IGNORED_LOCAL_DIR_NAMES = {
 
 MAX_CONTEXT_CHARS = 180000
 MAX_MANIFEST_ENTRIES = 1200
+
+# An untrusted repository can contain a ZIP bomb: bound both the compressed
+# HTTP body and the number/size of entries extracted onto the user's disk.
+MAX_REPO_ARCHIVE_DOWNLOAD_BYTES = 128 * 1024 * 1024
+MAX_REPO_FILE_DOWNLOAD_BYTES = 2 * 1024 * 1024
+MAX_REPO_ARCHIVE_MEMBER_BYTES = 128 * 1024 * 1024
+MAX_REPO_ARCHIVE_UNPACKED_BYTES = 512 * 1024 * 1024
+MAX_REPO_ARCHIVE_MEMBERS = 20_000
+
+
+def _validate_repository_archive(archive: zipfile.ZipFile) -> str:
+    """Preflight the entire remote archive, before extracting any entry."""
+    infos = archive.infolist()
+    if not infos or len(infos) > MAX_REPO_ARCHIVE_MEMBERS:
+        raise RuntimeError("Repository archive has too many entries or is empty.")
+    roots: set[str] = set()
+    seen: set[str] = set()
+    total = 0
+    for info in infos:
+        name = info.filename
+        parts = name.rstrip("/").split("/")
+        if (not name or name.startswith("/") or "\\" in name
+                or any(part in ("", ".", "..") or ":" in part for part in parts)
+                or (not info.is_dir() and len(parts) < 2)):
+            raise RuntimeError("Repository archive contains an unsafe file path.")
+        key = "/".join(parts).casefold()
+        if key in seen:
+            raise RuntimeError("Repository archive contains duplicate file paths.")
+        seen.add(key)
+        if info.flag_bits & 1 or stat.S_IFMT(info.external_attr >> 16) == stat.S_IFLNK:
+            raise RuntimeError("Repository archive contains encrypted or symbolic-link entries.")
+        if info.file_size > MAX_REPO_ARCHIVE_MEMBER_BYTES:
+            raise RuntimeError("Repository archive member exceeds the extraction size limit.")
+        total += info.file_size
+        if total > MAX_REPO_ARCHIVE_UNPACKED_BYTES:
+            raise RuntimeError("Repository archive exceeds the total extraction size limit.")
+        roots.add(parts[0])
+    if len(roots) != 1:
+        raise RuntimeError("Repository archive must contain one top-level directory.")
+    return next(iter(roots))
 
 
 def default_import_root(repo_name, branch_name):
@@ -91,7 +132,8 @@ def scan_local_repo_paths(local_root):
 
     collected = []
     for file_path in root_path.rglob("*"):
-        if not file_path.is_file():
+        # Never auto-enumerate a symlink alias into a private file.
+        if file_path.is_symlink() or not file_path.is_file():
             continue
         relative = file_path.relative_to(root_path).as_posix()
         if any(part in IGNORED_LOCAL_DIR_NAMES for part in PurePosixPath(relative).parts):
@@ -109,7 +151,8 @@ def resolve_scope_paths(scope_mode, selected_paths, repo_file_paths, local_root=
         return list(selected_paths)
 
     if repo_file_paths:
-        return list(repo_file_paths)
+        # Reapply privacy policy to stale or imported inventories.
+        return [path for path in repo_file_paths if _is_repo_text_path(path)]
     if local_root:
         return scan_local_repo_paths(local_root)
     raise RuntimeError("Load the file tree first so Gitlink knows which repository files to stitch together.")
@@ -150,7 +193,16 @@ def validate_pending_changes(pending_changes):
                 raise RuntimeError(f"Proposed change for `{path_text}` is missing its file content.")
 
 
-def apply_change_set(local_root, pending_changes):
+def apply_change_set(local_root, pending_changes, *, require_review=False):
+    # An Apply from the real Gitlink UI must have the same original bytes as
+    # the diff the user approved. Preflight the *entire* set before any write.
+    # The default remains compatible with existing internal direct callers;
+    # backend.agents._call_gitlink_apply always sets require_review=True.
+    reviewed = None
+    if require_review:
+        from graphlink_plugins.gitlink.change_review import verify_change_review
+
+        reviewed = verify_change_review(local_root, pending_changes)
     # Backup-and-rollback (audit finding A1): previously a mid-loop failure
     # (permission denied, a directory sitting where a file is expected, disk
     # full, ...) left files 1..N-1 already written/deleted with no way back -
@@ -165,10 +217,17 @@ def apply_change_set(local_root, pending_changes):
     written_files = 0
     backups = []  # (target_path, original_bytes or None if the file did not exist)
     try:
-        for file_item in pending_changes:
+        for index, file_item in enumerate(pending_changes):
             path_text = file_item.get("path", "")
             operation = file_item.get("operation", "update")
             target_path = _safe_local_target(local_root, path_text)
+            if reviewed is not None:
+                # Recheck the target right before touching it, not only at
+                # the initial full-set preflight. If another process edited a
+                # later file during this Apply, roll back earlier writes.
+                from graphlink_plugins.gitlink.change_review import assert_target_unchanged
+
+                assert_target_unchanged(local_root, file_item, reviewed[index])
 
             if operation == "delete":
                 if target_path.exists():
@@ -232,17 +291,39 @@ class GitlinkRepository:
         )
         if isinstance(content_payload, list):
             raise RuntimeError(f"`{repo_path}` resolves to a directory, not a file.")
+        if not isinstance(content_payload, dict):
+            raise RuntimeError("GitHub returned an invalid file response.")
 
         if content_payload.get("encoding") == "base64" and content_payload.get("content"):
             return _decode_text_bytes(base64.b64decode(content_payload["content"]))
 
         download_url = content_payload.get("download_url")
         if download_url:
+            # URLs in an API response are not trusted network destinations.
+            try:
+                parsed_download = urlsplit(str(download_url))
+                trusted_download = (
+                    parsed_download.scheme == "https"
+                    and parsed_download.hostname in {"api.github.com", "raw.githubusercontent.com"}
+                    and parsed_download.port in (None, 443)
+                    and parsed_download.username is None
+                    and parsed_download.password is None
+                )
+            except ValueError:
+                trusted_download = False
+            if not trusted_download:
+                raise RuntimeError("GitHub file response contains an unsafe download URL (untrusted destination).")
             # Route through github_client rather than a raw requests.get: the
             # bypassed call sent no Authorization header and got none of the
             # client's 401/403/404 friendly-error mapping - a real gap for
             # private-repo file fetches on this (rarer) fallback branch.
-            raw_bytes = self.github_client.request(download_url, expect_json=False, timeout=25)
+            # An API-supplied URL is not itself a trusted network
+            # destination. Bound the body before buffering it and enforce
+            # the HTTP client's HTTPS/GitHub-only redirect policy.
+            raw_bytes = self.github_client.request(
+                download_url, expect_json=False, timeout=25,
+                max_bytes=MAX_REPO_FILE_DOWNLOAD_BYTES,
+            )
             return _decode_text_bytes(raw_bytes)
 
         raise RuntimeError(f"GitHub did not return file contents for `{repo_path}`.")
@@ -256,6 +337,7 @@ class GitlinkRepository:
             f"https://api.github.com/repos/{repo_name}/zipball/{quote(branch_name, safe='')}",
             expect_json=False,
             timeout=60,
+            max_bytes=MAX_REPO_ARCHIVE_DOWNLOAD_BYTES,
         )
 
         with tempfile.TemporaryDirectory(prefix="gitlink_import_") as temp_dir:
@@ -266,10 +348,10 @@ class GitlinkRepository:
             archive_path.write_bytes(archive_bytes)
 
             with zipfile.ZipFile(archive_path) as archive:
+                root_name = _validate_repository_archive(archive)
                 archive.extractall(extract_root)
 
-            extracted_dirs = [item for item in extract_root.iterdir() if item.is_dir()]
-            extracted_root = extracted_dirs[0] if extracted_dirs else extract_root
+            extracted_root = extract_root / root_name
 
             if target_root.exists():
                 return target_root
@@ -290,6 +372,18 @@ class GitlinkRepository:
             source_origin = "github"
             try:
                 if local_root is not None:
+                    if scope_mode != "selected":
+                        # Full Repo Access sends context to a model without
+                        # per-file approval. Reject secret and symlink aliases.
+                        root = Path(local_root).expanduser().resolve()
+                        resolved = _safe_local_target(root, normalized_path)
+                        resolved_name = resolved.relative_to(root).as_posix()
+                        if (not _is_repo_text_path(normalized_path)
+                                or not _is_repo_text_path(resolved_name)
+                                or (root / normalized_path).is_symlink()):
+                            raise RuntimeError(
+                                "Sensitive or symlinked file excluded from automatic repository context."
+                            )
                     source_text = read_local_repo_file(local_root, normalized_path)
                     source_origin = "local"
                 else:

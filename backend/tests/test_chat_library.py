@@ -3421,6 +3421,200 @@ class TestExportWorkspaceIntent:
     pickGitlinkLocalRoot tests monkeypatch pick_folder - a fake async
     function, never a real OS dialog."""
 
+    def test_export_flushes_live_edits_to_an_existing_graph_before_archiving(self, db_path, tmp_path, monkeypatch):
+        workspace = get_all_workspaces(db_path)[0]
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "Existing Graph",
+            {"nodes": [{"node_type": "chat", "id": "n1", "raw_content": "on disk",
+                        "is_user": True, "position": {"x": 0, "y": 0}}]},
+            [], [], workspace_id=workspace["id"],
+        )
+        bus, document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+        document.add_chat_node(20, 20, "latest edit before autosave", is_user=True)
+        assert "latest edit before autosave" not in str(load_chat_row(db_path, chat_id)["data"])
+
+        target = tmp_path / "fresh-export.graphlink"
+
+        async def pick_save_file(default_name, file_types=(), directory=""):
+            return str(target)
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", pick_save_file)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+
+        archive = workspace_archive_module.read_archive(target)
+        assert len(archive["chats"]) == 1
+        assert "latest edit before autosave" in str(archive["chats"][0]["data"])
+        assert "latest edit before autosave" in str(load_chat_row(db_path, chat_id)["data"])
+        assert notifications.msg_type == "success"
+
+    def test_export_includes_new_unsaved_graph_in_its_workspace(self, db_path, tmp_path, monkeypatch):
+        workspace = create_workspace(db_path, "New Drafts")
+        bus, document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", [workspace["id"]]))
+        document.add_chat_node(0, 0, "fresh unsaved graph content", is_user=True)
+        assert document.current_chat_id is None
+        assert not [row for row in get_all_chats(db_path) if row["workspaceId"] == workspace["id"]]
+
+        target = tmp_path / "new-graph.graphlink"
+
+        async def pick_save_file(default_name, file_types=(), directory=""):
+            return str(target)
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", pick_save_file)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+
+        exported = workspace_archive_module.read_archive(target)
+        assert len(exported["chats"]) == 1
+        assert "fresh unsaved graph content" in str(exported["chats"][0]["data"])
+        rows = [row for row in get_all_chats(db_path) if row["workspaceId"] == workspace["id"]]
+        assert len(rows) == 1
+        assert document.current_chat_id == rows[0]["id"]
+        assert notifications.msg_type == "success"
+
+    def test_export_includes_unsaved_default_canvas_with_no_rows(self, db_path, tmp_path, monkeypatch):
+        default = get_all_workspaces(db_path)[0]
+        bus, document, notifications = _bus_with_canvas(db_path)
+        document.add_chat_node(0, 0, "default unsaved graph", is_user=True)
+        assert document.current_workspace_id is None
+
+        target = tmp_path / "default-new.graphlink"
+
+        async def pick_save_file(default_name, file_types=(), directory=""):
+            return str(target)
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", pick_save_file)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [default["id"]]))
+
+        exported = workspace_archive_module.read_archive(target)
+        assert len(exported["chats"]) == 1
+        assert "default unsaved graph" in str(exported["chats"][0]["data"])
+        assert notifications.msg_type == "success"
+
+    def test_export_cancel_does_not_persist_unsaved_draft(self, db_path, monkeypatch):
+        workspace = create_workspace(db_path, "Drafts")
+        bus, document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", [workspace["id"]]))
+        document.add_chat_node(0, 0, "still only in memory", is_user=True)
+
+        async def cancel_save(default_name, file_types=(), directory=""):
+            return None
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", cancel_save)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+        assert document.current_chat_id is None
+        assert not [row for row in get_all_chats(db_path) if row["workspaceId"] == workspace["id"]]
+        assert notifications.visible is False
+
+    def test_export_rejects_failed_live_save_instead_of_creating_stale_archive(self, db_path, tmp_path, monkeypatch):
+        workspace = get_all_workspaces(db_path)[0]
+        chat_id, _ = save_chat_atomically_row(
+            db_path, None, "Original", {"nodes": [
+                {"node_type": "chat", "id": "n1", "raw_content": "old", "is_user": True,
+                 "position": {"x": 0, "y": 0}},
+            ]}, [], [], workspace_id=workspace["id"],
+        )
+        bus, document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+        document.add_chat_node(0, 0, "not persisted", is_user=True)
+        target = tmp_path / "must-not-exist.graphlink"
+
+        async def pick_save_file(default_name, file_types=(), directory=""):
+            return str(target)
+
+        def fail_save(*args, **kwargs):
+            raise OSError("simulated disk full")
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", pick_save_file)
+        monkeypatch.setattr(chat_library_module, "save_chat_atomically_row", fail_save)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+
+        assert not target.exists()
+        assert "not persisted" not in str(load_chat_row(db_path, chat_id)["data"])
+        assert notifications.msg_type == "error"
+        assert "simulated disk full" in notifications.message
+
+    def test_export_refuses_stale_optimistic_token_without_clobbering_other_writer(self, db_path, tmp_path, monkeypatch):
+        workspace = get_all_workspaces(db_path)[0]
+        chat_id, original_token = save_chat_atomically_row(
+            db_path, None, "Shared", {"nodes": [
+                {"node_type": "chat", "id": "n1", "raw_content": "original", "is_user": True,
+                 "position": {"x": 0, "y": 0}},
+            ]}, [], [], workspace_id=workspace["id"],
+        )
+        bus, document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [chat_id]))
+        document.add_chat_node(0, 0, "local divergent edit", is_user=True)
+        save_chat_atomically_row(
+            db_path, chat_id, "Shared", {"nodes": [
+                {"node_type": "chat", "id": "n1", "raw_content": "from other window", "is_user": True},
+            ]}, [], [], expected_updated_at=original_token,
+        )
+        target = tmp_path / "not-current.graphlink"
+
+        async def pick_save_file(default_name, file_types=(), directory=""):
+            return str(target)
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", pick_save_file)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+
+        assert not target.exists()
+        assert "from other window" in str(load_chat_row(db_path, chat_id)["data"])
+        assert "local divergent edit" not in str(load_chat_row(db_path, chat_id)["data"])
+        assert notifications.msg_type == "warning"
+        assert notifications.message == LOST_RACE_MESSAGE_MANUAL
+
+    def test_export_waits_for_autosave_guard_before_persisting(self, db_path, tmp_path, monkeypatch):
+        workspace = get_all_workspaces(db_path)[0]
+        bus, document, notifications = _bus_with_canvas(db_path)
+        document.add_chat_node(0, 0, "guarded draft", is_user=True)
+        guard = bus.chat_mutation_guard
+        target = tmp_path / "after-autosave.graphlink"
+        released = []
+
+        async def pick_save_file(default_name, file_types=(), directory=""):
+            guard["active"] = True
+            guard["owner"] = AUTOSAVE_OWNER
+            guard["released"].clear()
+
+            async def finish_autosave():
+                await asyncio.sleep(0.02)
+                guard["active"] = False
+                guard["owner"] = None
+                guard["released"].set()
+                released.append(True)
+
+            asyncio.create_task(finish_autosave())
+            return str(target)
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", pick_save_file)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+
+        assert released == [True]
+        assert "guarded draft" in str(workspace_archive_module.read_archive(target)["chats"][0]["data"])
+        assert notifications.msg_type == "success"
+
+    def test_export_of_another_workspace_does_not_save_unrelated_live_draft(self, db_path, tmp_path, monkeypatch):
+        workspace_a = create_workspace(db_path, "A")
+        workspace_b = create_workspace(db_path, "B")
+        save_chat_atomically_row(db_path, None, "A1", {"nodes": []}, [], [], workspace_id=workspace_a["id"])
+        bus, document, notifications = _bus_with_canvas(db_path)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", [workspace_b["id"]]))
+        document.add_chat_node(0, 0, "B's private unsaved draft", is_user=True)
+
+        target = tmp_path / "a.graphlink"
+
+        async def pick_save_file(default_name, file_types=(), directory=""):
+            return str(target)
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", pick_save_file)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace_a["id"]]))
+
+        assert document.current_chat_id is None
+        assert len(workspace_archive_module.read_archive(target)["chats"]) == 1
+        assert not [r for r in get_all_chats(db_path) if r["workspaceId"] == workspace_b["id"]]
+        assert notifications.msg_type == "success"
+
     def test_exports_only_the_target_workspaces_graphs_as_a_real_archive(self, db_path, tmp_path, monkeypatch):
         get_all_chats(db_path)  # bootstraps a fully-migrated db (Default = workspace A)
         workspace_a = get_all_workspaces(db_path)[0]

@@ -988,16 +988,21 @@ describe("SceneStore", () => {
     ]);
   });
 
-  it("sends conversation-node intents with the backend's registered names and shapes", () => {
-    const { transport, intents } = makeFakeTransport();
+  it("acknowledges a real conversation admission and sends the other registered intents", async () => {
+    const { transport, intents, requests, requestResults } = makeFakeTransport();
     const store = new SceneStore(transport);
     store.addConversationNode(10, 20, "n1");
-    store.sendConversationMessage("n2", "hello there");
+    requestResults.push("n2", null);
+    expect(await store.sendConversationMessage("n2", "hello there")).toBe(true);
+    expect(await store.sendConversationMessage("n2", "a blocked send")).toBe(false);
     store.appendConversationAssistantMessage("n2", "hi back");
     store.deleteConversationMessage("n2", 0);
+    expect(requests).toEqual([
+      { topic: "scene", intent: "sendConversationMessage", args: ["n2", "hello there"] },
+      { topic: "scene", intent: "sendConversationMessage", args: ["n2", "a blocked send"] },
+    ]);
     expect(intents).toEqual([
       { topic: "scene", intent: "addConversationNode", args: [10, 20, "n1"] },
-      { topic: "scene", intent: "sendConversationMessage", args: ["n2", "hello there"] },
       { topic: "scene", intent: "appendConversationAssistantMessage", args: ["n2", "hi back"] },
       { topic: "scene", intent: "deleteConversationMessage", args: ["n2", 0] },
     ]);
@@ -1154,12 +1159,12 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "cancelGitlinkRequest", args: ["req-55"] }]);
   });
 
-  it("applyGitlinkChanges sends the scene-topic applyGitlinkChanges intent with [nodeId, fingerprint]", () => {
+  it("applyGitlinkChanges forwards only fingerprint plus selected file paths, not file contents", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);
-    store.applyGitlinkChanges("n1", "fingerprint-abc123");
+    store.applyGitlinkChanges("n1", "fingerprint-abc123", ["b.py", "a.py"]);
     expect(intents).toEqual([
-      { topic: "scene", intent: "applyGitlinkChanges", args: ["n1", "fingerprint-abc123"] },
+      { topic: "scene", intent: "applyGitlinkChanges", args: ["n1", "fingerprint-abc123", ["b.py", "a.py"]] },
     ]);
   });
 
@@ -1832,3 +1837,92 @@ describe("SceneStore", () => {
   });
 });
 
+
+
+describe("Artifact manual editing transport", () => {
+  it("sends the base document as a compare-and-swap guard, without offline queuing", () => {
+    const fake = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(fake.transport);
+    const settled = vi.fn();
+    store.setArtifactContent("n0", "# New", "# Old", settled);
+    expect(fake.intents).toEqual([{
+      topic: "scene",
+      intent: "setArtifactContent",
+      args: ["n0", "# New", "# Old"],
+    }]);
+    expect(fake.transport.fireIntent).toHaveBeenCalledWith(
+      "scene", "setArtifactContent", ["n0", "# New", "# Old"],
+      undefined, false, undefined, settled,
+    );
+    expect(fake.fireIntentSettlers).toHaveLength(1);
+    fake.fireIntentSettlers[0](false);
+    expect(settled).toHaveBeenCalledWith(false);
+  });
+});
+
+
+describe("Artifact proposal transport", () => {
+  it("lazily fetches a bounded candidate from the server", async () => {
+    const fake = makeFakeTransport();
+    fake.requestResults.push({
+      proposalId: "id-1", content: "# Revision",
+      baseSha256: "b".repeat(64), baseMatchesCurrent: true, summary: "heading changed",
+    });
+    const store = new SceneStore(fake.transport);
+    expect(await store.fetchArtifactProposal("n1")).toEqual({
+      proposalId: "id-1", content: "# Revision",
+      baseSha256: "b".repeat(64), baseMatchesCurrent: true, summary: "heading changed",
+    });
+    expect(fake.requests).toEqual([{
+      topic: "scene", intent: "fetchArtifactProposal", args: ["n1"],
+    }]);
+  });
+
+  it("rejects malformed or too-large fetched candidates", async () => {
+    const fake = makeFakeTransport();
+    fake.requestResults.push({ proposalId: "x", content: 23, summary: "" });
+    const store = new SceneStore(fake.transport);
+    await expect(store.fetchArtifactProposal("n1")).rejects.toThrow("malformed");
+  });
+
+  it("sends nonqueueable, acknowledged accept and discard actions", () => {
+    const fake = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(fake.transport);
+    const accepted = vi.fn();
+    const discarded = vi.fn();
+    store.acceptArtifactProposal("n1", "p1", accepted);
+    store.discardArtifactProposal("n1", "p1", discarded);
+    expect(fake.intents).toEqual([
+      { topic: "scene", intent: "acceptArtifactProposal", args: ["n1", "p1"] },
+      { topic: "scene", intent: "discardArtifactProposal", args: ["n1", "p1"] },
+    ]);
+    expect(fake.transport.fireIntent).toHaveBeenCalledWith(
+      "scene", "acceptArtifactProposal", ["n1", "p1"], undefined,
+      false, undefined, accepted,
+    );
+    fake.fireIntentSettlers[0](true);
+    fake.fireIntentSettlers[1](false);
+    expect(accepted).toHaveBeenCalledWith(true);
+    expect(discarded).toHaveBeenCalledWith(false);
+  });
+});
+
+
+describe("Virtual Environment Runner manual Python edit transport", () => {
+  it("sends the expected original code and an acknowledged nonqueueable edit", () => {
+    const fake = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(fake.transport);
+    const onSettled = vi.fn();
+    store.setCodeSandboxCode("cs-1", "print(2)", "print(1)", onSettled);
+    expect(fake.intents).toEqual([{
+      topic: "scene", intent: "setCodeSandboxCode",
+      args: ["cs-1", "print(2)", "print(1)"],
+    }]);
+    expect(fake.transport.fireIntent).toHaveBeenCalledWith(
+      "scene", "setCodeSandboxCode", ["cs-1", "print(2)", "print(1)"],
+      undefined, false, undefined, onSettled,
+    );
+    fake.fireIntentSettlers[0](false);
+    expect(onSettled).toHaveBeenCalledWith(false);
+  });
+});

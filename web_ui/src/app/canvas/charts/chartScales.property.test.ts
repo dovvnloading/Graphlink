@@ -85,16 +85,14 @@ describe("computeHistogramBins (property-based)", () => {
         fc.integer({ min: 1, max: 20 }),
         (values, bins) => {
           const result = computeHistogramBins(values, bins);
-          const min = Math.min(...values);
-          const max = Math.max(...values);
+          // Check the actual output ranges instead of recomputing the
+          // OLD bin origin (which put all constant data on the left edge).
+          // Constant-valued histograms now widen around the value, matching
+          // matplotlib's plotted range.
           for (const value of values) {
-            const width = (max - min) / bins || 1;
-            let index = Math.floor((value - min) / width);
-            if (index >= bins) index = bins - 1;
-            if (index < 0) index = 0;
-            const bin = result[index];
-            expect(value).toBeGreaterThanOrEqual(bin.x0 - 1e-9);
-            expect(value).toBeLessThanOrEqual(bin.x1 + 1e-9);
+            expect(result.some((bin) =>
+              value >= bin.x0 - 1e-9 && value <= bin.x1 + 1e-9,
+            )).toBe(true);
           }
         },
       ),

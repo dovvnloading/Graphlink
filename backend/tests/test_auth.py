@@ -130,6 +130,22 @@ def test_is_guarded_path_covers_api_without_catching_lookalike_prefixes():
     assert is_guarded_path("/api-reference") is False
 
 
+@pytest.mark.parametrize("invalid", ["", " ", "\t"])
+def test_explicit_empty_token_fails_closed_instead_of_disabling_auth(tmp_path, invalid):
+    with pytest.raises(ValueError, match="capability token"):
+        create_app(
+            auth_token=invalid,
+            settings_state_file=tmp_path / "session.dat",
+            chat_db_path=tmp_path / "chats.db",
+        )
+
+
+def test_blank_dev_token_is_a_configuration_error_not_no_auth(monkeypatch):
+    monkeypatch.setenv(DEV_AUTH_TOKEN_ENV, " ")
+    with pytest.raises(ValueError, match=DEV_AUTH_TOKEN_ENV):
+        resolve_configured_token(None)
+
+
 def test_resolve_configured_token_precedence(monkeypatch):
     monkeypatch.delenv(DEV_AUTH_TOKEN_ENV, raising=False)
     assert resolve_configured_token("explicit") == "explicit"

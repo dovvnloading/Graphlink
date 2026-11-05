@@ -351,3 +351,5 @@ jobs:
           backend/tests/test_db_backup.py
           backend/tests/test_knowledge_store.py
           backend/tests/test_backend_secrets_at_rest.py
+          backend/tests/test_mcp_server.py
+          backend/tests/test_instance_lock.py
