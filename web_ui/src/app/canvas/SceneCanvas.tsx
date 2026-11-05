@@ -910,6 +910,11 @@ function makeArtifactFns(id: string, liveRef: { current: DispatcherLive }) {
     onSubmit: (text: string) => liveRef.current.store.sendArtifactMessage(id, text),
     onSetContent: (content: string, expectedContent: string, onSettled: (success: boolean) => void) =>
       liveRef.current.store.setArtifactContent(id, content, expectedContent, onSettled),
+    onFetchProposal: () => liveRef.current.store.fetchArtifactProposal(id),
+    onAcceptProposal: (proposalId: string, settled: (success: boolean) => void) =>
+      liveRef.current.store.acceptArtifactProposal(id, proposalId, settled),
+    onDiscardProposal: (proposalId: string, settled: (success: boolean) => void) =>
+      liveRef.current.store.discardArtifactProposal(id, proposalId, settled),
     onCancel: () => {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.cancelArtifactRequest(n.pendingRequestId);
@@ -1606,6 +1611,7 @@ export function toFlowNodes(
         data: {
           artifactContent: n.artifactContent,
           artifactError: n.artifactError,
+          artifactProposalId: n.artifactProposalId,
           history: n.history,
           isCollapsed: n.isCollapsed,
           pendingRequestId: n.pendingRequestId ?? null,

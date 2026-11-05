@@ -42,6 +42,10 @@ def register_artifact_intents(
         # stale click racing a delete has nothing destructive to protect
         # against.
         node = require_node(document.nodes, node_id, "artifact", ArtifactState)
+        if node.state.artifact_proposal_id:
+            notifications.show("Review or discard the pending Artifact proposal before generating again.", "info")
+            await bus.publish("notification")
+            return None
         # Guard before appending to history: otherwise an extra Send while the
         # model is busy adds an instruction that was never dispatched.
         # A cancelled handle is no longer live even while its old request id
@@ -94,8 +98,10 @@ def register_artifact_intents(
             # "agent" provenance since this is a model-produced reply, not a
             # direct user action.
             document.record_command(
-                "completeArtifactGeneration", "agent",
-                lambda: document.complete_artifact_generation(node_id, new_content, ai_message),
+                "stageArtifactProposal", "agent",
+                lambda: document.stage_artifact_proposal(
+                    node_id, new_content, ai_message, draft_at_send,
+                ),
                 node_ids=[node_id],
             )
 
@@ -131,6 +137,28 @@ def register_artifact_intents(
         await publish_scene()
         return node_id
 
+    async def fetch_artifact_proposal(node_id):
+        # Explicit lazy fetch: the scene wire exposes only the proposal id.
+        return document.fetch_artifact_proposal(node_id)
+
+    async def accept_artifact_proposal(node_id, proposal_id):
+        document.record_command(
+            "acceptArtifactProposal", "user",
+            lambda: document.accept_artifact_proposal(node_id, proposal_id),
+            node_ids=[node_id],
+        )
+        await publish_scene()
+        return node_id
+
+    async def discard_artifact_proposal(node_id, proposal_id):
+        document.record_command(
+            "discardArtifactProposal", "user",
+            lambda: document.discard_artifact_proposal(node_id, proposal_id),
+            node_ids=[node_id],
+        )
+        await publish_scene()
+        return node_id
+
     async def cancel_artifact_request(request_id):
         agent_dispatcher.cancel_artifact(request_id)
 
@@ -141,4 +169,7 @@ def register_artifact_intents(
     # pair above.
     bus.register_intent("scene", "sendArtifactMessage", send_artifact_message)
     bus.register_intent("scene", "setArtifactContent", set_artifact_content)
+    bus.register_intent("scene", "fetchArtifactProposal", fetch_artifact_proposal)
+    bus.register_intent("scene", "acceptArtifactProposal", accept_artifact_proposal)
+    bus.register_intent("scene", "discardArtifactProposal", discard_artifact_proposal)
     bus.register_intent("scene", "cancelArtifactRequest", cancel_artifact_request)

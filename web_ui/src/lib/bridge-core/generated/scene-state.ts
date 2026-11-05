@@ -36,6 +36,7 @@ export interface SceneNodeRow {
   researchRetainToKnowledge: boolean;
   artifactContent: string;
   artifactError: string;
+  artifactProposalId: string;
   gitlinkRepo: string;
   gitlinkBranch: string;
   gitlinkScopeMode: string;
@@ -523,6 +524,7 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["researchRetainToKnowledge", "b", 0, false],
   ["artifactContent", "s", 0, ""],
   ["artifactError", "s", 0, ""],
+  ["artifactProposalId", "s", 0, ""],
   ["gitlinkRepo", "s", 0, ""],
   ["gitlinkBranch", "s", 0, ""],
   ["gitlinkScopeMode", "s", 0, "selected"],

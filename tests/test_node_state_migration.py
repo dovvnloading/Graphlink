@@ -345,7 +345,8 @@ def test_scene_node_core_field_count():
 # (one flat dict literal, no per-kind branching), so one representative node
 # is sufficient; the point is the KEY SET, not per-kind values.
 _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
-    "artifactContent", "artifactError", "attachmentKind", "branchStatus", "byteSize",
+    # Artifact proposal review adds one opaque ID (candidate text is fetched on demand).
+    "artifactContent", "artifactError", "artifactProposalId", "attachmentKind", "branchStatus", "byteSize",
     "chartAspectLocked", "chartData",
     "chartError", "chartHeight", "chartSourceNodeId", "chartType", "chartWidth",
     "chatScrollValue", "code", "codeSandboxAnalysis",

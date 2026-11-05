@@ -13,6 +13,7 @@ per-kind method groups are being lifted out of SceneDocument at all.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 
 from backend.domain._composed import SceneDocumentParts
@@ -221,6 +222,86 @@ class AgentRunOps(SceneDocumentParts):
         node.state.artifact_content = new_content
         node.state.artifact_error = ""
         node.history.append({"role": "assistant", "content": str(ai_message)})
+        return node
+
+    @staticmethod
+    def _clear_artifact_proposal(state: ArtifactState) -> None:
+        state.artifact_proposal_id = ""
+        state.artifact_proposal_content = ""
+        state.artifact_proposal_base_sha256 = ""
+        state.artifact_proposal_summary = ""
+
+    def stage_artifact_proposal(
+        self, node_id: str, content: str, ai_message: str, expected_document: str
+    ) -> SceneNode:
+        """Stage an AI revision without replacing the user's saved text.
+
+        The proposal is a separate, persisted document candidate. Its base
+        fingerprint prevents any later Accept from silently overwriting a
+        manual edit, undo, restore, or another proposal's newer draft.
+        """
+        node = require_node(self.nodes, node_id, "artifact", ArtifactState)
+        state = node.state
+        if node.state.artifact_content != expected_document:
+            raise SceneError("Artifact changed during generation; proposal discarded.")
+        if state.artifact_proposal_id:
+            raise SceneError("Review or discard the previous Artifact proposal first.")
+        if not isinstance(content, str) or len(content) > ARTIFACT_MAX_CHARS:
+            raise SceneError("Generated Artifact proposal exceeded the document size limit.")
+        if not isinstance(ai_message, str):
+            ai_message = ""
+        state.artifact_proposal_id = uuid.uuid4().hex
+        state.artifact_proposal_content = content
+        state.artifact_proposal_base_sha256 = hashlib.sha256(
+            expected_document.encode("utf-8")
+        ).hexdigest()
+        state.artifact_proposal_summary = ai_message.strip()[:500]
+        state.artifact_error = ""
+        node.history.append({
+            "role": "assistant",
+            "content": "Proposed revision ready for review."
+        })
+        return node
+
+    def fetch_artifact_proposal(self, node_id: str) -> dict[str, str | bool] | None:
+        """Read large proposal contents only on explicit review."""
+        node = require_node(self.nodes, node_id, "artifact", ArtifactState)
+        state = node.state
+        if not state.artifact_proposal_id:
+            return None
+        return {
+            "proposalId": state.artifact_proposal_id,
+            "content": state.artifact_proposal_content,
+            "baseSha256": state.artifact_proposal_base_sha256,
+            "baseMatchesCurrent": hashlib.sha256(
+                node.state.artifact_content.encode("utf-8")
+            ).hexdigest() == state.artifact_proposal_base_sha256,
+            "summary": state.artifact_proposal_summary,
+        }
+
+    def accept_artifact_proposal(self, node_id: str, proposal_id: str) -> SceneNode:
+        """Atomically apply only the exact reviewed proposal on its base."""
+        node = require_node(self.nodes, node_id, "artifact", ArtifactState)
+        state = node.state
+        if not proposal_id or state.artifact_proposal_id != proposal_id:
+            raise SceneError("Artifact proposal is no longer current; reopen review.")
+        current_sha = hashlib.sha256(node.state.artifact_content.encode("utf-8")).hexdigest()
+        if current_sha != state.artifact_proposal_base_sha256:
+            raise SceneError("Artifact changed after the proposal was created. Export or discard the proposal before retrying.")
+        content = state.artifact_proposal_content
+        if len(content) > ARTIFACT_MAX_CHARS:
+            raise SceneError("Artifact proposal exceeds the safe document size limit.")
+        node.state.artifact_content = content
+        state.artifact_error = ""
+        self._clear_artifact_proposal(state)
+        return node
+
+    def discard_artifact_proposal(self, node_id: str, proposal_id: str) -> SceneNode:
+        """Discard only a matching proposal; never touch the saved draft."""
+        node = require_node(self.nodes, node_id, "artifact", ArtifactState)
+        if not proposal_id or node.state.artifact_proposal_id != proposal_id:
+            raise SceneError("Artifact proposal is no longer current; reopen review.")
+        self._clear_artifact_proposal(node.state)
         return node
 
     # -- R5.4: Execution Sandbox node ----------------------------------------

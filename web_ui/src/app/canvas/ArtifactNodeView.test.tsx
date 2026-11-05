@@ -13,6 +13,7 @@ function baseData(overrides: Partial<ArtifactFlowNode["data"]> = {}): ArtifactFl
   return {
     artifactContent: "",
     artifactError: "",
+    artifactProposalId: "",
     history: [],
     isCollapsed: false,
     pendingRequestId: null,
@@ -20,6 +21,9 @@ function baseData(overrides: Partial<ArtifactFlowNode["data"]> = {}): ArtifactFl
     onDelete: vi.fn(),
     onSubmit: vi.fn(),
     onSetContent: vi.fn(),
+    onFetchProposal: vi.fn(async () => null),
+    onAcceptProposal: vi.fn(),
+    onDiscardProposal: vi.fn(),
     onCancel: vi.fn(),
     ...overrides,
   };
@@ -353,12 +357,16 @@ describe("ArtifactNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
 
   it.each([
     ["artifactContent", { artifactContent: "changed" }],
+    ["artifactProposalId", { artifactProposalId: "proposal-id" }],
     ["isCollapsed", { isCollapsed: true }],
     ["pendingRequestId", { pendingRequestId: "req-1" }],
     ["onToggleCollapse", { onToggleCollapse: vi.fn() }],
     ["onDelete", { onDelete: vi.fn() }],
     ["onSubmit", { onSubmit: vi.fn() }],
     ["onSetContent", { onSetContent: vi.fn() }],
+    ["onFetchProposal", { onFetchProposal: vi.fn() }],
+    ["onAcceptProposal", { onAcceptProposal: vi.fn() }],
+    ["onDiscardProposal", { onDiscardProposal: vi.fn() }],
     ["onCancel", { onCancel: vi.fn() }],
   ] as const)("returns false when data.%s changes and nothing else does", (_name, override) => {
     const a = props();
@@ -466,5 +474,74 @@ describe("ArtifactNodeView editor and export", () => {
     renderArtifactNode({ artifactContent: "# Hello world" });
     expect(screen.getByRole("button", { name: "Download .md" })).toBeEnabled();
     expect(screen.getByText("3 words")).toBeInTheDocument();
+  });
+});
+
+
+describe("ArtifactNodeView proposal review", () => {
+  const proposal = {
+    proposalId: "proposal-1",
+    content: "# New heading\n\nNew paragraph.",
+    baseSha256: "a".repeat(64),
+    baseMatchesCurrent: true,
+    summary: "Edited the heading and paragraph.",
+  };
+
+  it("shows a review CTA without replacing saved Markdown", () => {
+    renderArtifactNode({
+      artifactContent: "# Original heading\n\nOriginal paragraph.",
+      artifactProposalId: proposal.proposalId,
+    });
+    expect(screen.getByRole("button", { name: "Review AI revision" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Original heading" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refine" })).toBeDisabled();
+  });
+
+  it("loads a bounded proposal on demand and accepts only by proposal id", async () => {
+    const user = userEvent.setup();
+    const onFetchProposal = vi.fn(async () => proposal);
+    const onAcceptProposal = vi.fn((_id, done) => done(true));
+    renderArtifactNode({
+      artifactContent: "# Original heading\n\nOriginal paragraph.",
+      artifactProposalId: proposal.proposalId,
+      onFetchProposal,
+      onAcceptProposal,
+    });
+    await user.click(screen.getByRole("button", { name: "Review AI revision" }));
+    expect(await screen.findByText("Edited the heading and paragraph.")).toBeInTheDocument();
+    expect(screen.getByText("Current change region")).toBeInTheDocument();
+    expect(screen.getByText("Proposed change region")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download proposed .md" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Accept revision" }));
+    expect(onFetchProposal).toHaveBeenCalledOnce();
+    expect(onAcceptProposal).toHaveBeenCalledWith(proposal.proposalId, expect.any(Function));
+  });
+
+  it("allows safely discarding a pending proposal without editing saved text", async () => {
+    const user = userEvent.setup();
+    const onDiscardProposal = vi.fn((_id, done) => done(true));
+    renderArtifactNode({
+      artifactContent: "Current",
+      artifactProposalId: proposal.proposalId,
+      onFetchProposal: vi.fn(async () => proposal),
+      onDiscardProposal,
+    });
+    await user.click(screen.getByRole("button", { name: "Review AI revision" }));
+    await user.click(await screen.findByRole("button", { name: "Discard revision" }));
+    expect(onDiscardProposal).toHaveBeenCalledWith(proposal.proposalId, expect.any(Function));
+  });
+
+  it("leaves review visible if accept fails server-side", async () => {
+    const user = userEvent.setup();
+    renderArtifactNode({
+      artifactContent: "Current",
+      artifactProposalId: proposal.proposalId,
+      onFetchProposal: vi.fn(async () => proposal),
+      onAcceptProposal: vi.fn((_id, settled) => settled(false)),
+    });
+    await user.click(screen.getByRole("button", { name: "Review AI revision" }));
+    await user.click(await screen.findByRole("button", { name: "Accept revision" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Nothing was overwritten");
+    expect(screen.getByRole("button", { name: "Accept revision" })).toBeEnabled();
   });
 });

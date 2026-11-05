@@ -969,6 +969,44 @@ export class SceneStore {
     );
   }
 
+  async fetchArtifactProposal(nodeId: string): Promise<{
+    proposalId: string; content: string; baseSha256: string; baseMatchesCurrent: boolean; summary: string;
+  } | null> {
+    // Proposal Markdown can be large, so it must be fetched by explicit
+    // review. Do not silently accept arbitrary unvalidated WS data.
+    const value: unknown = await this.transport.request("scene", "fetchArtifactProposal", [nodeId]);
+    if (value === null) return null;
+    if (!isPlainObject(value) ||
+        typeof value.proposalId !== "string" ||
+        typeof value.content !== "string" || value.content.length > 256_000 ||
+        typeof value.baseSha256 !== "string" ||
+        typeof value.baseMatchesCurrent !== "boolean" ||
+        typeof value.summary !== "string") {
+      throw new Error("Artifact proposal response was malformed.");
+    }
+    return {
+      proposalId: value.proposalId,
+      content: value.content,
+      baseSha256: value.baseSha256,
+      baseMatchesCurrent: value.baseMatchesCurrent,
+      summary: value.summary,
+    };
+  }
+
+  acceptArtifactProposal(nodeId: string, proposalId: string, onSettled: (success: boolean) => void): void {
+    this.transport.fireIntent(
+      "scene", "acceptArtifactProposal", [nodeId, proposalId],
+      undefined, false, undefined, onSettled,
+    );
+  }
+
+  discardArtifactProposal(nodeId: string, proposalId: string, onSettled: (success: boolean) => void): void {
+    this.transport.fireIntent(
+      "scene", "discardArtifactProposal", [nodeId, proposalId],
+      undefined, false, undefined, onSettled,
+    );
+  }
+
   cancelArtifactRequest(requestId: string): void {
     this.transport.fireIntent("scene", "cancelArtifactRequest", [requestId]);
   }

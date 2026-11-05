@@ -6581,6 +6581,89 @@ mark.document-view-search-match-current {
   flex-direction: column;
 }
 
+.artifact-node-proposal {
+  padding: 8px 10px;
+  border: 1px solid var(--gl-surface-border-strong, var(--gl-surface-border));
+  border-radius: 8px;
+  background: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
+.artifact-node-proposal-heading {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gl-surface-text-primary);
+  margin: 0 0 8px;
+}
+
+.artifact-node-proposal-summary,
+.artifact-node-diff-summary {
+  font-size: 11px;
+  color: var(--gl-surface-text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.artifact-node-diff-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.artifact-node-diff-grid strong {
+  display: block;
+  font-size: 10px;
+  margin-bottom: 4px;
+}
+
+.artifact-node-diff-grid pre {
+  box-sizing: border-box;
+  max-height: 150px;
+  overflow: auto;
+  padding: 8px;
+  margin: 0;
+  font-size: 10px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+}
+
+.artifact-node-diff-before {
+  border-left: 3px solid var(--gl-semantic-status-error, var(--gl-surface-border));
+}
+
+.artifact-node-diff-after {
+  border-left: 3px solid var(--gl-surface-border-strong, var(--gl-surface-border));
+}
+
+.artifact-node-proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.artifact-node-proposal button {
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  padding: 5px 9px;
+  cursor: pointer;
+}
+
+.artifact-node-proposal button:hover:enabled {
+  background: var(--gl-neutral-button-hover);
+}
+
+.artifact-node-proposal button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .artifact-node-toolbar {
   display: flex;
   flex-wrap: wrap;

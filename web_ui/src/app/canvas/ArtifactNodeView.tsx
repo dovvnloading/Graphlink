@@ -1,5 +1,6 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useState } from "react";
+import { artifactDiffPreview } from "./artifactProposalDiff";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import { downloadTextFile } from "./downloadTextFile";
 import type { MenuPosition } from "./menuPosition";
@@ -46,9 +47,18 @@ export interface ArtifactMessage {
   content: string;
 }
 
+export interface ArtifactProposal {
+  proposalId: string;
+  content: string;
+  baseSha256: string;
+  baseMatchesCurrent: boolean;
+  summary: string;
+}
+
 export interface ArtifactNodeData extends Record<string, unknown> {
   artifactContent: string;
   artifactError: string;
+  artifactProposalId: string;
   history: ArtifactMessage[];
   isCollapsed: boolean;
   pendingRequestId: string | null;
@@ -56,6 +66,9 @@ export interface ArtifactNodeData extends Record<string, unknown> {
   onDelete: () => void;
   onSubmit: (text: string) => void;
   onSetContent: (content: string, expectedContent: string, onSettled: (success: boolean) => void) => void;
+  onFetchProposal: () => Promise<ArtifactProposal | null>;
+  onAcceptProposal: (proposalId: string, onSettled: (success: boolean) => void) => void;
+  onDiscardProposal: (proposalId: string, onSettled: (success: boolean) => void) => void;
   onCancel: () => void;
 }
 
@@ -151,12 +164,16 @@ export function artifactNodePropsAreEqual(
   return (
     a.artifactContent === b.artifactContent &&
     a.artifactError === b.artifactError &&
+    a.artifactProposalId === b.artifactProposalId &&
     a.isCollapsed === b.isCollapsed &&
     a.pendingRequestId === b.pendingRequestId &&
     a.onToggleCollapse === b.onToggleCollapse &&
     a.onDelete === b.onDelete &&
     a.onSubmit === b.onSubmit &&
     a.onSetContent === b.onSetContent &&
+    a.onFetchProposal === b.onFetchProposal &&
+    a.onAcceptProposal === b.onAcceptProposal &&
+    a.onDiscardProposal === b.onDiscardProposal &&
     a.onCancel === b.onCancel &&
     historyEqual(a.history, b.history)
   );
@@ -180,6 +197,16 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
   const [editBase, setEditBase] = useState("");
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState("");
+  const [review, setReview] = useState<{ proposal: ArtifactProposal; original: string } | null>(null);
+  const [loadingReview, setLoadingReview] = useState(false);
+  const [deciding, setDeciding] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+  const activeReview = review?.proposal.proposalId === data.artifactProposalId ? review : null;
+  const staleReview = !!activeReview && (
+    !activeReview.proposal.baseMatchesCurrent ||
+    activeReview.original !== data.artifactContent
+  );
+  const proposedDiff = activeReview ? artifactDiffPreview(activeReview.original, activeReview.proposal.content) : null;
   const staleEdit = editing && data.artifactContent !== editBase;
   const displayedDocument = editing ? editDraft : data.artifactContent;
   const wordCount = displayedDocument.trim() ? displayedDocument.trim().split(/\s+/).length : 0;
@@ -220,9 +247,47 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
     });
   }
 
+  async function loadProposal() {
+    if (!data.artifactProposalId || loadingReview) return;
+    setLoadingReview(true);
+    setReviewError("");
+    try {
+      const proposal = await data.onFetchProposal();
+      if (!proposal || proposal.proposalId !== data.artifactProposalId) {
+        setReviewError("This proposal is no longer available. Reopen the latest suggestion.");
+        return;
+      }
+      setReview({ proposal, original: data.artifactContent });
+    } catch {
+      setReviewError("Unable to load the proposed document. Your current draft was not changed.");
+    } finally {
+      setLoadingReview(false);
+    }
+  }
+
+  function decideProposal(accept: boolean) {
+    if (!activeReview || deciding || data.pendingRequestId) return;
+    if (accept && (editing || staleReview)) {
+      setReviewError("Your current document changed or has unsaved edits. Export the proposal before continuing.");
+      return;
+    }
+    setDeciding(true);
+    setReviewError("");
+    const settle = (success: boolean) => {
+      setDeciding(false);
+      if (success) {
+        setReview(null);
+      } else {
+        setReviewError("The proposal action was rejected. Nothing was overwritten; refresh this review and retry.");
+      }
+    };
+    if (accept) data.onAcceptProposal(activeReview.proposal.proposalId, settle);
+    else data.onDiscardProposal(activeReview.proposal.proposalId, settle);
+  }
+
   function submit() {
     const text = draft.trim();
-    if (!text || editing || data.pendingRequestId) return;
+    if (!text || editing || data.pendingRequestId || data.artifactProposalId) return;
     data.onSubmit(text);
     setDraft("");
   }
@@ -278,6 +343,67 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
         </div>
       )}
 
+      {data.artifactProposalId && (
+        <section className="artifact-node-proposal" aria-label="AI revision proposal">
+          <p className="artifact-node-proposal-heading">
+            AI revision ready for review — the saved document is unchanged.
+          </p>
+          {!activeReview && (
+            <button type="button" disabled={loadingReview} onClick={() => { void loadProposal(); }}>
+              {loadingReview ? "Loading proposal…" : "Review AI revision"}
+            </button>
+          )}
+          {reviewError && <p role="alert" className="artifact-node-edit-warning">{reviewError}</p>}
+          {activeReview && proposedDiff && (
+            <>
+              {activeReview.proposal.summary && (
+                <p className="artifact-node-proposal-summary">{activeReview.proposal.summary}</p>
+              )}
+              {staleReview && (
+                <p role="alert" className="artifact-node-edit-warning">
+                  The saved document differs from this proposal's original base. Accept is disabled to protect your edits.
+                </p>
+              )}
+              {proposedDiff.changed ? (
+                <>
+                  <p className="artifact-node-diff-summary">
+                    {proposedDiff.leadingUnchangedLines} unchanged leading lines and{" "}
+                    {proposedDiff.trailingUnchangedLines} unchanged trailing lines omitted from preview.
+                  </p>
+                  <div className="artifact-node-diff-grid">
+                    <div>
+                      <strong>Current change region</strong>
+                      <pre className="artifact-node-diff-before">{proposedDiff.before || "(empty)"}</pre>
+                      {proposedDiff.omittedBeforeLines > 0 && <small>{proposedDiff.omittedBeforeLines} more lines not shown</small>}
+                      {proposedDiff.clippedBeforeChars && <small>Long lines clipped to 5,000 characters</small>}
+                    </div>
+                    <div>
+                      <strong>Proposed change region</strong>
+                      <pre className="artifact-node-diff-after">{proposedDiff.after || "(empty)"}</pre>
+                      {proposedDiff.omittedAfterLines > 0 && <small>{proposedDiff.omittedAfterLines} more lines not shown</small>}
+                      {proposedDiff.clippedAfterChars && <small>Long lines clipped to 5,000 characters</small>}
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p>No document changes were proposed.</p>
+              )}
+              <div className="artifact-node-proposal-actions">
+                <button type="button" disabled={deciding || editing || busy || staleReview}
+                  onClick={() => decideProposal(true)}>
+                  {deciding ? "Processing…" : "Accept revision"}
+                </button>
+                <button type="button" disabled={deciding || busy}
+                  onClick={() => decideProposal(false)}>Discard revision</button>
+                <button type="button"
+                  onClick={() => downloadTextFile(activeReview.proposal.content, "artifact-proposal.md")}>
+                  Download proposed .md
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+      )}
       <div className="artifact-node-toolbar">
         <span className="artifact-node-word-count">{wordCount.toLocaleString()} words</span>
         {editing ? (
@@ -370,7 +496,7 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
           <button
             type="button"
             className="artifact-node-submit-btn"
-            disabled={!draft.trim() || busy || editing}
+            disabled={!draft.trim() || busy || editing || !!data.artifactProposalId}
             onClick={submit}
           >
             {submitLabel}
