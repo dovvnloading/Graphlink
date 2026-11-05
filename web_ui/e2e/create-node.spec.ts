@@ -39,7 +39,10 @@ test("creates a node from an empty canvas, then a Conversation Node via the Plug
   // "Branch Foundations" (backend/plugins.py's _CATEGORY_META) is the
   // picker's own default active category, and both entries below belong to
   // it, so no category click is needed.
-  await page.getByRole("option", { name: "System Prompt" }).click();
+  // The picker now exposes native action buttons rather than listbox options.
+  await expect(page.getByRole("searchbox", { name: "Search plugins" })).toBeFocused();
+  await page.getByRole("dialog", { name: "Plugins" })
+    .getByRole("button", { name: /^System Prompt/ }).click();
 
   await expect(page.locator(".react-flow__node")).toHaveCount(1);
   await expect(page.locator(".react-flow__node-note")).toHaveCount(1);
@@ -49,7 +52,11 @@ test("creates a node from an empty canvas, then a Conversation Node via the Plug
   await page.locator(".react-flow__node").first().click();
 
   await page.locator('[data-overlay-trigger="plugins"]').click();
-  await page.getByRole("option", { name: "Conversation Node" }).click();
+  // Exercise real cross-category search in the browser before creating the
+  // second node. The same selected parent and backend intent must be used.
+  const picker = page.getByRole("dialog", { name: "Plugins" });
+  await picker.getByRole("searchbox", { name: "Search plugins" }).fill("conversation");
+  await picker.getByRole("button", { name: /^Conversation Node/ }).click();
 
   await expect(page.locator(".react-flow__node")).toHaveCount(2);
   // React Flow itself stamps `react-flow__node-<type>` on every node
