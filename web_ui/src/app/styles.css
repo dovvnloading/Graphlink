@@ -6581,6 +6581,64 @@ mark.document-view-search-match-current {
   flex-direction: column;
 }
 
+.artifact-node-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.artifact-node-word-count {
+  margin-right: auto;
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.artifact-node-toolbar button {
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.artifact-node-toolbar button:hover:enabled {
+  background: var(--gl-neutral-button-hover);
+}
+
+.artifact-node-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.artifact-node-editor {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 180px;
+  max-height: 320px;
+  padding: 8px 10px;
+  overflow: auto;
+  resize: vertical;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-inset, var(--gl-surface-window));
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.artifact-node-edit-warning {
+  margin: 0;
+  font-size: 11px;
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+}
+
 .artifact-node-empty {
   margin: 0;
   font-size: 12px;

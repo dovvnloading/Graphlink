@@ -12,7 +12,9 @@ ADR-002 stage 2.6).
 
 from __future__ import annotations
 
-from backend.agents import AgentDispatcher
+from backend.agents import AgentDispatcher, _NODE_RUN_CLAIM_PLACEHOLDER
+from backend.domain.node_access import require_node
+from backend.domain.node_states import ArtifactState
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
 from backend.events import SessionBus
@@ -39,11 +41,34 @@ def register_artifact_intents(
         # state on this node that an unguarded call could corrupt, so a
         # stale click racing a delete has nothing destructive to protect
         # against.
-        node, _command = document.record_command(
-            "sendArtifactMessage", "user",
-            lambda: document.send_artifact_message(node_id, text),
-            node_ids=[node_id],
-        )
+        node = require_node(document.nodes, node_id, "artifact", ArtifactState)
+        # Guard before appending to history: otherwise an extra Send while the
+        # model is busy adds an instruction that was never dispatched.
+        # A cancelled handle is no longer live even while its old request id
+        # remains on the node until the worker unwinds.
+        is_live = getattr(agent_dispatcher, "is_node_run_live", None)
+        if node.pending_request_id and (
+            is_live(node.pending_request_id) if callable(is_live) else True
+        ):
+            notifications.show("Artifact generation is already running for this node.", "info")
+            await bus.publish("notification")
+            return None
+
+        # Claim synchronously before publish_scene's first await, the same
+        # placeholder contract used by the other per-node async tools.
+        node.pending_request_id = _NODE_RUN_CLAIM_PLACEHOLDER
+        try:
+            node, _command = document.record_command(
+                "sendArtifactMessage", "user",
+                lambda: document.send_artifact_message(node_id, text),
+                node_ids=[node_id],
+            )
+        except Exception:
+            if node.pending_request_id == _NODE_RUN_CLAIM_PLACEHOLDER:
+                node.pending_request_id = None
+            raise
+        draft_at_send = node.state.artifact_content
+        history_at_send = [message.copy() for message in node.history]
         await publish_scene()
 
         parent_edge = document._branch_parent_edge(node_id)
@@ -51,13 +76,19 @@ def register_artifact_intents(
         full_history = branch_history + node.history
 
         def _on_reply(new_content, ai_message):
-            if node_id not in document.nodes:
-                # Deleted mid-flight: silent no-op, the same posture as the
-                # chat, image and conversation reply callbacks.
-                # complete_artifact_generation goes through require_node, so
-                # it would raise and the dispatcher would report "Artifact
-                # generation failed" for a request that succeeded.
+            current_node = document.nodes.get(node_id)
+            if current_node is not node:
+                # Deleted/replaced mid-flight: a stale model result must
+                # never land on an unrelated node with the same id.
                 return
+            if (
+                current_node.state.artifact_content != draft_at_send
+                or current_node.history != history_at_send
+            ):
+                raise RuntimeError(
+                    "The Artifact changed while generation was running. "
+                    "The new response was discarded to preserve your edits; retry from the latest draft."
+                )
             # Same content-mutation shape as intents_chat.py's chatReply /
             # intents_conversation.py's appendConversationAssistantMessage -
             # "agent" provenance since this is a model-produced reply, not a
@@ -69,8 +100,9 @@ def register_artifact_intents(
             )
 
         def _on_failure(message):
-            # Recorded as an "agent" command for the same reason _on_reply is:
-            # it is a model-produced outcome, not a direct user action.
+            # Do not attach a stale error to a deleted or replaced node.
+            if document.nodes.get(node_id) is not node:
+                return
             document.record_command(
                 "failArtifactGeneration", "agent",
                 lambda: document.fail_artifact_generation(node_id, message),
@@ -88,6 +120,17 @@ def register_artifact_intents(
         )
         return node.id
 
+    async def set_artifact_content(node_id, new_content, expected_content):
+        # User editing is undoable and compare-and-swap guarded: a stale
+        # browser tab may not overwrite a newer model result or undo.
+        document.record_command(
+            "setArtifactContent", "user",
+            lambda: document.set_artifact_content(node_id, new_content, expected_content),
+            node_ids=[node_id],
+        )
+        await publish_scene()
+        return node_id
+
     async def cancel_artifact_request(request_id):
         agent_dispatcher.cancel_artifact(request_id)
 
@@ -97,4 +140,5 @@ def register_artifact_intents(
     # posture as Web Research's own runWebResearch/cancelWebResearchRequest
     # pair above.
     bus.register_intent("scene", "sendArtifactMessage", send_artifact_message)
+    bus.register_intent("scene", "setArtifactContent", set_artifact_content)
     bus.register_intent("scene", "cancelArtifactRequest", cancel_artifact_request)
