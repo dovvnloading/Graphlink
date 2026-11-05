@@ -1082,12 +1082,11 @@ export class SceneStore {
     this.transport.fireIntent("scene", "cancelGitlinkRequest", [requestId]);
   }
 
-  // fingerprint is passed through verbatim - the caller (GitlinkNodeView's
-  // Apply confirmation) must pass exactly the server's own last-sent
-  // gitlinkChangeFingerprint, never anything computed client-side; this
-  // store method has no opinion on that, it just forwards the argument.
-  applyGitlinkChanges(nodeId: string, fingerprint: string): void {
-    this.transport.fireIntent("scene", "applyGitlinkChanges", [nodeId, fingerprint]);
+  // Pass only the server's full-proposal fingerprint and selected FILE PATHS.
+  // The backend determines all file contents and validates membership,
+  // optimistic baselines, local root, and the approval fingerprint.
+  applyGitlinkChanges(nodeId: string, fingerprint: string, selectedPaths: string[]): void {
+    this.transport.fireIntent("scene", "applyGitlinkChanges", [nodeId, fingerprint, selectedPaths]);
   }
 
   // Review Lens node - seven intents backing the Setup/Walkthrough/

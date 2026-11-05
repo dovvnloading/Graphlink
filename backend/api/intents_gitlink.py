@@ -175,7 +175,7 @@ def register_gitlink_intents(
     async def cancel_gitlink_request(request_id):
         agent_dispatcher.cancel_gitlink(request_id)
 
-    async def apply_gitlink_changes(node_id, fingerprint):
+    async def apply_gitlink_changes(node_id, fingerprint, selected_paths=None):
         node = document.nodes.get(node_id)
         if node is None or node.kind != "gitlink":
             notifications.show("This node no longer exists.", "warning")
@@ -199,6 +199,7 @@ def register_gitlink_intents(
             bus=bus, notifications_state=notifications, node=node, node_id=node_id,
             client_fingerprint=fingerprint, local_root=node.state.gitlink_local_root,
             on_success=_on_success, on_failure=_on_failure,
+            selected_paths=selected_paths,
         )
         return node_id
 
@@ -211,11 +212,10 @@ def register_gitlink_intents(
     bus.register_intent("scene", "fetchGitlinkContext", fetch_gitlink_context)
     bus.register_intent("scene", "runGitlinkChangeSet", run_gitlink_change_set)
     bus.register_intent("scene", "cancelGitlinkRequest", cancel_gitlink_request)
-    # CRITICAL, load-bearing property: applyGitlinkChanges takes ONLY
-    # (node_id, fingerprint) as WS intent arguments - there must be NO
-    # changes/pending_changes parameter anywhere in this signature or the
-    # dispatcher method it calls. This closes the most obvious
-    # content-injection bypass by construction, not by a runtime check: the
-    # only content that ever reaches apply_change_set is server-held,
-    # already-normalized node.state.gitlink_pending_changes.
+    # CRITICAL: the intent accepts (node_id, full-proposal fingerprint,
+    # optional selected_paths) - NEVER client-supplied file contents,
+    # operations, hashes, or pending_changes. The dispatcher checks the
+    # WHOLE server-held proposal's fingerprint, validates that each selected
+    # path belongs to it, freezes those rows, and applies only that subset.
+    # Omitted selected_paths remains all-files for older connected clients.
     bus.register_intent("scene", "applyGitlinkChanges", apply_gitlink_changes)

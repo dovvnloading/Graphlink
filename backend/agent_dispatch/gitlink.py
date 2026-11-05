@@ -299,6 +299,7 @@ class GitlinkDispatchOps(DispatcherParts):
         local_root: str,
         on_success,
         on_failure,
+        selected_paths: list[str] | None = None,
     ) -> None:
         """R5.3: Gitlink's Apply action - THE code the whole increment hinges
         on. The fingerprint check and the freeze of the data that will
@@ -435,7 +436,19 @@ class GitlinkDispatchOps(DispatcherParts):
                 "Regenerate the change set before applying."
             )
             return
-        changes_snapshot = [dict(item) for item in node.state.gitlink_pending_changes]
+        from graphlink_plugins.gitlink.change_review import select_gitlink_changes
+
+        try:
+            # The client can choose only paths already in the server-held
+            # proposal. Keep the full three-way proposal fingerprint above:
+            # hashing just the selected subset would let changed proposals
+            # masquerade as previously approved ones.
+            changes_snapshot = select_gitlink_changes(
+                node.state.gitlink_pending_changes, selected_paths
+            )
+        except RuntimeError as exc:
+            await _abandon(str(exc))
+            return
         # --- End atomic section. Everything past this point operates ONLY on
         # changes_snapshot, never on node.state.gitlink_pending_changes again. ---
 

@@ -160,6 +160,50 @@ def prepare_change_review(
     return clean_files, originals
 
 
+def select_gitlink_changes(
+    pending_changes: list[dict[str, Any]], selected_paths: list[str] | None,
+) -> list[dict[str, Any]]:
+    """Freeze a caller-selected *subset* of a server-held approved proposal.
+
+    The caller supplies only exact paths, never file contents, operations or
+    baselines. None retains the old two-argument Apply intent's all-files
+    behavior; an explicitly empty list means apply nothing and is rejected.
+    The full proposal fingerprint is checked by the dispatcher BEFORE this
+    selector runs, so selecting files cannot evade the existing approval.
+    """
+    if not isinstance(pending_changes, list) or not pending_changes or len(pending_changes) > MAX_REVIEW_FILES:
+        raise RuntimeError("Gitlink has no valid approved file changes to select.")
+
+    available: dict[str, dict[str, Any]] = {}
+    canonical_paths: set[str] = set()
+    for change in pending_changes:
+        if not isinstance(change, dict) or not isinstance(change.get("path"), str):
+            raise RuntimeError("Gitlink proposal contains an invalid file entry.")
+        path = change["path"]
+        if _normalize_repo_path(path) != path:
+            raise RuntimeError("Gitlink proposal contains a noncanonical file path.")
+        folded = path.casefold()
+        if folded in canonical_paths:
+            raise RuntimeError("Gitlink proposal contains duplicate file paths.")
+        canonical_paths.add(folded)
+        available[path] = change
+
+    if selected_paths is None:
+        requested = set(available)
+    else:
+        if not isinstance(selected_paths, list) or not selected_paths or len(selected_paths) > len(available):
+            raise RuntimeError("Select at least one valid Gitlink file before applying.")
+        if any(not isinstance(path, str) or path not in available for path in selected_paths):
+            raise RuntimeError("Selected Gitlink files no longer match the approved proposal.")
+        requested = set(selected_paths)
+        if len(requested) != len(selected_paths):
+            raise RuntimeError("The Gitlink selection contains duplicate file paths.")
+
+    # Never follow user order or accept client-supplied file payloads. Apply
+    # only the server's approved rows, in the same order as the preview.
+    return [dict(change) for path, change in available.items() if path in requested]
+
+
 def verify_change_review(
     local_root: str | Path, changes: list[dict[str, Any]],
 ) -> list[ReviewedTarget]:
