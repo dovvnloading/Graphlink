@@ -804,8 +804,15 @@ export class SceneStore {
   // in R4.") over the same notification WS topic the Composer/ChatNode's
   // own sendMessage already flows through - nothing new to wire on the
   // frontend for that half of it.
-  sendConversationMessage(id: string, text: string): void {
-    this.transport.fireIntent("scene", "sendConversationMessage", [id, text]);
+  async sendConversationMessage(id: string, text: string): Promise<boolean> {
+    // Only a confirmed admission may clear the editor draft. A chat can be
+    // refused because the Composer is busy or no provider is configured;
+    // request() returns the accepted node ID, or null on refusal, and does
+    // not queue a stale send for replay after disconnection.
+    const accepted: unknown = await this.transport.request(
+      "scene", "sendConversationMessage", [id, text],
+    );
+    return accepted === id;
   }
 
   // No live caller yet this increment (same posture as addThinkingNode when
