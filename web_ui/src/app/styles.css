@@ -1519,8 +1519,32 @@ body,
   touch-action: none;
 }
 
-.html-node-splitter:hover {
+.html-node-splitter:hover,
+.html-node-splitter:focus-visible {
   background-color: var(--gl-surface-text-muted);
+}
+
+.html-node-splitter:focus-visible,
+.html-node-render-btn:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+
+.html-node-render-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.html-node-preview-status {
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+.html-node-preview-status.stale {
+  font-weight: 600;
+  color: var(--gl-surface-text-primary);
 }
 
 .html-node-render-btn {
