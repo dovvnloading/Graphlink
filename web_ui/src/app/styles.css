@@ -7881,6 +7881,57 @@ mark.document-view-search-match-current {
    Bounded and self-scrolling: with both output panes uncapped inside one
    scroller, a script of any length pushed the terminal out of the visible
    area entirely, and the card hit its ceiling showing nothing but source. */
+/* User-authored Python remains reviewable source, never auto-executed. */
+.code-sandbox-node-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.code-sandbox-node-editor-actions button {
+  padding: 5px 9px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid var(--gl-neutral-button-border);
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  cursor: pointer;
+}
+
+.code-sandbox-node-editor-actions button:hover:enabled {
+  background: var(--gl-neutral-button-hover);
+}
+
+.code-sandbox-node-editor-actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.code-sandbox-node-source-editor {
+  width: 100%;
+  min-height: 180px;
+  max-height: 320px;
+  overflow: auto;
+  box-sizing: border-box;
+  resize: vertical;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  padding: 8px 10px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-inset, var(--gl-surface-window));
+}
+
+.code-sandbox-node-editor-notice {
+  color: var(--gl-surface-text-muted);
+  font-size: 10px;
+  margin: 0;
+}
+
 .code-sandbox-node-code,
 .code-sandbox-node-analysis {
   max-height: 160px;
