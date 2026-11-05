@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
-import { CodeSandboxNodeView, codeSandboxNodePropsAreEqual, type CodeSandboxFlowNode } from "./CodeSandboxNodeView";
+import { CodeSandboxNodeView, appendBoundedTerminalOutput, codeSandboxNodePropsAreEqual, type CodeSandboxFlowNode } from "./CodeSandboxNodeView";
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
 // ArtifactNodeView.test.tsx for why a bare ReactFlowProvider is enough here
@@ -40,6 +40,7 @@ function baseData(overrides: Partial<CodeSandboxFlowNode["data"]> = {}): CodeSan
     isCollapsed: false,
     pendingRequestId: null,
     onSetRequirements: vi.fn(),
+    onSetCode: vi.fn(),
     onToggleAllowSourceBuilds: vi.fn(),
     onRun: vi.fn(),
     onCancel: vi.fn(),
@@ -584,6 +585,7 @@ describe("CodeSandboxNodeView React.memo comparator (ADR-011 stage 11.1)", () =>
     ["isCollapsed", { isCollapsed: true }],
     ["pendingRequestId", { pendingRequestId: "req-1" }],
     ["onSetRequirements", { onSetRequirements: vi.fn() }],
+    ["onSetCode", { onSetCode: vi.fn() }],
     ["onToggleAllowSourceBuilds", { onToggleAllowSourceBuilds: vi.fn() }],
     ["onRun", { onRun: vi.fn() }],
     ["onCancel", { onCancel: vi.fn() }],
@@ -627,5 +629,60 @@ describe("CodeSandboxNodeView React.memo comparator (ADR-011 stage 11.1)", () =>
     );
     expect(root.className).not.toBe("CORRUPTED");
     expect(root.className).toContain("selected");
+  });
+});
+
+
+describe("Virtual Environment Runner manual Python editing", () => {
+  it("offers manual Python authoring even when the AI never generated code", async () => {
+    const user = userEvent.setup();
+    const data = renderCodeSandboxNode({ codeSandboxCode: "" });
+    await user.click(screen.getByRole("button", { name: "Write Python" }));
+    expect(screen.getByRole("textbox", { name: "Edit Python script" })).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Run" })).toBeDisabled();
+    expect(data.onSetCode).not.toHaveBeenCalled();
+  });
+
+  it("saves a manual revision with the original code as an optimistic precondition", async () => {
+    const user = userEvent.setup();
+    const onSetCode = vi.fn((_newCode, _expectedCode, settled) => settled(true));
+    renderCodeSandboxNode({ codeSandboxCode: "print(1)", onSetCode });
+    await user.click(screen.getByRole("button", { name: "Edit Python" }));
+    const editor = screen.getByRole("textbox", { name: "Edit Python script" });
+    await user.clear(editor);
+    await user.type(editor, "print(2)");
+    await user.click(screen.getByRole("button", { name: "Save script" }));
+    expect(onSetCode).toHaveBeenCalledWith("print(2)", "print(1)", expect.any(Function));
+    expect(screen.queryByRole("textbox", { name: "Edit Python script" })).toBeNull();
+  });
+
+  it("preserves unsaved code and the download affordance if a save is rejected", async () => {
+    const user = userEvent.setup();
+    const onSetCode = vi.fn((_newCode, _expectedCode, settled) => settled(false));
+    renderCodeSandboxNode({ codeSandboxCode: "print(1)", onSetCode });
+    await user.click(screen.getByRole("button", { name: "Edit Python" }));
+    const editor = screen.getByRole("textbox", { name: "Edit Python script" });
+    await user.clear(editor);
+    await user.type(editor, "print(3)");
+    await user.click(screen.getByRole("button", { name: "Save script" }));
+    expect(editor).toHaveValue("print(3)");
+    expect(screen.getByRole("alert")).toHaveTextContent("save was rejected");
+    expect(screen.getByRole("button", { name: "Download .py" })).toBeEnabled();
+  });
+
+  it("disables manual editing when code is already being run or approved", () => {
+    renderCodeSandboxNode({ codeSandboxCode: "print(1)", pendingRequestId: "busy" });
+    expect(screen.getByRole("button", { name: "Edit Python" })).toBeDisabled();
+    expect(screen.getByText(/user-account permissions/)).toBeInTheDocument();
+  });
+
+  it("guards the owner buffer from a giant uninterrupted live output stream", () => {
+    const first = appendBoundedTerminalOutput("", "x".repeat(100_000), false);
+    expect(first.length).toBeLessThanOrEqual(64_000);
+    expect(first).toContain("[Earlier terminal output hidden");
+    const second = appendBoundedTerminalOutput(first, "last-chunk", false);
+    expect(second.length).toBeLessThanOrEqual(64_000);
+    expect(second.endsWith("last-chunk")).toBe(true);
+    expect(appendBoundedTerminalOutput(second, "reset", true)).toBe("reset");
   });
 });
