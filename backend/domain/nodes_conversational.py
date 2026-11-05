@@ -170,7 +170,11 @@ class ConversationalOps(SceneDocumentParts):
         """Append a real user message to a conversation node's history -
         mirrors graphlink_conversation_node.py's add_user_message, minus the
         view-layer bubble creation (the frontend's job)."""
-        node = require_node(self.nodes, node_id, "conversation")
+        node = self.nodes.get(node_id)
+        if node is None:
+            raise SceneError(f"unknown node: {node_id}")
+        if node.kind != "conversation":
+            raise SceneError(f"node is not a conversation node: {node_id}")
         if not isinstance(text, str) or not text.strip():
             raise SceneError("Conversation message must be nonempty text.")
         if len(text) > MAX_CONVERSATION_USER_CHARS:
