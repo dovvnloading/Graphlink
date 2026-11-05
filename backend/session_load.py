@@ -210,7 +210,7 @@ from backend.canvas import (
 from backend.domain.node_access import with_state
 # Not re-exported by backend.canvas, unlike the kinds above - imported
 # from the domain package directly, as session_save.py does.
-from backend.domain.node_states import ChartState, FrameState, NoteState
+from backend.domain.node_states import ARTIFACT_MAX_CHARS, ChartState, FrameState, NoteState
 from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 from graphlink_navigation_pins import NavigationPinRecord
@@ -661,6 +661,26 @@ def _restore_web_payload(payload: dict[str, Any]) -> SceneNode:
                 "provider_snapshot": {},
             })
     return node
+
+
+def _artifact_proposal_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+    """Load only a bounded, structurally valid, pending review candidate."""
+    proposal_id = payload.get("proposal_id")
+    content = payload.get("proposal_content")
+    base = payload.get("proposal_base_sha256")
+    summary = payload.get("proposal_summary", "")
+    if not (
+        isinstance(proposal_id, str) and re.fullmatch(r"[0-9a-f]{32}", proposal_id)
+        and isinstance(content, str) and len(content) <= ARTIFACT_MAX_CHARS
+        and isinstance(base, str) and re.fullmatch(r"[0-9a-f]{64}", base)
+    ):
+        return {}
+    return {
+        "artifact_proposal_id": proposal_id,
+        "artifact_proposal_content": content,
+        "artifact_proposal_base_sha256": base,
+        "artifact_proposal_summary": summary[:500] if isinstance(summary, str) else "",
+    }
 
 
 def _restore_artifact_payload(payload: dict[str, Any]) -> SceneNode:
