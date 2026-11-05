@@ -37,6 +37,18 @@ def register_code_sandbox_intents(
         )
         await publish_scene()
 
+    async def set_code_sandbox_code(node_id, new_code, expected_code):
+        # Acknowledged, non-queueable edit: the domain verifies the original
+        # code and refuses changes while a model/approval/execution is live.
+        # Save/Undo both operate on the exact code that the user reviewed.
+        document.record_command(
+            "setCodeSandboxCode", "user",
+            lambda: document.set_code_sandbox_code(node_id, new_code, expected_code),
+            node_ids=[node_id],
+        )
+        await publish_scene()
+        return node_id
+
     async def set_code_sandbox_allow_source_builds(node_id, allow):
         document.set_code_sandbox_allow_source_builds(node_id, allow)
         await publish_scene()
@@ -79,6 +91,7 @@ def register_code_sandbox_intents(
         agent_dispatcher.cancel_code_sandbox(request_id)
 
     bus.register_intent("scene", "setCodeSandboxRequirements", set_code_sandbox_requirements)
+    bus.register_intent("scene", "setCodeSandboxCode", set_code_sandbox_code)
     bus.register_intent(
         "scene", "setCodeSandboxAllowSourceBuilds", set_code_sandbox_allow_source_builds
     )
