@@ -27,7 +27,7 @@ def _manual_canvas():
 
         async def start_conversation_reply(self, **kwargs):
             self.calls.append(kwargs)
-            kwargs["on_claim"]()
+            kwargs["accepted_history"] = kwargs["on_claim"]()
             kwargs["node"].pending_request_id = "captured-run-id"
 
     bus = SessionBus("conversation-admission-tests")
@@ -80,7 +80,7 @@ def test_admitted_send_mutates_once_and_forwards_branch_context():
         assert call["canvas_document"] is doc and call["node_id"] == node.id
         assert call["conversation_history"] is node.history
         # The committed snapshot returned to _dispatch is a separate list.
-        snapshot = call["on_claim"]()
+        snapshot = call["accepted_history"]
         assert snapshot == node.history
         assert snapshot is not node.history
 
