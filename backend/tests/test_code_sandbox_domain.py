@@ -496,41 +496,43 @@ class TestRunSubprocessInterruptedThenReused:
         assert "still works" in output
 
 
-class TestReentrancyGapOnASingleSandboxInstance:
-    """Documents a genuine gap in the domain code (flagged in the task
-    report, not fixed - see this file's PR/task notes): VirtualEnvSandbox
-    has no lock guarding self.guard/self.current_process against a second,
-    overlapping _run_subprocess call on the SAME instance. Each call
-    unconditionally overwrites both attributes at its own start, so an
-    earlier in-flight call's own tracking is silently orphaned - its
-    eventual `finally` block closes/nulls whatever the SECOND call put
-    there, never its own guard/process. In production this is masked by
-    VirtualEnvSandbox being constructed fresh per run (see backend/
-    agents.py's own AgentDispatcher.__init__ docstring: "Execution Sandbox
-    needs NO equivalent manager...constructed fresh per run"), so two
-    overlapping runs never share one instance today - but nothing in
-    domain.py itself enforces that; it is a caller convention, not a
-    guarantee this module provides."""
+class TestExclusiveProcessOwnership:
+    """The previous overlap test intentionally documented an orphaned
+    subprocess. Rejecting the second operation now protects the first run's
+    process and guard from being overwritten, even if a caller misuses the
+    same VirtualEnvSandbox instance concurrently.
+    """
 
-    def test_a_second_run_subprocess_call_orphans_the_firsts_tracking(self):
-        sandbox = VirtualEnvSandbox("reentrancy-gap-test")
+    def test_a_busy_instance_refuses_a_second_run_without_touching_its_process(self):
+        sandbox = VirtualEnvSandbox("reentrancy-fixed-test")
         first_guard = MagicMock()
         first_process = MagicMock()
-        first_process.poll.return_value = None
         sandbox.guard = first_guard
         sandbox.current_process = first_process
 
-        output, code = sandbox._run_subprocess(
-            [sys.executable, "-c", "print('second call')"],
-            should_continue=lambda: True,
-            timeout_seconds=30,
-        )
+        with pytest.raises(RuntimeError, match="existing process ownership"):
+            sandbox._run_subprocess(
+                [sys.executable, "-c", "print('second call')"],
+                should_continue=lambda: True,
+                timeout_seconds=30,
+            )
 
-        assert code == 0
-        # Nothing about the second, successful call ever closed/terminated
-        # the first call's own guard/process - they were simply overwritten.
+        assert sandbox.guard is first_guard
+        assert sandbox.current_process is first_process
         first_guard.close.assert_not_called()
         first_process.terminate.assert_not_called()
+
+    def test_nonblocking_run_lock_refuses_while_another_call_owns_it(self):
+        sandbox = VirtualEnvSandbox("reentrancy-lock-test")
+        sandbox._run_lock.acquire()
+        try:
+            with pytest.raises(RuntimeError, match="already has an active subprocess"):
+                sandbox._run_subprocess(
+                    [sys.executable, "-c", "print('should not spawn')"],
+                    should_continue=lambda: True,
+                )
+        finally:
+            sandbox._run_lock.release()
 
 
 # -- VirtualEnvSandbox.execute_code ------------------------------------------
@@ -746,3 +748,68 @@ class TestSyncRequirementsRealMalformedManifest:
         # subsequent read of requirements.txt reflects the attempted
         # manifest even when the install itself failed.
         assert "totally-not-a-package[unclosed-extra" in sandbox.requirements_file.read_text(encoding="utf-8")
+
+
+# -- Runaway output and cleanup safety (real child processes) ----------------
+
+class TestBoundedProcessOutput:
+    def test_single_newline_free_line_is_read_in_bounded_chunks(self):
+        sandbox = VirtualEnvSandbox("bounded-line-test")
+        chunks = []
+        output, code = sandbox._run_subprocess(
+            [sys.executable, "-c", "import sys; sys.stdout.write('x' * 16000); sys.stdout.flush()"],
+            should_continue=lambda: True, emit_line=chunks.append, timeout_seconds=30,
+        )
+        assert code == 0
+        assert output == "x" * 16000
+        assert len(chunks) >= 4
+        assert all(len(chunk) <= domain_module.MAX_SUBPROCESS_READ_CHARS for chunk in chunks)
+        assert "".join(chunks) == output
+
+    def test_unbounded_stdout_is_stopped_instead_of_exhausting_memory(self):
+        sandbox = VirtualEnvSandbox("oversized-output-test")
+        with pytest.raises(RuntimeError, match="output exceeded"):
+            sandbox._run_subprocess(
+                [sys.executable, "-c",
+                 "import sys; sys.stdout.write('x' * 300000); sys.stdout.flush()"],
+                should_continue=lambda: True, timeout_seconds=30,
+            )
+        assert sandbox.current_process is None
+        assert sandbox.guard is None
+
+    def test_non_utf8_subprocess_output_is_replaced_not_silently_lost(self):
+        sandbox = VirtualEnvSandbox("binary-ish-output-test")
+        output, code = sandbox._run_subprocess(
+            [sys.executable, "-c", "import sys; sys.stdout.buffer.write(bytes([255, 254])); sys.stdout.flush()"],
+            should_continue=lambda: True, timeout_seconds=30,
+        )
+        assert code == 0
+        assert "\ufffd" in output
+
+    def test_guard_is_released_when_process_spawn_raises(self, monkeypatch):
+        sandbox = VirtualEnvSandbox("popen-error-test")
+        guard = MagicMock()
+        guard.popen_kwargs.return_value = {}
+        monkeypatch.setattr(domain_module, "create_execution_guard", lambda: guard)
+
+        def refuse_popen(*_args, **_kwargs):
+            raise FileNotFoundError("no interpreter")
+
+        monkeypatch.setattr(domain_module.subprocess, "Popen", refuse_popen)
+        with pytest.raises(FileNotFoundError, match="no interpreter"):
+            sandbox._run_subprocess(["missing-executable"], lambda: True)
+
+        guard.close.assert_called_once()
+        assert sandbox.current_process is None
+        assert sandbox.guard is None
+        assert not sandbox._run_lock.locked()
+
+    def test_manifest_and_script_limits_apply_even_to_direct_domain_calls(self, tmp_path):
+        sandbox = VirtualEnvSandbox("input-budget-test")
+        sandbox.base_dir = tmp_path / "scratch"
+        sandbox.script_path = sandbox.base_dir / "sandbox_entry.py"
+        with pytest.raises(RuntimeError, match="manifest exceeded"):
+            sandbox.sync_requirements("x" * 17000, lambda: True)
+        with pytest.raises(RuntimeError, match="script exceeded"):
+            sandbox.execute_code("x" * 100001, lambda: True)
+        assert not sandbox.script_path.exists()

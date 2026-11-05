@@ -246,6 +246,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_code_sandbox.py (scene) -------------------------
     Classified("scene", "setCodeSandboxRequirements", "A", "content: requirements text is document state"),
+    Classified("scene", "setCodeSandboxCode", "A", "content: undoable optimistic Python source edit"),
     Classified("scene", "setCodeSandboxAllowSourceBuilds", "B", "security: source-build approval gate"),
     Classified("scene", "runCodeSandbox", "B", "run-lifecycle: start/complete/fail an agent run"),
     Classified("scene", "cancelCodeSandboxRequest", "B", "run-lifecycle: cancel"),

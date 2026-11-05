@@ -3,6 +3,7 @@ import { memo, useEffect, useState } from "react";
 import type { StreamListener } from "../../lib/ws/transport";
 import { CodeExecutionApprovalPanel } from "./CodeExecutionApprovalPanel";
 import { CollapseToggleButton } from "./CollapseToggleButton";
+import { downloadTextFile } from "./downloadTextFile";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
@@ -68,6 +69,7 @@ export interface CodeSandboxNodeData extends Record<string, unknown> {
   isCollapsed: boolean;
   pendingRequestId: string | null;
   onSetRequirements: (requirementsText: string) => void;
+  onSetCode: (code: string, expectedCode: string, onSettled: (success: boolean) => void) => void;
   onToggleAllowSourceBuilds: (allow: boolean) => void;
   onRun: (inputText: string) => void;
   onCancel: () => void;
@@ -131,6 +133,16 @@ function toPythonFence(code: string): string {
   return "```python\n" + code + "\n```";
 }
 
+const MAX_LIVE_TERMINAL_CHARS = 64_000;
+const OLDER_OUTPUT_HIDDEN = "[Earlier terminal output hidden to limit memory]\n";
+
+/** Keep recent terminal output visible without retaining unbounded deltas. */
+export function appendBoundedTerminalOutput(current: string, delta: string, reset: boolean): string {
+  const next = (reset ? "" : current) + delta;
+  if (next.length <= MAX_LIVE_TERMINAL_CHARS) return next;
+  return OLDER_OUTPUT_HIDDEN + next.slice(-(MAX_LIVE_TERMINAL_CHARS - OLDER_OUTPUT_HIDDEN.length));
+}
+
 // -- view ----------------------------------------------------------------
 
 /** ADR-011 stage 11.1: React.memo comparator - id (read into
@@ -168,6 +180,7 @@ export function codeSandboxNodePropsAreEqual(
     a.isCollapsed === b.isCollapsed &&
     a.pendingRequestId === b.pendingRequestId &&
     a.onSetRequirements === b.onSetRequirements &&
+    a.onSetCode === b.onSetCode &&
     a.onToggleAllowSourceBuilds === b.onToggleAllowSourceBuilds &&
     a.onRun === b.onRun &&
     a.onCancel === b.onCancel &&
@@ -200,10 +213,52 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
   const [promptDraft, setPromptDraft] = useState(data.codeSandboxPrompt);
 
   const busy = !!data.pendingRequestId;
+  // User edits must not overwrite a newer model result, or bypass the
+  // approval step. The backend verifies this exact original value again.
+  const [editingCode, setEditingCode] = useState(false);
+  const [codeDraft, setCodeDraft] = useState("");
+  const [codeBase, setCodeBase] = useState("");
+  const [savingCode, setSavingCode] = useState(false);
+  const [codeEditError, setCodeEditError] = useState("");
+  const staleCode = editingCode && codeBase !== data.codeSandboxCode;
   const canRun = !!promptDraft.trim() || !!data.codeSandboxCode.trim();
 
+  function beginCodeEdit() {
+    if (busy || data.codeSandboxAwaitingApproval) return;
+    setCodeBase(data.codeSandboxCode);
+    setCodeDraft(data.codeSandboxCode);
+    setCodeEditError("");
+    setEditingCode(true);
+  }
+
+  function saveCodeEdit() {
+    if (savingCode || busy || data.codeSandboxAwaitingApproval) return;
+    if (staleCode) {
+      setCodeEditError("The Python script changed while editing. Download your draft, then reopen the latest script.");
+      return;
+    }
+    if (codeDraft.length > 100_000) {
+      setCodeEditError("Python scripts are limited to 100,000 characters.");
+      return;
+    }
+    if (codeDraft === codeBase) {
+      setEditingCode(false);
+      return;
+    }
+    setSavingCode(true);
+    data.onSetCode(codeDraft, codeBase, (success) => {
+      setSavingCode(false);
+      if (success) {
+        setCodeEditError("");
+        setEditingCode(false);
+      } else {
+        setCodeEditError("The save was rejected. Your script remains in the editor; retry or download it.");
+      }
+    });
+  }
+
   function runNow() {
-    if (!canRun) return;
+    if (!canRun || busy || editingCode) return;
     data.onRun(promptDraft.trim());
   }
 
@@ -228,7 +283,7 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
     const requestId = data.pendingRequestId;
     if (!requestId) return;
     const unsubscribe = data.subscribeStream(requestId, (delta, _done, reset) => {
-      setStreamedOutput((current) => (reset ? delta : current + delta));
+      setStreamedOutput((current) => appendBoundedTerminalOutput(current, delta, reset));
     });
     return () => unsubscribe();
     // data.subscribeStream is a fresh closure every render (see SceneCanvas's
@@ -343,11 +398,22 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
             <button
               type="button"
               className="code-sandbox-node-run"
-              disabled={!canRun || busy}
+              disabled={!canRun || busy || editingCode}
               onClick={runNow}
             >
               {busy ? "Running…" : "Run"}
             </button>
+            {!!data.codeSandboxCode.trim() && (
+              <button
+                type="button"
+                className="code-sandbox-node-cancel"
+                disabled={busy || editingCode}
+                onClick={() => data.onRun("")}
+                title="Re-run the saved Python script without asking the AI to regenerate it"
+              >
+                Run saved script
+              </button>
+            )}
             {data.pendingRequestId && (
               <button
                 type="button"
@@ -408,17 +474,57 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
             </div>
           )}
 
-          {data.codeSandboxCode && (
-            <div className="code-sandbox-node-section">
-              {/* No "Code" label: the fence header NodeMarkdown renders
-                  already says PYTHON with its own Copy button, and two
-                  stacked all-caps headers naming the same pane was part of
-                  what read as a form rather than a tool. */}
+          <div className="code-sandbox-node-section">
+            <div className="code-sandbox-node-editor-actions">
+              {editingCode ? (
+                <>
+                  <button type="button" disabled={savingCode || busy || staleCode} onClick={saveCodeEdit}>
+                    {savingCode ? "Saving…" : "Save script"}
+                  </button>
+                  <button type="button" disabled={savingCode} onClick={() => setEditingCode(false)}>
+                    Cancel edit
+                  </button>
+                </>
+              ) : (
+                <button type="button" disabled={busy || data.codeSandboxAwaitingApproval} onClick={beginCodeEdit}>
+                  {data.codeSandboxCode ? "Edit Python" : "Write Python"}
+                </button>
+              )}
+              <button type="button"
+                disabled={!(editingCode ? codeDraft : data.codeSandboxCode)}
+                onClick={() => downloadTextFile(editingCode ? codeDraft : data.codeSandboxCode, "runner.py")}>
+                Download .py
+              </button>
+            </div>
+            <p className="code-sandbox-node-editor-notice">
+              Executed Python runs with your user-account permissions. Review and approve every run.
+            </p>
+            {staleCode && <p role="alert" className="code-sandbox-node-banner-error">
+              The saved script changed during this edit. Download your draft before reopening the latest version.
+            </p>}
+            {editingCode && codeEditError && <p role="alert" className="code-sandbox-node-banner-error">
+              {codeEditError}
+            </p>}
+            {editingCode ? (
+              <textarea className="code-sandbox-node-source-editor nodrag"
+                aria-label="Edit Python script"
+                value={codeDraft}
+                onChange={(event) => { setCodeDraft(event.target.value); setCodeEditError(""); }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                    event.preventDefault();
+                    saveCodeEdit();
+                  }
+                }}
+                disabled={savingCode}
+                spellCheck={false}
+              />
+            ) : data.codeSandboxCode ? (
               <div className="chat-node-content code-sandbox-node-code">
                 <NodeMarkdown content={toPythonFence(data.codeSandboxCode)} />
               </div>
-            </div>
-          )}
+            ) : null}
+          </div>
 
           {/* The terminal exists only once there is (or is about to be)
               output. The old card rendered a permanent "No output yet." box

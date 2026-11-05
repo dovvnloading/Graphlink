@@ -975,6 +975,8 @@ function makeCodeSandboxFns(id: string, liveRef: { current: DispatcherLive }) {
     onDelete: () => liveRef.current.store.removeNodes([id]),
     onSetRequirements: (requirementsText: string) =>
       liveRef.current.store.setCodeSandboxRequirements(id, requirementsText),
+    onSetCode: (code: string, expectedCode: string, settled: (success: boolean) => void) =>
+      liveRef.current.store.setCodeSandboxCode(id, code, expectedCode, settled),
     onToggleAllowSourceBuilds: (allow: boolean) => liveRef.current.store.setCodeSandboxAllowSourceBuilds(id, allow),
     onRun: (inputText: string) => liveRef.current.store.runCodeSandbox(id, inputText),
     onCancel: () => {

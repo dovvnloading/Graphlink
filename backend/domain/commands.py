@@ -397,6 +397,7 @@ _COMMAND_LABELS = {
     "setNoteContent": "Edit Note",
     "setHtmlContent": "Edit HTML",
     "setArtifactContent": "Edit Artifact",
+    "setCodeSandboxCode": "Edit Python Script",
     "stageArtifactProposal": "Propose Artifact Revision",
     "acceptArtifactProposal": "Accept Artifact Revision",
     "discardArtifactProposal": "Discard Artifact Revision",
