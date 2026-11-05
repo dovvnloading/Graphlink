@@ -70,6 +70,34 @@ but does **not** yet reduce provider output tokens.
 
 ## Phase 1B — checked incremental editing and diff review
 
+**Implemented first increment (this PR):** The Artifact agent now selects
+bounded Markdown sections only when a user's latest instruction explicitly
+names unique section headings. For documents of at least 6,000 characters,
+the selected sections (up to three, each at most 14,000 chars) plus a bounded
+heading outline are sent to the existing schema-constrained JSON provider
+path. Unchanged section bodies stay on the server. A valid JSON patch is
+checked against the full source fingerprint and each target's ID/sha256,
+then composed locally into a whole-document candidate. The existing #459
+review/accept/discard flow is still the **only** path that applies it.
+
+For small documents and global changes up to 24,000 characters, the existing
+full-document generation remains available. On larger unmatched instructions,
+duplicate section headings, oversized targets, or malformed responses, the
+agent fails with an actionable message rather than silently truncating a
+document or guessing a target. No native file patch application or code
+execution is performed. Section headings inside fenced code blocks are not
+eligible targets. These are deliberately conservative defaults.
+
+This enables smaller *model inputs* and smaller *model outputs* for local
+revisions. Offline tests compare the actual outbound prompt length with the
+source document. Real provider cost, success rates and latency still require
+measurement before claiming gains.
+
+**Next expansion:** explicit UI target selection, section insertion/deletion,
+broader semantic matching, optional full rewrite for large structured docs,
+and an improved multi-hunk visual diff. These are separate tasks rather than
+silently weakening safety checks in this initial patch path.
+
 Define a versioned edit protocol independent of any one provider:
 
 ```json
