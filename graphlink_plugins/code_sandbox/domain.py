@@ -47,6 +47,10 @@ from pathlib import Path
 import api_provider
 import graphlink_task_config as config
 from graphlink_execution_guard import create_execution_guard
+from backend.domain.node_states import (
+    CODE_SANDBOX_MAX_CODE_CHARS,
+    CODE_SANDBOX_MAX_REQUIREMENTS_CHARS,
+)
 from graphlink_process_env import safe_subprocess_env
 from graphlink_scratch_dirs import (
     EXECUTION_SANDBOX_ROOT,
@@ -54,6 +58,14 @@ from graphlink_scratch_dirs import (
     safe_scratch_id,
     touch_scratch_dir_usage,
 )
+
+
+# Strict per-child memory budget for captured and streamed stdout/stderr.
+# The reader only takes bounded chunks and the queue has finite capacity, so
+# both an infinite print loop and a giant newline-free line are contained.
+MAX_SUBPROCESS_OUTPUT_CHARS = 256_000
+MAX_SUBPROCESS_READ_CHARS = 4_096
+MAX_SUBPROCESS_QUEUED_CHUNKS = 32
 
 
 class SandboxStage(Enum):
@@ -309,6 +321,9 @@ class VirtualEnvSandbox:
         self.requirements_hash_file = self.base_dir / ".requirements.sha256"
         self.script_path = self.base_dir / "sandbox_entry.py"
         self.current_process = None
+        # The subprocess owner must be unique on each VirtualEnvSandbox.
+        # A second simultaneous call used to overwrite the first guard/pid.
+        self._run_lock = threading.Lock()
         # ADR-005 stage 5.2: the resource guard for whichever subprocess
         # _run_subprocess currently owns - see stop()'s own comment for why
         # closing this, not just terminating/killing current_process, is
@@ -353,7 +368,19 @@ class VirtualEnvSandbox:
         self.current_process = None
 
     def _run_subprocess(self, args, should_continue, emit_line=None, cwd=None, timeout_seconds=None):
+        if not self._run_lock.acquire(blocking=False):
+            raise RuntimeError("Virtual environment runner already has an active subprocess.")
+        try:
+            if self.current_process is not None or self.guard is not None:
+                raise RuntimeError("Virtual environment runner has existing process ownership; stop it first.")
+            return self._run_subprocess_owned(args, should_continue, emit_line, cwd, timeout_seconds)
+        finally:
+            self._run_lock.release()
+
+    def _run_subprocess_owned(self, args, should_continue, emit_line=None, cwd=None, timeout_seconds=None):
+        """One owned child process, bounded captured output, guaranteed cleanup."""
         output_chunks = []
+        output_chars = 0
         start_time = time.monotonic()
         # ADR-005 stage 5.2/5.3: the guard is created BEFORE Popen so its
         # popen_kwargs() can reach the spawn itself. Empty on Windows (the
@@ -362,16 +389,25 @@ class VirtualEnvSandbox:
         # rlimit preexec hook, which must be in place between fork and
         # exec - see graphlink_execution_guard's own docstring.
         self.guard = create_execution_guard()
-        process = subprocess.Popen(
-            args,
-            cwd=str(cwd) if cwd else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            **self.guard.popen_kwargs(),
-            **_subprocess_kwargs(),
-        )
+        try:
+            process = subprocess.Popen(
+                args,
+                cwd=str(cwd) if cwd else None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                **self.guard.popen_kwargs(),
+                **_subprocess_kwargs(),
+            )
+        except BaseException:
+            # A Popen failure must not leave a guard attached to the next
+            # attempted run (the old code's try/finally began after Popen).
+            self.guard.close()
+            self.guard = None
+            raise
         self.current_process = process
         # Windows applies its cap here, after the child exists (an accepted
         # tradeoff over CREATE_SUSPENDED - the child has not run its own
@@ -386,18 +422,39 @@ class VirtualEnvSandbox:
         # normal, repeated-use pattern) never bumps this on its own.
         if cwd:
             touch_scratch_dir_usage(Path(cwd))
-        output_queue = queue.Queue()
+        output_queue = queue.Queue(maxsize=MAX_SUBPROCESS_QUEUED_CHUNKS)
         done_signal = object()
+        reader_stopped = threading.Event()
+
+        def _enqueue(item):
+            while not reader_stopped.is_set():
+                try:
+                    output_queue.put(item, timeout=0.1)
+                    return
+                except queue.Full:
+                    # Backpressure the PIPE reader until the owner catches up.
+                    # Unlike Queue() with no maxsize, runaway output cannot
+                    # consume arbitrarily much process memory.
+                    continue
 
         def _reader():
             if not process.stdout:
-                output_queue.put(done_signal)
+                _enqueue(done_signal)
                 return
             try:
-                for line in iter(process.stdout.readline, ""):
-                    output_queue.put(line)
+                while not reader_stopped.is_set():
+                    try:
+                        # A bounded readline is essential: Python's default
+                        # readline() can allocate a whole giant no-newline line.
+                        line = process.stdout.readline(MAX_SUBPROCESS_READ_CHARS)
+                    except (OSError, ValueError):
+                        # stop() can close the stdout pipe mid-read.
+                        break
+                    if not line:
+                        break
+                    _enqueue(line)
             finally:
-                output_queue.put(done_signal)
+                _enqueue(done_signal)
 
         reader_thread = threading.Thread(target=_reader, daemon=True)
         reader_thread.start()
@@ -430,6 +487,14 @@ class VirtualEnvSandbox:
                 if line is done_signal:
                     break
 
+                output_chars += len(line)
+                if output_chars > MAX_SUBPROCESS_OUTPUT_CHARS:
+                    self.stop()
+                    raise RuntimeError(
+                        "Virtual environment runner output exceeded "
+                        f"{MAX_SUBPROCESS_OUTPUT_CHARS:,} characters; "
+                        "the subprocess was stopped to protect application memory."
+                    )
                 output_chunks.append(line)
                 if emit_line:
                     emit_line(line)
@@ -451,6 +516,7 @@ class VirtualEnvSandbox:
                 self.stop()
             raise
         finally:
+            reader_stopped.set()
             if reader_thread.is_alive():
                 reader_thread.join(timeout=0.5)
             # Normal-completion path: stop() (called on the
@@ -486,6 +552,8 @@ class VirtualEnvSandbox:
             raise RuntimeError(f"Failed to create sandbox environment.\n{output.strip()}")
 
     def sync_requirements(self, requirements_manifest, should_continue, emit_line=None, allow_source_builds=False):
+        if not isinstance(requirements_manifest, str) or len(requirements_manifest) > CODE_SANDBOX_MAX_REQUIREMENTS_CHARS:
+            raise RuntimeError("Dependency manifest exceeded the safe input size limit.")
         normalized = _normalize_requirements(requirements_manifest)
         # ADR-005 stage 5.5 round-3 review-fix: checked unconditionally,
         # ahead of even the cache short-circuit below - --only-binary :all:
@@ -596,6 +664,8 @@ class VirtualEnvSandbox:
         self.requirements_hash_file.write_text(manifest_hash, encoding="utf-8")
 
     def execute_code(self, code, should_continue, emit_line=None):
+        if not isinstance(code, str) or len(code) > CODE_SANDBOX_MAX_CODE_CHARS:
+            raise RuntimeError("Python script exceeded the safe execution size limit.")
         prepare_scratch_dir(self.base_dir)
         self.script_path.write_text(code, encoding="utf-8")
         if emit_line:
