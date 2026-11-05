@@ -594,15 +594,22 @@ def test_a_reply_that_parses_but_carries_no_review_reports_no_verdict(monkeypatc
         ("findings only", '{"review_findings": [{"title": "T", "evidence": "E"}]}'),
     ],
 )
-def test_a_thin_but_real_review_is_still_graded(monkeypatch, label, reply):
-    """The other side of the same gate: a genuine review with nothing wrong to
-    report still has an overview and a scorecard, and must NOT be discarded as
-    contentless."""
+def test_a_thin_but_real_review_is_not_discarded_or_given_an_unearned_grade(monkeypatch, label, reply):
+    """A sparse, real model response is not a fallback. An overview or an
+    explicit scorecard may be graded; a finding without any source path/line
+    must instead remain a provisional suggestion, never a confirmed defect
+    or a release-wide grade."""
     monkeypatch.setattr(api_provider, "chat", lambda **kwargs: {"message": {"content": reply}})
     agent = ReviewLensAgent()
     result = agent.get_response(_payload())
     assert result["fallback"] is False, label
-    assert result["verdict"] != "none", label
+    if label == "findings only":
+        assert result["verdict"] == "none"
+        assert result["quality_score"] == 0
+        assert result["review_findings"][0]["category"] == "Needs Verification"
+        assert result["review_findings"][0]["severity"] == "info"
+    else:
+        assert result["verdict"] != "none", label
 
 
 def test_a_real_model_reply_is_still_graded_normally(monkeypatch):

@@ -94,11 +94,14 @@ Attach these specialist nodes to a branch from the plugin picker:
 | Conversation Node | Branch Foundations | A self-contained linear chat inside a single node. |
 | Web Research | Reasoning & Research | Web retrieval, summarization, and source capture for real-time information. |
 | Gitlink | Build & Execution | Loads a GitHub repo into structured context, previews file-level changes, and writes only after approval. |
+| Review Lens | Reasoning & Research | Fetches a GitHub pull-request diff, reviews added-line evidence, and surfaces source-linked findings and provisional suggestions. |
 | Virtual Environment Runner | Build & Execution | Runs Python in a per-node virtualenv with declared dependencies (isolates installed packages, not the OS or filesystem/network access). |
 | HTML Renderer | Build & Execution | Renders HTML from a parent branch directly inside the app. |
 | Artifact / Drafter | Workflow & Drafting | A split-pane surface for drafting and refining long-form Markdown. |
 
 Use the search field at the top of the plugin picker to find plugins across all categories by name or task. Use the Up/Down arrows to move between results, Enter to launch a result, or Escape to close the picker. Plugin permissions are still checked by the backend.
+
+**Review Lens:** Paste a pull-request URL, **Fetch Diff**, then **Run Review**. Findings anchored to visible added lines include actual source excerpts. Claims without a matching added-line anchor are explicitly marked as provisional **Needs Verification** suggestions, not treated as confirmed high-severity errors. The **Inspect diff** action opens the matching file and hunk in the Walkthrough tab (with a full-diff fallback when the location is unavailable). Truncated diffs or file listings never receive an overall quality score/verdict. A line anchor verifies that the location exists in the diff, **not** that a model's diagnosis is correct; review the source before acting.
 
 **HTML Renderer:** Edit the **Source** pane, then press **Render** or **Ctrl+Enter** (**Cmd+Enter** on macOS) inside the editor. An **out-of-date** indicator distinguishes the saved preview from unsent edits; clicking Render again also restarts interactive HTML/JavaScript previews without creating an extra source edit. Resize Source and Preview using the divider with the mouse or focus it and use Arrow keys (5% steps), PageUp/PageDown (20% steps), or Home/End. The iframe remains isolated with its existing strict Content Security Policy: inline scripts can run inside the preview but cannot access Graphlink's origin or make network requests through the document's restricted resource policies. Do not use the preview for trusted browsing or unrestricted website testing.
 

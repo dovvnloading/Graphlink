@@ -7726,6 +7726,26 @@ mark.document-view-search-match-current {
   color: var(--gl-surface-text-primary);
 }
 
+.code-review-node-diff-focus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+  color: var(--gl-surface-text-muted);
+  font-size: 11px;
+}
+
+.code-review-node-diff-focus p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-review-node-diff-focus button:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+
 .code-review-node-diff-markdown {
   max-height: none;
   overflow: visible;
