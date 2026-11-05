@@ -510,6 +510,14 @@ class GitlinkState(NodeState):
 
 
 
+# User-authored and model-produced Python is approved before execution,
+# but must also be bounded before entering live node state and saved scenes.
+# A venv isolates Python dependencies, NOT the host's user permissions.
+CODE_SANDBOX_MAX_CODE_CHARS = 100_000
+CODE_SANDBOX_MAX_REQUIREMENTS_CHARS = 16_384
+CODE_SANDBOX_MAX_PROMPT_CHARS = 12_000
+
+
 @dataclass
 class CodeSandboxState(NodeState):
     """Relocated verbatim from SceneNode's ten code_sandbox fields (former
