@@ -1,5 +1,5 @@
 import type { Node, NodeProps } from "@xyflow/react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useId, useMemo, useRef, useState } from "react";
 import { resolveShortcut } from "../chrome/shortcuts";
 import {
   HTML_SPLIT_DEFAULT,
@@ -9,6 +9,7 @@ import {
   HTML_SPLITTER_REPORT_DEBOUNCE_MS,
 } from "./canvasConstants";
 import { NodeShell } from "./NodeShell";
+import { nextHtmlSplitterKeyboardValue } from "./htmlSplitterControls";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -169,16 +170,20 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
   const lodCollapsed = useLodVisibility();
   const collapsed = data.isCollapsed || lodCollapsed;
 
-  // Two separate pieces of local state, per the R3.18 spec: `sourceText`
-  // tracks every keystroke in the textarea (fine - it never touches the
-  // iframe), while `renderedDoc` is only ever reassigned by the Render
-  // button's onClick below, via buildSandboxedHtmlDocument, or reseeded
-  // from a server value the card did not write (see prevHtmlContent below).
-  // The iframe's srcDoc is bound to `renderedDoc` alone, never to
-  // `sourceText` - typing literally cannot reach the iframe through any
-  // path in this component.
+  // Source is an editable draft. The sandbox only receives renderedSource,
+  // which changes after an explicit Render or an external server update; a
+  // keystroke alone cannot change or execute the iframe document. Keep the
+  // wrapper memoized rather than rebuilding a potentially large srcdoc on
+  // every textarea keystroke. Render also bumps the iframe key: an unchanged
+  // srcDoc property is otherwise ignored by React/Chromium, so pressing
+  // Render a second time would NOT restart a preview's scripts.
   const [sourceText, setSourceText] = useState(data.htmlContent);
-  const [renderedDoc, setRenderedDoc] = useState(() => buildSandboxedHtmlDocument(data.htmlContent));
+  const [renderedSource, setRenderedSource] = useState(data.htmlContent);
+  const [renderVersion, setRenderVersion] = useState(0);
+  const renderedDoc = useMemo(() => buildSandboxedHtmlDocument(renderedSource), [renderedSource]);
+  const previewOutOfDate = sourceText !== renderedSource;
+  const sourceId = useId();
+  const previewId = useId();
 
   // Off-viewport culling genuinely unmounts this card, so an edit that
   // never reached the backend is lost on the next remount (and on save).
@@ -227,9 +232,17 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
       setCommittedSource(data.htmlContent);
       if (sourceText === committedSource) {
         setSourceText(data.htmlContent);
-        setRenderedDoc(buildSandboxedHtmlDocument(data.htmlContent));
+        setRenderedSource(data.htmlContent);
       }
     }
+  }
+
+  function renderPreview() {
+    setRenderedSource(sourceText);
+    // Remount even when the HTML is unchanged, so interactive previews can be
+    // restarted (timers/DOM state/scripts) without editing the source.
+    setRenderVersion((version) => version + 1);
+    commitSource();
   }
 
   // Save is exempt from the while-typing shortcut gate (see shortcuts.ts),
@@ -238,6 +251,16 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
   // committing here sends setHtmlContent ahead of saveChat and the saved
   // session holds what the user sees. The event is left to propagate.
   function onSourceKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (
+      event.key === "Enter" &&
+      (event.ctrlKey || event.metaKey) &&
+      !event.altKey && !event.shiftKey
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      renderPreview();
+      return;
+    }
     if (resolveShortcut(event) === "save-chat") commitSource();
   }
 
@@ -247,9 +270,14 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
   // debounce state across drags (see makeDebouncedSplitterReport above).
   const [splitterValue, setSplitterValue] = useState(data.htmlSplitterState ?? HTML_SPLIT_DEFAULT);
   const splitterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(
     () => () => {
+      // A drag can outlive its node when React Flow culls it offscreen or
+      // the user deletes it. Remove ALL window listeners and pending reports,
+      // not just the report timer, to avoid stray state updates after unmount.
+      dragCleanupRef.current?.();
       if (splitterTimerRef.current) clearTimeout(splitterTimerRef.current);
     },
     [],
@@ -265,26 +293,63 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
   // render and would risk a stale read if onPointerUp ran before that render
   // flushed.
   function onSplitterPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== undefined && event.button !== 0) return;
+    // One active drag at a time. Ignore moves/ups from a different finger,
+    // and restore the original size on pointercancel/window blur.
+    dragCleanupRef.current?.();
     const startY = event.clientY;
+    const pointerId = event.pointerId;
     const startValue = splitterValue;
     const latestValue = { current: startValue };
+    const isOurPointer = (e: PointerEvent) =>
+      pointerId == null || e.pointerId == null || e.pointerId === pointerId;
 
+    function cleanup() {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      window.removeEventListener("blur", onWindowBlur);
+      dragCleanupRef.current = null;
+    }
     function onPointerMove(moveEvent: PointerEvent) {
+      if (!isOurPointer(moveEvent)) return;
       const next = clampSplitterValue(startValue + (moveEvent.clientY - startY) / HTML_SPLIT_TOTAL_PX);
       latestValue.current = next;
       setSplitterValue(next);
     }
-    function onPointerUp() {
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      // A plain click with no real movement is a no-op - don't fire a
-      // network round trip for an unchanged value.
+    function onPointerUp(upEvent: PointerEvent) {
+      if (!isOurPointer(upEvent)) return;
+      cleanup();
+      // No network round trip for a click without movement.
       if (latestValue.current !== startValue) {
         makeDebouncedSplitterReport(splitterTimerRef, data.onSplitterChange)(latestValue.current);
       }
     }
+    function onPointerCancel(cancelEvent: PointerEvent) {
+      if (!isOurPointer(cancelEvent)) return;
+      cleanup();
+      setSplitterValue(startValue);
+    }
+    function onWindowBlur() {
+      cleanup();
+      setSplitterValue(startValue);
+    }
+    dragCleanupRef.current = cleanup;
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+    window.addEventListener("blur", onWindowBlur);
+  }
+
+  function onSplitterKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const next = nextHtmlSplitterKeyboardValue(splitterValue, event.key);
+    if (next === null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (next === splitterValue) return;
+    setSplitterValue(next);
+    makeDebouncedSplitterReport(splitterTimerRef, data.onSplitterChange)(next);
   }
 
   const sourceHeightPx = Math.round(splitterValue * HTML_SPLIT_TOTAL_PX);
@@ -323,6 +388,8 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
       <div className="html-node-section">
         <p className="html-node-section-label">Source</p>
         <textarea
+          id={sourceId}
+          aria-label="HTML source"
           className="html-node-source"
           style={{ height: sourceHeightPx }}
           value={sourceText}
@@ -341,20 +408,31 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
       <div
         className="html-node-splitter nodrag"
         role="separator"
+        tabIndex={0}
         aria-orientation="horizontal"
         aria-label="Resize source and preview panes"
+        aria-controls={sourceId + " " + previewId}
+        aria-valuemin={Math.round(HTML_SPLIT_MIN * 100)}
+        aria-valuemax={Math.round(HTML_SPLIT_MAX * 100)}
+        aria-valuenow={Math.round(splitterValue * 100)}
+        aria-valuetext={Math.round(splitterValue * 100) + "% source, " +
+          Math.round((1 - splitterValue) * 100) + "% preview"}
         onPointerDown={onSplitterPointerDown}
+        onKeyDown={onSplitterKeyDown}
       />
-      <button
-        type="button"
-        className="html-node-render-btn"
-        onClick={() => {
-          setRenderedDoc(buildSandboxedHtmlDocument(sourceText));
-          commitSource();
-        }}
-      >
-        Render
-      </button>
+      <div className="html-node-render-controls">
+        <button
+          type="button"
+          className="html-node-render-btn"
+          onClick={renderPreview}
+          title="Render or restart the HTML preview (Ctrl+Enter in Source)"
+        >
+          Render
+        </button>
+        <span className={"html-node-preview-status" + (previewOutOfDate ? " stale" : "")} role="status">
+          {previewOutOfDate ? "Preview out of date" : "Preview up to date"}
+        </span>
+      </div>
       <div className="html-node-section">
         <p className="html-node-section-label">Preview</p>
         {/* sandbox is EXACTLY "allow-scripts" - no allow-same-origin (no
@@ -372,6 +450,8 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
             is the only content-delivery path, and it only ever holds
             buildSandboxedHtmlDocument's output. */}
         <iframe
+          key={renderVersion}
+          id={previewId}
           className="html-node-preview"
           style={{ height: previewHeightPx }}
           sandbox="allow-scripts"

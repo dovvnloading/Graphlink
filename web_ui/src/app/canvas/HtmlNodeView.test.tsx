@@ -318,6 +318,81 @@ describe("HtmlNodeView", () => {
   });
 });
 
+describe("HtmlNodeView preview refresh and draft status", () => {
+  it("marks the preview stale on typing and current only after explicit Render", async () => {
+    const user = userEvent.setup();
+    const { container, onSourceCommit } = renderHtmlNode({ htmlContent: "<p>original</p>" });
+    expect(screen.getByRole("status")).toHaveTextContent("Preview up to date");
+    const iframe = getIframe(container);
+
+    fireEvent.change(getSourceTextarea(container), { target: { value: "<p>edited</p>" } });
+    expect(screen.getByRole("status")).toHaveTextContent("Preview out of date");
+    expect(getIframe(container)).toBe(iframe);
+    expect(getIframe(container).srcdoc).toBe(buildSandboxedHtmlDocument("<p>original</p>"));
+    expect(onSourceCommit).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Render" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Preview up to date");
+    expect(getIframe(container).srcdoc).toBe(buildSandboxedHtmlDocument("<p>edited</p>"));
+    expect(onSourceCommit).toHaveBeenCalledExactlyOnceWith("<p>edited</p>");
+  });
+
+  it("restarts the sandbox on repeated Render even when the srcdoc string has not changed", async () => {
+    const user = userEvent.setup();
+    const { container, onSourceCommit } = renderHtmlNode({ htmlContent: "<script>window.count = 1</script>" });
+    const initial = getIframe(container);
+    const html = initial.srcdoc;
+    await user.click(screen.getByRole("button", { name: "Render" }));
+    const firstRerender = getIframe(container);
+    expect(firstRerender).not.toBe(initial);
+    expect(firstRerender.srcdoc).toBe(html);
+
+    await user.click(screen.getByRole("button", { name: "Render" }));
+    expect(getIframe(container)).not.toBe(firstRerender);
+    expect(getIframe(container).srcdoc).toBe(html);
+    // Refreshing an unchanged preview must not create spurious undo entries.
+    expect(onSourceCommit).not.toHaveBeenCalled();
+  });
+
+  it("supports Ctrl+Enter (and Cmd+Enter) in Source, without adding a newline", () => {
+    const { container, onSourceCommit } = renderHtmlNode();
+    const textarea = getSourceTextarea(container);
+
+    fireEvent.change(textarea, { target: { value: "<h1>rendered</h1>" } });
+    const before = getIframe(container);
+    expect(fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true })).toBe(false);
+    expect(textarea.value).toBe("<h1>rendered</h1>");
+    expect(getIframe(container)).not.toBe(before);
+    expect(getIframe(container).srcdoc).toBe(buildSandboxedHtmlDocument("<h1>rendered</h1>"));
+    expect(onSourceCommit).toHaveBeenCalledOnce();
+
+    const refreshed = getIframe(container);
+    expect(fireEvent.keyDown(textarea, { key: "Enter", metaKey: true })).toBe(false);
+    expect(getIframe(container)).not.toBe(refreshed);
+    expect(onSourceCommit).toHaveBeenCalledOnce();
+  });
+
+  it("does not hijack plain Enter or Ctrl+Shift+Enter in the editor", () => {
+    const { container, onSourceCommit } = renderHtmlNode();
+    const textarea = getSourceTextarea(container);
+    const iframe = getIframe(container);
+    fireEvent.keyDown(textarea, { key: "Enter" });
+    fireEvent.keyDown(textarea, { key: "Enter", ctrlKey: true, shiftKey: true });
+    expect(getIframe(container)).toBe(iframe);
+    expect(onSourceCommit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the sandbox policy and fixed base URL unchanged across refreshes", async () => {
+    const user = userEvent.setup();
+    const { container } = renderHtmlNode({ htmlContent: "<h1>isolated</h1>" });
+    await user.click(screen.getByRole("button", { name: "Render" }));
+    const iframe = getIframe(container);
+    expect(iframe).toHaveAttribute("sandbox", "allow-scripts");
+    expect(iframe.srcdoc).toContain(EXACT_CSP_META);
+    expect(iframe.srcdoc).toContain(EXACT_BASE_TAG);
+  });
+});
+
 // R6.3: HTML node splitter-position scaffolding.
 describe("HtmlNodeView splitter (R6.3)", () => {
   it("defaults to a 50/50 split (HTML_SPLIT_TOTAL_PX/2 each pane) when htmlSplitterState is null", () => {
@@ -398,6 +473,105 @@ describe("HtmlNodeView splitter (R6.3)", () => {
       expect(onSplitterChange).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe("HtmlNodeView accessible splitter and interrupted drags", () => {
+  it("exposes a focusable separator with source/preview values and controlled regions", () => {
+    const { container } = renderHtmlNode({ htmlSplitterState: 0.65 });
+    const splitter = getSplitter(container);
+    const textarea = getSourceTextarea(container);
+    const preview = getIframe(container);
+    expect(textarea).toHaveAttribute("aria-label", "HTML source");
+    expect(splitter).toHaveAttribute("tabindex", "0");
+    expect(splitter).toHaveAttribute("aria-valuemin", "15");
+    expect(splitter).toHaveAttribute("aria-valuemax", "85");
+    expect(splitter).toHaveAttribute("aria-valuenow", "65");
+    expect(splitter).toHaveAttribute("aria-valuetext", "65% source, 35% preview");
+    expect(splitter.getAttribute("aria-controls")?.split(" ")).toEqual([textarea.id, preview.id]);
+  });
+
+  it("resizes with ArrowDown, reports only after the debounce, and ignores modified keys", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, onSplitterChange } = renderHtmlNode();
+      const splitter = getSplitter(container);
+      expect(fireEvent.keyDown(splitter, { key: "ArrowDown" })).toBe(false);
+      expect(splitter).toHaveAttribute("aria-valuenow", "55");
+      expect(getSourceTextarea(container).style.height).toBe("154px");
+      expect(getIframe(container).style.height).toBe("126px");
+      expect(onSplitterChange).not.toHaveBeenCalled();
+      fireEvent.keyDown(splitter, { key: "ArrowDown", ctrlKey: true });
+      expect(splitter).toHaveAttribute("aria-valuenow", "55");
+      vi.advanceTimersByTime(200);
+      expect(onSplitterChange).toHaveBeenCalledExactlyOnceWith(0.55);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("supports Home, End and Page keys; ignores unbound keys and no-op bound moves", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, onSplitterChange } = renderHtmlNode({ htmlSplitterState: 0.5 });
+      const splitter = getSplitter(container);
+      fireEvent.keyDown(splitter, { key: "End" });
+      expect(splitter).toHaveAttribute("aria-valuenow", "85");
+      fireEvent.keyDown(splitter, { key: "ArrowDown" }); // already at the maximum
+      fireEvent.keyDown(splitter, { key: "Tab" });
+      vi.advanceTimersByTime(200);
+      expect(onSplitterChange).toHaveBeenCalledExactlyOnceWith(0.85);
+      fireEvent.keyDown(splitter, { key: "Home" });
+      expect(splitter).toHaveAttribute("aria-valuenow", "15");
+      fireEvent.keyDown(splitter, { key: "PageDown" });
+      expect(splitter).toHaveAttribute("aria-valuenow", "35");
+      vi.advanceTimersByTime(200);
+      expect(onSplitterChange).toHaveBeenCalledTimes(2);
+      expect(onSplitterChange).toHaveBeenLastCalledWith(0.35);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ignores other pointer IDs and restores the split on pointercancel", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, onSplitterChange } = renderHtmlNode();
+      const splitter = getSplitter(container);
+      fireEvent.pointerDown(splitter, { clientY: 100, pointerId: 3 });
+      fireEvent.pointerMove(window, { clientY: 250, pointerId: 4 });
+      expect(splitter).toHaveAttribute("aria-valuenow", "50");
+      fireEvent.pointerMove(window, { clientY: 128, pointerId: 3 });
+      expect(splitter).toHaveAttribute("aria-valuenow", "60");
+      fireEvent.pointerCancel(window, { pointerId: 3 });
+      expect(splitter).toHaveAttribute("aria-valuenow", "50");
+      fireEvent.pointerUp(window, { pointerId: 3 });
+      vi.advanceTimersByTime(500);
+      expect(onSplitterChange).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("removes active global pointer listeners if the node unmounts mid-drag", () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+    try {
+      const { container, unmount, onSplitterChange } = renderHtmlNode();
+      fireEvent.pointerDown(getSplitter(container), { clientY: 80 });
+      const listener = addSpy.mock.calls.find(([type]) => type === "pointercancel")?.[1];
+      expect(listener).toEqual(expect.any(Function));
+      unmount();
+      expect(removeSpy).toHaveBeenCalledWith("pointercancel", listener);
+      expect(removeSpy).toHaveBeenCalledWith("pointerup", expect.any(Function));
+      expect(removeSpy).toHaveBeenCalledWith("pointermove", expect.any(Function));
+      fireEvent.pointerMove(window, { clientY: 120 });
+      fireEvent.pointerUp(window);
+      expect(onSplitterChange).not.toHaveBeenCalled();
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
     }
   });
 });

@@ -100,6 +100,8 @@ Attach these specialist nodes to a branch from the plugin picker:
 
 Use the search field at the top of the plugin picker to find plugins across all categories by name or task. Use the Up/Down arrows to move between results, Enter to launch a result, or Escape to close the picker. Plugin permissions are still checked by the backend.
 
+**HTML Renderer:** Edit the **Source** pane, then press **Render** or **Ctrl+Enter** (**Cmd+Enter** on macOS) inside the editor. An **out-of-date** indicator distinguishes the saved preview from unsent edits; clicking Render again also restarts interactive HTML/JavaScript previews without creating an extra source edit. Resize Source and Preview using the divider with the mouse or focus it and use Arrow keys (5% steps), PageUp/PageDown (20% steps), or Home/End. The iframe remains isolated with its existing strict Content Security Policy: inline scripts can run inside the preview but cannot access Graphlink's origin or make network requests through the document's restricted resource policies. Do not use the preview for trusted browsing or unrestricted website testing.
+
 ## Getting Started
 
 ### Requirements
