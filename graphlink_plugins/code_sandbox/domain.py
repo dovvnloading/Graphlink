@@ -409,19 +409,16 @@ class VirtualEnvSandbox:
             self.guard = None
             raise
         self.current_process = process
-        # Windows applies its cap here, after the child exists (an accepted
-        # tradeoff over CREATE_SUSPENDED - the child has not run its own
-        # code yet). On POSIX this records the process-group id close()
-        # will kill.
-        self.guard.assign(process.pid)
-        # ADR-005 stage 5.3 (review-fix): mark base_dir as actively used -
-        # every real call site (venv creation, pip install, script
-        # execution) routes through here, so this is the one choke point
-        # that needs it. See touch_scratch_dir_usage's own docstring for
-        # why an in-place file rewrite (sync_requirements/execute_code's
-        # normal, repeated-use pattern) never bumps this on its own.
-        if cwd:
-            touch_scratch_dir_usage(Path(cwd))
+        # Windows applies its resource guard after spawn. If assign() or
+        # usage bookkeeping fails, close the just-created child immediately
+        # rather than orphaning it before the reader/finally block exists.
+        try:
+            self.guard.assign(process.pid)
+            if cwd:
+                touch_scratch_dir_usage(Path(cwd))
+        except BaseException:
+            self.stop()
+            raise
         output_queue = queue.Queue(maxsize=MAX_SUBPROCESS_QUEUED_CHUNKS)
         done_signal = object()
         reader_stopped = threading.Event()
