@@ -6107,6 +6107,35 @@ mark.document-view-search-match-current {
    it (unlike every scalar-content sibling's single `-content` block, this
    node's body is two stacked regions: a growing list, then a fixed input
    row that must stay put). */
+/* Keep long conversations responsive: only recent bubbles are mounted by
+   default, but all saved turns remain available via Show earlier and export. */
+.conversation-node-history-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+.conversation-node-history-controls button {
+  padding: 3px 7px;
+  font-size: 10px;
+  font-family: inherit;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.conversation-node-send-error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+}
+
 .conversation-node-messages {
   display: flex;
   flex-direction: column;
