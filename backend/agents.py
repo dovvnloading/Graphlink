@@ -89,6 +89,7 @@ from graphlink_plugins.gitlink.agent import GitlinkAgent, _fingerprint_changes, 
 from graphlink_plugins.review_lens.diff_fetch import fetch_pr_review_bundle
 from graphlink_plugins.review_lens.pr_url import parse_pr_url
 from graphlink_plugins.review_lens.review_engine import ReviewLensAgent
+from graphlink_plugins.gitlink.change_review import prepare_change_review  # noqa: F401
 from graphlink_plugins.gitlink.repository import (
     GitlinkRepository,
     apply_change_set,
@@ -821,7 +822,7 @@ def _build_gitlink_proposal_markdown(repo, branch, result):
     return "\n".join(lines)
 
 
-def _build_gitlink_preview_text(files, local_root, repo, branch):
+def _build_gitlink_preview_text(files, local_root, repo, branch, *, original_texts=None):
     """Replicates _build_preview_text's diff-building shape, reusing
     read_local_repo_file for the original-content side of each update/delete
     diff. DEVIATION from legacy, noted explicitly: legacy's own
@@ -836,7 +837,11 @@ def _build_gitlink_preview_text(files, local_root, repo, branch):
         path_text = file_item.get("path", "")
         operation = file_item.get("operation", "update")
         original_text = None
-        if local_root:
+        if original_texts is not None:
+            # Review-bound previews use the exact bytes hashed at proposal
+            # creation, not a second potentially stale filesystem read.
+            original_text = original_texts.get(path_text)
+        elif local_root:
             try:
                 original_text = read_local_repo_file(local_root, path_text)
             except Exception:
@@ -899,11 +904,13 @@ def _build_gitlink_preview_text(files, local_root, repo, branch):
 
 
 def _call_gitlink_apply(local_root, pending_changes):
-    """Runs inside asyncio.to_thread. Reuses validate_pending_changes/
-    apply_change_set UNMODIFIED, verbatim - the path-safety boundary is never
-    reimplemented, only invoked."""
+    """Run in a worker: validate content, then enforce preview-bound baselines.
+
+    Legacy saved proposals must be regenerated before they can overwrite
+    local files; the fingerprint alone does not protect against local edits.
+    """
     validate_pending_changes(pending_changes)
-    return apply_change_set(local_root, pending_changes)
+    return apply_change_set(local_root, pending_changes, require_review=True)
 
 
 def register_agents(
