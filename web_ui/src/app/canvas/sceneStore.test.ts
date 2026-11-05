@@ -1854,3 +1854,50 @@ describe("Artifact manual editing transport", () => {
     expect(settled).toHaveBeenCalledWith(false);
   });
 });
+
+
+describe("Artifact proposal transport", () => {
+  it("lazily fetches a bounded candidate from the server", async () => {
+    const fake = makeFakeTransport();
+    fake.requestResults.push({
+      proposalId: "id-1", content: "# Revision",
+      baseSha256: "b".repeat(64), summary: "heading changed",
+    });
+    const store = new SceneStore(fake.transport);
+    expect(await store.fetchArtifactProposal("n1")).toEqual({
+      proposalId: "id-1", content: "# Revision",
+      baseSha256: "b".repeat(64), summary: "heading changed",
+    });
+    expect(fake.requests).toEqual([{
+      topic: "scene", intent: "fetchArtifactProposal", args: ["n1"],
+    }]);
+  });
+
+  it("rejects malformed or too-large fetched candidates", async () => {
+    const fake = makeFakeTransport();
+    fake.requestResults.push({ proposalId: "x", content: 23, summary: "" });
+    const store = new SceneStore(fake.transport);
+    await expect(store.fetchArtifactProposal("n1")).rejects.toThrow("malformed");
+  });
+
+  it("sends nonqueueable, acknowledged accept and discard actions", () => {
+    const fake = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(fake.transport);
+    const accepted = vi.fn();
+    const discarded = vi.fn();
+    store.acceptArtifactProposal("n1", "p1", accepted);
+    store.discardArtifactProposal("n1", "p1", discarded);
+    expect(fake.intents).toEqual([
+      { topic: "scene", intent: "acceptArtifactProposal", args: ["n1", "p1"] },
+      { topic: "scene", intent: "discardArtifactProposal", args: ["n1", "p1"] },
+    ]);
+    expect(fake.transport.fireIntent).toHaveBeenCalledWith(
+      "scene", "acceptArtifactProposal", ["n1", "p1"], undefined,
+      false, undefined, accepted,
+    );
+    fake.fireIntentSettlers[0](true);
+    fake.fireIntentSettlers[1](false);
+    expect(accepted).toHaveBeenCalledWith(true);
+    expect(discarded).toHaveBeenCalledWith(false);
+  });
+});
