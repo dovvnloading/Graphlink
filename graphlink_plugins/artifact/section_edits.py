@@ -42,6 +42,9 @@ SECTION_ID_RE = re.compile(r"^sec-[1-9][0-9]*-[a-f0-9]{12}$")
 # Portable JSON Schema subset supported by backend.structured_output.
 SECTION_PATCH_SCHEMA: dict[str, Any] = {
     "type": "object",
+    # Required by OpenAI's strict JSON Schema mode; also supported by
+    # Gemini and the tool-forced Anthropic provider path.
+    "additionalProperties": False,
     "properties": {
         "version": {"type": "integer", "enum": [1]},
         "base_sha256": {"type": "string"},
@@ -49,6 +52,7 @@ SECTION_PATCH_SCHEMA: dict[str, Any] = {
             "type": "array",
             "items": {
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "kind": {"type": "string", "enum": ["replace-section"]},
                     "section_id": {"type": "string"},
