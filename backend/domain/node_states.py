@@ -97,6 +97,18 @@ class ArtifactState(NodeState):
     # something a reloaded session resurrects.
     artifact_error: str = ""
 
+    # Only the opaque identifier appears on the scene wire. The candidate
+    # body is lazily fetched through an explicit intent, avoiding an extra
+    # 256K characters on every canvas snapshot or patch.
+    #
+    # Unlike a running-job status, an awaiting-review proposal is user
+    # content: all four fields are saved so reconnect/restart cannot silently
+    # discard generated work before a human accepts or rejects it.
+    artifact_proposal_id: str = ""
+    artifact_proposal_content: str = ""
+    artifact_proposal_base_sha256: str = ""
+    artifact_proposal_summary: str = ""
+
 
 @dataclass
 class CodeState(NodeState):
