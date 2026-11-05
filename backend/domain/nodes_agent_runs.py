@@ -23,6 +23,9 @@ from backend.domain.node_states import (
     ARTIFACT_MAX_CHARS,
     ArtifactState,
     CodeSandboxState,
+    CODE_SANDBOX_MAX_CODE_CHARS,
+    CODE_SANDBOX_MAX_PROMPT_CHARS,
+    CODE_SANDBOX_MAX_REQUIREMENTS_CHARS,
     WebResearchState,
 )
 
@@ -341,7 +344,29 @@ class AgentRunOps(SceneDocumentParts):
 
     def set_code_sandbox_requirements(self, node_id: str, requirements_text: str) -> SceneNode:
         node = require_node(self.nodes, node_id, "code_sandbox", CodeSandboxState)
-        node.state.code_sandbox_requirements = str(requirements_text)
+        if not isinstance(requirements_text, str) or len(requirements_text) > CODE_SANDBOX_MAX_REQUIREMENTS_CHARS:
+            raise SceneError(f"Dependency manifest must be text of at most {CODE_SANDBOX_MAX_REQUIREMENTS_CHARS} characters.")
+        node.state.code_sandbox_requirements = requirements_text
+        return node
+
+    def set_code_sandbox_code(self, node_id: str, code: str, expected_code: str) -> SceneNode:
+        """Undoable, optimistic-concurrency edit of the script to re-run.
+
+        Refuse edits during approval/execution, so a user never silently
+        alters already-approved code or loses work to a late model result.
+        Clear old output and analysis because they describe the old script.
+        """
+        node = require_node(self.nodes, node_id, "code_sandbox", CodeSandboxState)
+        if node.pending_request_id or node.state.code_sandbox_awaiting_approval:
+            raise SceneError("Stop the running task before editing its Python script.")
+        if not isinstance(code, str) or len(code) > CODE_SANDBOX_MAX_CODE_CHARS:
+            raise SceneError(f"Python script must be text of at most {CODE_SANDBOX_MAX_CODE_CHARS} characters.")
+        if not isinstance(expected_code, str) or node.state.code_sandbox_code != expected_code:
+            raise SceneError("Python script changed since editing began; preserve your draft and reopen the latest script.")
+        node.state.code_sandbox_code = code
+        node.state.code_sandbox_output = ""
+        node.state.code_sandbox_analysis = ""
+        node.state.code_sandbox_error = ""
         return node
 
     def set_code_sandbox_allow_source_builds(self, node_id: str, allow: bool) -> SceneNode:
@@ -365,7 +390,13 @@ class AgentRunOps(SceneDocumentParts):
         code_sandbox_code value at call time, so this must not overwrite it
         before that decision is made."""
         node = require_node(self.nodes, node_id, "code_sandbox", CodeSandboxState)
-        node.state.code_sandbox_prompt = str(input_text)
+        if not isinstance(input_text, str) or len(input_text) > CODE_SANDBOX_MAX_PROMPT_CHARS:
+            raise SceneError(f"Task prompt must be text of at most {CODE_SANDBOX_MAX_PROMPT_CHARS} characters.")
+        if len(node.state.code_sandbox_code) > CODE_SANDBOX_MAX_CODE_CHARS:
+            raise SceneError("Saved Python script exceeds the safe run size; edit it before execution.")
+        if len(node.state.code_sandbox_requirements) > CODE_SANDBOX_MAX_REQUIREMENTS_CHARS:
+            raise SceneError("Dependency manifest exceeds the safe run size; shorten it first.")
+        node.state.code_sandbox_prompt = input_text
         node.state.code_sandbox_error = ""
         return node
 
