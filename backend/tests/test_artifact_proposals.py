@@ -73,6 +73,7 @@ def test_accepted_revision_refuses_stale_changed_document_without_erasing_either
     doc.stage_artifact_proposal(node.id, "candidate", "Summary", node.state.artifact_content)
     proposal_id = node.state.artifact_proposal_id
     doc.set_artifact_content(node.id, "Human edit", "# Current\n\nKeep me.")
+    assert doc.fetch_artifact_proposal(node.id)["baseMatchesCurrent"] is False
     with pytest.raises(SceneError, match="changed after the proposal"):
         doc.accept_artifact_proposal(node.id, proposal_id)
     assert node.state.artifact_content == "Human edit"
