@@ -942,7 +942,8 @@ function makeGitlinkFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.cancelGitlinkRequest(n.pendingRequestId);
     },
-    onApply: (fingerprint: string) => liveRef.current.store.applyGitlinkChanges(id, fingerprint),
+    onApply: (fingerprint: string, selectedPaths: string[]) =>
+      liveRef.current.store.applyGitlinkChanges(id, fingerprint, selectedPaths),
   };
 }
 

@@ -1159,12 +1159,12 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "cancelGitlinkRequest", args: ["req-55"] }]);
   });
 
-  it("applyGitlinkChanges sends the scene-topic applyGitlinkChanges intent with [nodeId, fingerprint]", () => {
+  it("applyGitlinkChanges forwards only fingerprint plus selected file paths, not file contents", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);
-    store.applyGitlinkChanges("n1", "fingerprint-abc123");
+    store.applyGitlinkChanges("n1", "fingerprint-abc123", ["b.py", "a.py"]);
     expect(intents).toEqual([
-      { topic: "scene", intent: "applyGitlinkChanges", args: ["n1", "fingerprint-abc123"] },
+      { topic: "scene", intent: "applyGitlinkChanges", args: ["n1", "fingerprint-abc123", ["b.py", "a.py"]] },
     ]);
   });
 

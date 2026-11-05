@@ -113,7 +113,7 @@ export interface GitlinkNodeData extends Record<string, unknown> {
   onFetchContext: () => Promise<string>;
   onRun: (taskPrompt: string) => void;
   onCancel: () => void;
-  onApply: (fingerprint: string) => void;
+  onApply: (fingerprint: string, selectedPaths: string[]) => void;
   onToggleCollapse: () => void;
   onDelete: () => void;
 }
@@ -365,15 +365,23 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
 
   // -- Proposal tab / Apply confirmation -----------------------------------
   const applying = data.gitlinkChangeState === "applying" || busy;
-  const canApply = data.gitlinkPendingChanges.length > 0 && !!data.gitlinkChangeFingerprint;
-  // Review one file at a time without changing WHAT gets approved. The
-  // backend owns the entire pending set and its fingerprint.
+  // Diff focus and approval selection are independent: viewing a file does
+  // not include or exclude it. A new fingerprint resets to all selected.
   const [reviewIndex, setReviewIndex] = useState<number | null>(null);
   const [reviewFingerprint, setReviewFingerprint] = useState(data.gitlinkChangeFingerprint);
+  const [approvedPaths, setApprovedPaths] = useState<string[]>(
+    () => data.gitlinkPendingChanges.map((change) => change.path),
+  );
+  const [confirmationFingerprint, setConfirmationFingerprint] = useState<string | null>(null);
   if (reviewFingerprint !== data.gitlinkChangeFingerprint) {
     setReviewFingerprint(data.gitlinkChangeFingerprint);
     setReviewIndex(null);
+    setApprovedPaths(data.gitlinkPendingChanges.map((change) => change.path));
   }
+  const approvedSet = new Set(approvedPaths);
+  const approvedChanges = data.gitlinkPendingChanges.filter((change) => approvedSet.has(change.path));
+  const canApply = approvedChanges.length > 0 && !!data.gitlinkChangeFingerprint;
+  const skippedCount = data.gitlinkPendingChanges.length - approvedChanges.length;
   const reviewSections = splitGitlinkPreview(data.gitlinkPreviewText, data.gitlinkPendingChanges);
   const focusedPreview = reviewIndex != null && reviewSections?.[reviewIndex]
     ? reviewSections[reviewIndex]
@@ -668,8 +676,25 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
 
               {data.gitlinkPendingChanges.length > 0 && (
                 <div className="gitlink-node-review">
-                  <p className="gitlink-node-field-label">Review proposed file changes</p>
-                  <div className="gitlink-node-review-files" aria-label="Review Gitlink files">
+                  <p className="gitlink-node-field-label">Review and select proposed file changes</p>
+                  <div className="gitlink-node-review-selection-bar">
+                    <span role="status">{approvedChanges.length} of {data.gitlinkPendingChanges.length} selected for Apply</span>
+                    <button
+                      type="button"
+                      disabled={applying || skippedCount === 0}
+                      onClick={() => setApprovedPaths(data.gitlinkPendingChanges.map((change) => change.path))}
+                    >
+                      Select all
+                    </button>
+                    <button
+                      type="button"
+                      disabled={applying || approvedChanges.length === 0}
+                      onClick={() => setApprovedPaths([])}
+                    >
+                      Select none
+                    </button>
+                  </div>
+                  <div className="gitlink-node-review-files" aria-label="Select and review Gitlink files">
                     <button
                       type="button"
                       aria-pressed={reviewIndex === null}
@@ -679,18 +704,30 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                       All files
                     </button>
                     {data.gitlinkPendingChanges.map((change, index) => (
-                      <button
-                        key={change.path + ":" + index}
-                        type="button"
-                        aria-label={"Review " + change.operation + " " + change.path}
-                        aria-pressed={reviewIndex === index}
-                        className={reviewIndex === index ? "active" : ""}
-                        disabled={!reviewSections}
-                        onClick={() => setReviewIndex(index)}
-                      >
-                        <span className="gitlink-node-review-operation">{change.operation}</span>
-                        <span>{change.path}</span>
-                      </button>
+                      <div className="gitlink-node-review-file" key={change.path + ":" + index}>
+                        <input
+                          type="checkbox"
+                          aria-label={"Include " + change.path + " in Apply"}
+                          checked={approvedSet.has(change.path)}
+                          disabled={applying}
+                          onChange={(event) => {
+                            setApprovedPaths((current) => event.target.checked
+                              ? [...current, change.path]
+                              : current.filter((path) => path !== change.path));
+                          }}
+                        />
+                        <button
+                          type="button"
+                          aria-label={"Review " + change.operation + " " + change.path}
+                          aria-pressed={reviewIndex === index}
+                          className={reviewIndex === index ? "active" : ""}
+                          disabled={!reviewSections}
+                          onClick={() => setReviewIndex(index)}
+                        >
+                          <span className="gitlink-node-review-operation">{change.operation}</span>
+                          <span>{change.path}</span>
+                        </button>
+                      </div>
                     ))}
                   </div>
                   {reviewIndex !== null && (
@@ -699,8 +736,9 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                     </p>
                   )}
                   <p className="gitlink-node-review-note">
-                    Before writing, Gitlink checks every local file against the version shown
-                    in this preview. A conflict stops the full Apply and requires regeneration.
+                    Check files to include in Apply; viewing a diff does not change selection.
+                    Selected files are checked for conflicts before writing. Unchecked files
+                    are skipped and discarded once the proposal is successfully applied.
                   </p>
                 </div>
               )}
@@ -722,24 +760,34 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   type="button"
                   className="gitlink-node-apply-btn"
                   disabled={!canApply || applying}
-                  onClick={() => overlays.open(applyOverlayName, "dialog")}
+                  onClick={() => {
+                    setConfirmationFingerprint(data.gitlinkChangeFingerprint);
+                    overlays.open(applyOverlayName, "dialog");
+                  }}
                 >
-                  Apply
+                  Apply selected ({approvedChanges.length})
                 </button>
               </div>
 
-              <Dialog name={applyOverlayName} title="Apply Changes?" className="gitlink-node-apply-dialog">
+              <Dialog name={applyOverlayName} title="Apply Selected Changes?" className="gitlink-node-apply-dialog">
+                {confirmationFingerprint !== data.gitlinkChangeFingerprint && (
+                  <p role="alert" className="gitlink-node-banner-error">
+                    The proposal changed while this confirmation was open.
+                    Close it and review the new proposal before applying.
+                  </p>
+                )}
                 <p>
-                  Write {data.gitlinkPendingChanges.length} file{" "}
+                  Write {approvedChanges.length} of {data.gitlinkPendingChanges.length} proposed file{" "}
                   {data.gitlinkPendingChanges.length === 1 ? "change" : "changes"} into{" "}
                   {data.gitlinkLocalRoot}?
                 </p>
                 <p className="gitlink-node-review-note">
-                  All listed files will be applied together. This confirmation does not
-                  select individual files; inspect each diff before continuing.
+                  Only the selected files below will be written. {skippedCount} unchecked{" "}
+                  {skippedCount === 1 ? "change" : "changes"} will be discarded when Apply succeeds.
+                  Regenerate the proposal to apply skipped changes later.
                 </p>
                 <ul className="gitlink-node-apply-file-list">
-                  {data.gitlinkPendingChanges.map((change, index) => (
+                  {approvedChanges.map((change, index) => (
                     <li key={index}>
                       {change.operation} — {change.path}
                     </li>
@@ -751,9 +799,18 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   </button>
                   <button
                     type="button"
-                    disabled={applying || !data.gitlinkChangeFingerprint}
+                    disabled={applying || !canApply || confirmationFingerprint !== data.gitlinkChangeFingerprint}
                     onClick={() => {
-                      if (data.gitlinkChangeFingerprint) data.onApply(data.gitlinkChangeFingerprint);
+                      if (
+                        data.gitlinkChangeFingerprint &&
+                        confirmationFingerprint === data.gitlinkChangeFingerprint &&
+                        approvedChanges.length > 0
+                      ) {
+                        data.onApply(
+                          confirmationFingerprint,
+                          approvedChanges.map((change) => change.path),
+                        );
+                      }
                       overlays.close();
                     }}
                   >
