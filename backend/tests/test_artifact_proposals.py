@@ -31,6 +31,7 @@ def test_generated_candidate_does_not_overwrite_the_saved_document():
         "proposalId": node.state.artifact_proposal_id,
         "content": "# New\n\nChange me.",
         "baseSha256": hashlib.sha256(b"# Current\n\nKeep me.").hexdigest(),
+        "baseMatchesCurrent": True,
         "summary": "Changed the heading.",
     }
     assert node.history[-1]["content"] == "Proposed revision ready for review."
