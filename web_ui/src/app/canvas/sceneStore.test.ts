@@ -1901,3 +1901,23 @@ describe("Artifact proposal transport", () => {
     expect(discarded).toHaveBeenCalledWith(false);
   });
 });
+
+
+describe("Virtual Environment Runner manual Python edit transport", () => {
+  it("sends the expected original code and an acknowledged nonqueueable edit", () => {
+    const fake = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(fake.transport);
+    const onSettled = vi.fn();
+    store.setCodeSandboxCode("cs-1", "print(2)", "print(1)", onSettled);
+    expect(fake.intents).toEqual([{
+      topic: "scene", intent: "setCodeSandboxCode",
+      args: ["cs-1", "print(2)", "print(1)"],
+    }]);
+    expect(fake.transport.fireIntent).toHaveBeenCalledWith(
+      "scene", "setCodeSandboxCode", ["cs-1", "print(2)", "print(1)"],
+      undefined, false, undefined, onSettled,
+    );
+    fake.fireIntentSettlers[0](false);
+    expect(onSettled).toHaveBeenCalledWith(false);
+  });
+});
