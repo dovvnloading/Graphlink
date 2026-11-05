@@ -263,7 +263,7 @@ class AgentRunOps(SceneDocumentParts):
         })
         return node
 
-    def fetch_artifact_proposal(self, node_id: str) -> dict[str, str] | None:
+    def fetch_artifact_proposal(self, node_id: str) -> dict[str, str | bool] | None:
         """Read large proposal contents only on explicit review."""
         state = require_node(self.nodes, node_id, "artifact", ArtifactState).state
         if not state.artifact_proposal_id:
@@ -272,6 +272,9 @@ class AgentRunOps(SceneDocumentParts):
             "proposalId": state.artifact_proposal_id,
             "content": state.artifact_proposal_content,
             "baseSha256": state.artifact_proposal_base_sha256,
+            "baseMatchesCurrent": hashlib.sha256(
+                state.artifact_content.encode("utf-8")
+            ).hexdigest() == state.artifact_proposal_base_sha256,
             "summary": state.artifact_proposal_summary,
         }
 
