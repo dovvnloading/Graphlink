@@ -20,6 +20,13 @@ import json
 import re
 
 from backend.domain.node_states import ARTIFACT_MAX_CHARS
+from graphlink_plugins.artifact.section_edits import (
+    SECTION_PATCH_SCHEMA,
+    apply_section_patch,
+    patch_messages,
+    select_edit_plan,
+    validate_structured_result_size,
+)
 
 import graphlink_task_config as config
 import api_provider
@@ -51,6 +58,30 @@ RULES:
                 f"The document exceeds {ARTIFACT_MAX_CHARS} characters. "
                 "Shorten or split it before requesting a full-document rewrite."
             )
+        # Section-aware route: edit just the explicitly named section(s)
+        # when the draft is long enough. Nothing changes in the persisted
+        # Artifact/Accept-Discard contract: we compose and validate a full
+        # candidate locally, then stage it for human approval like before.
+        plan = select_edit_plan(current_artifact, history)
+        if plan is not None:
+            from backend.structured_output import respond_json
+
+            patch = respond_json(
+                task=config.TASK_CHAT,
+                messages=patch_messages(plan),
+                schema=SECTION_PATCH_SCHEMA,
+                schema_name="artifact_section_patch_v1",
+            )
+            validate_structured_result_size(patch)
+            updated, summary = apply_section_patch(
+                current_artifact, patch,
+                allowed_section_ids={section.section_id for section in plan.selected},
+            )
+            headings = ", ".join(section.heading for section in plan.selected)
+            return updated, f"Targeted edit ({headings}): {summary}"
+
+        # Short/global drafting still uses the shipped full-rewrite path,
+        # with all existing tag parsing and fail-closed limits preserved.
         snapshot = json.dumps(current_artifact, ensure_ascii=False)
         messages = [
             {"role": "system", "content": self.system_prompt},
