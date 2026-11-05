@@ -242,7 +242,7 @@ class AgentRunOps(SceneDocumentParts):
         """
         node = require_node(self.nodes, node_id, "artifact", ArtifactState)
         state = node.state
-        if state.artifact_content != expected_document:
+        if node.state.artifact_content != expected_document:
             raise SceneError("Artifact changed during generation; proposal discarded.")
         if state.artifact_proposal_id:
             raise SceneError("Review or discard the previous Artifact proposal first.")
@@ -265,7 +265,8 @@ class AgentRunOps(SceneDocumentParts):
 
     def fetch_artifact_proposal(self, node_id: str) -> dict[str, str | bool] | None:
         """Read large proposal contents only on explicit review."""
-        state = require_node(self.nodes, node_id, "artifact", ArtifactState).state
+        node = require_node(self.nodes, node_id, "artifact", ArtifactState)
+        state = node.state
         if not state.artifact_proposal_id:
             return None
         return {
@@ -273,7 +274,7 @@ class AgentRunOps(SceneDocumentParts):
             "content": state.artifact_proposal_content,
             "baseSha256": state.artifact_proposal_base_sha256,
             "baseMatchesCurrent": hashlib.sha256(
-                state.artifact_content.encode("utf-8")
+                node.state.artifact_content.encode("utf-8")
             ).hexdigest() == state.artifact_proposal_base_sha256,
             "summary": state.artifact_proposal_summary,
         }
@@ -284,13 +285,13 @@ class AgentRunOps(SceneDocumentParts):
         state = node.state
         if not proposal_id or state.artifact_proposal_id != proposal_id:
             raise SceneError("Artifact proposal is no longer current; reopen review.")
-        current_sha = hashlib.sha256(state.artifact_content.encode("utf-8")).hexdigest()
+        current_sha = hashlib.sha256(node.state.artifact_content.encode("utf-8")).hexdigest()
         if current_sha != state.artifact_proposal_base_sha256:
             raise SceneError("Artifact changed after the proposal was created. Export or discard the proposal before retrying.")
         content = state.artifact_proposal_content
         if len(content) > ARTIFACT_MAX_CHARS:
             raise SceneError("Artifact proposal exceeds the safe document size limit.")
-        state.artifact_content = content
+        node.state.artifact_content = content
         state.artifact_error = ""
         self._clear_artifact_proposal(state)
         return node
