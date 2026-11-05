@@ -51,6 +51,7 @@ export interface ArtifactProposal {
   proposalId: string;
   content: string;
   baseSha256: string;
+  baseMatchesCurrent: boolean;
   summary: string;
 }
 
@@ -201,7 +202,10 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
   const [deciding, setDeciding] = useState(false);
   const [reviewError, setReviewError] = useState("");
   const activeReview = review?.proposal.proposalId === data.artifactProposalId ? review : null;
-  const staleReview = !!activeReview && activeReview.original !== data.artifactContent;
+  const staleReview = !!activeReview && (
+    !activeReview.proposal.baseMatchesCurrent ||
+    activeReview.original !== data.artifactContent
+  );
   const proposedDiff = activeReview ? artifactDiffPreview(activeReview.original, activeReview.proposal.content) : null;
   const staleEdit = editing && data.artifactContent !== editBase;
   const displayedDocument = editing ? editDraft : data.artifactContent;
@@ -357,7 +361,7 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
               )}
               {staleReview && (
                 <p role="alert" className="artifact-node-edit-warning">
-                  Your saved document changed since this review was opened. Accept is disabled.
+                  The saved document differs from this proposal's original base. Accept is disabled to protect your edits.
                 </p>
               )}
               {proposedDiff.changed ? (
