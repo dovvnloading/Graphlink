@@ -375,11 +375,13 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
                       <strong>Current change region</strong>
                       <pre className="artifact-node-diff-before">{proposedDiff.before || "(empty)"}</pre>
                       {proposedDiff.omittedBeforeLines > 0 && <small>{proposedDiff.omittedBeforeLines} more lines not shown</small>}
+                      {proposedDiff.clippedBeforeChars && <small>Long lines clipped to 5,000 characters</small>}
                     </div>
                     <div>
                       <strong>Proposed change region</strong>
                       <pre className="artifact-node-diff-after">{proposedDiff.after || "(empty)"}</pre>
                       {proposedDiff.omittedAfterLines > 0 && <small>{proposedDiff.omittedAfterLines} more lines not shown</small>}
+                      {proposedDiff.clippedAfterChars && <small>Long lines clipped to 5,000 characters</small>}
                     </div>
                   </div>
                 </>
