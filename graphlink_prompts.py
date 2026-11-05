@@ -134,6 +134,11 @@ def _resolve_note_explainer() -> str:
     return ExplainerAgent().system_prompt
 
 
+def _resolve_artifact_section_patch() -> str:
+    from graphlink_plugins.artifact.section_edits import SECTION_PATCH_SYSTEM_PROMPT
+    return SECTION_PATCH_SYSTEM_PROMPT
+
+
 def _resolve_web_research_query() -> str:
     from graphlink_plugins.web_research.providers import ApiResearchModel
     return ApiResearchModel.QUERY_SYSTEM
@@ -206,6 +211,7 @@ _PROMPT_RESOLVERS = {
     "note-branch-comparison": _resolve_note_branch_comparison,
     "note-branch-synthesis": _resolve_note_branch_synthesis,
     "note-explainer": _resolve_note_explainer,
+    "artifact-section-patch": _resolve_artifact_section_patch,
     "web-research-query": _resolve_web_research_query,
     "web-research-validation": _resolve_web_research_validation,
     "web-research-summary": _resolve_web_research_summary,
@@ -247,6 +253,9 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         ("note-branch-comparison", 1, "0713d59157923e1ea9dd71715a1ffc9e394e6fedec5a42e62cacb143ef06dfc1"),
         ("note-branch-synthesis", 1, "7513752343c8bc7d4aecfaf388d0513114fd18ad425fa86bab237dfcf38fe2ff"),
         ("note-explainer", 1, "ee3201aec9c750884374a9e01ba3fe544a576ede662b329807a050ff205866b5"),
+        # Targeted Artifact edit protocol v1. Changing the schema-facing
+        # system text requires an explicit version bump and new hash.
+        ("artifact-section-patch", 1, "22938afefc82c4fb49736f95651e2910d71392d78932ca17fd6624bca3749f54"),
         ("web-research-query", 1, "8ac34972ab12b8574177839d28f1b0a3adcadee56af06d9039b3ce9639b8bd67"),
         ("web-research-validation", 1, "6736a24ac6b339cac2268fd1b81ced90185b5537f53406ec2a811a8b8615a3d0"),
         # v2: require exact source IDs rather than abbreviating hashed citation markers.
