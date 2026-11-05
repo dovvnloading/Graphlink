@@ -21,6 +21,11 @@ from backend.domain.node_access import require_node
 from backend.domain.node_states import ChatState
 
 
+# Limit one instruction before it enters scene history and model context.
+# Older histories remain readable; the limit is for new user submissions.
+MAX_CONVERSATION_USER_CHARS = 16_000
+
+
 class ConversationalOps(SceneDocumentParts):
     """The two message-threaded kinds: chat nodes (one bubble each) and
     conversation nodes (a whole thread in one node).
@@ -168,7 +173,13 @@ class ConversationalOps(SceneDocumentParts):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.history.append({"role": "user", "content": str(text)})
+        if node.kind != "conversation":
+            raise SceneError(f"node is not a conversation node: {node_id}")
+        if not isinstance(text, str) or not text.strip():
+            raise SceneError("Conversation message must be nonempty text.")
+        if len(text) > MAX_CONVERSATION_USER_CHARS:
+            raise SceneError(f"Conversation message is limited to {MAX_CONVERSATION_USER_CHARS} characters.")
+        node.history.append({"role": "user", "content": text})
         return node
 
     def append_conversation_assistant_message(
@@ -201,8 +212,8 @@ class ConversationalOps(SceneDocumentParts):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        if message_index < 0 or message_index >= len(node.history):
-            raise SceneError(f"message index out of range: {message_index}")
+        if type(message_index) is not int or message_index < 0 or message_index >= len(node.history):
+            raise SceneError("Conversation message index must be a valid nonnegative integer.")
         node.history.pop(message_index)
 
     def send_conversation_message(self, node_id: str, text: str) -> SceneNode:

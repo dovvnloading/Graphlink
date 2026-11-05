@@ -874,7 +874,10 @@ def test_delete_conversation_message_intent_mutates_and_publishes():
         bus, document, recorder = make_bus()
         parent_id = await bus.dispatch_intent("scene", "addNode", [0, 0, "parent"])
         node_id = await bus.dispatch_intent("scene", "addConversationNode", [10, 10, parent_id])
-        await bus.dispatch_intent("scene", "sendConversationMessage", [node_id, "first"])
+        # The test is about deletion, not provider admission. A real
+        # send now correctly refuses an unconfigured provider without
+        # persisting a phantom user message, so seed this history directly.
+        document.append_conversation_user_message(node_id, "first")
         await bus.dispatch_intent(
             "scene", "appendConversationAssistantMessage", [node_id, "second"]
         )

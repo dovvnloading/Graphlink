@@ -967,7 +967,16 @@ def test_add_pin_assigns_an_incrementing_sort_order(wired):
     assert document.pins.get(d).sort_order == 2
 
 
-def test_conversation_send_and_agent_reply_are_undoable_and_correctly_attributed(wired):
+def test_conversation_send_and_agent_reply_are_undoable_and_correctly_attributed(wired, monkeypatch):
+    # Claim admission deterministically, without a live provider. The
+    # backend now records this command ONLY if a shared chat run was
+    # admitted; a default unconfigured test dispatcher must refuse it.
+    from backend.agents import AgentDispatcher
+
+    async def admit_without_provider(self, **kwargs):
+        kwargs["on_claim"]()
+
+    monkeypatch.setattr(AgentDispatcher, "start_conversation_reply", admit_without_provider)
     bus, document = wired
     parent = _dispatch(bus, "addNote", 0, 0, False, False)
     node_id = _dispatch(bus, "addConversationNode", 0, 0, parent)

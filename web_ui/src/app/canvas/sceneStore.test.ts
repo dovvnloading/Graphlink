@@ -988,16 +988,21 @@ describe("SceneStore", () => {
     ]);
   });
 
-  it("sends conversation-node intents with the backend's registered names and shapes", () => {
-    const { transport, intents } = makeFakeTransport();
+  it("acknowledges a real conversation admission and sends the other registered intents", async () => {
+    const { transport, intents, requests, requestResults } = makeFakeTransport();
     const store = new SceneStore(transport);
     store.addConversationNode(10, 20, "n1");
-    store.sendConversationMessage("n2", "hello there");
+    requestResults.push("n2", null);
+    expect(await store.sendConversationMessage("n2", "hello there")).toBe(true);
+    expect(await store.sendConversationMessage("n2", "a blocked send")).toBe(false);
     store.appendConversationAssistantMessage("n2", "hi back");
     store.deleteConversationMessage("n2", 0);
+    expect(requests).toEqual([
+      { topic: "scene", intent: "sendConversationMessage", args: ["n2", "hello there"] },
+      { topic: "scene", intent: "sendConversationMessage", args: ["n2", "a blocked send"] },
+    ]);
     expect(intents).toEqual([
       { topic: "scene", intent: "addConversationNode", args: [10, 20, "n1"] },
-      { topic: "scene", intent: "sendConversationMessage", args: ["n2", "hello there"] },
       { topic: "scene", intent: "appendConversationAssistantMessage", args: ["n2", "hi back"] },
       { topic: "scene", intent: "deleteConversationMessage", args: ["n2", 0] },
     ]);

@@ -61,7 +61,7 @@ export interface ConversationNodeData extends Record<string, unknown> {
   pendingRequestId: string | null;
   onToggleCollapse: () => void;
   onDelete: () => void;
-  onSend: (text: string) => void;
+  onSend: (text: string) => Promise<boolean>;
   onDeleteMessage: (index: number) => void;
   onCancel: () => void;
   onOpenDocumentView: () => void;
@@ -383,6 +383,11 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
   const collapsed = data.isCollapsed || lodCollapsed;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
   const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState("");
+  const [visibleMessages, setVisibleMessages] = useState(40);
+  const hiddenCount = Math.max(0, data.history.length - visibleMessages);
+  const visibleHistory = data.history.slice(hiddenCount);
 
   // ADR-006 stage 6.4 / ADR-011 stage 11.4 (throttle extended here
   // 2026-08-12): live reply streaming, throttled to at most one markdown
@@ -393,11 +398,28 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
   // parse cost to amortize and is deliberately left as is.)
   const streamedReply = useStreamBuffer(data.pendingRequestId, data.subscribeStream);
 
-  function send() {
+  async function send() {
     const text = draft.trim();
-    if (!text) return;
-    data.onSend(text);
-    setDraft("");
+    if (!text || sending || data.pendingRequestId) return;
+    if (text.length > 16_000) {
+      setSendError("A message can contain at most 16,000 characters. Shorten it before sending.");
+      return;
+    }
+    setSending(true);
+    setSendError("");
+    try {
+      const admitted = await data.onSend(text);
+      if (admitted) {
+        // Keep text added by the user while the send was being confirmed.
+        setDraft((current) => current === draft ? "" : current);
+      } else {
+        setSendError("This message was not sent. Another reply may be running or the AI provider may be unavailable.");
+      }
+    } catch {
+      setSendError("The message could not be sent. Your draft is preserved; check the connection and retry.");
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -430,14 +452,22 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
       }
     >
       <div className="conversation-node-messages">
-        {data.history.map((message, index) => (
+        <div className="conversation-node-history-controls">
+          <span>{data.history.length.toLocaleString()} messages</span>
+          {hiddenCount > 0 && (
+            <button type="button" onClick={() => setVisibleMessages((count) => count + 40)}>
+              Show earlier messages ({hiddenCount.toLocaleString()} hidden)
+            </button>
+          )}
+        </div>
+        {visibleHistory.map((message, index) => (
           // No per-message id on the wire shape - render order is
           // always the true history order, so index is a correct and
           // sufficient key here.
           <ConversationBubble
-            key={index}
+            key={hiddenCount + index}
             message={message}
-            index={index}
+            index={hiddenCount + index}
             onDeleteMessage={data.onDeleteMessage}
           />
         ))}
@@ -483,7 +513,7 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
             if (event.nativeEvent.isComposing) return;
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              send();
+              void send();
             }
           }}
           placeholder="Send a message…"
@@ -495,10 +525,10 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
           <button
             type="button"
             className="conversation-node-send-btn"
-            disabled={!draft.trim() || !!data.pendingRequestId}
-            onClick={send}
+            disabled={!draft.trim() || sending || !!data.pendingRequestId || draft.trim().length > 16_000}
+            onClick={() => { void send(); }}
           >
-            Send
+            {sending ? "Sending…" : "Send"}
           </button>
           {data.pendingRequestId && (
             <button
@@ -512,6 +542,7 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
           )}
         </div>
       </div>
+      {sendError && <p className="conversation-node-send-error" role="alert">{sendError}</p>}
     </NodeShell>
   );
 }

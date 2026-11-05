@@ -97,6 +97,9 @@ class ChatDispatchOps(DispatcherParts):
         conversation_history,
         on_reply,
         on_partial=None,
+        on_claim=None,
+        canvas_document=None,
+        node_id: str | None = None,
     ) -> None:
         """R4.3's ConversationNode equivalent of start_chat_reply: same
         _dispatch pipeline, but the in-flight request_id lives on the
@@ -122,6 +125,9 @@ class ChatDispatchOps(DispatcherParts):
             state_topic="scene",
             stream=True,
             on_partial=on_partial,
+            on_claim=on_claim,
+            canvas_document=canvas_document,
+            node_id=node_id,
         )
 
     async def start_image_reply(
