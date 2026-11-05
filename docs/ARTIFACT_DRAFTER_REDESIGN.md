@@ -56,7 +56,19 @@ code cleanup does not touch most of them.
 This protects the whole-document architecture; it does not solve its scaling
 limit or provide a durable document revision database.
 
-## Phase 1 — checked incremental editing and diff review
+## Phase 1A — reviewed AI proposal lifecycle (PR #459 or later)
+
+The first review increment stages the model's *full document* output as an
+independent candidate rather than silently replacing the accepted Markdown.
+Only a small proposal ID goes over scene snapshots; users request the full
+candidate on demand, see a bounded before/after change region and can
+explicitly Accept or Discard. The accepted edit is compare-and-swap checked
+against the document hash captured when generation began; both the candidate
+and its expected base are retained through workspace save/reload. Acceptance
+and discard are undoable commands. This removes automatic model overwrites,
+but does **not** yet reduce provider output tokens.
+
+## Phase 1B — checked incremental editing and diff review
 
 Define a versioned edit protocol independent of any one provider:
 
