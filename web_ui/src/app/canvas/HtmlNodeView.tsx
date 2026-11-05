@@ -355,6 +355,11 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
   const sourceHeightPx = Math.round(splitterValue * HTML_SPLIT_TOTAL_PX);
   const previewHeightPx = HTML_SPLIT_TOTAL_PX - sourceHeightPx;
 
+  // WAI-ARIA's window-splitter pattern makes a value-bearing separator
+  // focusable and keyboard-operable. jsx-a11y still categorizes *every*
+  // separator as noninteractive, ignoring aria-valuenow / input handling.
+  // Scope these two exceptions to this returned component tree only.
+  /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
   return (
     <NodeShell
       kindClassName="html-node"
@@ -461,6 +466,7 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
       </div>
     </NodeShell>
   );
+  /* eslint-enable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex */
 }
 
 /** ADR-011 stage 11.1: every prop this view actually reads, compared - it
