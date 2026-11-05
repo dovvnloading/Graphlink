@@ -240,15 +240,28 @@ class GitlinkDispatchOps(DispatcherParts):
                     notifications_state.show("Gitlink generation cancelled.", "info")
                     await bus.publish("notification")
                 else:
+                    # Capture the working-tree baselines once, off the event
+                    # loop. Use the SAME snapshot for the diff and fingerprint
+                    # so approval can never overwrite a file changed after
+                    # the preview was built. No checkout means preview-only.
+                    reviewed_files, originals = await asyncio.to_thread(
+                        agents_module.prepare_change_review, result["files"], local_root
+                    )
+                    if cancel_event.is_set():
+                        notifications_state.show("Gitlink generation cancelled.", "info")
+                        await bus.publish("notification")
+                        return
                     proposal_markdown = agents_module._build_gitlink_proposal_markdown(repo, branch, result)
-                    preview_text = agents_module._build_gitlink_preview_text(result["files"], local_root, repo, branch)
-                    fingerprint = agents_module._fingerprint_changes(result["files"]) if result["files"] else None
+                    preview_text = agents_module._build_gitlink_preview_text(
+                        reviewed_files, local_root, repo, branch, original_texts=originals
+                    )
+                    fingerprint = agents_module._fingerprint_changes(reviewed_files) if reviewed_files else None
                     # R5.3 post-review FIX 2: local_root is now forwarded to
                     # on_success too, so document.complete_gitlink_run can
                     # record exactly which local_root THIS run used (see that
                     # method's own docstring) - the write-destination binding
                     # start_gitlink_apply's fourth check enforces.
-                    on_success(proposal_markdown, result["files"], preview_text, fingerprint, local_root)
+                    on_success(proposal_markdown, reviewed_files, preview_text, fingerprint, local_root)
                     await bus.publish("scene")
             except asyncio.TimeoutError:
                 cancel_event.set()

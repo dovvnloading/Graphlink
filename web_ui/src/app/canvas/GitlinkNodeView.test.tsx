@@ -588,6 +588,54 @@ describe("GitlinkNodeView", () => {
     expect(screen.queryByRole("img")).toBeNull();
   });
 
+
+  it("reviews each diff separately without changing the full approved set", async () => {
+    const user = userEvent.setup();
+    renderGitlinkNode({
+      gitlinkPendingChanges: [
+        { path: "a.py", operation: "update", reason: "repair handler" },
+        { path: "b.py", operation: "create", reason: "add coverage" },
+      ],
+      gitlinkPreviewText: [
+        "### a.py [update]", "",
+        "--- a/a.py", "+++ b/a.py", "@@ -1 +1 @@", "-old A", "+new A", "",
+        "### b.py [create]", "",
+        "--- a/b.py", "+++ b/b.py", "@@ -0,0 +1 @@", "+new B",
+      ].join("\n"),
+      gitlinkChangeFingerprint: "fp-2",
+    });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    const code = () => document.querySelector(".gitlink-node-proposal-diff pre code")?.textContent || "";
+    expect(code()).toContain("-old A");
+    expect(code()).toContain("+new B");
+
+    await user.click(screen.getByRole("button", { name: /create b\.py/ }));
+    expect(screen.getByText("add coverage")).toBeInTheDocument();
+    expect(code()).not.toContain("-old A");
+    expect(code()).toContain("+new B");
+
+    await user.click(screen.getByRole("button", { name: /update a\.py/ }));
+    expect(screen.getByText("repair handler")).toBeInTheDocument();
+    expect(code()).toContain("-old A");
+    expect(code()).not.toContain("+new B");
+
+    await user.click(screen.getByRole("button", { name: "All files" }));
+    expect(code()).toContain("+new B");
+    expect(code()).toContain("-old A");
+  });
+
+  it("preserves the full preview when a legacy diff cannot be split", async () => {
+    const user = userEvent.setup();
+    renderGitlinkNode({
+      gitlinkPendingChanges: [{ path: "a.py", operation: "update", reason: "legacy" }],
+      gitlinkPreviewText: "legacy raw diff\n+inert content",
+    });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    expect(screen.getByRole("button", { name: /update a\.py/ })).toBeDisabled();
+    const code = document.querySelector(".gitlink-node-proposal-diff pre code");
+    expect(code?.textContent).toContain("legacy raw diff");
+  });
+
   // -- Apply confirmation ---------------------------------------------------
 
   it("clicking Apply does NOT call onApply directly - it opens a confirmation first", async () => {

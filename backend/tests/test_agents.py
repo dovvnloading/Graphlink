@@ -2942,7 +2942,7 @@ def test_start_gitlink_run_cancel_mid_flight_fires_info_notification_and_never_c
 
 
 def test_gitlink_apply_rejects_client_fingerprint_mismatch(monkeypatch):
-    def raising_apply_change_set(local_root, pending_changes):
+    def raising_apply_change_set(local_root, pending_changes, *, require_review=False):
         raise AssertionError("apply_change_set must never be reached on a fingerprint mismatch")
 
     monkeypatch.setattr(agents_module, "apply_change_set", raising_apply_change_set)
@@ -2977,7 +2977,7 @@ def test_gitlink_apply_rejects_client_fingerprint_mismatch(monkeypatch):
 
 
 def test_gitlink_apply_rejects_when_pending_changes_mutated_between_generation_and_apply(monkeypatch, tmp_path):
-    def raising_apply_change_set(local_root, pending_changes):
+    def raising_apply_change_set(local_root, pending_changes, *, require_review=False):
         raise AssertionError("apply_change_set must never be reached when the recorded fingerprint is stale")
 
     monkeypatch.setattr(agents_module, "apply_change_set", raising_apply_change_set)
@@ -3029,7 +3029,7 @@ def test_gitlink_apply_rejects_when_client_fingerprint_matches_live_data_but_not
     exercises the first clause - this is the direct test of the second
     comparison, which a prior mutation-testing audit found had zero
     coverage before this test existed."""
-    def raising_apply_change_set(local_root, pending_changes):
+    def raising_apply_change_set(local_root, pending_changes, *, require_review=False):
         raise AssertionError(
             "apply_change_set must never be reached when the live data was never actually approved"
         )
@@ -3091,7 +3091,7 @@ def test_gitlink_apply_freezes_changes_before_await(monkeypatch, tmp_path):
     )
     captured = {}
 
-    def mutating_apply_change_set(local_root, pending_changes):
+    def mutating_apply_change_set(local_root, pending_changes, *, require_review=False):
         # Proves the write uses a DISTINCT, already-frozen list/copy - not
         # node.state.gitlink_pending_changes itself.
         assert pending_changes is not node.state.gitlink_pending_changes
@@ -3160,7 +3160,7 @@ def test_gitlink_apply_busy_guard_blocks_concurrent_run_and_apply(tmp_path):
 
 
 def test_gitlink_apply_no_pending_changes_calls_on_failure_without_touching_apply_change_set(monkeypatch, tmp_path):
-    def raising_apply_change_set(local_root, pending_changes):
+    def raising_apply_change_set(local_root, pending_changes, *, require_review=False):
         raise AssertionError("apply_change_set must never be reached with no pending changes")
 
     monkeypatch.setattr(agents_module, "apply_change_set", raising_apply_change_set)
@@ -3236,7 +3236,7 @@ def test_gitlink_apply_success_calls_on_success_with_written_files_count(monkeyp
         gitlink_pending_changes=changes, gitlink_change_fingerprint=fingerprint, gitlink_local_root=str(tmp_path),
         gitlink_change_local_root=str(tmp_path),
     )
-    monkeypatch.setattr(agents_module, "apply_change_set", lambda local_root, pending_changes: 3)
+    monkeypatch.setattr(agents_module, "apply_change_set", lambda local_root, pending_changes, *, require_review=False: 3)
     monkeypatch.setattr(agents_module, "validate_pending_changes", lambda pending_changes: None)
 
     async def run():
@@ -3282,7 +3282,10 @@ def test_gitlink_apply_transitions_to_applying_before_the_write_starts(monkeypat
     )
     observed_state = []
 
-    def capturing_apply_change_set(local_root, pending_changes):
+    def capturing_apply_change_set(local_root, pending_changes, *, require_review=False):
+        # UI Apply must pass the strict original-file baseline check, even
+        # though this test replaces the filesystem function with a spy.
+        assert require_review is True
         # Called from the worker thread apply_change_set actually runs on
         # (asyncio.to_thread) - a plain attribute read is safe here under
         # CPython's GIL, same posture as the fake sandboxes' own call-capture
@@ -3328,7 +3331,7 @@ def test_gitlink_apply_rollback_message_surfaced_verbatim(monkeypatch, tmp_path)
         f"{tmp_path}/a.py)"
     )
 
-    def raising_apply_change_set(local_root, pending_changes):
+    def raising_apply_change_set(local_root, pending_changes, *, require_review=False):
         raise RuntimeError(rollback_message)
 
     monkeypatch.setattr(agents_module, "apply_change_set", raising_apply_change_set)
@@ -3362,7 +3365,7 @@ def test_gitlink_apply_timeout_fires_the_exact_message_and_clears_the_slot(monke
         gitlink_change_local_root=str(tmp_path),
     )
 
-    def slow_apply_change_set(local_root, pending_changes):
+    def slow_apply_change_set(local_root, pending_changes, *, require_review=False):
         time.sleep(0.3)
         return 1
 
@@ -3399,7 +3402,7 @@ def test_gitlink_apply_rejects_when_local_root_changed_since_generation(monkeypa
     Apply. Both checkout paths must actually exist on disk (the exists()
     check runs BEFORE this new check), so this uses two real tmp_path
     subdirectories rather than illustrative non-existent paths."""
-    def raising_apply_change_set(local_root, pending_changes):
+    def raising_apply_change_set(local_root, pending_changes, *, require_review=False):
         raise AssertionError("apply_change_set must never be reached when local_root changed since generation")
 
     monkeypatch.setattr(agents_module, "apply_change_set", raising_apply_change_set)
@@ -3455,7 +3458,7 @@ def test_gitlink_apply_cannot_be_replayed_after_success(monkeypatch, tmp_path):
     fingerprint = agents_module._fingerprint_changes(changes)
     apply_calls = []
 
-    def counting_apply_change_set(local_root, pending_changes):
+    def counting_apply_change_set(local_root, pending_changes, *, require_review=False):
         apply_calls.append(list(pending_changes))
         return 1
 
@@ -3540,7 +3543,7 @@ def test_two_concurrent_start_gitlink_apply_calls_for_the_same_node_only_one_rea
     `local_root_path.exists()` await this test also relies on."""
     call_count = {"n": 0}
 
-    def slow_counting_apply_change_set(local_root, pending_changes):
+    def slow_counting_apply_change_set(local_root, pending_changes, *, require_review=False):
         call_count["n"] += 1
         time.sleep(0.05)
         return len(pending_changes)

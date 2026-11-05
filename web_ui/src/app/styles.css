@@ -7266,6 +7266,73 @@ mark.document-view-search-match-current {
   overflow: visible;
 }
 
+.gitlink-node-review {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.gitlink-node-review-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+.gitlink-node-review-files button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 5px 8px;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-neutral-button-border);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.gitlink-node-review-files button.active {
+  background: var(--gl-neutral-button-hover);
+  border-color: var(--gl-surface-border-strong);
+}
+
+.gitlink-node-review-files button:hover:enabled {
+  background: var(--gl-neutral-button-hover);
+}
+
+.gitlink-node-review-files button:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+
+.gitlink-node-review-files button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.gitlink-node-review-operation {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.gitlink-node-review-reason {
+  margin: 0;
+  font-size: 11px;
+  color: var(--gl-surface-text-primary);
+}
+
+.gitlink-node-review-note {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--gl-surface-text-muted);
+}
+
 .gitlink-node-banner-error {
   padding: 8px 10px;
   font-size: 11px;

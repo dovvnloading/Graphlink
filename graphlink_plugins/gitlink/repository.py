@@ -193,7 +193,16 @@ def validate_pending_changes(pending_changes):
                 raise RuntimeError(f"Proposed change for `{path_text}` is missing its file content.")
 
 
-def apply_change_set(local_root, pending_changes):
+def apply_change_set(local_root, pending_changes, *, require_review=False):
+    # An Apply from the real Gitlink UI must have the same original bytes as
+    # the diff the user approved. Preflight the *entire* set before any write.
+    # The default remains compatible with existing internal direct callers;
+    # backend.agents._call_gitlink_apply always sets require_review=True.
+    reviewed = None
+    if require_review:
+        from graphlink_plugins.gitlink.change_review import verify_change_review
+
+        reviewed = verify_change_review(local_root, pending_changes)
     # Backup-and-rollback (audit finding A1): previously a mid-loop failure
     # (permission denied, a directory sitting where a file is expected, disk
     # full, ...) left files 1..N-1 already written/deleted with no way back -
@@ -208,10 +217,17 @@ def apply_change_set(local_root, pending_changes):
     written_files = 0
     backups = []  # (target_path, original_bytes or None if the file did not exist)
     try:
-        for file_item in pending_changes:
+        for index, file_item in enumerate(pending_changes):
             path_text = file_item.get("path", "")
             operation = file_item.get("operation", "update")
             target_path = _safe_local_target(local_root, path_text)
+            if reviewed is not None:
+                # Recheck the target right before touching it, not only at
+                # the initial full-set preflight. If another process edited a
+                # later file during this Apply, roll back earlier writes.
+                from graphlink_plugins.gitlink.change_review import assert_target_unchanged
+
+                assert_target_unchanged(local_root, file_item, reviewed[index])
 
             if operation == "delete":
                 if target_path.exists():
