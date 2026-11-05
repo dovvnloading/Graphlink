@@ -1861,12 +1861,12 @@ describe("Artifact proposal transport", () => {
     const fake = makeFakeTransport();
     fake.requestResults.push({
       proposalId: "id-1", content: "# Revision",
-      baseSha256: "b".repeat(64), summary: "heading changed",
+      baseSha256: "b".repeat(64), baseMatchesCurrent: true, summary: "heading changed",
     });
     const store = new SceneStore(fake.transport);
     expect(await store.fetchArtifactProposal("n1")).toEqual({
       proposalId: "id-1", content: "# Revision",
-      baseSha256: "b".repeat(64), summary: "heading changed",
+      baseSha256: "b".repeat(64), baseMatchesCurrent: true, summary: "heading changed",
     });
     expect(fake.requests).toEqual([{
       topic: "scene", intent: "fetchArtifactProposal", args: ["n1"],
