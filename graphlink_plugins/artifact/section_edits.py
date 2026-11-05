@@ -18,7 +18,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 from backend.domain.node_states import ARTIFACT_MAX_CHARS
 
@@ -269,7 +269,7 @@ def select_edit_plan(document: str, history: list[dict]) -> SectionEditPlan | No
     return SectionEditPlan(sha256_text(document), sections, selected, instruction, outline, context)
 
 
-def _raise_no_selection() -> None:
+def _raise_no_selection() -> NoReturn:
     raise SectionEditError(
         "This document is too large for a reliable full rewrite. "
         "Name a unique section heading in your request to edit only that section."
