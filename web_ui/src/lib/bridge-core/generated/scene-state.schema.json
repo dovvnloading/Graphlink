@@ -64,6 +64,10 @@
             "default": "",
             "type": "string"
           },
+          "artifactProposalId": {
+            "default": "",
+            "type": "string"
+          },
           "attachmentKind": {
             "default": "",
             "type": "string"
