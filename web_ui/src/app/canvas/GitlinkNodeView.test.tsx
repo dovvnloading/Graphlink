@@ -1,5 +1,5 @@
 import { ReactFlowProvider, useStoreApi, type NodeProps } from "@xyflow/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -636,6 +636,112 @@ describe("GitlinkNodeView", () => {
     expect(code?.textContent).toContain("legacy raw diff");
   });
 
+  it("selects individual files and confirms only that subset, in proposal order", async () => {
+    const user = userEvent.setup();
+    const data = renderGitlinkNode({
+      gitlinkPendingChanges: [
+        { path: "a.py", operation: "update", reason: "a" },
+        { path: "b.py", operation: "delete", reason: "b" },
+        { path: "c.py", operation: "create", reason: "c" },
+      ],
+      gitlinkChangeFingerprint: "fp-full-proposal",
+      gitlinkLocalRoot: "C:/checkout",
+    });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    const b = screen.getByRole("checkbox", { name: "Include b.py in Apply" });
+    expect(b).toBeChecked();
+    await user.click(b);
+    expect(b).not.toBeChecked();
+    expect(screen.getByRole("status")).toHaveTextContent("2 of 3 selected for Apply");
+
+    await user.click(screen.getByRole("button", { name: "Apply selected (2)" }));
+    const dialog = screen.getByRole("dialog", { name: "Apply Selected Changes?" });
+    expect(within(dialog).getByText(/Write 2 of 3 proposed file changes/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/1 unchecked change will be discarded/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/update.*a\.py/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/create.*c\.py/)).toBeInTheDocument();
+    expect(within(dialog).queryByText(/delete.*b\.py/)).toBeNull();
+    expect(data.onApply).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole("button", { name: "Yes" }));
+    expect(data.onApply).toHaveBeenCalledExactlyOnceWith("fp-full-proposal", ["a.py", "c.py"]);
+  });
+
+  it("disables Apply for an empty selection and offers select-all/select-none", async () => {
+    const user = userEvent.setup();
+    const data = renderGitlinkNode({
+      gitlinkPendingChanges: [
+        { path: "a.py", operation: "update", reason: "first" },
+        { path: "b.py", operation: "update", reason: "second" },
+      ],
+      gitlinkChangeFingerprint: "fp-valid",
+    });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    await user.click(screen.getByRole("button", { name: "Select none" }));
+    expect(screen.getByRole("checkbox", { name: "Include a.py in Apply" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Include b.py in Apply" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Apply selected (0)" })).toBeDisabled();
+    expect(data.onApply).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Select all" }));
+    expect(screen.getByRole("button", { name: "Apply selected (2)" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Include a.py in Apply" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Include b.py in Apply" })).toBeChecked();
+  });
+
+  it("keeps reviewing a file independent of whether it is selected for Apply", async () => {
+    const user = userEvent.setup();
+    renderGitlinkNode({
+      gitlinkPendingChanges: [{ path: "a.py", operation: "update", reason: "fix" }],
+      gitlinkPreviewText: "### a.py [update]\n\n-old\n+new",
+      gitlinkChangeFingerprint: "fp",
+    });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    const checked = screen.getByRole("checkbox", { name: "Include a.py in Apply" });
+    await user.click(screen.getByRole("button", { name: "Review update a.py" }));
+    expect(checked).toBeChecked();
+    await user.click(checked);
+    expect(checked).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Review update a.py" })).toHaveAttribute("aria-pressed", "true");
+    expect(document.querySelector(".gitlink-node-proposal-diff pre code")?.textContent).toContain("-old");
+  });
+
+  it("keeps user selection across ordinary snapshots and resets on a new fingerprint", async () => {
+    const user = userEvent.setup();
+    const { data, rerenderWithData } = renderGitlinkNodeWithRerender({
+      gitlinkPendingChanges: [
+        { path: "a.py", operation: "update", reason: "a" },
+        { path: "b.py", operation: "update", reason: "b" },
+      ],
+      gitlinkChangeFingerprint: "fp-first",
+    });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    await user.click(screen.getByRole("button", { name: "Select none" }));
+    rerenderWithData({ ...data });
+    expect(screen.getByRole("button", { name: "Apply selected (0)" })).toBeDisabled();
+
+    rerenderWithData({ ...data, gitlinkChangeFingerprint: "fp-new" });
+    expect(screen.getByRole("button", { name: "Apply selected (2)" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "Include a.py in Apply" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Include b.py in Apply" })).toBeChecked();
+  });
+
+  it("cannot approve a new proposal through an old, already-open confirmation", async () => {
+    const user = userEvent.setup();
+    const { data, rerenderWithData } = renderGitlinkNodeWithRerender({
+      gitlinkPendingChanges: [{ path: "a.py", operation: "update", reason: "a" }],
+      gitlinkChangeFingerprint: "fp-first",
+    });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    await user.click(screen.getByRole("button", { name: "Apply selected (1)" }));
+    expect(screen.getByRole("button", { name: "Yes" })).toBeEnabled();
+
+    rerenderWithData({ ...data, gitlinkChangeFingerprint: "fp-new" });
+    expect(screen.getByRole("alert")).toHaveTextContent("proposal changed");
+    expect(screen.getByRole("button", { name: "Yes" })).toBeDisabled();
+    expect(data.onApply).not.toHaveBeenCalled();
+  });
+
   // -- Apply confirmation ---------------------------------------------------
 
   it("clicking Apply does NOT call onApply directly - it opens a confirmation first", async () => {
@@ -647,14 +753,14 @@ describe("GitlinkNodeView", () => {
     });
     await user.click(screen.getByRole("tab", { name: "Proposal" }));
 
-    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await user.click(screen.getByRole("button", { name: /Apply selected/ }));
     expect(data.onApply).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "Apply Changes?" })).toBeInTheDocument();
-    expect(screen.getByText(/Write 1 file change into C:\/repos\/repo\?/)).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Apply Selected Changes?" })).toBeInTheDocument();
+    expect(screen.getByText(/Write 1 of 1 proposed file change into C:\/repos\/repo\?/)).toBeInTheDocument();
     expect(screen.getByText(/modify.*app\.py/)).toBeInTheDocument();
   });
 
-  it("clicking Yes in the confirmation calls onApply with EXACTLY the gitlinkChangeFingerprint prop value", async () => {
+  it("clicking Yes submits the full server fingerprint and exact selected paths", async () => {
     const user = userEvent.setup();
     const data = renderGitlinkNode({
       gitlinkPendingChanges: [{ path: "app.py", operation: "modify", reason: "add route" }],
@@ -662,10 +768,10 @@ describe("GitlinkNodeView", () => {
       gitlinkLocalRoot: "C:/repos/repo",
     });
     await user.click(screen.getByRole("tab", { name: "Proposal" }));
-    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await user.click(screen.getByRole("button", { name: /Apply selected/ }));
     await user.click(screen.getByRole("button", { name: "Yes" }));
 
-    expect(data.onApply).toHaveBeenCalledExactlyOnceWith("fp-exact-value");
+    expect(data.onApply).toHaveBeenCalledExactlyOnceWith("fp-exact-value", ["app.py"]);
   });
 
   it("clicking Cancel in the confirmation dismisses it without calling onApply", async () => {
@@ -675,18 +781,18 @@ describe("GitlinkNodeView", () => {
       gitlinkChangeFingerprint: "fp-123",
     });
     await user.click(screen.getByRole("tab", { name: "Proposal" }));
-    await user.click(screen.getByRole("button", { name: "Apply" }));
+    await user.click(screen.getByRole("button", { name: /Apply selected/ }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(data.onApply).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog", { name: "Apply Changes?" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Apply Selected Changes?" })).toBeNull();
   });
 
   it("Apply is disabled with no pending changes or no fingerprint", async () => {
     const user = userEvent.setup();
     renderGitlinkNode({ gitlinkPendingChanges: [], gitlinkChangeFingerprint: null });
     await user.click(screen.getByRole("tab", { name: "Proposal" }));
-    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Apply selected/ })).toBeDisabled();
   });
 
   it("Apply and the confirmation's Yes button are both disabled while gitlinkChangeState is 'applying'", async () => {
@@ -697,7 +803,7 @@ describe("GitlinkNodeView", () => {
       gitlinkChangeState: "applying",
     });
     await user.click(screen.getByRole("tab", { name: "Proposal" }));
-    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Apply selected/ })).toBeDisabled();
   });
 
   it("shows the gitlinkError inline in the Proposal tab when changeState is 'previewed'", async () => {

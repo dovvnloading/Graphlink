@@ -372,6 +372,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
   const [approvedPaths, setApprovedPaths] = useState<string[]>(
     () => data.gitlinkPendingChanges.map((change) => change.path),
   );
+  const [confirmationFingerprint, setConfirmationFingerprint] = useState<string | null>(null);
   if (reviewFingerprint !== data.gitlinkChangeFingerprint) {
     setReviewFingerprint(data.gitlinkChangeFingerprint);
     setReviewIndex(null);
@@ -759,13 +760,22 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   type="button"
                   className="gitlink-node-apply-btn"
                   disabled={!canApply || applying}
-                  onClick={() => overlays.open(applyOverlayName, "dialog")}
+                  onClick={() => {
+                    setConfirmationFingerprint(data.gitlinkChangeFingerprint);
+                    overlays.open(applyOverlayName, "dialog");
+                  }}
                 >
                   Apply selected ({approvedChanges.length})
                 </button>
               </div>
 
               <Dialog name={applyOverlayName} title="Apply Selected Changes?" className="gitlink-node-apply-dialog">
+                {confirmationFingerprint !== data.gitlinkChangeFingerprint && (
+                  <p role="alert" className="gitlink-node-banner-error">
+                    The proposal changed while this confirmation was open.
+                    Close it and review the new proposal before applying.
+                  </p>
+                )}
                 <p>
                   Write {approvedChanges.length} of {data.gitlinkPendingChanges.length} proposed file{" "}
                   {data.gitlinkPendingChanges.length === 1 ? "change" : "changes"} into{" "}
@@ -789,11 +799,15 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   </button>
                   <button
                     type="button"
-                    disabled={applying || !canApply}
+                    disabled={applying || !canApply || confirmationFingerprint !== data.gitlinkChangeFingerprint}
                     onClick={() => {
-                      if (data.gitlinkChangeFingerprint && approvedChanges.length > 0) {
+                      if (
+                        data.gitlinkChangeFingerprint &&
+                        confirmationFingerprint === data.gitlinkChangeFingerprint &&
+                        approvedChanges.length > 0
+                      ) {
                         data.onApply(
-                          data.gitlinkChangeFingerprint,
+                          confirmationFingerprint,
                           approvedChanges.map((change) => change.path),
                         );
                       }
