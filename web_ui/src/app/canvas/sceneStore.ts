@@ -1132,6 +1132,18 @@ export class SceneStore {
     this.transport.fireIntent("scene", "setCodeSandboxRequirements", [nodeId, requirementsText], undefined, true);
   }
 
+  setCodeSandboxCode(
+    nodeId: string, code: string, expectedCode: string,
+    onSettled: (success: boolean) => void,
+  ): void {
+    // Human code writes cannot be replayed after a disconnect: the server
+    // checks expectedCode and refuses edits during approval or execution.
+    this.transport.fireIntent(
+      "scene", "setCodeSandboxCode", [nodeId, code, expectedCode],
+      undefined, false, undefined, onSettled,
+    );
+  }
+
   // ADR-005 stage 5.5: the approval panel's own source-build opt-in
   // checkbox - fires immediately on toggle, same posture as
   // setCodeSandboxRequirements above, not deferred to Approve.
