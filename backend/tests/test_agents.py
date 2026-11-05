@@ -3603,11 +3603,9 @@ def test_two_concurrent_start_gitlink_apply_calls_for_the_same_node_only_one_rea
 
 
 def test_gitlink_apply_no_changes_payload_in_intent_signature():
-    """Signature-inspection regression guard: the registered
-    applyGitlinkChanges WS intent handler must take EXACTLY two parameters
-    (node_id, fingerprint) - guards against a future regression that adds a
-    changes/pending_changes argument, which would let a client inject
-    arbitrary file content into the write path."""
+    """Only the approved fingerprint and optional *path selection* may cross
+    this intent boundary. File contents, operations, replacement hashes and
+    arbitrary pending_changes must remain server-owned, never client input."""
     bus = SessionBus("gitlink-signature-test")
     notifications = NotificationState()
     bus.register_topic("notification", notifications.payload)
@@ -3622,8 +3620,11 @@ def test_gitlink_apply_no_changes_payload_in_intent_signature():
 
     handler = bus._intents[("scene", "applyGitlinkChanges")].handler
     signature = inspect.signature(handler)
-    assert list(signature.parameters) == ["node_id", "fingerprint"], (
-        "applyGitlinkChanges must take ONLY (node_id, fingerprint) - no changes/pending_changes param"
+    assert list(signature.parameters) == ["node_id", "fingerprint", "selected_paths"], (
+        "Apply may accept file paths, but never client-supplied changes or pending_changes."
+    )
+    assert signature.parameters["selected_paths"].default is None, (
+        "Omitted selection must keep the two-argument legacy full-Apply contract."
     )
 
 
