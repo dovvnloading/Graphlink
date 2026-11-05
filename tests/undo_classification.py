@@ -158,6 +158,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
     # -- backend/api/intents_artifact.py (scene) -----------------------------
     Classified("scene", "sendArtifactMessage", "A", "content: user instruction + agent reply, both recorded"),
     Classified("scene", "setArtifactContent", "A", "content: revision-checked, undoable Markdown edit"),
+    Classified("scene", "fetchArtifactProposal", "B", "read-only: lazily fetches the bounded pending AI suggestion"),
+    Classified("scene", "acceptArtifactProposal", "A", "content: atomic compare-and-swap acceptance of reviewed draft"),
+    Classified("scene", "discardArtifactProposal", "A", "content: undoable cancellation of proposed document change"),
     Classified("scene", "cancelArtifactRequest", "B", "run-lifecycle: cancel"),
 
     # -- backend/api/intents_conversation.py (scene) -------------------------
