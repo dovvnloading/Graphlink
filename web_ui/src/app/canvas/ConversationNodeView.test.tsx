@@ -30,7 +30,7 @@ import { ConversationNodeView, type ConversationFlowNode } from "./ConversationN
 function renderConversationNode(overrides: Partial<ConversationFlowNode["data"]> = {}) {
   const onToggleCollapse = vi.fn();
   const onDelete = vi.fn();
-  const onSend = vi.fn();
+  const onSend = vi.fn().mockResolvedValue(true);
   const onDeleteMessage = vi.fn();
   const onCancel = vi.fn();
   const onOpenDocumentView = vi.fn();
@@ -82,7 +82,7 @@ function ZoomSetter({ zoom }: { zoom: number }) {
 function renderConversationNodeAtZoom(zoom: number, overrides: Partial<ConversationFlowNode["data"]> = {}) {
   const onToggleCollapse = vi.fn();
   const onDelete = vi.fn();
-  const onSend = vi.fn();
+  const onSend = vi.fn().mockResolvedValue(true);
   const onDeleteMessage = vi.fn();
   const onCancel = vi.fn();
   const onOpenDocumentView = vi.fn();
