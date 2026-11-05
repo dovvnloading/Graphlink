@@ -789,6 +789,7 @@ class TestBoundedProcessOutput:
     def test_guard_is_released_when_process_spawn_raises(self, monkeypatch):
         sandbox = VirtualEnvSandbox("popen-error-test")
         guard = MagicMock()
+        guard.popen_kwargs.return_value = {}
         monkeypatch.setattr(domain_module, "create_execution_guard", lambda: guard)
 
         def refuse_popen(*_args, **_kwargs):
