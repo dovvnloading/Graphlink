@@ -970,7 +970,7 @@ export class SceneStore {
   }
 
   async fetchArtifactProposal(nodeId: string): Promise<{
-    proposalId: string; content: string; baseSha256: string; summary: string;
+    proposalId: string; content: string; baseSha256: string; baseMatchesCurrent: boolean; summary: string;
   } | null> {
     // Proposal Markdown can be large, so it must be fetched by explicit
     // review. Do not silently accept arbitrary unvalidated WS data.
@@ -980,6 +980,7 @@ export class SceneStore {
         typeof value.proposalId !== "string" ||
         typeof value.content !== "string" || value.content.length > 256_000 ||
         typeof value.baseSha256 !== "string" ||
+        typeof value.baseMatchesCurrent !== "boolean" ||
         typeof value.summary !== "string") {
       throw new Error("Artifact proposal response was malformed.");
     }
@@ -987,6 +988,7 @@ export class SceneStore {
       proposalId: value.proposalId,
       content: value.content,
       baseSha256: value.baseSha256,
+      baseMatchesCurrent: value.baseMatchesCurrent,
       summary: value.summary,
     };
   }
