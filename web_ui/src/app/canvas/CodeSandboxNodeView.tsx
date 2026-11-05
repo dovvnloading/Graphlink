@@ -403,6 +403,17 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
             >
               {busy ? "Running…" : "Run"}
             </button>
+            {!!data.codeSandboxCode.trim() && (
+              <button
+                type="button"
+                className="code-sandbox-node-cancel"
+                disabled={busy || editingCode}
+                onClick={() => data.onRun("")}
+                title="Re-run the saved Python script without asking the AI to regenerate it"
+              >
+                Run saved script
+              </button>
+            )}
             {data.pendingRequestId && (
               <button
                 type="button"
