@@ -292,6 +292,90 @@ describe("Findings tab", () => {
 
 // -- audit regression pins ---------------------------------------------------
 
+describe("finding evidence and diff navigation", () => {
+  const diff = [
+    "diff --git a/src/a.py b/src/a.py",
+    "--- a/src/a.py", "+++ b/src/a.py",
+    "@@ -11,2 +11,3 @@", " old", "+danger()", " next",
+    "diff --git a/src/b.py b/src/b.py",
+    "--- a/src/b.py", "+++ b/src/b.py",
+    "@@ -0,0 +1 @@", "+safe()",
+  ].join("\n");
+
+  const finding = {
+    id: "f1", title: "Unsafe call", severity: "high", tier: "red",
+    category: "Reliability", path: "src/a.py", line: 12,
+    evidence: "Visible added line 12: danger(). Reviewer's claim: may fail.",
+    impact: "Could fail", recommendation: "Guard call",
+  };
+
+  it("jumps from a finding to the real file/hunk without mixing another file", async () => {
+    const onFetchDiffText = vi.fn().mockResolvedValue(diff);
+    renderReviewNode({
+      codeReviewState: "reviewed",
+      codeReviewDiffVersion: 3,
+      codeReviewFindings: [finding],
+      onFetchDiffText,
+    });
+    switchTab("Findings");
+    expect(screen.getByText(/Visible added line 12/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect finding in diff: Unsafe call" }));
+
+    expect(screen.getByRole("tab", { name: /Walkthrough/ })).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(onFetchDiffText).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.getByText(/Inspecting src\/a.py:12/)).toBeInTheDocument());
+    const code = document.querySelector(".code-review-node-diff-markdown pre code");
+    await waitFor(() => expect(code?.textContent).toContain("+danger()"));
+    expect(code?.textContent).not.toContain("+safe()");
+    fireEvent.click(screen.getByRole("button", { name: "Show full diff" }));
+    await waitFor(() => expect(document.querySelector(".code-review-node-diff-markdown pre code")?.textContent).toContain("+safe()"));
+  });
+
+  it("safely falls back to the full diff for an old/unknown line", async () => {
+    renderReviewNode({
+      codeReviewState: "reviewed",
+      codeReviewFindings: [{ ...finding, line: 999 }],
+      onFetchDiffText: vi.fn().mockResolvedValue(diff),
+    });
+    switchTab("Findings");
+    fireEvent.click(screen.getByRole("button", { name: "Inspect finding in diff: Unsafe call" }));
+    await waitFor(() => expect(screen.getByText(/not found in the saved excerpt/)).toBeInTheDocument());
+    expect(document.querySelector(".code-review-node-diff-markdown pre code")?.textContent).toContain("+safe()");
+  });
+
+  it("surfaces the reason a partial review has no overall score", () => {
+    renderReviewNode({
+      codeReviewState: "reviewed",
+      codeReviewVerdict: "none",
+      codeReviewDiffTruncated: true,
+      codeReviewQualitySummary: "The pull-request diff is truncated. Overall grading withheld.",
+    });
+    switchTab("Findings");
+    expect(screen.getByText("Not assessed")).toBeInTheDocument();
+    expect(screen.getByText(/partial diff or file list/)).toBeInTheDocument();
+    expect(screen.queryByText("0/100")).toBeNull();
+  });
+
+  it("labels model suggestions without matching source lines as ungraded", () => {
+    renderReviewNode({
+      codeReviewState: "reviewed",
+      codeReviewVerdict: "none",
+      codeReviewQualitySummary: "1 model location was not on added lines. Overall grading withheld.",
+      codeReviewFindings: [{
+        ...finding, severity: "info", tier: "gray", line: 0,
+        path: "", category: "Needs Verification",
+        title: "Verify location: Unsafe call",
+        evidence: "The reported file/line is absent from the visible diff.",
+      }],
+    });
+    switchTab("Findings");
+    expect(screen.getByText("Verify location: Unsafe call")).toBeInTheDocument();
+    expect(screen.getByText("FYI")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Inspect finding in diff/ })).toBeNull();
+    expect(screen.getByText(/no overall grade claimed/)).toBeInTheDocument();
+  });
+});
+
 describe("fallback (pre-screen) review state", () => {
   const preScreened = {
     codeReviewState: "reviewed",
