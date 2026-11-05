@@ -672,7 +672,13 @@ def _restore_artifact_payload(payload: dict[str, Any]) -> SceneNode:
         # which every other kind already reuses for "the node's primary
         # editable text" - reused the same way here, not left to drop.
         content=str(payload.get("instruction", "")),
-        state=ArtifactState(artifact_content=str(payload.get("content", ""))),
+        state=ArtifactState(
+            artifact_content=str(payload.get("content", "")),
+            # Legacy saves have no proposal fields. Reject malformed or
+            # oversized externally supplied snapshots rather than allowing
+            # an imported chat to inject unbounded proposal data onto wire.
+            **_artifact_proposal_from_payload(payload),
+        ),
         history=_restore_history(payload.get("conversation_history")),
         is_collapsed=bool(payload.get("is_collapsed", False)),
     )
