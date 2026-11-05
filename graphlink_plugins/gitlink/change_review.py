@@ -40,15 +40,15 @@ class ReviewedTarget(NamedTuple):
 
 def read_review_bytes(target: Path, path: str) -> bytes | None:
     """Read at most the review cap plus one byte, distinguishing empty/missing."""
-    if target.is_dir():
-        raise RuntimeError(f"Proposed target \`{path}\` is a directory, not a file.")
+    if target.exists() and not target.is_file():
+        raise RuntimeError(f"Proposed target `{path}` is not a regular file.")
     try:
         with target.open("rb") as stream:
             raw = stream.read(MAX_REVIEW_FILE_BYTES + 1)
     except FileNotFoundError:
         return None
     if len(raw) > MAX_REVIEW_FILE_BYTES:
-        raise RuntimeError(f"File \`{path}\` exceeds the Gitlink safe-review size limit.")
+        raise RuntimeError(f"File `{path}` exceeds the Gitlink safe-review size limit.")
     return raw
 
 
@@ -58,7 +58,7 @@ def _reject_linked_target(root: Path, relative: str) -> None:
     for part in PurePosixPath(relative).parts:
         cursor = cursor / part
         if cursor.is_symlink():
-            raise RuntimeError(f"Gitlink cannot apply changes through a symlink: \`{relative}\`.")
+            raise RuntimeError(f"Gitlink cannot apply changes through a symlink: `{relative}`.")
 
 
 def _snapshot_change_set(
@@ -85,19 +85,19 @@ def _snapshot_change_set(
         relative = _normalize_repo_path(path)
         folded = relative.casefold()
         if folded in seen:
-            raise RuntimeError(f"Gitlink proposal contains duplicate file changes for \`{relative}\`.")
+            raise RuntimeError(f"Gitlink proposal contains duplicate file changes for `{relative}`.")
         seen.add(folded)
 
         operation = change.get("operation", "update")
         if operation not in {"create", "update", "delete"}:
-            raise RuntimeError(f"Gitlink proposal has an unknown operation for \`{relative}\`.")
+            raise RuntimeError(f"Gitlink proposal has an unknown operation for `{relative}`.")
         if operation != "delete":
             content = change.get("content")
             if not isinstance(content, str):
-                raise RuntimeError(f"Proposed change for \`{relative}\` is missing its file content.")
+                raise RuntimeError(f"Proposed change for `{relative}` is missing its file content.")
             proposed_size = len(content.encode("utf-8"))
             if proposed_size > MAX_REVIEW_FILE_BYTES:
-                raise RuntimeError(f"Proposed content for \`{relative}\` exceeds the safe-review size limit.")
+                raise RuntimeError(f"Proposed content for `{relative}` exceeds the safe-review size limit.")
             total += proposed_size
 
         _reject_linked_target(root, relative)
@@ -119,16 +119,16 @@ def _snapshot_change_set(
                 or len(expected) != 64
                 or any(c not in "0123456789abcdef" for c in expected)
             ):
-                raise RuntimeError(f"Gitlink proposal has an invalid baseline for \`{relative}\`.")
+                raise RuntimeError(f"Gitlink proposal has an invalid baseline for `{relative}`.")
             if actual != expected:
                 raise RuntimeError(
-                    f"Local file \`{relative}\` changed since the preview. "
+                    f"Local file `{relative}` changed since the preview. "
                     "Nothing was written; regenerate and review the proposal."
                 )
         elif operation == "create" and original is not None:
-            raise RuntimeError(f"Cannot create \`{relative}\`: the file already exists locally.")
+            raise RuntimeError(f"Cannot create `{relative}`: the file already exists locally.")
         elif operation in {"update", "delete"} and original is None:
-            raise RuntimeError(f"Cannot {operation} \`{relative}\`: the local file is missing.")
+            raise RuntimeError(f"Cannot {operation} `{relative}`: the local file is missing.")
 
         snapshots.append(ReviewedTarget(relative, target, original))
     return snapshots
@@ -174,6 +174,6 @@ def assert_target_unchanged(local_root: str | Path, change: dict[str, Any], snap
     target = _safe_local_target(root, change["path"])
     if target != snapshot.target or read_review_bytes(target, snapshot.path) != snapshot.original:
         raise RuntimeError(
-            f"Local file \`{snapshot.path}\` changed while applying the proposal. "
+            f"Local file `{snapshot.path}` changed while applying the proposal. "
             "Remaining changes were stopped."
         )
