@@ -103,6 +103,9 @@ def test_undoing_the_sent_message_prevents_late_reply_on_a_restored_node():
     async def run():
         bus, doc, node, dispatcher = _manual_canvas()
         await bus.dispatch_intent("scene", "sendConversationMessage", [node.id, "question"])
+        # Graphlink intentionally refuses Undo while a run is live. Model a
+        # user cancelling the request first, then undoing the admitted turn.
+        node.pending_request_id = None
         doc.undo()
         restored = doc.nodes[node.id]
         assert restored is not node
