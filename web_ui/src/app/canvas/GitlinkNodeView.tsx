@@ -5,6 +5,7 @@ import { Dialog, useOverlays } from "../overlays/overlays";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
+import { splitGitlinkPreview } from "./gitlinkPreview";
 import { NodeMenu } from "./NodeMenu";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
@@ -365,6 +366,18 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
   // -- Proposal tab / Apply confirmation -----------------------------------
   const applying = data.gitlinkChangeState === "applying" || busy;
   const canApply = data.gitlinkPendingChanges.length > 0 && !!data.gitlinkChangeFingerprint;
+  // Review one file at a time without changing WHAT gets approved. The
+  // backend owns the entire pending set and its fingerprint.
+  const [reviewIndex, setReviewIndex] = useState<number | null>(null);
+  const [reviewFingerprint, setReviewFingerprint] = useState(data.gitlinkChangeFingerprint);
+  if (reviewFingerprint !== data.gitlinkChangeFingerprint) {
+    setReviewFingerprint(data.gitlinkChangeFingerprint);
+    setReviewIndex(null);
+  }
+  const reviewSections = splitGitlinkPreview(data.gitlinkPreviewText, data.gitlinkPendingChanges);
+  const focusedPreview = reviewIndex != null && reviewSections?.[reviewIndex]
+    ? reviewSections[reviewIndex]
+    : data.gitlinkPreviewText;
 
   return (
     <NodeShell
@@ -653,9 +666,47 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                 <p className="gitlink-node-empty">No change set generated yet.</p>
               )}
 
+              {data.gitlinkPendingChanges.length > 0 && (
+                <div className="gitlink-node-review">
+                  <p className="gitlink-node-field-label">Review proposed file changes</p>
+                  <div className="gitlink-node-review-files" aria-label="Review Gitlink files">
+                    <button
+                      type="button"
+                      aria-pressed={reviewIndex === null}
+                      className={reviewIndex === null ? "active" : ""}
+                      onClick={() => setReviewIndex(null)}
+                    >
+                      All files
+                    </button>
+                    {data.gitlinkPendingChanges.map((change, index) => (
+                      <button
+                        key={change.path + ":" + index}
+                        type="button"
+                        aria-pressed={reviewIndex === index}
+                        className={reviewIndex === index ? "active" : ""}
+                        disabled={!reviewSections}
+                        onClick={() => setReviewIndex(index)}
+                      >
+                        <span className="gitlink-node-review-operation">{change.operation}</span>
+                        <span>{change.path}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {reviewIndex !== null && (
+                    <p className="gitlink-node-review-reason">
+                      {data.gitlinkPendingChanges[reviewIndex]?.reason || "No reason supplied."}
+                    </p>
+                  )}
+                  <p className="gitlink-node-review-note">
+                    Before writing, Gitlink checks every local file against the version shown
+                    in this preview. A conflict stops the full Apply and requires regeneration.
+                  </p>
+                </div>
+              )}
+
               {data.gitlinkPreviewText && (
                 <div className="chat-node-content gitlink-node-proposal-diff">
-                  <NodeMarkdown content={toDiffFence(data.gitlinkPreviewText)} />
+                  <NodeMarkdown content={toDiffFence(focusedPreview)} />
                 </div>
               )}
 
@@ -681,6 +732,10 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                   Write {data.gitlinkPendingChanges.length} file{" "}
                   {data.gitlinkPendingChanges.length === 1 ? "change" : "changes"} into{" "}
                   {data.gitlinkLocalRoot}?
+                </p>
+                <p className="gitlink-node-review-note">
+                  All listed files will be applied together. This confirmation does not
+                  select individual files; inspect each diff before continuing.
                 </p>
                 <ul className="gitlink-node-apply-file-list">
                   {data.gitlinkPendingChanges.map((change, index) => (

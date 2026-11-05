@@ -189,6 +189,8 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 - **Undo** anything, including a whole agent run in one action.
 - **Export** the whole canvas as a PNG, or export individual nodes — Chat as `.md`, Code as a source file (extension inferred from language, falling back to `.txt`), Image as `.png`.
 
+Gitlink's **Proposal** tab offers **All files / individual file** diff review, with the reason for each change. The **Apply** confirmation still writes the entire proposal, not a selected subset. When a local checkout is configured during generation, Gitlink records byte-exact original-file baselines and rechecks every target before writing. If any file has changed, appeared, or disappeared since review, the whole Apply is rejected with an explanation; regenerate and review the proposal. Older saved proposals without these baselines must also be regenerated before applying.
+
 ## Headless automation (MCP)
 
 Graphlink can run its backend without a desktop window and expose
