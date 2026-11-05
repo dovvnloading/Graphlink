@@ -281,3 +281,14 @@ def test_global_request_under_ceiling_retains_full_rewrite(monkeypatch):
 def test_oversized_model_json_is_rejected_after_provider_response():
     with pytest.raises(SectionEditError, match="oversized"):
         validate_structured_result_size({"blob": "X" * 75000})
+
+
+def test_native_strict_provider_schema_closes_every_object():
+    # OpenAI strict Structured Outputs requires all fields be mandatory and
+    # additionalProperties: false for every object, including nested items.
+    root = SECTION_PATCH_SCHEMA
+    operation = root["properties"]["operations"]["items"]
+    for obj in (root, operation):
+        assert obj["type"] == "object"
+        assert obj["additionalProperties"] is False
+        assert set(obj["required"]) == set(obj["properties"])
