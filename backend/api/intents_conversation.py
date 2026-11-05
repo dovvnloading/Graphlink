@@ -36,6 +36,9 @@ def register_conversation_intents(
             raise SceneError(f"unknown node: {node_id}")
         if node.kind != "conversation":
             raise SceneError(f"node is not a conversation node: {node_id}")
+        # Store the narrowed, non-optional object under a stable name for
+        # callbacks that run after this scope returns.
+        bound_node = node
 
         accepted = False
         sent_history: list[dict] = []
@@ -47,7 +50,7 @@ def register_conversation_intents(
                 lambda: document.send_conversation_message(node_id, text),
                 node_ids=[node_id],
             )
-            sent_history = [message.copy() for message in node.history]
+            sent_history = [message.copy() for message in bound_node.history]
             accepted = True
             # A frozen snapshot is passed to the provider, not the mutable
             # live history whose messages may later be edited or deleted.
@@ -55,9 +58,9 @@ def register_conversation_intents(
 
         def _still_current() -> bool:
             return (
-                document.nodes.get(node_id) is node
-                and node.pending_request_id is not None
-                and node.history == sent_history
+                document.nodes.get(node_id) is bound_node
+                and bound_node.pending_request_id is not None
+                and bound_node.history == sent_history
             )
 
         def _on_reply(reply_text):
@@ -87,8 +90,8 @@ def register_conversation_intents(
         await agent_dispatcher.start_conversation_reply(
             bus=bus,
             notifications_state=notifications,
-            node=node,
-            conversation_history=node.history,
+            node=bound_node,
+            conversation_history=bound_node.history,
             on_reply=_on_reply,
             on_partial=_on_partial,
             on_claim=_on_claim,
