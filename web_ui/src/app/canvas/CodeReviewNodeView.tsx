@@ -5,6 +5,7 @@ import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 import { NodeShell } from "./NodeShell";
+import { reviewDiffContext } from "./reviewDiffFocus";
 import { useLodVisibility } from "./useLodVisibility";
 
 /**
@@ -326,6 +327,20 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
   // fetches overlap; the version counter (never a summary string) is the
   // cache key.
   const [fetchedDiffText, setFetchedDiffText] = useState<string | null>(null);
+  const [diffFocus, setDiffFocus] = useState<{ path: string; line: number } | null>(null);
+  const [diffFocusVersion, setDiffFocusVersion] = useState(data.codeReviewDiffVersion);
+  if (diffFocusVersion !== data.codeReviewDiffVersion) {
+    setDiffFocusVersion(data.codeReviewDiffVersion);
+    setDiffFocus(null); // old diff location cannot follow a newer PR fetch
+  }
+  const focusedDiff = diffFocus && fetchedDiffText !== null
+    ? reviewDiffContext(fetchedDiffText, diffFocus.path, diffFocus.line)
+    : null;
+
+  function inspectDiff(path: string, line: number) {
+    setDiffFocus({ path, line });
+    setActiveTab("walkthrough");
+  }
   const [diffFetchError, setDiffFetchError] = useState<string | null>(null);
   const fetchedForVersionRef = useRef<number | null>(null);
   const diffFetchSeqRef = useRef(0);
@@ -572,12 +587,25 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
                 Loading diff…
               </p>
             ) : (
-              // The unified diff through the same NodeMarkdown pipeline as
-              // GitlinkNodeView's own proposal diff (fenced ```diff for
-              // colorization, still inert text) - never raw HTML.
-              <div className="chat-node-content code-review-node-diff-markdown">
-                <NodeMarkdown content={toDiffFence(fetchedDiffText)} />
-              </div>
+              <>
+                {diffFocus && (
+                  <div className="code-review-node-diff-focus">
+                    <p>
+                      Inspecting {findingLocation(diffFocus.path, diffFocus.line)}
+                      {focusedDiff === null && " — not found in the saved excerpt; showing the full diff"}
+                    </p>
+                    <div className="code-review-node-inline-row">
+                      <button type="button" onClick={() => setDiffFocus(null)}>
+                        Show full diff
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {/* Always inert fenced text: never interpret PR diff content as HTML. */}
+                <div className="chat-node-content code-review-node-diff-markdown">
+                  <NodeMarkdown content={toDiffFence(focusedDiff ?? fetchedDiffText)} />
+                </div>
+              </>
             ))}
 
           <div className="code-review-node-qa">
@@ -644,7 +672,9 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
             <div className="code-review-node-verdict code-review-node-verdict-none" role="status">
               <span className="code-review-node-verdict-label">Not assessed</span>
               <span className="code-review-node-verdict-risk">
-                deterministic pre-screen only - run the review again for a graded assessment
+                {data.codeReviewDiffTruncated || data.codeReviewFilesTruncated
+                  ? "partial diff or file list — overall grade withheld"
+                  : "only a pre-screen or unanchored findings were available — no overall grade claimed"}
               </span>
             </div>
           ) : (
@@ -690,6 +720,15 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
                 <strong>Fix:</strong> {error.fix}
               </p>
               <div className="code-review-node-inline-row">
+                {error.path && (
+                  <button
+                    type="button"
+                    aria-label={`Inspect error in diff: ${error.title}`}
+                    onClick={() => inspectDiff(error.path, error.line)}
+                  >
+                    Inspect diff
+                  </button>
+                )}
                 <button
                   type="button"
                   aria-label={`Copy error: ${error.title}`}
@@ -725,6 +764,15 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
                 <strong>Recommendation:</strong> {finding.recommendation}
               </p>
               <div className="code-review-node-inline-row">
+                {finding.path && (
+                  <button
+                    type="button"
+                    aria-label={`Inspect finding in diff: ${finding.title}`}
+                    onClick={() => inspectDiff(finding.path, finding.line)}
+                  >
+                    Inspect diff
+                  </button>
+                )}
                 <button
                   type="button"
                   aria-label={`Copy finding: ${finding.title}`}
