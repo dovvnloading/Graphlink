@@ -682,6 +682,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                       <button
                         key={change.path + ":" + index}
                         type="button"
+                        aria-label={"Review " + change.operation + " " + change.path}
                         aria-pressed={reviewIndex === index}
                         className={reviewIndex === index ? "active" : ""}
                         disabled={!reviewSections}
