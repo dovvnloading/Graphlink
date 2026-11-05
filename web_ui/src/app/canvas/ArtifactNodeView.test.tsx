@@ -483,6 +483,7 @@ describe("ArtifactNodeView proposal review", () => {
     proposalId: "proposal-1",
     content: "# New heading\n\nNew paragraph.",
     baseSha256: "a".repeat(64),
+    baseMatchesCurrent: true,
     summary: "Edited the heading and paragraph.",
   };
 
