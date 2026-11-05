@@ -324,9 +324,10 @@ describe("finding evidence and diff navigation", () => {
     expect(screen.getByRole("tab", { name: /Walkthrough/ })).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(onFetchDiffText).toHaveBeenCalledOnce());
     await waitFor(() => expect(screen.getByText(/Inspecting src\/a.py:12/)).toBeInTheDocument());
-    const code = document.querySelector(".code-review-node-diff-markdown pre code");
-    await waitFor(() => expect(code?.textContent).toContain("+danger()"));
-    expect(code?.textContent).not.toContain("+safe()");
+    await waitFor(() =>
+      expect(document.querySelector(".code-review-node-diff-markdown pre code")?.textContent).toContain("+danger()"),
+    );
+    expect(document.querySelector(".code-review-node-diff-markdown pre code")?.textContent).not.toContain("+safe()");
     fireEvent.click(screen.getByRole("button", { name: "Show full diff" }));
     await waitFor(() => expect(document.querySelector(".code-review-node-diff-markdown pre code")?.textContent).toContain("+safe()"));
   });

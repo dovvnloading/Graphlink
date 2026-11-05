@@ -163,6 +163,23 @@ def test_spaces_and_quoted_paths_are_not_substring_matches():
     assert assess_model_location(index, "file.py", 1)[0] == "unverified"
 
 
+def test_a_plus_prefixed_source_line_cannot_forge_a_new_file_header():
+    # A code line that starts with two plus signs serializes as '+++ b/foo'.
+    # This is *inside* the hunk, not a new +++ b/foo metadata header.
+    diff = "\n".join([
+        "diff --git a/src/app.py b/src/app.py",
+        "--- a/src/app.py", "+++ b/src/app.py",
+        "@@ -0,0 +1,3 @@",
+        "+++ b/fake.py",
+        "+actually_changed()",
+        "+end()",
+    ])
+    index = index_visible_diff(diff)
+    assert assess_model_location(index, "src/app.py", 1) == ("added", "++ b/fake.py")
+    assert assess_model_location(index, "src/app.py", 2) == ("added", "actually_changed()")
+    assert assess_model_location(index, "fake.py", 1)[0] == "unverified"
+
+
 def test_model_claims_are_verified_against_added_hunks_and_show_actual_source(monkeypatch):
     result = _review(monkeypatch, errors_found=[_error()], review_findings=[
         _finding(path="tests/test_app.py", line=2, severity="medium"),

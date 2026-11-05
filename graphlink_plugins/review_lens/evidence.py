@@ -88,7 +88,9 @@ def index_visible_diff(diff_text: str) -> DiffEvidence:
             continue
         if not saw_diff_header:
             continue
-        if raw.startswith("+++ "):
+        if raw.startswith("+++ ") and next_new_line is None:
+            # Inside an @@ hunk, +++ may be an added code line whose text
+            # starts with "++ ". It is NOT another file header.
             current_path = _header_path(raw[4:], "b/")
             next_new_line = None
             if current_path is not None:
@@ -100,7 +102,7 @@ def index_visible_diff(diff_text: str) -> DiffEvidence:
             continue
         if next_new_line is None or current_path is None:
             continue
-        if raw.startswith("+") and not raw.startswith("+++"):
+        if raw.startswith("+"):
             result.lines[current_path][next_new_line] = DiffLine(
                 "added", raw[1:1 + _MAX_EXCERPT]
             )
