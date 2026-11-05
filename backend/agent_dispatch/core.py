@@ -449,6 +449,7 @@ class DispatcherCoreOps(DispatcherParts):
         node_id: str | None = None,
         on_partial=None,
         on_usage=None,
+        on_claim=None,
     ) -> None:
         """The shared real-dispatch pipeline behind both start_chat_reply
         (Composer, state_topic="app-composer") and start_conversation_reply
@@ -539,6 +540,19 @@ class DispatcherCoreOps(DispatcherParts):
             "chat", node_id=node_id, cancel_event=cancel_event, finalize=_finalize
         )
         request_id = handle.request_id
+
+        if on_claim is not None:
+            # ConversationNode must commit its user message only AFTER the
+            # shared chat slot and configured-provider gates succeed. This
+            # synchronous callback may return a frozen history snapshot;
+            # it must never yield between claim and mutation.
+            try:
+                claimed_history = on_claim()
+                if claimed_history is not None:
+                    conversation_history = claimed_history
+            except BaseException:
+                self._runs.release(request_id)
+                raise
 
         async def _run():
             async def _commit_partial() -> None:
@@ -808,6 +822,11 @@ class DispatcherCoreOps(DispatcherParts):
                         ),
                         timeout=agents_module.WATCHDOG_TIMEOUT_SECONDS,
                     )
+                # Release-on-cancel allows a newer request to start while
+                # a previous provider thread is still unwinding. A late
+                # successful return must never commit into that new turn.
+                if cancel_event.is_set() or self._runs.get(request_id) is None:
+                    return
                 if inspect.iscoroutinefunction(on_reply):
                     await on_reply(reply_text)
                 else:
