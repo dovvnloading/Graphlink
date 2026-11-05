@@ -98,6 +98,8 @@ Attach these specialist nodes to a branch from the plugin picker:
 | HTML Renderer | Build & Execution | Renders HTML from a parent branch directly inside the app. |
 | Artifact / Drafter | Workflow & Drafting | A split-pane surface for drafting and refining long-form Markdown. |
 
+Use the search field at the top of the plugin picker to find plugins across all categories by name or task. Use the Up/Down arrows to move between results, Enter to launch a result, or Escape to close the picker. Plugin permissions are still checked by the backend.
+
 ## Getting Started
 
 ### Requirements

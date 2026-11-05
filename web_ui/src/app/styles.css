@@ -5124,12 +5124,76 @@ mark.document-view-search-match-current {
 
 .plugin-picker-shell {
   box-sizing: border-box;
-  width: 100%;
+  min-width: 0;
+  width: min(520px, calc(100vw - 16px));
   max-width: 520px;
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   gap: 0;
   padding: 8px;
+}
+
+.plugin-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 10px;
+  border-bottom: 1px solid var(--gl-surface-border);
+}
+
+.plugin-picker-search-input {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-surface-inset);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 7px;
+}
+
+.plugin-picker-search-input::placeholder {
+  color: var(--gl-surface-text-muted);
+}
+
+.plugin-picker-clear-btn {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  color: var(--gl-surface-text-muted);
+  background: transparent;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.plugin-picker-clear-btn:hover {
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-neutral-button-hover);
+}
+
+.plugin-picker-hint {
+  margin: 0;
+  padding: 6px 10px 2px;
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+.plugin-picker-main {
+  display: flex;
+  min-height: 0;
+}
+
+.plugin-picker-search-input:focus-visible,
+.plugin-picker-clear-btn:focus-visible,
+.plugin-picker-category-btn:focus-visible,
+.plugin-picker-row:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
 }
 
 .plugin-picker-rail {
@@ -5284,6 +5348,39 @@ mark.document-view-search-match-current {
   flex-shrink: 0;
   font-size: 16px;
   color: var(--gl-surface-text-muted);
+}
+
+.plugin-picker-row-category {
+  font-size: 10px;
+  color: var(--gl-surface-text-muted);
+}
+
+@media (max-width: 560px) {
+  .plugin-picker-main {
+    flex-direction: column;
+  }
+
+  .plugin-picker-rail {
+    width: 100%;
+    padding: 6px 8px;
+    border-right: none;
+    border-bottom: 1px solid var(--gl-surface-border);
+  }
+
+  .plugin-picker-rail-buttons {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .plugin-picker-category-btn {
+    width: auto;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .plugin-picker-list {
+    max-height: min(300px, 42vh);
+  }
 }
 
 /* -- Settings dialog (R2.5d) ----------------------------------------------- */
