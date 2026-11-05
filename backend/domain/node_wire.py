@@ -101,6 +101,7 @@ WIRE_DEFAULTS: dict[str, Any] = {
     "researchRetainToKnowledge": False,
     "artifactContent": "",
     "artifactError": "",
+    "artifactProposalId": "",
     "gitlinkRepo": "",
     "gitlinkBranch": "",
     "gitlinkScopeMode": "selected",
@@ -511,7 +512,11 @@ _STATE_FIELDS: dict[type, tuple[_Entry, ...]] = {
         ("researchResult", "research_result"),
         ("researchRetainToKnowledge", "research_retain_to_knowledge"),
     ),
-    ArtifactState: _table(("artifactContent", "artifact_content"), ("artifactError", "artifact_error")),
+    ArtifactState: _table(
+        ("artifactContent", "artifact_content"),
+        ("artifactError", "artifact_error"),
+        ("artifactProposalId", "artifact_proposal_id"),
+    ),
     # gitlinkContextXml is DELIBERATELY absent - see GitlinkState's own
     # comment; served on demand via the fetchGitlinkContext intent.
     GitlinkState: _table(
