@@ -381,6 +381,7 @@ def validate_layout_constraints(original: SceneDocument, projected: SceneDocumen
         if group.kind not in _GROUP_KINDS or group.is_collapsed:
             continue
         members = _member_leaves(projected, group_id)
+        nested_groups = _descendant_groups(projected, group_id)
         # A nested group pill is itself a visible direct member, even if it
         # has no visible leaves. An outer group must enclose its pill.
         for member_id in group.item_ids:
@@ -402,7 +403,7 @@ def validate_layout_constraints(original: SceneDocument, projected: SceneDocumen
             if visible[nid].kind in _GROUP_KINDS:
                 if nid in group.item_ids:
                     continue
-                if nid in _descendant_groups(projected, group_id):
+                if nid in nested_groups:
                     continue
             if _rectangles_overlap(bounds[group_id], bounds[nid]):
                 raise SceneError(
