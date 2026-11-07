@@ -10,13 +10,9 @@ hostile/inadvertent floating-point extrema, not ordinary legacy layouts.
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
-
+from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import SceneError
 from backend.domain.node_states import ChartState, FrameState, GroupSizedState
-
-if TYPE_CHECKING:
-    from backend.domain.graph import SceneDocument
 
 MAX_COORDINATE = 1_000_000_000_000.0
 MAX_DIMENSION = 1_000_000_000_000.0
@@ -44,7 +40,7 @@ def valid_measured_dimension(value: object) -> bool:
     return math.isfinite(numeric) and 0 < numeric <= MAX_MEASURED_DIMENSION
 
 
-def validate_layout_geometry(document: SceneDocument) -> None:
+def validate_layout_geometry(document: SceneDocumentParts) -> None:
     """Validate a whole scene before planning and *after* calculating a plan.
 
     Includes measured sizes even for currently hidden members so a later
