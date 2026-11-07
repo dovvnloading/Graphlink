@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 from backend.domain.node_access import require_node
 from backend.domain.node_states import ChatState, NoteState
-from backend.domain.structure import is_structural_edge
+from backend.domain.structure import preferred_parent_edge
 
 from backend.domain._composed import SceneDocumentParts
 
@@ -185,30 +185,13 @@ class BranchOps(SceneDocumentParts):
         return node_ref, branch_ref
 
     def _branch_parent_edge(self, node_id: str) -> SceneEdge | None:
-        """R6.1: the shared 'find the edge whose target == node_id' lookup
-        chat_branch_history/get_branch_root/regenerate_response/
-        delete_chat_node all use to walk BRANCH structure (parent -> child,
-        source -> target) - factored out once this increment introduced a
-        second, unrelated edge shape that can also target a chat node: a
-        System Prompt note's note -> root edge (backend/plugins.py's
-        "System Prompt" branch, direction confirmed against
-        backend/agents.py's _resolve_branch_system_prompt). That edge is
-        METADATA (which note decorates this root) - a note is never a real
-        branch "parent", so a branch history/root walk must never traverse
-        through it (doing so would both corrupt chat_branch_history's real
-        conversation_history with the note's own content as a fake turn, AND
-        make get_branch_root resolve to the note instead of the true chat
-        root, silently defeating the override it exists to find). Skips
-        edges whose source is a kind="note" node for exactly that reason;
-        otherwise identical to the plain `next((e for e in self.edges.
-        values() if e.target == node_id), None)` pattern this replaces."""
-        for edge in self.edges.values():
-            if edge.target != node_id:
-                continue
-            if not is_structural_edge(self.nodes, edge):
-                continue
-            return edge
-        return None
+        """Resolve the same explicit-first ancestry as the organization solver.
+
+        Legacy untyped edges retain their historical creation-order rule,
+        and metadata notes, secondary parents and references never replace
+        the structural parent in branch history or regeneration.
+        """
+        return preferred_parent_edge(self.nodes, self.edges, node_id)
 
     def _chat_subtree_ids(self, root_id: str) -> list[str]:
         """ADR-002 Workstream 1 ("Branch status and lifecycle"): the
