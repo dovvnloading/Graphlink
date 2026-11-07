@@ -129,6 +129,34 @@ function isIdList(value: unknown): boolean {
   return Array.isArray(value) && value.every((id) => typeof id === "string");
 }
 
+
+/** A backend-computed preview; positions are display-only, never trusted writes. */
+export interface OrganizationPreview {
+  fingerprint: string;
+  planId: string;
+  scope: "all" | "selection" | "branch" | "group";
+  selectedCount: number;
+  movedCount: number;
+  nodes: Array<{
+    id: string;
+    kind: string;
+    title: string;
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    changed: boolean;
+  }>;
+}
+
+export interface OrganizationOptions {
+  scope: OrganizationPreview["scope"];
+  rootId: string | null;
+  nodeIds: string[] | null;
+  fixedNodeIds: string[] | null;
+  preserveFrameSizes: boolean;
+}
+
 export class SceneStore {
   private scene: SceneState = initialSceneState;
   private grid: GridControlState = initialGridState;
@@ -1363,6 +1391,23 @@ export class SceneStore {
   organizeNodes(): void {
     this.transport.fireIntent("scene", "organizeNodes", []);
   }
+
+  /** Request the current server-side layout without changing the canvas. */
+  async previewOrganize(options: OrganizationOptions): Promise<OrganizationPreview> {
+    return this.transport.request("scene", "previewOrganize", [
+      options.scope, options.rootId, options.nodeIds, options.fixedNodeIds,
+      options.preserveFrameSizes,
+    ]) as Promise<OrganizationPreview>;
+  }
+
+  /** Apply only if the same backend-calculated plan still matches the graph. */
+  async applyOrganize(options: OrganizationOptions, planId: string): Promise<void> {
+    await this.transport.request("scene", "applyOrganize", [
+      options.scope, options.rootId, options.nodeIds, options.fixedNodeIds,
+      options.preserveFrameSizes, planId,
+    ]);
+  }
+
 
   // ADR-012 stage 12.6: the bundled sample workspace - a small, fixed 3-node
   // demo the backend hardcodes (see backend/api/intents_onboarding.py's own
