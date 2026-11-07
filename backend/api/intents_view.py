@@ -94,7 +94,11 @@ def register_view_intents(bus: SessionBus, document: SceneDocument) -> None:
         document.record_command(
             "organizeNodes", "user",
             lambda: apply_organization_plan(document, plan),
-            node_ids=list(document.nodes.keys()),
+            # The planner copies only these nodes' layout fields. Watching
+            # every leaf forces record_command to deepcopy large histories
+            # for unrelated branches, even when organizing two nodes.
+            # CommandOps already defensively watches every frame/container.
+            node_ids=plan.changed_ids,
         )
         await publish_scene()
 
