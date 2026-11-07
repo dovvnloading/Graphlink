@@ -172,12 +172,36 @@ def organize_compound_islands(
     for members, owners in islands:
         subset = copy.copy(document)
         subset.nodes = {}
-        for nid in sorted(members, key=lambda key: insertion[key]):
+
+        # A frame and a container can share a hinge member. Arrange the
+        # container-only leaves, then the hinge, then frame-only leaves, so
+        # neither background engulfs the other group's exclusive members.
+        # A single-kind island simply keeps creation order.
+        def member_order(nid: str) -> tuple[int, int]:
+            has_frame = any(
+                document.nodes[gid].kind == "frame" and nid in group_members[gid]
+                for gid in owners
+            )
+            has_container = any(
+                document.nodes[gid].kind == "container" and nid in group_members[gid]
+                for gid in owners
+            )
+            if has_container and not has_frame:
+                bucket = 0
+            elif has_container and has_frame:
+                bucket = 1
+            elif has_frame:
+                bucket = 2
+            else:
+                bucket = 3
+            return bucket, insertion[nid]
+
+        ordered_members = sorted(members, key=member_order)
+        for order, nid in enumerate(ordered_members):
             node = copy.copy(layout_nodes[nid])
-            # Fix the layout's own input ordering to *creation* order in
-            # this compound mode. If the order depended on current x, a
-            # second Organize could reorder its own previously moved cards.
-            node.x = float(insertion[nid])
+            # Stable from creation/membership rather than current x: the
+            # second Organize must not reorder its own moved cards.
+            node.x = float(order)
             node.y = 0.0
             subset.nodes[nid] = node
         subset.edges = {
