@@ -943,9 +943,16 @@ class SceneDocument(
         self.total_session_tokens += _estimate_tokens(str(text))
 
     def organize(self) -> None:
-        """Tidy layout: size-aware layered tree layout - see LayoutOps
-        .organize_layout (backend/domain/layout.py) for the algorithm."""
-        self.organize_layout()
+        """Legacy entry point with the same fail-closed geometry guarantee.
+
+        The UI still exposes this old intent to callers predating Preview.
+        Route it through the read-only planner rather than mutating live
+        positions before discovering an invalid compound-group layout.
+        """
+        from backend.domain.organization import apply_organization_plan, make_organization_plan
+
+        plan = make_organization_plan(self, "all", preserve_frame_sizes=False)
+        apply_organization_plan(self, plan)
 
     # -- snapshots ---------------------------------------------------------
 
