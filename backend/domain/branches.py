@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 from backend.domain.node_access import require_node
 from backend.domain.node_states import ChatState, NoteState
+from backend.domain.structure import is_structural_edge
 
 from backend.domain._composed import SceneDocumentParts
 
@@ -204,8 +205,7 @@ class BranchOps(SceneDocumentParts):
         for edge in self.edges.values():
             if edge.target != node_id:
                 continue
-            source_node = self.nodes.get(edge.source)
-            if source_node is not None and source_node.kind == "note":
+            if not is_structural_edge(self.nodes, edge):
                 continue
             return edge
         return None
