@@ -31,6 +31,7 @@ from backend.domain._composed import SceneDocumentParts
 from backend.domain.containment import group_dependency_order, hidden_group_descendants
 from backend.domain.layout import COMPONENT_GAP, NODE_GAP_X
 from backend.domain.model import GROUP_PADDING, GROUP_PADDING_TOP
+from backend.domain.structure import primary_parent_edges
 
 if TYPE_CHECKING:
     from backend.domain.model import SceneNode
@@ -78,6 +79,34 @@ def _structural_root(
         for member_id in trail:
             cache[member_id] = root
     return cache[node_id]
+
+
+def cross_tree_group_ids(document: SceneDocumentParts) -> set[str]:
+    """Expanded groups that bridge distinct primary conversation trees.
+
+    The containment validator uses this exact trigger, rather than
+    rejecting legacy single-tree scenes whose manually expanded backgrounds
+    historically overlap nonmembers. Those scenes are a separate engine-v2
+    constraint problem, not a reason to regress existing Organize calls.
+    """
+    if any(n.kind in _GROUP_KINDS and n.is_collapsed for n in document.nodes.values()):
+        return set()
+    hidden = hidden_group_descendants(document.nodes)
+    eligible = {
+        nid for nid, n in document.nodes.items()
+        if n.kind not in _GROUP_KINDS and not n.is_docked and nid not in hidden
+    }
+    parents = {
+        nid: edge.source for nid, edge in primary_parent_edges(
+            document.nodes, document.edges, eligible,
+        ).items()
+    }
+    cache: dict[str, str] = {}
+    return {
+        gid
+        for gid, members in _visible_group_members(document, eligible).items()
+        if len({_structural_root(nid, parents, cache) for nid in members}) > 1
+    }
 
 
 def _connected_islands(
