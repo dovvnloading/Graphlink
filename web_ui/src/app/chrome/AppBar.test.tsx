@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { AppBar } from "./AppBar";
-import { OverlayProvider } from "../overlays/overlays";
+import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { SceneStore } from "../canvas/sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
 
@@ -39,11 +39,17 @@ function makeStore(): SceneStore {
   return new SceneStore(transport);
 }
 
+function ActiveOverlayProbe() {
+  const overlays = useOverlays();
+  return <output data-testid="active-overlay">{overlays.openSurface ?? ""}</output>;
+}
+
 function renderAppBar(store = makeStore()) {
   render(
     <OverlayProvider>
       <ReactFlowProvider>
         <AppBar store={store} />
+        <ActiveOverlayProbe />
       </ReactFlowProvider>
     </OverlayProvider>,
   );
@@ -157,7 +163,7 @@ describe("AppBar", () => {
     // Organize happened to be correct. One shared assertion per action
     // closes that exact gap for good, rather than re-opening it the next
     // time a plain action is added.
-    it.each(["Export PNG", "Organize", "Zoom In", "Zoom Out", "Reset", "Fit All"])(
+    it.each(["Export PNG", "Zoom In", "Zoom Out", "Reset", "Fit All"])(
       "clicking the overflow copy of a plain action (%s) closes the menu",
       async (label) => {
         const user = userEvent.setup();
@@ -174,7 +180,8 @@ describe("AppBar", () => {
       const organizeSpy = vi.spyOn(store, "organizeNodes");
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
       await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Organize" }));
-      expect(organizeSpy).toHaveBeenCalledOnce();
+      expect(organizeSpy).not.toHaveBeenCalled();
+      expect(screen.getByTestId("active-overlay")).toHaveTextContent("organize");
     });
 
     it("clicking an overlay-opening item (Pins) opens that overlay and closes the menu", async () => {
