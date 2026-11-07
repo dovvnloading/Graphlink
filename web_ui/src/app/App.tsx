@@ -60,6 +60,7 @@ const BuilderLaunchDialog = lazy(() =>
   import("./chrome/BuilderLaunchDialog").then((m) => ({ default: m.BuilderLaunchDialog })),
 );
 const CommandPalette = lazy(() => import("./chrome/CommandPalette").then((m) => ({ default: m.CommandPalette })));
+const OrganizationDialog = lazy(() => import("./chrome/OrganizationDialog").then((m) => ({ default: m.OrganizationDialog })));
 const DiagnosticsDialog = lazy(() =>
   import("./chrome/DiagnosticsDialog").then((m) => ({ default: m.DiagnosticsDialog })),
 );
@@ -504,6 +505,9 @@ function App() {
                   </div>
                   <LazySurface overlayName="palette">
                     <CommandPalette store={sceneStore} />
+                  </LazySurface>
+                  <LazySurface overlayName="organize">
+                    <OrganizationDialog store={sceneStore} />
                   </LazySurface>
                   <LazySurface overlayName="quick-switcher">
                     <QuickSwitcherDialog transport={transport} />
