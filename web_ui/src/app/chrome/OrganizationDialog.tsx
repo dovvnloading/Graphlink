@@ -184,7 +184,7 @@ export function OrganizationDialog({ store }: { store: SceneStore }) {
     return {
       scope, rootId,
       nodeIds: scope === "selection" ? selected : null,
-      fixedNodeIds: pinSelection ? selected : null,
+      fixedNodeIds: pinSelection && (scope === "all" || scope === "branch") ? selected : null,
       preserveFrameSizes,
     };
   }
@@ -247,7 +247,8 @@ export function OrganizationDialog({ store }: { store: SceneStore }) {
         </label>
         <label className="organization-check">
           <input
-            type="checkbox" checked={pinSelection} disabled={busy}
+            type="checkbox" checked={pinSelection && (scope === "all" || scope === "branch")}
+            disabled={busy || (scope !== "all" && scope !== "branch")}
             onChange={(event) => { setPinSelection(event.target.checked); setPreview(null); setError(""); }}
           />
           Keep currently selected nodes fixed (hard constraint)
