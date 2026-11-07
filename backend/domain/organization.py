@@ -70,6 +70,7 @@ def layout_fingerprint(document: SceneDocument) -> str:
 def _clone_for_layout(document: SceneDocument) -> SceneDocument:
     """Clone layout-mutable state, never any real user content or asset bytes."""
     shadow = copy.copy(document)
+    shadow.edges = dict(document.edges)
     shadow.nodes = {}
     for node_id, original in document.nodes.items():
         node = copy.copy(original)
@@ -297,6 +298,135 @@ def _place_subset(
         raise SceneError("could not find space for organized selection")
 
 
+def _rectangles_overlap(
+    a: tuple[float, float, float, float],
+    b: tuple[float, float, float, float],
+) -> bool:
+    """Positive-area collision, without placement gaps or touching edges."""
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    return ax < bx + bw and bx < ax + aw and ay < by + bh and by < ay + ah
+
+
+def _hidden_descendants(document: SceneDocument) -> set[str]:
+    """A collapsed frame/container hides all transitive members.
+
+    Dual-membership nodes are hidden if *either* one of their owners is
+    collapsed. A nested collapsed group itself is hidden when its outer
+    group is collapsed; the outer group remains visible as the proxy.
+    """
+    hidden: set[str] = set()
+    stack: list[str] = [
+        member_id
+        for node in document.nodes.values()
+        if node.kind in _GROUP_KINDS and node.is_collapsed
+        for member_id in node.item_ids
+    ]
+    while stack:
+        nid = stack.pop()
+        if nid in hidden:
+            continue
+        node = document.nodes.get(nid)
+        if node is None:
+            continue
+        hidden.add(nid)
+        if node.kind in _GROUP_KINDS:
+            stack.extend(node.item_ids)
+    return hidden
+
+
+def validate_layout_constraints(original: SceneDocument, projected: SceneDocument) -> None:
+    """Prove a preview preserves graph semantics and visible containment.
+
+    A card can be collision-free relative to all other cards yet sit
+    physically inside an unrelated frame's background. That is a *false*
+    membership cue; reject the plan rather than return a misleading SVG or
+    publish its positions. Legitimate overlapping frame+container members
+    are excluded from the unrelated-node check by transitive membership.
+    """
+    validate_layout_geometry(projected)
+    if tuple(original.nodes) != tuple(projected.nodes):
+        raise SceneError("organization changed the set of graph nodes")
+    if original.edges != projected.edges:
+        raise SceneError("organization altered graph connections")
+    for nid, before in original.nodes.items():
+        after = projected.nodes[nid]
+        if before.kind != after.kind or before.item_ids != after.item_ids:
+            raise SceneError(f"organization altered membership of node {nid}")
+
+    hidden = _hidden_descendants(projected)
+    visible = {
+        nid: node for nid, node in projected.nodes.items()
+        if not node.is_docked and nid not in hidden
+    }
+    bounds = {
+        nid: (node.x, node.y, *projected.node_footprint(node))
+        for nid, node in visible.items()
+    }
+
+    # Distinct cards and collapsed pills cannot overlap, independent of
+    # which group backgrounds happen to draw behind them.
+    solid_ids = [
+        nid for nid, node in visible.items()
+        if node.kind not in _GROUP_KINDS or node.is_collapsed
+    ]
+    for index, nid in enumerate(solid_ids):
+        for other_id in solid_ids[index + 1:]:
+            if _rectangles_overlap(bounds[nid], bounds[other_id]):
+                raise SceneError(
+                    f"organization would overlap visible nodes {nid} and {other_id}"
+                )
+
+    for group_id, group in visible.items():
+        if group.kind not in _GROUP_KINDS or group.is_collapsed:
+            continue
+        members = _member_leaves(projected, group_id)
+        # A nested group pill is itself a visible direct member, even if it
+        # has no visible leaves. An outer group must enclose its pill.
+        for member_id in group.item_ids:
+            if member_id not in bounds:
+                continue
+            member_rect = bounds[member_id]
+            gx, gy, gw, gh = bounds[group_id]
+            mx, my, mw, mh = member_rect
+            if not (gx <= mx and gy <= my and mx + mw <= gx + gw
+                    and my + mh <= gy + gh):
+                raise SceneError(
+                    f"organization would place member {member_id} outside group {group_id}"
+                )
+        for nid in solid_ids:
+            if nid in members or nid == group_id or nid not in bounds:
+                continue
+            # A visible group pill can be a member of the outer group; a
+            # nested container also participates transitively.
+            if visible[nid].kind in _GROUP_KINDS:
+                if nid in group.item_ids:
+                    continue
+                if nid in _descendant_groups(projected, group_id):
+                    continue
+            if _rectangles_overlap(bounds[group_id], bounds[nid]):
+                raise SceneError(
+                    f"organization would visually engulf unrelated node {nid} "
+                    f"inside group {group_id}"
+                )
+
+
+def _descendant_groups(document: SceneDocument, group_id: str) -> set[str]:
+    nested: set[str] = set()
+    pending = [group_id]
+    while pending:
+        gid = pending.pop()
+        group = document.nodes.get(gid)
+        if group is None or group.kind not in _GROUP_KINDS:
+            continue
+        for nid in group.item_ids:
+            child = document.nodes.get(nid)
+            if child is not None and child.kind in _GROUP_KINDS and nid not in nested:
+                nested.add(nid)
+                pending.append(nid)
+    return nested
+
+
 @dataclass(frozen=True)
 class OrganizationPlan:
     source_fingerprint: str
@@ -378,9 +508,10 @@ def make_organization_plan(
         _place_subset(shadow, document, movable)
         _refit_groups(shadow, document, _affected_groups(shadow, movable), preserve_frame_sizes)
 
-    # Reject malformed/overflowed projections *before* a plan is returned.
-    # The live document is still untouched at this point.
-    validate_layout_geometry(shadow)
+    # Hard contract: read-only preview must never advertise a layout that
+    # loses topology, overlaps cards or visually misclassifies group members.
+    # Rejections occur before any live mutation or undo command.
+    validate_layout_constraints(document, shadow)
     changed = frozenset(
         nid for nid, node in shadow.nodes.items()
         if _layout_geometry(node) != _layout_geometry(document.nodes[nid])
