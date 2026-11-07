@@ -170,7 +170,7 @@ def test_undo_redo_restores_exact_prior_coordinates_and_group_dimensions():
 
 def test_legacy_whole_canvas_layout_is_unchanged_when_frame_preservation_off():
     doc, _root, child, other = _sample()
-    frame = doc.create_frame([child, other])
+    doc.create_frame([child, other])
     plan = make_organization_plan(doc, "all", preserve_frame_sizes=False)
     apply_organization_plan(doc, plan)
     actual = {nid: _layout_geometry(n) for nid, n in doc.nodes.items()}
