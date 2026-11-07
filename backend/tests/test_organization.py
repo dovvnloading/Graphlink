@@ -116,6 +116,50 @@ def test_group_scope_expands_nested_container_and_preserves_membership():
     assert container.item_ids == [frame.id, root]
 
 
+def test_scoped_layout_cannot_place_ungrouped_nodes_inside_an_unrelated_frame():
+    """Only groups that contain selected leaves may be repacked around them.
+
+    A manually widened frame is a large visible background even when its
+    own content occupies one corner. Without treating its full rect as an
+    obstacle, a second selected root can appear inside the frame despite
+    never belonging to it. This changes the *apparent* organization while
+    the membership data stays unchanged.
+    """
+    from backend.domain.layout import _rects_clear
+
+    doc = SceneDocument()
+    first = doc.add_node(0, 0, "first")
+    second = doc.add_node(70, 0, "second")
+    private_member = doc.add_node(1000, 0, "private")
+    frame = doc.create_frame([private_member.id])
+    doc.resize_frame(frame.id, 1350, 360)
+    assert isinstance(frame.state, FrameState)
+
+    # Neither selected node currently intersects this unrelated frame.
+    before_group = (
+        frame.x, frame.y, frame.state.group_width, frame.state.group_height
+    )
+    assert all(
+        _rects_clear(doc.nodes[nid].x, doc.nodes[nid].y, *doc.node_footprint(doc.nodes[nid]), *before_group)
+        for nid in (first.id, second.id)
+    )
+
+    plan = make_organization_plan(doc, "selection", node_ids=[first.id, second.id])
+    apply_organization_plan(doc, plan)
+
+    # A frame is a semantic visual boundary, not an inert decoration.
+    # The selected nodes must remain outside the *full* background, not
+    # merely clear of its one private member.
+    assert all(
+        _rects_clear(doc.nodes[nid].x, doc.nodes[nid].y, *doc.node_footprint(doc.nodes[nid]), *before_group)
+        for nid in (first.id, second.id)
+    )
+    assert (
+        frame.x, frame.y, frame.state.group_width, frame.state.group_height
+    ) == before_group
+    assert frame.item_ids == [private_member.id]
+
+
 def test_fixed_node_stays_unchanged_when_the_rest_reflows():
     doc, _root, child, _other = _sample()
     initial = (doc.nodes[child].x, doc.nodes[child].y)
