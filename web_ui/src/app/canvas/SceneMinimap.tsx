@@ -4,6 +4,7 @@ import { MiniMap, Panel, useReactFlow, type MiniMapNodeProps } from "@xyflow/rea
 import { minimapMeta, minimapState, type MinimapNodeMeta } from "./minimapNodeMeta";
 import type { SceneStore } from "./sceneStore";
 import { motionDuration } from "../reducedMotion";
+import { hiddenGroupMemberIds } from "./collapsedGroups";
 
 /**
  * The canvas minimap.
@@ -121,11 +122,14 @@ export function SceneMinimap({ store }: { store: SceneStore }) {
     return map;
   }, [scene.nodes]);
 
-  // Nodes parked on a human decision, in canvas order, so "jump to the next
-  // one" is stable rather than depending on Map iteration luck.
+  // Do not offer "jump to" a member whose whole parent group is
+  // collapsed: the card is intentionally absent from the canvas.
+  const hiddenMembers = useMemo(() => hiddenGroupMemberIds(scene.nodes), [scene.nodes]);
   const waiting = useMemo(
-    () => scene.nodes.filter((node) => minimapState(node) === "attention"),
-    [scene.nodes],
+    () => scene.nodes.filter((node) =>
+      !hiddenMembers.has(node.id) && minimapState(node) === "attention"
+    ),
+    [scene.nodes, hiddenMembers],
   );
 
   const toggleCollapsed = useCallback(() => {
