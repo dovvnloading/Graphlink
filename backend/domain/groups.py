@@ -122,7 +122,7 @@ class GroupOps(SceneDocumentParts):
         """
         groups = {
             node.id: node for node in self.nodes.values()
-            if node.kind in ("frame", "container")
+            if is_node_of(node, ("frame", "container"), GroupSizedState)
         }
         if not groups or not touched_ids:
             return False
