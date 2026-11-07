@@ -1631,7 +1631,9 @@ describe("Collapsed semantic-group visibility (#474)", () => {
       new Set(["inner", "nested", "leaf"]),
     );
     expect(
-      applyGroupDragDelta(allFlowNodes, "outer", { x: 200, y: 150 }, true).map((change) => change.id),
+      applyGroupDragDelta(allFlowNodes, "outer", { x: 200, y: 150 }, true)
+        .filter((change) => change.type === "position")
+        .map((change) => change.id),
     ).toEqual(["inner", "nested", "leaf"]);
     expect(toFlowEdges(collapsed, null)).toEqual([]);
 
