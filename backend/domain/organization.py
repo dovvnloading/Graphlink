@@ -30,14 +30,13 @@ _GROUP_KINDS = frozenset(("frame", "container"))
 
 def _layout_geometry(node: SceneNode) -> tuple[object, ...]:
     """The exact mutation footprint of the organization engine."""
-    state = node.state
     group_fields: tuple[object, ...] = ()
-    if isinstance(state, GroupSizedState):
-        group_fields = (state.group_width, state.group_height)
-        if isinstance(state, FrameState):
+    if isinstance(node.state, GroupSizedState):
+        group_fields = (node.state.group_width, node.state.group_height)
+        if isinstance(node.state, FrameState):
             group_fields += (
-                state.group_manual_x, state.group_manual_y,
-                state.group_manual_width, state.group_manual_height,
+                node.state.group_manual_x, node.state.group_manual_y,
+                node.state.group_manual_width, node.state.group_manual_height,
             )
     return (node.x, node.y, *group_fields)
 
@@ -124,19 +123,18 @@ def _refit_groups(
         if group_id not in affected:
             continue
         node = shadow.nodes[group_id]
-        state = node.state
-        if isinstance(state, FrameState):
+        if isinstance(node.state, FrameState):
             # Old position anchors cannot survive a reflow without stretching
             # the group across where its children *used* to be.
-            state.group_manual_x = None
-            state.group_manual_y = None
-            previous = original.nodes[group_id].state
-            if preserve_frame_sizes and isinstance(previous, FrameState):
-                state.group_manual_width = previous.group_manual_width
-                state.group_manual_height = previous.group_manual_height
+            node.state.group_manual_x = None
+            node.state.group_manual_y = None
+            previous_node = original.nodes[group_id]
+            if preserve_frame_sizes and isinstance(previous_node.state, FrameState):
+                node.state.group_manual_width = previous_node.state.group_manual_width
+                node.state.group_manual_height = previous_node.state.group_manual_height
             else:
-                state.group_manual_width = None
-                state.group_manual_height = None
+                node.state.group_manual_width = None
+                node.state.group_manual_height = None
         shadow._recompute_group_bounds(group_id)
 
 
@@ -384,12 +382,11 @@ def apply_organization_plan(document: SceneDocument, plan: OrganizationPlan) -> 
         target = document.nodes[nid]
         projected = plan.nodes[nid]
         target.x, target.y = projected.x, projected.y
-        to_state, from_state = target.state, projected.state
-        if isinstance(to_state, GroupSizedState) and isinstance(from_state, GroupSizedState):
-            to_state.group_width = from_state.group_width
-            to_state.group_height = from_state.group_height
-            if isinstance(to_state, FrameState) and isinstance(from_state, FrameState):
-                to_state.group_manual_x = from_state.group_manual_x
-                to_state.group_manual_y = from_state.group_manual_y
-                to_state.group_manual_width = from_state.group_manual_width
-                to_state.group_manual_height = from_state.group_manual_height
+        if isinstance(target.state, GroupSizedState) and isinstance(projected.state, GroupSizedState):
+            target.state.group_width = projected.state.group_width
+            target.state.group_height = projected.state.group_height
+            if isinstance(target.state, FrameState) and isinstance(projected.state, FrameState):
+                target.state.group_manual_x = projected.state.group_manual_x
+                target.state.group_manual_y = projected.state.group_manual_y
+                target.state.group_manual_width = projected.state.group_manual_width
+                target.state.group_manual_height = projected.state.group_manual_height
