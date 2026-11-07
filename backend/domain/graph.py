@@ -36,6 +36,8 @@ would silently no-op; patch `backend.domain.graph.<name>` instead.
 
 from __future__ import annotations
 
+from backend.domain.geometry_safety import finite_float
+
 from collections import deque
 import itertools
 import logging
@@ -636,7 +638,9 @@ class SceneDocument(
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
-        node.x, node.y = float(x), float(y)
+        new_x = finite_float(x, "node x")
+        new_y = finite_float(y, "node y")
+        node.x, node.y = new_x, new_y
         if node.kind == "frame":
             # R6.1 follow-up: dragging a frame directly - a locked whole-
             # group drag (the frontend commits the frame's own position
@@ -685,12 +689,16 @@ class SceneDocument(
         to the same set), using the fully-settled positions throughout.
         Callers still using move_node for a single, non-group node stay
         unaffected - this is purely additive."""
+        # Validate every known node before mutating any of them. Invalid
+        # entries later in a batch cannot leave earlier nodes half-moved.
+        checked = [
+            (node_id, finite_float(x, "node x"), finite_float(y, "node y"))
+            for node_id, x, y in positions if node_id in self.nodes
+        ]
         moved_ids: set[str] = set()
-        for node_id, x, y in positions:
-            node = self.nodes.get(node_id)
-            if node is None:
-                continue
-            node.x, node.y = float(x), float(y)
+        for node_id, x, y in checked:
+            node = self.nodes[node_id]
+            node.x, node.y = x, y
             moved_ids.add(node_id)
             if is_node_of(node, "frame", FrameState):
                 node.state.group_manual_x, node.state.group_manual_y = node.x, node.y
@@ -935,9 +943,15 @@ class SceneDocument(
         self.total_session_tokens += _estimate_tokens(str(text))
 
     def organize(self) -> None:
-        """Tidy layout: size-aware layered tree layout - see LayoutOps
-        .organize_layout (backend/domain/layout.py) for the algorithm."""
-        self.organize_layout()
+        """Use a read-only plan so invalid geometry cannot half-move nodes.
+
+        Preserve the legacy layout algorithm and its frame sizing policy.
+        All positions are checked before copying them into the live scene.
+        """
+        from backend.domain.organization import apply_organization_plan, make_organization_plan
+
+        plan = make_organization_plan(self, "all", preserve_frame_sizes=False)
+        apply_organization_plan(self, plan)
 
     # -- snapshots ---------------------------------------------------------
 
