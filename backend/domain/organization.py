@@ -43,16 +43,26 @@ def _layout_geometry(node: SceneNode) -> tuple[object, ...]:
 
 def layout_fingerprint(document: SceneDocument) -> str:
     """Hash *all* facts that can affect planning or invalidate its preview."""
+    # A preview must expire when *content* changes as well as geometry.
+    # Streaming replies can update content before the browser has reported
+    # a new measured height; checking sizes alone misses that real race.
+    # Keep opaque per-kind state and assets in this fence too: image/HTML/
+    # chart edits may change what the canvas renders without changing x/y.
     nodes = tuple(
         (
-            n.id, n.kind, n.title, n.is_docked, n.is_collapsed,
+            n.id, n.kind, n.title, n.content, repr(n.history),
+            repr(n.state), n.pending_request_id, n.is_docked, n.is_collapsed,
             tuple(n.item_ids), _layout_geometry(n), document.node_footprint(n),
         )
         for n in document.nodes.values()
     )
     edges = tuple((e.id, e.source, e.target) for e in document.edges.values())
     sizes = tuple(sorted(document.measured_sizes.items()))
-    return hashlib.sha256(repr((nodes, edges, sizes)).encode("utf-8")).hexdigest()
+    assets = tuple(
+        (key, mime, hashlib.sha256(data).digest())
+        for key, (data, mime) in sorted(document.image_assets.items())
+    )
+    return hashlib.sha256(repr((nodes, edges, sizes, assets)).encode("utf-8")).hexdigest()
 
 
 def _clone_for_layout(document: SceneDocument) -> SceneDocument:
