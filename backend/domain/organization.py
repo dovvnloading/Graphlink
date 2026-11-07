@@ -16,7 +16,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
-from backend.domain.layout import COMPONENT_GAP, NODE_GAP_X, NODE_GAP_Y, _rects_clear
+from backend.domain.layout import NODE_GAP_X, _rects_clear
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_states import FrameState, GroupSizedState
 from backend.domain.structure import primary_parent_edges
@@ -327,6 +327,18 @@ def make_organization_plan(
     preserve_frame_sizes: bool = True,
 ) -> OrganizationPlan:
     """Plan a scoped organization. No mutation of document is permitted."""
+    if scope not in ("all", "branch", "group", "selection"):
+        raise SceneError(f"unknown organization scope: {scope}")
+    if root_id is not None and not isinstance(root_id, str):
+        raise SceneError("root_id must be a node id")
+    for name, ids in (("node_ids", node_ids), ("fixed_node_ids", fixed_node_ids)):
+        if ids is not None and (
+            not isinstance(ids, list)
+            or any(not isinstance(nid, str) for nid in ids)
+        ):
+            raise SceneError(f"{name} must be a list of node ids")
+    if not isinstance(preserve_frame_sizes, bool):
+        raise SceneError("preserve_frame_sizes must be a boolean")
     source_fingerprint = layout_fingerprint(document)
     selected = _selected_leaves(document, scope, root_id, node_ids)
     fixed = set(fixed_node_ids or ())
