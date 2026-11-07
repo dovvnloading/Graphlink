@@ -240,6 +240,33 @@ def test_organize_shrinks_an_outer_container_when_its_member_frame_collapses():
     assert outer.state.group_height == expected_height
 
 
+def test_expanded_group_intrinsic_geometry_beats_stale_client_measurement():
+    """An outer container must never wrap stale dimensions of its child group.
+
+    The group node's visible width/height are controlled by the backend, not
+    the DOM (GroupNodeView/React Flow set them explicitly). A measurement
+    from before a child expands must not shrink the outer bounding box.
+    """
+    doc = SceneDocument()
+    leaf = doc.add_node(100, 200, "leaf")
+    inner = doc.create_container([leaf.id])
+    outer = doc.create_container([inner.id])
+
+    old_size = doc.node_footprint(inner)
+    doc.set_measured_node_sizes([(inner.id, *old_size)])
+    # Leaf can grow before the browser re-measures the containing group.
+    doc.set_measured_node_sizes([(leaf.id, 850.0, 580.0)])
+    assert inner.state.group_width > old_size[0]
+    assert inner.state.group_height > old_size[1]
+    assert doc.node_footprint(inner) == (
+        inner.state.group_width, inner.state.group_height
+    )
+    assert doc._member_footprint(inner) == doc.node_footprint(inner)
+    assert outer.x <= inner.x and outer.y <= inner.y
+    assert outer.x + outer.state.group_width >= inner.x + inner.state.group_width
+    assert outer.y + outer.state.group_height >= inner.y + inner.state.group_height
+
+
 def test_member_footprint_of_a_collapsed_group_matches_node_footprint():
     """groups.py's _member_footprint and layout.py's node_footprint must
     agree on a collapsed group's size - two independent "how big is this
