@@ -2480,7 +2480,7 @@ def test_preview_and_apply_organize_use_actual_scene_intents():
     async def run():
         bus, document, recorder = make_bus()
         root = document.add_chat_node(300, 600, "root", True)
-        child = document.add_chat_node(350, 620, "child", False, parent_id=root.id)
+        document.add_chat_node(350, 620, "child", False, parent_id=root.id)
         start = {nid: (n.x, n.y) for nid, n in document.nodes.items()}
         edge_ids = list(document.edges)
 
