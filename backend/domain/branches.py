@@ -254,21 +254,13 @@ class BranchOps(SceneDocumentParts):
         parent_edge = self._branch_parent_edge(node_id)
         parent_id = parent_edge.source if parent_edge is not None else None
         child_edges = [e for e in self.edges.values() if e.source == node_id]
-        # R6.1: a System Prompt note attached to node_id (a note -> node_id
-        # edge - the exact shape _branch_parent_edge deliberately skips
-        # above, so it is NOT parent_edge) still dies with this endpoint,
-        # same "edges die with either endpoint" invariant remove_nodes
-        # already enforces elsewhere - otherwise it would dangle, pointing
-        # at a node_id that no longer exists in self.nodes. The note ITSELF
-        # is not deleted (mirrors ungroup's own "detach, don't
-        # cascade-delete" precedent) - only this now-stale edge.
-        note_edges = []
-        for edge in self.edges.values():
-            if edge.target != node_id:
-                continue
-            source_node = self.nodes.get(edge.source)
-            if source_node is not None and source_node.kind == "note":
-                note_edges.append(edge)
+        # The primary structural edge determines where children reconnect,
+        # but it is NOT the only edge that might target this chat node.
+        # Live connect() permits extra incoming cross-links from chat/content
+        # nodes, in addition to note -> chat metadata. Once this node is
+        # deleted, *every* incident edge must go; the alternative leaves
+        # dangling targets in scene snapshots and silently loses those
+        # relationships on a future save/load.
 
         # REVIEW-FIX: reconnect children to the deleted node's own parent
         # BEFORE removing any edge below, not after (the original order) -
@@ -326,11 +318,15 @@ class BranchOps(SceneDocumentParts):
             for target in reconnect_targets:
                 self.connect(parent_id, target)
 
-        # A distinct name from the `edge` above: this list also holds
-        # parent_edge, which may be None.
-        for stale_edge in [parent_edge, *child_edges, *note_edges]:
-            if stale_edge is not None:
-                self.edges.pop(stale_edge.id, None)
+        # Drop every incoming AND outgoing edge, not just the selected
+        # primary parent, outgoing children and metadata note links. This
+        # executes only after all child reconnects passed preflight, so an
+        # invalid reconnect still leaves the original graph untouched.
+        # Fresh parent -> child links (which do not touch node_id) survive.
+        self.edges = {
+            edge_id: edge for edge_id, edge in self.edges.items()
+            if edge.source != node_id and edge.target != node_id
+        }
 
         if self.last_chat_node_id == node_id:
             # The active branch continues from wherever it now ends: the
