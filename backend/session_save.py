@@ -1104,7 +1104,12 @@ def _build_chat_data(
         # compatibility cost; dropping the READ side, which is where the
         # lossiness actually bit, is done.
         "edges": [
-            {"source": edge.source, "target": edge.target}
+            {
+                "source": edge.source, "target": edge.target,
+                # Optional additive schema: legacy files and old readers
+                # keep working; new readers recover explicit semantics.
+                **({"role": edge.role} if edge.role != "legacy" else {}),
+            }
             for edge in document.edges.values()
         ],
         "system_prompt_connections": system_prompt_connections,
