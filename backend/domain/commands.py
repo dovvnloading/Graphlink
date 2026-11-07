@@ -679,11 +679,15 @@ class CommandOps(SceneDocumentParts):
         # edits mutate an existing edge in place, so the watched set must
         # capture those differences exactly as it does for node edits.
         for eid in watch_edge_ids & edge_ids_before & edge_ids_after:
-            before = edge_snapshot_before.get(eid)
-            after = self.edges.get(eid)
-            if before is not None and after is not None and before != after:
-                edge_before_out[eid] = before
-                edge_after_out[eid] = copy.deepcopy(after)
+            edge_before_snapshot = edge_snapshot_before.get(eid)
+            edge_after_live = self.edges.get(eid)
+            if (
+                edge_before_snapshot is not None
+                and edge_after_live is not None
+                and edge_before_snapshot != edge_after_live
+            ):
+                edge_before_out[eid] = edge_before_snapshot
+                edge_after_out[eid] = copy.deepcopy(edge_after_live)
 
         asset_before_out: dict[str, "tuple[bytes, str] | None"] = {}
         asset_after_out: dict[str, "tuple[bytes, str] | None"] = {}
