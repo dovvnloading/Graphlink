@@ -30,6 +30,7 @@ values a second time through this payload would just be redundant.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -506,7 +507,9 @@ def register_composer(
         if not path:
             return
         try:
-            staged = stage_file(path)
+            # PDF/DOCX parsing, token estimation and file I/O can be slow.
+            # Never hold the WebSocket event loop while staging a file.
+            staged = await asyncio.to_thread(stage_file, path)
         except AttachmentError as exc:
             if notifications is not None:
                 notifications.show(str(exc), "warning")

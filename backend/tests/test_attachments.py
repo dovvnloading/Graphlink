@@ -223,3 +223,55 @@ class TestRejections:
     def test_a_directory_is_rejected_not_read_as_a_file(self, tmp_path):
         with pytest.raises(AttachmentError, match="File not found"):
             stage_file(str(tmp_path))
+
+def test_staging_rejects_oversize_files_before_reading(tmp_file, monkeypatch):
+    import backend.attachments as attachments_module
+
+    path = tmp_file("large.txt", "A" * 32)
+    monkeypatch.setattr(attachments_module, "MAX_STAGED_FILE_BYTES", 16)
+    with pytest.raises(AttachmentError, match="file limit"):
+        stage_file(path)
+
+
+def test_staging_bounds_extracted_plain_text(tmp_file, monkeypatch):
+    import backend.attachments as attachments_module
+
+    path = tmp_file("many-lines.txt", "important " * 20)
+    monkeypatch.setattr(attachments_module, "MAX_DOCUMENT_TEXT_CHARS", 20)
+    with pytest.raises(AttachmentError, match="extracted-text"):
+        stage_file(path)
+
+
+def test_docx_extracts_tables_in_document_order(tmp_file):
+    pytest.importorskip("docx")
+    from docx import Document
+    from pathlib import Path
+
+    document = Document()
+    document.add_paragraph("Before table")
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Key"
+    table.cell(0, 1).text = "Value"
+    table.cell(1, 0).text = "Priority"
+    table.cell(1, 1).text = "High"
+    document.add_paragraph("After table")
+
+    path = Path(tmp_file("table-report.docx", b""))
+    document.save(path)
+    staged = stage_file(str(path))
+    assert staged.extracted_text == "Before table\nKey\tValue\nPriority\tHigh\nAfter table"
+
+
+def test_docx_table_only_is_not_silently_empty(tmp_file):
+    pytest.importorskip("docx")
+    from docx import Document
+    from pathlib import Path
+
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    table.cell(0, 0).text = "Only text is here"
+    path = Path(tmp_file("table-only.docx", b""))
+    document.save(path)
+
+    staged = stage_file(str(path))
+    assert "Only text is here" in staged.extracted_text

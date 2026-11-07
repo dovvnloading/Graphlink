@@ -283,7 +283,11 @@ export class WsTransport {
    * file. Cleared once the request completes (`done`): after that point the
    * persisted `content` field is the source of truth for a (re)mounted
    * component, so nothing is left to replay. */
-  private readonly streamBuffers = new Map<string, { text: string; seq: number }>();
+  private readonly streamBuffers = new Map<string, { text: string; seq: number; overflowed?: boolean }>();
+  // A model response never needs an unlimited cross-virtualization replay
+  // buffer. Large or abandoned streams fall back to persisted node content.
+  private static readonly MAX_STREAM_BUFFER_CHARS = 1_000_000;
+  private static readonly MAX_STREAM_BUFFER_REQUESTS = 32;
   /** ADR-003 stage 3.4: keyed by topic, like stateListeners, but a separate
    * Map rather than a widened StateListener signature - mirroring how
    * streamListeners is already its own parallel registry. A topic can have
@@ -396,6 +400,8 @@ export class WsTransport {
       if (this.socket !== socket) return;
       this.socket = null;
       this.snapshotRequestsPending.clear();
+      // A disconnected run may never deliver its final done frame.
+      this.streamBuffers.clear();
       // ADR-003 stage 3.6 review-fix: the paused state has to cover the WHOLE
       // outage, not just an in-flight connect attempt. This used to publish
       // "closed" here and leave connect() - which only runs after a 500ms-4s
@@ -424,6 +430,7 @@ export class WsTransport {
     this.socket = null;
     this.snapshotRequestsPending.clear();
     this.resubscribeListeners.clear();
+    this.streamBuffers.clear();
   }
 
   getStatus(): ConnectionStatus {
@@ -1102,8 +1109,18 @@ export class WsTransport {
         this.streamBuffers.delete(requestId);
       } else {
         const existing = this.streamBuffers.get(requestId);
+        // Once a stream exceeds the replay cap, keep only a tiny marker
+        // until done. Do not replay a misleading partial suffix to a
+        // virtualized node that remounts later.
         const text = reset || !existing ? delta : existing.text + delta;
-        this.streamBuffers.set(requestId, { text, seq });
+        const overflowed = (!reset && existing?.overflowed) ||
+          text.length > WsTransport.MAX_STREAM_BUFFER_CHARS;
+        this.streamBuffers.delete(requestId);
+        this.streamBuffers.set(requestId, { text: overflowed ? "" : text, seq, overflowed });
+        if (this.streamBuffers.size > WsTransport.MAX_STREAM_BUFFER_REQUESTS) {
+          const oldest = this.streamBuffers.keys().next().value;
+          if (oldest !== undefined) this.streamBuffers.delete(oldest);
+        }
       }
       const listeners = this.streamListeners.get(requestId);
       if (listeners) {

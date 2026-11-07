@@ -1656,3 +1656,63 @@ describe("offline intent queue (ADR-003 stage 3.6)", () => {
     ]);
   });
 });
+
+describe("bounded stream replay buffers", () => {
+  it("forgets an interrupted request on WebSocket disconnect", () => {
+    const transport = makeTransport();
+    transport.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    socket.receive({
+      kind: "stream", requestId: "lost", seq: 0, delta: "unfinished",
+      done: false, reset: false,
+    });
+    socket.close();
+
+    const seen: string[] = [];
+    transport.subscribeStream("lost", (delta) => seen.push(delta));
+    expect(seen).toEqual([]);
+    transport.dispose();
+  });
+
+  it("drops replay after an oversized stream without replaying a partial suffix", () => {
+    const transport = makeTransport();
+    transport.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    socket.receive({
+      kind: "stream", requestId: "huge", seq: 0, delta: "x".repeat(1_000_001),
+      done: false, reset: false,
+    });
+    socket.receive({
+      kind: "stream", requestId: "huge", seq: 1, delta: "tail",
+      done: false, reset: false,
+    });
+
+    const seen: string[] = [];
+    transport.subscribeStream("huge", (delta) => seen.push(delta));
+    expect(seen).toEqual([]);
+    transport.dispose();
+  });
+
+  it("bounds abandoned request count while preserving recent replay", () => {
+    const transport = makeTransport();
+    transport.connect();
+    const socket = FakeSocket.instances[0];
+    socket.open();
+    for (let i = 0; i < 40; i += 1) {
+      socket.receive({
+        kind: "stream", requestId: `req-${i}`, seq: 0, delta: "part",
+        done: false, reset: false,
+      });
+    }
+
+    const evicted: string[] = [];
+    transport.subscribeStream("req-0", (delta) => evicted.push(delta));
+    expect(evicted).toEqual([]);
+    const recent: string[] = [];
+    transport.subscribeStream("req-39", (delta) => recent.push(delta));
+    expect(recent).toEqual(["part"]);
+    transport.dispose();
+  });
+});
