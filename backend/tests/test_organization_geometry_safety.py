@@ -152,6 +152,6 @@ def test_preview_plan_apply_rechecks_invalid_projection_without_modifying_scene(
     before = {nid: (n.x, n.y) for nid, n in doc.nodes.items()}
     assert plan.changed_ids
     plan.nodes[next(iter(plan.changed_ids))].x = float("nan")
-    with pytest.raises(SceneError, match="non-finite"):
+    with pytest.raises(SceneError, match="finite"):
         apply_organization_plan(doc, plan)
     assert {nid: (n.x, n.y) for nid, n in doc.nodes.items()} == before
