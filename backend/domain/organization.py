@@ -16,6 +16,7 @@ import hashlib
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from backend.domain.geometry_safety import validate_layout_geometry
 from backend.domain.layout import NODE_GAP_X, _rects_clear
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_states import FrameState, GroupSizedState
@@ -350,6 +351,9 @@ def make_organization_plan(
             raise SceneError(f"{name} must be a list of node ids")
     if not isinstance(preserve_frame_sizes, bool):
         raise SceneError("preserve_frame_sizes must be a boolean")
+    # Reject malformed coordinates and dimensions before calculating even a
+    # read-only preview, including stale browser measurements.
+    validate_layout_geometry(document)
     source_fingerprint = layout_fingerprint(document)
     selected = _selected_leaves(document, scope, root_id, node_ids)
     fixed = set(fixed_node_ids or ())
@@ -373,6 +377,9 @@ def make_organization_plan(
         _place_subset(shadow, document, movable)
         _refit_groups(shadow, document, _affected_groups(shadow, movable), preserve_frame_sizes)
 
+    # Do not return a plan whose computed positions or group dimensions
+    # overflowed a valid input; all mutation still happens on the shadow.
+    validate_layout_geometry(shadow)
     changed = frozenset(
         nid for nid, node in shadow.nodes.items()
         if _layout_geometry(node) != _layout_geometry(document.nodes[nid])
@@ -391,6 +398,13 @@ def apply_organization_plan(document: SceneDocument, plan: OrganizationPlan) -> 
     """Apply *server-calculated* geometry, with an atomic stale-preview fence."""
     if layout_fingerprint(document) != plan.source_fingerprint:
         raise SceneError("graph changed after organization preview; preview again")
+    validate_layout_geometry(document)
+    # Even direct in-process callers cannot smuggle a malformed projected
+    # group width or coordinate through a valid stale-preview fingerprint.
+    # Check all rows first so no earlier row is partially committed.
+    projected = copy.copy(document)
+    projected.nodes = plan.nodes
+    validate_layout_geometry(projected)
     for nid in plan.changed_ids:
         target = document.nodes[nid]
         projected = plan.nodes[nid]
