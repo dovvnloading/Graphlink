@@ -502,6 +502,20 @@ def test_collapsed_group_reserves_its_expanded_footprint_while_other_trees_reflo
 
 
 
+def test_collapsed_group_reserves_unmeasured_chat_footprints_not_old_group_placeholders():
+    """An unmeasured 422px chat must not be treated as a 220px latent card."""
+    doc = SceneDocument()
+    hidden = doc.add_chat_node(0, 0, "hidden large chat", True)
+    frame = doc.create_frame([hidden.id])
+    doc.toggle_group_collapsed(frame.id)
+    outside = doc.add_chat_node(0, 0, "outside", True)
+
+    doc.organize()
+    a = (hidden.x, hidden.y, *doc.node_footprint(hidden))
+    b = (outside.x, outside.y, *doc.node_footprint(outside))
+    assert not _rects_overlap(a, b)
+
+
 def test_create_frame_and_create_container_reject_an_empty_member_list():
     """The frontend's own create-frame/create-container commands gate on
     2+ selected nodes, but that is a UI-layer convenience, not an
