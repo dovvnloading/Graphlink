@@ -499,11 +499,9 @@ def test_create_frame_and_create_container_reject_an_empty_member_list():
 
 # -- node_footprint's fallback-chain priority tiers
 
-def test_node_footprint_intrinsic_size_wins_over_kind_fallback_but_loses_to_measured():
-    """node_footprint's middle priority tier - a kind's own intrinsic
-    geometry (chart_width/height, group_width/height) - sits strictly
-    between measured (wins) and the flat per-kind fallback (loses); only
-    the top and bottom tiers were previously pinned by any test."""
+def test_node_footprint_uses_authoritative_chart_size_even_when_measured_is_stale():
+    """Chart/Group React Flow wrappers are explicitly sized by the backend.
+    Only content-driven cards prefer client measurements over estimates."""
     doc = SceneDocument()
     parent = doc.add_chat_node(0, 0, "p", True)
     chart = doc.add_chart_node(0, 0, parent.id, "bar", {"labels": ["a"], "values": [1.0]})
@@ -516,9 +514,13 @@ def test_node_footprint_intrinsic_size_wins_over_kind_fallback_but_loses_to_meas
         "not the flat per-kind fallback"
     )
     doc.set_measured_node_sizes([(chart.id, 111.0, 222.0)])
-    assert doc.node_footprint(chart) == (111.0, 222.0), (
-        "a real measured size must still win over the intrinsic chart size"
+    assert doc.node_footprint(chart) == intrinsic, (
+        "a chart's server-owned wrapper size wins over stale DOM measurement"
     )
+    doc.resize_chart(chart.id, 1600, 1000)
+    chart_size = (chart.state.chart_width, chart.state.chart_height)
+    assert doc.node_footprint(chart) == chart_size
+    assert doc._member_footprint(chart) == chart_size
 
 
 # -- place_root / place_at_scene_right: docked-node exclusion
