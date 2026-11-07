@@ -4,7 +4,7 @@ Run: python -m backend.tests.perf.measure_organization
 
 The documented 25/100/500/2,000-node workloads are generated through
 the real domain API. This measures read-only preview time and memory, as
-well as objective geometric quality: diagram area, movement and crossings.
+well as objective geometric quality: diagram area, movement, crossings, and centreline-through-card obstructions.
 Geometry and semantic group containment invariants are checked by the
 read-only planner before it returns a proposal. Edge crossings here are a
 centreline quality proxy (not the full rendered orthogonal/Bezier routing).
@@ -37,6 +37,46 @@ def _crosses(
     a1, a2 = orient(a, b, c), orient(a, b, d)
     b1, b2 = orient(c, d, a), orient(c, d, b)
     return a1 * a2 < 0 and b1 * b2 < 0
+
+
+def _segment_passes_through_rect(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    rect: tuple[float, float, float, float],
+) -> bool:
+    """True only if the segment crosses the rectangle's *interior*.
+
+    Liang-Barsky clipping avoids counting a mere tangent or an edge that
+    follows the border. Source/target cards are excluded by the caller.
+    """
+    x, y, width, height = rect
+    if width <= 0 or height <= 0:
+        return False
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    lower, upper = 0.0, 1.0
+    for p, q in (
+        (-dx, start[0] - x),
+        (dx, x + width - start[0]),
+        (-dy, start[1] - y),
+        (dy, y + height - start[1]),
+    ):
+        if p == 0:
+            if q < 0:
+                return False
+            continue
+        ratio = q / p
+        if p < 0:
+            lower = max(lower, ratio)
+        else:
+            upper = min(upper, ratio)
+        if lower > upper:
+            return False
+    if lower >= upper:
+        return False
+    midpoint = (lower + upper) / 2
+    px = start[0] + midpoint * dx
+    py = start[1] + midpoint * dy
+    return x < px < x + width and y < py < y + height
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -80,6 +120,20 @@ def layout_quality(document, plan) -> dict[str, float | int]:
         if edge.source in centre and edge.target in centre
     ]
     lengths = [math.dist(start, end) for _, _, start, end in paths]
+    # Straight centreline proxy, not a claim about eventual routed edges.
+    # Count each (edge, unrelated visible card) obstruction once.
+    leaf_rects = {
+        nid: (node.x, node.y, *document.node_footprint(node))
+        for nid, node in plan.nodes.items()
+        if nid not in hidden and not node.is_docked
+        and node.kind not in ("frame", "container")
+    }
+    edge_node_intersections = sum(
+        _segment_passes_through_rect(start, end, rect)
+        for source, target, start, end in paths
+        for nid, rect in leaf_rects.items()
+        if nid != source and nid != target
+    )
     crossings = 0
     for index, (source, target, a, b) in enumerate(paths):
         for c_source, c_target, c, d in paths[index + 1:]:
@@ -96,6 +150,7 @@ def layout_quality(document, plan) -> dict[str, float | int]:
     return {
         "diagram_area": round(area, 2),
         "edge_crossings": crossings,
+        "edge_node_intersections": edge_node_intersections,
         "mean_edge_length": round(statistics.mean(lengths) if lengths else 0.0, 2),
         "p95_edge_length": round(_percentile(lengths, 0.95), 2),
         "mean_displacement": round(statistics.mean(movement) if movement else 0.0, 2),
