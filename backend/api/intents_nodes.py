@@ -330,6 +330,20 @@ def register_node_intents(
         await publish_scene()
         return edge.id
 
+    async def set_edge_role(edge_id, role):
+        # Editing ancestry is a semantic graph change. Keep the endpoint
+        # intact and snapshot the edge in one undoable command.
+        document.record_command(
+            "setEdgeRole", "user", lambda: document.set_edge_role(edge_id, role),
+            edge_ids=[edge_id],
+        )
+        await publish_scene()
+
+    async def get_edge_roles():
+        # A read-only bridge while the generated three-field scene wire
+        # remains backward compatible with older frontends.
+        return {edge.id: edge.role for edge in document.edges.values()}
+
     async def remove_edges(edge_ids):
         ids = list(edge_ids)
         # edge_ids is required here for the same reason move needs node_ids:
@@ -356,3 +370,5 @@ def register_node_intents(
     bus.register_intent("scene", "removeNodes", remove_nodes)
     bus.register_intent("scene", "connectNodes", connect_nodes)
     bus.register_intent("scene", "removeEdges", remove_edges)
+    bus.register_intent("scene", "setEdgeRole", set_edge_role)
+    bus.register_intent("scene", "getEdgeRoles", get_edge_roles)

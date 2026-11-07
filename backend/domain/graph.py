@@ -41,8 +41,8 @@ from backend.domain.geometry_safety import finite_float
 from collections import deque
 import itertools
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable, cast
 
 from graphlink_grid_view_settings import (
     GRID_SIZE_PRESETS,
@@ -64,6 +64,8 @@ from backend.domain.model import (
     FONT_SIZE_MAX,
     FONT_SIZE_MIN,
     GRID_COLOR_PRESETS,
+    EDGE_ROLES,
+    EdgeRole,
     SceneEdge,
     SceneError,
     SceneNode,
@@ -871,6 +873,39 @@ class SceneDocument(
             raise SceneError(f"cannot connect unknown nodes: {source} -> {target}")
         if source == target:
             raise SceneError("cannot connect a node to itself")
+
+    def set_edge_role(self, edge_id: str, role: str) -> None:
+        """Classify an edge without changing its endpoints or removing a link.
+
+        Explicit primary assignments cannot silently fight an existing
+        explicit primary, attach a note as an ancestor or create a primary
+        ancestry cycle. Legacy is the safe default for pre-v2 graph files.
+        """
+        from backend.domain.structure import primary_parent_edges
+
+        edge = self.edges.get(edge_id)
+        if edge is None:
+            raise SceneError(f"unknown edge: {edge_id}")
+        if not isinstance(role, str) or role not in EDGE_ROLES:
+            raise SceneError(f"invalid edge role: {role!r}")
+        if edge.role == role:
+            return
+        if role == "primary":
+            source_node = self.nodes.get(edge.source)
+            if source_node is None or source_node.kind == "note":
+                raise SceneError("a note cannot be a primary structural parent")
+            if any(
+                other.id != edge_id and other.target == edge.target
+                and other.role == "primary"
+                for other in self.edges.values()
+            ):
+                raise SceneError(f"node {edge.target} already has an explicit primary parent")
+            proposal = dict(self.edges)
+            proposal[edge_id] = replace(edge, role="primary")
+            parents = primary_parent_edges(self.nodes, proposal, set(self.nodes))
+            if parents.get(edge.target) is not proposal[edge_id]:
+                raise SceneError("primary edge would create an ancestry cycle")
+        edge.role = cast(EdgeRole, role)
 
     def _insert_edge(self, source: str, target: str) -> SceneEdge:
         edge_id = f"e{next(self._counter)}"

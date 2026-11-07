@@ -156,6 +156,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "removeNodes", "A", "content: delete"),
     Classified("scene", "connectNodes", "A", "content: connect"),
     Classified("scene", "removeEdges", "A", "content: delete edges"),
+    Classified("scene", "setEdgeRole", "A", "content: persisted edge ancestry changes, with before/after edge snapshots"),
+    Classified("scene", "getEdgeRoles", "B", "read-only: returns the current semantic roles without mutation"),
 
     # -- backend/api/intents_artifact.py (scene) -----------------------------
     Classified("scene", "sendArtifactMessage", "A", "content: user instruction + agent reply, both recorded"),
