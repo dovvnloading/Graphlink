@@ -66,6 +66,7 @@ import { useViewportReporting } from "./useViewportReporting";
 import { useCanvasPan } from "./useCanvasPan";
 import { motionDuration } from "../reducedMotion";
 import { useNodeDragAndSizeSync } from "./useNodeDragAndSizeSync";
+import { hiddenGroupMemberIds } from "./collapsedGroups";
 
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
@@ -1081,6 +1082,9 @@ export function toFlowNodes(
   // per chat node; the code branch's scene.edges.find per code node) - see
   // buildSceneIndexes' own doc above for the full reasoning.
   const { nodesById, edgesBySource, edgesByTarget } = buildSceneIndexes(scene);
+  // Collapsed frames/containers are proxies for their transitive members;
+  // never mount the hidden cards independently behind their collapsed pill.
+  const collapsedHiddenIds = hiddenGroupMemberIds(scene.nodes);
   // R8a: computed once per call, then just a Set.has() per node below -
   // see computeDimmedNodeIds' own doc for why it builds its own maps rather
   // than reusing nodesById above.
@@ -1114,7 +1118,7 @@ export function toFlowNodes(
     // filters a docked node's edges generically - a kind-specific check here
     // would leave a docked non-thinking node rendered with no edge to it the
     // moment any future node type wires up a real onDock action.
-    if (n.isDocked) continue;
+    if (n.isDocked || collapsedHiddenIds.has(n.id)) continue;
     if (n.kind === "chat") {
       // dockedChildren: this chat node's own edges whose target is currently
       // docked - the new stack's equivalent of the legacy scene's per-node
@@ -2348,10 +2352,15 @@ export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Ed
   // nodesById's own node rows instead of a second separate `Map(scene.nodes
   // .map((n) => [n.id, n.kind]))`, one less O(N) map built per call.
   const { nodesById, dockedNodeIds } = buildSceneIndexes(scene);
-  // An edge pointing at a docked node must not render either - mirrors the
-  // legacy connection-item self-suppression when its end node is docked.
+  const collapsedHiddenIds = hiddenGroupMemberIds(scene.nodes);
+  // Rendering, hit-testing, and export must agree: a hidden member has no
+  // visible node or connection. This applies to either endpoint (including
+  // docked sources), not only the traditional docked target.
   return scene.edges
-    .filter((e) => !dockedNodeIds.has(e.target))
+    .filter((e) =>
+      !dockedNodeIds.has(e.target) && !dockedNodeIds.has(e.source)
+      && !collapsedHiddenIds.has(e.target) && !collapsedHiddenIds.has(e.source)
+    )
     .map((e) => ({
       id: e.id,
       source: e.source,
