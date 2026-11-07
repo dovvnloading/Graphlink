@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from backend.domain.geometry_safety import validate_layout_geometry
 from backend.domain.layout import NODE_GAP_X, _rects_clear
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_states import FrameState, GroupSizedState
@@ -350,6 +352,9 @@ def make_organization_plan(
             raise SceneError(f"{name} must be a list of node ids")
     if not isinstance(preserve_frame_sizes, bool):
         raise SceneError("preserve_frame_sizes must be a boolean")
+    # Fail before touching even the shadow if legacy/malformed input contains
+    # non-finite coordinates or dimensions.
+    validate_layout_geometry(document)
     source_fingerprint = layout_fingerprint(document)
     selected = _selected_leaves(document, scope, root_id, node_ids)
     fixed = set(fixed_node_ids or ())
@@ -373,6 +378,9 @@ def make_organization_plan(
         _place_subset(shadow, document, movable)
         _refit_groups(shadow, document, _affected_groups(shadow, movable), preserve_frame_sizes)
 
+    # Reject malformed/overflowed projections *before* a plan is returned.
+    # The live document is still untouched at this point.
+    validate_layout_geometry(shadow)
     changed = frozenset(
         nid for nid, node in shadow.nodes.items()
         if _layout_geometry(node) != _layout_geometry(document.nodes[nid])
@@ -391,6 +399,13 @@ def apply_organization_plan(document: SceneDocument, plan: OrganizationPlan) -> 
     """Apply *server-calculated* geometry, with an atomic stale-preview fence."""
     if layout_fingerprint(document) != plan.source_fingerprint:
         raise SceneError("graph changed after organization preview; preview again")
+    validate_layout_geometry(document)
+    # An in-process caller could hand in a malformed projected node; never
+    # partially apply its earlier rows before detecting a later bad one.
+    for nid in plan.changed_ids:
+        node = plan.nodes[nid]
+        if not (math.isfinite(node.x) and math.isfinite(node.y)):
+            raise SceneError("organization plan contains non-finite coordinates")
     for nid in plan.changed_ids:
         target = document.nodes[nid]
         projected = plan.nodes[nid]
