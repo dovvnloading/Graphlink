@@ -135,6 +135,24 @@ def test_stale_plan_rejected_without_partial_writes():
     assert {nid: _layout_geometry(n) for nid, n in doc.nodes.items()} == before
 
 
+@pytest.mark.parametrize("mutation", ("stream", "history", "state", "asset"))
+def test_content_changes_expire_a_preview_even_before_resize_reporting(mutation):
+    doc, root, _child, _other = _sample()
+    plan = make_organization_plan(doc)
+    old_positions = {nid: (node.x, node.y) for nid, node in doc.nodes.items()}
+    if mutation == "stream":
+        doc.nodes[root].content += " an in-progress assistant token"
+    elif mutation == "history":
+        doc.nodes[root].history.append({"role": "assistant", "content": "new turn"})
+    elif mutation == "state":
+        doc.nodes[root].state.branch_status = "accepted"
+    else:
+        doc.image_assets["new"] = (b"updated png", "image/png")
+    with pytest.raises(SceneError, match="graph changed"):
+        apply_organization_plan(doc, plan)
+    assert {nid: (node.x, node.y) for nid, node in doc.nodes.items()} == old_positions
+
+
 def test_topology_change_invalidates_preview():
     doc, _root, _child, other = _sample()
     plan = make_organization_plan(doc)
