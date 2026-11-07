@@ -2534,7 +2534,7 @@ def test_scoped_organize_undo_snapshots_only_changed_leaves():
         assert second.id in copied_ids
         assert unrelated.id not in copied_ids
         assert unrelated.content == "A" * 250_000
-        assert document.undo_label() == "Undo Organize Nodes"
+        assert document.undo_label() == "Organize Nodes"
 
     asyncio.run(run())
 
