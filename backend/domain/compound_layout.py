@@ -247,5 +247,21 @@ def organize_compound_islands(
             anchor = document.nodes[parent_edge.source]
             node.x, node.y = anchor.x, anchor.y
 
-    document._organize_groups()
+    # GroupOps' historical unmeasured-card fallback (220x120) is much
+    # smaller than LayoutOps' placement footprint (e.g. chat 422x360).
+    # With no browser measurement yet, refitting against the former would
+    # make a freshly organized frame *clip its own members*. Override the
+    # measurements only while computing this isolated compound layout's
+    # group geometry; restore the observation map unmodified afterwards.
+    original_measurements = document.measured_sizes
+    placement_measurements = dict(original_measurements)
+    for nid in eligible:
+        placement_measurements.setdefault(
+            nid, document.node_footprint(document.nodes[nid]),
+        )
+    document.measured_sizes = placement_measurements
+    try:
+        document._organize_groups()
+    finally:
+        document.measured_sizes = original_measurements
     return True
