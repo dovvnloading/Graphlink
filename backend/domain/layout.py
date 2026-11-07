@@ -98,6 +98,42 @@ def _rects_clear(
     )
 
 
+def _cluster_related_siblings(
+    ids: list[str], group_coverage: dict[str, set[str]],
+) -> list[str]:
+    """Keep sibling subtrees that share any frame/container contiguous.
+
+    A container may hold a descendant of tree A and a separate root C;
+    sorting only direct ROOT owners cannot see this. Build a union of the
+    child subtrees that share group members, then stably order each cluster
+    at its earliest sibling slot. Independent siblings retain their order.
+    """
+    if len(ids) < 3:
+        return ids
+    parent = {nid: nid for nid in ids}
+
+    def find(nid: str) -> str:
+        while parent[nid] != nid:
+            parent[nid] = parent[parent[nid]]
+            nid = parent[nid]
+        return nid
+
+    owner_first: dict[str, str] = {}
+    for nid in ids:
+        for group_id in sorted(group_coverage.get(nid, ())):
+            previous = owner_first.setdefault(group_id, nid)
+            root_a, root_b = find(previous), find(nid)
+            if root_a != root_b:
+                parent[root_b] = root_a
+
+    order: dict[str, int] = {}
+    for index, nid in enumerate(ids):
+        root = find(nid)
+        if root not in order:
+            order[root] = index
+    return sorted(ids, key=lambda nid: order[find(nid)])
+
+
 class LayoutOps(SceneDocumentParts):
     """Placement/layout mixin for SceneDocument (same pattern as GroupOps).
     Reads self.nodes / self.edges / self.measured_sizes."""
@@ -397,6 +433,30 @@ class LayoutOps(SceneDocumentParts):
 
         roots.sort(key=root_owner_key)
 
+        # Group containment must influence EVERY sibling level, not just
+        # the direct-owner key used for roots above. A frame can contain a
+        # descendant of one root and another independent root: without
+        # bottom-up membership projection those roots can straddle an
+        # unrelated component, and the later frame bbox falsely encloses it.
+        # Gather each expanded group's transitive visible leaf members.
+        group_coverage: dict[str, set[str]] = {nid: set() for nid in layout_nodes}
+        for group in self.nodes.values():
+            if group.kind not in group_kinds or group.is_collapsed:
+                continue
+            pending = list(group.item_ids)
+            seen_groups: set[str] = {group.id}
+            while pending:
+                member_id = pending.pop()
+                member = self.nodes.get(member_id)
+                if member is None:
+                    continue
+                if member.kind in group_kinds:
+                    if member.id not in seen_groups and not member.is_collapsed:
+                        seen_groups.add(member.id)
+                        pending.extend(member.item_ids)
+                elif member_id in group_coverage:
+                    group_coverage[member_id].add(group.id)
+
         # Subtree widths, iterative post-order (chat chains can be deep).
         # packed_width is the children row's own span (0 for a leaf) -
         # remembered so the assign pass below centres over the same number
@@ -412,12 +472,19 @@ class LayoutOps(SceneDocumentParts):
                 stack.append((node_id, True))
                 stack.extend((k, False) for k in reversed(kids))
                 continue
+            for kid in kids:
+                group_coverage[node_id].update(group_coverage[kid])
+            if kids:
+                kids = _cluster_related_siblings(kids, group_coverage)
+                children[node_id] = kids
             packed = (
                 sum(subtree_width[k] for k in kids) + NODE_GAP_X * (len(kids) - 1)
                 if kids else 0.0
             )
             packed_width[node_id] = packed
             subtree_width[node_id] = max(footprints[node_id][0], packed)
+
+        roots = _cluster_related_siblings(roots, group_coverage)
 
         # Assign positions, iterative pre-order: each node centred over its
         # own subtree span, children on a row below its real bottom edge.
