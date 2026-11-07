@@ -32,10 +32,11 @@ def test_layout_quality_has_finite_reproducible_nonnegative_metrics() -> None:
 def test_layout_benchmark_smoke_repeats_on_real_graph_factory() -> None:
     result = measure(TYPICAL, repeats=2)
     assert result["nodes"] == TYPICAL.node_count
-    assert result["edges"] > 0
-    assert result["preview_p50_ms"] >= 0
-    assert result["preview_p95_ms"] >= 0
-    assert result["preview_peak_mib"] > 0
+    assert isinstance(result["edges"], int) and result["edges"] > 0
+    for field in ("preview_p50_ms", "preview_p95_ms", "preview_peak_mib"):
+        value = result[field]
+        assert isinstance(value, (int, float)) and value >= 0
+    assert result["preview_peak_mib"] != 0
 
 
 def test_layout_quality_counts_no_phantom_group_membership() -> None:
