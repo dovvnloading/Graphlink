@@ -1606,6 +1606,51 @@ function chartNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
   };
 }
 
+describe("Collapsed semantic-group visibility (#474)", () => {
+  it("hides transitive members and their connections until expansion", () => {
+    const nodes = [
+      baseNode({ id: "outer", kind: "container", isCollapsed: true, itemIds: ["inner", "leaf"] }),
+      baseNode({ id: "inner", kind: "frame", itemIds: ["nested"] }),
+      baseNode({ id: "leaf", kind: "chat" }),
+      baseNode({ id: "nested", kind: "chat" }),
+      baseNode({ id: "outside", kind: "chat" }),
+    ];
+    const edges = [
+      { id: "e1", source: "outside", target: "leaf" },
+      { id: "e2", source: "nested", target: "outside" },
+    ];
+    const collapsed = baseScene({ nodes, edges });
+    const visibleIds = toFlowNodes(collapsed, makeStore()).map((node) => node.id);
+    expect(visibleIds).toEqual(["outer", "outside"]);
+    expect(toFlowEdges(collapsed, null)).toEqual([]);
+
+    const expanded = baseScene({
+      nodes: nodes.map((n) => n.id === "outer" ? { ...n, isCollapsed: false } : n),
+      edges,
+    });
+    expect(toFlowNodes(expanded, makeStore()).map((node) => node.id)).toEqual(
+      ["outer", "inner", "leaf", "nested", "outside"],
+    );
+    expect(toFlowEdges(expanded, null).map((edge) => edge.id)).toEqual(["e1", "e2"]);
+  });
+
+  it("keeps shared members hidden if an independent frame is collapsed", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "frame", kind: "frame", isCollapsed: true, itemIds: ["shared"] }),
+        baseNode({ id: "container", kind: "container", itemIds: ["shared", "other"] }),
+        baseNode({ id: "shared", kind: "chat" }),
+        baseNode({ id: "other", kind: "chat" }),
+      ],
+      edges: [{ id: "cross", source: "shared", target: "other" }],
+    });
+    expect(toFlowNodes(scene, makeStore()).map((node) => node.id)).toEqual(
+      ["frame", "container", "other"],
+    );
+    expect(toFlowEdges(scene, null)).toEqual([]);
+  });
+});
+
 describe("toFlowNodes (R6.2 chart node)", () => {
   it("maps all 7 chart wire fields onto the flow node's data, and chartWidth/chartHeight ALSO onto the flow node object itself (NodeResizer controlled-mode)", () => {
     const scene = baseScene({
