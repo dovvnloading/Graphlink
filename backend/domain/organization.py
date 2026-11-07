@@ -478,6 +478,12 @@ def make_organization_plan(
         _place_subset(shadow, document, movable)
         _refit_groups(shadow, document, _affected_groups(shadow, movable), preserve_frame_sizes)
 
+    # Pinned nodes (including manually pinned group wrappers) are hard
+    # constraints, not hints. A child reflow may otherwise resize or move a
+    # "fixed" frame behind the user's back during ancestor refitting.
+    for fixed_id in fixed:
+        if _layout_geometry(shadow.nodes[fixed_id]) != _layout_geometry(document.nodes[fixed_id]):
+            raise SceneError(f"organization would move fixed node {fixed_id}")
     # Hard contract: read-only preview must never advertise a layout that
     # loses topology, overlaps cards or visually misclassifies group members.
     # Rejections occur before any live mutation or undo command.
