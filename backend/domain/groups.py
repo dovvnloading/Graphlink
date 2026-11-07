@@ -217,7 +217,7 @@ class GroupOps(SceneDocumentParts):
                 continue
             try:
                 new_size = (float(width), float(height))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
             if not valid_measured_dimension(new_size[0]) or not valid_measured_dimension(new_size[1]):
                 continue
