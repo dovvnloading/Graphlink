@@ -57,7 +57,7 @@ def test_explicit_primary_overrides_legacy_without_discarding_links():
 
 @pytest.mark.parametrize("role", ["secondary", "reference", "association"])
 def test_nonprimary_typed_edges_never_become_legacy_ancestry(role):
-    doc, first, _second, child, early, late = _two_parents()
+    doc, _first, _second, child, early, late = _two_parents()
     doc.set_edge_role(early.id, role)
     doc.set_edge_role(late.id, role)
     assert doc._branch_parent_edge(child.id) is None
@@ -67,7 +67,7 @@ def test_nonprimary_typed_edges_never_become_legacy_ancestry(role):
 
 
 def test_conflicting_primary_roles_and_note_ancestry_fail_atomically():
-    doc, first, second, child, early, late = _two_parents()
+    doc, _first, _second, child, early, late = _two_parents()
     note = doc.add_note(0, 900)
     metadata = doc.connect(note.id, child.id)
     doc.set_edge_role(late.id, "primary")
@@ -118,7 +118,7 @@ def test_save_load_preserves_roles_and_legacy_files_default_correctly():
 
 
 def test_invalid_persisted_roles_fall_back_to_legacy_without_losing_link():
-    doc, first, _second, child, early, _late = _two_parents()
+    doc, _first, _second, _child, _early, _late = _two_parents()
     saved = build_chat_data(doc)
     saved["edges"][0]["role"] = ["not", "a", "string"]
     saved["edges"][1]["role"] = "unknown-future-role"
@@ -128,3 +128,19 @@ def test_invalid_persisted_roles_fall_back_to_legacy_without_losing_link():
     restore_chat_into_document(loaded, {"data": saved}, notes, pins)
     assert len(loaded.edges) == len(doc.edges)
     assert all(edge.role == "legacy" for edge in loaded.edges.values())
+
+
+def test_edge_role_edit_is_one_undoable_command():
+    doc, _first, _second, child, _early, late = _two_parents()
+    original_edges = copy.deepcopy(doc.edges)
+    doc.record_command(
+        "setEdgeRole", "user",
+        lambda: doc.set_edge_role(late.id, "primary"),
+        edge_ids=[late.id],
+    )
+    assert doc.edges[late.id].role == "primary"
+    assert doc._branch_parent_edge(child.id).role == "primary"
+    doc.undo()
+    assert doc.edges == original_edges
+    doc.redo()
+    assert doc.edges[late.id].role == "primary"
