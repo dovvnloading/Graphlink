@@ -54,6 +54,60 @@ def test_preview_does_not_mutate_nodes_edges_sizes_or_undo_history():
     assert len(doc.command_log) == original_commands
 
 
+
+def test_preview_contains_precise_before_after_geometry_and_existing_edges():
+    doc, root, child, other = _sample()
+    snapshot = copy.deepcopy(doc.nodes)
+    edges_before = copy.deepcopy(doc.edges)
+    plan = make_organization_plan(doc, "all")
+    result = plan.preview(doc)
+    rows = {row["id"]: row for row in result["nodes"]}
+
+    assert set(rows) == set(doc.nodes)
+    for nid, row in rows.items():
+        original = doc.nodes[nid]
+        assert (row["previousX"], row["previousY"]) == (original.x, original.y)
+        assert (row["previousWidth"], row["previousHeight"]) == doc.node_footprint(original)
+        proposed = plan.nodes[nid]
+        assert (row["x"], row["y"]) == (proposed.x, proposed.y)
+        assert row["changed"] == (nid in plan.changed_ids)
+    assert result["edges"] == [
+        {"id": edge.id, "source": edge.source, "target": edge.target}
+        for edge in doc.edges.values()
+    ]
+    for mode, area_field in (("previous", "areaBefore"), ("", "areaAfter")):
+        prefix = mode
+        x_key = prefix + "X" if prefix else "x"
+        y_key = prefix + "Y" if prefix else "y"
+        width_key = prefix + "Width" if prefix else "width"
+        height_key = prefix + "Height" if prefix else "height"
+        left = min(row[x_key] for row in rows.values())
+        top = min(row[y_key] for row in rows.values())
+        right = max(row[x_key] + row[width_key] for row in rows.values())
+        bottom = max(row[y_key] + row[height_key] for row in rows.values())
+        assert result[area_field] == (right - left) * (bottom - top)
+    assert doc.nodes == snapshot
+    assert doc.edges == edges_before
+    assert child in rows and other in rows and root in rows
+
+
+def test_preview_does_not_expose_hidden_group_descendant_edges():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    hidden = doc.add_chat_node(400, 100, "hidden", False, parent_id=root.id)
+    group = doc.create_container([hidden.id])
+    doc.toggle_group_collapsed(group.id)
+    preview = make_organization_plan(doc, "all").preview(doc)
+    node_ids = {row["id"] for row in preview["nodes"]}
+    assert group.id in node_ids
+    assert hidden.id not in node_ids
+    assert all(
+        edge["source"] in node_ids and edge["target"] in node_ids
+        for edge in preview["edges"]
+    )
+    assert not any(hidden.id in (edge["source"], edge["target"]) for edge in preview["edges"])
+
+
 def test_collapsed_group_scope_is_rejected_and_hidden_leaves_stay_fixed():
     """A collapsed proxy is not an invitation to move invisible members."""
     doc = SceneDocument()
