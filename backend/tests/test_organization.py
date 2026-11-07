@@ -54,6 +54,44 @@ def test_preview_does_not_mutate_nodes_edges_sizes_or_undo_history():
     assert len(doc.command_log) == original_commands
 
 
+def test_collapsed_group_scope_is_rejected_and_hidden_leaves_stay_fixed():
+    """A collapsed proxy is not an invitation to move invisible members."""
+    doc = SceneDocument()
+    hidden = doc.add_chat_node(800, 900, "member", True)
+    group = doc.create_container([hidden.id])
+    doc.toggle_group_collapsed(group.id)
+    other = doc.add_chat_node(0, 0, "visible outsider", True)
+    before = (hidden.x, hidden.y, group.x, group.y)
+
+    with pytest.raises(SceneError, match="expand the collapsed group"):
+        make_organization_plan(doc, "group", root_id=group.id)
+    plan = make_organization_plan(doc, "all")
+    assert hidden.id not in plan.selected_ids
+    preview_ids = [node["id"] for node in plan.preview(doc)["nodes"]]
+    assert hidden.id not in preview_ids
+    assert group.id in preview_ids
+    apply_organization_plan(doc, plan)
+    assert (hidden.x, hidden.y, group.x, group.y) == before
+    assert other.id in doc.nodes
+
+
+def test_collapsed_frame_preserves_manual_anchor_after_preview_and_expansion():
+    doc = SceneDocument()
+    leaf = doc.add_chat_node(500, 500, "member", True)
+    frame = doc.create_frame([leaf.id])
+    doc.resize_frame(frame.id, 1600, 1100)
+    doc.move_node(frame.id, 600, 600)
+    frame_before = (frame.x, frame.y)
+    manual_before = (frame.state.group_manual_x, frame.state.group_manual_y)
+    doc.toggle_group_collapsed(frame.id)
+
+    plan = make_organization_plan(doc, "all")
+    apply_organization_plan(doc, plan)
+    assert (frame.state.group_manual_x, frame.state.group_manual_y) == manual_before
+    doc.toggle_group_collapsed(frame.id)
+    assert (frame.x, frame.y) == frame_before
+
+
 def test_metadata_note_link_never_becomes_a_structural_parent():
     doc = SceneDocument()
     root = doc.add_chat_node(0, 0, "root", True)
