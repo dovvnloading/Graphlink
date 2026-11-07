@@ -27,7 +27,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
 from backend.domain.containment import group_dependency_order, hidden_group_descendants
-from backend.domain.layout_constants import COMPONENT_GAP, NODE_GAP_X
+from backend.domain.layout import COMPONENT_GAP, NODE_GAP_X
 from backend.domain.model import GROUP_PADDING, GROUP_PADDING_TOP
 
 if TYPE_CHECKING:
