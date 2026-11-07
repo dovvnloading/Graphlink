@@ -72,8 +72,18 @@ class GroupOps(SceneDocumentParts):
         inner frame/container keeps sizing itself to that stale expanded
         reading forever (confirmed via _recompute_group_bounds, which this
         helper feeds through _bbox_of_members)."""
-        if member.kind in ("frame", "container") and member.is_collapsed:
-            return GROUP_COLLAPSED_WIDTH, GROUP_COLLAPSED_HEIGHT
+        if member.kind in ("frame", "container"):
+            if member.is_collapsed:
+                return GROUP_COLLAPSED_WIDTH, GROUP_COLLAPSED_HEIGHT
+            # Expanded groups have backend-controlled dimensions, too:
+            # Graphlink draws the exact group_width/group_height on the
+            # React Flow wrapper. Measurements can still reflect an older
+            # box when a nested member has just grown. The authoritative
+            # state must win when a parent computes its own member bbox.
+            if is_node_of(member, ("frame", "container"), GroupSizedState):
+                gw, gh = member.state.group_width, member.state.group_height
+                if gw is not None and gh is not None and gw > 0 and gh > 0:
+                    return float(gw), float(gh)
         measured = self.measured_sizes.get(member.id)
         width, height = measured if measured is not None else (None, None)
         if not (width and width > 0 and height and height > 0):
