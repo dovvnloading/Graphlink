@@ -316,6 +316,17 @@ class LayoutOps(SceneDocumentParts):
             ).items()
         }
 
+        # Groups that span *different structural trees* require compound
+        # containment to be a first-class packing constraint. The ordinary
+        # tree fast path cannot place a framed descendant of one root beside
+        # a second root without risking an unrelated root or ancestor
+        # appearing inside the frame's background. Import here, not at the
+        # module top, because the opt-in solver reuses our spacing constants.
+        from backend.domain.compound_layout import organize_compound_islands
+        if organize_compound_islands(self, layout_nodes, parent_of):
+            validate_layout_geometry(self)
+            return
+
         children: dict[str, list[str]] = {}
         for child, parent in parent_of.items():
             children.setdefault(parent, []).append(child)
