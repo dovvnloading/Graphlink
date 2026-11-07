@@ -77,7 +77,7 @@ import { AppBarIcon, type AppBarIconName } from "./AppBarIcon";
  * Intent routing, surface by surface, against the ToolbarBridge @Slot list:
  * - zoomIn/zoomOut/resetZoom/fitAll -> React Flow viewport ops (they were
  *   pure ChatView viewport calls; the viewport lives HERE now)
- * - organizeNodes -> scene intent (backend tidy layout)
+ * - Organize -> the previewable organization dialog; legacy backend intent remains compatible
  * - togglePins -> the pins overlay (R2.4: full search + rename/note editing)
  * - toggleControls -> the View popover (audit P5: ONE popover for
  *   drag/grid/font instead of three stacked cards)
@@ -391,7 +391,7 @@ export function AppBar({ store }: { store: SceneStore }) {
           icon="organize"
           label="Organize"
           className="appbar-btn"
-          onClick={() => store.organizeNodes()}
+          onClick={() => overlays.open("organize", "dialog")}
         />
         <BarIconButton
           icon="pin"
@@ -529,10 +529,7 @@ export function AppBar({ store }: { store: SceneStore }) {
         <button
           type="button"
           className="appbar-menu-item appbar-overflow-item"
-          onClick={() => {
-            store.organizeNodes();
-            closeMenu();
-          }}
+          onClick={() => overlays.open("organize", "dialog")}
         >
           Organize
         </button>
