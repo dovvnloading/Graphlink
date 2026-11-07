@@ -292,5 +292,12 @@ def organize_compound_islands(
     try:
         document._organize_groups()
     finally:
-        document.measured_sizes = original_measurements
+        # make_organization_plan performs another preserve-frame-sizes
+        # refit after the initial whole-scene layout. A read-only shadow
+        # must retain the same layout-sized fallback through that second
+        # pass, or the frame clips the very content it just arranged.
+        # Direct organize_layout callers are not a preview shadow: their
+        # browser-observation map must stay unchanged.
+        if not getattr(document, "_layout_projection_shadow", False):
+            document.measured_sizes = original_measurements
     return True
