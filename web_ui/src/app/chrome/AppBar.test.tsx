@@ -174,7 +174,7 @@ describe("AppBar", () => {
       },
     );
 
-    it("Organize's overflow copy calls store.organizeNodes", async () => {
+    it("Organize's overflow copy opens preview without moving nodes", async () => {
       const user = userEvent.setup();
       const { store } = renderAppBar();
       const organizeSpy = vi.spyOn(store, "organizeNodes");
