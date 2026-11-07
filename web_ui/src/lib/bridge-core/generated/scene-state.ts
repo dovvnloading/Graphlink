@@ -316,6 +316,7 @@ export interface SceneEdgeRow {
   id: string;
   source: string;
   target: string;
+  role?: "legacy" | "primary" | "secondary" | "reference" | "association" | null;
 }
 
 export interface ScenePinRow {
@@ -658,6 +659,7 @@ const SCENE_EDGE_ROW_FIELDS: WireFields = [
   ["id", "s", 0],
   ["source", "s", 0],
   ["target", "s", 0],
+  ["role", { e: ["legacy", "primary", "secondary", "reference", "association"] }, 1],
 ];
 
 const SCENE_PIN_ROW_FIELDS: WireFields = [

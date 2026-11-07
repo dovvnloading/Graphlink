@@ -1032,7 +1032,7 @@ class SceneDocument(
         return {str(k): str(v) for k, v in raw.items()}
 
     def _edge_wire(self, e: SceneEdge) -> dict[str, Any]:
-        return {"id": e.id, "source": e.source, "target": e.target}
+        return {"id": e.id, "source": e.source, "target": e.target, "role": e.role}
 
     def _pins_wire(self) -> list[dict[str, Any]]:
         return [

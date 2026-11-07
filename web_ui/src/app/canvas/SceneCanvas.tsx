@@ -264,6 +264,48 @@ const BRANCH_FOCUS_KINDS = new Set(["chat", "code", "document", "thinking", "ima
  * malformed QGraphicsScene the same way), so an unguarded walk here could
  * infinite-loop where legacy's structurally never could.
  */
+/** Match backend.domain.structure.primary_parent_edges, including its
+ * explicit-primary precedence, legacy fallback, and cycle guard. Typed
+ * reference/secondary/association links still render, but cannot redefine
+ * ancestry. Old snapshots without roles retain first-eligible legacy order.
+ */
+function canonicalParentEdges(scene: SceneState): Map<string, SceneEdgeRow> {
+  const kindOf = new Map(scene.nodes.map((node) => [node.id, node.kind]));
+  const chosen = new Map<string, SceneEdgeRow>();
+  for (const role of ["primary", "legacy"] as const) {
+    for (const edge of scene.edges) {
+      if ((edge.role ?? "legacy") !== role ||
+          !kindOf.has(edge.source) || !kindOf.has(edge.target) ||
+          kindOf.get(edge.source) === "note" ||
+          chosen.has(edge.target) || edge.source === edge.target) continue;
+
+      const seen = new Set<string>();
+      let ancestor: string | undefined = edge.source;
+      while (ancestor !== undefined && !seen.has(ancestor)) {
+        seen.add(ancestor);
+        ancestor = chosen.get(ancestor)?.source;
+      }
+      if (!seen.has(edge.target)) chosen.set(edge.target, edge);
+    }
+  }
+  return chosen;
+}
+
+function canonicalBranchIndexes(scene: SceneState): {
+  parentOf: Map<string, string>;
+  childrenOf: Map<string, string[]>;
+} {
+  const parentOf = new Map<string, string>();
+  const childrenOf = new Map<string, string[]>();
+  for (const [targetId, edge] of canonicalParentEdges(scene)) {
+    parentOf.set(targetId, edge.source);
+    const children = childrenOf.get(edge.source);
+    if (children) children.push(targetId);
+    else childrenOf.set(edge.source, [targetId]);
+  }
+  return { parentOf, childrenOf };
+}
+
 export function computeDimmedNodeIds(scene: SceneState, originId: string | null): Set<string> {
   if (originId === null) return new Set();
 
@@ -276,20 +318,7 @@ export function computeDimmedNodeIds(scene: SceneState, originId: string | null)
   // conversationHistoryToDocumentMarkdown above), and threading maps between
   // functions to save one more Map construction over a scene of at most a
   // few hundred nodes is not worth the coupling.
-  const parentOf = new Map<string, string>();
-  const childrenOf = new Map<string, string[]>();
-  for (const e of scene.edges) {
-    // First edge whose target is this node wins - a deliberate tie-break for
-    // the (currently UI-unreachable, but structurally possible via
-    // connectNodes) case of a node with more than one incoming edge. Legacy
-    // has no multi-parent concept to fall back on for comparison: parent_node
-    // is a single pointer set once at creation, so this is this port's own
-    // reasonable interpretation, not a legacy behavior being matched.
-    if (!parentOf.has(e.target)) parentOf.set(e.target, e.source);
-    const siblings = childrenOf.get(e.source);
-    if (siblings) siblings.push(e.target);
-    else childrenOf.set(e.source, [e.target]);
-  }
+  const { parentOf, childrenOf } = canonicalBranchIndexes(scene);
 
   const isChat = (id: string) => nodesById.get(id)?.kind === "chat";
 
@@ -368,14 +397,7 @@ export function computeDimmedNodeIds(scene: SceneState, originId: string | null)
  */
 export function computeNonAcceptedNodeIds(scene: SceneState): Set<string> {
   const nodesById = new Map(scene.nodes.map((n) => [n.id, n]));
-  const parentOf = new Map<string, string>();
-  const childrenOf = new Map<string, string[]>();
-  for (const e of scene.edges) {
-    if (!parentOf.has(e.target)) parentOf.set(e.target, e.source);
-    const siblings = childrenOf.get(e.source);
-    if (siblings) siblings.push(e.target);
-    else childrenOf.set(e.source, [e.target]);
-  }
+  const { parentOf, childrenOf } = canonicalBranchIndexes(scene);
 
   const isChat = (id: string) => nodesById.get(id)?.kind === "chat";
   function chatAnchorOf(id: string): string {
@@ -1081,7 +1103,8 @@ export function toFlowNodes(
   // scans that used to live below (dockedChildren's full scene.edges scan
   // per chat node; the code branch's scene.edges.find per code node) - see
   // buildSceneIndexes' own doc above for the full reasoning.
-  const { nodesById, edgesBySource, edgesByTarget } = buildSceneIndexes(scene);
+  const { nodesById, edgesBySource } = buildSceneIndexes(scene);
+  const canonicalParents = canonicalParentEdges(scene);
   // Collapsed frames/containers are proxies for their transitive members;
   // never mount the hidden cards independently behind their collapsed pill.
   const collapsedHiddenIds = hiddenGroupMemberIds(scene.nodes);
@@ -1135,7 +1158,9 @@ export function toFlowNodes(
       const dockedChildren: { id: string; label: string }[] = [];
       for (const e of edgesBySource.get(n.id) ?? []) {
         const target = nodesById.get(e.target);
-        if (target?.isDocked) dockedChildren.push({ id: target.id, label: target.title });
+        if (target?.isDocked && canonicalParents.get(target.id)?.source === n.id) {
+          dockedChildren.push({ id: target.id, label: target.title });
+        }
       }
       const dimmedVal = isDimmed(n.id);
       // dockedChildren depends on OTHER nodes' isDocked/title (via edges),
@@ -1234,15 +1259,12 @@ export function toFlowNodes(
       // dockedChildren above) since the backend never kind-sniffs a code
       // node id back to its parent chat node (see regenerateResponse's own
       // comment above and SceneCanvas's regenerate-response design notes).
-      // ADR-011 stage 11.1: edgesByTarget.get(n.id)?.[0] replaces
-      // `scene.edges.find((e) => e.target === n.id)` - both return the
-      // FIRST edge in scene.edges' own order whose target is this node
-      // (edgesByTarget's per-target arrays are built by iterating
-      // scene.edges in order in buildSceneIndexes above, so `[0]` is
-      // exactly what `.find` would have returned), just without re-scanning
-      // the full array for every code node.
-      const parentEdge = edgesByTarget.get(n.id)?.[0];
-      const parentChatNodeId = parentEdge ? parentEdge.source : null;
+      // Engine-v2 edge roles choose explicit primary before legacy parents.
+      // Never regenerate against an older reference or non-chat link.
+      const parentEdge = canonicalParents.get(n.id);
+      const parentChatNodeId = parentEdge && nodesById.get(parentEdge.source)?.kind === "chat"
+        ? parentEdge.source
+        : null;
       const dimmedVal = isDimmed(n.id);
       const extraSig = `${dimmedVal ? 1 : 0}${isBranchFocusActive ? 1 : 0}|${parentChatNodeId ?? ""}`;
       const cached = cache.flowNodes.get(n);

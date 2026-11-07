@@ -3359,3 +3359,75 @@ describe("SceneCanvas empty canvas", () => {
     expect(document.querySelector(".scene-empty-hint")).toBeNull();
   });
 });
+
+describe("typed edge roles keep frontend ancestry aligned with the backend", () => {
+  it("code Regenerate uses the explicit primary chat, not the first incoming legacy edge", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "first", kind: "chat" }),
+        baseNode({ id: "second", kind: "chat" }),
+        baseNode({ id: "code-1", kind: "code", code: "print(1)", language: "python" }),
+      ],
+      edges: [
+        { id: "early", source: "first", target: "code-1", role: "legacy" },
+        { id: "late", source: "second", target: "code-1", role: "primary" },
+      ],
+    });
+    const store = makeStore();
+    const regenerate = vi.spyOn(store, "regenerateResponse");
+    const code = toFlowNodes(scene, store).find((n) => n.id === "code-1");
+    expect((code!.data as { parentChatNodeId: string | null }).parentChatNodeId).toBe("second");
+    (code!.data as { onRegenerate: () => void }).onRegenerate();
+    expect(regenerate).toHaveBeenCalledWith("second");
+  });
+
+  it("Focus Accepted Paths follows explicit primary, not a rejected reference parent", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "rejected", kind: "chat", branchStatus: "rejected" }),
+        baseNode({ id: "healthy", kind: "chat", branchStatus: "active" }),
+        baseNode({ id: "shared", kind: "chat", branchStatus: "active" }),
+      ],
+      edges: [
+        { id: "first", source: "rejected", target: "shared", role: "legacy" },
+        { id: "primary", source: "healthy", target: "shared", role: "primary" },
+      ],
+    });
+    expect(computeNonAcceptedNodeIds(scene)).toEqual(new Set(["rejected"]));
+    const dimmed = computeDimmedNodeIds(scene, "healthy");
+    expect(dimmed.has("shared")).toBe(false);
+    expect(dimmed.has("rejected")).toBe(true);
+  });
+
+  it("reference-only cross-links do not add unrelated chats to branch focus", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "root", kind: "chat" }),
+        baseNode({ id: "unrelated", kind: "chat" }),
+      ],
+      edges: [{ id: "link", source: "root", target: "unrelated", role: "reference" }],
+    });
+    expect(computeDimmedNodeIds(scene, "root")).toEqual(new Set(["unrelated"]));
+  });
+
+  it("the docked-child badge appears under the canonical primary chat only", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "first", kind: "chat" }),
+        baseNode({ id: "second", kind: "chat" }),
+        baseNode({ id: "thinking", kind: "thinking", isDocked: true, title: "Thinking" }),
+      ],
+      edges: [
+        { id: "early", source: "first", target: "thinking" },
+        { id: "primary", source: "second", target: "thinking", role: "primary" },
+      ],
+    });
+    const nodes = toFlowNodes(scene, makeStore());
+    const first = nodes.find((node) => node.id === "first")!;
+    const second = nodes.find((node) => node.id === "second")!;
+    expect((first.data as { dockedChildren: unknown[] }).dockedChildren).toEqual([]);
+    expect((second.data as { dockedChildren: unknown[] }).dockedChildren).toEqual([
+      { id: "thinking", label: "Thinking" },
+    ]);
+  });
+});
