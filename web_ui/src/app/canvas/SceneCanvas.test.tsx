@@ -3,6 +3,7 @@ import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   applyGroupDragDelta,
+  collectTransitiveMemberIds,
   buildDragSizeCache,
   computeDimmedNodeIds,
   computeFilteredOutNodeIds,
@@ -1606,6 +1607,65 @@ function chartNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
   };
 }
 
+describe("Collapsed semantic-group visibility (#474)", () => {
+  it("hides transitive members and their connections until expansion", () => {
+    const nodes = [
+      baseNode({ id: "outer", kind: "container", isCollapsed: true, itemIds: ["inner", "leaf"] }),
+      baseNode({ id: "inner", kind: "frame", itemIds: ["nested"] }),
+      baseNode({ id: "leaf", kind: "chat" }),
+      baseNode({ id: "nested", kind: "chat" }),
+      baseNode({ id: "outside", kind: "chat" }),
+    ];
+    const edges = [
+      { id: "e1", source: "outside", target: "leaf" },
+      { id: "e2", source: "nested", target: "outside" },
+    ];
+    const collapsed = baseScene({ nodes, edges });
+    const allFlowNodes = toFlowNodes(collapsed, makeStore());
+    expect(allFlowNodes.filter((n) => !n.hidden).map((n) => n.id)).toEqual(["outer", "outside"]);
+    expect(allFlowNodes.filter((n) => n.hidden).map((n) => n.id)).toEqual(
+      ["inner", "leaf", "nested"],
+    );
+    const outer = allFlowNodes.find((n) => n.id === "outer")!;
+    expect(collectTransitiveMemberIds(allFlowNodes, outer)).toEqual(
+      new Set(["inner", "nested", "leaf"]),
+    );
+    expect(
+      applyGroupDragDelta(allFlowNodes, "outer", { x: 200, y: 150 }, true)
+        .filter((change) => change.type === "position")
+        .map((change) => change.id),
+    ).toEqual(["inner", "nested", "leaf"]);
+    expect(toFlowEdges(collapsed, null)).toEqual([]);
+
+    const expanded = baseScene({
+      nodes: nodes.map((n) => n.id === "outer" ? { ...n, isCollapsed: false } : n),
+      edges,
+    });
+    expect(toFlowNodes(expanded, makeStore()).map((node) => node.id)).toEqual(
+      ["outer", "inner", "leaf", "nested", "outside"],
+    );
+    expect(toFlowEdges(expanded, null).map((edge) => edge.id)).toEqual(["e1", "e2"]);
+  });
+
+  it("keeps shared members hidden if an independent frame is collapsed", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "frame", kind: "frame", isCollapsed: true, itemIds: ["shared"] }),
+        baseNode({ id: "container", kind: "container", itemIds: ["shared", "other"] }),
+        baseNode({ id: "shared", kind: "chat" }),
+        baseNode({ id: "other", kind: "chat" }),
+      ],
+      edges: [{ id: "cross", source: "shared", target: "other" }],
+    });
+    const flowNodes = toFlowNodes(scene, makeStore());
+    expect(flowNodes.filter((node) => !node.hidden).map((node) => node.id)).toEqual(
+      ["frame", "container", "other"],
+    );
+    expect(flowNodes.find((node) => node.id === "shared")?.hidden).toBe(true);
+    expect(toFlowEdges(scene, null)).toEqual([]);
+  });
+});
+
 describe("toFlowNodes (R6.2 chart node)", () => {
   it("maps all 7 chart wire fields onto the flow node's data, and chartWidth/chartHeight ALSO onto the flow node object itself (NodeResizer controlled-mode)", () => {
     const scene = baseScene({
@@ -2285,6 +2345,12 @@ describe("groupDragKindOf (R6.1 group-drag eligibility)", () => {
 
   it("returns null for an unlocked frame", () => {
     expect(groupDragKindOf(flowNode({ type: "frame", data: { isLocked: false } } as Partial<SceneFlowNode>))).toBeNull();
+  });
+
+  it("carries latent members when a collapsed frame is unlocked", () => {
+    expect(groupDragKindOf(flowNode({
+      type: "frame", data: { isLocked: false, isCollapsed: true, itemIds: ["member"] },
+    } as Partial<SceneFlowNode>))).toBe("frame");
   });
 
   it("returns 'container' unconditionally (no lock concept)", () => {

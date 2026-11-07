@@ -28,11 +28,15 @@ SceneDocument exactly like BranchOps/GroupOps/CommandOps.
 
 from __future__ import annotations
 
+from backend.domain.containment import group_dependency_order, hidden_group_descendants
 from backend.domain.geometry_safety import validate_layout_geometry
 
 from backend.domain.model import (
     GROUP_COLLAPSED_HEIGHT,
     GROUP_COLLAPSED_WIDTH,
+    GROUP_PADDING,
+    GROUP_PADDING_TOP,
+    SceneError,
     SceneNode,
 )
 
@@ -289,10 +293,14 @@ class LayoutOps(SceneDocumentParts):
         below everything else. Docked nodes ride along at their parent's
         position (invisible while docked; sane if later undocked)."""
         validate_layout_geometry(self)
+        # Refuse cyclic legacy group membership before moving even a shadow
+        # node. All descendant visibility is transitive.
+        group_dependency_order(self.nodes)
         group_kinds = ("frame", "container")
+        hidden = hidden_group_descendants(self.nodes)
         layout_nodes = {
             n.id: n for n in self.nodes.values()
-            if n.kind not in group_kinds and not n.is_docked
+            if n.kind not in group_kinds and not n.is_docked and n.id not in hidden
         }
         if not layout_nodes:
             self._organize_groups()
@@ -404,6 +412,7 @@ class LayoutOps(SceneDocumentParts):
         # instead of re-deriving it.
         footprints = {nid: self.node_footprint(n) for nid, n in layout_nodes.items()}
         subtree_width: dict[str, float] = {}
+        subtree_height: dict[str, float] = {}
         packed_width: dict[str, float] = {}
         stack: list[tuple[str, bool]] = [(r, False) for r in reversed(roots)]
         while stack:
@@ -419,14 +428,77 @@ class LayoutOps(SceneDocumentParts):
             )
             packed_width[node_id] = packed
             subtree_width[node_id] = max(footprints[node_id][0], packed)
+            subtree_height[node_id] = footprints[node_id][1] + (
+                NODE_GAP_Y + max(subtree_height[kid] for kid in kids) if kids else 0.0
+            )
 
-        # Assign positions, iterative pre-order: each node centred over its
-        # own subtree span, children on a row below its real bottom edge.
+        # Collapse is a visible proxy, not permission to teleport its
+        # hidden members. Keep the pill's old anchor, and reserve both the
+        # pill and the latent expanded-member bounds. Other trees must
+        # organize around that footprint, not through it.
+        reservations: list[tuple[float, float, float, float]] = []
+        for group in self.nodes.values():
+            if (
+                group.kind not in group_kinds
+                or not group.is_collapsed
+                or group.id in hidden
+            ):
+                continue
+            gx, gy, gw, gh = self._bbox_of_members(group.item_ids)
+            width = getattr(group.state, "group_manual_width", None)
+            height = getattr(group.state, "group_manual_height", None)
+            left, top = min(group.x, gx), min(group.y, gy)
+            right = max(gx + gw, group.x + GROUP_COLLAPSED_WIDTH,
+                        group.x + (width if width is not None else 0))
+            bottom = max(gy + gh, group.y + GROUP_COLLAPSED_HEIGHT,
+                         group.y + (height if height is not None else 0))
+            # GroupOps' unmeasured member placeholder is smaller than the
+            # canvas' realistic kind fallback (e.g. chat: 220 vs 422 px).
+            # Reserve the real footprint of every *latent* descendant,
+            # not only the old, undersized group bbox. Otherwise another
+            # organized tree could hide beneath a member on expansion.
+            pending = list(group.item_ids)
+            seen: set[str] = set()
+            while pending:
+                member_id = pending.pop()
+                if member_id in seen:
+                    continue
+                seen.add(member_id)
+                member = self.nodes.get(member_id)
+                if member is None:
+                    continue
+                mw, mh = self.node_footprint(member)
+                left = min(left, member.x - GROUP_PADDING)
+                top = min(top, member.y - GROUP_PADDING_TOP)
+                right = max(right, member.x + mw + GROUP_PADDING)
+                bottom = max(bottom, member.y + mh + GROUP_PADDING)
+                if member.kind in group_kinds:
+                    pending.extend(member.item_ids)
+            reservations.append((left, top, right - left, bottom - top))
+
+        # Assign positions, iterative pre-order: each node centred over
+        # its subtree span, clearing every collapsed member reservation.
         cursor_x = 0.0
         assign: list[tuple[str, float, float]] = []
         for root in roots:
-            assign.append((root, cursor_x, 0.0))
-            cursor_x += subtree_width[root] + COMPONENT_GAP
+            candidate_x = cursor_x
+            for _ in range(len(reservations) + 1):
+                blockers = [
+                    rect for rect in reservations
+                    if not _rects_clear(
+                        candidate_x, 0.0, subtree_width[root], subtree_height[root], *rect
+                    )
+                ]
+                if not blockers:
+                    break
+                candidate_x = max(
+                    candidate_x,
+                    min(rect[0] + rect[2] + NODE_GAP_X for rect in blockers),
+                )
+            else:
+                raise SceneError("cannot place tree around collapsed group")
+            assign.append((root, candidate_x, 0.0))
+            cursor_x = candidate_x + subtree_width[root] + COMPONENT_GAP
         while assign:
             node_id, left, y = assign.pop()
             node = layout_nodes[node_id]
@@ -454,54 +526,17 @@ class LayoutOps(SceneDocumentParts):
         validate_layout_geometry(self)
 
     def _organize_groups(self) -> None:
-        """Post-layout group pass: line collapsed pills up in a row below
-        the laid-out content, then re-wrap every expanded frame/container
-        around its members' new positions - pills first, so a container
-        holding a collapsed pill wraps the pill's final spot, and
-        innermost groups first, so an outer container unions its inner
-        group's re-wrapped rect rather than a stale pre-organize one
-        (containers can legitimately nest - see create_container)."""
-        groups = [n for n in self.nodes.values() if n.kind in ("frame", "container")]
-        expanded = [g for g in groups if not g.is_collapsed]
-        collapsed = [g for g in groups if g.is_collapsed]
+        """Refit expanded groups bottom-up; do not move collapsed proxies.
 
-        if collapsed:
-            collapsed_set = {g.id for g in collapsed}
-            others = [
-                n for n in self.nodes.values()
-                if not n.is_docked and n.id not in collapsed_set
-            ]
-            if others:
-                left = min(n.x for n in others)
-                bottom = max(n.y + self.node_footprint(n)[1] for n in others)
-            else:
-                left, bottom = 0.0, -GROUP_COLLAPSED_HEIGHT - COMPONENT_GAP
-            x = left
-            y = bottom + COMPONENT_GAP
-            for group in sorted(collapsed, key=lambda g: g.id):
-                group.x, group.y = x, y
-                x += self.node_footprint(group)[0] + NODE_GAP_X
-
-        # Innermost-first: a group's nesting height is 1 + the tallest
-        # height among its member groups (0 when it holds no group).
-        height_cache: dict[str, int] = {}
-
-        def nesting_height(group_id: str, trail: frozenset[str] = frozenset()) -> int:
-            if group_id in height_cache:
-                return height_cache[group_id]
-            if group_id in trail:  # membership cycles cannot happen; belt and braces
-                return 0
+        Hidden descendants retain their latent geometry and manual anchors
+        so Collapse/Organize/Expand cannot teleport the contents. A visible
+        expanded container still refits around a nested collapsed pill.
+        """
+        hidden = hidden_group_descendants(self.nodes)
+        for group_id in group_dependency_order(self.nodes):
             group = self.nodes[group_id]
-            member_heights = [
-                nesting_height(member_id, trail | {group_id})
-                for member_id in group.item_ids
-                if (member := self.nodes.get(member_id)) is not None
-                and member.kind in ("frame", "container")
-            ]
-            height_cache[group_id] = 1 + max(member_heights, default=0) if member_heights else 0
-            return height_cache[group_id]
-
-        for group in sorted(expanded, key=lambda g: (nesting_height(g.id), g.id)):
+            if group.is_collapsed or group_id in hidden:
+                continue
             state = group.state
             if state is not None:
                 for attr in (

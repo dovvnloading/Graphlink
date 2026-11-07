@@ -456,29 +456,64 @@ def test_organize_correctly_nests_a_container_wrapped_around_a_frame():
     )
 
 
-def test_organize_lines_up_multiple_collapsed_groups_without_overlap():
-    """Several independent collapsed frames/containers must all land on
-    the same pill row below the laid-out content, each clear of the
-    others - not stacked on top of each other."""
+def test_collapsed_group_proxies_remain_at_their_existing_anchors_during_organize():
+    """Issue #474: moving a pill away from its hidden members teleports on expand."""
     doc = SceneDocument()
-    m1 = doc.add_chat_node(0, 500, "m1", True)
-    m2 = doc.add_chat_node(500, 500, "m2", True)
-    m3 = doc.add_chat_node(1000, 500, "m3", True)
-    g1 = doc.create_frame([m1.id])
-    g2 = doc.create_container([m2.id])
-    g3 = doc.create_frame([m3.id])
-    for g in (g1, g2, g3):
-        doc.set_chat_collapsed(g.id, True)
+    members = [
+        doc.add_chat_node(0, 500, "m1", True),
+        doc.add_chat_node(500, 500, "m2", True),
+        doc.add_chat_node(1000, 500, "m3", True),
+    ]
+    groups = [
+        doc.create_frame([members[0].id]),
+        doc.create_container([members[1].id]),
+        doc.create_frame([members[2].id]),
+    ]
+    anchors = {g.id: (g.x, g.y) for g in groups}
+    for g in groups:
+        doc.toggle_group_collapsed(g.id)
 
     doc.organize()
+    assert {g.id: (g.x, g.y) for g in groups} == anchors
+    for group in groups:
+        doc.toggle_group_collapsed(group.id)
+        assert (group.x, group.y) == anchors[group.id]
 
-    rects = {g.id: (g.x, g.y, *doc.node_footprint(g)) for g in (g1, g2, g3)}
-    ids = sorted(rects)
-    for i, a_id in enumerate(ids):
-        for b_id in ids[i + 1:]:
-            assert not _rects_overlap(rects[a_id], rects[b_id]), f"{a_id} and {b_id} overlap"
-    ys = {r[1] for r in rects.values()}
-    assert len(ys) == 1, "all collapsed pills should share one row"
+
+def test_collapsed_group_reserves_its_expanded_footprint_while_other_trees_reflow():
+    """Organize must not hide a future overlap behind today's small pill."""
+    doc = SceneDocument()
+    hidden_member = doc.add_chat_node(0, 0, "hidden", True)
+    frame = doc.create_frame([hidden_member.id])
+    doc.resize_frame(frame.id, 1400, 900)
+    original_anchor = (frame.x, frame.y)
+    doc.toggle_group_collapsed(frame.id)
+    outsider = doc.add_chat_node(0, 0, "another root", True)
+
+    doc.organize()
+    assert (frame.x, frame.y) == original_anchor
+    assert (hidden_member.x, hidden_member.y) == (0, 0)
+    doc.toggle_group_collapsed(frame.id)
+
+    a = (frame.x, frame.y, *doc.node_footprint(frame))
+    b = (outsider.x, outsider.y, *doc.node_footprint(outsider))
+    assert not _rects_overlap(a, b), "expanded group should not engulf organized outsider"
+
+
+
+
+def test_collapsed_group_reserves_unmeasured_chat_footprints_not_old_group_placeholders():
+    """An unmeasured 422px chat must not be treated as a 220px latent card."""
+    doc = SceneDocument()
+    hidden = doc.add_chat_node(0, 0, "hidden large chat", True)
+    frame = doc.create_frame([hidden.id])
+    doc.toggle_group_collapsed(frame.id)
+    outside = doc.add_chat_node(0, 0, "outside", True)
+
+    doc.organize()
+    a = (hidden.x, hidden.y, *doc.node_footprint(hidden))
+    b = (outside.x, outside.y, *doc.node_footprint(outside))
+    assert not _rects_overlap(a, b)
 
 
 def test_create_frame_and_create_container_reject_an_empty_member_list():
