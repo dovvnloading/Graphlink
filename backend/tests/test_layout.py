@@ -326,6 +326,55 @@ def test_size_reporting_refits_arbitrarily_nested_containers_in_dependency_order
         _assert_group_encloses(outer, inner)
 
 
+def test_ungroup_cascades_empty_ancestor_containers_and_undo_restores_them():
+    """Auto-deleting an empty child group cannot strand ancestor item_ids."""
+    doc = SceneDocument()
+    leaf = doc.add_node(0, 0, "leaf")
+    frame = doc.create_frame([leaf.id])
+    middle = doc.create_container([frame.id])
+    outer = doc.create_container([middle.id])
+    unrelated = doc.add_node(1800, 0, "other")
+    edge = doc.connect(outer.id, unrelated.id)
+
+    doc.record_command(
+        "ungroup", "user", lambda: doc.ungroup(frame.id),
+        node_ids=[frame.id],
+    )
+    assert leaf.id in doc.nodes
+    assert all(group_id not in doc.nodes for group_id in (frame.id, middle.id, outer.id))
+    assert edge.id not in doc.edges
+    assert all(
+        member_id in doc.nodes
+        for node in doc.nodes.values()
+        if node.kind in ("frame", "container")
+        for member_id in node.item_ids
+    )
+
+    doc.undo()
+    assert frame.id in doc.nodes and middle.id in doc.nodes and outer.id in doc.nodes
+    assert doc.nodes[middle.id].item_ids == [frame.id]
+    assert doc.nodes[outer.id].item_ids == [middle.id]
+    assert edge.id in doc.edges
+
+
+def test_regrouping_a_leaf_does_not_leave_a_deleted_old_frame_in_a_container():
+    doc = SceneDocument()
+    leaf = doc.add_node(0, 0, "leaf")
+    old_frame = doc.create_frame([leaf.id])
+    parent = doc.create_container([old_frame.id])
+    new_frame = doc.create_frame([leaf.id])
+
+    assert new_frame.item_ids == [leaf.id]
+    assert old_frame.id not in doc.nodes
+    assert parent.id not in doc.nodes
+    assert all(
+        member_id in doc.nodes
+        for node in doc.nodes.values()
+        if node.kind in ("frame", "container")
+        for member_id in node.item_ids
+    )
+
+
 def test_member_footprint_of_a_collapsed_group_matches_node_footprint():
     """groups.py's _member_footprint and layout.py's node_footprint must
     agree on a collapsed group's size - two independent "how big is this
