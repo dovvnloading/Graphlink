@@ -71,6 +71,12 @@ def layout_fingerprint(document: SceneDocument) -> str:
 def _clone_for_layout(document: SceneDocument) -> SceneDocument:
     """Clone layout-mutable state, never any real user content or asset bytes."""
     shadow = copy.copy(document)
+    # Compound islands temporarily substitute realistic placement-size
+    # fallbacks while refitting group geometry. Never share this observation
+    # map with the live document, and keep the temporary values available to
+    # the planner's *second* preserve-frame-sizes refit.
+    shadow.measured_sizes = dict(document.measured_sizes)
+    setattr(shadow, "_layout_projection_shadow", True)
     shadow.nodes = {}
     for node_id, original in document.nodes.items():
         node = copy.copy(original)
