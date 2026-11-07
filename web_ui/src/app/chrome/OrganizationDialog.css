@@ -1,5 +1,5 @@
 /* Preview-only organization dialog. No real canvas node is touched here. */
-.organization-dialog { width: min(620px, calc(100vw - 64px)); }
+.organization-dialog { width: min(820px, calc(100vw - 64px)); }
 .organization-description {
   margin: 0 0 16px;
   color: var(--gl-surface-text-secondary);
@@ -102,4 +102,59 @@
 .organization-actions .organization-apply {
   background: var(--gl-neutral-button-hover);
   font-weight: 650;
+}
+
+.organization-preview-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.organization-view-toggle {
+  display: flex;
+  gap: 4px;
+}
+.organization-view-toggle button {
+  padding: 6px 9px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 6px;
+  background: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+.organization-view-toggle button[aria-pressed="true"] {
+  border-color: var(--gl-palette-selection);
+  background: var(--gl-neutral-button-hover);
+}
+.organization-view-toggle button:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+.organization-comparison {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.organization-comparison.after-only { grid-template-columns: minmax(0, 1fr); }
+.organization-pane { min-width: 0; }
+.organization-pane h3 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--gl-surface-text-secondary);
+}
+.organization-miniature-edge {
+  fill: none;
+  stroke: var(--gl-surface-text-secondary);
+  stroke-width: 1.1;
+  opacity: .65;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+@media (max-width: 640px) {
+  .organization-comparison { grid-template-columns: minmax(0, 1fr); }
 }

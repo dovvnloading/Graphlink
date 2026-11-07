@@ -137,6 +137,8 @@ export interface OrganizationPreview {
   scope: "all" | "selection" | "branch" | "group";
   selectedCount: number;
   movedCount: number;
+  areaBefore: number;
+  areaAfter: number;
   nodes: Array<{
     id: string;
     kind: string;
@@ -145,8 +147,13 @@ export interface OrganizationPreview {
     y: number;
     width: number;
     height: number;
+    previousX: number;
+    previousY: number;
+    previousWidth: number;
+    previousHeight: number;
     changed: boolean;
   }>;
+  edges: Array<{ id: string; source: string; target: string }>;
 }
 
 export interface OrganizationOptions {

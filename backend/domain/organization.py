@@ -304,27 +304,65 @@ class OrganizationPlan:
     nodes: dict[str, SceneNode]
 
     def preview(self, document: SceneDocument) -> dict[str, object]:
+        """Give the client a read-only before/after diagram with live edges.
+
+        The original and proposed rectangles use the same footprint rules.
+        No client-side proposal is ever accepted back by Apply; its plan ID
+        alone is checked against a freshly recomputed server-side layout.
+        """
         rows: list[dict[str, object]] = []
+        visible_ids: set[str] = set()
         hidden = hidden_group_descendants(self.nodes)
-        for nid, node in self.nodes.items():
-            if node.is_docked or nid in hidden:
-                continue
+
+        def footprint(node: SceneNode) -> tuple[float, float]:
             width, height = document.node_footprint(node)
             if isinstance(node.state, GroupSizedState) and not node.is_collapsed:
                 width = float(node.state.group_width or width)
                 height = float(node.state.group_height or height)
+            return width, height
+
+        before_bounds: list[tuple[float, float, float, float]] = []
+        after_bounds: list[tuple[float, float, float, float]] = []
+        for nid, node in self.nodes.items():
+            if node.is_docked or nid in hidden:
+                continue
+            original = document.nodes[nid]
+            width, height = footprint(node)
+            original_width, original_height = footprint(original)
             rows.append({
                 "id": nid, "kind": node.kind, "title": node.title[:80],
                 "x": node.x, "y": node.y, "width": width, "height": height,
+                "previousX": original.x, "previousY": original.y,
+                "previousWidth": original_width, "previousHeight": original_height,
                 "changed": nid in self.changed_ids,
             })
+            visible_ids.add(nid)
+            before_bounds.append((original.x, original.y, original_width, original_height))
+            after_bounds.append((node.x, node.y, width, height))
+
+        def area(rects: list[tuple[float, float, float, float]]) -> float:
+            if not rects:
+                return 0.0
+            left = min(x for x, _, _, _ in rects)
+            top = min(y for _, y, _, _ in rects)
+            right = max(x + w for x, _, w, _ in rects)
+            bottom = max(y + h for _, y, _, h in rects)
+            return max(0.0, right - left) * max(0.0, bottom - top)
+
         return {
             "fingerprint": self.source_fingerprint,
             "planId": self.plan_id,
             "scope": self.scope,
             "selectedCount": len(self.selected_ids),
             "movedCount": len(self.changed_ids),
+            "areaBefore": area(before_bounds),
+            "areaAfter": area(after_bounds),
             "nodes": rows,
+            "edges": [
+                {"id": edge.id, "source": edge.source, "target": edge.target}
+                for edge in document.edges.values()
+                if edge.source in visible_ids and edge.target in visible_ids
+            ],
         }
 
 
@@ -359,7 +397,31 @@ def make_organization_plan(
     unknown = fixed.difference(document.nodes)
     if unknown:
         raise SceneError(f"unknown fixed node: {sorted(unknown)[0]}")
+    # A pinned group is a hard *region*, not merely a frozen background:
+    # moving its members could silently violate the group's enclosure.
+    # Freeze the whole transitive membership DAG, including nested groups
+    # and dual-membership cards, without recursing on arbitrary legacy depth.
+    pending = [
+        nid for nid in fixed if document.nodes[nid].kind in _GROUP_KINDS
+    ]
+    inspected: set[str] = set()
+    while pending:
+        group_id = pending.pop()
+        if group_id in inspected:
+            continue
+        inspected.add(group_id)
+        for member_id in document.nodes[group_id].item_ids:
+            member = document.nodes.get(member_id)
+            if member is None:
+                continue
+            fixed.add(member_id)
+            if member.kind in _GROUP_KINDS and member_id not in inspected:
+                pending.append(member_id)
     movable = selected - fixed
+    if selected and not movable and fixed:
+        # Report an impossible layout instead of silently presenting a no-op
+        # when every requested card is inside a pinned group.
+        raise SceneError("cannot organize: all selected content is a fixed node")
     shadow = _clone_for_layout(document)
 
     if scope == "all" and not fixed:
