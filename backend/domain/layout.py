@@ -118,6 +118,12 @@ class LayoutOps(SceneDocumentParts):
                 gw, gh = node.state.group_width, node.state.group_height
                 if gw is not None and gh is not None and gw > 0 and gh > 0:
                     return float(gw), float(gh)
+        # Charts, like expanded groups, use a backend-controlled wrapper
+        # size. A preceding DOM measurement can be stale after resize_chart.
+        if is_node_of(node, "chart", ChartState):
+            cw, ch = node.state.chart_width, node.state.chart_height
+            if cw > 0 and ch > 0:
+                return float(cw), float(ch)
         measured = self.measured_sizes.get(node.id)
         width, height = measured if measured is not None else (None, None)
         if not (width and width > 0 and height and height > 0):
