@@ -62,7 +62,7 @@ describe("read-only before/after comparison", () => {
   it("draws port-based orthogonal connections without diagonal segments", () => {
     const rectangles = previewComparisonRects(nodes, "after");
     const path = previewEdgePath(rectangles[0], rectangles[1]);
-    const points = path.match(/-?\\d+(?:\\.\\d+)?/g)?.map(Number) ?? [];
+    const points = path.match(/-?[0-9]+(?:[.][0-9]+)?/g)?.map(Number) ?? [];
     expect(points).toHaveLength(8);
     for (let index = 0; index < 6; index += 2) {
       const isHorizontal = points[index + 1] === points[index + 3];
