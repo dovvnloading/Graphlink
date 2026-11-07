@@ -373,8 +373,18 @@ class GroupOps(SceneDocumentParts):
             other.item_ids = [i for i in other.item_ids if i != member_id]
             if not other.item_ids:
                 self.nodes.pop(other.id, None)
+                self.edges = {
+                    eid: edge for eid, edge in self.edges.items()
+                    if edge.source != other.id and edge.target != other.id
+                }
+                # The removed frame/container may be the only member of
+                # one or more ancestors. Detach recursively so their
+                # item_ids never point at a deleted group.
+                self._detach_node_from_membership(other.id)
             else:
-                self._recompute_group_bounds(other.id)
+                self._recompute_affected_group_bounds(
+                    {other.id}, include_touched_groups=True,
+                )
             break
 
     def create_frame(self, item_ids: list[str]) -> SceneNode:
@@ -591,13 +601,33 @@ class GroupOps(SceneDocumentParts):
         remove_nodes, so it would otherwise leave stale item_ids behind.
         list(...) over a live view since a match can mutate self.nodes
         (popping an emptied group) mid-iteration."""
-        for group in list(self.nodes.values()):
-            if group.kind not in ("frame", "container"):
-                continue
-            if node_id not in group.item_ids:
-                continue
-            group.item_ids = [i for i in group.item_ids if i != node_id]
-            if not group.item_ids:
-                self.nodes.pop(group.id, None)
-            else:
-                self._recompute_group_bounds(group.id)
+        pending = [node_id]
+        affected: set[str] = set()
+        deleted_groups: set[str] = set()
+        while pending:
+            deleted_id = pending.pop()
+            for group in list(self.nodes.values()):
+                if group.kind not in ("frame", "container"):
+                    continue
+                if deleted_id not in group.item_ids:
+                    continue
+                group.item_ids = [i for i in group.item_ids if i != deleted_id]
+                if not group.item_ids:
+                    self.nodes.pop(group.id, None)
+                    deleted_groups.add(group.id)
+                    pending.append(group.id)
+                else:
+                    affected.add(group.id)
+
+        # Auto-deletion must maintain the same edge-endpoint invariant as
+        # remove_nodes/ungroup; otherwise an outer group deleted as a side
+        # effect can leave an invisible dangling connection behind.
+        if deleted_groups:
+            self.edges = {
+                eid: edge for eid, edge in self.edges.items()
+                if edge.source not in deleted_groups and edge.target not in deleted_groups
+            }
+        if affected:
+            self._recompute_affected_group_bounds(
+                affected, include_touched_groups=True,
+            )
