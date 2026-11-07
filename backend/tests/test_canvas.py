@@ -2475,6 +2475,62 @@ def test_font_color_defaults_to_theme_following_and_empty_resets_to_it():
     asyncio.run(run())
 
 
+def test_preview_and_apply_organize_use_actual_scene_intents():
+    """The preview path is read-only; Apply commits only the approved plan."""
+    async def run():
+        bus, document, recorder = make_bus()
+        root = document.add_chat_node(300, 600, "root", True)
+        child = document.add_chat_node(350, 620, "child", False, parent_id=root.id)
+        start = {nid: (n.x, n.y) for nid, n in document.nodes.items()}
+        edge_ids = list(document.edges)
+
+        args = ["all", None, None, None, True]
+        preview = await bus.dispatch_intent("scene", "previewOrganize", args)
+        assert preview["planId"] and preview["selectedCount"] == 2
+        assert {nid: (n.x, n.y) for nid, n in document.nodes.items()} == start
+        assert list(document.edges) == edge_ids
+        assert recorder.topics_seen().count("scene") == 0
+
+        await bus.dispatch_intent("scene", "applyOrganize", [*args, preview["planId"]])
+        moved = {nid: (n.x, n.y) for nid, n in document.nodes.items()}
+        assert moved != start
+        assert list(document.edges) == edge_ids
+        assert recorder.topics_seen().count("scene") == 1
+        assert document.command_log[-1].label == "Organize Nodes"
+
+        await bus.dispatch_intent("scene", "undo", [])
+        assert {nid: (n.x, n.y) for nid, n in document.nodes.items()} == start
+        await bus.dispatch_intent("scene", "redo", [])
+        assert {nid: (n.x, n.y) for nid, n in document.nodes.items()} == moved
+
+    asyncio.run(run())
+
+
+def test_apply_organize_rejects_stale_and_forged_plan_ids():
+    async def run():
+        bus, document, recorder = make_bus()
+        first = document.add_chat_node(200, 500, "first", True)
+        document.add_chat_node(210, 515, "second", False, parent_id=first.id)
+        args = ["all", None, None, None, True]
+        preview = await bus.dispatch_intent("scene", "previewOrganize", args)
+        before = {nid: (n.x, n.y) for nid, n in document.nodes.items()}
+        with pytest.raises(SceneError, match="preview changed"):
+            await bus.dispatch_intent("scene", "applyOrganize", [*args, "forged-plan-id"])
+        assert {nid: (n.x, n.y) for nid, n in document.nodes.items()} == before
+        assert not document.command_log
+        assert recorder.topics_seen().count("scene") == 0
+
+        document.move_node(first.id, 20, 70)
+        stale = {nid: (n.x, n.y) for nid, n in document.nodes.items()}
+        with pytest.raises(SceneError, match="preview changed"):
+            await bus.dispatch_intent("scene", "applyOrganize", [*args, preview["planId"]])
+        assert {nid: (n.x, n.y) for nid, n in document.nodes.items()} == stale
+        assert not document.command_log
+        assert recorder.topics_seen().count("scene") == 0
+
+    asyncio.run(run())
+
+
 def test_organize_lines_up_disconnected_nodes_without_overlap():
     async def run():
         bus, document, _ = make_bus()
