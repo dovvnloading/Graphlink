@@ -36,6 +36,7 @@ from backend.domain.model import (
 
 from backend.domain.node_access import is_node_of
 from backend.domain.node_states import ChartState, GroupSizedState
+from backend.domain.structure import primary_parent_edges
 
 from backend.domain._composed import SceneDocumentParts
 
@@ -284,32 +285,15 @@ class LayoutOps(SceneDocumentParts):
             self._organize_groups()
             return
 
-        parent_of: dict[str, str] = {}
-        # Insertion order, NOT sorted by id: edge ids are "e<counter>"
-        # strings, so a lexicographic sort puts e10 before e9 and a
-        # later-added cross-link could steal a node's structural parent
-        # from its real creation edge. self.edges preserves creation order
-        # (and a loaded session restores edges in saved order), which is
-        # exactly the "first edge wins" rule wanted here.
-        for edge in self.edges.values():
-            source, target = edge.source, edge.target
-            if (
-                source == target
-                or source not in layout_nodes
-                or target not in layout_nodes
-                or target in parent_of
-            ):
-                continue
-            # Refuse a link that would close a cycle under the links
-            # assigned so far (walk source's ancestry looking for target).
-            ancestor: str | None = source
-            seen: set[str] = set()
-            while ancestor is not None and ancestor not in seen:
-                seen.add(ancestor)
-                ancestor = parent_of.get(ancestor)
-            if target in seen:
-                continue
-            parent_of[target] = source
+        # Primary ancestry is interpreted in one shared place with branch
+        # history. Note-sourced metadata connections never steal a chat root;
+        # legacy cross-links remain present but are not duplicated as parents.
+        parent_of = {
+            child_id: edge.source
+            for child_id, edge in primary_parent_edges(
+                self.nodes, self.edges, set(layout_nodes)
+            ).items()
+        }
 
         children: dict[str, list[str]] = {}
         for child, parent in parent_of.items():

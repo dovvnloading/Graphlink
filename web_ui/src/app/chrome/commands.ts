@@ -124,7 +124,7 @@ export function buildCommands(
       id: "organize-nodes",
       name: "Organize Nodes",
       aliases: ["organize", "auto layout", "rearrange"],
-      run: () => store.organizeNodes(),
+      run: () => overlays.open("organize", "dialog"),
       enabled: hasNodes,
     },
     {

@@ -362,7 +362,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           {
             action: "Organize",
             description:
-              "Lays the graph out as a tree. It moves things - if you have arranged the canvas deliberately, this will undo that arrangement, and Undo will bring it back.",
+              "Opens a read-only tree-layout preview. Choose the whole canvas, selected nodes, a branch, or a group; Apply changes the positions in one undoable action. Links and group membership stay intact.",
           },
         ],
       },

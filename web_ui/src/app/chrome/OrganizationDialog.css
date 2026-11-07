@@ -1,0 +1,105 @@
+/* Preview-only organization dialog. No real canvas node is touched here. */
+.organization-dialog { width: min(620px, calc(100vw - 64px)); }
+.organization-description {
+  margin: 0 0 16px;
+  color: var(--gl-surface-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.organization-options { display: flex; flex-direction: column; gap: 8px; }
+.organization-options > label:first-child {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gl-surface-text-primary);
+}
+.organization-options select {
+  width: 100%;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 7px;
+  background: var(--gl-surface-node-body);
+  color: var(--gl-surface-text-primary);
+  padding: 9px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+.organization-options select:focus-visible,
+.organization-actions button:focus-visible,
+.organization-check input:focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 2px;
+}
+.organization-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0 2px;
+  color: var(--gl-surface-text-secondary);
+  font-size: 12px;
+}
+.organization-check input { accent-color: var(--gl-palette-selection); }
+.organization-result { margin-top: 18px; }
+.organization-summary {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--gl-surface-text-secondary);
+}
+.organization-summary strong { color: var(--gl-surface-text-primary); }
+.organization-miniature {
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 9px;
+  background-color: var(--gl-surface-window);
+  overflow: hidden;
+}
+.organization-miniature svg { width: 100%; max-height: 260px; display: block; }
+.organization-miniature-group {
+  fill: var(--gl-neutral-button-background);
+  stroke: var(--gl-surface-border-strong);
+  stroke-width: 1;
+}
+.organization-miniature-node {
+  fill: var(--gl-surface-text-muted);
+  stroke: var(--gl-surface-border-strong);
+  stroke-width: .6;
+}
+.organization-miniature-node.moved {
+  fill: var(--gl-palette-selection);
+  stroke: var(--gl-surface-text-secondary);
+}
+.organization-hint {
+  color: var(--gl-surface-text-muted);
+  margin: 8px 0 0;
+  font-size: 11px;
+}
+.organization-error {
+  color: var(--gl-semantic-status-error, var(--gl-surface-text-primary));
+  font-size: 12px;
+  margin: 12px 0 0;
+}
+.organization-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 16px;
+}
+.organization-actions button {
+  cursor: pointer;
+  padding: 8px 13px;
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  background: var(--gl-neutral-button-background);
+  color: var(--gl-surface-text-primary);
+}
+.organization-actions button:hover:not(:disabled) {
+  background: var(--gl-neutral-button-hover);
+}
+.organization-actions button:disabled { cursor: not-allowed; opacity: .45; }
+.organization-actions .organization-apply {
+  background: var(--gl-neutral-button-hover);
+  font-weight: 650;
+}

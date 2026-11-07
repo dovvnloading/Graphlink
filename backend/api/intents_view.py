@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
+from backend.domain.model import SceneError
+from backend.domain.organization import apply_organization_plan, make_organization_plan
 from backend.events import SessionBus
 
 
@@ -66,6 +68,36 @@ def register_view_intents(bus: SessionBus, document: SceneDocument) -> None:
         )
         await publish_scene()
 
+    async def preview_organize(
+        scope="all", root_id=None, node_ids=None, fixed_node_ids=None,
+        preserve_frame_sizes=True,
+    ):
+        """Read-only: compute a complete layout preview without publishing."""
+        plan = make_organization_plan(
+            document, scope, root_id=root_id, node_ids=node_ids,
+            fixed_node_ids=fixed_node_ids,
+            preserve_frame_sizes=preserve_frame_sizes,
+        )
+        return plan.preview(document)
+
+    async def apply_organize(
+        scope, root_id, node_ids, fixed_node_ids, preserve_frame_sizes, expected_plan_id,
+    ):
+        """Recompute on the server and reject any stale/mismatched preview."""
+        plan = make_organization_plan(
+            document, scope, root_id=root_id, node_ids=node_ids,
+            fixed_node_ids=fixed_node_ids,
+            preserve_frame_sizes=preserve_frame_sizes,
+        )
+        if not isinstance(expected_plan_id, str) or expected_plan_id != plan.plan_id:
+            raise SceneError("organization preview changed; preview again")
+        document.record_command(
+            "organizeNodes", "user",
+            lambda: apply_organization_plan(document, plan),
+            node_ids=list(document.nodes.keys()),
+        )
+        await publish_scene()
+
     async def set_font_family(family):
         document.set_font(family=family)
         await publish_scene()
@@ -79,6 +111,8 @@ def register_view_intents(bus: SessionBus, document: SceneDocument) -> None:
         await publish_scene()
 
     bus.register_intent("scene", "organizeNodes", organize_nodes)
+    bus.register_intent("scene", "previewOrganize", preview_organize)
+    bus.register_intent("scene", "applyOrganize", apply_organize)
     # Font intent names == FontControlBridge's @Slot names, same 1:1 rule as
     # grid; they live on the scene topic because the VALUES are scene state.
     bus.register_intent("scene", "setFontFamily", set_font_family)

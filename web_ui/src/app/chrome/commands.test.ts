@@ -79,6 +79,16 @@ describe("buildCommands", () => {
     expect(commands.find((c) => c.id === "organize-nodes")!.enabled()).toBe(true);
   });
 
+  it("organize-nodes opens the preview dialog instead of mutating nodes", () => {
+    const store = makeStore([{ id: "n0", x: 0, y: 0, title: "A", kind: "chat" }]);
+    const overlays = makeOverlays();
+    // @ts-expect-error - test double
+    const commands = buildCommands(store, makeRf(), overlays);
+    commands.find((c) => c.id === "organize-nodes")!.run();
+    expect(overlays.open).toHaveBeenCalledWith("organize", "dialog");
+    expect(store.organizeNodes).not.toHaveBeenCalled();
+  });
+
   it("delete-selected is disabled with no selection and calls remove intents when run", () => {
     const store = makeStore([{ id: "n0", x: 0, y: 0, title: "A", kind: "placeholder" }]);
     const rf = makeRf([{ id: "n0", selected: true }]);
