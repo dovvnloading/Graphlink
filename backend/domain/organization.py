@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Literal
 
 from backend.domain.containment import group_dependency_order, hidden_group_descendants
 from backend.domain.geometry_safety import validate_layout_geometry
+from backend.domain.layout_invariants import validate_no_new_false_containment
 from backend.domain.layout import NODE_GAP_X, _rects_clear
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_states import FrameState, GroupSizedState
@@ -70,6 +71,12 @@ def layout_fingerprint(document: SceneDocument) -> str:
 def _clone_for_layout(document: SceneDocument) -> SceneDocument:
     """Clone layout-mutable state, never any real user content or asset bytes."""
     shadow = copy.copy(document)
+    # Compound islands temporarily substitute realistic placement-size
+    # fallbacks while refitting group geometry. Never share this observation
+    # map with the live document, and keep the temporary values available to
+    # the planner's *second* preserve-frame-sizes refit.
+    shadow.measured_sizes = dict(document.measured_sizes)
+    setattr(shadow, "_layout_projection_shadow", True)
     shadow.nodes = {}
     for node_id, original in document.nodes.items():
         node = copy.copy(original)
@@ -369,9 +376,19 @@ def make_organization_plan(
         _place_subset(shadow, document, movable)
         _refit_groups(shadow, document, _affected_groups(shadow, movable), preserve_frame_sizes)
 
-    # Do not return a plan whose computed positions or group dimensions
-    # overflowed a valid input; all mutation still happens on the shadow.
+    # A fixed frame/container is as immutable as a fixed content card.
+    # Refitting group bounds can otherwise move the pinned background when
+    # some of its other members are reflowed.
+    for fixed_id in fixed:
+        if _layout_geometry(shadow.nodes[fixed_id]) != _layout_geometry(document.nodes[fixed_id]):
+            raise SceneError(f"organization would change fixed node {fixed_id}")
+
+    # Before offering this read-only preview, enforce semantic group
+    # integrity: no rearranged card may newly appear inside a background
+    # whose item_ids do not contain it. This uses the same node rectangles
+    # as the on-canvas renderer and permits legitimate dual membership.
     validate_layout_geometry(shadow)
+    validate_no_new_false_containment(document, shadow)
     changed = frozenset(
         nid for nid, node in shadow.nodes.items()
         if _layout_geometry(node) != _layout_geometry(document.nodes[nid])
@@ -397,6 +414,7 @@ def apply_organization_plan(document: SceneDocument, plan: OrganizationPlan) -> 
     projected_scene = copy.copy(document)
     projected_scene.nodes = plan.nodes
     validate_layout_geometry(projected_scene)
+    validate_no_new_false_containment(document, projected_scene)
     for nid in plan.changed_ids:
         target = document.nodes[nid]
         projected = plan.nodes[nid]
