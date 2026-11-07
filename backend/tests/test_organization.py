@@ -62,7 +62,9 @@ def test_metadata_note_link_never_becomes_a_structural_parent():
     doc.connect(prompt.id, child.id)  # deliberately BEFORE the real parent
     doc.connect(root.id, child.id)
 
-    assert doc._branch_parent_edge(child.id).source == root.id
+    parent = doc._branch_parent_edge(child.id)
+    assert parent is not None
+    assert parent.source == root.id
     plan = make_organization_plan(doc, "branch", root_id=root.id)
     assert child.id in plan.selected_ids
     assert prompt.id not in plan.selected_ids
@@ -115,7 +117,7 @@ def test_group_scope_expands_nested_container_and_preserves_membership():
 
 
 def test_fixed_node_stays_unchanged_when_the_rest_reflows():
-    doc, root, child, other = _sample()
+    doc, _root, child, _other = _sample()
     initial = (doc.nodes[child].x, doc.nodes[child].y)
     plan = make_organization_plan(doc, "all", fixed_node_ids=[child])
     apply_organization_plan(doc, plan)
@@ -124,7 +126,7 @@ def test_fixed_node_stays_unchanged_when_the_rest_reflows():
 
 
 def test_stale_plan_rejected_without_partial_writes():
-    doc, root, child, other = _sample()
+    doc, root, _child, _other = _sample()
     plan = make_organization_plan(doc)
     doc.move_node(root, 340, 777)
     before = {nid: _layout_geometry(n) for nid, n in doc.nodes.items()}
@@ -134,7 +136,7 @@ def test_stale_plan_rejected_without_partial_writes():
 
 
 def test_topology_change_invalidates_preview():
-    doc, root, child, other = _sample()
+    doc, _root, _child, other = _sample()
     plan = make_organization_plan(doc)
     new = doc.add_chat_node(0, 0, "new", True)
     doc.connect(new.id, other)
@@ -143,7 +145,7 @@ def test_topology_change_invalidates_preview():
 
 
 def test_undo_redo_restores_exact_prior_coordinates_and_group_dimensions():
-    doc, root, child, other = _sample()
+    doc, _root, child, other = _sample()
     frame = doc.create_frame([child, other])
     doc.resize_frame(frame.id, 1200, 900)
     before = {nid: _layout_geometry(n) for nid, n in doc.nodes.items()}
@@ -167,13 +169,13 @@ def test_undo_redo_restores_exact_prior_coordinates_and_group_dimensions():
 
 
 def test_legacy_whole_canvas_layout_is_unchanged_when_frame_preservation_off():
-    doc, root, child, other = _sample()
+    doc, _root, child, other = _sample()
     frame = doc.create_frame([child, other])
     plan = make_organization_plan(doc, "all", preserve_frame_sizes=False)
     apply_organization_plan(doc, plan)
     actual = {nid: _layout_geometry(n) for nid, n in doc.nodes.items()}
     # The existing legacy command must still produce precisely the same geometry.
-    doc2, root2, child2, other2 = _sample()
+    doc2, _root2, child2, other2 = _sample()
     doc2.create_frame([child2, other2])
     doc2.organize()
     expected = list(_layout_geometry(n) for n in doc2.nodes.values())
@@ -181,7 +183,7 @@ def test_legacy_whole_canvas_layout_is_unchanged_when_frame_preservation_off():
 
 
 def test_bad_scopes_are_rejected_before_a_mutation():
-    doc, root, child, other = _sample()
+    doc, root, _child, _other = _sample()
     before = layout_fingerprint(doc)
     with pytest.raises(SceneError, match="unknown organization scope"):
         make_organization_plan(doc, "unrecognised")  # type: ignore[arg-type]
@@ -193,7 +195,7 @@ def test_bad_scopes_are_rejected_before_a_mutation():
 
 
 def test_previews_are_deterministic_and_second_apply_is_a_noop():
-    doc, root, child, other = _sample()
+    doc, _root, _child, _other = _sample()
     first = make_organization_plan(doc, "all")
     same = make_organization_plan(doc, "all")
     assert first.plan_id == same.plan_id
