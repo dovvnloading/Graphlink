@@ -86,6 +86,13 @@ class GroupOps(SceneDocumentParts):
                 gw, gh = member.state.group_width, member.state.group_height
                 if gw is not None and gh is not None and gw > 0 and gh > 0:
                     return float(gw), float(gh)
+        # Chart wrappers have backend-controlled dimensions just like group
+        # wrappers. Measurements can lag resize_chart; never shrink an
+        # enclosing frame/container to stale client-side chart dimensions.
+        if is_node_of(member, "chart", ChartState):
+            cw, ch = member.state.chart_width, member.state.chart_height
+            if cw > 0 and ch > 0:
+                return float(cw), float(ch)
         measured = self.measured_sizes.get(member.id)
         width, height = measured if measured is not None else (None, None)
         if not (width and width > 0 and height and height > 0):
