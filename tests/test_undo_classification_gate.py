@@ -287,7 +287,8 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 188 -> 191: reviewable Artifact proposal fetch (read-only), accept,
     # and discard (both undoable) in backend/api/intents_artifact.py.
     real = _collect_real_registrations()
-    assert len(real) == 194, (
+    # 194 -> 196 when engine-v2 added scene/setEdgeRole and scene/getEdgeRoles.
+    assert len(real) == 196, (
         f"expected exactly 194 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
