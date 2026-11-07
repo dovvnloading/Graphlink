@@ -267,6 +267,65 @@ def test_expanded_group_intrinsic_geometry_beats_stale_client_measurement():
     assert outer.y + outer.state.group_height >= inner.y + inner.state.group_height
 
 
+def _assert_group_encloses(outer, inner):
+    assert outer.x <= inner.x
+    assert outer.y <= inner.y
+    assert outer.x + outer.state.group_width >= inner.x + inner.state.group_width
+    assert outer.y + outer.state.group_height >= inner.y + inner.state.group_height
+
+
+def test_moving_a_nested_leaf_refits_its_outer_container_for_single_and_batch_moves():
+    """Direct position edits must propagate through transitive membership."""
+    doc = SceneDocument()
+    leaf = doc.add_node(0, 0, "leaf")
+    frame = doc.create_frame([leaf.id])
+    outer = doc.create_container([frame.id])
+    doc.move_node(leaf.id, 1500, 800)
+    _assert_group_encloses(outer, frame)
+    doc.move_nodes([(leaf.id, 2600, 1600)])
+    _assert_group_encloses(outer, frame)
+
+
+def test_inner_group_collapse_resize_and_fit_refresh_outer_container():
+    """A parent's bounds must track its child's lifecycle without Organize."""
+    doc = SceneDocument()
+    leaf = doc.add_node(40, 50, "leaf")
+    frame = doc.create_frame([leaf.id])
+    outer = doc.create_container([frame.id])
+    before_height = outer.state.group_height
+
+    doc.toggle_group_collapsed(frame.id)
+    assert outer.state.group_height < before_height
+    _assert_group_encloses(outer, frame)
+    doc.toggle_group_collapsed(frame.id)
+    _assert_group_encloses(outer, frame)
+
+    doc.resize_frame(frame.id, 1200, 700)
+    _assert_group_encloses(outer, frame)
+    assert outer.state.group_width >= 1200
+    doc.fit_frame_to_content(frame.id)
+    _assert_group_encloses(outer, frame)
+    assert outer.state.group_width < 1200
+
+
+def test_size_reporting_refits_arbitrarily_nested_containers_in_dependency_order():
+    """A hard-coded four-pass limit misses supported 5+-level nesting.
+
+    Reordering the dict simulates a rehydrated scene whose insertion order
+    differs from its group membership dependencies.
+    """
+    doc = SceneDocument()
+    leaf = doc.add_node(0, 0, "leaf")
+    groups = [doc.create_container([leaf.id])]
+    for index in range(7):
+        groups.append(doc.create_container([groups[-1].id]))
+    doc.nodes = dict(reversed(list(doc.nodes.items())))
+
+    doc.set_measured_node_sizes([(leaf.id, 950.0, 720.0)])
+    for inner, outer in zip(groups, groups[1:]):
+        _assert_group_encloses(outer, inner)
+
+
 def test_member_footprint_of_a_collapsed_group_matches_node_footprint():
     """groups.py's _member_footprint and layout.py's node_footprint must
     agree on a collapsed group's size - two independent "how big is this
