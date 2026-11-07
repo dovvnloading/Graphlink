@@ -443,6 +443,63 @@ class GroupOps(SceneDocumentParts):
         self._recompute_group_bounds(node_id)
         return node
 
+    def _normalize_container_selection(self, item_ids: list[str]) -> list[str]:
+        """Validate first, then retain only outermost selected containers.
+
+        Selecting a container AND one of its existing descendants must not
+        detach the descendant: that can empty/delete the selected ancestor
+        midway through create_container, leaving a dangling member ID in the
+        new wrapper. Follow only container.item_ids for ancestor coverage.
+        Frame membership is an independent axis (a leaf may intentionally
+        be a member of one frame AND one container), so it is not traversed.
+
+        Validate every requested ID and the selected container subtrees
+        BEFORE changing any membership. This also refuses malformed legacy
+        cycles and dangling references instead of minting a new group from
+        a corrupted subtree. An iterative DFS supports deep nesting without
+        Python recursion or a hard-coded depth cap.
+        """
+        ids = list(dict.fromkeys(item_ids))
+        if not ids:
+            raise SceneError("a container needs at least one member")
+        for member_id in ids:
+            if member_id not in self.nodes:
+                raise SceneError(f"unknown member node: {member_id}")
+
+        selected = set(ids)
+        redundant: set[str] = set()
+        for root_id in ids:
+            root = self.nodes[root_id]
+            if root.kind != "container":
+                continue
+            active = {root_id}
+            completed: set[str] = set()
+            stack = [(root_id, iter(root.item_ids))]
+            while stack:
+                current_id, members = stack[-1]
+                try:
+                    member_id = next(members)
+                except StopIteration:
+                    stack.pop()
+                    active.remove(current_id)
+                    completed.add(current_id)
+                    continue
+                member = self.nodes.get(member_id)
+                if member is None:
+                    raise SceneError(f"unknown nested member node: {member_id}")
+                if member.kind == "container":
+                    if member_id in active:
+                        raise SceneError("cyclic container membership in selection")
+                    if member_id not in completed:
+                        active.add(member_id)
+                        stack.append((member_id, iter(member.item_ids)))
+                if member_id in selected and member_id != root_id:
+                    redundant.add(member_id)
+
+        # A cycle cannot produce a meaningful outermost selection; the
+        # acyclicity check above catches that before anything is detached.
+        return [member_id for member_id in ids if member_id not in redundant]
+
     def create_container(self, item_ids: list[str]) -> SceneNode:
         """Group an existing set of nodes into a new container. Same
         validation/detach posture as create_frame, scoped to "container"
@@ -455,14 +512,15 @@ class GroupOps(SceneDocumentParts):
         that class's own docstring, backend/domain/node_states.py) - no
         toggle_container_lock exists and none should be added.
 
+        A selection containing both a container and one of its existing
+        descendants retains just the ancestor. This avoids deleting a
+        selected container while reparenting its last member. Validation
+        and stable deduplication happen before any detach; frame membership
+        is independent and remains unchanged.
+
         Requires at least one member - same domain-layer invariant and
         rationale as create_frame's own guard just above."""
-        ids = list(item_ids)
-        if not ids:
-            raise SceneError("a container needs at least one member")
-        for member_id in ids:
-            if member_id not in self.nodes:
-                raise SceneError(f"unknown member node: {member_id}")
+        ids = self._normalize_container_selection(item_ids)
         for member_id in ids:
             self._detach_from_existing_group(member_id, "container")
         node_id = f"n{next(self._counter)}"
