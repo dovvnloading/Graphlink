@@ -418,6 +418,10 @@ def make_organization_plan(
             if member.kind in _GROUP_KINDS and member_id not in inspected:
                 pending.append(member_id)
     movable = selected - fixed
+    if selected and not movable and fixed:
+        # Report an impossible layout instead of silently presenting a no-op
+        # when every requested card is inside a pinned group.
+        raise SceneError("cannot organize: all selected content is a fixed node")
     shadow = _clone_for_layout(document)
 
     if scope == "all" and not fixed:
