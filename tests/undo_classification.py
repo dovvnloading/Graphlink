@@ -124,6 +124,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
         "noise through Ctrl+Z would be meaningless",
     ),
     Classified("scene", "organizeNodes", "A", "content: auto-layout repositions every node - one Ctrl+Z restores them all"),
+    Classified("scene", "previewOrganize", "B", "read-only: computes proposed layout from a safe clone without touching live graph state"),
+    Classified("scene", "applyOrganize", "A", "content: applies a server-recomputed layout as one undoable command after verifying the preview fingerprint"),
     Classified("scene", "setFontFamily", "B", "preference: canvas-appearance font"),
     Classified("scene", "setFontSize", "B", "preference: canvas-appearance font"),
     Classified("scene", "setFontColor", "B", "preference: canvas-appearance font"),
