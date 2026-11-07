@@ -54,6 +54,41 @@ def test_preview_does_not_mutate_nodes_edges_sizes_or_undo_history():
     assert len(doc.command_log) == original_commands
 
 
+def test_full_organize_clusters_frame_members_across_different_tree_roots():
+    """Issue #473: group member descendants must not straddle unrelated roots."""
+    doc = SceneDocument()
+    root = doc.add_chat_node(-2000, 0, "root A", True)
+    framed_child = doc.add_chat_node(1800, 0, "framed descendant", False, parent_id=root.id)
+    unrelated = doc.add_chat_node(0, 0, "unrelated root", True)
+    framed_root = doc.add_chat_node(2000, 0, "framed root", True)
+    frame = doc.create_frame([framed_child.id, framed_root.id])
+
+    plan = make_organization_plan(doc)
+    apply_organization_plan(doc, plan)
+    gx, gy = frame.x, frame.y
+    gw, gh = frame.state.group_width, frame.state.group_height
+    ux, uy = unrelated.x, unrelated.y
+    uw, uh = doc.node_footprint(unrelated)
+    assert not (ux < gx + gw and ux + uw > gx and uy < gy + gh and uy + uh > gy)
+    assert frame.item_ids == [framed_child.id, framed_root.id]
+
+
+def test_unresolvable_scoped_group_visual_containment_rejects_without_mutating():
+    """A group spanning fixed nodes cannot silently engulf a bystander."""
+    doc = SceneDocument()
+    first = doc.add_chat_node(0, 0, "member A", True)
+    bystander = doc.add_chat_node(900, 0, "unrelated", True)
+    second = doc.add_chat_node(1800, 0, "member B", True)
+    frame = doc.create_frame([first.id, second.id])
+    # The original graph is already visually ambiguous; a scoped organize
+    # cannot fix the span while the other member remains fixed.
+    before = {n.id: (n.x, n.y) for n in doc.nodes.values()}
+    with pytest.raises(SceneError, match="visually engulf"):
+        make_organization_plan(doc, "selection", node_ids=[first.id])
+    assert {n.id: (n.x, n.y) for n in doc.nodes.values()} == before
+    assert frame.item_ids == [first.id, second.id]
+
+
 def test_metadata_note_link_never_becomes_a_structural_parent():
     doc = SceneDocument()
     root = doc.add_chat_node(0, 0, "root", True)
