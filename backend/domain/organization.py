@@ -59,7 +59,7 @@ def layout_fingerprint(document: SceneDocument) -> str:
         )
         for n in document.nodes.values()
     )
-    edges = tuple((e.id, e.source, e.target) for e in document.edges.values())
+    edges = tuple((e.id, e.source, e.target, e.role) for e in document.edges.values())
     sizes = tuple(sorted(document.measured_sizes.items()))
     assets = tuple(
         (key, mime, hashlib.sha256(data).digest())
