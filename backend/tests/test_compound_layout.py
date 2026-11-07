@@ -51,9 +51,17 @@ def test_issue_473_frame_with_members_across_two_structural_trees() -> None:
 
     apply_organization_plan(doc, plan)
     assert not visual_membership_violations(doc)
-    assert doc.nodes[group_id].item_ids == [descendant, next(
-        mid for mid in doc.nodes[group_id].item_ids if mid != descendant
-    )]
+    group = doc.nodes[group_id]
+    assert descendant in group.item_ids and len(group.item_ids) == 2
+    # The group's own footprint must enclose real placement-size cards,
+    # not only GroupOps' smaller historical no-measurement placeholders.
+    gx, gy, gw, gh = group.x, group.y, *doc.node_footprint(group)
+    for mid in group.item_ids:
+        member = doc.nodes[mid]
+        mw, mh = doc.node_footprint(member)
+        assert gx <= member.x and gy <= member.y
+        assert member.x + mw <= gx + gw
+        assert member.y + mh <= gy + gh
     assert doc.edges == before_edges
     assert any(
         edge.source == ancestor and edge.target == descendant
