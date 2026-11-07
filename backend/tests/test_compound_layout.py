@@ -147,6 +147,21 @@ def test_random_cross_tree_group_island_containment(xs: list[int]) -> None:
     assert after == {nid: (n.x, n.y) for nid, n in doc.nodes.items()}
 
 
+def test_fixed_group_bounds_are_never_silently_refitted() -> None:
+    """A fixed frame is a hard constraint even when its members are selected."""
+    doc = SceneDocument()
+    first = doc.add_chat_node(0, 0, "first", True)
+    second = doc.add_chat_node(2500, 0, "second", True)
+    frame = doc.create_frame([first.id, second.id])
+    before = copy.deepcopy(doc.nodes)
+    with pytest.raises(SceneError, match="fixed node"):
+        make_organization_plan(
+            doc, "selection", node_ids=[first.id, second.id],
+            fixed_node_ids=[frame.id],
+        )
+    assert doc.nodes == before
+
+
 def test_cross_tree_group_island_undo_redo_restores_exact_geometry() -> None:
     doc, _ancestor, _descendant, _unrelated, group_id = _cross_tree_frame()
     original = copy.deepcopy(doc.nodes)
