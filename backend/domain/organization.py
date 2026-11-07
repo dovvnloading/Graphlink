@@ -402,9 +402,9 @@ def apply_organization_plan(document: SceneDocument, plan: OrganizationPlan) -> 
     # Even direct in-process callers cannot smuggle a malformed projected
     # group width or coordinate through a valid stale-preview fingerprint.
     # Check all rows first so no earlier row is partially committed.
-    projected = copy.copy(document)
-    projected.nodes = plan.nodes
-    validate_layout_geometry(projected)
+    projected_scene = copy.copy(document)
+    projected_scene.nodes = plan.nodes
+    validate_layout_geometry(projected_scene)
     for nid in plan.changed_ids:
         target = document.nodes[nid]
         projected = plan.nodes[nid]
