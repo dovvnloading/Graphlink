@@ -9,6 +9,7 @@ from hypothesis import given, settings, strategies as st
 
 from backend.canvas import SceneDocument
 from backend.domain.model import SceneError
+from backend.domain.node_states import ContainerState
 from backend.domain.organization import apply_organization_plan, make_organization_plan
 from backend.tests.perf.graph_factory import build_graph
 from backend.tests.perf.measure_organization import layout_quality
@@ -69,6 +70,7 @@ def test_deep_container_dependency_order_is_iterative() -> None:
     plan = make_organization_plan(doc, "all")
     assert latest.id in plan.nodes
     assert innermost.id in plan.nodes
+    assert isinstance(latest.state, ContainerState)
     assert latest.state.group_width is not None
     apply_organization_plan(doc, plan)
     assert latest.id in doc.nodes
