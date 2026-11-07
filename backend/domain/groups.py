@@ -504,7 +504,7 @@ class GroupOps(SceneDocumentParts):
         future-proofs a later change to that math."""
         node = require_node(self.nodes, node_id, "frame", FrameState)
         node.state.is_locked = not node.state.is_locked
-        self._recompute_group_bounds(node_id)
+        self._recompute_affected_group_bounds({node_id}, include_touched_groups=True)
 
     def toggle_group_collapsed(self, node_id: str) -> None:
         """Shared frame/container collapse toggle. A single call to
@@ -520,7 +520,7 @@ class GroupOps(SceneDocumentParts):
         if node.kind not in ("frame", "container"):
             raise SceneError(f"node is not a frame/container node: {node_id}")
         node.is_collapsed = not node.is_collapsed
-        self._recompute_group_bounds(node_id)
+        self._recompute_affected_group_bounds({node_id}, include_touched_groups=True)
 
     def resize_frame(self, node_id: str, width: float, height: float) -> None:
         """Frame kind only. Records a manual size override, clamped to never
@@ -534,7 +534,7 @@ class GroupOps(SceneDocumentParts):
         _, _, min_width, min_height = self._bbox_of_members(node.item_ids)
         node.state.group_manual_width = max(float(width), min_width)
         node.state.group_manual_height = max(float(height), min_height)
-        self._recompute_group_bounds(node_id)
+        self._recompute_affected_group_bounds({node_id}, include_touched_groups=True)
 
     def fit_frame_to_content(self, node_id: str) -> None:
         """Frame kind only. Clears BOTH the manual size override (set by
@@ -549,7 +549,7 @@ class GroupOps(SceneDocumentParts):
         node.state.group_manual_height = None
         node.state.group_manual_x = None
         node.state.group_manual_y = None
-        self._recompute_group_bounds(node_id)
+        self._recompute_affected_group_bounds({node_id}, include_touched_groups=True)
 
     def ungroup(self, node_id: str) -> None:
         """Deletes a frame/container node itself. Members are NOT deleted
