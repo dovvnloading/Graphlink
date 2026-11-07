@@ -107,13 +107,17 @@ class LayoutOps(SceneDocumentParts):
         """One node's (width, height) for placement purposes: measured ->
         intrinsic -> per-kind fallback. Non-positive values from any source
         fall through, same posture as groups.py's _member_footprint."""
-        if node.kind in ("frame", "container") and node.is_collapsed:
-            # The pill size wins over a measured entry: the measurement may
-            # be the EXPANDED box from before the collapse (the client only
-            # re-reports on the next dimensions change), and a stale
-            # 1200px-wide "obstacle" would shove every subsequent spawn
-            # past a phantom rect.
-            return GROUP_COLLAPSED_WIDTH, GROUP_COLLAPSED_HEIGHT
+        if node.kind in ("frame", "container"):
+            if node.is_collapsed:
+                # A stale expanded measurement must not enlarge a pill.
+                return GROUP_COLLAPSED_WIDTH, GROUP_COLLAPSED_HEIGHT
+            # Expanded group geometry is also backend-controlled. A DOM
+            # measurement of an older box must not override a newly refit
+            # state, especially for nested containers during organization.
+            if is_node_of(node, ("frame", "container"), GroupSizedState):
+                gw, gh = node.state.group_width, node.state.group_height
+                if gw is not None and gh is not None and gw > 0 and gh > 0:
+                    return float(gw), float(gh)
         measured = self.measured_sizes.get(node.id)
         width, height = measured if measured is not None else (None, None)
         if not (width and width > 0 and height and height > 0):
