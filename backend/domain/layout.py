@@ -34,6 +34,8 @@ from backend.domain.geometry_safety import validate_layout_geometry
 from backend.domain.model import (
     GROUP_COLLAPSED_HEIGHT,
     GROUP_COLLAPSED_WIDTH,
+    GROUP_PADDING,
+    GROUP_PADDING_TOP,
     SceneError,
     SceneNode,
 )
@@ -445,15 +447,33 @@ class LayoutOps(SceneDocumentParts):
             gx, gy, gw, gh = self._bbox_of_members(group.item_ids)
             width = getattr(group.state, "group_manual_width", None)
             height = getattr(group.state, "group_manual_height", None)
-            right = max(
-                gx + gw, group.x + GROUP_COLLAPSED_WIDTH,
-                group.x + (width if width is not None else 0),
-            )
-            bottom = max(
-                gy + gh, group.y + GROUP_COLLAPSED_HEIGHT,
-                group.y + (height if height is not None else 0),
-            )
             left, top = min(group.x, gx), min(group.y, gy)
+            right = max(gx + gw, group.x + GROUP_COLLAPSED_WIDTH,
+                        group.x + (width if width is not None else 0))
+            bottom = max(gy + gh, group.y + GROUP_COLLAPSED_HEIGHT,
+                         group.y + (height if height is not None else 0))
+            # GroupOps' unmeasured member placeholder is smaller than the
+            # canvas' realistic kind fallback (e.g. chat: 220 vs 422 px).
+            # Reserve the real footprint of every *latent* descendant,
+            # not only the old, undersized group bbox. Otherwise another
+            # organized tree could hide beneath a member on expansion.
+            pending = list(group.item_ids)
+            seen: set[str] = set()
+            while pending:
+                member_id = pending.pop()
+                if member_id in seen:
+                    continue
+                seen.add(member_id)
+                member = self.nodes.get(member_id)
+                if member is None:
+                    continue
+                mw, mh = self.node_footprint(member)
+                left = min(left, member.x - GROUP_PADDING)
+                top = min(top, member.y - GROUP_PADDING_TOP)
+                right = max(right, member.x + mw + GROUP_PADDING)
+                bottom = max(bottom, member.y + mh + GROUP_PADDING)
+                if member.kind in group_kinds:
+                    pending.extend(member.item_ids)
             reservations.append((left, top, right - left, bottom - top))
 
         # Assign positions, iterative pre-order: each node centred over
