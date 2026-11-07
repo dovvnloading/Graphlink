@@ -580,9 +580,12 @@ class LayoutOps(SceneDocumentParts):
         container refits around its nested pills. Iterative dependency order
         handles thousands of nested containers without recursion.
         """
+        hidden = hidden_group_descendants(self.nodes)
         for group_id in group_dependency_order(self.nodes):
             group = self.nodes[group_id]
-            if group.is_collapsed:
+            if group.is_collapsed or group_id in hidden:
+                # A hidden group's geometry and manual frame anchors are
+                # latent state, not inputs to this visible-only reflow.
                 continue
             state = group.state
             if state is not None:
