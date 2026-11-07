@@ -144,3 +144,108 @@ def test_edge_role_edit_is_one_undoable_command():
     assert doc.edges == original_edges
     doc.redo()
     assert doc.edges[late.id].role == "primary"
+
+@pytest.mark.parametrize("role", ["secondary", "reference", "association"])
+def test_collapse_branch_excludes_nonstructural_chat_cross_links(role):
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    child = doc.add_chat_node(0, 300, "child", False, parent_id=root.id)
+    separate = doc.add_chat_node(900, 0, "other branch", True)
+    cross_link = doc.connect(root.id, separate.id)
+    doc.set_edge_role(cross_link.id, role)
+
+    doc.collapse_branch(root.id, True)
+
+    assert doc.nodes[root.id].is_collapsed
+    assert doc.nodes[child.id].is_collapsed
+    assert not doc.nodes[separate.id].is_collapsed
+
+
+def test_collapse_branch_follows_explicit_primary_instead_of_earlier_legacy_link():
+    doc, first, second, child, _early, late = _two_parents()
+    doc.set_edge_role(late.id, "primary")
+
+    doc.collapse_branch(first.id, True)
+    assert not doc.nodes[child.id].is_collapsed
+
+    doc.collapse_branch(second.id, True)
+    assert doc.nodes[child.id].is_collapsed
+
+
+def test_delete_chat_does_not_promote_reference_or_secondary_links():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    victim = doc.add_chat_node(0, 300, "victim", False, parent_id=root.id)
+    child = doc.add_chat_node(0, 600, "real child", True, parent_id=victim.id)
+    reference = doc.add_chat_node(900, 0, "referenced chat", True)
+    secondary = doc.add_chat_node(1200, 0, "secondary", True)
+    link1 = doc.connect(victim.id, reference.id)
+    link2 = doc.connect(victim.id, secondary.id)
+    doc.set_edge_role(link1.id, "reference")
+    doc.set_edge_role(link2.id, "secondary")
+
+    doc.delete_chat_node(victim.id)
+
+    assert doc._branch_parent_edge(child.id).source == root.id
+    assert not any(e.source == root.id and e.target in (reference.id, secondary.id)
+                   for e in doc.edges.values())
+    assert not any(e.source == victim.id or e.target == victim.id for e in doc.edges.values())
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_delete_chat_preserves_child_ancestry_amid_other_legacy_links(explicit):
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    victim = doc.add_chat_node(0, 300, "victim", False, parent_id=root.id)
+    child = doc.add_chat_node(0, 600, "real child", True, parent_id=victim.id)
+    other = doc.add_chat_node(900, 0, "other parent", True)
+    victim_edge = doc._branch_parent_edge(child.id)
+    other_edge = doc.connect(other.id, child.id)
+    if explicit:
+        doc.set_edge_role(victim_edge.id, "primary")
+
+    doc.delete_chat_node(victim.id)
+
+    chosen = doc._branch_parent_edge(child.id)
+    assert chosen is not None
+    assert chosen.source == root.id
+    assert chosen.role == "primary"
+    assert other_edge.id in doc.edges
+
+
+@pytest.mark.parametrize("root_already_collapsed", [False, True])
+def test_collapse_branch_intent_undo_redo_tracks_all_descendants(root_already_collapsed):
+    import asyncio
+    from backend.tests.test_canvas import make_bus_with_dispatcher
+
+    bus, doc, _recorder, _dispatcher = make_bus_with_dispatcher()
+    root = doc.add_chat_node(0, 0, "root", True)
+    child = doc.add_chat_node(0, 250, "child", False, parent_id=root.id)
+    grandchild = doc.add_chat_node(0, 500, "grandchild", True, parent_id=child.id)
+    doc.nodes[root.id].is_collapsed = root_already_collapsed
+    before = {node.id: node.is_collapsed for node in (root, child, grandchild)}
+
+    asyncio.run(bus.dispatch_intent("scene", "collapseBranch", [root.id, True]))
+    assert all(doc.nodes[nid].is_collapsed for nid in before)
+    assert doc.command_log and doc.command_log[-1].command_type == "collapseBranch"
+
+    doc.undo()
+    assert {nid: doc.nodes[nid].is_collapsed for nid in before} == before
+    doc.redo()
+    assert all(doc.nodes[nid].is_collapsed for nid in before)
+
+
+def test_organize_docked_child_follows_explicit_primary_parent():
+    doc = SceneDocument()
+    first = doc.add_chat_node(0, 0, "first", True)
+    second = doc.add_chat_node(1000, 0, "second", True)
+    thinking = doc.add_thinking_node(0, 300, "draft thinking", first.id)
+    new_parent = doc.connect(second.id, thinking.id)
+    doc.set_edge_role(new_parent.id, "primary")
+    doc.set_node_docked(thinking.id, True)
+
+    doc.organize()
+
+    assert (doc.nodes[thinking.id].x, doc.nodes[thinking.id].y) == (
+        doc.nodes[second.id].x, doc.nodes[second.id].y
+    )

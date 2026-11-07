@@ -187,9 +187,12 @@ def register_conversation_intents(
         await publish_scene()
 
     async def collapse_branch(node_id, collapsed):
+        # Collapse Branch mutates *every* chat descendant in-place, not just
+        # its root. Snapshot all of them so Ctrl+Z restores each old flag,
+        # including when the root was already in the requested state.
         document.record_command(
             "collapseBranch", "user", lambda: document.collapse_branch(node_id, collapsed),
-            node_ids=[node_id],
+            node_ids=document._chat_subtree_ids(node_id),
         )
         await publish_scene()
 
