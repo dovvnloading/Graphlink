@@ -261,6 +261,24 @@ def test_fixed_node_stays_unchanged_when_the_rest_reflows():
     assert child not in plan.changed_ids
 
 
+
+def test_pin_nested_container_freezes_its_entire_membership_region():
+    doc, _root, child, other = _sample()
+    frame = doc.create_frame([child, other])
+    container = doc.create_container([frame.id])
+    doc.add_chat_node(2400, 800, "outside", True)
+
+    pinned = {container.id, frame.id, child, other}
+    before = {nid: _layout_geometry(doc.nodes[nid]) for nid in pinned}
+    plan = make_organization_plan(doc, "all", fixed_node_ids=[container.id])
+
+    assert pinned.isdisjoint(plan.changed_ids)
+    assert {nid: _layout_geometry(plan.nodes[nid]) for nid in pinned} == before
+    apply_organization_plan(doc, plan)
+    assert {nid: _layout_geometry(doc.nodes[nid]) for nid in pinned} == before
+
+
+
 def test_stale_plan_rejected_without_partial_writes():
     doc, root, _child, _other = _sample()
     plan = make_organization_plan(doc)
