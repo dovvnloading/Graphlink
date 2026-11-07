@@ -310,7 +310,7 @@ export function AppBar({ store }: { store: SceneStore }) {
   // Overlay-opening actions (Pins/View/Plugins/About/Help) close the open
   // menu for free via OverlayProvider's own single-open policy - opening any
   // surface replaces whatever else was open, "toolbar-overflow" included.
-  // Plain actions (Organize/Zoom/Fit/Export) never touch the overlay
+  // Plain actions (Zoom/Fit/Export) never touch the overlay
   // registry at all, so their menu copies close it explicitly.
   const closeMenu = () => overlays.close();
   const menuItem = (surface: string) =>
