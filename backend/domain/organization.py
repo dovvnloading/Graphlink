@@ -1,0 +1,383 @@
+"""Side-effect-free, scope-aware organization plans for the scene canvas.
+
+A preview is calculated on a shallow *structural* clone: node objects and
+mutable group state are copied, but histories, assets and undo stacks are not.
+No preview can change the live graph, its connections, or its membership.
+
+Only the server computes placements. Applying a preview re-computes the plan
+against a geometry/topology fingerprint and copies *layout fields only*.
+No client-provided coordinates are accepted on the write path.
+"""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
+
+from backend.domain.layout import COMPONENT_GAP, NODE_GAP_X, NODE_GAP_Y, _rects_clear
+from backend.domain.model import SceneError, SceneNode
+from backend.domain.node_states import FrameState, GroupSizedState
+from backend.domain.structure import primary_parent_edges
+
+if TYPE_CHECKING:
+    from backend.domain.graph import SceneDocument
+
+OrganizationScope = Literal["all", "branch", "group", "selection"]
+_GROUP_KINDS = frozenset(("frame", "container"))
+
+
+def _layout_geometry(node: SceneNode) -> tuple[object, ...]:
+    """The exact mutation footprint of the organization engine."""
+    state = node.state
+    group_fields: tuple[object, ...] = ()
+    if isinstance(state, GroupSizedState):
+        group_fields = (state.group_width, state.group_height)
+        if isinstance(state, FrameState):
+            group_fields += (
+                state.group_manual_x, state.group_manual_y,
+                state.group_manual_width, state.group_manual_height,
+            )
+    return (node.x, node.y, *group_fields)
+
+
+def layout_fingerprint(document: SceneDocument) -> str:
+    """Hash *all* facts that can affect planning or invalidate its preview."""
+    nodes = tuple(
+        (
+            n.id, n.kind, n.title, n.is_docked, n.is_collapsed,
+            tuple(n.item_ids), _layout_geometry(n), document.node_footprint(n),
+        )
+        for n in document.nodes.values()
+    )
+    edges = tuple((e.id, e.source, e.target) for e in document.edges.values())
+    sizes = tuple(sorted(document.measured_sizes.items()))
+    return hashlib.sha256(repr((nodes, edges, sizes)).encode("utf-8")).hexdigest()
+
+
+def _clone_for_layout(document: SceneDocument) -> SceneDocument:
+    """Clone layout-mutable state, never any real user content or asset bytes."""
+    shadow = copy.copy(document)
+    shadow.nodes = {}
+    for node_id, original in document.nodes.items():
+        node = copy.copy(original)
+        # Group recomputation changes state fields in-place. Copying the
+        # state avoids changing the live document while previewing.
+        if isinstance(node.state, GroupSizedState):
+            node.state = copy.copy(node.state)
+        shadow.nodes[node_id] = node
+    return shadow
+
+
+def _group_order(document: SceneDocument) -> list[str]:
+    """Innermost groups before parents; detect corrupt legacy membership."""
+    groups = {
+        node_id: node for node_id, node in document.nodes.items()
+        if node.kind in _GROUP_KINDS
+    }
+    dependencies = {
+        node_id: {member for member in node.item_ids if member in groups}
+        for node_id, node in groups.items()
+    }
+    ordered: list[str] = []
+    remaining = dict(dependencies)
+    while remaining:
+        ready = [node_id for node_id, members in remaining.items() if not members]
+        if not ready:
+            raise SceneError("cannot organize cyclic group membership")
+        ordered.extend(ready)
+        for node_id in ready:
+            del remaining[node_id]
+        for members in remaining.values():
+            members.difference_update(ready)
+    return ordered
+
+
+def _affected_groups(document: SceneDocument, movable: set[str]) -> set[str]:
+    """All enclosing groups, including the parents of changed groups."""
+    affected: set[str] = set()
+    touched = set(movable)
+    changed = True
+    while changed:
+        changed = False
+        for node_id, node in document.nodes.items():
+            if (
+                node.kind in _GROUP_KINDS
+                and node_id not in affected
+                and touched.intersection(node.item_ids)
+            ):
+                affected.add(node_id)
+                touched.add(node_id)
+                changed = True
+    return affected
+
+
+def _refit_groups(
+    shadow: SceneDocument,
+    original: SceneDocument,
+    affected: set[str],
+    preserve_frame_sizes: bool,
+) -> None:
+    """Derived bounds update after all leaf positions have settled."""
+    for group_id in _group_order(shadow):
+        if group_id not in affected:
+            continue
+        node = shadow.nodes[group_id]
+        state = node.state
+        if isinstance(state, FrameState):
+            # Old position anchors cannot survive a reflow without stretching
+            # the group across where its children *used* to be.
+            state.group_manual_x = None
+            state.group_manual_y = None
+            previous = original.nodes[group_id].state
+            if preserve_frame_sizes and isinstance(previous, FrameState):
+                state.group_manual_width = previous.group_manual_width
+                state.group_manual_height = previous.group_manual_height
+            else:
+                state.group_manual_width = None
+                state.group_manual_height = None
+        shadow._recompute_group_bounds(group_id)
+
+
+def _member_leaves(document: SceneDocument, group_id: str) -> set[str]:
+    """Expand group membership transitively, with visited guards."""
+    visited: set[str] = set()
+    leaves: set[str] = set()
+    pending = [group_id]
+    while pending:
+        current = pending.pop()
+        if current in visited:
+            continue
+        visited.add(current)
+        group = document.nodes.get(current)
+        if group is None or group.kind not in _GROUP_KINDS:
+            continue
+        for member_id in group.item_ids:
+            member = document.nodes.get(member_id)
+            if member is None:
+                continue
+            if member.kind in _GROUP_KINDS:
+                pending.append(member_id)
+            elif not member.is_docked:
+                leaves.add(member_id)
+    return leaves
+
+
+def _selected_leaves(
+    document: SceneDocument,
+    scope: OrganizationScope,
+    root_id: str | None,
+    node_ids: list[str] | None,
+) -> set[str]:
+    if scope == "all":
+        return {
+            n.id for n in document.nodes.values()
+            if n.kind not in _GROUP_KINDS and not n.is_docked
+        }
+    if scope == "group":
+        group = document.nodes.get(root_id) if root_id else None
+        if group is None or group.kind not in _GROUP_KINDS:
+            raise SceneError("group organization requires a frame or container")
+        return _member_leaves(document, group.id)
+    if scope == "selection":
+        if not node_ids:
+            raise SceneError("selection organization requires at least one node")
+        missing = [node_id for node_id in node_ids if node_id not in document.nodes]
+        if missing:
+            raise SceneError(f"unknown selected node: {missing[0]}")
+        selected: set[str] = set()
+        for node_id in node_ids:
+            node = document.nodes[node_id]
+            if node.kind in _GROUP_KINDS:
+                selected.update(_member_leaves(document, node_id))
+            elif not node.is_docked:
+                selected.add(node_id)
+        return selected
+    if scope == "branch":
+        root = document.nodes.get(root_id) if root_id else None
+        if root is None or root.kind in _GROUP_KINDS or root.is_docked:
+            raise SceneError("branch organization requires a visible content node")
+        eligible = {
+            n.id for n in document.nodes.values()
+            if n.kind not in _GROUP_KINDS and not n.is_docked
+        }
+        parent_edges = primary_parent_edges(document.nodes, document.edges, eligible)
+        children: dict[str, list[str]] = {}
+        for target, edge in parent_edges.items():
+            children.setdefault(edge.source, []).append(target)
+        selected = {root.id}
+        stack = [root.id]
+        while stack:
+            current = stack.pop()
+            for child in children.get(current, []):
+                if child not in selected:
+                    selected.add(child)
+                    stack.append(child)
+        return selected
+    raise SceneError(f"unknown organization scope: {scope}")
+
+
+def _place_subset(
+    shadow: SceneDocument,
+    original: SceneDocument,
+    movable: set[str],
+) -> None:
+    """Run the existing measured, deterministic tree packer *only* on movable leaves.
+
+    Anchor the new arrangement near its former top-left and translate the
+    whole arrangement past fixed obstacles. The block moves as a unit so a
+    collision never distorts the edges' relative geometry.
+    """
+    if not movable:
+        return
+    original_left = min(original.nodes[nid].x for nid in movable)
+    original_top = min(original.nodes[nid].y for nid in movable)
+    subset = copy.copy(shadow)
+    subset.nodes = {nid: shadow.nodes[nid] for nid in shadow.nodes if nid in movable}
+    subset.edges = {
+        eid: e for eid, e in shadow.edges.items()
+        if e.source in movable and e.target in movable
+    }
+    subset.organize_layout()
+
+    layout_left = min(shadow.nodes[nid].x for nid in movable)
+    layout_top = min(shadow.nodes[nid].y for nid in movable)
+    dx, dy = original_left - layout_left, original_top - layout_top
+    for nid in movable:
+        node = shadow.nodes[nid]
+        node.x += dx
+        node.y += dy
+
+    # Expanded group boxes are backgrounds, not collision obstacles.
+    # Docked nodes render inside their parent; a collapsed group *is*
+    # visible and must be treated as a solid pill.
+    obstacles = []
+    for node in original.nodes.values():
+        if node.id in movable or node.is_docked:
+            continue
+        if node.kind in _GROUP_KINDS and not node.is_collapsed:
+            continue
+        width, height = original.node_footprint(node)
+        obstacles.append((node.x, node.y, width, height))
+
+    left = min(shadow.nodes[nid].x for nid in movable)
+    top = min(shadow.nodes[nid].y for nid in movable)
+    right = max(shadow.nodes[nid].x + shadow.node_footprint(shadow.nodes[nid])[0] for nid in movable)
+    bottom = max(shadow.nodes[nid].y + shadow.node_footprint(shadow.nodes[nid])[1] for nid in movable)
+    width, height = right - left, bottom - top
+    # Once this bounding rect clears an obstacle to its right it can never
+    # collide with that obstacle again. Thus <= #obstacles advances suffice.
+    for _ in range(len(obstacles) + 1):
+        blockers = [
+            rect for rect in obstacles
+            if not _rects_clear(left, top, width, height, *rect)
+        ]
+        if not blockers:
+            break
+        new_left = min(rect[0] + rect[2] + NODE_GAP_X for rect in blockers)
+        shift = new_left - left
+        left = new_left
+        for nid in movable:
+            shadow.nodes[nid].x += shift
+    else:
+        raise SceneError("could not find space for organized selection")
+
+
+@dataclass(frozen=True)
+class OrganizationPlan:
+    source_fingerprint: str
+    plan_id: str
+    scope: OrganizationScope
+    selected_ids: frozenset[str]
+    changed_ids: frozenset[str]
+    nodes: dict[str, SceneNode]
+
+    def preview(self, document: SceneDocument) -> dict[str, object]:
+        rows: list[dict[str, object]] = []
+        for nid, node in self.nodes.items():
+            if node.is_docked:
+                continue
+            width, height = document.node_footprint(node)
+            if isinstance(node.state, GroupSizedState) and not node.is_collapsed:
+                width = float(node.state.group_width or width)
+                height = float(node.state.group_height or height)
+            rows.append({
+                "id": nid, "kind": node.kind, "title": node.title[:80],
+                "x": node.x, "y": node.y, "width": width, "height": height,
+                "changed": nid in self.changed_ids,
+            })
+        return {
+            "fingerprint": self.source_fingerprint,
+            "planId": self.plan_id,
+            "scope": self.scope,
+            "selectedCount": len(self.selected_ids),
+            "movedCount": len(self.changed_ids),
+            "nodes": rows,
+        }
+
+
+def make_organization_plan(
+    document: SceneDocument,
+    scope: OrganizationScope = "all",
+    *,
+    root_id: str | None = None,
+    node_ids: list[str] | None = None,
+    fixed_node_ids: list[str] | None = None,
+    preserve_frame_sizes: bool = True,
+) -> OrganizationPlan:
+    """Plan a scoped organization. No mutation of document is permitted."""
+    source_fingerprint = layout_fingerprint(document)
+    selected = _selected_leaves(document, scope, root_id, node_ids)
+    fixed = set(fixed_node_ids or ())
+    unknown = fixed.difference(document.nodes)
+    if unknown:
+        raise SceneError(f"unknown fixed node: {sorted(unknown)[0]}")
+    movable = selected - fixed
+    shadow = _clone_for_layout(document)
+
+    if scope == "all" and not fixed:
+        shadow.organize_layout()
+        if preserve_frame_sizes:
+            # Organize's historical default clears manual frame sizing.
+            # Explicit preview/apply preserves the dimensions by default.
+            _refit_groups(
+                shadow, document,
+                {nid for nid, n in shadow.nodes.items() if n.kind in _GROUP_KINDS},
+                True,
+            )
+    else:
+        _place_subset(shadow, document, movable)
+        _refit_groups(shadow, document, _affected_groups(shadow, movable), preserve_frame_sizes)
+
+    changed = frozenset(
+        nid for nid, node in shadow.nodes.items()
+        if _layout_geometry(node) != _layout_geometry(document.nodes[nid])
+    )
+    signature = hashlib.sha256(
+        repr((
+            source_fingerprint, scope, root_id, tuple(sorted(selected)),
+            tuple(sorted(fixed)), preserve_frame_sizes,
+            tuple((nid, _layout_geometry(shadow.nodes[nid])) for nid in sorted(changed)),
+        )).encode("utf-8")
+    ).hexdigest()
+    return OrganizationPlan(source_fingerprint, signature, scope, frozenset(selected), changed, shadow.nodes)
+
+
+def apply_organization_plan(document: SceneDocument, plan: OrganizationPlan) -> None:
+    """Apply *server-calculated* geometry, with an atomic stale-preview fence."""
+    if layout_fingerprint(document) != plan.source_fingerprint:
+        raise SceneError("graph changed after organization preview; preview again")
+    for nid in plan.changed_ids:
+        target = document.nodes[nid]
+        projected = plan.nodes[nid]
+        target.x, target.y = projected.x, projected.y
+        to_state, from_state = target.state, projected.state
+        if isinstance(to_state, GroupSizedState) and isinstance(from_state, GroupSizedState):
+            to_state.group_width = from_state.group_width
+            to_state.group_height = from_state.group_height
+            if isinstance(to_state, FrameState) and isinstance(from_state, FrameState):
+                to_state.group_manual_x = from_state.group_manual_x
+                to_state.group_manual_y = from_state.group_manual_y
+                to_state.group_manual_width = from_state.group_manual_width
+                to_state.group_manual_height = from_state.group_manual_height
