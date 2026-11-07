@@ -35,6 +35,35 @@ def _has_edge(document, source_id, target_id) -> bool:
 # -- per-kind node serialization ------------------------------------------
 
 
+def test_deleting_a_multi_parent_chat_removes_stale_links_before_save_and_load():
+    """Issue #471: save never serializes dead cross-links after Delete Message."""
+    doc = SceneDocument()
+    first = doc.add_chat_node(0, 0, "primary", True)
+    second = doc.add_chat_node(500, 0, "secondary", True)
+    victim = doc.add_chat_node(0, 300, "deleted", False, parent_id=first.id)
+    child = doc.add_chat_node(0, 700, "child", False, parent_id=victim.id)
+    doc.connect(second.id, victim.id)  # valid secondary incoming cross-link
+
+    doc.delete_chat_node(victim.id)
+    assert all(e.source in doc.nodes and e.target in doc.nodes for e in doc.edges.values())
+    assert len(doc.edges) == 1
+
+    saved = build_chat_data(doc)
+    assert len(saved["edges"]) == 1
+    assert saved["edges"][0]["source"] == first.id
+    assert saved["edges"][0]["target"] == child.id
+
+    restored = _round_trip(doc)
+    restored_first = next(n for n in restored.nodes.values() if n.content == "primary")
+    restored_child = next(n for n in restored.nodes.values() if n.content == "child")
+    assert len(restored.edges) == 1
+    assert _has_edge(restored, restored_first.id, restored_child.id)
+    assert all(
+        e.source in restored.nodes and e.target in restored.nodes
+        for e in restored.edges.values()
+    )
+
+
 def test_chat_node_serializes_is_user_and_content():
     doc = SceneDocument()
     doc.add_chat_node(0, 0, "hello", is_user=True)
