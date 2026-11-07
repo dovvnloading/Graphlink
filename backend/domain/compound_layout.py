@@ -26,12 +26,13 @@ import copy
 from collections.abc import Mapping
 from typing import TYPE_CHECKING
 
+from backend.domain._composed import SceneDocumentParts
+
 from backend.domain.containment import group_dependency_order, hidden_group_descendants
 from backend.domain.layout import COMPONENT_GAP, NODE_GAP_X
 from backend.domain.model import GROUP_PADDING, GROUP_PADDING_TOP
 
 if TYPE_CHECKING:
-    from backend.domain.graph import SceneDocument
     from backend.domain.model import SceneNode
 
 
@@ -39,7 +40,7 @@ _GROUP_KINDS = frozenset(("frame", "container"))
 
 
 def _visible_group_members(
-    document: SceneDocument,
+    document: SceneDocumentParts,
     eligible: set[str],
 ) -> dict[str, set[str]]:
     """Transitive visible leaf membership in one group-DAG pass."""
@@ -80,7 +81,7 @@ def _structural_root(
 
 
 def _connected_islands(
-    document: SceneDocument,
+    document: SceneDocumentParts,
     group_members: Mapping[str, set[str]],
     eligible: set[str],
 ) -> list[tuple[set[str], set[str]]]:
@@ -129,7 +130,7 @@ def _connected_islands(
 
 
 def organize_compound_islands(
-    document: SceneDocument,
+    document: SceneDocumentParts,
     layout_nodes: Mapping[str, SceneNode],
     parent_of: Mapping[str, str],
 ) -> bool:
