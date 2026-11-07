@@ -11,6 +11,7 @@ unchanged.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Literal
 
 from backend.domain.node_states import NodeState
 
@@ -242,8 +243,16 @@ class SceneNode:
     state: NodeState | None = None
 
 
+# Missing role in pre-v2 saves means "legacy", retaining the exact historical
+# first-eligible-incoming-parent interpretation until explicitly classified.
+# A secondary parent is a DAG relationship, not a second tree ancestor.
+EdgeRole = Literal["legacy", "primary", "secondary", "reference", "association"]
+EDGE_ROLES = frozenset(("legacy", "primary", "secondary", "reference", "association"))
+
+
 @dataclass
 class SceneEdge:
     id: str
     source: str
     target: str
+    role: EdgeRole = "legacy"
