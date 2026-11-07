@@ -38,18 +38,21 @@ def test_issue_473_frame_with_members_across_two_structural_trees() -> None:
     doc, ancestor, descendant, unrelated, group_id = _cross_tree_frame()
     before = copy.deepcopy(doc.nodes)
     before_edges = copy.deepcopy(doc.edges)
+    before_sizes = dict(doc.measured_sizes)
     assert (group_id, unrelated) not in visual_membership_violations(doc)
     assert (group_id, ancestor) not in visual_membership_violations(doc)
 
     plan = make_organization_plan(doc, "all")
     assert doc.nodes == before, "a preview cannot mutate the original graph"
     assert doc.edges == before_edges
+    assert doc.measured_sizes == before_sizes, "fallback observations are shadow-only"
     projected = copy.copy(doc)
     projected.nodes = plan.nodes
     assert (group_id, unrelated) not in visual_membership_violations(projected)
     assert (group_id, ancestor) not in visual_membership_violations(projected)
 
     apply_organization_plan(doc, plan)
+    assert doc.measured_sizes == before_sizes
     assert not visual_membership_violations(doc)
     group = doc.nodes[group_id]
     assert descendant in group.item_ids and len(group.item_ids) == 2
