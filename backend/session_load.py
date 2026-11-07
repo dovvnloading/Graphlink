@@ -186,7 +186,7 @@ import logging
 import math
 import re
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from backend.canvas import (
     ArtifactState,
@@ -207,6 +207,7 @@ from backend.canvas import (
     _content_codec,
     _placeholder_chart_data,
 )
+from backend.domain.model import EDGE_ROLES, EdgeRole
 from backend.domain.node_access import with_state
 # Not re-exported by backend.canvas, unlike the kinds above - imported
 # from the domain package directly, as session_save.py does.
@@ -1692,7 +1693,13 @@ def _restore_flat_edges(
         if source_id is None or target_id is None or source_id == target_id:
             continue
         try:
-            document.connect(source_id, target_id)
+            edge = document.connect(source_id, target_id)
+            role = entry.get("role", "legacy")
+            if isinstance(role, str) and role in EDGE_ROLES:
+                # Nodes can already have been connected by their legacy
+                # branch restorer; the authoritative flat list still wins
+                # for edge semantics. Unknown roles degrade to legacy.
+                edge.role = cast(EdgeRole, role)
         except Exception:
             continue
     return True
