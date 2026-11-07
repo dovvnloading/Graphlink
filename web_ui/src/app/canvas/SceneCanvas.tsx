@@ -1118,7 +1118,12 @@ export function toFlowNodes(
     // filters a docked node's edges generically - a kind-specific check here
     // would leave a docked non-thinking node rendered with no edge to it the
     // moment any future node type wires up a real onDock action.
-    if (n.isDocked || collapsedHiddenIds.has(n.id)) continue;
+    // Keep collapsed members in React Flow's *internal* node collection,
+    // marked hidden, instead of removing them. Group-drag middleware uses
+    // this collection to carry every transitive member in the same atomic
+    // gesture; omitting them makes a collapsed pill drift away from its
+    // content and snap back after expansion.
+    if (n.isDocked) continue;
     if (n.kind === "chat") {
       // dockedChildren: this chat node's own edges whose target is currently
       // docked - the new stack's equivalent of the legacy scene's per-node
@@ -1978,7 +1983,16 @@ export function toFlowNodes(
   }
 
   pruneDispatcherCache(cache, nodesById);
-  return flowNodes;
+  // React Flow's hidden flag unmounts cards without deleting their internal
+  // records. This preserves nested group-drag propagation and the ability
+  // to commit hidden members' moved coordinates. Apply it after cache
+  // lookups so a parent's collapse invalidates visibility even when a
+  // member's own SceneNodeRow reference did not change.
+  return collapsedHiddenIds.size === 0
+    ? flowNodes
+    : flowNodes.map((node) => (
+      collapsedHiddenIds.has(node.id) ? { ...node, hidden: true, selected: false } : node
+    ));
 }
 
 // R5.1: the onSelectionChange callback's actual logic, pulled out standalone
