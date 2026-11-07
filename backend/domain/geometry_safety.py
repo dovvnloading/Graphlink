@@ -47,6 +47,11 @@ def validate_layout_geometry(document: SceneDocumentParts) -> None:
     expansion cannot reveal geometry polluted by an untrusted size report.
     This function is read-only and never repairs a broken graph silently.
     """
+    # Report a corrupt cached dimension before its invalid value is
+    # picked up as a derived footprint (a more actionable error).
+    for node_id, (w, h) in document.measured_sizes.items():
+        if not valid_measured_dimension(w) or not valid_measured_dimension(h):
+            raise SceneError(f"invalid measured geometry for node {node_id}")
     for node in document.nodes.values():
         finite_float(node.x, f"node {node.id} x")
         finite_float(node.y, f"node {node.id} y")
@@ -78,6 +83,3 @@ def validate_layout_geometry(document: SceneDocumentParts) -> None:
                      limit=MAX_DIMENSION, positive=True)
         finite_float(node.x + w, f"node {node.id} right edge")
         finite_float(node.y + h, f"node {node.id} bottom edge")
-    for node_id, (w, h) in document.measured_sizes.items():
-        if not valid_measured_dimension(w) or not valid_measured_dimension(h):
-            raise SceneError(f"invalid measured geometry for node {node_id}")
