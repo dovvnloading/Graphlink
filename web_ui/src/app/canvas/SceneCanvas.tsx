@@ -2013,7 +2013,13 @@ export function handleSelectionChange(store: SceneStore, nodes: { id: string }[]
 export function groupDragKindOf(node: SceneFlowNode | undefined): "frame" | "container" | null {
   if (!node) return null;
   if (node.type === "container") return "container";
-  if (node.type === "frame" && (node.data as { isLocked?: boolean }).isLocked) return "frame";
+  // A collapsed pill stands for the whole group even when its expanded
+  // frame is unlocked. Carry latent members with the pill to ensure that
+  // expanding after a drag does not jump back to their old coordinates.
+  if (node.type === "frame" && (
+    (node.data as { isLocked?: boolean }).isLocked
+    || (node.data as { isCollapsed?: boolean }).isCollapsed
+  )) return "frame";
   return null;
 }
 
