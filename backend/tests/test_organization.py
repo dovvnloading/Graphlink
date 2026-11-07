@@ -12,7 +12,7 @@ import pytest
 
 from backend.canvas import SceneDocument
 from backend.domain.model import SceneError
-from backend.domain.node_states import FrameState
+from backend.domain.node_states import ChatState, FrameState
 from backend.domain.organization import (
     _layout_geometry,
     apply_organization_plan,
@@ -145,7 +145,9 @@ def test_content_changes_expire_a_preview_even_before_resize_reporting(mutation)
     elif mutation == "history":
         doc.nodes[root].history.append({"role": "assistant", "content": "new turn"})
     elif mutation == "state":
-        doc.nodes[root].state.branch_status = "accepted"
+        chat = doc.nodes[root]
+        assert isinstance(chat.state, ChatState)
+        chat.state.branch_status = "accepted"
     else:
         doc.image_assets["new"] = (b"updated png", "image/png")
     with pytest.raises(SceneError, match="graph changed"):
