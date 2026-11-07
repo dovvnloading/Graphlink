@@ -3,6 +3,7 @@ import { act, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   applyGroupDragDelta,
+  collectTransitiveMemberIds,
   buildDragSizeCache,
   computeDimmedNodeIds,
   computeFilteredOutNodeIds,
@@ -1620,8 +1621,18 @@ describe("Collapsed semantic-group visibility (#474)", () => {
       { id: "e2", source: "nested", target: "outside" },
     ];
     const collapsed = baseScene({ nodes, edges });
-    const visibleIds = toFlowNodes(collapsed, makeStore()).map((node) => node.id);
-    expect(visibleIds).toEqual(["outer", "outside"]);
+    const allFlowNodes = toFlowNodes(collapsed, makeStore());
+    expect(allFlowNodes.filter((n) => !n.hidden).map((n) => n.id)).toEqual(["outer", "outside"]);
+    expect(allFlowNodes.filter((n) => n.hidden).map((n) => n.id)).toEqual(
+      ["inner", "leaf", "nested"],
+    );
+    const outer = allFlowNodes.find((n) => n.id === "outer")!;
+    expect(collectTransitiveMemberIds(allFlowNodes, outer)).toEqual(
+      new Set(["inner", "nested", "leaf"]),
+    );
+    expect(
+      applyGroupDragDelta(allFlowNodes, "outer", { x: 200, y: 150 }, true).map((change) => change.id),
+    ).toEqual(["inner", "nested", "leaf"]);
     expect(toFlowEdges(collapsed, null)).toEqual([]);
 
     const expanded = baseScene({
@@ -1644,9 +1655,11 @@ describe("Collapsed semantic-group visibility (#474)", () => {
       ],
       edges: [{ id: "cross", source: "shared", target: "other" }],
     });
-    expect(toFlowNodes(scene, makeStore()).map((node) => node.id)).toEqual(
+    const flowNodes = toFlowNodes(scene, makeStore());
+    expect(flowNodes.filter((node) => !node.hidden).map((node) => node.id).toEqual(
       ["frame", "container", "other"],
     );
+    expect(flowNodes.find((node) => node.id === "shared")?.hidden).toBe(true);
     expect(toFlowEdges(scene, null)).toEqual([]);
   });
 });
