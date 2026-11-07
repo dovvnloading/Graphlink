@@ -115,7 +115,7 @@ def test_unresolvable_scoped_group_visual_containment_rejects_without_mutating()
     """A group spanning fixed nodes cannot silently engulf a bystander."""
     doc = SceneDocument()
     first = doc.add_chat_node(0, 0, "member A", True)
-    bystander = doc.add_chat_node(900, 0, "unrelated", True)
+    doc.add_chat_node(900, 0, "unrelated", True)
     second = doc.add_chat_node(1800, 0, "member B", True)
     frame = doc.create_frame([first.id, second.id])
     # The original graph is already visually ambiguous; a scoped organize
