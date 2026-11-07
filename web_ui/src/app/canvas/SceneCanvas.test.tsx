@@ -2347,6 +2347,12 @@ describe("groupDragKindOf (R6.1 group-drag eligibility)", () => {
     expect(groupDragKindOf(flowNode({ type: "frame", data: { isLocked: false } } as Partial<SceneFlowNode>))).toBeNull();
   });
 
+  it("carries latent members when a collapsed frame is unlocked", () => {
+    expect(groupDragKindOf(flowNode({
+      type: "frame", data: { isLocked: false, isCollapsed: true, itemIds: ["member"] },
+    } as Partial<SceneFlowNode>))).toBe("frame");
+  });
+
   it("returns 'container' unconditionally (no lock concept)", () => {
     expect(groupDragKindOf(flowNode({ type: "container", data: {} } as Partial<SceneFlowNode>))).toBe("container");
   });
