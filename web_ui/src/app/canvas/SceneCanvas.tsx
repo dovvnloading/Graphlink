@@ -2342,7 +2342,10 @@ export function withPreservedFlowState(
   const merged = rebuilt.map((n) => {
     const prev = currentById.get(n.id);
     if (!prev || prev === n) return n;
-    const selected = prev.selected === true;
+    // A member becoming hidden under its collapsed group cannot remain
+    // selected just because the previous React Flow instance had it
+    // selected: actions and keyboard navigation must target visible nodes.
+    const selected = prev.selected === true && n.hidden !== true;
     const measured = n.measured === undefined ? prev.measured : undefined;
     const preservePosition = pendingSettledIds?.has(n.id) === true;
     if (!selected && measured === undefined && !preservePosition) return n;
