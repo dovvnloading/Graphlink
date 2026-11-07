@@ -17,6 +17,7 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from backend.domain.containment import group_dependency_order, hidden_group_descendants
 from backend.domain.geometry_safety import validate_layout_geometry
 from backend.domain.layout import NODE_GAP_X, _rects_clear
 from backend.domain.model import SceneError, SceneNode
@@ -83,27 +84,8 @@ def _clone_for_layout(document: SceneDocument) -> SceneDocument:
 
 
 def _group_order(document: SceneDocument) -> list[str]:
-    """Innermost groups before parents; detect corrupt legacy membership."""
-    groups = {
-        node_id: node for node_id, node in document.nodes.items()
-        if node.kind in _GROUP_KINDS
-    }
-    dependencies = {
-        node_id: {member for member in node.item_ids if member in groups}
-        for node_id, node in groups.items()
-    }
-    ordered: list[str] = []
-    remaining = dict(dependencies)
-    while remaining:
-        ready = [node_id for node_id, members in remaining.items() if not members]
-        if not ready:
-            raise SceneError("cannot organize cyclic group membership")
-        ordered.extend(ready)
-        for node_id in ready:
-            del remaining[node_id]
-        for members in remaining.values():
-            members.difference_update(ready)
-    return ordered
+    """Dependency-ready group ordering, shared with the layout engine."""
+    return group_dependency_order(document.nodes)
 
 
 def _affected_groups(document: SceneDocument, movable: set[str]) -> set[str]:
@@ -136,6 +118,10 @@ def _refit_groups(
         if group_id not in affected:
             continue
         node = shadow.nodes[group_id]
+        if node.is_collapsed:
+            # A collapsed proxy retains its old anchor and latent members.
+            # Refitting it would discard the anchor used on expansion.
+            continue
         if isinstance(node.state, FrameState):
             # Old position anchors cannot survive a reflow without stretching
             # the group across where its children *used* to be.
@@ -181,16 +167,19 @@ def _selected_leaves(
     root_id: str | None,
     node_ids: list[str] | None,
 ) -> set[str]:
+    hidden = _hidden_descendants(document)
     if scope == "all":
         return {
             n.id for n in document.nodes.values()
-            if n.kind not in _GROUP_KINDS and not n.is_docked
+            if n.kind not in _GROUP_KINDS and not n.is_docked and n.id not in hidden
         }
     if scope == "group":
         group = document.nodes.get(root_id) if root_id else None
         if group is None or group.kind not in _GROUP_KINDS:
             raise SceneError("group organization requires a frame or container")
-        return _member_leaves(document, group.id)
+        if group.is_collapsed or group.id in hidden:
+            raise SceneError("expand the collapsed group before organizing its contents")
+        return _member_leaves(document, group.id) - hidden
     if scope == "selection":
         if not node_ids:
             raise SceneError("selection organization requires at least one node")
@@ -201,17 +190,19 @@ def _selected_leaves(
         for node_id in node_ids:
             node = document.nodes[node_id]
             if node.kind in _GROUP_KINDS:
-                selected.update(_member_leaves(document, node_id))
-            elif not node.is_docked:
+                if node.is_collapsed or node.id in hidden:
+                    raise SceneError("expand the collapsed group before organizing its contents")
+                selected.update(_member_leaves(document, node_id) - hidden)
+            elif not node.is_docked and node.id not in hidden:
                 selected.add(node_id)
         return selected
     if scope == "branch":
         root = document.nodes.get(root_id) if root_id else None
-        if root is None or root.kind in _GROUP_KINDS or root.is_docked:
+        if root is None or root.kind in _GROUP_KINDS or root.is_docked or root.id in hidden:
             raise SceneError("branch organization requires a visible content node")
         eligible = {
             n.id for n in document.nodes.values()
-            if n.kind not in _GROUP_KINDS and not n.is_docked
+            if n.kind not in _GROUP_KINDS and not n.is_docked and n.id not in hidden
         }
         parent_edges = primary_parent_edges(document.nodes, document.edges, eligible)
         children: dict[str, list[str]] = {}
@@ -309,30 +300,7 @@ def _rectangles_overlap(
 
 
 def _hidden_descendants(document: SceneDocument) -> set[str]:
-    """A collapsed frame/container hides all transitive members.
-
-    Dual-membership nodes are hidden if *either* one of their owners is
-    collapsed. A nested collapsed group itself is hidden when its outer
-    group is collapsed; the outer group remains visible as the proxy.
-    """
-    hidden: set[str] = set()
-    stack: list[str] = [
-        member_id
-        for node in document.nodes.values()
-        if node.kind in _GROUP_KINDS and node.is_collapsed
-        for member_id in node.item_ids
-    ]
-    while stack:
-        nid = stack.pop()
-        if nid in hidden:
-            continue
-        node = document.nodes.get(nid)
-        if node is None:
-            continue
-        hidden.add(nid)
-        if node.kind in _GROUP_KINDS:
-            stack.extend(node.item_ids)
-    return hidden
+    return hidden_group_descendants(document.nodes)
 
 
 def validate_layout_constraints(original: SceneDocument, projected: SceneDocument) -> None:
@@ -439,8 +407,9 @@ class OrganizationPlan:
 
     def preview(self, document: SceneDocument) -> dict[str, object]:
         rows: list[dict[str, object]] = []
+        hidden = hidden_group_descendants(self.nodes)
         for nid, node in self.nodes.items():
-            if node.is_docked:
+            if node.is_docked or nid in hidden:
                 continue
             width, height = document.node_footprint(node)
             if isinstance(node.state, GroupSizedState) and not node.is_collapsed:
