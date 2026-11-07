@@ -157,9 +157,9 @@ def test_undo_redo_restores_exact_prior_coordinates_and_group_dimensions():
         node_ids=list(doc.nodes),
     )
     after = {nid: _layout_geometry(n) for nid, n in doc.nodes.items()}
-    frame_state = doc.nodes[frame.id].state
-    assert isinstance(frame_state, FrameState)
-    assert frame_state.group_manual_width == 1200
+    frame_node = doc.nodes[frame.id]
+    assert isinstance(frame_node.state, FrameState)
+    assert frame_node.state.group_manual_width == 1200
     assert before != after
     doc.undo()
     assert {nid: _layout_geometry(n) for nid, n in doc.nodes.items()} == before
