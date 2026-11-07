@@ -675,6 +675,16 @@ class CommandOps(SceneDocumentParts):
             edge_before_out[eid] = edge_snapshot_before[eid]
             edge_after_out[eid] = None
 
+        # Edges were historically creation/deletion-only. Engine-v2 role
+        # edits mutate an existing edge in place, so the watched set must
+        # capture those differences exactly as it does for node edits.
+        for eid in watch_edge_ids & edge_ids_before & edge_ids_after:
+            before = edge_snapshot_before.get(eid)
+            after = self.edges.get(eid)
+            if before is not None and after is not None and before != after:
+                edge_before_out[eid] = before
+                edge_after_out[eid] = copy.deepcopy(after)
+
         asset_before_out: dict[str, "tuple[bytes, str] | None"] = {}
         asset_after_out: dict[str, "tuple[bytes, str] | None"] = {}
         for aid in asset_ids_after - asset_ids_before:
