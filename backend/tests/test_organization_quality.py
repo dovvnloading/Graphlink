@@ -18,7 +18,7 @@ def test_layout_quality_has_finite_reproducible_nonnegative_metrics() -> None:
     metrics = layout_quality(doc, plan)
     assert len(doc.command_log) == before
     for key in (
-        "diagram_area", "edge_crossings", "mean_edge_length",
+        "diagram_area", "edge_crossings", "edge_node_intersections", "mean_edge_length",
         "p95_edge_length", "mean_displacement", "p95_displacement",
         "moved_node_count",
     ):
