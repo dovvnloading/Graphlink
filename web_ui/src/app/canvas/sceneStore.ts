@@ -156,6 +156,8 @@ export interface OrganizationPreview {
   edges: Array<{ id: string; source: string; target: string }>;
 }
 
+export type EdgeRole = "legacy" | "primary" | "secondary" | "reference" | "association";
+
 export interface OrganizationOptions {
   scope: OrganizationPreview["scope"];
   rootId: string | null;
@@ -1397,6 +1399,16 @@ export class SceneStore {
 
   organizeNodes(): void {
     this.transport.fireIntent("scene", "organizeNodes", []);
+  }
+
+  /** Read the explicit semantic classification of saved graph connections. */
+  async getEdgeRoles(): Promise<Record<string, EdgeRole>> {
+    return this.transport.request("scene", "getEdgeRoles", []) as Promise<Record<string, EdgeRole>>;
+  }
+
+  /** Change an edge's ancestry semantics without deleting its connection. */
+  async setEdgeRole(edgeId: string, role: EdgeRole): Promise<void> {
+    await this.transport.request("scene", "setEdgeRole", [edgeId, role]);
   }
 
   /** Request the current server-side layout without changing the canvas. */
