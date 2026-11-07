@@ -73,7 +73,19 @@ def _clone_for_layout(document: SceneDocument) -> SceneDocument:
     shadow = copy.copy(document)
     shadow.edges = dict(document.edges)
     shadow.nodes = {}
+    # LayoutOps.node_footprint knows each card's realistic fallback width
+    # and height, whereas GroupOps._member_footprint historically uses a
+    # smaller 220x120 placeholder until the browser measures it. Those
+    # two inconsistent rectangles make the frame appear to clip its own
+    # contents after Organize. On this read-only shadow ONLY, substitute
+    # the placement footprint for any not-yet-measured ordinary card.
+    # Never change the document's own measurements or the save format.
+    shadow.measured_sizes = dict(document.measured_sizes)
     for node_id, original in document.nodes.items():
+        if original.kind not in _GROUP_KINDS and not original.is_docked:
+            shadow.measured_sizes.setdefault(
+                node_id, document.node_footprint(original),
+            )
         node = copy.copy(original)
         # Group recomputation changes state fields in-place. Copying the
         # state avoids changing the live document while previewing.
