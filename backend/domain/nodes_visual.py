@@ -17,6 +17,7 @@ from typing import Any
 
 from graphlink_chart_data import SUPPORTED_CHART_TYPES
 
+from backend.domain.geometry_safety import finite_float
 from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import (
     CHART_MAX_HEIGHT,
@@ -137,8 +138,8 @@ class VisualOps(SceneDocumentParts):
         add_chart_node's own docstring for why."""
         node = require_node(self.nodes, node_id, "chart", ChartState)
 
-        requested_width = float(width)
-        requested_height = float(height)
+        requested_width = finite_float(width, "chart width", positive=True)
+        requested_height = finite_float(height, "chart height", positive=True)
         clamped_width = min(CHART_MAX_WIDTH, max(CHART_MIN_WIDTH, requested_width))
         clamped_height = min(CHART_MAX_HEIGHT, max(CHART_MIN_HEIGHT, requested_height))
 
