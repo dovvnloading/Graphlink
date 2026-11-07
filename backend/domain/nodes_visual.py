@@ -13,10 +13,12 @@ per-kind method groups are being lifted out of SceneDocument at all.
 from __future__ import annotations
 
 import uuid
+import math
 from typing import Any
 
 from graphlink_chart_data import SUPPORTED_CHART_TYPES
 
+from backend.domain.geometry_safety import finite_float
 from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import (
     CHART_MAX_HEIGHT,
@@ -137,13 +139,17 @@ class VisualOps(SceneDocumentParts):
         add_chart_node's own docstring for why."""
         node = require_node(self.nodes, node_id, "chart", ChartState)
 
-        requested_width = float(width)
-        requested_height = float(height)
+        requested_width = finite_float(width, "chart width", positive=True)
+        requested_height = finite_float(height, "chart height", positive=True)
         clamped_width = min(CHART_MAX_WIDTH, max(CHART_MIN_WIDTH, requested_width))
         clamped_height = min(CHART_MAX_HEIGHT, max(CHART_MIN_HEIGHT, requested_height))
 
         if node.state.chart_aspect_locked and requested_width > 0 and requested_height > 0:
             aspect_ratio = requested_width / requested_height
+            # Degenerate but finite inputs can still underflow/overflow
+            # their ratio; derive a safe ratio from bounded clamped sizes.
+            if not math.isfinite(aspect_ratio) or aspect_ratio <= 0:
+                aspect_ratio = clamped_width / clamped_height
             width_from_height = clamped_height * aspect_ratio
             height_from_width = clamped_width / aspect_ratio
             if abs(width_from_height - clamped_width) < abs(height_from_width - clamped_height):
@@ -160,6 +166,9 @@ class VisualOps(SceneDocumentParts):
 
         node.state.chart_width = clamped_width
         node.state.chart_height = clamped_height
+        # Containing frames/containers must track the authoritative new
+        # chart footprint immediately, without waiting for a DOM resize.
+        self._recompute_affected_group_bounds({node_id})
 
     def toggle_chart_aspect_lock(self, node_id: str) -> None:
         """Chart kind only (SceneError otherwise). Flips chart_aspect_locked."""

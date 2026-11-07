@@ -39,6 +39,7 @@ from backend.domain.node_states import (
     GroupSizedState,
 )
 
+from backend.domain.geometry_safety import finite_float, valid_measured_dimension
 from backend.domain._composed import SceneDocumentParts
 
 
@@ -86,6 +87,13 @@ class GroupOps(SceneDocumentParts):
                 gw, gh = member.state.group_width, member.state.group_height
                 if gw is not None and gh is not None and gw > 0 and gh > 0:
                     return float(gw), float(gh)
+        # Chart wrappers have backend-controlled dimensions just like group
+        # wrappers. Measurements can lag resize_chart; never shrink an
+        # enclosing frame/container to stale client-side chart dimensions.
+        if is_node_of(member, "chart", ChartState):
+            cw, ch = member.state.chart_width, member.state.chart_height
+            if cw > 0 and ch > 0:
+                return float(cw), float(ch)
         measured = self.measured_sizes.get(member.id)
         width, height = measured if measured is not None else (None, None)
         if not (width and width > 0 and height and height > 0):
@@ -209,9 +217,9 @@ class GroupOps(SceneDocumentParts):
                 continue
             try:
                 new_size = (float(width), float(height))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 continue
-            if new_size[0] <= 0 or new_size[1] <= 0:
+            if not valid_measured_dimension(new_size[0]) or not valid_measured_dimension(new_size[1]):
                 continue
             if self.measured_sizes.get(node_id) == new_size:
                 continue
@@ -600,8 +608,10 @@ class GroupOps(SceneDocumentParts):
         own trailing recompute call."""
         node = require_node(self.nodes, node_id, "frame", FrameState)
         _, _, min_width, min_height = self._bbox_of_members(node.item_ids)
-        node.state.group_manual_width = max(float(width), min_width)
-        node.state.group_manual_height = max(float(height), min_height)
+        safe_width = finite_float(width, "frame width", positive=True)
+        safe_height = finite_float(height, "frame height", positive=True)
+        node.state.group_manual_width = max(safe_width, min_width)
+        node.state.group_manual_height = max(safe_height, min_height)
         self._recompute_affected_group_bounds({node_id}, include_touched_groups=True)
 
     def fit_frame_to_content(self, node_id: str) -> None:

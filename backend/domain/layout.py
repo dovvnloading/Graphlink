@@ -28,6 +28,8 @@ SceneDocument exactly like BranchOps/GroupOps/CommandOps.
 
 from __future__ import annotations
 
+from backend.domain.geometry_safety import validate_layout_geometry
+
 from backend.domain.model import (
     GROUP_COLLAPSED_HEIGHT,
     GROUP_COLLAPSED_WIDTH,
@@ -118,6 +120,12 @@ class LayoutOps(SceneDocumentParts):
                 gw, gh = node.state.group_width, node.state.group_height
                 if gw is not None and gh is not None and gw > 0 and gh > 0:
                     return float(gw), float(gh)
+        # Resizable charts have authoritative backend-owned wrapper sizes.
+        # A DOM measurement may still reflect the size before resize_chart.
+        if is_node_of(node, "chart", ChartState):
+            cw, ch = node.state.chart_width, node.state.chart_height
+            if cw > 0 and ch > 0:
+                return float(cw), float(ch)
         measured = self.measured_sizes.get(node.id)
         width, height = measured if measured is not None else (None, None)
         if not (width and width > 0 and height and height > 0):
@@ -280,6 +288,7 @@ class LayoutOps(SceneDocumentParts):
         group pills keep no member bbox to wrap, so they line up in a row
         below everything else. Docked nodes ride along at their parent's
         position (invisible while docked; sane if later undocked)."""
+        validate_layout_geometry(self)
         group_kinds = ("frame", "container")
         layout_nodes = {
             n.id: n for n in self.nodes.values()
@@ -442,6 +451,7 @@ class LayoutOps(SceneDocumentParts):
                 node.x, node.y = parent_node.x, parent_node.y
 
         self._organize_groups()
+        validate_layout_geometry(self)
 
     def _organize_groups(self) -> None:
         """Post-layout group pass: line collapsed pills up in a row below
