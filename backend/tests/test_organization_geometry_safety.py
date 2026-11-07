@@ -11,6 +11,7 @@ from hypothesis import given, settings, strategies as st
 from backend.canvas import SceneDocument
 from backend.domain.geometry_safety import MAX_MEASURED_DIMENSION, validate_layout_geometry
 from backend.domain.model import SceneError
+from backend.domain.node_states import ChartState, FrameState, ContainerState
 from backend.domain.organization import make_organization_plan, apply_organization_plan
 
 
@@ -18,7 +19,7 @@ def test_non_finite_report_does_not_corrupt_layout() -> None:
     doc = SceneDocument()
     root = doc.add_chat_node(0, 0, "root", True)
     for value in (float("inf"), float("-inf"), float("nan"), 0, -5, 1e300, "not a number"):
-        assert not doc.set_measured_node_sizes([(root.id, value, 500)])
+        assert not doc.set_measured_node_sizes([(root.id, value, 500)])  # type: ignore[list-item]
         assert root.id not in doc.measured_sizes
     doc.organize()
     assert math.isfinite(root.x) and math.isfinite(root.y)
@@ -117,6 +118,9 @@ def test_chart_resize_immediately_refits_nested_groups_and_preview() -> None:
     doc.set_measured_node_sizes([(chart.id, *old_chart_size)])
     doc.resize_chart(chart.id, 1600, 1000)
 
+    assert isinstance(chart.state, ChartState)
+    assert isinstance(frame.state, FrameState)
+    assert isinstance(outer.state, ContainerState)
     actual = (chart.state.chart_width, chart.state.chart_height)
     assert actual != old_chart_size
     assert doc.node_footprint(chart) == actual
