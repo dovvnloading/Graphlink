@@ -1656,7 +1656,7 @@ describe("Collapsed semantic-group visibility (#474)", () => {
       edges: [{ id: "cross", source: "shared", target: "other" }],
     });
     const flowNodes = toFlowNodes(scene, makeStore());
-    expect(flowNodes.filter((node) => !node.hidden).map((node) => node.id).toEqual(
+    expect(flowNodes.filter((node) => !node.hidden).map((node) => node.id)).toEqual(
       ["frame", "container", "other"],
     );
     expect(flowNodes.find((node) => node.id === "shared")?.hidden).toBe(true);
