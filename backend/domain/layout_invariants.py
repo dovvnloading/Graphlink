@@ -89,13 +89,27 @@ def validate_no_new_false_containment(
     original: SceneDocumentParts,
     projected: SceneDocumentParts,
 ) -> None:
-    """Reject a preview before Apply if it newly encloses any nonmember."""
-    added = (
-        visual_membership_violations(projected)
-        - visual_membership_violations(original)
+    """Reject any false containment in groups handled by compound packing.
+
+    A legacy single-tree frame may deliberately be manually expanded over
+    an unrelated content card, or be resized around an attached chart with
+    an outgoing edge to its external parent. A universal validator without
+    a matching constraint-aware solver would reject formerly-valid normal
+    layouts; the old experimental PR #478 failed in exactly that way.
+    Restrict this hard gate to cross-tree groups actually handled by the
+    new island solver. Full-scene constraints remain a separate #476 phase.
+    """
+    from backend.domain.compound_layout import cross_tree_group_ids
+
+    constrained = cross_tree_group_ids(original)
+    if not constrained:
+        return
+    violations = sorted(
+        (gid, nid) for gid, nid in visual_membership_violations(projected)
+        if gid in constrained
     )
-    if added:
-        gid, outsider = sorted(added)[0]
+    if violations:
+        gid, outsider = violations[0]
         raise SceneError(
             f"organization would visually enclose unrelated node {outsider} "
             f"inside group {gid}"
