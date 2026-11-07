@@ -264,6 +264,43 @@ def test_delete_chat_node_reparents_children_to_the_deleted_nodes_parent():
     assert not any(e.target == b.id or e.source == b.id for e in doc.edges.values())
 
 
+def test_delete_chat_node_drops_all_extra_incoming_links_and_only_reparents_primary_children():
+    """Issue #471: a user-added non-primary incoming link must not dangle."""
+    doc = SceneDocument()
+    primary = doc.add_chat_node(0, 0, "primary", True)
+    secondary = doc.add_chat_node(700, 0, "second parent", True)
+    content = doc.add_node(1200, 0, "content cross-link")
+    note = doc.add_note(1500, 0)
+    victim = doc.add_chat_node(0, 500, "delete me", False, parent_id=primary.id)
+    child = doc.add_chat_node(50, 900, "surviving reply", False, parent_id=victim.id)
+
+    secondary_edge = doc.connect(secondary.id, victim.id)
+    content_edge = doc.connect(content.id, victim.id)
+    note_edge = doc.connect(note.id, victim.id)
+    unrelated = doc.connect(secondary.id, content.id)
+    incident_ids = {
+        e.id for e in doc.edges.values()
+        if e.source == victim.id or e.target == victim.id
+    }
+    assert len(incident_ids) == 5  # primary, secondary, content, note, child
+
+    doc.delete_chat_node(victim.id)
+
+    assert victim.id not in doc.nodes
+    assert not incident_ids.intersection(doc.edges)
+    assert all(
+        edge.source in doc.nodes and edge.target in doc.nodes
+        for edge in doc.edges.values()
+    )
+    assert unrelated.id in doc.edges
+    assert all(e.id not in doc.edges for e in (secondary_edge, content_edge, note_edge))
+    assert any(e.source == primary.id and e.target == child.id for e in doc.edges.values())
+    assert not any(
+        e.source in (secondary.id, content.id, note.id) and e.target == child.id
+        for e in doc.edges.values()
+    )
+
+
 def test_delete_chat_node_at_the_root_makes_children_new_roots():
     doc = SceneDocument()
     root = doc.add_chat_node(0, 0, "root", True)
@@ -2415,6 +2452,60 @@ def test_update_pin_intent_renames_and_validates():
         assert pin["note"] == "a note"
         with pytest.raises(Exception):
             await bus.dispatch_intent("scene", "updatePin", [pin_id, "   ", ""])
+
+    asyncio.run(run())
+
+
+def test_delete_chat_node_intent_undo_and_redo_preserve_all_original_incoming_links():
+    """One user delete + undo/redo restores exact edge identities and groups."""
+    async def run():
+        bus, document, recorder = make_bus()
+        primary = document.add_chat_node(0, 0, "primary", True)
+        alternate = document.add_chat_node(550, 0, "alternate", True)
+        note = document.add_note(1000, 0)
+        victim = document.add_chat_node(0, 500, "victim", False, parent_id=primary.id)
+        child = document.add_chat_node(0, 900, "child", False, parent_id=victim.id)
+        manual_link = document.connect(alternate.id, victim.id)
+        note_link = document.connect(note.id, victim.id)
+        frame = document.create_frame([victim.id])
+        before_edges = copy.deepcopy(document.edges)
+        assert manual_link.id in before_edges and note_link.id in before_edges
+
+        await bus.dispatch_intent("scene", "deleteChatNode", [victim.id])
+        assert document.command_log[-1].command_type == "deleteChatNode"
+        assert victim.id not in document.nodes
+        assert frame.id not in document.nodes  # cascade-deleted empty group
+        assert all(
+            edge.source in document.nodes and edge.target in document.nodes
+            for edge in document.edges.values()
+        )
+        assert manual_link.id not in document.edges
+        assert note_link.id not in document.edges
+        assert any(
+            e.source == primary.id and e.target == child.id
+            for e in document.edges.values()
+        )
+        assert recorder.topics_seen().count("scene") == 1
+        deleted_edges = copy.deepcopy(document.edges)
+
+        await bus.dispatch_intent("scene", "undo", [])
+        assert victim.id in document.nodes
+        assert frame.id in document.nodes
+        assert document.nodes[frame.id].item_ids == [victim.id]
+        assert document.edges == before_edges
+        assert not any(
+            e.source == primary.id and e.target == child.id
+            for e in document.edges.values()
+        )
+
+        await bus.dispatch_intent("scene", "redo", [])
+        assert victim.id not in document.nodes
+        assert frame.id not in document.nodes
+        assert document.edges == deleted_edges
+        assert all(
+            edge.source in document.nodes and edge.target in document.nodes
+            for edge in document.edges.values()
+        )
 
     asyncio.run(run())
 
