@@ -18,6 +18,8 @@ wrapper is new.
 
 from __future__ import annotations
 
+from collections import deque
+
 from backend.domain.model import (
     GROUP_COLLAPSED_HEIGHT,
     GROUP_COLLAPSED_WIDTH,
@@ -101,6 +103,93 @@ class GroupOps(SceneDocumentParts):
             height = GROUP_MEMBER_DEFAULT_HEIGHT
         return float(width), float(height)
 
+    def _recompute_affected_group_bounds(
+        self, touched_ids: set[str], *, include_touched_groups: bool = False,
+    ) -> bool:
+        """Rewrap all affected groups innermost-first, at arbitrary depth.
+
+        A leaf may belong to both a frame and a container; each can in turn
+        be inside a container, without a nesting-depth limit. One-hop
+        recomputations leave grandparents stale. Four arbitrary passes may
+        also leave older/out-of-order restored group trees stale. Instead,
+        walk the actual membership DAG and evaluate each affected group once
+        after all of its affected child groups have settled.
+
+        A directly moved container's position is allowed to remain where
+        the user moved it; only its enclosing parents are recomputed unless
+        the caller opts in to recomputing the touched group itself. This
+        keeps move_node(container) compatible with its prior behavior.
+        """
+        groups = {
+            node.id: node for node in self.nodes.values()
+            if node.kind in ("frame", "container")
+        }
+        if not groups or not touched_ids:
+            return False
+
+        parents_by_member: dict[str, list[str]] = {}
+        for group in groups.values():
+            for member_id in group.item_ids:
+                parents_by_member.setdefault(member_id, []).append(group.id)
+
+        affected: set[str] = (
+            touched_ids.intersection(groups) if include_touched_groups else set()
+        )
+        visited = set(touched_ids)
+        pending = deque(touched_ids)
+        while pending:
+            member_id = pending.popleft()
+            for parent_id in parents_by_member.get(member_id, ()):
+                affected.add(parent_id)
+                if parent_id not in visited:
+                    visited.add(parent_id)
+                    pending.append(parent_id)
+        if not affected:
+            return False
+
+        # Restrict Kahn's ordering to the affected set. All *member* nodes
+        # have already settled; an outer group cannot be recomputed before
+        # its nested group's updated geometry is available.
+        required_children: dict[str, set[str]] = {
+            group_id: {
+                member_id for member_id in groups[group_id].item_ids
+                if member_id in affected and member_id in groups
+            }
+            for group_id in affected
+        }
+        parents_of_group: dict[str, list[str]] = {}
+        for group_id, members in required_children.items():
+            for member_id in members:
+                parents_of_group.setdefault(member_id, []).append(group_id)
+
+        ready = deque(
+            group_id for group_id in groups
+            if group_id in affected and not required_children[group_id]
+        )
+        processed = 0
+        changed = False
+        while ready:
+            group_id = ready.popleft()
+            group = groups[group_id]
+            before = (
+                group.x, group.y, group.state.group_width, group.state.group_height,
+            )
+            self._recompute_group_bounds(group_id)
+            after = (
+                group.x, group.y, group.state.group_width, group.state.group_height,
+            )
+            changed = changed or before != after
+            processed += 1
+            for parent_id in parents_of_group.get(group_id, ()):
+                dependencies = required_children[parent_id]
+                dependencies.discard(group_id)
+                if not dependencies:
+                    ready.append(parent_id)
+
+        if processed != len(affected):
+            raise SceneError("cyclic frame/container membership prevents refitting bounds")
+        return changed
+
     def set_measured_node_sizes(self, sizes: list[tuple[str, float, float]]) -> bool:
         """Record the frontend's rendered size for each (node_id, w, h),
         then re-fit every group affected. Returns True if anything actually
@@ -137,31 +226,10 @@ class GroupOps(SceneDocumentParts):
                 del self.measured_sizes[stale_id]
         if not touched:
             return False
-        # A resized member can change the box of the group holding it, and
-        # of any group holding THAT group - so recompute outward until
-        # nothing moves, rather than one level deep. Bounded by nesting
-        # depth, which this model caps at container-holding-frame.
-        changed = False
-        for _ in range(4):
-            pass_changed = False
-            for group in self.nodes.values():
-                if not is_node_of(group, ("frame", "container"), GroupSizedState):
-                    continue
-                if not any(member_id in touched for member_id in group.item_ids):
-                    continue
-                before = (group.x, group.y, group.state.group_width, group.state.group_height)
-                self._recompute_group_bounds(group.id)
-                after = (group.x, group.y, group.state.group_width, group.state.group_height)
-                if before != after:
-                    pass_changed = True
-                    touched.add(group.id)
-            if not pass_changed:
-                break
-            changed = True
-        # Only a moved GROUP box is worth a republish: measured_sizes
-        # itself never reaches the client (it came FROM there), so a size
-        # report that leaves every box where it was is a no-op on the wire.
-        return changed
+        # Any measured member can affect ancestors, at arbitrarily deep
+        # container nesting. The DAG refit returns True only when a group's
+        # actual geometry changes; measured_sizes itself stays off the wire.
+        return self._recompute_affected_group_bounds(touched)
 
     def _bbox_of_members(self, item_ids: list[str]) -> tuple[float, float, float, float]:
         """Compute the padded union rect (x, y, width, height) enclosing
