@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import math
 import statistics
+import sys
 import time
 import tracemalloc
 
@@ -132,7 +133,7 @@ def measure(workload: Workload, repeats: int = 5) -> dict[str, object]:
 
 def main() -> None:
     results = [measure(workload) for workload in ALL_WORKLOADS]
-    print(json.dumps(results, indent=2))
+    sys.stdout.write(json.dumps(results, indent=2) + "\\n")
 
 
 if __name__ == "__main__":
