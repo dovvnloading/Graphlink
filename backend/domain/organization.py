@@ -370,6 +370,13 @@ def make_organization_plan(
         _place_subset(shadow, document, movable)
         _refit_groups(shadow, document, _affected_groups(shadow, movable), preserve_frame_sizes)
 
+    # A fixed frame/container is as immutable as a fixed content card.
+    # Refitting group bounds can otherwise move the pinned background when
+    # some of its other members are reflowed.
+    for fixed_id in fixed:
+        if _layout_geometry(shadow.nodes[fixed_id]) != _layout_geometry(document.nodes[fixed_id]):
+            raise SceneError(f"organization would change fixed node {fixed_id}")
+
     # Before offering this read-only preview, enforce semantic group
     # integrity: no rearranged card may newly appear inside a background
     # whose item_ids do not contain it. This uses the same node rectangles
