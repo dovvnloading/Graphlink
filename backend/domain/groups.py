@@ -18,6 +18,8 @@ wrapper is new.
 
 from __future__ import annotations
 
+from collections import deque
+
 from backend.domain.model import (
     GROUP_COLLAPSED_HEIGHT,
     GROUP_COLLAPSED_WIDTH,
@@ -72,8 +74,18 @@ class GroupOps(SceneDocumentParts):
         inner frame/container keeps sizing itself to that stale expanded
         reading forever (confirmed via _recompute_group_bounds, which this
         helper feeds through _bbox_of_members)."""
-        if member.kind in ("frame", "container") and member.is_collapsed:
-            return GROUP_COLLAPSED_WIDTH, GROUP_COLLAPSED_HEIGHT
+        if member.kind in ("frame", "container"):
+            if member.is_collapsed:
+                return GROUP_COLLAPSED_WIDTH, GROUP_COLLAPSED_HEIGHT
+            # Expanded groups have backend-controlled dimensions, too:
+            # Graphlink draws the exact group_width/group_height on the
+            # React Flow wrapper. Measurements can still reflect an older
+            # box when a nested member has just grown. The authoritative
+            # state must win when a parent computes its own member bbox.
+            if is_node_of(member, ("frame", "container"), GroupSizedState):
+                gw, gh = member.state.group_width, member.state.group_height
+                if gw is not None and gh is not None and gw > 0 and gh > 0:
+                    return float(gw), float(gh)
         measured = self.measured_sizes.get(member.id)
         width, height = measured if measured is not None else (None, None)
         if not (width and width > 0 and height and height > 0):
@@ -90,6 +102,93 @@ class GroupOps(SceneDocumentParts):
         if not (height and height > 0):
             height = GROUP_MEMBER_DEFAULT_HEIGHT
         return float(width), float(height)
+
+    def _recompute_affected_group_bounds(
+        self, touched_ids: set[str], *, include_touched_groups: bool = False,
+    ) -> bool:
+        """Rewrap all affected groups innermost-first, at arbitrary depth.
+
+        A leaf may belong to both a frame and a container; each can in turn
+        be inside a container, without a nesting-depth limit. One-hop
+        recomputations leave grandparents stale. Four arbitrary passes may
+        also leave older/out-of-order restored group trees stale. Instead,
+        walk the actual membership DAG and evaluate each affected group once
+        after all of its affected child groups have settled.
+
+        A directly moved container's position is allowed to remain where
+        the user moved it; only its enclosing parents are recomputed unless
+        the caller opts in to recomputing the touched group itself. This
+        keeps move_node(container) compatible with its prior behavior.
+        """
+        groups = {
+            node.id: node for node in self.nodes.values()
+            if is_node_of(node, ("frame", "container"), GroupSizedState)
+        }
+        if not groups or not touched_ids:
+            return False
+
+        parents_by_member: dict[str, list[str]] = {}
+        for group in groups.values():
+            for member_id in group.item_ids:
+                parents_by_member.setdefault(member_id, []).append(group.id)
+
+        affected: set[str] = (
+            touched_ids.intersection(groups) if include_touched_groups else set()
+        )
+        visited = set(touched_ids)
+        pending = deque(touched_ids)
+        while pending:
+            member_id = pending.popleft()
+            for parent_id in parents_by_member.get(member_id, ()):
+                affected.add(parent_id)
+                if parent_id not in visited:
+                    visited.add(parent_id)
+                    pending.append(parent_id)
+        if not affected:
+            return False
+
+        # Restrict Kahn's ordering to the affected set. All *member* nodes
+        # have already settled; an outer group cannot be recomputed before
+        # its nested group's updated geometry is available.
+        required_children: dict[str, set[str]] = {
+            group_id: {
+                member_id for member_id in groups[group_id].item_ids
+                if member_id in affected and member_id in groups
+            }
+            for group_id in affected
+        }
+        parents_of_group: dict[str, list[str]] = {}
+        for group_id, members in required_children.items():
+            for member_id in members:
+                parents_of_group.setdefault(member_id, []).append(group_id)
+
+        ready = deque(
+            group_id for group_id in groups
+            if group_id in affected and not required_children[group_id]
+        )
+        processed = 0
+        changed = False
+        while ready:
+            group_id = ready.popleft()
+            group = groups[group_id]
+            before = (
+                group.x, group.y, group.state.group_width, group.state.group_height,
+            )
+            self._recompute_group_bounds(group_id)
+            after = (
+                group.x, group.y, group.state.group_width, group.state.group_height,
+            )
+            changed = changed or before != after
+            processed += 1
+            for parent_id in parents_of_group.get(group_id, ()):
+                dependencies = required_children[parent_id]
+                dependencies.discard(group_id)
+                if not dependencies:
+                    ready.append(parent_id)
+
+        if processed != len(affected):
+            raise SceneError("cyclic frame/container membership prevents refitting bounds")
+        return changed
 
     def set_measured_node_sizes(self, sizes: list[tuple[str, float, float]]) -> bool:
         """Record the frontend's rendered size for each (node_id, w, h),
@@ -127,31 +226,10 @@ class GroupOps(SceneDocumentParts):
                 del self.measured_sizes[stale_id]
         if not touched:
             return False
-        # A resized member can change the box of the group holding it, and
-        # of any group holding THAT group - so recompute outward until
-        # nothing moves, rather than one level deep. Bounded by nesting
-        # depth, which this model caps at container-holding-frame.
-        changed = False
-        for _ in range(4):
-            pass_changed = False
-            for group in self.nodes.values():
-                if not is_node_of(group, ("frame", "container"), GroupSizedState):
-                    continue
-                if not any(member_id in touched for member_id in group.item_ids):
-                    continue
-                before = (group.x, group.y, group.state.group_width, group.state.group_height)
-                self._recompute_group_bounds(group.id)
-                after = (group.x, group.y, group.state.group_width, group.state.group_height)
-                if before != after:
-                    pass_changed = True
-                    touched.add(group.id)
-            if not pass_changed:
-                break
-            changed = True
-        # Only a moved GROUP box is worth a republish: measured_sizes
-        # itself never reaches the client (it came FROM there), so a size
-        # report that leaves every box where it was is a no-op on the wire.
-        return changed
+        # Any measured member can affect ancestors, at arbitrarily deep
+        # container nesting. The DAG refit returns True only when a group's
+        # actual geometry changes; measured_sizes itself stays off the wire.
+        return self._recompute_affected_group_bounds(touched)
 
     def _bbox_of_members(self, item_ids: list[str]) -> tuple[float, float, float, float]:
         """Compute the padded union rect (x, y, width, height) enclosing
@@ -295,8 +373,18 @@ class GroupOps(SceneDocumentParts):
             other.item_ids = [i for i in other.item_ids if i != member_id]
             if not other.item_ids:
                 self.nodes.pop(other.id, None)
+                self.edges = {
+                    eid: edge for eid, edge in self.edges.items()
+                    if edge.source != other.id and edge.target != other.id
+                }
+                # The removed frame/container may be the only member of
+                # one or more ancestors. Detach recursively so their
+                # item_ids never point at a deleted group.
+                self._detach_node_from_membership(other.id)
             else:
-                self._recompute_group_bounds(other.id)
+                self._recompute_affected_group_bounds(
+                    {other.id}, include_touched_groups=True,
+                )
             break
 
     def create_frame(self, item_ids: list[str]) -> SceneNode:
@@ -355,6 +443,63 @@ class GroupOps(SceneDocumentParts):
         self._recompute_group_bounds(node_id)
         return node
 
+    def _normalize_container_selection(self, item_ids: list[str]) -> list[str]:
+        """Validate first, then retain only outermost selected containers.
+
+        Selecting a container AND one of its existing descendants must not
+        detach the descendant: that can empty/delete the selected ancestor
+        midway through create_container, leaving a dangling member ID in the
+        new wrapper. Follow only container.item_ids for ancestor coverage.
+        Frame membership is an independent axis (a leaf may intentionally
+        be a member of one frame AND one container), so it is not traversed.
+
+        Validate every requested ID and the selected container subtrees
+        BEFORE changing any membership. This also refuses malformed legacy
+        cycles and dangling references instead of minting a new group from
+        a corrupted subtree. An iterative DFS supports deep nesting without
+        Python recursion or a hard-coded depth cap.
+        """
+        ids = list(dict.fromkeys(item_ids))
+        if not ids:
+            raise SceneError("a container needs at least one member")
+        for member_id in ids:
+            if member_id not in self.nodes:
+                raise SceneError(f"unknown member node: {member_id}")
+
+        selected = set(ids)
+        redundant: set[str] = set()
+        for root_id in ids:
+            root = self.nodes[root_id]
+            if root.kind != "container":
+                continue
+            active = {root_id}
+            completed: set[str] = set()
+            stack = [(root_id, iter(root.item_ids))]
+            while stack:
+                current_id, members = stack[-1]
+                try:
+                    member_id = next(members)
+                except StopIteration:
+                    stack.pop()
+                    active.remove(current_id)
+                    completed.add(current_id)
+                    continue
+                member = self.nodes.get(member_id)
+                if member is None:
+                    raise SceneError(f"unknown nested member node: {member_id}")
+                if member.kind == "container":
+                    if member_id in active:
+                        raise SceneError("cyclic container membership in selection")
+                    if member_id not in completed:
+                        active.add(member_id)
+                        stack.append((member_id, iter(member.item_ids)))
+                if member_id in selected and member_id != root_id:
+                    redundant.add(member_id)
+
+        # A cycle cannot produce a meaningful outermost selection; the
+        # acyclicity check above catches that before anything is detached.
+        return [member_id for member_id in ids if member_id not in redundant]
+
     def create_container(self, item_ids: list[str]) -> SceneNode:
         """Group an existing set of nodes into a new container. Same
         validation/detach posture as create_frame, scoped to "container"
@@ -367,14 +512,15 @@ class GroupOps(SceneDocumentParts):
         that class's own docstring, backend/domain/node_states.py) - no
         toggle_container_lock exists and none should be added.
 
+        A selection containing both a container and one of its existing
+        descendants retains just the ancestor. This avoids deleting a
+        selected container while reparenting its last member. Validation
+        and stable deduplication happen before any detach; frame membership
+        is independent and remains unchanged.
+
         Requires at least one member - same domain-layer invariant and
         rationale as create_frame's own guard just above."""
-        ids = list(item_ids)
-        if not ids:
-            raise SceneError("a container needs at least one member")
-        for member_id in ids:
-            if member_id not in self.nodes:
-                raise SceneError(f"unknown member node: {member_id}")
+        ids = self._normalize_container_selection(item_ids)
         for member_id in ids:
             self._detach_from_existing_group(member_id, "container")
         node_id = f"n{next(self._counter)}"
@@ -426,7 +572,7 @@ class GroupOps(SceneDocumentParts):
         future-proofs a later change to that math."""
         node = require_node(self.nodes, node_id, "frame", FrameState)
         node.state.is_locked = not node.state.is_locked
-        self._recompute_group_bounds(node_id)
+        self._recompute_affected_group_bounds({node_id}, include_touched_groups=True)
 
     def toggle_group_collapsed(self, node_id: str) -> None:
         """Shared frame/container collapse toggle. A single call to
@@ -442,7 +588,7 @@ class GroupOps(SceneDocumentParts):
         if node.kind not in ("frame", "container"):
             raise SceneError(f"node is not a frame/container node: {node_id}")
         node.is_collapsed = not node.is_collapsed
-        self._recompute_group_bounds(node_id)
+        self._recompute_affected_group_bounds({node_id}, include_touched_groups=True)
 
     def resize_frame(self, node_id: str, width: float, height: float) -> None:
         """Frame kind only. Records a manual size override, clamped to never
@@ -456,7 +602,7 @@ class GroupOps(SceneDocumentParts):
         _, _, min_width, min_height = self._bbox_of_members(node.item_ids)
         node.state.group_manual_width = max(float(width), min_width)
         node.state.group_manual_height = max(float(height), min_height)
-        self._recompute_group_bounds(node_id)
+        self._recompute_affected_group_bounds({node_id}, include_touched_groups=True)
 
     def fit_frame_to_content(self, node_id: str) -> None:
         """Frame kind only. Clears BOTH the manual size override (set by
@@ -471,7 +617,7 @@ class GroupOps(SceneDocumentParts):
         node.state.group_manual_height = None
         node.state.group_manual_x = None
         node.state.group_manual_y = None
-        self._recompute_group_bounds(node_id)
+        self._recompute_affected_group_bounds({node_id}, include_touched_groups=True)
 
     def ungroup(self, node_id: str) -> None:
         """Deletes a frame/container node itself. Members are NOT deleted
@@ -513,13 +659,33 @@ class GroupOps(SceneDocumentParts):
         remove_nodes, so it would otherwise leave stale item_ids behind.
         list(...) over a live view since a match can mutate self.nodes
         (popping an emptied group) mid-iteration."""
-        for group in list(self.nodes.values()):
-            if group.kind not in ("frame", "container"):
-                continue
-            if node_id not in group.item_ids:
-                continue
-            group.item_ids = [i for i in group.item_ids if i != node_id]
-            if not group.item_ids:
-                self.nodes.pop(group.id, None)
-            else:
-                self._recompute_group_bounds(group.id)
+        pending = [node_id]
+        affected: set[str] = set()
+        deleted_groups: set[str] = set()
+        while pending:
+            deleted_id = pending.pop()
+            for group in list(self.nodes.values()):
+                if group.kind not in ("frame", "container"):
+                    continue
+                if deleted_id not in group.item_ids:
+                    continue
+                group.item_ids = [i for i in group.item_ids if i != deleted_id]
+                if not group.item_ids:
+                    self.nodes.pop(group.id, None)
+                    deleted_groups.add(group.id)
+                    pending.append(group.id)
+                else:
+                    affected.add(group.id)
+
+        # Auto-deletion must maintain the same edge-endpoint invariant as
+        # remove_nodes/ungroup; otherwise an outer group deleted as a side
+        # effect can leave an invisible dangling connection behind.
+        if deleted_groups:
+            self.edges = {
+                eid: edge for eid, edge in self.edges.items()
+                if edge.source not in deleted_groups and edge.target not in deleted_groups
+            }
+        if affected:
+            self._recompute_affected_group_bounds(
+                affected, include_touched_groups=True,
+            )

@@ -654,16 +654,14 @@ class SceneDocument(
             # frame-only writes below are checkable.
             frame = require_node(self.nodes, node_id, "frame", FrameState)
             frame.state.group_manual_x, frame.state.group_manual_y = node.x, node.y
-            self._recompute_group_bounds(node_id)
-        # R6.1: keep every frame/container this node is a member of enclosing
-        # it - a node is a member of at most one frame AND at most one
-        # container simultaneously (see item_ids's own field comment), so
-        # this is at most 2 matches, not an expensive scan; a plain
-        # iteration over self.nodes.values() is correctness-first, no reverse
-        # index needed for this dataset size.
-        for group in self.nodes.values():
-            if group.kind in ("frame", "container") and node_id in group.item_ids:
-                self._recompute_group_bounds(group.id)
+        # A nested container's parents must also follow this movement,
+        # even when only the *leaf* was moved. Recompute dependency-first
+        # so every ancestor encloses its child's updated bounding box.
+        # For a moved container, preserve move_node's historical independent
+        # positioning: its parents refit, not the container itself.
+        self._recompute_affected_group_bounds(
+            {node_id}, include_touched_groups=node.kind == "frame",
+        )
         return node
 
     def move_nodes(self, positions: list[tuple[str, float, float]]) -> None:
@@ -696,16 +694,10 @@ class SceneDocument(
             moved_ids.add(node_id)
             if is_node_of(node, "frame", FrameState):
                 node.state.group_manual_x, node.state.group_manual_y = node.x, node.y
-        affected_groups: set[str] = set()
-        for moved_id in moved_ids:
-            moved_node = self.nodes.get(moved_id)
-            if moved_node is not None and moved_node.kind in ("frame", "container"):
-                affected_groups.add(moved_id)
-        for group in self.nodes.values():
-            if group.kind in ("frame", "container") and moved_ids.intersection(group.item_ids):
-                affected_groups.add(group.id)
-        for group_id in affected_groups:
-            self._recompute_group_bounds(group_id)
+        # Refit both directly moved groups and every enclosing ancestor
+        # after all positions settle. Iterating a set of direct parents
+        # alone is neither ordered nor transitive for nested containers.
+        self._recompute_affected_group_bounds(moved_ids, include_touched_groups=True)
 
     def remove_nodes(self, node_ids: list[str]) -> None:
         # The chat pointers must not outlive their node either, the same

@@ -240,6 +240,141 @@ def test_organize_shrinks_an_outer_container_when_its_member_frame_collapses():
     assert outer.state.group_height == expected_height
 
 
+def test_expanded_group_intrinsic_geometry_beats_stale_client_measurement():
+    """An outer container must never wrap stale dimensions of its child group.
+
+    The group node's visible width/height are controlled by the backend, not
+    the DOM (GroupNodeView/React Flow set them explicitly). A measurement
+    from before a child expands must not shrink the outer bounding box.
+    """
+    doc = SceneDocument()
+    leaf = doc.add_node(100, 200, "leaf")
+    inner = doc.create_container([leaf.id])
+    outer = doc.create_container([inner.id])
+
+    old_size = doc.node_footprint(inner)
+    doc.set_measured_node_sizes([(inner.id, *old_size)])
+    # Leaf can grow before the browser re-measures the containing group.
+    doc.set_measured_node_sizes([(leaf.id, 850.0, 580.0)])
+    assert inner.state.group_width > old_size[0]
+    assert inner.state.group_height > old_size[1]
+    assert doc.node_footprint(inner) == (
+        inner.state.group_width, inner.state.group_height
+    )
+    assert doc._member_footprint(inner) == doc.node_footprint(inner)
+    assert outer.x <= inner.x and outer.y <= inner.y
+    assert outer.x + outer.state.group_width >= inner.x + inner.state.group_width
+    assert outer.y + outer.state.group_height >= inner.y + inner.state.group_height
+
+
+def _assert_group_encloses(outer, inner):
+    assert outer.x <= inner.x
+    assert outer.y <= inner.y
+    assert outer.x + outer.state.group_width >= inner.x + inner.state.group_width
+    assert outer.y + outer.state.group_height >= inner.y + inner.state.group_height
+
+
+def test_moving_a_nested_leaf_refits_its_outer_container_for_single_and_batch_moves():
+    """Direct position edits must propagate through transitive membership."""
+    doc = SceneDocument()
+    leaf = doc.add_node(0, 0, "leaf")
+    frame = doc.create_frame([leaf.id])
+    outer = doc.create_container([frame.id])
+    doc.move_node(leaf.id, 1500, 800)
+    _assert_group_encloses(outer, frame)
+    doc.move_nodes([(leaf.id, 2600, 1600)])
+    _assert_group_encloses(outer, frame)
+
+
+def test_inner_group_collapse_resize_and_fit_refresh_outer_container():
+    """A parent's bounds must track its child's lifecycle without Organize."""
+    doc = SceneDocument()
+    leaf = doc.add_node(40, 50, "leaf")
+    frame = doc.create_frame([leaf.id])
+    outer = doc.create_container([frame.id])
+    before_height = outer.state.group_height
+
+    doc.toggle_group_collapsed(frame.id)
+    assert outer.state.group_height < before_height
+    _assert_group_encloses(outer, frame)
+    doc.toggle_group_collapsed(frame.id)
+    _assert_group_encloses(outer, frame)
+
+    doc.resize_frame(frame.id, 1200, 700)
+    _assert_group_encloses(outer, frame)
+    assert outer.state.group_width >= 1200
+    doc.fit_frame_to_content(frame.id)
+    _assert_group_encloses(outer, frame)
+    assert outer.state.group_width < 1200
+
+
+def test_size_reporting_refits_arbitrarily_nested_containers_in_dependency_order():
+    """A hard-coded four-pass limit misses supported 5+-level nesting.
+
+    Reordering the dict simulates a rehydrated scene whose insertion order
+    differs from its group membership dependencies.
+    """
+    doc = SceneDocument()
+    leaf = doc.add_node(0, 0, "leaf")
+    groups = [doc.create_container([leaf.id])]
+    for index in range(7):
+        groups.append(doc.create_container([groups[-1].id]))
+    doc.nodes = dict(reversed(list(doc.nodes.items())))
+
+    doc.set_measured_node_sizes([(leaf.id, 950.0, 720.0)])
+    for inner, outer in zip(groups, groups[1:]):
+        _assert_group_encloses(outer, inner)
+
+
+def test_ungroup_cascades_empty_ancestor_containers_and_undo_restores_them():
+    """Auto-deleting an empty child group cannot strand ancestor item_ids."""
+    doc = SceneDocument()
+    leaf = doc.add_node(0, 0, "leaf")
+    frame = doc.create_frame([leaf.id])
+    middle = doc.create_container([frame.id])
+    outer = doc.create_container([middle.id])
+    unrelated = doc.add_node(1800, 0, "other")
+    edge = doc.connect(outer.id, unrelated.id)
+
+    doc.record_command(
+        "ungroup", "user", lambda: doc.ungroup(frame.id),
+        node_ids=[frame.id],
+    )
+    assert leaf.id in doc.nodes
+    assert all(group_id not in doc.nodes for group_id in (frame.id, middle.id, outer.id))
+    assert edge.id not in doc.edges
+    assert all(
+        member_id in doc.nodes
+        for node in doc.nodes.values()
+        if node.kind in ("frame", "container")
+        for member_id in node.item_ids
+    )
+
+    doc.undo()
+    assert frame.id in doc.nodes and middle.id in doc.nodes and outer.id in doc.nodes
+    assert doc.nodes[middle.id].item_ids == [frame.id]
+    assert doc.nodes[outer.id].item_ids == [middle.id]
+    assert edge.id in doc.edges
+
+
+def test_regrouping_a_leaf_does_not_leave_a_deleted_old_frame_in_a_container():
+    doc = SceneDocument()
+    leaf = doc.add_node(0, 0, "leaf")
+    old_frame = doc.create_frame([leaf.id])
+    parent = doc.create_container([old_frame.id])
+    new_frame = doc.create_frame([leaf.id])
+
+    assert new_frame.item_ids == [leaf.id]
+    assert old_frame.id not in doc.nodes
+    assert parent.id not in doc.nodes
+    assert all(
+        member_id in doc.nodes
+        for node in doc.nodes.values()
+        if node.kind in ("frame", "container")
+        for member_id in node.item_ids
+    )
+
+
 def test_member_footprint_of_a_collapsed_group_matches_node_footprint():
     """groups.py's _member_footprint and layout.py's node_footprint must
     agree on a collapsed group's size - two independent "how big is this

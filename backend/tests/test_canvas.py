@@ -4,6 +4,7 @@ shape, and snapshot publishing."""
 
 import asyncio
 import base64
+import copy
 import threading
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -2502,6 +2503,38 @@ def test_preview_and_apply_organize_use_actual_scene_intents():
         assert {nid: (n.x, n.y) for nid, n in document.nodes.items()} == start
         await bus.dispatch_intent("scene", "redo", [])
         assert {nid: (n.x, n.y) for nid, n in document.nodes.items()} == moved
+
+    asyncio.run(run())
+
+
+def test_scoped_organize_undo_snapshots_only_changed_leaves():
+    """Organizing two nodes must not deepcopy unrelated chat histories."""
+    async def run():
+        bus, document, _recorder = make_bus()
+        first = document.add_node(0, 0, "one")
+        second = document.add_node(70, 0, "two")
+        unrelated = document.add_chat_node(9000, 0, "unrelated", True)
+        unrelated.content = "A" * 250_000
+        options = ["selection", None, [first.id, second.id], None, True]
+        preview = await bus.dispatch_intent("scene", "previewOrganize", options)
+
+        # Spying on the deepcopies performed by CommandOps is more direct
+        # than timing: all old code paths pass, but an accidental switch
+        # back to node_ids=list(document.nodes) immediately fails this.
+        real_deepcopy = copy.deepcopy
+        with patch("backend.domain.commands.copy.deepcopy", wraps=real_deepcopy) as copier:
+            await bus.dispatch_intent(
+                "scene", "applyOrganize", [*options, preview["planId"]]
+            )
+        copied_ids = [
+            args.args[0].id for args in copier.call_args_list
+            if isinstance(args.args[0], type(first))
+        ]
+        assert first.id not in copied_ids  # first stays at x=0
+        assert second.id in copied_ids
+        assert unrelated.id not in copied_ids
+        assert unrelated.content == "A" * 250_000
+        assert document.undo_label() == "Organize Nodes"
 
     asyncio.run(run())
 

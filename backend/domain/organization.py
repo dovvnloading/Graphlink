@@ -257,14 +257,17 @@ def _place_subset(
         node.x += dx
         node.y += dy
 
-    # Expanded group boxes are backgrounds, not collision obstacles.
-    # Docked nodes render inside their parent; a collapsed group *is*
-    # visible and must be treated as a solid pill.
+    # A frame/container is a *semantic* background. Allow selected members
+    # to reflow within their own groups, but keep every unrelated expanded
+    # group as a solid obstacle. Ignoring those boxes makes unrelated nodes
+    # visually appear to belong to a group without changing item_ids.
+    # Docked nodes render inside a parent rather than as standalone cards.
+    enclosing_groups = _affected_groups(original, movable)
     obstacles = []
     for node in original.nodes.values():
         if node.id in movable or node.is_docked:
             continue
-        if node.kind in _GROUP_KINDS and not node.is_collapsed:
+        if node.kind in _GROUP_KINDS and not node.is_collapsed and node.id in enclosing_groups:
             continue
         width, height = original.node_footprint(node)
         obstacles.append((node.x, node.y, width, height))
