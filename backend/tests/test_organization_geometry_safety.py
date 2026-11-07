@@ -125,6 +125,8 @@ def test_chart_resize_immediately_refits_nested_groups_and_preview() -> None:
     assert actual != old_chart_size
     assert doc.node_footprint(chart) == actual
     assert doc._member_footprint(chart) == actual
+    assert frame.state.group_width is not None
+    assert outer.state.group_width is not None
     assert frame.x + frame.state.group_width >= chart.x + actual[0]
     assert outer.x + outer.state.group_width >= frame.x + frame.state.group_width
     plan = make_organization_plan(doc)
