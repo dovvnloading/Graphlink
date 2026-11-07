@@ -397,6 +397,26 @@ def make_organization_plan(
     unknown = fixed.difference(document.nodes)
     if unknown:
         raise SceneError(f"unknown fixed node: {sorted(unknown)[0]}")
+    # A pinned group is a hard *region*, not merely a frozen background:
+    # moving its members could silently violate the group's enclosure.
+    # Freeze the whole transitive membership DAG, including nested groups
+    # and dual-membership cards, without recursing on arbitrary legacy depth.
+    pending = [
+        nid for nid in fixed if document.nodes[nid].kind in _GROUP_KINDS
+    ]
+    inspected: set[str] = set()
+    while pending:
+        group_id = pending.pop()
+        if group_id in inspected:
+            continue
+        inspected.add(group_id)
+        for member_id in document.nodes[group_id].item_ids:
+            member = document.nodes.get(member_id)
+            if member is None:
+                continue
+            fixed.add(member_id)
+            if member.kind in _GROUP_KINDS and member_id not in inspected:
+                pending.append(member_id)
     movable = selected - fixed
     shadow = _clone_for_layout(document)
 
