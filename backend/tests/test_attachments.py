@@ -225,12 +225,23 @@ class TestPdfAndDocx:
     def test_regular_compressed_pdf_content_still_extracts(self, tmp_path):
         pytest.importorskip("pypdf")
         from pypdf import PdfWriter
-        from pypdf.generic import DecodedStreamObject, NameObject
+        from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
         writer = PdfWriter()
         page = writer.add_blank_page(width=612, height=792)
+        # A real font resource and text state are needed on pypdf 6.x:
+        # the previous minimal BT/Tj fixture was tolerated by 5.x only.
+        helvetica = DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        })
+        font = writer._add_object(helvetica)
+        page[NameObject("/Resources")] = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+        })
         stream = DecodedStreamObject()
-        stream.set_data(b"BT (Small valid page) Tj ET")
+        stream.set_data(b"BT /F1 12 Tf 36 720 Td (Small valid page) Tj ET")
         page[NameObject("/Contents")] = writer._add_object(stream.flate_encode())
         path = tmp_path / "normal.pdf"
         writer.write(path)
