@@ -3966,3 +3966,117 @@ def test_archive_import_intent_uses_native_picker_and_reports_success(db_path, t
     assert count == 1
     assert notifications.msg_type == "success"
     assert len(get_all_chats(db_path)) == 1
+
+
+def test_load_chat_preserves_edit_arriving_during_target_database_read(db_path, monkeypatch):
+    original_id, _ = save_chat_atomically_row(
+        db_path, None, "Previous", {"nodes": []}, [], [],
+    )
+    other_id, _ = save_chat_atomically_row(
+        db_path, None, "Next", {"nodes": []}, [], [],
+    )
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [original_id]))
+    node = document.add_chat_node(0, 0, "before", is_user=True)
+    entered = threading.Event()
+    proceed = threading.Event()
+    real_load = chat_library_module.load_chat_snapshot
+
+    def slow_read(path, graph_id):
+        if graph_id == other_id:
+            entered.set()
+            assert proceed.wait(timeout=5), "test did not release the target graph read"
+        return real_load(path, graph_id)
+
+    monkeypatch.setattr(chat_library_module, "load_chat_snapshot", slow_read)
+
+    async def run():
+        task = asyncio.create_task(bus.dispatch_intent("app-chat-library", "loadChat", [other_id]))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            # This edit lands after the load started, before the target row
+            # read finishes. Saving only at the START of load loses it.
+            node.content = "edited while target graph was loading"
+        finally:
+            proceed.set()
+        await task
+
+    asyncio.run(run())
+    assert document.current_chat_id == other_id
+    assert "edited while target graph was loading" in json.dumps(
+        load_chat_row(db_path, original_id)["data"]
+    )
+
+
+def test_load_chat_rechecks_edits_that_arrive_while_save_is_in_flight(db_path, monkeypatch):
+    target, _ = save_chat_atomically_row(
+        db_path, None, "Target", {"nodes": []}, [], [],
+    )
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    node = document.add_chat_node(0, 0, "initial", is_user=True)
+    entered = threading.Event()
+    proceed = threading.Event()
+    real_write = chat_library_module.save_chat_atomically_row
+    writes = []
+
+    def paused_first_write(*args, **kwargs):
+        if not writes:
+            entered.set()
+            assert proceed.wait(timeout=5), "test did not release the in-flight write"
+        result = real_write(*args, **kwargs)
+        writes.append(result[0])
+        return result
+
+    monkeypatch.setattr(chat_library_module, "save_chat_atomically_row", paused_first_write)
+
+    async def run():
+        task = asyncio.create_task(bus.dispatch_intent("app-chat-library", "loadChat", [target]))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            # save_chat serialized "initial" before its worker started.
+            node.content = "last-second edit during save"
+        finally:
+            proceed.set()
+        await task
+
+    asyncio.run(run())
+    assert len(writes) >= 2, "a newer edit requires a follow-up save"
+    assert writes[0] == writes[-1], "both writes update the same graph, never create duplicates"
+    assert "last-second edit during save" in json.dumps(load_chat_row(db_path, writes[0])["data"])
+
+
+def test_new_chat_preserves_edits_arriving_during_workspace_lookup(db_path, monkeypatch):
+    get_all_chats(db_path)
+    target_workspace = create_workspace(db_path, "Next Workspace")["id"]
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    node = document.add_chat_node(0, 0, "initial", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    initial_id = document.current_chat_id
+    entered = threading.Event()
+    proceed = threading.Event()
+    real_workspaces = chat_library_module.get_all_workspaces
+
+    def paused_workspaces(path):
+        entered.set()
+        assert proceed.wait(timeout=5), "test did not release workspace lookup"
+        return real_workspaces(path)
+
+    monkeypatch.setattr(chat_library_module, "get_all_workspaces", paused_workspaces)
+
+    async def run():
+        task = asyncio.create_task(
+            bus.dispatch_intent("app-chat-library", "newChat", [target_workspace]),
+        )
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            node.content = "edited while new chat destination loaded"
+        finally:
+            proceed.set()
+        await task
+
+    asyncio.run(run())
+    assert document.nodes == {}
+    assert document.current_workspace_id == target_workspace
+    assert "edited while new chat destination loaded" in json.dumps(
+        load_chat_row(db_path, initial_id)["data"]
+    )
