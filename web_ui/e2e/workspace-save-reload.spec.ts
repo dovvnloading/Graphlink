@@ -72,10 +72,11 @@ test("saves a node, clears the canvas, then reloads it from the chat library", a
   const libraryDialog = page.getByRole("dialog", { name: "Chat Library" });
   await expect(libraryDialog).toBeVisible();
 
-  // Fully isolated chats.db (a fresh temp file per E2E run - see
-  // tests_e2e/run_backend.py), so this Save produced exactly one row.
-  const savedRow = libraryDialog.locator(".library-row");
-  await expect(savedRow).toHaveCount(1);
+  // Earlier test scenes may now be safely persisted when gotoApp clears
+  // the canvas. Select the just-saved, newest row instead of assuming
+  // the shared E2E test database has exactly one graph across specs.
+  const savedRow = libraryDialog.locator(".library-row").first();
+  await expect(savedRow).toBeVisible();
   const openSavedChat = savedRow.getByRole("button", { name: /^Open chat/ });
 
   // Confirm the user-visible graph switch. The New Chat action now saves
