@@ -298,7 +298,9 @@ def _check_pdf_content_size(page) -> None:
     of trusting them to obey the cap. Image XObjects aren't text-extracted.
     """
     # Each frame: (content stream(s), resource dictionary, ancestor form IDs)
-    pending = [(page.get("/Contents"), page.get("/Resources"), frozenset())]
+    pending: list[tuple[Any, Any, frozenset[int]]] = [
+        (page.get("/Contents"), page.get("/Resources"), frozenset()),
+    ]
     decoded_total = 0
     forms_seen = 0
 
