@@ -195,6 +195,58 @@ class TestPdfAndDocx:
         finally:
             os.unlink(real_path)
 
+    def test_small_compressed_pdf_that_expands_past_page_limit_is_refused_before_parsing(
+        self, tmp_path, monkeypatch,
+    ):
+        import backend.attachments as attachments_module
+        from pypdf import PdfWriter
+        from pypdf.generic import DecodedStreamObject, NameObject
+        from pypdf._page import PageObject
+
+        pytest.importorskip("pypdf")
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        stream = DecodedStreamObject()
+        stream.set_data(b"BT (" + b"x" * 25_000 + b") Tj ET")
+        page[NameObject("/Contents")] = writer._add_object(stream.flate_encode())
+        path = tmp_path / "compressed.pdf"
+        writer.write(path)
+        assert path.stat().st_size < 5000, "fixture must actually be compressed"
+
+        monkeypatch.setattr(attachments_module, "MAX_PDF_CONTENT_STREAM_BYTES", 2048)
+
+        def forbidden_parse(*_args, **_kwargs):
+            pytest.fail("large expanded content must be rejected before extract_text")
+
+        monkeypatch.setattr(PageObject, "extract_text", forbidden_parse)
+        with pytest.raises(AttachmentError, match="expanded-stream"):
+            stage_file(str(path))
+
+    def test_regular_compressed_pdf_content_still_extracts(self, tmp_path):
+        pytest.importorskip("pypdf")
+        from pypdf import PdfWriter
+        from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        # A real font resource and text state are needed on pypdf 6.x:
+        # the previous minimal BT/Tj fixture was tolerated by 5.x only.
+        helvetica = DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        })
+        font = writer._add_object(helvetica)
+        page[NameObject("/Resources")] = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+        })
+        stream = DecodedStreamObject()
+        stream.set_data(b"BT /F1 12 Tf 36 720 Td (Small valid page) Tj ET")
+        page[NameObject("/Contents")] = writer._add_object(stream.flate_encode())
+        path = tmp_path / "normal.pdf"
+        writer.write(path)
+        assert "Small valid page" in stage_file(str(path)).extracted_text
+
     def test_a_real_pdf_with_no_extractable_text_is_rejected_not_silently_empty(self, tmp_file):
         pytest.importorskip("pypdf")
         from pypdf import PdfWriter

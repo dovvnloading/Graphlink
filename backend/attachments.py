@@ -32,6 +32,7 @@ import base64
 import codecs
 import os
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -75,6 +76,11 @@ DOCX_INSTALL_MESSAGE = "Word document support is not installed. Please run: pip 
 MAX_STAGED_FILE_BYTES = 128 * 1024 * 1024
 MAX_DOCUMENT_TEXT_CHARS = 1_000_000
 MAX_PDF_PAGES = 400
+# A highly compressed PDF content stream can expand to many MB and force
+# pypdf's parser to allocate large intermediate arrays BEFORE it returns
+# any text for MAX_DOCUMENT_TEXT_CHARS to reject. Bound each page's TOTAL
+# decoded /Contents stream size before calling extract_text.
+MAX_PDF_CONTENT_STREAM_BYTES = 1024 * 1024
 # DOCX is a ZIP container. File size and extracted-text caps alone do not
 # bound the XML/ZIP expansion that python-docx parses before text extraction.
 MAX_DOCX_MEMBERS = 2_048
@@ -231,6 +237,57 @@ def _extract_pdf_page_text(page) -> str:
     return ""
 
 
+def _check_pdf_content_size(page) -> None:
+    """Preflight page content streams without asking pypdf to decompress.
+
+    Calling page.get_contents() or an encoded stream's get_data() would
+    inflate the whole stream before our guard runs. Instead, use the raw
+    _data bytes on pypdf's stream objects and incrementally decode the
+    common /FlateDecode format with a strict max_length. Arrays of streams
+    share ONE per-page budget. If a filter cannot be bounded safely, reject
+    it rather than parsing arbitrarily expanded user-controlled input.
+    """
+    contents = page.get("/Contents")
+    if contents is None:
+        return
+    streams = contents if isinstance(contents, list) else [contents]
+    decoded_total = 0
+    for entry in streams:
+        stream = entry.get_object() if hasattr(entry, "get_object") else entry
+        raw = getattr(stream, "_data", None)
+        if not isinstance(raw, bytes):
+            raise AttachmentError("PDF contains an unreadable page content stream.")
+        filters = stream.get("/Filter")
+        filters_list = [str(item) for item in filters] if isinstance(filters, list) else (
+            [str(filters)] if filters is not None else []
+        )
+        if not filters_list:
+            decoded_total += len(raw)
+            if decoded_total > MAX_PDF_CONTENT_STREAM_BYTES:
+                raise AttachmentError("PDF page content exceeds the expanded-stream attachment limit.")
+            continue
+        if filters_list not in (["/FlateDecode"], ["/Fl"]):
+            raise AttachmentError("PDF page content uses a compression filter that cannot be safely bounded.")
+
+        decoder = zlib.decompressobj()
+        try:
+            for offset in range(0, len(raw), 4096):
+                pending = raw[offset:offset + 4096]
+                while pending:
+                    limit = MAX_PDF_CONTENT_STREAM_BYTES - decoded_total
+                    inflated = decoder.decompress(pending, limit + 1)
+                    decoded_total += len(inflated)
+                    if decoded_total > MAX_PDF_CONTENT_STREAM_BYTES:
+                        raise AttachmentError("PDF page content exceeds the expanded-stream attachment limit.")
+                    pending = decoder.unconsumed_tail
+            tail = decoder.flush(MAX_PDF_CONTENT_STREAM_BYTES - decoded_total + 1)
+            decoded_total += len(tail)
+        except zlib.error as exc:
+            raise AttachmentError("PDF has an invalid compressed page content stream.") from exc
+        if decoded_total > MAX_PDF_CONTENT_STREAM_BYTES:
+            raise AttachmentError("PDF page content exceeds the expanded-stream attachment limit.")
+
+
 def _read_pdf(path: Path) -> str:
     """Verbatim port of FileHandler._read_pdf. Raises AttachmentError (not
     ValueError) when nothing extractable is found, and when the optional
@@ -249,6 +306,8 @@ def _read_pdf(path: Path) -> str:
         except ImportError:
             raise AttachmentError(PDF_INSTALL_MESSAGE) from None
 
+    if path.stat().st_size > MAX_STAGED_FILE_BYTES:
+        raise AttachmentError("PDF exceeds the attachment file size limit.")
     content: list[str] = []
     extracted_characters = 0
     with open(path, "rb") as f:
@@ -256,6 +315,7 @@ def _read_pdf(path: Path) -> str:
         if len(reader.pages) > MAX_PDF_PAGES:
             raise AttachmentError(f"PDF exceeds the {MAX_PDF_PAGES}-page attachment limit.")
         for page_number, page in enumerate(reader.pages, start=1):
+            _check_pdf_content_size(page)
             page_text = _extract_pdf_page_text(page)
             if page_text:
                 normalized_text = page_text.strip()

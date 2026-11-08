@@ -76,6 +76,24 @@ class TestExtractTextDispatch:
         assert "Second real paragraph." in text
         assert mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
+    def test_pdf_knowledge_ingest_shares_the_expanded_content_guard(self, tmp_path, monkeypatch):
+        pytest.importorskip("pypdf")
+        import backend.attachments as attachments_module
+        from pypdf import PdfWriter
+        from pypdf.generic import DecodedStreamObject, NameObject
+
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        stream = DecodedStreamObject()
+        stream.set_data(b"BT (" + b"A" * 4000 + b") Tj ET")
+        page[NameObject("/Contents")] = writer._add_object(stream.flate_encode())
+        path = tmp_path / "large-expanded.pdf"
+        writer.write(path)
+
+        monkeypatch.setattr(attachments_module, "MAX_PDF_CONTENT_STREAM_BYTES", 1000)
+        with pytest.raises(AttachmentError, match="expanded-stream"):
+            extract_text(path)
+
     def test_pdf_with_no_extractable_text_is_rejected_not_silently_empty(self, tmp_path):
         pytest.importorskip("pypdf")
         from pypdf import PdfWriter
