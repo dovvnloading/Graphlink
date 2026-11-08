@@ -197,6 +197,7 @@ def register_knowledge_intents(
             except IngestError as exc:
                 if notifications is not None:
                     notifications.show(str(exc), "error")
+                    await bus.publish("notification")
                 return
 
         document.record_command(

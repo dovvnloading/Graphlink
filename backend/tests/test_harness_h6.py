@@ -483,6 +483,65 @@ class TestShellSessions:
         finally:
             sessions.stop_all()
 
+    def test_long_newline_free_stdout_is_bounded_before_reading(self, tmp_path):
+        import io
+
+        from backend.harness.shell_sessions import MAX_LINE_CHARS, ShellBackend, ShellSession
+
+        class FakeBackend(ShellBackend):
+            def spawn(self, command, cwd):
+                class FakeProcess:
+                    stdout = io.StringIO("a" * (MAX_LINE_CHARS * 50) + "\ntail\n")
+                return FakeProcess()
+
+            def teardown(self, handle):
+                pass
+
+        session = ShellSession("huge-line", "unused", tmp_path, FakeBackend())
+        session._reader.join(timeout=2)
+        assert not session._reader.is_alive()
+        assert session.read_new() == "a" * MAX_LINE_CHARS + "…[line truncated]\ntail"
+
+    def test_stalled_stdin_write_times_out_and_stops_the_session(self, tmp_path, monkeypatch):
+        import threading
+
+        from backend.harness import tools_shell as shell_module
+
+        registry, sessions, workspace = self._setup(tmp_path)
+        released = threading.Event()
+        stopped = []
+
+        class StalledSession:
+            def write(self, text):
+                released.wait(timeout=1)
+
+        monkeypatch.setattr(sessions, "get", lambda *args, **kwargs: StalledSession())
+
+        def stop(workspace_id, name):
+            stopped.append(name)
+            released.set()
+
+        monkeypatch.setattr(sessions, "stop", stop)
+        monkeypatch.setattr(shell_module, "_SESSION_WRITE_TIMEOUT_SECONDS", 0.02)
+
+        result = _invoke(
+            registry, "shell.session",
+            {"action": "write", "name": "stuck", "input": "hello"}, _tool_ctx(workspace),
+        )
+        assert result.is_error and "timed out" in result.content
+        assert stopped == ["stuck"]
+
+    def test_shell_input_length_is_checked_before_writing(self, tmp_path):
+        from backend.harness.tools_shell import _SESSION_WRITE_MAX_CHARS
+
+        registry, sessions, workspace = self._setup(tmp_path)
+        result = _invoke(
+            registry, "shell.session",
+            {"action": "write", "name": "missing", "input": "x" * (_SESSION_WRITE_MAX_CHARS + 1)},
+            _tool_ctx(workspace),
+        )
+        assert result.is_error and "exceeds" in result.content
+
 
 class TestInteractionTools:
     def _setup(self):

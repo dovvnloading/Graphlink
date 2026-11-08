@@ -141,10 +141,25 @@ class ShellSession:
         if stream is None:
             return
         try:
-            for line in stream:
-                text = line.rstrip("\n")
+            # A plain "for line in stream" reads a *complete* logical line
+            # before the MAX_LINE_CHARS truncation. A subprocess producing
+            # gigabytes without a newline would exhaust memory in readline().
+            # Bound each read itself; discard the remainder of an oversized
+            # line without ever materializing it.
+            discarding_long_line = False
+            while True:
+                fragment = stream.readline(MAX_LINE_CHARS + 1)
+                if not fragment:
+                    break
+                completed_line = fragment.endswith("\n")
+                if discarding_long_line:
+                    if completed_line:
+                        discarding_long_line = False
+                    continue
+                text = fragment.rstrip("\n")
                 if len(text) > MAX_LINE_CHARS:
                     text = text[:MAX_LINE_CHARS] + "…[line truncated]"
+                    discarding_long_line = not completed_line
                 with self._lock:
                     if len(self._lines) == self._lines.maxlen:
                         self._dropped += 1
@@ -188,16 +203,19 @@ class ShellSession:
 
     def stop(self) -> None:
         """Terminate the process and its whole tree, then join the reader."""
-        try:
-            if self._process.stdin is not None:
-                self._process.stdin.close()
-        except (ValueError, OSError):
-            pass
+        # Kill the child BEFORE closing stdin. If a concurrent write() has
+        # filled the pipe, stdin.close() can block waiting for the stream's
+        # write lock; killing the process first releases the blocked writer.
         try:
             self._process.kill()
         except (ValueError, OSError, ProcessLookupError):
             pass
         self._backend.teardown(self._process)
+        try:
+            if self._process.stdin is not None:
+                self._process.stdin.close()
+        except (ValueError, OSError):
+            pass
         try:
             self._process.wait(timeout=_STOP_JOIN_SECONDS)
         except Exception:

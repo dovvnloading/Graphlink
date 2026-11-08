@@ -112,6 +112,16 @@ class TestSetChatIndexIntoKnowledgeIntent:
         assert document.nodes[node_id].state.index_into_knowledge is False
         assert len(knowledge_store.list_documents(_isolated_knowledge_db)) == 1  # untouched
 
+    def test_empty_branch_index_failure_is_published_to_the_user(self, _isolated_knowledge_db):
+        bus, document, recorder = make_bus()
+        node_id = _run(bus.dispatch_intent("scene", "addChatNode", [0, 0, "", True]))
+        recorder.messages.clear()
+
+        _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_id, True]))
+
+        assert document.nodes[node_id].state.index_into_knowledge is False
+        assert recorder.topics_seen() == ["notification"]
+
     def test_setting_it_on_a_non_chat_node_raises(self, _isolated_knowledge_db):
         from backend.domain.graph import SceneError
 

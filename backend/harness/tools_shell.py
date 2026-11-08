@@ -193,6 +193,10 @@ SHELL_SESSION_SPEC = ToolSpec(
 # that starts silently and stays up.
 _SETTLE_SECONDS = 2.0
 _SETTLE_POLL_SECONDS = 0.05
+# Child stdin pipes are finite. A process that never reads them must not
+# park an agent run forever in the executor thread's write()/flush().
+_SESSION_WRITE_TIMEOUT_SECONDS = 5.0
+_SESSION_WRITE_MAX_CHARS = 16_000
 
 
 async def _settle(session, *, want_output: bool = True) -> str:
@@ -286,8 +290,26 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
                 text = call.arguments.get("input")
                 if not isinstance(text, str) or not text:
                     return ToolResult(content="shell.session 'write' needs non-empty input.", is_error=True)
+                if len(text) > _SESSION_WRITE_MAX_CHARS:
+                    return ToolResult(
+                        content=f"Shell session input exceeds {_SESSION_WRITE_MAX_CHARS} characters.",
+                        is_error=True,
+                    )
                 session = session_registry.get(workspace_id, name, expected_root=workspace)
-                await asyncio.to_thread(session.write, text)
+                try:
+                    await asyncio.wait_for(
+                        asyncio.to_thread(session.write, text),
+                        timeout=_SESSION_WRITE_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    # wait_for stops waiting, but cannot cancel a blocked
+                    # OS-pipe write inside to_thread. Stop the child to break
+                    # the pipe and release that worker too.
+                    await asyncio.to_thread(session_registry.stop, workspace_id, name)
+                    return ToolResult(
+                        content=f"Input to shell session {name!r} timed out; session stopped.",
+                        is_error=True,
+                    )
                 output = await _settle(session)
                 return ToolResult(content=output or f"Wrote to {name!r} (no output yet).")
 

@@ -362,7 +362,10 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
             return ToolResult(content="VCS metadata cannot be modified by harness filesystem tools.", is_error=True)
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
+            # Do not translate newlines on Windows: the model's bytes should
+            # be written as supplied, not silently changed from LF to CRLF.
+            with target.open("w", encoding="utf-8", newline="") as stream:
+                stream.write(content)
         except OSError as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Wrote {len(content)} characters to {call.arguments.get('path')}.")
@@ -403,7 +406,11 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         if len(replacement.encode("utf-8")) > _MAX_FS_FILE_BYTES:
             return ToolResult(content="Edited file would exceed the permitted size.", is_error=True)
         try:
-            target.write_text(replacement, encoding="utf-8")
+            # _read_bounded_text decodes original bytes WITHOUT universal
+            # newline translation. Path.write_text() would turn each existing
+            # CRLF into CRCRLF on Windows, corrupting otherwise valid files.
+            with target.open("w", encoding="utf-8", newline="") as stream:
+                stream.write(replacement)
         except OSError as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Edited {call.arguments.get('path')}.")
