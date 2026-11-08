@@ -544,7 +544,7 @@ function App() {
                     <SettingsDialog transport={transport} />
                   </LazySurface>
                   <LazySurface overlayName="library">
-                    <ChatLibraryDialog transport={transport} />
+                    <ChatLibraryDialog transport={transport} store={sceneStore} />
                   </LazySurface>
                 </ExecutionLimitsProvider>
               </div>
