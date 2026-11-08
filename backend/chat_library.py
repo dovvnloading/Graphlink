@@ -2672,6 +2672,13 @@ class ExportWorkspaceArgs:
     workspaceId: int
 
 
+@dataclass
+class ImportWorkspaceArgs:
+    """Import an inspected .graphlink archive into one explicit workspace."""
+
+    workspaceId: int
+
+
 def _safe_export_filename(name: str) -> str:
     """Sanitizes a workspace name into a default `.graphlink` SAVE-dialog
     filename - a cosmetic prefill, not a security boundary (the user's own
@@ -2687,6 +2694,106 @@ def _safe_export_filename(name: str) -> str:
     safe = "".join(ch for ch in text if ch.isalnum() or ch in (" ", "-", "_")).strip()
     safe = re.sub(r"\s+", "_", safe)
     return safe or "workspace"
+
+
+def import_workspace_rows_atomically(
+    db_path: Path, archive_path: Path, workspace_id: int,
+) -> list[int]:
+    """Restore all graphs in ONE transaction after validating the whole ZIP.
+
+    No incoming graph IDs are trusted or reused: a backup may be imported
+    repeatedly without overwriting existing graphs. Notes, pins, tags and
+    favorite/archive flags travel with each new graph. Asset blobs are
+    content-addressed, verified *before* the first write and stored before
+    the SQLite transaction. A DB failure may leave harmless unreferenced
+    assets but can never leave a partially imported workspace.
+    """
+    from backend.asset_store import content_ref
+
+    parsed = workspace_archive.read_archive(archive_path)
+    chats = parsed["chats"]
+    for ref, content in parsed["assets"].items():
+        if content_ref(content) != ref:
+            raise workspace_archive.ArchiveError(
+                "Archive contains an asset whose contents do not match its checksum."
+            )
+    # Validate nested shapes before any assets or graph rows are written.
+    for chat in chats:
+        for key in ("notes", "pins"):
+            if any(not isinstance(item, dict) for item in chat.get(key, [])):
+                raise workspace_archive.ArchiveError(f"Archive contains malformed {key} records.")
+        if any(not isinstance(tag, str) for tag in chat.get("tags", [])):
+            raise workspace_archive.ArchiveError("Archive contains malformed graph tags.")
+
+    imported: list[tuple[int, str, dict[str, Any]]] = []
+    with contextlib.closing(_connect(db_path)) as conn:
+        exists = conn.execute("SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
+        if exists is None:
+            raise ValueError("The destination workspace no longer exists.")
+
+        asset_store = store_for(db_path)
+        for content in parsed["assets"].values():
+            asset_store.put(content)
+
+        with conn:
+            for chat in chats:
+                title = chat["title"]
+                data = chat["data"]
+                preview, message_count = _extract_preview_and_message_count(data)
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+                cursor = conn.execute(
+                    "INSERT INTO graphs "
+                    "(title, data, preview, message_count, updated_at, workspace_id, favorite, archived) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        title, json.dumps(data), preview, message_count, now,
+                        workspace_id, int(chat.get("favorite", False)), int(chat.get("archived", False)),
+                    ),
+                )
+                graph_id = int(cursor.lastrowid)
+                for note in chat.get("notes", []):
+                    position = note.get("position") if isinstance(note.get("position"), dict) else {}
+                    size = note.get("size") if isinstance(note.get("size"), dict) else {}
+                    conn.execute(
+                        "INSERT INTO notes (chat_id, content, position_x, position_y, "
+                        "width, height, color, header_color, is_system_prompt, is_summary_note, note_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            graph_id, str(note.get("content", "")),
+                            float(position.get("x", 0.0)), float(position.get("y", 0.0)),
+                            float(size.get("width", 0.0)), float(size.get("height", 0.0)),
+                            _legacy_default_to_none(note.get("color")) or "",
+                            note.get("header_color"), int(bool(note.get("is_system_prompt"))),
+                            int(bool(note.get("is_summary_note"))), str(note.get("id") or "") or None,
+                        ),
+                    )
+                for index, pin in enumerate(chat.get("pins", [])):
+                    position = pin.get("position") if isinstance(pin.get("position"), dict) else {}
+                    conn.execute(
+                        "INSERT INTO pins (chat_id, title, note, position_x, position_y, "
+                        "pin_id, sort_order, anchor_item_id, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            graph_id, str(pin.get("title", "")), pin.get("note"),
+                            float(position.get("x", 0.0)), float(position.get("y", 0.0)),
+                            pin.get("pin_id"), pin.get("sort_order", index),
+                            pin.get("anchor_item_id"), pin.get("created_at"),
+                        ),
+                    )
+                for tag in _normalize_tags(chat.get("tags", [])):
+                    conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
+                    tag_id = conn.execute("SELECT id FROM tags WHERE name = ?", (tag,)).fetchone()[0]
+                    conn.execute(
+                        "INSERT OR IGNORE INTO graph_tags (graph_id, tag_id) VALUES (?, ?)",
+                        (graph_id, int(tag_id)),
+                    )
+                imported.append((graph_id, title, data))
+
+    # The search index is a separate database. It is best-effort like the
+    # ordinary save path and runs only once the full import has committed.
+    for graph_id, title, data in imported:
+        _reindex_graph_into_knowledge_store(graph_id, workspace_id, title, data, None)
+    return [graph_id for graph_id, _title, _data in imported]
 
 
 def make_export_workspace(
