@@ -629,6 +629,64 @@ def add_document_with_chunks(
         conn.close()
 
 
+def replace_branch_document_with_chunks(
+    db_path: Path, *, source_uri: str, title: str, text: str, chunks: list,
+    collection_id: int = 0,
+) -> IngestOutcome:
+    """Atomically replace one mutable branch source, never an unrelated file.
+
+    Unlike immutable-file ingestion, branch identity is a durable source URI,
+    not its content hash. Include the URI in this row's hash so two different
+    branches with identical text never collapse into one attribution record.
+    BEGIN IMMEDIATE locks the read/replace sequence against concurrent
+    indexing of the same source, just like graph reindexing does.
+    """
+    if not source_uri.startswith("branch:"):
+        raise ValueError("mutable branch source must use the branch: scheme")
+    hash_value = content_hash(f"{source_uri}\\0{text}")
+    conn = _connect(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            existing = conn.execute(
+                "SELECT id, content_hash FROM documents WHERE collection_id = ? AND source_uri = ?",
+                (collection_id, source_uri),
+            ).fetchall()
+            if len(existing) == 1 and existing[0][1] == hash_value:
+                doc_id = int(existing[0][0])
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE document_id = ?", (doc_id,),
+                ).fetchone()[0]
+                conn.commit()
+                return IngestOutcome(document_id=doc_id, chunk_count=count, was_new=False)
+
+            conn.execute(
+                "DELETE FROM documents WHERE collection_id = ? AND source_uri = ?",
+                (collection_id, source_uri),
+            )
+            cursor = conn.execute(
+                "INSERT INTO documents (collection_id, source_uri, title, mime, content_hash, added_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (collection_id, source_uri, title, "text/branch", hash_value, _now_iso()),
+            )
+            doc_id = int(cursor.lastrowid)
+            conn.executemany(
+                "INSERT INTO chunks (document_id, ordinal, text, token_count, offset_start, offset_end) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [
+                    (doc_id, part.ordinal, part.text, part.token_count, part.offset_start, part.offset_end)
+                    for part in chunks
+                ],
+            )
+            conn.commit()
+            return IngestOutcome(document_id=doc_id, chunk_count=len(chunks), was_new=True)
+        except BaseException:
+            conn.rollback()
+            raise
+    finally:
+        conn.close()
+
+
 def get_document(db_path: Path, document_id: int) -> dict[str, Any] | None:
     conn = _connect(db_path)
     try:

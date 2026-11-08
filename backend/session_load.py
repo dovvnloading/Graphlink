@@ -1895,6 +1895,17 @@ def _restore_chat_into_document(
 
     _restore_children(node_payloads, all_nodes_map, nodes_by_id, kind_by_new_id, document)
 
+    # A branch's durable source key is independent of its scene node id.
+    # Remap persisted ids through the SAME nodes_by_id table used by edges.
+    raw_branch_sources = chat_data.get("branch_index_sources")
+    if isinstance(raw_branch_sources, dict):
+        for old_id, source_key in raw_branch_sources.items():
+            if (isinstance(old_id, str) and isinstance(source_key, str)
+                    and re.fullmatch(r"[0-9a-f]{32}", source_key)):
+                restored_id = nodes_by_id.get(old_id)
+                if restored_id is not None and kind_by_new_id.get(restored_id) == "chat":
+                    document.branch_index_sources[restored_id] = source_key
+
     notes_map = _restore_notes(document, notes_data)
 
     # ADR-002 Workstream 1 ("Branch status and lifecycle") - confirmed,

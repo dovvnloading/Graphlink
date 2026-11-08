@@ -1133,6 +1133,12 @@ def _build_chat_data(
         # active branch, so the first Send after a load starts a detached
         # root instead of continuing the conversation.
         "last_chat_node_id": document.last_chat_node_id,
+        # Node ids are reassigned on reload. Persist the stable branch-source
+        # keys using the *saved* ids so session_load can remap to restored ids.
+        "branch_index_sources": {
+            nid: key for nid, key in document.branch_index_sources.items()
+            if nid in document.nodes and document.nodes[nid].kind == "chat"
+        },
         "notes_data": [_serialize_note(n) for n in notes],
         "pins_data": [_serialize_pin(r) for r in document.pins.records],
         # The 12 basic connection lists all draw from the SAME classified

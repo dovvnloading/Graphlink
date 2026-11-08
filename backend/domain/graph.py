@@ -43,6 +43,7 @@ import itertools
 import logging
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, cast
+from uuid import uuid4
 
 from graphlink_grid_view_settings import (
     GRID_SIZE_PRESETS,
@@ -243,6 +244,11 @@ class SceneDocument(
     # scene has no pending workspace assignment of its own until the next
     # newChat call sets one.
     current_workspace_id: int | None = None
+    # Durable, globally unique identities for explicitly indexed chat
+    # branches. Node ids can be reassigned on load, and multiple graphs
+    # reuse n1/n2/etc; saving these keys alongside the graph prevents
+    # one branch's indexed passages from being mistaken for another's.
+    branch_index_sources: dict[str, str] = field(default_factory=dict)
     # ADR-014 stage 14.2: the live-wire half of the Plugin SDK's generic
     # persistence seam - keyed by a plugin's ALREADY-namespaced node kind
     # (f"{plugin_id}.{kind}", HostContext.register_node_kind's own
@@ -489,6 +495,7 @@ class SceneDocument(
         self.total_session_tokens = 0
         self.current_chat_id = None
         self.current_workspace_id = None
+        self.branch_index_sources.clear()
         # ADR-010 stage 10.1: undo history does NOT survive a session load.
         # Every command in it references node/edge ids from the document
         # being replaced, so inverting one afterward would resurrect a node
