@@ -37,6 +37,19 @@ def test_preview_only_identifies_exact_old_scheme_and_does_not_change_data(tmp_p
     assert list(tmp_path.glob("*.legacy-branch-backup-*.db")) == []
 
 
+def test_preview_never_calls_the_migrating_write_connection(tmp_path, monkeypatch):
+    import backend.knowledge_legacy_cleanup as cleanup
+
+    db = tmp_path / "knowledge.db"
+    legacy = _insert(db, "branch:n3", "Branch (node n3)", "old content")
+
+    def disallowed_connect(*_args, **_kwargs):
+        pytest.fail("preview must use SQLite URI mode=ro, not the migrating writer")
+
+    monkeypatch.setattr(cleanup, "_connect", disallowed_connect)
+    assert [row["id"] for row in preview_legacy_branch_documents(db)] == [legacy]
+
+
 def test_explicit_ids_and_confirmation_required_before_any_delete(tmp_path):
     db = tmp_path / "knowledge.db"
     legacy = _insert(db, "branch:n1", "Branch (node n1)", "obsolete text")

@@ -54,7 +54,12 @@ def preview_legacy_branch_documents(db_path: Path = DEFAULT_DB_PATH) -> list[dic
     """Read-only preview; returns metadata, never raw snippets or private text."""
     if not db_path.is_file():
         return []
-    with contextlib.closing(_connect(db_path)) as conn:
+    # Do not use knowledge_store._connect here: that helper changes WAL
+    # settings and runs migrations on open. Preview must genuinely be read-
+    # only, including against an older database. SQLite's URI mode=ro
+    # reads the current WAL view without modifying the corpus.
+    uri = db_path.resolve().as_uri() + "?mode=ro"
+    with contextlib.closing(sqlite3.connect(uri, uri=True)) as conn:
         return [
             {
                 "id": row["id"],
