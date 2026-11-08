@@ -3328,6 +3328,37 @@ def register_chat_library(
         _serialize_mutating_intent(save_chat),
     )
 
+    async def import_workspace(workspace_id: int) -> int:
+        # The path comes only from the user's native OPEN picker, never a
+        # client-supplied absolute path or a model tool argument.
+        try:
+            selected = await native_dialogs.pick_file(
+                file_types=("Graphlink Archive (*.graphlink)",),
+            )
+        except Exception as exc:
+            if notifications is not None:
+                notifications.show(f"Could not open the archive picker: {exc}", "error")
+                await bus.publish("notification")
+            return 0
+        if not selected:
+            return 0
+        try:
+            imported = await asyncio.to_thread(
+                import_workspace_rows_atomically, resolved_path, Path(selected), int(workspace_id),
+            )
+        except (workspace_archive.ArchiveError, OSError, ValueError, sqlite3.Error) as exc:
+            if notifications is not None:
+                notifications.show(f"Workspace import was refused: {exc}", "error")
+                await bus.publish("notification")
+            return 0
+        await bus.publish("app-chat-library")
+        if notifications is not None:
+            notifications.show(
+                f"Imported {len(imported)} graph(s) into the selected workspace.", "success",
+            )
+            await bus.publish("notification")
+        return len(imported)
+
     bus.register_intent("app-chat-library", "renameChat", _serialize_mutating_intent(rename))
     # Serialized like every other mutating intent here. It was the one
     # exception, and that was a real hazard rather than an oversight with no
@@ -3371,6 +3402,7 @@ def register_chat_library(
         args_schema=SetWorkspaceDefaultModelArgs,
     )
     bus.register_intent("app-chat-library", "exportWorkspace", export_workspace, args_schema=ExportWorkspaceArgs)
+    bus.register_intent("app-chat-library", "importWorkspace", import_workspace, args_schema=ImportWorkspaceArgs)
 
     if canvas_document is not None and autosave_interval_seconds is not None:
         # R6.6: local import - backend/autosave.py itself imports several
