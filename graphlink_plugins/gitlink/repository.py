@@ -25,7 +25,7 @@ import shutil
 import stat
 import tempfile
 import zipfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote, urlsplit
 
