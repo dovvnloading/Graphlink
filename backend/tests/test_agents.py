@@ -5809,3 +5809,58 @@ def test_a_mcp_server_that_raises_valueerror_on_register_is_skipped_and_its_clie
     retained = getattr(dispatcher, "_mcp_clients", [])
     assert len(retained) == 1, "only the good server's client is kept"
     assert len(closed) == 1, "the bad server's connected client must be closed, not leaked"
+
+
+def test_gitlink_apply_soft_timeout_keeps_lease_until_real_worker_finishes(monkeypatch, tmp_path):
+    import threading
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_apply(_root, _changes):
+        started.set()
+        assert release.wait(timeout=5), "test worker was never released"
+        return 1
+
+    monkeypatch.setattr(agents_module, "_call_gitlink_apply", slow_apply)
+    monkeypatch.setattr(agents_module, "GITLINK_APPLY_TIMEOUT_SECONDS", 0.01)
+
+    async def run():
+        bus, notifications, dispatcher = _make_gitlink_env()
+        changes = [{"path": "file.py", "operation": "create", "content": "safe"}]
+        fingerprint = agents_module._fingerprint_changes(changes)
+        node = _make_gitlink_node(
+            gitlink_pending_changes=changes,
+            gitlink_change_fingerprint=fingerprint,
+            gitlink_local_root=str(tmp_path),
+            gitlink_change_local_root=str(tmp_path),
+        )
+        successes = []
+        try:
+            await dispatcher.start_gitlink_apply(
+                bus=bus, notifications_state=notifications, node=node, node_id="node",
+                client_fingerprint=fingerprint, local_root=str(tmp_path),
+                on_success=successes.append, on_failure=lambda *_: None,
+            )
+            task = next(iter(gitlink_apply_slots(dispatcher).values()))["task"]
+            assert await asyncio.to_thread(started.wait, 2)
+            await asyncio.sleep(0.05)
+            assert node.pending_request_id is not None
+            assert gitlink_apply_slots(dispatcher), "worker still writes; do not release slot at timeout"
+            assert notifications.msg_type == "warning"
+
+            await dispatcher.start_gitlink_apply(
+                bus=bus, notifications_state=notifications, node=node, node_id="node",
+                client_fingerprint=fingerprint, local_root=str(tmp_path),
+                on_success=successes.append, on_failure=lambda *_: None,
+            )
+            assert len(gitlink_apply_slots(dispatcher)) == 1
+            release.set()
+            await task
+            assert successes == [1]
+            assert node.pending_request_id is None
+            assert gitlink_apply_slots(dispatcher) == {}
+        finally:
+            release.set()
+
+    asyncio.run(run())
