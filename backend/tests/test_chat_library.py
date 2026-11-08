@@ -3615,6 +3615,39 @@ class TestExportWorkspaceIntent:
         assert not [r for r in get_all_chats(db_path) if r["workspaceId"] == workspace_b["id"]]
         assert notifications.msg_type == "success"
 
+    def test_export_reads_each_graph_notes_and_pins_from_one_sqlite_snapshot(self, db_path, tmp_path, monkeypatch):
+        workspace = get_all_workspaces(db_path)[0]
+        graph_id, _ = save_chat_atomically_row(
+            db_path, None, "Snapshot Graph", {"nodes": []}, [], [], workspace_id=workspace["id"],
+        )
+        target = tmp_path / "snapshot.graphlink"
+
+        async def pick_save_file(default_name, file_types=(), directory=""):
+            return str(target)
+
+        monkeypatch.setattr(native_dialogs_module, "pick_save_file", pick_save_file)
+        bus, _document, _notifications = _bus_with_canvas(db_path)
+        original = chat_library_module.load_chat_snapshot
+        calls = []
+
+        def snapshot_spy(path, chat_id):
+            calls.append(chat_id)
+            return original(path, chat_id)
+
+        def reject_split_reads(*args, **kwargs):
+            pytest.fail("workspace export must not read graph/notes/pins through separate connections")
+
+        monkeypatch.setattr(chat_library_module, "load_chat_snapshot", snapshot_spy)
+        monkeypatch.setattr(chat_library_module, "load_chat_row", reject_split_reads)
+        monkeypatch.setattr(chat_library_module, "load_notes_rows", reject_split_reads)
+        monkeypatch.setattr(chat_library_module, "load_pins_rows", reject_split_reads)
+        asyncio.run(bus.dispatch_intent("app-chat-library", "exportWorkspace", [workspace["id"]]))
+        assert calls == [graph_id]
+        exported = workspace_archive_module.read_archive(target)["chats"]
+        assert len(exported) == 1
+        assert exported[0]["title"] == "Snapshot Graph"
+        assert exported[0]["notes"] == exported[0]["pins"] == []
+
     def test_exports_only_the_target_workspaces_graphs_as_a_real_archive(self, db_path, tmp_path, monkeypatch):
         get_all_chats(db_path)  # bootstraps a fully-migrated db (Default = workspace A)
         workspace_a = get_all_workspaces(db_path)[0]

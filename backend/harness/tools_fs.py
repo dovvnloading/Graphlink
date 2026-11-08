@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import secrets
 import stat
-import tempfile
 import time
 from pathlib import Path
 
@@ -192,14 +192,25 @@ def _write_atomic_text(target: Path, content: str) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     staged_path: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", newline="", delete=False,
-            dir=target.parent, prefix=f".{target.name}.", suffix=".tmp",
-        ) as staged:
-            staged_path = Path(staged.name)
-            staged.write(content)
-            staged.flush()
-            os.fsync(staged.fileno())
+        # The exclusive "x" mode creates a unique sibling with the same
+        # 0o666 & umask permissions as an ordinary new text file. mkstemp/
+        # NamedTemporaryFile force 0o600 even with umask 0o022, which made
+        # new files under shared user workspaces unexpectedly private.
+        # A random, unguessable name and O_EXCL prevent overwriting another
+        # file; keep the temp path only after creation succeeds.
+        for _attempt in range(3):
+            candidate = target.parent / f".{target.name}.{secrets.token_hex(16)}.tmp"
+            try:
+                with candidate.open("x", encoding="utf-8", newline="") as staged:
+                    staged_path = candidate
+                    staged.write(content)
+                    staged.flush()
+                    os.fsync(staged.fileno())
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise FileExistsError("Could not allocate an exclusive staging file.")
         if target.exists():
             os.chmod(staged_path, stat.S_IMODE(target.stat().st_mode))
         os.replace(staged_path, target)

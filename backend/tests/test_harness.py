@@ -563,6 +563,23 @@ class TestWriteTools:
         assert not result.is_error
         assert (ws / "mixed.txt").read_bytes() == content.encode("utf-8")
 
+    def test_new_file_permissions_match_normal_creation_umask(self, workspace_root):
+        import os
+        import stat
+
+        if os.name == "nt":
+            pytest.skip("POSIX permissions are not meaningful on Windows")
+        ws = ensure_workspace("ws1")
+        ordinary = ws / "ordinary.txt"
+        ordinary.write_text("ordinary", encoding="utf-8")
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+        result = asyncio.run(registry.invoke(
+            call("1", "fs.write", path="created.txt", content="created"), ctx,
+        ))
+        assert not result.is_error
+        assert stat.S_IMODE((ws / "created.txt").stat().st_mode) == stat.S_IMODE(ordinary.stat().st_mode)
+
     def test_filesystem_writes_cannot_modify_vcs_hooks(self, workspace_root):
         ws = ensure_workspace("ws1")
         hooks = ws / ".git" / "hooks"

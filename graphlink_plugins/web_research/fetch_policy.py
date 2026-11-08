@@ -23,7 +23,9 @@ def canonicalize_url(url: str) -> str:
         port = parsed.port
     except ValueError:
         return ""
-    netloc = hostname
+    # urlsplit().hostname strips brackets from IPv6 literals; urlunsplit()
+    # does not put them back, so a valid literal becomes an invalid netloc.
+    netloc = f"[{hostname}]" if ":" in hostname else hostname
     if parsed.username or parsed.password:
         return ""
     if port and not ((scheme == "https" and port == 443) or (scheme == "http" and port == 80)):

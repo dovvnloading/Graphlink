@@ -47,6 +47,14 @@ class TestCanonicalizeUrl:
     def test_lowercases_scheme_and_host(self):
         assert canonicalize_url("HTTPS://Example.COM/Path") == "https://example.com/Path"
 
+    def test_preserves_ipv6_literal_brackets_and_default_port(self):
+        assert canonicalize_url("https://[2606:4700:4700::1111]/dns-query") == (
+            "https://[2606:4700:4700::1111]/dns-query"
+        )
+        assert canonicalize_url("https://[2606:4700:4700::1111]:443/path") == (
+            "https://[2606:4700:4700::1111]/path"
+        )
+
     def test_strips_the_default_port_for_the_scheme(self):
         assert canonicalize_url("https://example.com:443/") == "https://example.com/"
         assert canonicalize_url("http://example.com:80/") == "http://example.com/"
@@ -102,6 +110,12 @@ class TestIsPublicAddress:
 
 
 class TestFetchPolicyValidate:
+    def test_public_ipv6_literal_succeeds_without_dns_resolution(self):
+        policy = FetchPolicy(resolver=_raising_resolver(AssertionError("literal must not resolve")))
+        result = policy.validate("https://[2606:4700:4700::1111]/dns-query")
+        assert result.canonical_url == "https://[2606:4700:4700::1111]/dns-query"
+        assert result.pinned_ip == "2606:4700:4700::1111"
+
     def test_a_public_ip_literal_succeeds_and_pins_that_exact_ip(self):
         policy = FetchPolicy()
         result = policy.validate("https://8.8.8.8/path")
