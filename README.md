@@ -134,7 +134,9 @@ python graphlink_desktop.py
 
 `graphlink` above is the repo root (containing `requirements.txt` and `graphlink_desktop.py`). Dependencies — FastAPI, uvicorn, pywebview, the provider SDKs, web-search/spellcheck/charting/audio helpers, and the export/parsing libraries — install from `requirements.txt` in a single step. `llama-cpp-python` is optional (only needed for Llama.cpp local mode; Ollama is the built-in local path) — install it separately with `pip install llama-cpp-python`. Building the frontend (`npm run build`, inside `web_ui/`) only needs to be redone when `web_ui/` changes.
 
-> `graphlink_desktop.py` starts the Python backend, waits for it to report healthy, then opens a single native window (via `pywebview`) pointed at it — there is no separate frontend dev server to run and no browser tab involved. It requires `web_ui/dist/app/index.html` to already exist; if the frontend hasn't been built yet it logs an error naming the missing step and exits rather than building it for you.
+> `graphlink_desktop.py` starts the Python backend, waits for it to report healthy, then opens a single native window (via `pywebview`) pointed at it — there is no separate frontend dev server to run and no browser tab involved. From a source checkout, it requires `web_ui/dist/app/index.html` to already exist; installable wheels bundle this built frontend.
+
+**Linux / macOS desktop users:** plain `pip install -r requirements.txt` does not supply every native window-engine prerequisite. Linux must use GTK (not Qt); the required WebKitGTK and PyGObject packages are OS-specific. Standalone macOS Python may need PyObjC. See [Platform GUI installation](docs/PLATFORM_GUI_INSTALL.md) for tested commands, the `linux-gtk` / `macos-cocoa` package extras, and troubleshooting. Windows requires WebView2 Runtime.
 
 On first launch, Graphlink creates `~/.graphlink/` to hold your sessions and settings (see [Architecture](#architecture)).
 

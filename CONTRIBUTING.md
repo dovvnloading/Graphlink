@@ -26,7 +26,9 @@ npm run build
 cd ..
 ```
 
-This produces `web_ui/dist/app/index.html`. Launching the app does **not** build this automatically - if it's missing, `graphlink_desktop.py` logs an error telling you to run the build and exits with code 1.
+This produces `web_ui/dist/app/index.html`. Launching from a **source checkout** does not build it automatically - if it's missing, `graphlink_desktop.py` exits with a helpful error. Installed wheels bundle the prebuilt SPA.
+
+For GTK-based Linux and Cocoa/macOS native window prerequisites (not installed by the base requirements lock), see [Platform GUI installation](docs/PLATFORM_GUI_INSTALL.md). Windows requires WebView2 Runtime.
 
 Then launch from the repo root:
 

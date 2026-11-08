@@ -263,7 +263,19 @@ def _run_desktop_main() -> int:
         return 1
     logger.info("backend healthy at %s", base_url)
 
-    import webview  # pywebview - the native (non-Qt, non-browser) window
+    try:
+        import webview  # pywebview - the native (non-Qt, non-browser) window
+    except (ImportError, OSError, RuntimeError) as exc:
+        logger.error(
+            "Could not load the native webview backend: %s. "
+            "Check the platform prerequisites at "
+            "https://github.com/dovvnloading/Graphlink/blob/main/docs/PLATFORM_GUI_INSTALL.md",
+            exc,
+        )
+        _shutdown_backend(server, backend_thread)
+        mark_clean_exit()
+        return 1
+
 
     # The token reaches the SPA as a URL FRAGMENT, which the browser never
     # sends to the server - so it cannot land in an access log or a Referer
@@ -312,7 +324,11 @@ def _run_desktop_main() -> int:
     try:
         webview.start(**start_kwargs)
     except Exception:
-        logger.exception("webview.start() failed to launch the native window")
+        logger.exception(
+            "webview.start() failed to launch the native window. "
+            "On Linux install GTK/WebKitGTK and pywebview[gtk]; on macOS "
+            "ensure PyObjC is available (docs/PLATFORM_GUI_INSTALL.md)."
+        )
         return 1
     finally:
         _shutdown_backend(server, backend_thread)
