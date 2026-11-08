@@ -18,6 +18,16 @@
           "id": {
             "type": "string"
           },
+          "role": {
+            "enum": [
+              "legacy",
+              "primary",
+              "secondary",
+              "reference",
+              "association"
+            ],
+            "type": "string"
+          },
           "source": {
             "type": "string"
           },

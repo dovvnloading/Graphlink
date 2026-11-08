@@ -792,6 +792,8 @@ class SceneEdgeRow:
     id: str
     source: str
     target: str
+    # Optional for old snapshots; new backends always publish a concrete role.
+    role: Literal["legacy", "primary", "secondary", "reference", "association"] | None = None
 
 
 @dataclass
