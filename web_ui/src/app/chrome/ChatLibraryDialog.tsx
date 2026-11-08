@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
+import type { SceneStore } from "../canvas/sceneStore";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppChatLibraryRow, AppChatLibraryState, AppWorkspaceRow } from "../../lib/bridge-core/generated/app-chat-library-state";
 import type { AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
@@ -224,7 +225,7 @@ function Icon({
   }
 }
 
-export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
+export function ChatLibraryDialog({ transport, store }: { transport: WsTransport; store: SceneStore }) {
   const overlays = useOverlays();
   const [state, setState] = useState<AppChatLibraryState>(initialState);
   const [query, setQuery] = useState("");
@@ -382,12 +383,22 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
 
   const groups = useMemo(() => groupRows(filtered), [filtered]);
 
+  function confirmNavigation(message: string): boolean {
+    const scene = store.getScene();
+    // The backend also saves dirty state before switching. This UI check is
+    // deliberate confirmation, shared by Load and New Chat in this dialog.
+    if (scene.nodes.length === 0 && !scene.hasSavedChat) return true;
+    return window.confirm(message);
+  }
+
   function loadChat(id: number) {
+    if (!confirmNavigation("Open another chat? Current edits will be saved before switching.")) return;
     transport.fireIntent("app-chat-library", "loadChat", [id]);
     overlays.close();
   }
 
   function newChat() {
+    if (!confirmNavigation("Start a new chat? Your current edits will be saved before switching.")) return;
     // ADR-020 stage 20.2: newChat's new trailing workspaceId param is
     // optional/backward-compatible - omitted here whenever "All" is
     // selected (selectedWorkspaceId === null), which resolves server-side
