@@ -20,6 +20,7 @@ helper, not a second source of truth for repo/branch/local_root.
 
 import base64
 import html
+import os
 import shutil
 import stat
 import tempfile
@@ -53,6 +54,11 @@ IGNORED_LOCAL_DIR_NAMES = {
 
 MAX_CONTEXT_CHARS = 180000
 MAX_MANIFEST_ENTRIES = 1200
+# Cap both the number of context candidates and the amount ever read from
+# one user-selected file. The eventual XML truncation is NOT an I/O bound.
+MAX_CONTEXT_FILES = 1200
+MAX_LOCAL_CONTEXT_FILE_BYTES = 2 * 1024 * 1024
+MAX_LOCAL_SCAN_ENTRIES = 20_000
 
 # An untrusted repository can contain a ZIP bomb: bound both the compressed
 # HTTP body and the number/size of entries extracted onto the user's disk.
@@ -127,20 +133,30 @@ def default_import_root(repo_name, branch_name):
 
 def scan_local_repo_paths(local_root):
     root_path = Path(local_root).expanduser()
-    if not root_path.exists():
+    if not root_path.is_dir():
         raise RuntimeError("The selected local repo path does not exist.")
 
     collected = []
-    for file_path in root_path.rglob("*"):
-        # Never auto-enumerate a symlink alias into a private file.
-        if file_path.is_symlink() or not file_path.is_file():
-            continue
-        relative = file_path.relative_to(root_path).as_posix()
-        if any(part in IGNORED_LOCAL_DIR_NAMES for part in PurePosixPath(relative).parts):
-            continue
-        if not _is_repo_text_path(relative):
-            continue
-        collected.append(relative)
+    inspected = 0
+    # rglob() traversed ignored directories before filtering the results.
+    # Prune them before descent, and do not follow symlinked directories.
+    for directory, dirs, filenames in os.walk(root_path, followlinks=False):
+        dirs[:] = [
+            name for name in dirs
+            if name not in IGNORED_LOCAL_DIR_NAMES and not (Path(directory) / name).is_symlink()
+        ]
+        inspected += len(dirs) + len(filenames)
+        if inspected > MAX_LOCAL_SCAN_ENTRIES:
+            raise RuntimeError("Repository scan exceeds the file-count limit; select a smaller folder.")
+        for name in filenames:
+            file_path = Path(directory) / name
+            if file_path.is_symlink() or not file_path.is_file():
+                continue
+            relative = file_path.relative_to(root_path).as_posix()
+            if _is_repo_text_path(relative):
+                collected.append(relative)
+                if len(collected) > MAX_CONTEXT_FILES:
+                    raise RuntimeError("Repository contains too many text files for context; select individual files.")
     return sorted(collected, key=str.lower)
 
 
@@ -164,7 +180,11 @@ def read_local_repo_file(local_root, repo_path):
         raise RuntimeError(f"Local checkout is missing `{repo_path}`.")
     if file_path.is_dir():
         raise RuntimeError(f"`{repo_path}` resolves to a directory, not a file.")
-    return _decode_text_bytes(file_path.read_bytes())
+    with file_path.open("rb") as source:
+        raw = source.read(MAX_LOCAL_CONTEXT_FILE_BYTES + 1)
+    if len(raw) > MAX_LOCAL_CONTEXT_FILE_BYTES:
+        raise RuntimeError(f"File `{repo_path}` exceeds the bounded context-read limit.")
+    return _decode_text_bytes(raw)
 
 
 def validate_pending_changes(pending_changes):
@@ -354,14 +374,27 @@ class GitlinkRepository:
             extracted_root = extract_root / root_name
 
             if target_root.exists():
-                return target_root
-
-            shutil.move(str(extracted_root), str(target_root))
+                # An existing populated checkout is a concurrent winner.
+                # An EMPTY checkout, however, is incomplete and must not
+                # turn a successful download into a no-op.
+                if any(target_root.iterdir()):
+                    return target_root
+                target_root.rmdir()
+            try:
+                shutil.move(str(extracted_root), str(target_root))
+            except OSError:
+                # A second importer may have promoted its complete checkout
+                # after our empty-directory check; prefer its result.
+                if target_root.is_dir() and any(target_root.iterdir()):
+                    return target_root
+                raise
 
         return target_root
 
     def build_context_bundle(self, *, repo_name, branch_name, scope_mode, selected_paths, repo_file_paths, local_root):
         scope_paths = resolve_scope_paths(scope_mode, selected_paths, repo_file_paths, local_root=local_root)
+        if len(scope_paths) > MAX_CONTEXT_FILES:
+            raise RuntimeError("Gitlink context contains too many files; select a smaller scope.")
         records = []
         included_file_count = 0
         omitted_for_budget = 0
