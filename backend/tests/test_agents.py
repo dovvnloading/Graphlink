@@ -3439,7 +3439,7 @@ def test_gitlink_apply_rollback_message_surfaced_verbatim(monkeypatch, tmp_path)
     asyncio.run(run())
 
 
-def test_gitlink_apply_timeout_fires_the_exact_message_and_clears_the_slot(monkeypatch, tmp_path):
+def test_gitlink_apply_timeout_warns_and_keeps_slot_until_worker_finishes(monkeypatch, tmp_path):
     monkeypatch.setattr(agents_module, "GITLINK_APPLY_TIMEOUT_SECONDS", 0.05)
     changes = [{"path": "a.py", "operation": "update", "reason": "r", "content": "x"}]
     fingerprint = agents_module._fingerprint_changes(changes)
@@ -3457,17 +3457,23 @@ def test_gitlink_apply_timeout_fires_the_exact_message_and_clears_the_slot(monke
     async def run():
         bus, notifications, dispatcher = _make_gitlink_env()
         failures = []
+        successes = []
 
         await dispatcher.start_gitlink_apply(
             bus=bus, notifications_state=notifications, node=node, node_id="n1",
             client_fingerprint=fingerprint, local_root=str(tmp_path),
-            on_success=lambda written_files: None, on_failure=failures.append,
+            on_success=successes.append, on_failure=failures.append,
         )
         entry = next(iter(gitlink_apply_slots(dispatcher).values()))
-        await entry["task"]
+        await asyncio.sleep(0.12)
+        assert node.pending_request_id is not None
+        assert gitlink_apply_slots(dispatcher), "the filesystem worker has not finished"
+        assert notifications.msg_type == "warning"
+        assert "still working" in notifications.message
 
-        assert len(failures) == 1
-        assert "stopped responding" in failures[0]
+        await entry["task"]
+        assert failures == [], "the timeout is a warning, not a false failure"
+        assert successes == [1]
         assert gitlink_apply_slots(dispatcher) == {}
         assert node.pending_request_id is None
 
