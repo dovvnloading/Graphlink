@@ -525,9 +525,10 @@ class LayoutOps(SceneDocumentParts):
         for node in self.nodes.values():
             if not node.is_docked:
                 continue
-            parent_edge = next(
-                (e for e in self.edges.values() if e.target == node.id), None,
-            )
+            # Dock the child with its canonical parent, not simply the
+            # earliest incoming reference/legacy link. Both Organize and
+            # branch traversal honor an explicit primary edge first.
+            parent_edge = self._branch_parent_edge(node.id)
             if parent_edge is not None and parent_edge.source in self.nodes:
                 # Not `parent`: that name is a str elsewhere in this module.
                 parent_node = self.nodes[parent_edge.source]

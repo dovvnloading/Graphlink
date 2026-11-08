@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 from backend.domain.node_access import require_node
 from backend.domain.node_states import ChatState, NoteState
-from backend.domain.structure import preferred_parent_edge
+from backend.domain.structure import preferred_parent_edge, primary_parent_edges
 
 from backend.domain._composed import SceneDocumentParts
 
@@ -194,134 +194,97 @@ class BranchOps(SceneDocumentParts):
         return preferred_parent_edge(self.nodes, self.edges, node_id)
 
     def _chat_subtree_ids(self, root_id: str) -> list[str]:
-        """ADR-002 Workstream 1 ("Branch status and lifecycle"): the
-        DOWNWARD counterpart to _branch_parent_edge's upward walk above -
-        every chat-kind node's id in root_id's own subtree (root_id
-        itself, plus every descendant reachable through chat-kind edges),
-        via BFS. No such downward/forward walk existed anywhere in this
-        file before this feature - every other edge scan here is either
-        this file's own upward parent-walk pattern or an explicitly
-        one-hop-only scan (delete_chat_node's direct-children reparent,
-        send_message's sibling-fan-out count) - so this is new, not a
-        rename of something existing. Chat-kind only: a code/document/
-        thinking/image node hanging directly off a chat node in this
-        subtree is NOT included - collapsing a branch does not cascade
-        into its content children, matching how a single chat node's own
-        collapse already never cascades into ITS children either."""
+        """Chat descendants along the canonical structural tree only.
+
+        Explicit primary parents override legacy links; secondary/reference/
+        association links do not make a chat node a branch descendant. Use
+        the same cycle-free parent forest as Organize rather than traversing
+        arbitrary outgoing edges (which could collapse unrelated branches).
+        """
+        chosen = primary_parent_edges(self.nodes, self.edges, set(self.nodes))
+        children: dict[str, list[str]] = {}
+        for child_id, edge in chosen.items():
+            child = self.nodes.get(child_id)
+            if child is not None and child.kind == "chat":
+                children.setdefault(edge.source, []).append(child_id)
+
         result = [root_id]
         visited = {root_id}
         frontier = [root_id]
         while frontier:
             next_frontier = []
-            for nid in frontier:
-                for edge in self.edges.values():
-                    if edge.source != nid:
+            for parent_id in frontier:
+                for child_id in children.get(parent_id, ()):
+                    if child_id in visited:
                         continue
-                    target = self.nodes.get(edge.target)
-                    if target is None or target.kind != "chat" or target.id in visited:
-                        continue
-                    visited.add(target.id)
-                    result.append(target.id)
-                    next_frontier.append(target.id)
+                    visited.add(child_id)
+                    result.append(child_id)
+                    next_frontier.append(child_id)
             frontier = next_frontier
         return result
 
     def delete_chat_node(self, node_id: str) -> None:
-        """Delete one chat node WITHOUT orphaning its branch: children are
-        re-parented to the deleted node's own parent (or become roots if it
-        had none), mirroring ChatScene.delete_chat_node's load-bearing
-        reparent rule - a plain remove_nodes cascade-delete would sever every
-        child branch instead of splicing them back together."""
+        """Delete a chat message, splicing only its structural children.
+
+        Reference/association/secondary links are dropped with the deleted
+        node, never turned into fresh ancestor links. Replacement edges are
+        explicit primary links so surviving legacy cross-links cannot steal
+        the child's parent merely because a new edge was appended last.
+        """
         if node_id not in self.nodes:
             raise SceneError(f"unknown node: {node_id}")
         parent_edge = self._branch_parent_edge(node_id)
         parent_id = parent_edge.source if parent_edge is not None else None
-        child_edges = [e for e in self.edges.values() if e.source == node_id]
-        # The primary structural edge determines where children reconnect,
-        # but it is NOT the only edge that might target this chat node.
-        # Live connect() permits extra incoming cross-links from chat/content
-        # nodes, in addition to note -> chat metadata. Once this node is
-        # deleted, *every* incident edge must go; the alternative leaves
-        # dangling targets in scene snapshots and silently loses those
-        # relationships on a future save/load.
+        # One canonical parent per child, as in Organize/branch traversal.
+        # This also excludes a second outgoing legacy link when that child's
+        # chosen parent is someone else (and ignores old legacy cycles).
+        chosen = primary_parent_edges(self.nodes, self.edges, set(self.nodes))
+        reconnect_targets = [
+            target_id for target_id, edge in chosen.items()
+            if edge.source == node_id and target_id != parent_id
+        ]
 
-        # REVIEW-FIX: reconnect children to the deleted node's own parent
-        # BEFORE removing any edge below, not after (the original order) -
-        # and, as of this pass, check that EVERY child's reconnect will
-        # succeed before performing ANY of them, rather than one connect()
-        # per child interleaved with the loop.
-        #
-        # The reorder alone (reconnect-before-pop) already handles a
-        # pre-existing 2-node cycle where parent_id == edge.target (skipped
-        # just below rather than self-connected - see that comment), but it
-        # is NOT by itself atomic once node_id has 2+ children: connect()
-        # was being called once per child, sequentially, with no rollback
-        # around the loop. If child #1's reconnect succeeded (a real edge
-        # landed in self.edges) and child #2's reconnect then raised
-        # SceneError - reachable via a pre-existing MULTI-HOP legacy cycle,
-        # not just the direct 2-node case above, the same kind
-        # connect_unchecked still produces when session_load.py restores a
-        # pre-ADR-009-stage-9.6 per-kind connection-bucket save - the
-        # exception propagated with child #1's new edge already committed
-        # and node_id never deleted: a half-applied mutation, despite this
-        # comment previously (and wrongly) claiming that could no longer
-        # happen.
-        #
-        # Fixed by splitting "check" from "mutate" into two passes, the
-        # same discipline this session's undo_run fix (domain/commands.py)
-        # established for this same class of bug: the loop just below
-        # checks every child's reconnect with self._reaches BEFORE the
-        # second loop performs any connect() call at all. This is
-        # equivalent to checking each connect() as it would happen live,
-        # because connect() only ever ADDS an edge OUTGOING from
-        # parent_id, never one INCOMING to it - so nothing an earlier
-        # child's connect() call could do would change whether a LATER
-        # child's target can reach parent_id. Checking all of them against
-        # the graph exactly as it stood on entry to this method is
-        # therefore sound. A refusal here is now genuinely a no-op -
-        # nothing has been mutated yet - so the whole call fails cleanly
-        # instead of half-succeeding, for both the direct and the
-        # multi-hop cycle case.
         if parent_id is not None:
-            reconnect_targets = []
-            for edge in child_edges:
-                if edge.target == parent_id:
-                    # The direct-2-cycle precondition above - skip rather
-                    # than self-connect: there is nothing meaningful to
-                    # reconnect when the parent and the child are the same
-                    # node.
-                    continue
-                reconnect_targets.append(edge.target)
-            for target in reconnect_targets:
-                if self._reaches(target, parent_id):
+            # Preflight EVERY reconnect before touching edges or nodes. All
+            # new edges originate at parent_id, so one successful reconnect
+            # cannot change whether a later target can reach that parent.
+            for target_id in reconnect_targets:
+                if self._reaches(target_id, parent_id):
                     raise SceneError(
-                        f"cannot delete {node_id}: reconnecting child {target} "
+                        f"cannot delete {node_id}: reconnecting child {target_id} "
                         f"to {parent_id} would create a cycle"
                     )
-            for target in reconnect_targets:
-                self.connect(parent_id, target)
+                # An invalid legacy save could contain multiple explicit
+                # primaries. Refuse before mutating rather than leave a
+                # half-deleted graph if set_edge_role later rejects one.
+                if any(
+                    edge.target == target_id and edge.role == "primary"
+                    and edge.source != node_id
+                    for edge in self.edges.values()
+                ):
+                    raise SceneError(
+                        f"cannot delete {node_id}: child {target_id} has "
+                        "conflicting explicit primary parents"
+                    )
 
-        # Drop every incoming AND outgoing edge, not just the selected
-        # primary parent, outgoing children and metadata note links. This
-        # executes only after all child reconnects passed preflight, so an
-        # invalid reconnect still leaves the original graph untouched.
-        # Fresh parent -> child links (which do not touch node_id) survive.
+        # Drop every incident link, including additional incoming cross-links.
+        # With the preflight done, reconnecting after removal cannot introduce
+        # a cycle that was not already reachable before removal.
         self.edges = {
             edge_id: edge for edge_id, edge in self.edges.items()
             if edge.source != node_id and edge.target != node_id
         }
+        if parent_id is not None:
+            for target_id in reconnect_targets:
+                new_edge = self.connect(parent_id, target_id)
+                # Crucial for legacy children with extra incoming links:
+                # retaining a plain legacy role here would let an older
+                # unrelated link silently become the structural parent.
+                self.set_edge_role(new_edge.id, "primary")
 
         if self.last_chat_node_id == node_id:
-            # The active branch continues from wherever it now ends: the
-            # deleted node's own parent (None if it had none either).
             self.last_chat_node_id = parent_id
 
-        # ADR-002 Workstream 1 ("Branch status and lifecycle") - found by
-        # adversarial review: unlike last_chat_node_id above, this is
-        # cleared entirely rather than re-pointed to the parent. The parent
-        # was never itself marked Final Deliverable, so silently promoting
-        # it would misattribute a status the user never gave it; requiring
-        # a fresh, explicit re-mark is the safe behavior.
         if self.final_deliverable_node_id == node_id:
             self.final_deliverable_node_id = None
 
