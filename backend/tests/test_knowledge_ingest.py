@@ -46,6 +46,14 @@ class TestExtractTextDispatch:
         assert "def f():" in text
         assert mime == "text/plain"
 
+    @pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be", "utf-8-sig"])
+    def test_shared_text_decoder_preserves_knowledge_source_text(self, tmp_path, encoding):
+        path = tmp_path / "source.txt"
+        path.write_bytes("Hello knowledge".encode(encoding))
+        text, mime = extract_text(path)
+        assert text == "Hello knowledge"
+        assert mime == "text/plain"
+
     def test_csv_extension_reads_as_plain_text(self, tmp_path):
         path = tmp_path / "data.csv"
         path.write_bytes(b"a,b,c\n1,2,3\n")
