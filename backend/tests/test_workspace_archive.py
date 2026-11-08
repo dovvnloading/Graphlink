@@ -839,3 +839,43 @@ def test_bounded_zip_member_reader_enforces_actual_bytes_even_if_claimed_length_
     with zipfile.ZipFile(archive) as zf:
         with pytest.raises(ArchiveError, match="expanded size limit"):
             _read_archive_member(zf, "chats/0.json", 64)
+
+
+# -- Audit repair: exports must be readable under current import ceilings ---
+
+def test_export_rejects_an_asset_larger_than_the_matching_import_limit(tmp_path, monkeypatch):
+    import backend.workspace_archive as archive_module
+
+    live = AssetStore(tmp_path / "live-assets")
+    image = b"0123456789"
+    ref = live.put(image)
+    archive_path = tmp_path / "incompatible.graphlink"
+    monkeypatch.setattr(archive_module, "MAX_ASSET_BYTES", 8)
+
+    with pytest.raises(ArchiveError, match="supported import limit"):
+        export_archive(
+            archive_path,
+            [_chat(data={"nodes": [{"asset_ref": ref, "mime_type": "image/png"}]})],
+            live_assets=live,
+        )
+    assert not archive_path.exists()
+
+
+def test_export_refuses_too_many_members_before_publishing_archive(tmp_path, monkeypatch):
+    import backend.workspace_archive as archive_module
+
+    archive_path = tmp_path / "too-many.graphlink"
+    monkeypatch.setattr(archive_module, "MAX_ARCHIVE_MEMBERS", 1)
+    with pytest.raises(ArchiveError, match="too many entries"):
+        export_archive(archive_path, [_chat()])
+    assert not archive_path.exists()
+
+
+def test_export_checks_compressed_budget_as_well_as_uncompressed(tmp_path, monkeypatch):
+    import backend.workspace_archive as archive_module
+
+    archive_path = tmp_path / "compressed.graphlink"
+    monkeypatch.setattr(archive_module, "MAX_ARCHIVE_FILE_BYTES", 1)
+    with pytest.raises(ArchiveError, match="compressed import budget"):
+        export_archive(archive_path, [_chat()])
+    assert not archive_path.exists()
