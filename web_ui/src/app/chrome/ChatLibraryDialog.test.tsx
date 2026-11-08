@@ -828,6 +828,18 @@ describe("ChatLibraryDialog", () => {
     expect(intents).toContainEqual(["app-chat-library", "exportWorkspace", [2]]);
   });
 
+  it("offers transactional Import Workspace in the selected workspace gear panel", async () => {
+    const { user, push, intents, request } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    act(() => push({ ...snapshot, workspaces: [workspace({ id: 1, name: "Default" }), workspace({ id: 2, name: "Work" })] }));
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByLabelText('Show default model settings for "Work"'));
+    await user.click(screen.getByRole("button", { name: "Import Workspace…" }));
+
+    expect(request).toHaveBeenCalledWith("app-chat-library", "importWorkspace", [2]);
+    expect(intents).toContainEqual(["app-chat-library", "importWorkspace", [2]]);
+  });
+
   it("names the target workspace in the export panel's own description", async () => {
     const { user, push } = setup();
     act(() => push(composerSnapshot(), "app-composer"));
