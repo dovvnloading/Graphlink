@@ -92,7 +92,11 @@ function buildDownloadFilename(nodeId: string, prompt: string): string {
 async function handleCopyImage(imageAssetId: string): Promise<void> {
   try {
     const response = await fetch(assetUrl(imageAssetId));
+    if (!response.ok) throw new Error(`Image request failed (HTTP ${response.status})`);
     const blob = await response.blob();
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(blob.type)) {
+      throw new Error("Image endpoint returned non-image content");
+    }
     await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
   } catch (error) {
     console.error("[image-node] Copy Image failed:", error);
@@ -104,7 +108,11 @@ async function handleCopyImage(imageAssetId: string): Promise<void> {
 async function handleExportImage(imageAssetId: string, filename: string): Promise<void> {
   try {
     const response = await fetch(assetUrl(imageAssetId));
+    if (!response.ok) throw new Error(`Image request failed (HTTP ${response.status})`);
     const blob = await response.blob();
+    if (!/^image\/(png|jpeg|gif|webp)$/.test(blob.type)) {
+      throw new Error("Image endpoint returned non-image content");
+    }
     downloadBlob(blob, filename);
   } catch (error) {
     console.error("[image-node] Export Image failed:", error);
@@ -199,7 +207,9 @@ function ImageNodeMenu({
 function ImageNodeViewImpl({ id, data, selected }: NodeProps<ImageFlowNode>) {
   const collapsed = useLodVisibility();
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
-  const [imageFailed, setImageFailed] = useState(false);
+  // Failure is keyed to the asset, so an updated ID is automatically retried.
+  const [failedAssetId, setFailedAssetId] = useState<string | null>(null);
+  const imageFailed = failedAssetId === data.imageAssetId;
 
   const altText = data.prompt || "Generated image";
 
@@ -235,13 +245,18 @@ function ImageNodeViewImpl({ id, data, selected }: NodeProps<ImageFlowNode>) {
       }
     >
       {imageFailed ? (
-        <div className="image-node-placeholder">Image unavailable</div>
+        <div className="image-node-placeholder">
+          <span>Image unavailable</span>
+          <button type="button" onClick={() => setFailedAssetId(null)}>
+            Retry Image
+          </button>
+        </div>
       ) : (
         <img
           className="image-node-img"
           src={assetUrl(data.imageAssetId)}
           alt={altText}
-          onError={() => setImageFailed(true)}
+          onError={() => setFailedAssetId(data.imageAssetId)}
         />
       )}
     </NodeShell>
