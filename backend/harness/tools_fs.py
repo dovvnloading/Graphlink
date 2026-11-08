@@ -19,6 +19,9 @@ never a crash.
 from __future__ import annotations
 
 import asyncio
+import os
+import stat
+import tempfile
 import time
 from pathlib import Path
 
@@ -176,6 +179,36 @@ def _read_bounded_text(path: Path, *, errors: str = "strict", max_bytes: int | N
     if len(data) > max_bytes:
         raise WorkspaceError(f"File exceeds the {max_bytes}-byte harness read limit.")
     return data.decode("utf-8", errors=errors)
+
+
+def _write_atomic_text(target: Path, content: str) -> None:
+    """Replace text only after the complete UTF-8 payload is safely staged.
+
+    In particular, a failed fs.edit must never truncate the source file.
+    Using a temp file beside the destination keeps os.replace atomic on the
+    same filesystem. newline="" preserves caller-supplied LF/CRLF exactly.
+    Existing POSIX mode bits (including executable) survive an edit.
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", newline="", delete=False,
+            dir=target.parent, prefix=f".{target.name}.", suffix=".tmp",
+        ) as staged:
+            staged_path = Path(staged.name)
+            staged.write(content)
+            staged.flush()
+            os.fsync(staged.fileno())
+        if target.exists():
+            os.chmod(staged_path, stat.S_IMODE(target.stat().st_mode))
+        os.replace(staged_path, target)
+    finally:
+        if staged_path is not None:
+            try:
+                staged_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _iter_under_root(root: Path, pattern: str):
@@ -361,11 +394,7 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         if _is_metadata_path(target):
             return ToolResult(content="VCS metadata cannot be modified by harness filesystem tools.", is_error=True)
         try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            # Do not translate newlines on Windows: the model's bytes should
-            # be written as supplied, not silently changed from LF to CRLF.
-            with target.open("w", encoding="utf-8", newline="") as stream:
-                stream.write(content)
+            _write_atomic_text(target, content)
         except OSError as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Wrote {len(content)} characters to {call.arguments.get('path')}.")
@@ -406,11 +435,7 @@ def register_harness_fs_tools(registry: ToolRegistry) -> None:
         if len(replacement.encode("utf-8")) > _MAX_FS_FILE_BYTES:
             return ToolResult(content="Edited file would exceed the permitted size.", is_error=True)
         try:
-            # _read_bounded_text decodes original bytes WITHOUT universal
-            # newline translation. Path.write_text() would turn each existing
-            # CRLF into CRCRLF on Windows, corrupting otherwise valid files.
-            with target.open("w", encoding="utf-8", newline="") as stream:
-                stream.write(replacement)
+            _write_atomic_text(target, replacement)
         except OSError as exc:
             return ToolResult(content=f"Could not write file: {exc}", is_error=True)
         return ToolResult(content=f"Edited {call.arguments.get('path')}.")

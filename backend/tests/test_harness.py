@@ -599,6 +599,50 @@ class TestWriteTools:
         assert result.is_error and "read limit" in result.content
         assert path.read_text(encoding="utf-8") == "x" * 65
 
+    @pytest.mark.parametrize("intent", ["fs.write", "fs.edit"])
+    def test_failed_replace_preserves_original_and_cleans_temp(self, workspace_root, monkeypatch, intent):
+        from backend.harness import tools_fs as fs
+
+        ws = ensure_workspace("ws1")
+        target = ws / "important.txt"
+        original = b"before\r\nimportant\r\n"
+        target.write_bytes(original)
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+
+        def fail_replace(*_args):
+            raise OSError("simulated storage failure")
+
+        monkeypatch.setattr(fs.os, "replace", fail_replace)
+        args = (
+            {"path": "important.txt", "content": "overwritten"}
+            if intent == "fs.write"
+            else {"path": "important.txt", "old_string": "important", "new_string": "changed"}
+        )
+        result = asyncio.run(registry.invoke(call("1", intent, **args), ctx))
+        assert result.is_error and "simulated storage failure" in result.content
+        assert target.read_bytes() == original
+        assert sorted(p.name for p in ws.iterdir()) == ["important.txt"]
+
+    def test_edit_keeps_executable_permissions(self, workspace_root):
+        import os
+        import stat
+
+        if os.name == "nt":
+            pytest.skip("POSIX mode bits are not meaningful on Windows")
+        ws = ensure_workspace("ws1")
+        target = ws / "run.sh"
+        target.write_text("echo old", encoding="utf-8")
+        target.chmod(0o751)
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+        result = asyncio.run(registry.invoke(
+            call("1", "fs.edit", path="run.sh", old_string="old", new_string="new"), ctx,
+        ))
+        assert not result.is_error
+        assert target.read_text(encoding="utf-8") == "echo new"
+        assert stat.S_IMODE(target.stat().st_mode) == 0o751
+
     def test_denied_write_leaves_disk_untouched(self, workspace_root):
         ws = ensure_workspace("ws1")
         registry = self._registry()
@@ -700,6 +744,24 @@ class TestShellTool:
         assert "exit code 0" in result.content
         assert "yyy" in result.content
         assert elapsed < 30, "a drained pipe finishes at the command's own speed"
+
+    def test_newline_free_stdout_is_bounded_during_actual_read(self):
+        import io
+        from backend.harness.tools_shell import _drain_bounded_output, _OUTPUT_CAP_CHARS
+
+        class CappedReader(io.StringIO):
+            reads = 0
+
+            def readline(self, size=-1):
+                assert 0 < size <= 4096, "reading a whole logical line defeats the memory limit"
+                self.reads += 1
+                return super().readline(size)
+
+        stream = CappedReader("x" * 300_000)
+        chunks = []
+        _drain_bounded_output(stream, chunks)
+        assert "".join(chunks) == "x" * (_OUTPUT_CAP_CHARS + 1)
+        assert stream.reads > 1, "reader must drain the entire pipe"
 
     def test_denied_command_never_spawns(self, workspace_root):
         ws = ensure_workspace("ws1")
