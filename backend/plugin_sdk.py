@@ -117,17 +117,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-# Python version note: this repo's pyproject.toml declares
-# requires-python = ">=3.10", but tomllib is stdlib only from 3.11 onward.
-# CI/dev both run 3.12+ (tomllib present natively) so this fallback is
-# currently dead in practice, but is real correctness for the declared
-# support floor - not speculative. `tomli` is declared as a conditional
-# dependency in pyproject.toml (`python_version < "3.11"`) for exactly this
-# branch.
-try:
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - not exercised on this repo's CI (3.12+)
-    import tomli as tomllib  # type: ignore[no-redef]
+# Python 3.12+ is the documented and package-declared floor; tomllib is
+# available from the standard library on every supported interpreter.
+import tomllib
 
 from backend.canvas import SceneDocument, SceneNode
 from backend.domain.node_states import NodeState
