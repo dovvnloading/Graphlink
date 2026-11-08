@@ -222,6 +222,71 @@ class TestPdfAndDocx:
         with pytest.raises(AttachmentError, match="expanded-stream"):
             stage_file(str(path))
 
+    @pytest.mark.parametrize("nested", [False, True])
+    def test_compressed_form_xobject_is_capped_before_any_text_extraction(
+        self, tmp_path, monkeypatch, nested,
+    ):
+        import backend.attachments as attachments_module
+        from pypdf import PdfWriter
+        from pypdf._page import PageObject
+        from pypdf.generic import (
+            ArrayObject, DecodedStreamObject, DictionaryObject, FloatObject, NameObject,
+        )
+
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        font = writer._add_object(DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }))
+        font_resources = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+        })
+
+        def make_form(payload, resources):
+            stream = DecodedStreamObject()
+            stream.set_data(payload)
+            stream.update({
+                NameObject("/Type"): NameObject("/XObject"),
+                NameObject("/Subtype"): NameObject("/Form"),
+                NameObject("/BBox"): ArrayObject([
+                    FloatObject(0), FloatObject(0), FloatObject(100), FloatObject(100),
+                ]),
+                NameObject("/Resources"): resources,
+            })
+            return writer._add_object(stream.flate_encode())
+
+        large_form = make_form(
+            b"BT /F1 12 Tf (" + b"A" * 25_000 + b") Tj ET", font_resources,
+        )
+        if nested:
+            inner_resources = DictionaryObject({
+                NameObject("/XObject"): DictionaryObject({NameObject("/Inner"): large_form}),
+            })
+            target_form = make_form(b"q /Inner Do Q", inner_resources)
+        else:
+            target_form = large_form
+
+        page[NameObject("/Resources")] = DictionaryObject({
+            NameObject("/XObject"): DictionaryObject({NameObject("/Fx"): target_form}),
+        })
+        direct = DecodedStreamObject()
+        direct.set_data(b"q /Fx Do Q")
+        page[NameObject("/Contents")] = writer._add_object(direct)
+        path = tmp_path / "large-form.pdf"
+        writer.write(path)
+        assert path.stat().st_size < 5000
+
+        monkeypatch.setattr(attachments_module, "MAX_PDF_CONTENT_STREAM_BYTES", 2048)
+
+        def forbidden_parse(*_args, **_kwargs):
+            pytest.fail("nested Form expansion must be rejected before extract_text")
+
+        monkeypatch.setattr(PageObject, "extract_text", forbidden_parse)
+        with pytest.raises(AttachmentError, match="expanded-stream"):
+            stage_file(str(path))
+
     def test_regular_compressed_pdf_content_still_extracts(self, tmp_path):
         pytest.importorskip("pypdf")
         from pypdf import PdfWriter

@@ -81,6 +81,10 @@ MAX_PDF_PAGES = 400
 # any text for MAX_DOCUMENT_TEXT_CHARS to reject. Bound each page's TOTAL
 # decoded /Contents stream size before calling extract_text.
 MAX_PDF_CONTENT_STREAM_BYTES = 1024 * 1024
+# Bound nested Form XObjects as well as direct /Contents. Forms can contain
+# compressed drawing/text streams and their own /Resources /XObject chains.
+MAX_PDF_FORM_OBJECTS = 128
+MAX_PDF_XOBJECT_RESOURCE_ENTRIES = 256
 # DOCX is a ZIP container. File size and extracted-text caps alone do not
 # bound the XML/ZIP expansion that python-docx parses before text extraction.
 MAX_DOCX_MEMBERS = 2_048
@@ -237,56 +241,107 @@ def _extract_pdf_page_text(page) -> str:
     return ""
 
 
-def _check_pdf_content_size(page) -> None:
-    """Preflight page content streams without asking pypdf to decompress.
+def _pdf_object(value):
+    """Dereference a pypdf IndirectObject without decompressing its stream."""
+    return value.get_object() if hasattr(value, "get_object") else value
 
-    Calling page.get_contents() or an encoded stream's get_data() would
-    inflate the whole stream before our guard runs. Instead, use the raw
-    _data bytes on pypdf's stream objects and incrementally decode the
-    common /FlateDecode format with a strict max_length. Arrays of streams
-    share ONE per-page budget. If a filter cannot be bounded safely, reject
-    it rather than parsing arbitrarily expanded user-controlled input.
+
+def _pdf_expanded_stream_size(stream, remaining: int) -> int:
+    """Preflight one encoded content/Form stream, bounded by remaining bytes.
+
+    Never call get_data()/ContentStream: those expand the entire stream before
+    the caller can apply a byte cap. _data holds the encoded source bytes.
     """
-    contents = page.get("/Contents")
-    if contents is None:
-        return
-    streams = contents if isinstance(contents, list) else [contents]
+    raw = getattr(stream, "_data", None)
+    if not isinstance(raw, bytes):
+        raise AttachmentError("PDF contains an unreadable page/Form content stream.")
+    filters = stream.get("/Filter")
+    filters_list = [str(item) for item in filters] if isinstance(filters, list) else (
+        [str(filters)] if filters is not None else []
+    )
+    if not filters_list:
+        if len(raw) > remaining:
+            raise AttachmentError("PDF page/Form content exceeds the expanded-stream attachment limit.")
+        return len(raw)
+    if filters_list not in (["/FlateDecode"], ["/Fl"]):
+        raise AttachmentError("PDF page/Form uses a compression filter that cannot be safely bounded.")
+
+    decoder = zlib.decompressobj()
+    expanded = 0
+    try:
+        for offset in range(0, len(raw), 4096):
+            pending = raw[offset:offset + 4096]
+            while pending:
+                inflated = decoder.decompress(pending, remaining - expanded + 1)
+                expanded += len(inflated)
+                if expanded > remaining:
+                    raise AttachmentError("PDF page/Form content exceeds the expanded-stream attachment limit.")
+                pending = decoder.unconsumed_tail
+        expanded += len(decoder.flush(remaining - expanded + 1))
+    except zlib.error as exc:
+        raise AttachmentError("PDF has an invalid compressed page/Form stream.") from exc
+    if expanded > remaining:
+        raise AttachmentError("PDF page/Form content exceeds the expanded-stream attachment limit.")
+    return expanded
+
+
+def _check_pdf_content_size(page) -> None:
+    """Guard direct page streams AND every nested Form XObject before parsing.
+
+    Direct /Contents alone is insufficient: a 10-byte /Fx Do can reference a
+    Flate-compressed Form containing millions of characters. pypdf expands
+    those Forms in extract_text(), before our extracted-text cap is applied.
+
+    Walk each resource tree *iteratively* with a shared page-wide byte budget
+    and an explicit Form count. Detect cycles to avoid a recursive XObject
+    graph causing unbounded pypdf parsing; reject unsupported filters instead
+    of trusting them to obey the cap. Image XObjects aren't text-extracted.
+    """
+    # Each frame: (content stream(s), resource dictionary, ancestor form IDs)
+    pending = [(page.get("/Contents"), page.get("/Resources"), frozenset())]
     decoded_total = 0
-    for entry in streams:
-        stream = entry.get_object() if hasattr(entry, "get_object") else entry
-        raw = getattr(stream, "_data", None)
-        if not isinstance(raw, bytes):
-            raise AttachmentError("PDF contains an unreadable page content stream.")
-        filters = stream.get("/Filter")
-        filters_list = [str(item) for item in filters] if isinstance(filters, list) else (
-            [str(filters)] if filters is not None else []
-        )
-        if not filters_list:
-            decoded_total += len(raw)
-            if decoded_total > MAX_PDF_CONTENT_STREAM_BYTES:
-                raise AttachmentError("PDF page content exceeds the expanded-stream attachment limit.")
+    forms_seen = 0
+
+    while pending:
+        contents, resources, ancestors = pending.pop()
+        if contents is not None:
+            content_obj = _pdf_object(contents)
+            entries = content_obj if isinstance(content_obj, list) else [content_obj]
+            if len(entries) > MAX_PDF_XOBJECT_RESOURCE_ENTRIES:
+                raise AttachmentError("PDF contains too many page content streams.")
+            for entry in entries:
+                stream = _pdf_object(entry)
+                decoded_total += _pdf_expanded_stream_size(
+                    stream, MAX_PDF_CONTENT_STREAM_BYTES - decoded_total,
+                )
+
+        resource_dict = _pdf_object(resources)
+        if resource_dict is None:
             continue
-        if filters_list not in (["/FlateDecode"], ["/Fl"]):
-            raise AttachmentError("PDF page content uses a compression filter that cannot be safely bounded.")
-
-        decoder = zlib.decompressobj()
-        try:
-            for offset in range(0, len(raw), 4096):
-                pending = raw[offset:offset + 4096]
-                while pending:
-                    limit = MAX_PDF_CONTENT_STREAM_BYTES - decoded_total
-                    inflated = decoder.decompress(pending, limit + 1)
-                    decoded_total += len(inflated)
-                    if decoded_total > MAX_PDF_CONTENT_STREAM_BYTES:
-                        raise AttachmentError("PDF page content exceeds the expanded-stream attachment limit.")
-                    pending = decoder.unconsumed_tail
-            tail = decoder.flush(MAX_PDF_CONTENT_STREAM_BYTES - decoded_total + 1)
-            decoded_total += len(tail)
-        except zlib.error as exc:
-            raise AttachmentError("PDF has an invalid compressed page content stream.") from exc
-        if decoded_total > MAX_PDF_CONTENT_STREAM_BYTES:
-            raise AttachmentError("PDF page content exceeds the expanded-stream attachment limit.")
-
+        if not isinstance(resource_dict, dict):
+            raise AttachmentError("PDF contains an invalid resource dictionary.")
+        objects = _pdf_object(resource_dict.get("/XObject"))
+        if objects is None:
+            continue
+        if not isinstance(objects, dict):
+            raise AttachmentError("PDF contains an invalid XObject dictionary.")
+        if len(objects) > MAX_PDF_XOBJECT_RESOURCE_ENTRIES:
+            raise AttachmentError("PDF contains too many XObject resources.")
+        for ref in objects.values():
+            obj = _pdf_object(ref)
+            if not isinstance(obj, dict):
+                raise AttachmentError("PDF contains an invalid XObject resource.")
+            if str(obj.get("/Subtype")) != "/Form":
+                continue
+            identity = id(obj)
+            if identity in ancestors:
+                raise AttachmentError("PDF contains cyclic Form XObject resources.")
+            forms_seen += 1
+            if forms_seen > MAX_PDF_FORM_OBJECTS:
+                raise AttachmentError("PDF contains too many Form XObjects.")
+            pending.append((
+                obj, obj.get("/Resources"), ancestors | {identity},
+            ))
 
 def _read_pdf(path: Path) -> str:
     """Verbatim port of FileHandler._read_pdf. Raises AttachmentError (not
