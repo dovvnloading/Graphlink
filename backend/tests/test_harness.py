@@ -538,6 +538,31 @@ class TestWriteTools:
         assert (ws / "out" / "a.txt").read_text(encoding="utf-8") == "alpha gamma"
         assert decisions == ["fs.write", "fs.edit"]
 
+    def test_fs_edit_preserves_crlf_bytes(self, workspace_root):
+        # Regression: _read_bounded_text preserves CRLF bytes on input,
+        # while Path.write_text translated their LF half *again* on Windows.
+        ws = ensure_workspace("ws1")
+        target = ws / "windows.txt"
+        target.write_bytes(b"first\r\nsecond\r\n")
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+        result = asyncio.run(registry.invoke(
+            call("1", "fs.edit", path="windows.txt", old_string="second", new_string="changed"), ctx,
+        ))
+        assert not result.is_error
+        assert target.read_bytes() == b"first\r\nchanged\r\n"
+
+    def test_fs_write_preserves_the_supplied_newline_sequence(self, workspace_root):
+        ws = ensure_workspace("ws1")
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+        content = "first\nsecond\r\nthird\n"
+        result = asyncio.run(registry.invoke(
+            call("1", "fs.write", path="mixed.txt", content=content), ctx,
+        ))
+        assert not result.is_error
+        assert (ws / "mixed.txt").read_bytes() == content.encode("utf-8")
+
     def test_filesystem_writes_cannot_modify_vcs_hooks(self, workspace_root):
         ws = ensure_workspace("ws1")
         hooks = ws / ".git" / "hooks"
