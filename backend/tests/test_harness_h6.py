@@ -182,6 +182,58 @@ def _registry(*, always_reprompt=None) -> ToolRegistry:
     return registry
 
 
+class TestShellConsentBypassRegression:
+    @pytest.mark.parametrize(
+        ("tool_name", "args", "fresh"),
+        [
+            ("shell.exec", {"command": "python -c 'print(42)'"}, True),
+            ("shell.exec", {"command": "echo safe"}, True),
+            ("shell.exec", {"command": "rm -rf build"}, True),
+            ("shell.session", {"action": "start", "name": "x", "command": "node -e 'console.log(1)'"}, True),
+            ("shell.session", {"action": "write", "name": "x", "input": "1 + 1"}, True),
+            ("shell.session", {"action": "read", "name": "x"}, False),
+            ("shell.session", {"action": "stop", "name": "x"}, False),
+            ("shell.session", {"action": "list"}, False),
+        ],
+    )
+    def test_fresh_consent_is_based_on_effect_not_command_name(self, tool_name, args, fresh):
+        from backend.harness.shell_policy import requires_fresh_shell_approval
+        from backend.harness.loop import _is_dangerous_call
+
+        call = ToolCall(id="c", name=tool_name, arguments=args)
+        assert requires_fresh_shell_approval(tool_name, args) is fresh
+        assert _is_dangerous_call(call) is fresh
+
+    @pytest.mark.parametrize(
+        ("tool_name", "args"),
+        [
+            ("shell.exec", {"command": "python -c 'print(42)'"}),
+            ("shell.exec", {"command": "echo harmless"}),
+            ("shell.session", {"action": "start", "name": "dev", "command": "python -m http.server"}),
+            ("shell.session", {"action": "write", "name": "dev", "input": "hello"}),
+        ],
+    )
+    def test_real_registered_tools_reprompt_even_with_session_grants(self, tool_name, args):
+        from backend.harness.tools_shell import register_harness_shell_tool
+
+        registry = ToolRegistry()
+        register_harness_shell_tool(registry)
+        requests = []
+
+        async def deny(call):
+            requests.append(call.name)
+            return False
+
+        ctx = RunContext(
+            granted_scopes=frozenset({CODE_EXECUTE}),
+            request_approval=deny,
+            session_grants={"shell.exec", "shell.session"},
+        )
+        result = asyncio.run(registry.invoke(ToolCall(id="c1", name=tool_name, arguments=args), ctx))
+        assert result.is_error and "denied" in result.content
+        assert requests == [tool_name], "remembered consent must not authorize new execution"
+
+
 class TestGradedConsentAndReprompt:
     def test_an_identical_repeat_is_remembered_within_one_run(self):
         """The pre-existing fingerprint memo, unchanged - the baseline the

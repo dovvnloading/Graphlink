@@ -212,17 +212,13 @@ def _session_grants_of(dispatcher, workspace_id: str) -> "set | None":
 
 
 def _is_dangerous_call(call: ToolCall) -> bool:
-    """Whether §2.4's dangerous list covers this call - the same predicate
-    the registry uses to defeat remembered grants, asked here so the panel
-    can withhold the session-grant option entirely."""
-    if call.name == "shell.exec":
-        return shell_policy.is_dangerous_command(str(call.arguments.get("command") or ""))
-    if call.name == "shell.session":
-        action = str(call.arguments.get("action") or "").strip().lower()
-        if action == "start":
-            return shell_policy.is_dangerous_command(str(call.arguments.get("command") or ""))
-        return action == "write"
-    return False
+    """Whether this call must ask again and hide the session-grant option.
+
+    This is the same fail-closed predicate used by the ToolRegistry.
+    A dangerous-name blacklist is insufficient for arbitrary shell code:
+    interpreters and wrappers can execute anything after a benign command.
+    """
+    return shell_policy.requires_fresh_shell_approval(call.name, call.arguments)
 
 
 def _approval_summary(call: ToolCall) -> str:
@@ -340,10 +336,9 @@ async def run_harness(
         node.state.harness_awaiting_approval = True
         node.state.harness_approval_tool_name = call.name
         node.state.harness_approval_summary = _approval_summary(call)
-        # §2.4: a dangerous command is offered ONLY once-or-deny. Telling the
-        # panel that here (rather than letting it guess from the tool name)
-        # keeps the policy in one place - shell_policy - and means the
-        # session-grant button is absent, not merely ignored, for `rm -rf`.
+        # Executable commands and interactive stdin always ask fresh, even
+        # when a previous call was approved for the session. The panel must
+        # not suggest session consent that the registry will reject.
         node.state.harness_approval_session_offered = not _is_dangerous_call(call)
         await bus.publish("scene")
         try:
