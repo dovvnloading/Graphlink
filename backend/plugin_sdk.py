@@ -124,6 +124,7 @@ import tomllib
 from backend.canvas import SceneDocument, SceneNode
 from backend.domain.node_states import NodeState
 from backend.notifications import NotificationState
+from backend.packaging_resources import resolve_plugins_dir
 # ADR-014 stage 14.4: reused, never re-declared - a plugin manifest's
 # [scopes].grants entries are validated against the SAME closed vocabulary
 # backend/tools.py's ToolRegistry already gates real tool calls with, so
@@ -148,7 +149,7 @@ logger = logging.getLogger(__name__)
 SDK_API_VERSION = 1
 MIN_COMPATIBLE_SDK_API_VERSION = 1
 MANIFEST_FILENAME = "plugin.toml"
-DEFAULT_PLUGINS_ROOT = Path(__file__).resolve().parent.parent / "plugins"
+DEFAULT_PLUGINS_ROOT = resolve_plugins_dir()
 # ADR-014 stage 14.5: the repo root - one level above backend/, the SAME
 # base DEFAULT_PLUGINS_ROOT above is itself derived from. Passed as `cwd=`
 # to the worker subprocess's own Popen call so `python -m backend.

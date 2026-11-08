@@ -48,7 +48,8 @@ def _actual_top_level_modules() -> set[str]:
     # invariant - a silently-unpackaged module is exactly the failure this
     # test exists to prevent, and an exception list is where that protection
     # would quietly erode.
-    return {path.stem for path in REPO_ROOT.glob("*.py")}
+    # setup.py is a build hook, not a runtime importable Python module.
+    return {path.stem for path in REPO_ROOT.glob("*.py") if path.name != "setup.py"}
 
 
 def test_every_top_level_module_is_declared_in_py_modules():

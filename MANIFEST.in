@@ -1,0 +1,11 @@
+# Building from the source distribution must have everything Vite needs.
+include setup.py
+include web_ui/package.json
+include web_ui/package-lock.json
+include web_ui/vite.config.ts
+include web_ui/tsconfig.json
+include web_ui/.nvmrc
+recursive-include web_ui/src *
+# Bundled built-in plugin code and metadata are not importable packages.
+recursive-include plugins *.py *.toml
+include assets/graphlink.ico
