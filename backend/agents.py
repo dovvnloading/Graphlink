@@ -661,7 +661,9 @@ def _load_gitlink_tree(settings_manager, repo, branch):
     return repo, resolved_branch, file_paths
 
 
-def _ensure_gitlink_snapshot(settings_manager, repo, branch, local_root_hint, imported_root_hint):
+def _ensure_gitlink_snapshot(
+    settings_manager, repo, branch, local_root_hint, imported_root_hint, *, force_refresh=False,
+):
     """Replicates _ensure_repository_snapshot exactly: an existing
     local_root_hint wins outright (error if it does not exist); else an
     existing imported_root_hint is reused if it still exists; else a fresh
@@ -674,19 +676,31 @@ def _ensure_gitlink_snapshot(settings_manager, repo, branch, local_root_hint, im
     resolved_branch = _resolve_gitlink_branch(client, repo, branch)
 
     local_root_text = (local_root_hint or "").strip()
+    imported_root_text = (imported_root_hint or "").strip()
     if local_root_text:
         root_path = Path(local_root_text).expanduser()
-        if root_path.exists():
+        if not root_path.exists():
+            raise RuntimeError("The selected local repo path does not exist.")
+        # An explicitly selected local checkout is user-owned: never
+        # download over it. An imported checkout is recognized by matching
+        # the separately stored imported_root so Refresh can create a new
+        # copy instead of mistakenly reusing it as a user-picked directory.
+        if not force_refresh or not imported_root_text or (
+            root_path.resolve() != Path(imported_root_text).expanduser().resolve()
+        ):
             return repo, resolved_branch, root_path
-        raise RuntimeError("The selected local repo path does not exist.")
 
-    imported_root_text = (imported_root_hint or "").strip()
-    if imported_root_text:
+    if imported_root_text and not force_refresh:
         imported_path = Path(imported_root_text)
         if imported_path.exists():
             return repo, resolved_branch, imported_path
 
     target_root = default_import_root(repo, resolved_branch)
+    if force_refresh and target_root.exists() and any(target_root.iterdir()):
+        # Refresh is non-destructive: a working tree may contain approved
+        # edits. Keep it and import a fresh snapshot into a unique sibling.
+        from secrets import token_hex
+        target_root = target_root.with_name(f"{target_root.name}-refresh-{token_hex(8)}")
     repository = GitlinkRepository(client)
     target_path = repository.download_repository_snapshot(repo, resolved_branch, target_root)
     return repo, resolved_branch, target_path
