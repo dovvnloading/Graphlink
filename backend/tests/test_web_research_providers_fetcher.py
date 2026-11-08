@@ -542,6 +542,15 @@ class TestPinnedHTTPAdapterConnectionLogic:
         with pytest.raises(URLPolicyError, match="[Pp]rox"):
             adapter.get_connection_with_tls_context(request, verify=True, proxies={"https": "http://proxy.example:8080"})
 
+    def test_send_uses_bracketed_ipv6_literal_in_host_header(self):
+        adapter = _PinnedHTTPAdapter("2606:4700:4700::1111")
+        import requests
+
+        request = requests.Request("GET", "https://[2606:4700:4700::1111]:8443/path").prepare()
+        with patch.object(_PinnedHTTPAdapter.__bases__[0], "send", return_value="sentinel"):
+            adapter.send(request)
+        assert request.headers["Host"] == "[2606:4700:4700::1111]:8443"
+
     def test_send_injects_the_original_host_header_not_the_pinned_ip(self):
         adapter = _PinnedHTTPAdapter("93.184.216.34")
         request = self._prepared_request("https://example.com/path")

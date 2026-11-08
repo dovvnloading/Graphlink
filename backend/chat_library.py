@@ -2787,13 +2787,16 @@ def make_export_workspace(
         chats_by_id = {int(row["id"]): row for row in all_chats}
 
         def _load_one(graph_id: int) -> dict[str, Any]:
-            row = load_chat_row(resolved_path, graph_id)
+            # Export must read the graph body, notes and pins from ONE SQLite
+            # WAL snapshot. Three independent connections could combine the
+            # pre-save body with post-save notes/pins from another window.
+            row, notes_rows, pins_rows = load_chat_snapshot(resolved_path, graph_id)
             meta = chats_by_id.get(graph_id, {})
             return {
                 "title": row["title"] if row else "Untitled",
                 "data": row["data"] if row else {},
-                "notes": load_notes_rows(resolved_path, graph_id),
-                "pins": load_pins_rows(resolved_path, graph_id),
+                "notes": notes_rows,
+                "pins": pins_rows,
                 "tags": list(meta.get("tags", [])),
                 "favorite": bool(meta.get("favorite", False)),
                 "archived": bool(meta.get("archived", False)),

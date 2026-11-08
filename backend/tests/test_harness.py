@@ -563,6 +563,51 @@ class TestWriteTools:
         assert not result.is_error
         assert (ws / "mixed.txt").read_bytes() == content.encode("utf-8")
 
+    def test_new_file_permissions_match_normal_creation_umask(self, workspace_root):
+        import os
+        import stat
+
+        if os.name == "nt":
+            pytest.skip("POSIX permissions are not meaningful on Windows")
+        ws = ensure_workspace("ws1")
+        ordinary = ws / "ordinary.txt"
+        ordinary.write_text("ordinary", encoding="utf-8")
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+        result = asyncio.run(registry.invoke(
+            call("1", "fs.write", path="created.txt", content="created"), ctx,
+        ))
+        assert not result.is_error
+        assert stat.S_IMODE((ws / "created.txt").stat().st_mode) == stat.S_IMODE(ordinary.stat().st_mode)
+
+    def test_overwrite_staging_is_private_before_writing(self, workspace_root, monkeypatch):
+        import os
+        import stat
+        from backend.harness import tools_fs as fs
+
+        if os.name == "nt":
+            pytest.skip("POSIX permission bits are not meaningful on Windows")
+        ws = ensure_workspace("ws1")
+        target = ws / "secret.env"
+        target.write_text("old", encoding="utf-8")
+        target.chmod(0o600)
+        recorded = []
+        original_chmod = fs.os.chmod
+
+        def record_chmod(path, mode):
+            recorded.append((str(path), mode))
+            original_chmod(path, mode)
+
+        monkeypatch.setattr(fs.os, "chmod", record_chmod)
+        registry = self._registry()
+        ctx, _ = self._write_ctx()
+        result = asyncio.run(registry.invoke(
+            call("1", "fs.write", path="secret.env", content="new secret"), ctx,
+        ))
+        assert not result.is_error
+        assert any(mode == 0o600 for path, mode in recorded if ".secret.env." in path)
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
     def test_filesystem_writes_cannot_modify_vcs_hooks(self, workspace_root):
         ws = ensure_workspace("ws1")
         hooks = ws / ".git" / "hooks"

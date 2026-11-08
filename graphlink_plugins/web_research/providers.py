@@ -170,9 +170,13 @@ if REQUESTS_AVAILABLE:
             # virtual-hosted/SNI-routed sites and CDNs still resolve to the
             # intended site rather than whatever the IP's default vhost is.
             original = urlsplit(request.url)
+            hostname = original.hostname or ""
+            # RFC 3986 requires [brackets] around IPv6 literals in HTTP
+            # authority/Host headers as well as in the URL netloc.
+            authority = f"[{hostname}]" if ":" in hostname else hostname
             request.headers["Host"] = (
-                original.hostname if not original.port or original.port in (80, 443)
-                else f"{original.hostname}:{original.port}"
+                authority if not original.port or original.port in (80, 443)
+                else f"{authority}:{original.port}"
             )
             return super().send(request, **kwargs)
 else:
