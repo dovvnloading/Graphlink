@@ -237,6 +237,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
   // persisted anywhere; it lives exactly like `query` above, dialog-local
   // and reset whenever the dialog closes and reopens (a fresh mount).
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<number | null>(null);
+  const [importingWorkspaceId, setImportingWorkspaceId] = useState<number | null>(null);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [showArchived, setShowArchived] = useState(false);
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
@@ -456,6 +457,19 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
   // posture attachFile/pickGitlinkLocalRoot already established.
   function exportWorkspace(workspaceId: number) {
     transport.fireIntent("app-chat-library", "exportWorkspace", [workspaceId], NATIVE_DIALOG_TIMEOUT_MS);
+  }
+
+  async function importWorkspace(workspaceId: number) {
+    if (importingWorkspaceId !== null) return;
+    setImportingWorkspaceId(workspaceId);
+    try {
+      await transport.request("app-chat-library", "importWorkspace", [workspaceId], NATIVE_DIALOG_TIMEOUT_MS);
+    } catch (error) {
+      // The backend also publishes a detailed notification on import failure.
+      console.error("[chat-library] Workspace import failed:", error);
+    } finally {
+      setImportingWorkspaceId(null);
+    }
   }
 
   function startCreateWorkspace() {
@@ -748,6 +762,20 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
                 onClick={() => exportWorkspace(expandedWorkspace.id)}
               >
                 Export Workspace…
+              </button>
+            </div>
+            <div className="settings-field">
+              <span className="settings-field-label">Import</span>
+              <p className="settings-update-status">
+                Restore graphs from a .graphlink archive into &quot;{expandedWorkspace.name}&quot; without overwriting existing graphs.
+              </p>
+              <button
+                type="button"
+                className="library-new-chat-button"
+                disabled={importingWorkspaceId !== null}
+                onClick={() => { void importWorkspace(expandedWorkspace.id); }}
+              >
+                {importingWorkspaceId === expandedWorkspace.id ? "Importing…" : "Import Workspace…"}
               </button>
             </div>
           </div>
