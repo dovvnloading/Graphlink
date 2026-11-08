@@ -49,6 +49,7 @@ def make_client(tmp_path: Path | None = None, *, restrict_sessions: bool = True)
             # THROUGH the real /ws surface (a scenario otherwise
             # unreachable once this restriction is on).
             restrict_sessions=restrict_sessions,
+            allow_unauthenticated_for_tests=True,
         ),
         # ADR-004 stage 4.2: TrustedHostMiddleware now rejects any Host
         # other than 127.0.0.1 - TestClient's own default ("testserver")

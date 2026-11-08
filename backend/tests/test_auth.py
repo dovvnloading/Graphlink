@@ -286,13 +286,26 @@ def test_an_unauthenticated_ws_handshake_creates_no_session(authed_client):
     assert len(bus._sessions) == before
 
 
-# -- auth disabled (the test/dev default) -----------------------------------
+# -- explicitly permitted unauthenticated test-only mode ------------------
+
+
+def test_default_asgi_factory_fails_closed_without_token(monkeypatch, tmp_path):
+    monkeypatch.delenv(DEV_AUTH_TOKEN_ENV, raising=False)
+    with pytest.raises(ValueError, match="requires a capability token"):
+        create_app(
+            settings_state_file=tmp_path / "session.dat",
+            chat_db_path=tmp_path / "chats.db",
+        )
 
 
 def test_auth_disabled_when_no_token_is_configured(monkeypatch, tmp_path):
     monkeypatch.delenv(DEV_AUTH_TOKEN_ENV, raising=False)
     client = TestClient(
-        create_app(settings_state_file=tmp_path / "session.dat", chat_db_path=tmp_path / "chats.db"),
+        create_app(
+            settings_state_file=tmp_path / "session.dat",
+            chat_db_path=tmp_path / "chats.db",
+            allow_unauthenticated_for_tests=True,
+        ),
         base_url="http://127.0.0.1",
         headers={"host": "127.0.0.1"},
     )

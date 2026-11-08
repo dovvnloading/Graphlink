@@ -86,12 +86,10 @@ def resolve_configured_token(explicit_token: str | None) -> str | None:
          shipped path.
       2. $GRAPHLINK_DEV_AUTH_TOKEN - the dev-server escape hatch (see
          DEV_AUTH_TOKEN_ENV).
-      3. None - auth disabled. This is what a bare create_app() in a test
-         gets, so the ~1200-test suite needs no token plumbing to exercise
-         unrelated behavior. create_app() logs a warning in this case, and
-         tests/test_graphlink_desktop.py asserts the real launch path always
-         reaches case 1 - so "shipped with auth accidentally off" is a
-         test failure, not a silent regression.
+      3. None - no token available. create_app() refuses to start unless
+         the caller explicitly sets allow_unauthenticated_for_tests=True.
+         This prevents a direct uvicorn ASGI factory launch from silently
+         exposing privileged /api and /ws endpoints.
     """
     if explicit_token is not None:
         # Only None means "intentionally unauthenticated". A caller that
