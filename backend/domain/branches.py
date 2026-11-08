@@ -231,8 +231,14 @@ class BranchOps(SceneDocumentParts):
         explicit primary links so surviving legacy cross-links cannot steal
         the child's parent merely because a new edge was appended last.
         """
-        if node_id not in self.nodes:
+        node = self.nodes.get(node_id)
+        if node is None:
             raise SceneError(f"unknown node: {node_id}")
+        # The image/sandbox/harness kinds have different cleanup duties:
+        # letting deleteChatNode remove them bypasses removeNodes' asset
+        # eviction and run/process teardown.
+        if node.kind != "chat":
+            raise SceneError(f"node is not a chat node: {node_id}")
         parent_edge = self._branch_parent_edge(node_id)
         parent_id = parent_edge.source if parent_edge is not None else None
         # One canonical parent per child, as in Organize/branch traversal.
