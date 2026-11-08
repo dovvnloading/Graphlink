@@ -81,7 +81,7 @@ class TestSetChatIndexIntoKnowledgeIntent:
         assert document.nodes[node_id].state.index_into_knowledge is True
         docs = knowledge_store.list_documents(_isolated_knowledge_db)
         assert len(docs) == 1
-        assert docs[0]["source_uri"] == f"branch:{node_id}"
+        assert docs[0]["source_uri"] == f"branch:{document.branch_index_sources[node_id]}"
 
     def test_enabling_indexes_the_full_root_to_here_branch_text(self, _isolated_knowledge_db):
         bus, document, recorder = make_bus()
@@ -121,6 +121,86 @@ class TestSetChatIndexIntoKnowledgeIntent:
 
         assert document.nodes[node_id].state.index_into_knowledge is False
         assert recorder.topics_seen() == ["notification"]
+
+    def test_reindexing_an_edited_branch_replaces_old_passages(self, _isolated_knowledge_db):
+        bus, document, _ = make_bus()
+        node_id = _run(bus.dispatch_intent(
+            "scene", "addChatNode", [0, 0, "oldorchidphrase", True],
+        ))
+        _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_id, True]))
+        [old] = knowledge_store.list_documents(_isolated_knowledge_db)
+
+        _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_id, False]))
+        document.nodes[node_id].content = "newcactusphrase"
+        _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_id, True]))
+
+        [updated] = knowledge_store.list_documents(_isolated_knowledge_db)
+        assert updated["source_uri"] == old["source_uri"]
+        assert _run(bus.dispatch_intent("knowledge", "search", ["oldorchidphrase", 5])) == {"results": []}
+        new = _run(bus.dispatch_intent("knowledge", "search", ["newcactusphrase", 5]))
+        assert len(new["results"]) == 1
+
+    def test_identical_branches_in_one_workspace_keep_separate_sources(self, _isolated_knowledge_db):
+        first_bus, first_doc, _ = make_bus()
+        second_bus, second_doc, _ = make_bus()
+        first_doc.current_workspace_id = second_doc.current_workspace_id = 7
+        for bus in (first_bus, second_bus):
+            nid = _run(bus.dispatch_intent("scene", "addChatNode", [0, 0, "identical leaf content", True]))
+            _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [nid, True]))
+        collection = knowledge_store.get_or_create_workspace_collection(_isolated_knowledge_db, 7)
+        documents = knowledge_store.list_documents(_isolated_knowledge_db, collection_id=collection)
+        assert len(documents) == 2
+        assert len({row["source_uri"] for row in documents}) == 2
+
+    def test_async_ingest_uses_workspace_selected_before_dispatch(self, _isolated_knowledge_db, monkeypatch):
+        import threading
+
+        bus, document, _ = make_bus()
+        document.current_workspace_id = 7
+        node_id = _run(bus.dispatch_intent("scene", "addChatNode", [0, 0, "private branch", True]))
+        begun, proceed = threading.Event(), threading.Event()
+        real_chunk = intents_knowledge.chunk_text
+
+        def held_chunk(text):
+            begun.set()
+            if not proceed.wait(timeout=3):
+                raise AssertionError("test ingestion barrier timed out")
+            return real_chunk(text)
+
+        monkeypatch.setattr(intents_knowledge, "chunk_text", held_chunk)
+
+        async def race():
+            pending = asyncio.create_task(bus.dispatch_intent(
+                "scene", "setChatIndexIntoKnowledge", [node_id, True],
+            ))
+            try:
+                assert await asyncio.to_thread(begun.wait, 3)
+                document.current_workspace_id = 8
+            finally:
+                proceed.set()
+            await pending
+
+        _run(race())
+
+        old_collection = knowledge_store.get_or_create_workspace_collection(_isolated_knowledge_db, 7)
+        new_collection = knowledge_store.get_or_create_workspace_collection(_isolated_knowledge_db, 8)
+        assert len(knowledge_store.list_documents(_isolated_knowledge_db, collection_id=old_collection)) == 1
+        assert knowledge_store.list_documents(_isolated_knowledge_db, collection_id=new_collection) == []
+
+    def test_branch_source_survives_save_load_with_reassigned_node_id(self, _isolated_knowledge_db):
+        from backend.domain.graph import SceneDocument
+        from backend.session_save import build_chat_data
+        from backend.session_load import restore_chat_into_document
+
+        bus, document, _ = make_bus()
+        node_id = _run(bus.dispatch_intent("scene", "addChatNode", [0, 0, "persist me", True]))
+        _run(bus.dispatch_intent("scene", "setChatIndexIntoKnowledge", [node_id, True]))
+        source_key = document.branch_index_sources[node_id]
+
+        saved = build_chat_data(document)
+        restored = SceneDocument()
+        restore_chat_into_document(restored, {"data": saved}, [], [])
+        assert list(restored.branch_index_sources.values()) == [source_key]
 
     def test_setting_it_on_a_non_chat_node_raises(self, _isolated_knowledge_db):
         from backend.domain.graph import SceneError

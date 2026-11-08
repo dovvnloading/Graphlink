@@ -19,13 +19,17 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from uuid import uuid4
 
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument, SceneError
 from backend.events import SessionBus
-from backend.knowledge_ingest import IngestError, ingest_text
+from backend.knowledge_chunking import chunk_text
+from backend.knowledge_ingest import IngestError
 from backend.knowledge_retrieval import hybrid_search
-from backend.knowledge_store import DEFAULT_DB_PATH, get_or_create_workspace_collection
+from backend.knowledge_store import (
+    DEFAULT_DB_PATH, get_or_create_workspace_collection, replace_branch_document_with_chunks,
+)
 from backend.notifications import NotificationState
 
 _DEFAULT_K = 5
@@ -179,25 +183,47 @@ def register_knowledge_intents(
         if enabled:
             history = document.chat_branch_history(node_id)
             text = branch_history_to_text(history)
+            # Pin the workspace BEFORE the to_thread hop: another window can
+            # load a different graph while the worker is chunking this one.
+            # Resolving document.current_workspace_id inside the worker would
+            # write the OLD branch into the NEW workspace's collection.
+            workspace_id = document.current_workspace_id
+            # Each node gets a stable persisted key rather than relying on
+            # node_id (reassigned on reload, reused across other graphs).
+            source_key = document.branch_index_sources.setdefault(node_id, uuid4().hex)
+            source_uri = f"branch:{source_key}"
+            title = f"Branch (node {node_id})"
 
-            # ADR-020 stage 20.3: same workspace-scoping, same single-hop
-            # resolve-then-ingest shape as search() above.
+            # ADR-020 stage 20.3: same workspace scoping, but use a mutable
+            # source-aware replacement instead of immutable content dedup.
             def _ingest():
-                collection_id = _resolve_workspace_collection_id(document)
-                return ingest_text(
-                    text,
-                    source_uri=f"branch:{node_id}", title=f"Branch (node {node_id})",
-                    collection_id=collection_id,
+                if not text.strip():
+                    raise IngestError(f"'{title}' contained no indexable text.")
+                chunks = chunk_text(text)
+                if not chunks:
+                    raise IngestError(f"'{title}' contained no indexable text.")
+                collection_id = (
+                    get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                    if workspace_id is not None else 0
+                )
+                return replace_branch_document_with_chunks(
+                    DEFAULT_DB_PATH, source_uri=source_uri, title=title,
+                    text=text, chunks=chunks, collection_id=collection_id,
                 )
 
             try:
-                # Same blocking-I/O concern as search() above - ingest_text()
+                # Same blocking-I/O concern as search() above - this branch ingest
                 # does real SQLite writes (chunk + embedding-cache rows).
                 await asyncio.to_thread(_ingest)
             except IngestError as exc:
                 if notifications is not None:
                     notifications.show(str(exc), "error")
                     await bus.publish("notification")
+                return
+            # A load/new-chat may replace the graph while the DB write is
+            # running. Never mark a newly assigned node id as indexed based
+            # on the old node's completed operation.
+            if document.nodes.get(node_id) is not node:
                 return
 
         document.record_command(
