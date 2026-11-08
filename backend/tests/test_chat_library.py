@@ -3884,3 +3884,85 @@ def test_switch_aborts_if_preserving_current_edits_fails(db_path, monkeypatch):
     assert original.id in document.nodes
     assert document.current_chat_id is None
     assert notifications.visible and notifications.msg_type == "error"
+
+
+# -- Audit repair: transactional archive restoration -------------------------
+
+def _sample_graphlink_archive(path):
+    workspace_archive_module.export_archive(path, [{
+        "title": "Imported Graph",
+        "data": {"nodes": [{
+            "node_type": "chat", "id": "original-node", "raw_content": "restore text",
+            "is_user": True, "position": {"x": 0, "y": 0},
+        }]},
+        "notes": [{"id": "original-note", "content": "restored note", "position": {"x": 2, "y": 3}, "size": {}}],
+        "pins": [{"title": "restored pin", "position": {"x": 4, "y": 5}}],
+        "tags": ["Imported"], "favorite": True, "archived": True,
+    }])
+
+
+def test_workspace_import_restores_graphs_notes_pins_and_metadata_without_overwriting(db_path, tmp_path):
+    get_all_chats(db_path)
+    workspace = create_workspace(db_path, "Import Target")
+    existing, _ = save_chat_atomically_row(db_path, None, "Keep Me", {"nodes": []}, [], [])
+    archive_path = tmp_path / "backup.graphlink"
+    _sample_graphlink_archive(archive_path)
+
+    imported_ids = chat_library_module.import_workspace_rows_atomically(
+        db_path, archive_path, workspace["id"],
+    )
+
+    assert len(imported_ids) == 1 and imported_ids[0] != existing
+    assert load_chat_row(db_path, existing)["title"] == "Keep Me"
+    restored = load_chat_row(db_path, imported_ids[0])
+    assert restored["title"] == "Imported Graph"
+    assert "restore text" in json.dumps(restored["data"])
+    assert [n["content"] for n in load_notes_rows(db_path, imported_ids[0])] == ["restored note"]
+    assert [p["title"] for p in load_pins_rows(db_path, imported_ids[0])] == ["restored pin"]
+    row = next(r for r in get_all_chats(db_path) if r["id"] == imported_ids[0])
+    assert row["workspaceId"] == workspace["id"]
+    assert row["tags"] == ["Imported"] and row["favorite"] and row["archived"]
+
+
+def test_workspace_import_rolls_back_all_rows_on_second_graph_error(db_path, tmp_path, monkeypatch):
+    get_all_chats(db_path)
+    workspace_id = get_all_workspaces(db_path)[0]["id"]
+    archive_path = tmp_path / "two.graphlink"
+    workspace_archive_module.export_archive(
+        archive_path, [
+            {"title": "First", "data": {"nodes": []}},
+            {"title": "Second", "data": {"nodes": []}},
+        ],
+    )
+    real_preview = chat_library_module._extract_preview_and_message_count
+    calls = {"count": 0}
+
+    def fail_on_second(data):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise ValueError("synthetic second-row failure")
+        return real_preview(data)
+
+    monkeypatch.setattr(chat_library_module, "_extract_preview_and_message_count", fail_on_second)
+    with pytest.raises(ValueError, match="synthetic second-row failure"):
+        chat_library_module.import_workspace_rows_atomically(db_path, archive_path, workspace_id)
+    assert get_all_chats(db_path) == []
+
+
+def test_archive_import_intent_uses_native_picker_and_reports_success(db_path, tmp_path, monkeypatch):
+    get_all_chats(db_path)
+    target = get_all_workspaces(db_path)[0]["id"]
+    archive_path = tmp_path / "native.graphlink"
+    _sample_graphlink_archive(archive_path)
+
+    async def fake_picker(*, file_types=()):
+        assert any("graphlink" in item for item in file_types)
+        return str(archive_path)
+
+    monkeypatch.setattr(native_dialogs_module, "pick_file", fake_picker)
+    bus, _document, notifications = _bus_with_canvas(db_path)
+    count = asyncio.run(bus.dispatch_intent("app-chat-library", "importWorkspace", [target]))
+
+    assert count == 1
+    assert notifications.msg_type == "success"
+    assert len(get_all_chats(db_path)) == 1
