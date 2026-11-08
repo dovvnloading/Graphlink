@@ -452,11 +452,9 @@ def test_main_still_boots_when_the_scratch_dir_sweep_raises(desktop_harness):
 #
 # These are the tests that make "the shipped app runs with auth enabled" a
 # checked property rather than a convention. create_app(auth_token=None)
-# deliberately DISABLES auth so the ~1200-test suite needs no token
-# plumbing to exercise unrelated behavior (see backend/auth.py's
-# resolve_configured_token) - which means the only thing standing between
-# that convenience and shipping an unauthenticated app is this file
-# asserting the real launch path always supplies a real token.
+# now fails CLOSED unless explicitly passed
+# allow_unauthenticated_for_tests=True. Desktop launches still mint a
+# per-launch capability, checked separately here.
 
 
 def test_main_always_starts_the_backend_with_a_capability_token(desktop_harness):
