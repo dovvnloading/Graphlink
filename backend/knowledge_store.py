@@ -643,7 +643,7 @@ def replace_branch_document_with_chunks(
     """
     if not source_uri.startswith("branch:"):
         raise ValueError("mutable branch source must use the branch: scheme")
-    hash_value = content_hash(f"{source_uri}\\0{text}")
+    hash_value = content_hash(f"{source_uri}\n{text}")
     conn = _connect(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")

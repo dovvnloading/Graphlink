@@ -43,7 +43,6 @@ import itertools
 import logging
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, cast
-from uuid import uuid4
 
 from graphlink_grid_view_settings import (
     GRID_SIZE_PRESETS,

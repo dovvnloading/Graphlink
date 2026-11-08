@@ -204,7 +204,7 @@ def register_knowledge_intents(
                 )
 
             try:
-                # Same blocking-I/O concern as search() above - ingest_text()
+                # Same blocking-I/O concern as search() above - this branch ingest
                 # does real SQLite writes (chunk + embedding-cache rows).
                 await asyncio.to_thread(_ingest)
             except IngestError as exc:
