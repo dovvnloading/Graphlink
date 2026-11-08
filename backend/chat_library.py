@@ -2201,12 +2201,6 @@ def make_load_chat(
     passed in here as last_saved."""
 
     async def load_chat(chat_id: int):
-        # All graph-navigation paths (Library, Quick Switcher and global
-        # search) call this handler. Never replace a dirty live scene before
-        # protecting it; the autosave timer may not have fired yet.
-        if protect_current_canvas is not None and not await protect_current_canvas():
-            return
-
         # R6.4: replicates ChatSessionManager.load_chat's own orchestration
         # order (load row -> load notes/pins -> restore) and
         # SceneDeserializer._handle_load_error's "notification, not a
@@ -2229,6 +2223,13 @@ def make_load_chat(
                 return
 
             if canvas_document is None:
+                return
+
+            # Read the target BEFORE protecting the currently open graph.
+            # Another attached WS tab can still edit the live scene during
+            # load_chat_snapshot's await. The final protect and restore must
+            # be adjacent, with no intervening await after protection.
+            if protect_current_canvas is not None and not await protect_current_canvas():
                 return
 
             restore_chat_into_document(
@@ -2750,7 +2751,10 @@ def import_workspace_rows_atomically(
                         workspace_id, int(chat.get("favorite", False)), int(chat.get("archived", False)),
                     ),
                 )
-                graph_id = int(cursor.lastrowid)
+                inserted_id = cursor.lastrowid
+                if inserted_id is None:
+                    raise RuntimeError("SQLite did not return the imported graph ID")
+                graph_id = int(inserted_id)
                 for note in chat.get("notes", []):
                     position = note.get("position") if isinstance(note.get("position"), dict) else {}
                     size = note.get("size") if isinstance(note.get("size"), dict) else {}
@@ -3176,31 +3180,46 @@ def register_chat_library(
     )
 
     async def _protect_current_canvas() -> bool:
-        """Durably save dirty edits before replacing an in-memory scene.
+        """Save edits and verify the scene is still saved before replacing it.
 
-        All navigation callers already own the chat-mutation guard, so this
-        calls the underlying save handler instead of reacquiring that guard.
+        Other scene-topic intents are not blocked by the library's mutation
+        guard, so a second WebSocket tab may edit while save_chat awaits
+        SQLite. Compare the *post-save* canvas to last_saved and retry a
+        bounded number of times rather than discarding late edits.
         """
-        if canvas_document is None or (not canvas_document.nodes and canvas_document.current_chat_id is None):
+        if canvas_document is None:
             return True
-        try:
-            current = build_chat_data(
-                canvas_document, asset_store=store_for(resolved_path), settings_manager=settings_manager,
+        for attempt in range(4):
+            if not canvas_document.nodes and canvas_document.current_chat_id is None:
+                return True
+            try:
+                current = build_chat_data(
+                    canvas_document, asset_store=store_for(resolved_path), settings_manager=settings_manager,
+                )
+                notes = current.pop("notes_data", [])
+                pins = current.pop("pins_data", [])
+                unchanged = (
+                    _content_digest(current, notes, pins) == _last_saved.get("digest")
+                    and canvas_document.current_chat_id == _last_saved.get("chat_id")
+                )
+            except Exception as exc:
+                if notifications is not None:
+                    notifications.show(f"Could not preserve the current graph before switching: {exc}", "error")
+                    await bus.publish("notification")
+                return False
+            if unchanged:
+                return True
+            if attempt < 3 and await save_chat() is not True:
+                return False
+
+        # Continuous concurrent edits prevented a stable save; do NOT clear
+        # the scene. A user can retry navigation after the edits settle.
+        if notifications is not None:
+            notifications.show(
+                "The graph is still changing. Wait for edits to finish before switching.", "warning",
             )
-            notes = current.pop("notes_data", [])
-            pins = current.pop("pins_data", [])
-            unchanged = (
-                _content_digest(current, notes, pins) == _last_saved.get("digest")
-                and canvas_document.current_chat_id == _last_saved.get("chat_id")
-            )
-        except Exception as exc:
-            if notifications is not None:
-                notifications.show(f"Could not preserve the current graph before switching: {exc}", "error")
-                await bus.publish("notification")
-            return False
-        if unchanged:
-            return True
-        return await save_chat() is True
+            await bus.publish("notification")
+        return False
 
     load_chat = make_load_chat(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
@@ -3216,8 +3235,6 @@ def register_chat_library(
         # so this simply clears the live document and drops current_chat_id,
         # exactly like clear_for_load already does for a session LOAD.
         if canvas_document is None:
-            return
-        if not await _protect_current_canvas():
             return
 
         # ADR-020 stage 20.2: resolve/validate the caller's requested
@@ -3247,6 +3264,11 @@ def register_chat_library(
                 if candidate_workspace_id in existing_workspace_ids:
                     resolved_workspace_id = candidate_workspace_id
 
+        # Resolve the destination first; another tab can mutate during the
+        # workspace lookup's await. The final stable save and clear must
+        # happen consecutively on the event loop.
+        if not await _protect_current_canvas():
+            return
         canvas_document.clear_for_load()
         canvas_document.current_workspace_id = resolved_workspace_id
         # clear_for_load drops current_chat_id, so the save state that
