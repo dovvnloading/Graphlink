@@ -352,4 +352,5 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/chat_library.py (app-chat-library) - ADR-020 stage 20.5 --
     Classified("app-chat-library", "exportWorkspace", "B", "read-only: reads chats.db and writes an external .graphlink file, no document mutation"),
+    Classified("app-chat-library", "importWorkspace", "B", "whole-session: restores archive graphs, notes, pins and assets into persistent stores, not an in-document undoable change"),
 )
