@@ -408,14 +408,14 @@ def create_app(
     restrict_sessions: bool = True,
     control_read_token: str | None = None,
     control_write_token: str | None = None,
+    allow_unauthenticated_for_tests: bool = False,
 ) -> FastAPI:
     app = FastAPI(title="Graphlink backend", version=BACKEND_VERSION)
     # ADR-004 stage 4.1: the per-launch capability token gating /api/* and
     # /ws - see backend/auth.py's own docstring for the threat (audit C5) and
-    # why a token rather than accounts. None means "auth disabled", which is
-    # what a bare create_app() in a test gets; the real launch path always
-    # passes one (asserted by tests/test_graphlink_desktop.py, so shipping
-    # with auth off is a test failure rather than a silent regression).
+    # why a token rather than accounts. Missing credentials now FAIL CLOSED.
+    # Only expressly opted-in test harnesses may disable auth; the real
+    # desktop and headless launchers pass a fresh capability as before.
     resolved_auth_token = resolve_configured_token(auth_token)
     # A file-backed MCP credential must NEVER authorize normal backend
     # intents. Refuse an unprotected backend or an identical admin/read
@@ -432,11 +432,17 @@ def create_app(
         if (token_matches(resolved_auth_token, control_write_token)
                 or token_matches(control_read_token, control_write_token)):
             raise ValueError("MCP write token must differ from admin and read tokens")
+    if resolved_auth_token is None and not allow_unauthenticated_for_tests:
+        raise ValueError(
+            "Graphlink ASGI requires a capability token. Supply auth_token or "
+            "GRAPHLINK_DEV_AUTH_TOKEN. Only an isolated test harness may set "
+            "allow_unauthenticated_for_tests=True."
+        )
     app.state.auth_token = resolved_auth_token
     if resolved_auth_token is None:
         logger.warning(
-            "no capability token configured - /api and /ws are UNAUTHENTICATED "
-            "(expected only in tests; the desktop shell always mints one)"
+            "UNAUTHENTICATED /api and /ws explicitly enabled for tests; "
+            "never use allow_unauthenticated_for_tests in production."
         )
     # ONE SettingsManager for the whole app (it owns a single shared
     # ~/.graphlink/session.dat file), shared across every session rather

@@ -211,6 +211,8 @@ jobs:
           cd /tmp
           "$GITHUB_WORKSPACE/wheel_test_venv/bin/python" - <<'PY'
           import importlib.metadata
+          import tempfile
+          from pathlib import Path
           import backend.agents
           import graphlink_note_agent
           import graphlink_process_env
@@ -231,8 +233,14 @@ jobs:
           assert set(registry.manifests) >= expected, registry.load_errors
           assert len(registry.builtin_actions) >= len(expected), registry.load_errors
           assert resolve_plugins_dir().is_dir()
-          app = create_app(spa_dir=spa)
-          assert app is not None
+          with tempfile.TemporaryDirectory() as workdir:
+              app = create_app(
+                  spa_dir=spa,
+                  auth_token="wheel-smoke-isolated-test-token",
+                  settings_state_file=Path(workdir) / "session.dat",
+                  chat_db_path=Path(workdir) / "chats.db",
+              )
+              assert app.state.auth_token == "wheel-smoke-isolated-test-token"
           print("OK: installed wheel contains SPA, icon, eight built-in plugins and GUI entry point")
           PY
 

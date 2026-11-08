@@ -25,9 +25,8 @@ normal housekeeping (or a developer's `%TEMP%` cleanup) is left to reclaim
 it, exactly as pytest's own tmp_path fixture leaves its directories behind
 for inspection after a run.
 
-auth_token=None disables the /api and /ws capability-token requirement
-entirely - create_app()'s own docstring calls this "expected only in
-tests", which is exactly this use case: there is no graphlink_desktop.py
+The explicit allow_unauthenticated_for_tests=True flag disables /api
+and /ws authentication ONLY for this isolated loopback E2E harness: there is no graphlink_desktop.py
 mint_token() step here for Playwright's Chromium to receive the token
 from (that mechanism hands it to pywebview via a URL fragment main() builds
 itself - see that file's own docstring), and standing up an equivalent for
@@ -86,6 +85,7 @@ def main() -> None:
         settings_state_file=e2e_data_dir / "session.dat",
         chat_db_path=e2e_data_dir / "chats.db",
         auth_token=None,
+        allow_unauthenticated_for_tests=True,
     )
     uvicorn.run(app, host="127.0.0.1", port=E2E_PORT, log_level="warning")
 

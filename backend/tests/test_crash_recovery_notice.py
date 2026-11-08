@@ -29,6 +29,7 @@ def _client(previous_run_crashed: bool) -> TestClient:
             settings_state_file=state_path / "session.dat",
             chat_db_path=state_path / "chats.db",
             previous_run_crashed=previous_run_crashed,
+            allow_unauthenticated_for_tests=True,
         ),
         # ADR-004 stage 4.2: see backend/tests/test_app_ws.py's make_client
         # for why BOTH kwargs are required.

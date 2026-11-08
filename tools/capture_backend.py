@@ -11,9 +11,8 @@ them:
     built SPA out of web_ui/dist/app - a screenshot of a mocked app would be
     worth nothing.
 
-auth_token=None disables the /api and /ws capability token, the same
-"expected only in tests" posture run_backend.py documents: there is no
-desktop shell here to mint one, and this binds to loopback only.
+This isolated screenshot harness passes the explicit test-only
+allow_unauthenticated_for_tests=True flag and binds to loopback.
 
     python tools/capture_backend.py <port> <data-dir>
 """
@@ -43,6 +42,7 @@ def main() -> None:
         settings_state_file=data_dir / "session.dat",
         chat_db_path=data_dir / "chats.db",
         auth_token=None,
+        allow_unauthenticated_for_tests=True,
     )
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
 

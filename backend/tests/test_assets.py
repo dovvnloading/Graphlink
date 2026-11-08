@@ -33,6 +33,7 @@ def make_client(tmp_path: Path | None = None, *, restrict_sessions: bool = True)
             # non-default session id, otherwise unreachable in the real
             # (restrict_sessions=True by default) shipped policy.
             restrict_sessions=restrict_sessions,
+            allow_unauthenticated_for_tests=True,
         ),
         # ADR-004 stage 4.2: see test_app_ws.py's own make_client for why
         # BOTH kwargs are required (base_url for HTTP, headers= because

@@ -48,7 +48,7 @@ def test_creating_the_app_without_path_overrides_is_refused():
     from backend.app import create_app
 
     with pytest.raises(AssertionError, match="REAL user data"):
-        create_app()
+        create_app(allow_unauthenticated_for_tests=True)
 
 
 def test_a_tmp_path_derived_override_is_allowed(tmp_path):
