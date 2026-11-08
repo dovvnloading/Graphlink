@@ -70,6 +70,28 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("Explicit transport teardown", () => {
+  it("discards queued offline edits instead of replaying after a remount", () => {
+    const transport = makeTransport();
+    transport.connect();
+    const first = FakeSocket.instances[0];
+    first.open();
+    first.close();
+    const settled = vi.fn();
+    transport.fireIntent("scene", "moveNodes", [[{ id: "n1", x: 2, y: 3 }]], undefined, true, undefined, settled);
+
+    transport.dispose();
+    expect(settled).toHaveBeenCalledWith(false);
+    transport.connect();
+    const reopened = FakeSocket.instances.at(-1)!;
+    reopened.open();
+    expect(reopened.sent.map((raw) => JSON.parse(raw))).not.toContainEqual(
+      expect.objectContaining({ kind: "intent", intent: "moveNodes" }),
+    );
+    transport.dispose();
+  });
+});
+
 describe("WsTransport", () => {
   it("subscribes pre-registered topics on open", () => {
     const t = makeTransport();

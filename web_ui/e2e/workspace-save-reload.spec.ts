@@ -72,14 +72,16 @@ test("saves a node, clears the canvas, then reloads it from the chat library", a
   const libraryDialog = page.getByRole("dialog", { name: "Chat Library" });
   await expect(libraryDialog).toBeVisible();
 
-  // Fully isolated chats.db (a fresh temp file per E2E run - see
-  // tests_e2e/run_backend.py), so this Save produced exactly one row.
-  const savedRow = libraryDialog.locator(".library-row");
-  await expect(savedRow).toHaveCount(1);
+  // Earlier test scenes may now be safely persisted when gotoApp clears
+  // the canvas. Select the just-saved, newest row instead of assuming
+  // the shared E2E test database has exactly one graph across specs.
+  const savedRow = libraryDialog.locator(".library-row").first();
+  await expect(savedRow).toBeVisible();
   const openSavedChat = savedRow.getByRole("button", { name: /^Open chat/ });
 
-  // Clears the live document server-side and closes the dialog (newChat()'s
-  // own overlays.close() call, ChatLibraryDialog.tsx).
+  // Confirm the user-visible graph switch. The New Chat action now saves
+  // pending edits before clearing rather than silently discarding them.
+  page.once("dialog", (dialog) => { void dialog.accept(); });
   await page.getByRole("button", { name: "New Chat", exact: true }).click();
   await expect(libraryDialog).toBeHidden();
   await expect(page.locator(".react-flow__node")).toHaveCount(0);

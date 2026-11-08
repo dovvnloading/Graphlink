@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
+import type { SceneStore } from "../canvas/sceneStore";
 import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
 import type { AppChatLibraryRow, AppChatLibraryState, AppWorkspaceRow } from "../../lib/bridge-core/generated/app-chat-library-state";
 import type { AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
@@ -224,7 +225,7 @@ function Icon({
   }
 }
 
-export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
+export function ChatLibraryDialog({ transport, store }: { transport: WsTransport; store: SceneStore }) {
   const overlays = useOverlays();
   const [state, setState] = useState<AppChatLibraryState>(initialState);
   const [query, setQuery] = useState("");
@@ -236,6 +237,7 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
   // persisted anywhere; it lives exactly like `query` above, dialog-local
   // and reset whenever the dialog closes and reopens (a fresh mount).
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<number | null>(null);
+  const [importingWorkspaceId, setImportingWorkspaceId] = useState<number | null>(null);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [showArchived, setShowArchived] = useState(false);
   const [isCreatingWorkspace, setIsCreatingWorkspace] = useState(false);
@@ -382,12 +384,22 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
 
   const groups = useMemo(() => groupRows(filtered), [filtered]);
 
+  function confirmNavigation(message: string): boolean {
+    const scene = store.getScene();
+    // The backend also saves dirty state before switching. This UI check is
+    // deliberate confirmation, shared by Load and New Chat in this dialog.
+    if (scene.nodes.length === 0 && !scene.hasSavedChat) return true;
+    return window.confirm(message);
+  }
+
   function loadChat(id: number) {
+    if (!confirmNavigation("Open another chat? Current edits will be saved before switching.")) return;
     transport.fireIntent("app-chat-library", "loadChat", [id]);
     overlays.close();
   }
 
   function newChat() {
+    if (!confirmNavigation("Start a new chat? Your current edits will be saved before switching.")) return;
     // ADR-020 stage 20.2: newChat's new trailing workspaceId param is
     // optional/backward-compatible - omitted here whenever "All" is
     // selected (selectedWorkspaceId === null), which resolves server-side
@@ -445,6 +457,19 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
   // posture attachFile/pickGitlinkLocalRoot already established.
   function exportWorkspace(workspaceId: number) {
     transport.fireIntent("app-chat-library", "exportWorkspace", [workspaceId], NATIVE_DIALOG_TIMEOUT_MS);
+  }
+
+  async function importWorkspace(workspaceId: number) {
+    if (importingWorkspaceId !== null) return;
+    setImportingWorkspaceId(workspaceId);
+    try {
+      await transport.request("app-chat-library", "importWorkspace", [workspaceId], NATIVE_DIALOG_TIMEOUT_MS);
+    } catch (error) {
+      // The backend also publishes a detailed notification on import failure.
+      console.error("[chat-library] Workspace import failed:", error);
+    } finally {
+      setImportingWorkspaceId(null);
+    }
   }
 
   function startCreateWorkspace() {
@@ -737,6 +762,20 @@ export function ChatLibraryDialog({ transport }: { transport: WsTransport }) {
                 onClick={() => exportWorkspace(expandedWorkspace.id)}
               >
                 Export Workspace…
+              </button>
+            </div>
+            <div className="settings-field">
+              <span className="settings-field-label">Import</span>
+              <p className="settings-update-status">
+                Restore graphs from a .graphlink archive into &quot;{expandedWorkspace.name}&quot; without overwriting existing graphs.
+              </p>
+              <button
+                type="button"
+                className="library-new-chat-button"
+                disabled={importingWorkspaceId !== null}
+                onClick={() => { void importWorkspace(expandedWorkspace.id); }}
+              >
+                {importingWorkspaceId === expandedWorkspace.id ? "Importing…" : "Import Workspace…"}
               </button>
             </div>
           </div>

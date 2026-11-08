@@ -27,7 +27,7 @@ export interface PaletteCommand {
 /**
  * R7.5c: New Chat, with legacy's confirm step restored.
  * graphlink_window.py's new_chat (1427-1442) always showed a blocking
- * QMessageBox ("Start a new chat? Any unsaved changes will be lost.",
+ * QMessageBox ("Start a new chat? Your current edits will be saved before switching.",
  * default No) before clearing the canvas, and only skipped it when there was
  * genuinely nothing to lose. R7.5a shipped the palette command without that
  * guard; both the palette and R7.5c's Ctrl+T now route through here so the
@@ -54,7 +54,7 @@ export function requestNewChat(
 ): void {
   const scene = store.getScene();
   const nothingToLose = scene.nodes.length === 0 && !scene.hasSavedChat;
-  if (!nothingToLose && !confirmFn("Start a new chat? Any unsaved changes will be lost.")) return;
+  if (!nothingToLose && !confirmFn("Start a new chat? Your current edits will be saved before switching.")) return;
   store.newChat();
 }
 

@@ -1469,3 +1469,62 @@ def test_build_context_bundle_empty_scope_produces_empty_but_valid_shell(tmp_pat
     # scope_mode="full" with no repo_file_paths falls back to a full local
     # scan, so "unused.py" IS included here - this pins that fallback path.
     assert result.included_paths == ["unused.py"]
+
+
+# -- Repair regression tests: bounded context and explicit snapshot refresh --
+
+def test_repository_import_completes_existing_empty_destination(tmp_path):
+    target = tmp_path / "checkout"
+    target.mkdir()
+    zip_url = "https://api.github.com/repos/o/r/zipball/main"
+    client = _FakeGithubClient({zip_url: _zip_bytes({"src/a.py": b"ready"})})
+
+    assert GitlinkRepository(client).download_repository_snapshot("o/r", "main", target) == target
+    assert (target / "src" / "a.py").read_bytes() == b"ready"
+
+
+def test_gitlink_read_rejects_oversized_local_source_before_decoding(tmp_path, monkeypatch):
+    (tmp_path / "big.py").write_bytes(b"x" * 9)
+    monkeypatch.setattr(repository_module, "MAX_LOCAL_CONTEXT_FILE_BYTES", 8)
+    with pytest.raises(RuntimeError, match="bounded context-read limit"):
+        read_local_repo_file(tmp_path, "big.py")
+
+
+def test_gitlink_local_scan_prunes_excluded_directories_before_enumerating(tmp_path, monkeypatch):
+    excluded = tmp_path / ".venv"
+    excluded.mkdir()
+    for i in range(10):
+        (excluded / f"huge{i}.py").write_text("private")
+    (tmp_path / "good.py").write_text("safe")
+    monkeypatch.setattr(repository_module, "MAX_LOCAL_SCAN_ENTRIES", 1)
+    assert scan_local_repo_paths(tmp_path) == ["good.py"]
+
+
+def test_gitlink_context_rejects_too_many_paths_before_reading(tmp_path, monkeypatch):
+    monkeypatch.setattr(repository_module, "MAX_CONTEXT_FILES", 2)
+    with pytest.raises(RuntimeError, match="too many files"):
+        GitlinkRepository(None).build_context_bundle(
+            repo_name="o/r", branch_name="main", scope_mode="selected",
+            selected_paths=["one.py", "two.py", "three.py"],
+            repo_file_paths=[], local_root=tmp_path,
+        )
+
+
+def test_gitlink_refresh_keeps_previous_snapshot_and_imports_fresh_copy(tmp_path, monkeypatch):
+    from backend import agents as agents_module
+
+    target = tmp_path / "cached"
+    target.mkdir()
+    (target / "modified.py").write_text("local edits")
+    zip_url = "https://api.github.com/repos/o/r/zipball/main"
+    client = _FakeGithubClient({zip_url: _zip_bytes({"fresh.py": b"updated"})})
+    monkeypatch.setattr(agents_module, "GitHubRestClient", lambda _settings: client)
+    monkeypatch.setattr(agents_module, "_resolve_gitlink_branch", lambda _client, _repo, branch: branch)
+    monkeypatch.setattr(agents_module, "default_import_root", lambda _repo, _branch: target)
+
+    _repo, _branch, path = agents_module._ensure_gitlink_snapshot(
+        None, "o/r", "main", str(target), str(target), force_refresh=True,
+    )
+    assert path != target
+    assert (path / "fresh.py").read_bytes() == b"updated"
+    assert (target / "modified.py").read_text() == "local edits"

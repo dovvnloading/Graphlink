@@ -2189,11 +2189,10 @@ def test_reopening_a_saved_chat_continues_the_branch_from_its_saved_tip(db_path)
     assert [e.source for e in document.edges.values() if e.target == third.id] == [tip.id]
 
 
-def test_deleting_the_open_chat_clears_the_pointer_and_reenables_autosave(db_path):
-    # Audit finding (real bug): deleteChat left current_chat_id dangling and
-    # left the content-only digest looking "already saved", so a user who
-    # deleted their open chat and kept working had NO autosave protection
-    # until they happened to edit the canvas.
+def test_deleting_the_open_chat_clears_the_scene_without_autosave_resurrection(db_path):
+    # Deleting an active graph is an explicit destructive user action. The
+    # backend must clear the scene as well as its DB pointer so an autosave
+    # tick cannot silently re-insert the just-deleted contents.
     bus, document, notifications = _library_session(db_path)
     document.add_chat_node(0, 0, "hello", is_user=True)
     asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
@@ -2203,15 +2202,16 @@ def test_deleting_the_open_chat_clears_the_pointer_and_reenables_autosave(db_pat
 
     assert get_all_chats(db_path) == []
     assert document.current_chat_id is None, "the pointer to a deleted row must not dangle"
+    assert document.nodes == {}, "the deleted graph must not stay open"
 
-    state = bus.chat_save_state
-    # The canvas is deliberately NOT touched - the pre-fix content-only guard
-    # could not tell this apart from "already saved" and skipped forever.
-    asyncio.run(autosave_tick(bus, db_path, document, notifications, state))
+    asyncio.run(autosave_tick(bus, db_path, document, notifications, bus.chat_save_state))
+    assert get_all_chats(db_path) == [], "autosave must not resurrect deleted content"
 
+    # A genuinely NEW edit after deletion must still receive autosave.
+    document.add_chat_node(0, 0, "new work after delete", is_user=True)
+    asyncio.run(autosave_tick(bus, db_path, document, notifications, bus.chat_save_state))
     rows = get_all_chats(db_path)
-    assert len(rows) == 1, "the still-open work must be re-protected under a fresh row"
-    assert rows[0]["id"] != saved_id
+    assert len(rows) == 1 and rows[0]["id"] != saved_id
 
 
 def test_deleting_a_different_chat_leaves_the_open_session_pointer_alone(db_path):
@@ -3822,3 +3822,281 @@ class TestExportWorkspaceIntent:
         archive = workspace_archive_module.read_archive(target)
         titles = {chat["title"] for chat in archive["chats"]}
         assert titles == {"Graph A1", "Graph A2"}
+
+
+# -- Audit repair: graph navigation must never drop in-memory edits ---------
+
+def test_switching_to_another_chat_preserves_edits_before_replacing_scene(db_path):
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    node = document.add_chat_node(0, 0, "before switch", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    original_id = document.current_chat_id
+    other_id, _ = save_chat_atomically_row(
+        db_path, None, "Other Graph", {"nodes": []}, [], [],
+    )
+
+    # Not yet autosaved: switch through the same handler used by the library,
+    # Quick Switcher, and global search.
+    node.content = "edited immediately before switch"
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [other_id]))
+
+    assert document.current_chat_id == other_id
+    assert "edited immediately before switch" in json.dumps(load_chat_row(db_path, original_id)["data"])
+
+
+def test_new_chat_saves_unsaved_current_canvas_before_clearing(db_path):
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    document.add_chat_node(0, 0, "brand new unsaved graph", is_user=True)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", []))
+
+    assert document.nodes == {}
+    rows = get_all_chats(db_path)
+    assert len(rows) == 1
+    assert "brand new unsaved graph" in json.dumps(load_chat_row(db_path, rows[0]["id"])["data"])
+
+
+def test_deleting_active_chat_clears_scene_so_autosave_cannot_resurrect_it(db_path):
+    bus, document, notifications = _bus_with_canvas(db_path)
+    document.add_chat_node(0, 0, "delete me", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    chat_id = document.current_chat_id
+
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [chat_id])) is True
+    assert document.nodes == {}
+    assert document.current_chat_id is None
+
+    asyncio.run(autosave_tick(bus, db_path, document, notifications, bus.chat_save_state))
+    assert get_all_chats(db_path) == []
+
+
+def test_switch_aborts_if_preserving_current_edits_fails(db_path, monkeypatch):
+    bus, document, notifications = _bus_with_canvas(db_path)
+    original = document.add_chat_node(0, 0, "cannot save this", is_user=True)
+    other_id, _ = save_chat_atomically_row(db_path, None, "Other", {"nodes": []}, [], [])
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(chat_library_module, "save_chat_atomically_row", fail_write)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [other_id]))
+
+    assert original.id in document.nodes
+    assert document.current_chat_id is None
+    assert notifications.visible and notifications.msg_type == "error"
+
+
+# -- Audit repair: transactional archive restoration -------------------------
+
+def _sample_graphlink_archive(path):
+    workspace_archive_module.export_archive(path, [{
+        "title": "Imported Graph",
+        "data": {"nodes": [{
+            "node_type": "chat", "id": "original-node", "raw_content": "restore text",
+            "is_user": True, "position": {"x": 0, "y": 0},
+        }]},
+        "notes": [{"id": "original-note", "content": "restored note", "position": {"x": 2, "y": 3}, "size": {}}],
+        "pins": [{"title": "restored pin", "position": {"x": 4, "y": 5}}],
+        "tags": ["Imported"], "favorite": True, "archived": True,
+    }])
+
+
+def test_workspace_import_restores_graphs_notes_pins_and_metadata_without_overwriting(db_path, tmp_path):
+    get_all_chats(db_path)
+    workspace = create_workspace(db_path, "Import Target")
+    existing, _ = save_chat_atomically_row(db_path, None, "Keep Me", {"nodes": []}, [], [])
+    archive_path = tmp_path / "backup.graphlink"
+    _sample_graphlink_archive(archive_path)
+
+    imported_ids = chat_library_module.import_workspace_rows_atomically(
+        db_path, archive_path, workspace["id"],
+    )
+
+    assert len(imported_ids) == 1 and imported_ids[0] != existing
+    assert load_chat_row(db_path, existing)["title"] == "Keep Me"
+    restored = load_chat_row(db_path, imported_ids[0])
+    assert restored["title"] == "Imported Graph"
+    assert "restore text" in json.dumps(restored["data"])
+    assert [n["content"] for n in load_notes_rows(db_path, imported_ids[0])] == ["restored note"]
+    assert [p["title"] for p in load_pins_rows(db_path, imported_ids[0])] == ["restored pin"]
+    row = next(r for r in get_all_chats(db_path) if r["id"] == imported_ids[0])
+    assert row["workspaceId"] == workspace["id"]
+    assert row["tags"] == ["Imported"] and row["favorite"] and row["archived"]
+
+
+def test_workspace_import_rolls_back_all_rows_on_second_graph_error(db_path, tmp_path, monkeypatch):
+    get_all_chats(db_path)
+    workspace_id = get_all_workspaces(db_path)[0]["id"]
+    archive_path = tmp_path / "two.graphlink"
+    workspace_archive_module.export_archive(
+        archive_path, [
+            {"title": "First", "data": {"nodes": []}},
+            {"title": "Second", "data": {"nodes": []}},
+        ],
+    )
+    real_preview = chat_library_module._extract_preview_and_message_count
+    calls = {"count": 0}
+
+    def fail_on_second(data):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise ValueError("synthetic second-row failure")
+        return real_preview(data)
+
+    monkeypatch.setattr(chat_library_module, "_extract_preview_and_message_count", fail_on_second)
+    with pytest.raises(ValueError, match="synthetic second-row failure"):
+        chat_library_module.import_workspace_rows_atomically(db_path, archive_path, workspace_id)
+    assert get_all_chats(db_path) == []
+
+
+def test_archive_import_intent_uses_native_picker_and_reports_success(db_path, tmp_path, monkeypatch):
+    get_all_chats(db_path)
+    target = get_all_workspaces(db_path)[0]["id"]
+    archive_path = tmp_path / "native.graphlink"
+    _sample_graphlink_archive(archive_path)
+
+    async def fake_picker(*, file_types=()):
+        assert any("graphlink" in item for item in file_types)
+        return str(archive_path)
+
+    monkeypatch.setattr(native_dialogs_module, "pick_file", fake_picker)
+    bus, _document, notifications = _bus_with_canvas(db_path)
+    count = asyncio.run(bus.dispatch_intent("app-chat-library", "importWorkspace", [target]))
+
+    assert count == 1
+    assert notifications.msg_type == "success"
+    assert len(get_all_chats(db_path)) == 1
+
+
+def test_load_chat_preserves_edit_arriving_during_target_database_read(db_path, monkeypatch):
+    original_id, _ = save_chat_atomically_row(
+        db_path, None, "Previous", {"nodes": []}, [], [],
+    )
+    other_id, _ = save_chat_atomically_row(
+        db_path, None, "Next", {"nodes": []}, [], [],
+    )
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [original_id]))
+    node = document.add_chat_node(0, 0, "before", is_user=True)
+    entered = threading.Event()
+    proceed = threading.Event()
+    real_load = chat_library_module.load_chat_snapshot
+
+    def slow_read(path, graph_id):
+        if graph_id == other_id:
+            entered.set()
+            assert proceed.wait(timeout=5), "test did not release the target graph read"
+        return real_load(path, graph_id)
+
+    monkeypatch.setattr(chat_library_module, "load_chat_snapshot", slow_read)
+
+    async def run():
+        task = asyncio.create_task(bus.dispatch_intent("app-chat-library", "loadChat", [other_id]))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            # This edit lands after the load started, before the target row
+            # read finishes. Saving only at the START of load loses it.
+            node.content = "edited while target graph was loading"
+        finally:
+            proceed.set()
+        await task
+
+    asyncio.run(run())
+    assert document.current_chat_id == other_id
+    assert "edited while target graph was loading" in json.dumps(
+        load_chat_row(db_path, original_id)["data"]
+    )
+
+
+def test_load_chat_rechecks_edits_that_arrive_while_save_is_in_flight(db_path, monkeypatch):
+    target, _ = save_chat_atomically_row(
+        db_path, None, "Target", {"nodes": []}, [], [],
+    )
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    node = document.add_chat_node(0, 0, "initial", is_user=True)
+    entered = threading.Event()
+    proceed = threading.Event()
+    real_write = chat_library_module.save_chat_atomically_row
+    writes = []
+
+    def paused_first_write(*args, **kwargs):
+        if not writes:
+            entered.set()
+            assert proceed.wait(timeout=5), "test did not release the in-flight write"
+        result = real_write(*args, **kwargs)
+        writes.append(result[0])
+        return result
+
+    monkeypatch.setattr(chat_library_module, "save_chat_atomically_row", paused_first_write)
+
+    async def run():
+        task = asyncio.create_task(bus.dispatch_intent("app-chat-library", "loadChat", [target]))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            # save_chat serialized "initial" before its worker started.
+            node.content = "last-second edit during save"
+        finally:
+            proceed.set()
+        await task
+
+    asyncio.run(run())
+    assert len(writes) >= 2, "a newer edit requires a follow-up save"
+    assert writes[0] == writes[-1], "both writes update the same graph, never create duplicates"
+    assert "last-second edit during save" in json.dumps(load_chat_row(db_path, writes[0])["data"])
+
+
+def test_new_chat_preserves_edits_arriving_during_workspace_lookup(db_path, monkeypatch):
+    get_all_chats(db_path)
+    target_workspace = create_workspace(db_path, "Next Workspace")["id"]
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    node = document.add_chat_node(0, 0, "initial", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    initial_id = document.current_chat_id
+    entered = threading.Event()
+    proceed = threading.Event()
+    real_workspaces = chat_library_module.get_all_workspaces
+
+    def paused_workspaces(path):
+        entered.set()
+        assert proceed.wait(timeout=5), "test did not release workspace lookup"
+        return real_workspaces(path)
+
+    monkeypatch.setattr(chat_library_module, "get_all_workspaces", paused_workspaces)
+
+    async def run():
+        task = asyncio.create_task(
+            bus.dispatch_intent("app-chat-library", "newChat", [target_workspace]),
+        )
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            node.content = "edited while new chat destination loaded"
+        finally:
+            proceed.set()
+        await task
+
+    asyncio.run(run())
+    assert document.nodes == {}
+    assert document.current_workspace_id == target_workspace
+    assert "edited while new chat destination loaded" in json.dumps(
+        load_chat_row(db_path, initial_id)["data"]
+    )
+
+
+def test_reopening_active_graph_never_restores_stale_pre_save_snapshot(db_path):
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    node = document.add_chat_node(0, 0, "original", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    original_id = document.current_chat_id
+    original_node_id = node.id
+
+    # The loader used to read this row BEFORE the navigation safety gate,
+    # then save the edit and restore the now-outdated row it had read.
+    node.content = "new edit that must remain visible"
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [original_id]))
+
+    assert document.current_chat_id == original_id
+    assert original_node_id in document.nodes
+    assert document.nodes[original_node_id].content == "new edit that must remain visible"
+    assert "new edit that must remain visible" in json.dumps(
+        load_chat_row(db_path, original_id)["data"]
+    )

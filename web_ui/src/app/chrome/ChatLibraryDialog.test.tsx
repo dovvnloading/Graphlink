@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatLibraryDialog } from "./ChatLibraryDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import type { WsTransport } from "../../lib/ws/transport";
+import { initialSceneState, type SceneStore } from "../canvas/sceneStore";
 
 function row(overrides: Record<string, unknown>) {
   return {
@@ -175,13 +176,19 @@ function OpenLibraryButton() {
   );
 }
 
-function setup() {
+function setup(withActiveScene = false) {
   const user = userEvent.setup();
   const fake = makeTransport();
+  const store = {
+    getScene: () => ({
+      ...initialSceneState,
+      nodes: withActiveScene ? [{ id: "dirty" }] : [],
+    }),
+  } as unknown as SceneStore;
   render(
     <OverlayProvider>
       <OpenLibraryButton />
-      <ChatLibraryDialog transport={fake.transport} />
+      <ChatLibraryDialog transport={fake.transport} store={store} />
     </OverlayProvider>,
   );
   act(() => fake.push(snapshot));
@@ -217,6 +224,27 @@ describe("ChatLibraryDialog", () => {
 
     expect(intents).toContainEqual(["app-chat-library", "loadChat", [2]]);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps the library open and does not navigate when a dirty-scene switch is declined", async () => {
+    const { user, intents } = setup(true);
+    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: /Open chat "Second Chat"/ }));
+    expect(confirmation).toHaveBeenCalledOnce();
+    expect(intents.some((entry) => entry[1] === "loadChat")).toBe(false);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    confirmation.mockRestore();
+  });
+
+  it("asks before starting a new chat from a populated canvas", async () => {
+    const { user, intents } = setup(true);
+    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: "New Chat" }));
+    expect(confirmation).toHaveBeenCalledOnce();
+    expect(intents).toContainEqual(["app-chat-library", "newChat", []]);
+    confirmation.mockRestore();
   });
 
   it("New Chat dispatches the newChat intent with no workspaceId while 'All' is selected, and closes the dialog", async () => {
@@ -798,6 +826,18 @@ describe("ChatLibraryDialog", () => {
     await user.click(screen.getByRole("button", { name: "Export Workspace…" }));
 
     expect(intents).toContainEqual(["app-chat-library", "exportWorkspace", [2]]);
+  });
+
+  it("offers transactional Import Workspace in the selected workspace gear panel", async () => {
+    const { user, push, intents, request } = setup();
+    act(() => push(composerSnapshot(), "app-composer"));
+    act(() => push({ ...snapshot, workspaces: [workspace({ id: 1, name: "Default" }), workspace({ id: 2, name: "Work" })] }));
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByLabelText('Show default model settings for "Work"'));
+    await user.click(screen.getByRole("button", { name: "Import Workspace…" }));
+
+    expect(request).toHaveBeenCalledWith("app-chat-library", "importWorkspace", [2]);
+    expect(intents).toContainEqual(["app-chat-library", "importWorkspace", [2]]);
   });
 
   it("names the target workspace in the export panel's own description", async () => {

@@ -431,6 +431,12 @@ export class WsTransport {
     this.snapshotRequestsPending.clear();
     this.resubscribeListeners.clear();
     this.streamBuffers.clear();
+    // Explicit teardown is not a transient network outage. A subsequent
+    // StrictMode remount must not replay writes accepted by the old mount.
+    for (const item of this.offlineQueue.splice(0)) {
+      item.onSettled?.(false);
+    }
+    this.droppedWhileOffline = 0;
   }
 
   getStatus(): ConnectionStatus {

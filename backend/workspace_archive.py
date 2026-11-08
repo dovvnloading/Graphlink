@@ -202,6 +202,27 @@ def export_archive(
 
     index: list[dict[str, Any]] = []
     written_refs: set[str] = set()
+    export_bytes = 0
+    export_members = 0
+
+    def _write_importable_member(archive: zipfile.ZipFile, name: str, data: str | bytes, cap: int) -> None:
+        """Keep export within the SAME limits enforced by read_archive.
+
+        Previously an export could report success for a valid .graphlink ZIP
+        that this exact version of Graphlink would refuse to restore.
+        """
+        nonlocal export_bytes, export_members
+        encoded = data.encode("utf-8") if isinstance(data, str) else data
+        length = len(encoded)
+        if length > cap or length > MAX_MEMBER_BYTES:
+            raise ArchiveError(f"Cannot export {name}: member exceeds the supported import limit.")
+        if export_members + 1 > MAX_ARCHIVE_MEMBERS:
+            raise ArchiveError("Workspace contains too many entries for a restorable archive.")
+        if export_bytes + length > MAX_TOTAL_UNCOMPRESSED_BYTES:
+            raise ArchiveError("Workspace exceeds the supported 128 MiB uncompressed import budget.")
+        archive.writestr(name, encoded)
+        export_members += 1
+        export_bytes += length
 
     try:
         with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
@@ -226,7 +247,7 @@ def export_archive(
                     "archived": bool(chat.get("archived", False)),
                 }
                 member = f"{CHATS_PREFIX}{position}.json"
-                archive.writestr(member, json.dumps(payload, indent=2))
+                _write_importable_member(archive, member, json.dumps(payload, indent=2), MAX_CHAT_JSON_BYTES)
                 index.append({"member": member, "title": payload["title"]})
 
                 if live_assets is None:
@@ -243,7 +264,7 @@ def export_archive(
                         logger.warning("asset %s referenced but not in the store - skipping", ref)
                         continue
                     extension = extension_for_mime(mimes.get(ref))
-                    archive.writestr(f"{ASSETS_PREFIX}{ref}.{extension}", data)
+                    _write_importable_member(archive, f"{ASSETS_PREFIX}{ref}.{extension}", data, MAX_ASSET_BYTES)
                     written_refs.add(ref)
 
             manifest = {
@@ -254,7 +275,9 @@ def export_archive(
                 "assetCount": len(written_refs),
                 "chats": index,
             }
-            archive.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2))
+            _write_importable_member(archive, MANIFEST_NAME, json.dumps(manifest, indent=2), MAX_MANIFEST_BYTES)
+        if tmp_path.stat().st_size > MAX_ARCHIVE_FILE_BYTES:
+            raise ArchiveError("Workspace ZIP exceeds the supported compressed import budget.")
         # Publish only after ZipFile has closed successfully. Keep cleanup
         # in this same try so a rename failure also leaves no staged file.
         _publish_archive(tmp_path, archive_path)

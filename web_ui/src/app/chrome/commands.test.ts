@@ -398,7 +398,7 @@ describe("requestNewChat", () => {
     const confirmFn = vi.fn(() => true);
     // @ts-expect-error - test double
     requestNewChat(store, confirmFn);
-    expect(confirmFn).toHaveBeenCalledWith("Start a new chat? Any unsaved changes will be lost.");
+    expect(confirmFn).toHaveBeenCalledWith("Start a new chat? Your current edits will be saved before switching.");
     expect(store.newChat).toHaveBeenCalledTimes(1);
   });
 

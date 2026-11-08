@@ -2189,6 +2189,7 @@ def make_load_chat(
     record_saved: Callable[..., None],
     last_saved: dict[str, Any],
     settings_manager: "SettingsManager | None" = None,
+    protect_current_canvas: Callable[[], Awaitable[bool]] | None = None,
 ):
     """Factory for register_chat_library's own loadChat intent - lifted out
     to a top-level function purely to keep register_chat_library itself
@@ -2222,6 +2223,21 @@ def make_load_chat(
                 return
 
             if canvas_document is None:
+                return
+
+            # Read the target BEFORE protecting the currently open graph.
+            # Another attached WS tab can still edit the live scene during
+            # load_chat_snapshot's await. The final protect and restore must
+            # be adjacent, with no intervening await after protection.
+            if protect_current_canvas is not None and not await protect_current_canvas():
+                return
+
+            # Reopening the graph already on screen must not restore the
+            # snapshot read BEFORE the protection step. If that step saved
+            # unsaved edits, this earlier row is now stale and restoring it
+            # would revert the live scene. Global search already has the
+            # same "already open" fast path.
+            if canvas_document.current_chat_id == int(chat_id):
                 return
 
             restore_chat_into_document(
@@ -2665,6 +2681,13 @@ class ExportWorkspaceArgs:
     workspaceId: int
 
 
+@dataclass
+class ImportWorkspaceArgs:
+    """Import an inspected .graphlink archive into one explicit workspace."""
+
+    workspaceId: int
+
+
 def _safe_export_filename(name: str) -> str:
     """Sanitizes a workspace name into a default `.graphlink` SAVE-dialog
     filename - a cosmetic prefill, not a security boundary (the user's own
@@ -2680,6 +2703,109 @@ def _safe_export_filename(name: str) -> str:
     safe = "".join(ch for ch in text if ch.isalnum() or ch in (" ", "-", "_")).strip()
     safe = re.sub(r"\s+", "_", safe)
     return safe or "workspace"
+
+
+def import_workspace_rows_atomically(
+    db_path: Path, archive_path: Path, workspace_id: int,
+) -> list[int]:
+    """Restore all graphs in ONE transaction after validating the whole ZIP.
+
+    No incoming graph IDs are trusted or reused: a backup may be imported
+    repeatedly without overwriting existing graphs. Notes, pins, tags and
+    favorite/archive flags travel with each new graph. Asset blobs are
+    content-addressed, verified *before* the first write and stored before
+    the SQLite transaction. A DB failure may leave harmless unreferenced
+    assets but can never leave a partially imported workspace.
+    """
+    from backend.asset_store import content_ref
+
+    parsed = workspace_archive.read_archive(archive_path)
+    chats = parsed["chats"]
+    for ref, content in parsed["assets"].items():
+        if content_ref(content) != ref:
+            raise workspace_archive.ArchiveError(
+                "Archive contains an asset whose contents do not match its checksum."
+            )
+    # Validate nested shapes before any assets or graph rows are written.
+    for chat in chats:
+        for key in ("notes", "pins"):
+            if any(not isinstance(item, dict) for item in chat.get(key, [])):
+                raise workspace_archive.ArchiveError(f"Archive contains malformed {key} records.")
+        if any(not isinstance(tag, str) for tag in chat.get("tags", [])):
+            raise workspace_archive.ArchiveError("Archive contains malformed graph tags.")
+
+    imported: list[tuple[int, str, dict[str, Any]]] = []
+    with contextlib.closing(_connect(db_path)) as conn:
+        exists = conn.execute("SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)).fetchone()
+        if exists is None:
+            raise ValueError("The destination workspace no longer exists.")
+
+        asset_store = store_for(db_path)
+        for content in parsed["assets"].values():
+            asset_store.put(content)
+
+        with conn:
+            for chat in chats:
+                title = chat["title"]
+                data = chat["data"]
+                preview, message_count = _extract_preview_and_message_count(data)
+                now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")
+                cursor = conn.execute(
+                    "INSERT INTO graphs "
+                    "(title, data, preview, message_count, updated_at, workspace_id, favorite, archived) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        title, json.dumps(data), preview, message_count, now,
+                        workspace_id, int(chat.get("favorite", False)), int(chat.get("archived", False)),
+                    ),
+                )
+                inserted_id = cursor.lastrowid
+                if inserted_id is None:
+                    raise RuntimeError("SQLite did not return the imported graph ID")
+                graph_id = int(inserted_id)
+                for note in chat.get("notes", []):
+                    position = note.get("position") if isinstance(note.get("position"), dict) else {}
+                    size = note.get("size") if isinstance(note.get("size"), dict) else {}
+                    conn.execute(
+                        "INSERT INTO notes (chat_id, content, position_x, position_y, "
+                        "width, height, color, header_color, is_system_prompt, is_summary_note, note_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            graph_id, str(note.get("content", "")),
+                            float(position.get("x", 0.0)), float(position.get("y", 0.0)),
+                            float(size.get("width", 0.0)), float(size.get("height", 0.0)),
+                            _legacy_default_to_none(note.get("color")) or "",
+                            note.get("header_color"), int(bool(note.get("is_system_prompt"))),
+                            int(bool(note.get("is_summary_note"))), str(note.get("id") or "") or None,
+                        ),
+                    )
+                for index, pin in enumerate(chat.get("pins", [])):
+                    position = pin.get("position") if isinstance(pin.get("position"), dict) else {}
+                    conn.execute(
+                        "INSERT INTO pins (chat_id, title, note, position_x, position_y, "
+                        "pin_id, sort_order, anchor_item_id, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            graph_id, str(pin.get("title", "")), pin.get("note"),
+                            float(position.get("x", 0.0)), float(position.get("y", 0.0)),
+                            pin.get("pin_id"), pin.get("sort_order", index),
+                            pin.get("anchor_item_id"), pin.get("created_at"),
+                        ),
+                    )
+                for tag in _normalize_tags(chat.get("tags", [])):
+                    conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
+                    tag_id = conn.execute("SELECT id FROM tags WHERE name = ?", (tag,)).fetchone()[0]
+                    conn.execute(
+                        "INSERT OR IGNORE INTO graph_tags (graph_id, tag_id) VALUES (?, ?)",
+                        (graph_id, int(tag_id)),
+                    )
+                imported.append((graph_id, title, data))
+
+    # The search index is a separate database. It is best-effort like the
+    # ordinary save path and runs only once the full import has committed.
+    for graph_id, title, data in imported:
+        _reindex_graph_into_knowledge_store(graph_id, workspace_id, title, data, None)
+    return [graph_id for graph_id, _title, _data in imported]
 
 
 def make_export_workspace(
@@ -2808,7 +2934,7 @@ def make_export_workspace(
 
         try:
             written = await asyncio.to_thread(_do_export)
-        except OSError as exc:
+        except (OSError, workspace_archive.ArchiveError) as exc:
             if notifications is not None:
                 notifications.show(f"Could not export workspace: {exc}", "error")
                 await bus.publish("notification")
@@ -2859,7 +2985,11 @@ def make_delete_chat_intent(
         # through transport.request() and only clears its confirm state on
         # a truthy reply - see ChatLibraryDialog.tsx's confirmDelete.
         deleted = await asyncio.to_thread(delete_chat, resolved_path, int(chat_id))
-        if canvas_document is not None and canvas_document.current_chat_id == int(chat_id):
+        if deleted and canvas_document is not None and canvas_document.current_chat_id == int(chat_id):
+            # Do not leave deleted content on the live canvas: autosave would
+            # see an unsaved scene and recreate the graph under a new ID.
+            canvas_document.clear_for_load()
+            await bus.publish("scene")
             # Audit fix: deleting the row this session is currently pointed at
             # used to leave current_chat_id dangling AND leave the autosave
             # digest looking "already saved", so a user who deleted their open
@@ -2945,6 +3075,155 @@ def make_rename_chat_intent(
         return new_updated_at
 
     return rename
+
+
+def make_protect_current_canvas(
+    bus: SessionBus,
+    resolved_path: Path,
+    canvas_document: SceneDocument | None,
+    notifications: NotificationState | None,
+    _last_saved: dict[str, Any],
+    save_chat: Callable[[], Awaitable[bool]],
+    settings_manager: "SettingsManager | None" = None,
+) -> Callable[[], Awaitable[bool]]:
+    async def _protect_current_canvas() -> bool:
+        """Save edits and verify the scene is still saved before replacing it.
+
+        Other scene-topic intents are not blocked by the library's mutation
+        guard, so a second WebSocket tab may edit while save_chat awaits
+        SQLite. Compare the *post-save* canvas to last_saved and retry a
+        bounded number of times rather than discarding late edits.
+        """
+        if canvas_document is None:
+            return True
+        for attempt in range(4):
+            if not canvas_document.nodes and canvas_document.current_chat_id is None:
+                return True
+            try:
+                current = build_chat_data(
+                    canvas_document, asset_store=store_for(resolved_path), settings_manager=settings_manager,
+                )
+                notes = current.pop("notes_data", [])
+                pins = current.pop("pins_data", [])
+                unchanged = (
+                    _content_digest(current, notes, pins) == _last_saved.get("digest")
+                    and canvas_document.current_chat_id == _last_saved.get("chat_id")
+                )
+            except Exception as exc:
+                if notifications is not None:
+                    notifications.show(f"Could not preserve the current graph before switching: {exc}", "error")
+                    await bus.publish("notification")
+                return False
+            if unchanged:
+                return True
+            if attempt < 3 and await save_chat() is not True:
+                return False
+
+        # Continuous concurrent edits prevented a stable save; do NOT clear
+        # the scene. A user can retry navigation after the edits settle.
+        if notifications is not None:
+            notifications.show(
+                "The graph is still changing. Wait for edits to finish before switching.", "warning",
+            )
+            await bus.publish("notification")
+        return False
+    return _protect_current_canvas
+
+
+def make_new_chat(
+    bus: SessionBus,
+    resolved_path: Path,
+    canvas_document: SceneDocument | None,
+    _last_saved: dict[str, Any],
+    _protect_current_canvas: Callable[[], Awaitable[bool]],
+):
+    async def new_chat(workspace_id: int | None = None):
+        # R6.5: the backend counterpart of legacy's "start with an empty
+        # scene" - there is no legacy method this ports 1:1 (Qt's
+        # ChatSessionManager has no "new chat" concept at all; a fresh scene
+        # is just whatever exists before the first load/save of a session),
+        # so this simply clears the live document and drops current_chat_id,
+        # exactly like clear_for_load already does for a session LOAD.
+        if canvas_document is None:
+            return
+
+        # ADR-020 stage 20.2: resolve/validate the caller's requested
+        # workspace BEFORE clear_for_load() below (which itself resets
+        # current_workspace_id to None) - an invalid/unknown workspaceId
+        # (never existed, or since deleted - there is no deleteWorkspace
+        # intent yet, but a caller could still send a stale/bogus id) falls
+        # back to None here. None is exactly what save_chat_atomically_row's
+        # own workspace_id=None default already resolves to the Default
+        # workspace for, via graphs.workspace_id's own schema DEFAULT (see
+        # that function's own docstring) - so "omitted or invalid ->
+        # Default" is satisfied by ONE fallback path, not two. Every OTHER
+        # caller of newChat in the codebase (e.g. commands.ts's palette "new
+        # chat" command) keeps calling this with zero args, which is
+        # `workspace_id=None` here - byte-identical pre-20.2 behavior.
+        resolved_workspace_id: int | None = None
+        if workspace_id is not None:
+            try:
+                candidate_workspace_id = int(workspace_id)
+            except (TypeError, ValueError):
+                candidate_workspace_id = None
+            if candidate_workspace_id is not None:
+                existing_workspace_ids = {
+                    workspace["id"]
+                    for workspace in await asyncio.to_thread(get_all_workspaces, resolved_path)
+                }
+                if candidate_workspace_id in existing_workspace_ids:
+                    resolved_workspace_id = candidate_workspace_id
+
+        # Resolve the destination first; another tab can mutate during the
+        # workspace lookup's await. The final stable save and clear must
+        # happen consecutively on the event loop.
+        if not await _protect_current_canvas():
+            return
+        canvas_document.clear_for_load()
+        canvas_document.current_workspace_id = resolved_workspace_id
+        # clear_for_load drops current_chat_id, so the save state that
+        # described the old document no longer describes anything.
+        _last_saved["digest"] = None
+        _last_saved["chat_id"] = None
+        _last_saved["updated_at"] = None
+        await bus.publish("scene")
+    return new_chat
+
+
+def make_import_workspace(
+    bus: SessionBus, resolved_path: Path, notifications: NotificationState | None,
+):
+    async def import_workspace(workspace_id: int) -> int:
+        # The path comes only from the user's native OPEN picker, never a
+        # client-supplied absolute path or a model tool argument.
+        try:
+            selected = await native_dialogs.pick_file(
+                file_types=("Graphlink Archive (*.graphlink)",),
+            )
+        except Exception as exc:
+            if notifications is not None:
+                notifications.show(f"Could not open the archive picker: {exc}", "error")
+                await bus.publish("notification")
+            return 0
+        if not selected:
+            return 0
+        try:
+            imported = await asyncio.to_thread(
+                import_workspace_rows_atomically, resolved_path, Path(selected), int(workspace_id),
+            )
+        except (workspace_archive.ArchiveError, OSError, ValueError, sqlite3.Error) as exc:
+            if notifications is not None:
+                notifications.show(f"Workspace import was refused: {exc}", "error")
+                await bus.publish("notification")
+            return 0
+        await bus.publish("app-chat-library")
+        if notifications is not None:
+            notifications.show(
+                f"Imported {len(imported)} graph(s) into the selected workspace.", "success",
+            )
+            await bus.publish("notification")
+        return len(imported)
+    return import_workspace
 
 
 def register_chat_library(
@@ -3053,62 +3332,24 @@ def register_chat_library(
 
     delete = make_delete_chat_intent(bus, resolved_path, canvas_document, _last_saved)
 
-    load_chat = make_load_chat(
-        bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
-    )
-    # ADR-020 stage 20.4: built from the SAME `load_chat` closure just
-    # above, not a second restore implementation - see make_load_graph_
-    # and_focus_node's own docstring.
-    load_graph_and_focus_node = make_load_graph_and_focus_node(resolved_path, canvas_document, load_chat)
     save_chat = make_save_chat(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
     )
 
-    async def new_chat(workspace_id: int | None = None):
-        # R6.5: the backend counterpart of legacy's "start with an empty
-        # scene" - there is no legacy method this ports 1:1 (Qt's
-        # ChatSessionManager has no "new chat" concept at all; a fresh scene
-        # is just whatever exists before the first load/save of a session),
-        # so this simply clears the live document and drops current_chat_id,
-        # exactly like clear_for_load already does for a session LOAD.
-        if canvas_document is None:
-            return
+    _protect_current_canvas = make_protect_current_canvas(
+        bus, resolved_path, canvas_document, notifications,
+        _last_saved, save_chat, settings_manager,
+    )
 
-        # ADR-020 stage 20.2: resolve/validate the caller's requested
-        # workspace BEFORE clear_for_load() below (which itself resets
-        # current_workspace_id to None) - an invalid/unknown workspaceId
-        # (never existed, or since deleted - there is no deleteWorkspace
-        # intent yet, but a caller could still send a stale/bogus id) falls
-        # back to None here. None is exactly what save_chat_atomically_row's
-        # own workspace_id=None default already resolves to the Default
-        # workspace for, via graphs.workspace_id's own schema DEFAULT (see
-        # that function's own docstring) - so "omitted or invalid ->
-        # Default" is satisfied by ONE fallback path, not two. Every OTHER
-        # caller of newChat in the codebase (e.g. commands.ts's palette "new
-        # chat" command) keeps calling this with zero args, which is
-        # `workspace_id=None` here - byte-identical pre-20.2 behavior.
-        resolved_workspace_id: int | None = None
-        if workspace_id is not None:
-            try:
-                candidate_workspace_id = int(workspace_id)
-            except (TypeError, ValueError):
-                candidate_workspace_id = None
-            if candidate_workspace_id is not None:
-                existing_workspace_ids = {
-                    workspace["id"]
-                    for workspace in await asyncio.to_thread(get_all_workspaces, resolved_path)
-                }
-                if candidate_workspace_id in existing_workspace_ids:
-                    resolved_workspace_id = candidate_workspace_id
+    load_chat = make_load_chat(
+        bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
+        protect_current_canvas=_protect_current_canvas,
+    )
+    load_graph_and_focus_node = make_load_graph_and_focus_node(resolved_path, canvas_document, load_chat)
 
-        canvas_document.clear_for_load()
-        canvas_document.current_workspace_id = resolved_workspace_id
-        # clear_for_load drops current_chat_id, so the save state that
-        # described the old document no longer describes anything.
-        _last_saved["digest"] = None
-        _last_saved["chat_id"] = None
-        _last_saved["updated_at"] = None
-        await bus.publish("scene")
+    new_chat = make_new_chat(
+        bus, resolved_path, canvas_document, _last_saved, _protect_current_canvas,
+    )
 
     # -- ADR-020 stage 20.2: the 6 new intents -------------------------------
     #
@@ -3182,6 +3423,8 @@ def register_chat_library(
         _serialize_mutating_intent(save_chat),
     )
 
+    import_workspace = make_import_workspace(bus, resolved_path, notifications)
+
     bus.register_intent("app-chat-library", "renameChat", _serialize_mutating_intent(rename))
     # Serialized like every other mutating intent here. It was the one
     # exception, and that was a real hazard rather than an oversight with no
@@ -3225,6 +3468,7 @@ def register_chat_library(
         args_schema=SetWorkspaceDefaultModelArgs,
     )
     bus.register_intent("app-chat-library", "exportWorkspace", export_workspace, args_schema=ExportWorkspaceArgs)
+    bus.register_intent("app-chat-library", "importWorkspace", import_workspace, args_schema=ImportWorkspaceArgs)
 
     if canvas_document is not None and autosave_interval_seconds is not None:
         # R6.6: local import - backend/autosave.py itself imports several

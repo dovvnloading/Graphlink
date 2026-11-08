@@ -6,9 +6,11 @@
 2. cancel frees the slot immediately (well under the 2 s budget) - the slot
    empties the moment the cancel intent lands, not when the worker thread
    eventually observes it;
-3. cancel_all covers every run kind - statically, every claim() call site
-   passes a cancellation mechanism, so the pre-6.2 "chart/note/branch_*/
-   image/gitlink_apply are silently skipped" gap cannot re-open unnoticed.
+3. cancel_all covers cancellable run kinds - statically, every claim()
+   requires cancellation except Gitlink Apply. Its filesystem writer is
+   explicitly non-cancellable once started: allowing cancel_all() to release
+   the busy lease while the thread continues writing admits overlapping
+   Apply/rollback operations and risks corrupting the checkout.
 
 The WS-level tests drive the REAL ASGI app end to end (the same harness
 test_app_ws.py established), with only the provider network call faked.
@@ -172,13 +174,15 @@ def test_cancel_frees_the_chat_slot_immediately_not_when_the_worker_returns(monk
 
 
 def test_every_claim_site_passes_a_cancellation_mechanism():
-    """EXIT CRITERION (cancel_all covers all runs), enforced statically the
-    same way test_dispatch_claim_ordering pins its own invariant: every
-    registry claim() call under backend/ must pass cancel_event= or
-    on_cancel=. Before 6.2, six kinds (chart, note, branch_comparison,
-    branch_synthesis, image, gitlink_apply) passed neither and were silently
-    skipped by cancel_all() - a new kind reintroducing that gap fails here."""
+    """Every run except a filesystem Apply has a cancellation mechanism.
+
+    A live Gitlink Apply must retain its busy lease until its worker exits.
+    Releasing that lease from cancel_all() while an uncancellable to_thread
+    write continues would allow a second Apply to corrupt rollback state.
+    The exemption is exact-file AND exact-kind, not a free pass for callers.
+    """
     offenders = []
+    exceptional_kinds = []
     for rel in _CLAIM_SCAN_FILES:
         tree = ast.parse((REPO_ROOT / rel).read_text(encoding="utf-8"), filename=rel)
         for node in ast.walk(tree):
@@ -190,7 +194,20 @@ def test_every_claim_site_passes_a_cancellation_mechanism():
                 continue
             keywords = {kw.arg for kw in node.keywords}
             if "cancel_event" not in keywords and "on_cancel" not in keywords:
-                offenders.append(f"{rel}:{node.lineno}")
+                is_gitlink_apply = (
+                    rel == "backend/agent_dispatch/gitlink.py"
+                    and len(node.args) >= 1
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "gitlink_apply"
+                )
+                if is_gitlink_apply:
+                    exceptional_kinds.append(f"{rel}:{node.lineno}")
+                else:
+                    offenders.append(f"{rel}:{node.lineno}")
+    assert len(exceptional_kinds) == 1, (
+        "the one non-cancellable Gitlink Apply lease must remain explicitly "
+        "tracked and reviewed; found " + repr(exceptional_kinds)
+    )
     assert not offenders, (
         "these claim() call sites pass neither cancel_event= nor on_cancel= - "
         "the run kind they create would be invisible to cancel()/cancel_all(), "
