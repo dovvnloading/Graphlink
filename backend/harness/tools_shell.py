@@ -49,7 +49,7 @@ import time
 from pathlib import Path
 
 from api_provider import RequestCancelledError
-from backend.harness.shell_policy import is_dangerous_command
+from backend.harness.shell_policy import requires_fresh_shell_approval
 from backend.harness.shell_sessions import ShellSessionError, ShellSessionRegistry
 from backend.harness.workspace import WorkspaceError, ensure_workspace
 from backend.providers.base import ToolCall, ToolSpec
@@ -398,18 +398,10 @@ def register_harness_shell_tool(registry: ToolRegistry, sessions: "ShellSessionR
         )
 
     def _exec_needs_fresh_prompt(call: ToolCall) -> bool:
-        return is_dangerous_command(str(call.arguments.get("command") or ""))
+        return requires_fresh_shell_approval(call.name, call.arguments)
 
     def _session_needs_fresh_prompt(call: ToolCall) -> bool:
-        # 'start' carries a command and is judged like shell.exec. 'write'
-        # always re-prompts: feeding stdin to an already-running process is
-        # unbounded in effect (it is that program's input language, not a
-        # command line we can analyze), so a remembered grant must never
-        # cover a second, different write.
-        action = str(call.arguments.get("action") or "").strip().lower()
-        if action == "start":
-            return is_dangerous_command(str(call.arguments.get("command") or ""))
-        return action == "write"
+        return requires_fresh_shell_approval(call.name, call.arguments)
 
     registry.register(
         SHELL_EXEC_SPEC, shell_exec, scopes={CODE_EXECUTE}, approval="always",

@@ -188,3 +188,19 @@ def analyze(command: str) -> ShellPlan:
 def is_dangerous_command(command: str) -> bool:
     """The `always_reprompt` predicate ToolRegistry calls per invocation."""
     return analyze(command).is_dangerous
+
+
+def requires_fresh_shell_approval(tool_name: str, arguments: dict) -> bool:
+    """Fail closed for commands with effects a shell classifier cannot prove.
+
+    Shell and interpreter wrappers can carry arbitrary code regardless of the
+    first token. The blacklist/analyze() remains useful for disclosure, but
+    must NOT be the authority that lets a session grant bypass consent.
+    Every shell.exec and shell.session start/write requires fresh approval.
+    Read/list/stop retain the less intrusive existing grant behavior.
+    """
+    if tool_name == "shell.exec":
+        return True
+    if tool_name == "shell.session":
+        return str(arguments.get("action") or "").strip().lower() in {"start", "write"}
+    return False
