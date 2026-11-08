@@ -152,6 +152,41 @@ class TestSetChatIndexIntoKnowledgeIntent:
         assert len(documents) == 2
         assert len({row["source_uri"] for row in documents}) == 2
 
+    def test_async_ingest_uses_workspace_selected_before_dispatch(self, _isolated_knowledge_db, monkeypatch):
+        import threading
+
+        bus, document, _ = make_bus()
+        document.current_workspace_id = 7
+        node_id = _run(bus.dispatch_intent("scene", "addChatNode", [0, 0, "private branch", True]))
+        begun, proceed = threading.Event(), threading.Event()
+        real_chunk = intents_knowledge.chunk_text
+
+        def held_chunk(text):
+            begun.set()
+            if not proceed.wait(timeout=3):
+                raise AssertionError("test ingestion barrier timed out")
+            return real_chunk(text)
+
+        monkeypatch.setattr(intents_knowledge, "chunk_text", held_chunk)
+
+        async def race():
+            pending = asyncio.create_task(bus.dispatch_intent(
+                "scene", "setChatIndexIntoKnowledge", [node_id, True],
+            ))
+            try:
+                assert await asyncio.to_thread(begun.wait, 3)
+                document.current_workspace_id = 8
+            finally:
+                proceed.set()
+            await pending
+
+        _run(race())
+
+        old_collection = knowledge_store.get_or_create_workspace_collection(_isolated_knowledge_db, 7)
+        new_collection = knowledge_store.get_or_create_workspace_collection(_isolated_knowledge_db, 8)
+        assert len(knowledge_store.list_documents(_isolated_knowledge_db, collection_id=old_collection)) == 1
+        assert knowledge_store.list_documents(_isolated_knowledge_db, collection_id=new_collection) == []
+
     def test_branch_source_survives_save_load_with_reassigned_node_id(self, _isolated_knowledge_db):
         from backend.domain.graph import SceneDocument
         from backend.session_save import build_chat_data

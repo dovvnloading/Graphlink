@@ -183,6 +183,11 @@ def register_knowledge_intents(
         if enabled:
             history = document.chat_branch_history(node_id)
             text = branch_history_to_text(history)
+            # Pin the workspace BEFORE the to_thread hop: another window can
+            # load a different graph while the worker is chunking this one.
+            # Resolving document.current_workspace_id inside the worker would
+            # write the OLD branch into the NEW workspace's collection.
+            workspace_id = document.current_workspace_id
             # Each node gets a stable persisted key rather than relying on
             # node_id (reassigned on reload, reused across other graphs).
             source_key = document.branch_index_sources.setdefault(node_id, uuid4().hex)
@@ -197,7 +202,10 @@ def register_knowledge_intents(
                 chunks = chunk_text(text)
                 if not chunks:
                     raise IngestError(f"'{title}' contained no indexable text.")
-                collection_id = _resolve_workspace_collection_id(document)
+                collection_id = (
+                    get_or_create_workspace_collection(DEFAULT_DB_PATH, workspace_id)
+                    if workspace_id is not None else 0
+                )
                 return replace_branch_document_with_chunks(
                     DEFAULT_DB_PATH, source_uri=source_uri, title=title,
                     text=text, chunks=chunks, collection_id=collection_id,
