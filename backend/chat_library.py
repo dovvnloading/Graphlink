@@ -2815,7 +2815,7 @@ def make_export_workspace(
 
         try:
             written = await asyncio.to_thread(_do_export)
-        except OSError as exc:
+        except (OSError, workspace_archive.ArchiveError) as exc:
             if notifications is not None:
                 notifications.show(f"Could not export workspace: {exc}", "error")
                 await bus.publish("notification")
