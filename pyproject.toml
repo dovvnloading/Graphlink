@@ -48,7 +48,10 @@ llamacpp = ["llama-cpp-python"]
 # (the prod lockfile). CI installs them ad hoc (see .github/workflows/ci.yml),
 # same pattern ruff already used before this stage; this extra exists so a
 # contributor gets the identical set via one `pip install -e .[dev]`.
-dev = ["pytest", "pytest-cov", "pytest-xdist", "ruff", "mypy", "hypothesis", "mutmut"]
+# Cross-platform dev tools. Mutmut 3.x requires Unix os.fork(), so it is
+# separated from the Windows-compatible developer environment.
+dev = ["pytest", "pytest-cov", "pytest-xdist", "ruff", "mypy", "hypothesis"]
+mutation = ["mutmut; sys_platform != 'win32'"]
 
 [tool.pytest.ini_options]
 # ADR-015 stage 15.3: --strict-markers rejects a typo'd/unregistered
@@ -316,7 +319,7 @@ version = { attr = "graphlink_version.APP_VERSION" }
 # ignores) in a later stage, never down.
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py312"
 # No `exclude` needed: web_ui/ is a JS/TS tree ruff's own .py/.pyi file
 # discovery already skips, and graphlink_app/ (once excluded here for its own
 # Qt-era .py sources) has held zero .py files since the R7.6b cutover deleted
