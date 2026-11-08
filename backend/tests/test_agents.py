@@ -1105,6 +1105,89 @@ def test_real_usage_flows_to_the_token_counter_and_reply_node(monkeypatch):
         assert payload["sessionCompletionTokens"] == 22
         assert payload["sessionEstimatedCostUsd"] == 0.0
 
+        original = (
+            reply.content, reply.state.provider, reply.state.model,
+            reply.state.prompt_tokens, reply.state.completion_tokens,
+            reply.state.estimated_cost_usd,
+        )
+        reply_id = reply.id
+        document.undo()
+        assert reply_id not in document.nodes
+        document.redo()
+        redone = document.nodes[reply_id]
+        assert (
+            redone.content, redone.state.provider, redone.state.model,
+            redone.state.prompt_tokens, redone.state.completion_tokens,
+            redone.state.estimated_cost_usd,
+        ) == original
+
+    asyncio.run(run())
+
+
+def test_regenerate_undo_redo_restores_both_old_and_new_usage_and_model(monkeypatch):
+    from backend.token_counter import TokenCounterState
+
+    _configure_fake_ollama_provider_only(monkeypatch)
+    messages = iter((("initial reply", 11, 2), ("regenerated reply", 45, 7)))
+
+    def fake_stream(conversation_history, persona_text, cancel_event, on_chunk, *,
+                    on_usage=None, **kwargs):
+        message, prompt_tokens, completion_tokens = next(messages)
+        on_chunk(message, False)
+        if on_usage is not None:
+            on_usage({"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens})
+        return message
+
+    monkeypatch.setattr(agents_module, "_call_chat_agent_stream", fake_stream)
+
+    async def run():
+        bus = SessionBus("agents-regenerate-undo-metadata-test")
+        notifications = NotificationState()
+        bus.register_topic("notification", notifications.payload)
+        composer_document = ComposerDocument()
+        bus.register_topic("app-composer", composer_document.payload)
+        counter = TokenCounterState()
+        bus.register_topic("token-counter", counter.payload)
+        dispatcher = AgentDispatcher(_FakeSettingsManager(enable_system_prompt=True))
+        document = register_canvas(bus, notifications, dispatcher, composer_document, counter)
+
+        await bus.dispatch_intent("scene", "sendMessage", ["hello"])
+        await next(iter(chat_slots(dispatcher).values()))["task"]
+        reply_id = document.last_chat_node_id
+        before = document.nodes[reply_id]
+        original_metadata = (
+            before.content, before.state.provider, before.state.model,
+            before.state.prompt_tokens, before.state.completion_tokens,
+            before.state.estimated_cost_usd,
+        )
+
+        await bus.dispatch_intent("scene", "regenerateResponse", [reply_id])
+        await next(iter(chat_slots(dispatcher).values()))["task"]
+        updated = document.nodes[reply_id]
+        regenerated_metadata = (
+            updated.content, updated.state.provider, updated.state.model,
+            updated.state.prompt_tokens, updated.state.completion_tokens,
+            updated.state.estimated_cost_usd,
+        )
+        assert updated.state.prompt_tokens == 45
+        assert updated.state.completion_tokens == 7
+
+        document.undo()
+        restored = document.nodes[reply_id]
+        assert (
+            restored.content, restored.state.provider, restored.state.model,
+            restored.state.prompt_tokens, restored.state.completion_tokens,
+            restored.state.estimated_cost_usd,
+        ) == original_metadata
+
+        document.redo()
+        redone = document.nodes[reply_id]
+        assert (
+            redone.content, redone.state.provider, redone.state.model,
+            redone.state.prompt_tokens, redone.state.completion_tokens,
+            redone.state.estimated_cost_usd,
+        ) == regenerated_metadata
+
     asyncio.run(run())
 
 

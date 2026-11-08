@@ -271,7 +271,7 @@ def _stamp_reply_provenance(node, provider, model) -> None:
 
 def _make_on_usage(
     document, token_counter, publish_token_counter, publish_scene, node_ref,
-    provider=None, model=None,
+    provider=None, model=None, command_ref=None,
 ):
     """ADR-006 stage 6.8: the shared real-usage completion callback for both
     reply flows (module-level for the same 300-line-cap reason as its
@@ -306,6 +306,18 @@ def _make_on_usage(
                 usage.get("prompt_tokens"), usage.get("completion_tokens"),
                 provider=provider, model=model,
             )
+            # Real usage arrives after record_command() deep-copies the
+            # reply. Amend only these run-owned metadata fields in that
+            # command's redo snapshot; otherwise Undo -> Redo resurrects
+            # reply text with the old/missing usage and cost badge.
+            # Leave the command's before snapshot untouched: regenerating
+            # then undoing must restore the ORIGINAL reply's usage.
+            command = command_ref() if command_ref is not None else None
+            snapshot = command.node_after.get(node_id) if command is not None else None
+            if snapshot is not None and snapshot.state is not None:
+                snapshot.state.prompt_tokens = target.state.prompt_tokens
+                snapshot.state.completion_tokens = target.state.completion_tokens
+                snapshot.state.estimated_cost_usd = target.state.estimated_cost_usd
             await publish_scene()
 
     return _on_usage
@@ -407,16 +419,16 @@ def _make_send_on_reply(
             # names this reply: undo puts the continuation point back on the
             # user's message and redo brings it forward to the reply again.
             document.last_chat_node_id = ai.id
+            # The command's after-snapshot must contain the request-time
+            # provider/model, not an unstamped copy of this reply.
+            _stamp_reply_provenance(ai, provenance_provider, provenance_model)
             return ai
 
-        ai_node, _command = document.record_command(
+        ai_node, command = document.record_command(
             "chatReply", "agent", _commit, node_ids=[node.id],
         )
-        # ADR-006 stage 6.8: stamp provider/model provenance on the
-        # reply (previously only branch-synthesis nodes carried it),
-        # and remember the node for _on_usage's per-node token stamp.
-        _stamp_reply_provenance(ai_node, provenance_provider, provenance_model)
         reply_ref["node_id"] = ai_node.id
+        reply_ref["command"] = command
 
         # NOTE: the calls inside _create_reply_nodes above MUST use the
         # `document.` prefix. Before ADR-002 stage 2.6, a bare
@@ -438,7 +450,7 @@ def _make_send_on_reply(
 
 def _make_regenerate_on_reply(
     document, bus, notifications, token_counter, publish_token_counter, node_to_regenerate,
-    provenance_provider=None, provenance_model=None,
+    provenance_provider=None, provenance_model=None, command_ref=None,
 ):
     """regenerate_response's completion callback, built at module level for
     the same 300-line-cap reason as its siblings above (ADR-006 stage 6.4's
@@ -495,13 +507,17 @@ def _make_regenerate_on_reply(
             for edge in document.edges.values()
             if edge.source == node_to_regenerate.id
         ]
-        document.record_command(
-            "regenerateResponse", "agent",
-            lambda: _regenerate_in_place(document, node_to_regenerate, reply_text),
+        def _commit():
+            _regenerate_in_place(document, node_to_regenerate, reply_text)
+            # Stamp inside record_command so Undo/Redo retains the model.
+            _stamp_reply_provenance(node_to_regenerate, provenance_provider, provenance_model)
+
+        _, command = document.record_command(
+            "regenerateResponse", "agent", _commit,
             node_ids=[node_to_regenerate.id, *existing_children],
         )
-        # ADR-006 stage 6.8: provenance for the regenerated content.
-        _stamp_reply_provenance(node_to_regenerate, provenance_provider, provenance_model)
+        if command_ref is not None:
+            command_ref["command"] = command
 
         # last_chat_node_id: DELIBERATELY untouched. See §5.
 
@@ -640,6 +656,7 @@ def register_chat_intents(
         _on_usage = _make_on_usage(
             document, token_counter, publish_token_counter, publish_scene,
             lambda: reply_ref["node_id"], request_provider, request_model,
+            command_ref=lambda: reply_ref.get("command"),
         )
 
         await agent_dispatcher.start_chat_reply(
@@ -698,9 +715,10 @@ def register_chat_intents(
         request_provider, request_model = _snapshot_active_provider_model(
             agent_dispatcher, document, parent_id, bus,
         )
+        command_ref = {}
         _on_reply = _make_regenerate_on_reply(
             document, bus, notifications, token_counter, publish_token_counter,
-            node_to_regenerate, request_provider, request_model,
+            node_to_regenerate, request_provider, request_model, command_ref,
         )
 
         def _on_partial(partial_text):
@@ -712,6 +730,7 @@ def register_chat_intents(
         _on_usage = _make_on_usage(
             document, token_counter, publish_token_counter, publish_scene,
             lambda: node_to_regenerate.id, request_provider, request_model,
+            command_ref=lambda: command_ref.get("command"),
         )
 
         await agent_dispatcher.start_chat_reply(
