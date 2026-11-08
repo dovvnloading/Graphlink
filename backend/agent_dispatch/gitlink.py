@@ -88,7 +88,7 @@ class GitlinkDispatchOps(DispatcherParts):
         async def _action():
             resolved_repo, resolved_branch, local_root_path = await asyncio.to_thread(
                 agents_module._ensure_gitlink_snapshot, self._settings_manager, repo, branch,
-                local_root_hint, imported_root_hint,
+                local_root_hint, imported_root_hint, force_refresh=True,
             )
             return resolved_repo, resolved_branch, str(local_root_path)
 
@@ -363,8 +363,11 @@ class GitlinkDispatchOps(DispatcherParts):
         # half-applied state the UI has no way to represent. So cancel (and
         # session-disconnect cancel_all) covers the queued-but-not-started
         # window and frees the slot immediately; a mid-write apply finishes.
-        cancel_event = threading.Event()
-        handle = self._runs.claim("gitlink_apply", node_id=node_id, cancel_event=cancel_event)
+        # Apply is a filesystem transaction-like operation. Once it starts,
+        # disconnect must not release its lease while a worker may still be
+        # mutating or restoring files. Unlike generation, Apply is not
+        # interruptible through RunRegistry.cancel_all().
+        handle = self._runs.claim("gitlink_apply", node_id=node_id)
         request_id = handle.request_id
         node.pending_request_id = request_id
 
@@ -460,27 +463,28 @@ class GitlinkDispatchOps(DispatcherParts):
         await bus.publish("scene")
 
         async def _run():
+            worker: asyncio.Task | None = None
             try:
-                if cancel_event.is_set():
-                    # Cancelled before any file was written (see the claim's
-                    # own comment) - report it on the node rather than leaving
-                    # "applying" stuck.
-                    on_failure("Apply cancelled before any files were written.")
-                    return
-                written_files = await asyncio.wait_for(
-                    asyncio.to_thread(agents_module._call_gitlink_apply, local_root_path, changes_snapshot),
-                    timeout=agents_module.GITLINK_APPLY_TIMEOUT_SECONDS,
+                worker = asyncio.create_task(asyncio.to_thread(
+                    agents_module._call_gitlink_apply, local_root_path, changes_snapshot,
+                ))
+                # A timeout must NOT cancel an already-running thread: doing
+                # so released the busy lease while that same worker could
+                # still write, allowing a second Apply to overlap and corrupt
+                # its backup/rollback sequence. This is a soft warning only;
+                # the lease and eventual outcome remain authoritative.
+                done, _ = await asyncio.wait(
+                    {worker}, timeout=agents_module.GITLINK_APPLY_TIMEOUT_SECONDS,
                 )
+                if not done:
+                    notifications_state.show(
+                        "Gitlink Apply is still working. Other edits remain blocked until it finishes.",
+                        "warning",
+                    )
+                    await bus.publish("notification")
+                written_files = await asyncio.shield(worker)
                 on_success(written_files)
                 notifications_state.show(f"Applied {written_files} file changes.", "info")
-                await bus.publish("notification")
-            except asyncio.TimeoutError:
-                on_failure(
-                    "Applying changes stopped responding before the request completed. "
-                    "Some files may have been partially written - check the repository "
-                    "before retrying."
-                )
-                notifications_state.show("Gitlink apply timed out.", "error")
                 await bus.publish("notification")
             except Exception as exc:
                 agents_module.logger.exception("gitlink apply failed")
@@ -488,6 +492,13 @@ class GitlinkDispatchOps(DispatcherParts):
                 notifications_state.show(f"Gitlink apply failed: {exc}", "error")
                 await bus.publish("notification")
             finally:
+                # Even if this coroutine is unexpectedly cancelled, wait for
+                # the filesystem worker to stop before releasing the lease.
+                if worker is not None and not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except Exception:
+                        pass
                 self._runs.release(request_id)
                 # R5.3 post-review FIX 4(c): only clear if this task's OWN
                 # request_id is still the one recorded - same stale-task
