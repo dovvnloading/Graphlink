@@ -2232,6 +2232,14 @@ def make_load_chat(
             if protect_current_canvas is not None and not await protect_current_canvas():
                 return
 
+            # Reopening the graph already on screen must not restore the
+            # snapshot read BEFORE the protection step. If that step saved
+            # unsaved edits, this earlier row is now stale and restoring it
+            # would revert the live scene. Global search already has the
+            # same "already open" fast path.
+            if canvas_document.current_chat_id == int(chat_id):
+                return
+
             restore_chat_into_document(
                 canvas_document, row, notes_rows, pins_rows,
                 asset_store=store_for(resolved_path), settings_manager=settings_manager,
