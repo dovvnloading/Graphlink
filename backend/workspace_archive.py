@@ -66,7 +66,7 @@ ASSETS_PREFIX = "assets/"
 # than written. Guards the decompression-bomb case: a few KB of zip can
 # expand to gigabytes, and an import that fills the user's disk is a real
 # denial of service even from a file they trusted.
-MAX_MEMBER_BYTES = 256 * 1024 * 1024
+MAX_MEMBER_BYTES = 32 * 1024 * 1024
 
 # SECURITY-FIX: MAX_MEMBER_BYTES above bounds ONE entry's declared
 # uncompressed size, but read_archive holds every chats/*+assets/* member
@@ -79,7 +79,19 @@ MAX_MEMBER_BYTES = 256 * 1024 * 1024
 # ever tripping MAX_MEMBER_BYTES. Bounds the AGGREGATE declared size
 # across every real member, checked in the same infolist() pass that
 # already enforces the per-member cap.
-MAX_TOTAL_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+MAX_TOTAL_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
+
+# A decompression ceiling still allows a hostile archive's metadata to
+# contain many thousands of tiny entries. Bound entry count and member types
+# BEFORE any ZIP data is read or parsed as JSON. The standard importer keeps
+# all returned asset bytes in memory, so the 128 MiB total is a deliberate
+# desktop-safe ceiling rather than the former 2 GiB process-killing budget.
+MAX_ARCHIVE_MEMBERS = 2048
+MAX_ARCHIVE_FILE_BYTES = 160 * 1024 * 1024
+MAX_MANIFEST_BYTES = 1 * 1024 * 1024
+MAX_CHAT_JSON_BYTES = 8 * 1024 * 1024
+MAX_ASSET_BYTES = 32 * 1024 * 1024
+_ARCHIVE_READ_CHUNK_BYTES = 64 * 1024
 
 
 _WINDOWS_REPLACE_BACKOFF_SECONDS = (0.01, 0.03, 0.06, 0.1)
@@ -254,6 +266,27 @@ def export_archive(
             pass
 
 
+def _read_archive_member(archive: zipfile.ZipFile, name: str, max_bytes: int) -> bytes:
+    """Bound actual decompression, not only untrusted ZIP metadata.
+
+    zipfile.read() allocates the full decompressed member in one call;
+    read in chunks and refuse an overlong stream before materializing it.
+    The central-directory size is also checked before this function runs,
+    so both claimed and actual expansion must fit.
+    """
+    chunks: list[bytes] = []
+    count = 0
+    with archive.open(name, "r") as member:
+        while True:
+            chunk = member.read(min(_ARCHIVE_READ_CHUNK_BYTES, max_bytes - count + 1))
+            if not chunk:
+                return b"".join(chunks)
+            count += len(chunk)
+            if count > max_bytes:
+                raise ArchiveError(f"archive entry {name!r} exceeds its expanded size limit")
+            chunks.append(chunk)
+
+
 def read_archive(archive_path: Path) -> dict[str, Any]:
     """Parses and validates an archive WITHOUT writing anything anywhere.
 
@@ -262,21 +295,35 @@ def read_archive(archive_path: Path) -> dict[str, Any]:
     before a single row or file has been created."""
     if not archive_path.is_file():
         raise ArchiveError(f"{archive_path.name} does not exist")
+    if archive_path.stat().st_size > MAX_ARCHIVE_FILE_BYTES:
+        raise ArchiveError(f"{archive_path.name} exceeds the compressed archive size limit")
 
     try:
         with zipfile.ZipFile(archive_path) as archive:
-            names = [_safe_member_name(info.filename) for info in archive.infolist() if not info.is_dir()]
+            entries = archive.infolist()
+            if len(entries) > MAX_ARCHIVE_MEMBERS:
+                raise ArchiveError(f"{archive_path.name} contains too many ZIP entries")
+            names = [_safe_member_name(info.filename) for info in entries if not info.is_dir()]
             if len(names) != len(set(names)):
                 # zipfile.read(name) chooses one of the duplicate entries,
                 # making the manifest and actual data ambiguous.
                 raise ArchiveError(f"{archive_path.name} contains duplicate archive entries")
             total_uncompressed_bytes = 0
-            for info in archive.infolist():
+            for info in entries:
                 if info.file_size > MAX_MEMBER_BYTES:
                     raise ArchiveError(
                         f"{archive_path.name} contains an entry larger than "
                         f"{MAX_MEMBER_BYTES // (1024 * 1024)} MB and was refused"
                     )
+                # Member-kind ceilings are intentionally stricter than the
+                # aggregate cap: a single JSON body can expand further
+                # during json.loads; image bytes are retained in a dict.
+                if info.filename == MANIFEST_NAME and info.file_size > MAX_MANIFEST_BYTES:
+                    raise ArchiveError("archive manifest exceeds the size limit")
+                if info.filename.startswith(CHATS_PREFIX) and info.file_size > MAX_CHAT_JSON_BYTES:
+                    raise ArchiveError("archive chat entry exceeds the size limit")
+                if info.filename.startswith(ASSETS_PREFIX) and info.file_size > MAX_ASSET_BYTES:
+                    raise ArchiveError("archive asset entry exceeds the size limit")
                 total_uncompressed_bytes += info.file_size
                 if total_uncompressed_bytes > MAX_TOTAL_UNCOMPRESSED_BYTES:
                     raise ArchiveError(
@@ -287,7 +334,7 @@ def read_archive(archive_path: Path) -> dict[str, Any]:
                 raise ArchiveError(f"{archive_path.name} is not a Graphlink archive (no manifest)")
 
             try:
-                manifest = json.loads(archive.read(MANIFEST_NAME))
+                manifest = json.loads(_read_archive_member(archive, MANIFEST_NAME, MAX_MANIFEST_BYTES))
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 raise ArchiveError(f"{archive_path.name} has an unreadable manifest") from exc
 
@@ -335,7 +382,7 @@ def read_archive(archive_path: Path) -> dict[str, Any]:
             chats: list[dict[str, Any]] = []
             for name in chat_names:
                 try:
-                    chat = json.loads(archive.read(name))
+                    chat = json.loads(_read_archive_member(archive, name, MAX_CHAT_JSON_BYTES))
                 except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                     raise ArchiveError(f"{archive_path.name} has an unreadable chat entry ({name})") from exc
                 # Validate all chat shapes before import_archive writes even
@@ -353,7 +400,7 @@ def read_archive(archive_path: Path) -> dict[str, Any]:
             assets: dict[str, bytes] = {}
             for name in (n for n in names if n.startswith(ASSETS_PREFIX)):
                 ref = Path(name).stem
-                assets[ref] = archive.read(name)
+                assets[ref] = _read_archive_member(archive, name, MAX_ASSET_BYTES)
     except zipfile.BadZipFile as exc:
         raise ArchiveError(f"{archive_path.name} is not a readable archive") from exc
 

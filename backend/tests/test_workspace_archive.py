@@ -781,3 +781,61 @@ def test_a_failed_export_leaves_no_file_wearing_the_real_name(tmp_path):
 
     assert not archive.exists(), "a partial export must never wear the final name"
     assert not (tmp_path / "out.graphlink.tmp").exists(), "temp file left behind"
+
+
+def test_import_rejects_highly_compressed_asset_before_decompression(tmp_path, monkeypatch):
+    import backend.workspace_archive as archives
+
+    archive = tmp_path / "compressed-asset.graphlink"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+        zf.writestr("assets/oversized.png", b"Z" * 50_000)
+    assert archive.stat().st_size < 1000
+    monkeypatch.setattr(archives, "MAX_ASSET_BYTES", 1000)
+
+    original_open = zipfile.ZipFile.open
+
+    def reject_asset_open(self, name, *args, **kwargs):
+        if name == "assets/oversized.png":
+            pytest.fail("oversized asset must be rejected from ZIP metadata before decompression")
+        return original_open(self, name, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", reject_asset_open)
+    with pytest.raises(ArchiveError, match="asset entry exceeds"):
+        read_archive(archive)
+
+
+def test_import_rejects_excessive_member_count_without_reading_archive(tmp_path, monkeypatch):
+    import backend.workspace_archive as archives
+
+    archive = tmp_path / "too-many.graphlink"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+        for i in range(12):
+            zf.writestr(f"extra/{i}.txt", "")
+    monkeypatch.setattr(archives, "MAX_ARCHIVE_MEMBERS", 10)
+    with pytest.raises(ArchiveError, match="too many ZIP entries"):
+        read_archive(archive)
+
+
+def test_import_rejects_large_chat_json_before_json_decoding(tmp_path, monkeypatch):
+    import backend.workspace_archive as archives
+
+    archive = tmp_path / "large-json.graphlink"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("manifest.json", json.dumps({"formatVersion": FORMAT_VERSION}))
+        zf.writestr("chats/0.json", json.dumps(_chat(data={"nodes": [{"content": "a" * 5000}]})))
+    monkeypatch.setattr(archives, "MAX_CHAT_JSON_BYTES", 2000)
+    with pytest.raises(ArchiveError, match="chat entry exceeds"):
+        read_archive(archive)
+
+
+def test_bounded_zip_member_reader_enforces_actual_bytes_even_if_claimed_length_is_wrong(tmp_path):
+    from backend.workspace_archive import _read_archive_member
+
+    archive = tmp_path / "ordinary.graphlink"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("chats/0.json", b"A" * 1024)
+    with zipfile.ZipFile(archive) as zf:
+        with pytest.raises(ArchiveError, match="expanded size limit"):
+            _read_archive_member(zf, "chats/0.json", 64)
