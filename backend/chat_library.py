@@ -2189,6 +2189,7 @@ def make_load_chat(
     record_saved: Callable[..., None],
     last_saved: dict[str, Any],
     settings_manager: "SettingsManager | None" = None,
+    protect_current_canvas: Callable[[], Awaitable[bool]] | None = None,
 ):
     """Factory for register_chat_library's own loadChat intent - lifted out
     to a top-level function purely to keep register_chat_library itself
@@ -2200,6 +2201,12 @@ def make_load_chat(
     passed in here as last_saved."""
 
     async def load_chat(chat_id: int):
+        # All graph-navigation paths (Library, Quick Switcher and global
+        # search) call this handler. Never replace a dirty live scene before
+        # protecting it; the autosave timer may not have fired yet.
+        if protect_current_canvas is not None and not await protect_current_canvas():
+            return
+
         # R6.4: replicates ChatSessionManager.load_chat's own orchestration
         # order (load row -> load notes/pins -> restore) and
         # SceneDeserializer._handle_load_error's "notification, not a
@@ -2859,7 +2866,11 @@ def make_delete_chat_intent(
         # through transport.request() and only clears its confirm state on
         # a truthy reply - see ChatLibraryDialog.tsx's confirmDelete.
         deleted = await asyncio.to_thread(delete_chat, resolved_path, int(chat_id))
-        if canvas_document is not None and canvas_document.current_chat_id == int(chat_id):
+        if deleted and canvas_document is not None and canvas_document.current_chat_id == int(chat_id):
+            # Do not leave deleted content on the live canvas: autosave would
+            # see an unsaved scene and recreate the graph under a new ID.
+            canvas_document.clear_for_load()
+            await bus.publish("scene")
             # Audit fix: deleting the row this session is currently pointed at
             # used to leave current_chat_id dangling AND leave the autosave
             # digest looking "already saved", so a user who deleted their open
@@ -3053,16 +3064,42 @@ def register_chat_library(
 
     delete = make_delete_chat_intent(bus, resolved_path, canvas_document, _last_saved)
 
-    load_chat = make_load_chat(
-        bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
-    )
-    # ADR-020 stage 20.4: built from the SAME `load_chat` closure just
-    # above, not a second restore implementation - see make_load_graph_
-    # and_focus_node's own docstring.
-    load_graph_and_focus_node = make_load_graph_and_focus_node(resolved_path, canvas_document, load_chat)
     save_chat = make_save_chat(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
     )
+
+    async def _protect_current_canvas() -> bool:
+        """Durably save dirty edits before replacing an in-memory scene.
+
+        All navigation callers already own the chat-mutation guard, so this
+        calls the underlying save handler instead of reacquiring that guard.
+        """
+        if canvas_document is None or (not canvas_document.nodes and canvas_document.current_chat_id is None):
+            return True
+        try:
+            current = build_chat_data(
+                canvas_document, asset_store=store_for(resolved_path), settings_manager=settings_manager,
+            )
+            notes = current.pop("notes_data", [])
+            pins = current.pop("pins_data", [])
+            unchanged = (
+                _content_digest(current, notes, pins) == _last_saved.get("digest")
+                and canvas_document.current_chat_id == _last_saved.get("chat_id")
+            )
+        except Exception as exc:
+            if notifications is not None:
+                notifications.show(f"Could not preserve the current graph before switching: {exc}", "error")
+                await bus.publish("notification")
+            return False
+        if unchanged:
+            return True
+        return await save_chat() is True
+
+    load_chat = make_load_chat(
+        bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
+        protect_current_canvas=_protect_current_canvas,
+    )
+    load_graph_and_focus_node = make_load_graph_and_focus_node(resolved_path, canvas_document, load_chat)
 
     async def new_chat(workspace_id: int | None = None):
         # R6.5: the backend counterpart of legacy's "start with an empty
@@ -3072,6 +3109,8 @@ def register_chat_library(
         # so this simply clears the live document and drops current_chat_id,
         # exactly like clear_for_load already does for a session LOAD.
         if canvas_document is None:
+            return
+        if not await _protect_current_canvas():
             return
 
         # ADR-020 stage 20.2: resolve/validate the caller's requested
