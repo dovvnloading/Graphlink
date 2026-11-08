@@ -43,6 +43,18 @@ dependencies = [
 # for newer Python versions, so requiring it would break installs for most users.
 [project.optional-dependencies]
 llamacpp = ["llama-cpp-python"]
+# pywebview requires an OS-native window engine. Windows has pythonnet
+# through pywebview; Linux must opt into non-Qt GTK/PyGObject, and standalone
+# macOS Python needs Cocoa/WebKit PyObjC bindings. Do not force GTK builds
+# on headless Linux CI or add a Qt dependency to the base distribution.
+linux-gtk = ["pywebview[gtk]; sys_platform == 'linux'"]
+macos-cocoa = [
+    "pyobjc-core; sys_platform == 'darwin'",
+    "pyobjc-framework-Cocoa; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz; sys_platform == 'darwin'",
+    "pyobjc-framework-WebKit; sys_platform == 'darwin'",
+    "pyobjc-framework-Security; sys_platform == 'darwin'",
+]
 # ADR-015 stage 15.7: pytest/pytest-cov/ruff/mypy are dev-only tooling, not
 # a runtime dependency of the shipped app - deliberately NOT in requirements.in
 # (the prod lockfile). CI installs them ad hoc (see .github/workflows/ci.yml),
