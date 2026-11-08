@@ -249,3 +249,34 @@ def test_organize_docked_child_follows_explicit_primary_parent():
     assert (doc.nodes[thinking.id].x, doc.nodes[thinking.id].y) == (
         doc.nodes[second.id].x, doc.nodes[second.id].y
     )
+
+def test_delete_chat_node_intent_rejects_an_image_without_losing_asset():
+    import asyncio
+
+    from backend.tests.test_canvas import make_bus
+
+    bus, document, recorder = make_bus()
+    chat = document.add_chat_node(0, 0, "user", True)
+    image = document.add_image_node(0, 240, b"image bytes", "test prompt", chat.id)
+    asset_id = image.state.image_asset_id
+    original_edges = copy.deepcopy(document.edges)
+    original_assets = dict(document.image_assets)
+    recorder.messages.clear()
+
+    with pytest.raises(SceneError, match="not a chat node"):
+        asyncio.run(bus.dispatch_intent("scene", "deleteChatNode", [image.id]))
+
+    assert image.id in document.nodes
+    assert document.edges == original_edges
+    assert document.image_assets == original_assets
+    assert asset_id in document.image_assets
+    assert recorder.topics_seen() == []
+
+
+def test_delete_chat_node_domain_rejects_other_node_kinds():
+    doc = SceneDocument()
+    root = doc.add_chat_node(0, 0, "root", True)
+    thinking = doc.add_thinking_node(0, 260, "notes", root.id)
+    with pytest.raises(SceneError, match="not a chat node"):
+        doc.delete_chat_node(thinking.id)
+    assert thinking.id in doc.nodes
