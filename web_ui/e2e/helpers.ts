@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Dialog, type Page } from "@playwright/test";
 
 /**
  * ADR-015 stage 15.6: shared navigation entry point for every spec in this
@@ -36,10 +36,10 @@ import { expect, type Page } from "@playwright/test";
  *    `npx playwright test` invocation reusing the same backend process
  *    locally - see playwright.config.ts's own `reuseExistingServer`) would
  *    silently leak into the next spec's assertions. Chat Library's own
- *    "New Chat" button (ChatLibraryDialog.tsx's `newChat()`) is the real,
- *    exercised, confirm-free reset action - `.first()` because BOTH its
- *    "already have chats" header copy and its "no chats yet" empty-state
- *    copy can render at once and are functionally identical (same handler).
+ *    "New Chat" button (ChatLibraryDialog.tsx's `newChat()`) is the real
+ *    reset action. A populated scene now requires an explicit confirmation
+ *    and is durably saved before clearing it, so this helper accepts that
+ *    confirmation rather than silently dismissing it.
  */
 export async function gotoApp(page: Page): Promise<void> {
   await page.goto("/");
@@ -65,7 +65,13 @@ export async function gotoApp(page: Page): Promise<void> {
   await page.locator('[data-overlay-trigger="library"]').click();
   const libraryDialog = page.getByRole("dialog", { name: "Chat Library" });
   await expect(libraryDialog).toBeVisible();
-  await libraryDialog.getByRole("button", { name: "New Chat", exact: true }).first().click();
-  await expect(libraryDialog).toBeHidden();
+  const acceptReset = (dialog: Dialog) => { void dialog.accept(); };
+  page.on("dialog", acceptReset);
+  try {
+    await libraryDialog.getByRole("button", { name: "New Chat", exact: true }).first().click();
+    await expect(libraryDialog).toBeHidden();
+  } finally {
+    page.off("dialog", acceptReset);
+  }
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
 }
