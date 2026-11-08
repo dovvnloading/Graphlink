@@ -214,7 +214,12 @@ def _run_desktop_main() -> int:
     except Exception:
         logger.exception("scratch-dir age sweep failed at launch")
 
+    # A source checkout builds web_ui/ locally; installed wheels use their
+    # bundled SPA. Keep REPO_ROOT first for development/test overrides.
+    from backend.packaging_resources import resolve_spa_dir
     spa_index = REPO_ROOT / "web_ui" / "dist" / "app" / "index.html"
+    if not spa_index.is_file():
+        spa_index = resolve_spa_dir() / "index.html"
     if not spa_index.is_file():
         logger.error(
             "SPA build missing at %s - run: cd web_ui && npm run build",
@@ -288,7 +293,10 @@ def _run_desktop_main() -> int:
     # str because the backend does its own os.path.isfile() check on it.
     #
     # Rebuild assets/graphlink.ico with: python tools/build_app_icon.py
+    from backend.packaging_resources import resolve_app_icon
     icon_path = REPO_ROOT / "assets" / "graphlink.ico"
+    if not icon_path.is_file():
+        icon_path = resolve_app_icon()
     # Mixed value types (a bool, then a str path below), so an inferred
     # dict[str, bool] would reject the icon - and, being **-splatted into
     # webview.start(), every one of its keyword parameters too.

@@ -180,11 +180,18 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # The build hook compiles the frontend from the sdist using Node 24.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web_ui/.nvmrc
+          cache: npm
+          cache-dependency-path: web_ui/package-lock.json
+
       - name: Install build tooling
         run: pip install build==1.5.0 twine==7.0.0
 
-      - name: Build the wheel
-        run: python -m build --wheel
+      - name: Build sdist and wheel with bundled frontend and plugins
+        run: python -m build
 
       - name: Twine check (validates package metadata, incl. the version string)
         # python -m twine, not a bare `twine` invocation: pip's script-install
@@ -192,9 +199,9 @@ jobs:
         # (confirmed locally - `twine` alone was not found even right after
         # `pip install twine` succeeded), and the module form has no such
         # dependency.
-        run: python -m twine check dist/*.whl
+        run: python -m twine check dist/*
 
-      - name: Install wheel + real runtime deps into a clean venv, import backend.agents
+      - name: Install wheel and verify desktop SPA, assets, and built-in plugins in isolation
         shell: bash
         run: |
           python -m venv wheel_test_venv
@@ -202,7 +209,32 @@ jobs:
           wheel=$(ls dist/*.whl | head -1)
           wheel_test_venv/bin/pip install --quiet --no-deps "$wheel"
           cd /tmp
-          "$GITHUB_WORKSPACE/wheel_test_venv/bin/python" -c "import backend.agents, graphlink_note_agent, graphlink_process_env; print('OK: backend.agents and all py-modules import cleanly from the installed wheel')"
+          "$GITHUB_WORKSPACE/wheel_test_venv/bin/python" - <<'PY'
+          import importlib.metadata
+          import backend.agents
+          import graphlink_note_agent
+          import graphlink_process_env
+          from backend.app import SPA_DIST_DIR, create_app
+          from backend.packaging_resources import resolve_app_icon, resolve_plugins_dir, resolve_spa_dir
+          from backend.plugin_sdk import discover_plugins
+
+          expected = {"artifact", "code_sandbox", "conversation_node", "gitlink",
+                      "html_renderer", "review_lens", "system_prompt", "web_research"}
+          distribution = importlib.metadata.distribution("graphlink")
+          assert any(e.group == "gui_scripts" and e.name == "graphlink" for e in distribution.entry_points)
+          spa = resolve_spa_dir()
+          assert spa.is_dir() and (spa / "index.html").is_file(), spa
+          assert (spa / "assets").is_dir() and any((spa / "assets").iterdir()), spa
+          assert SPA_DIST_DIR == spa, (SPA_DIST_DIR, spa)
+          assert resolve_app_icon().is_file()
+          registry = discover_plugins()
+          assert set(registry.manifests) >= expected, registry.load_errors
+          assert len(registry.builtin_actions) >= len(expected), registry.load_errors
+          assert resolve_plugins_dir().is_dir()
+          app = create_app(spa_dir=spa)
+          assert app is not None
+          print("OK: installed wheel contains SPA, icon, eight built-in plugins and GUI entry point")
+          PY
 
   frontend-checks:
     name: Frontend checks (npm run check)

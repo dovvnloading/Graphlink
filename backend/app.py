@@ -69,6 +69,7 @@ from backend.events import (
 from backend.execution_limits import register_execution_limits
 from backend.notifications import register_notifications
 from backend.plugins import register_plugins
+from backend.packaging_resources import resolve_spa_dir
 from backend.session_context import (
     SessionContext,
     SessionNotConfiguredError,
@@ -81,7 +82,7 @@ from backend.token_counter import register_token_counter
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SPA_DIST_DIR = REPO_ROOT / "web_ui" / "dist" / "app"
+SPA_DIST_DIR = resolve_spa_dir()
 
 # Loopback host Graphlink always binds to (graphlink_desktop.py hardcodes
 # host="127.0.0.1"). Required, not just preferred, for the same-origin check
