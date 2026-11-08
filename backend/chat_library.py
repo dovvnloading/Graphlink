@@ -3077,6 +3077,155 @@ def make_rename_chat_intent(
     return rename
 
 
+def make_protect_current_canvas(
+    bus: SessionBus,
+    resolved_path: Path,
+    canvas_document: SceneDocument | None,
+    notifications: NotificationState | None,
+    _last_saved: dict[str, Any],
+    save_chat: Callable[[], Awaitable[bool]],
+    settings_manager: "SettingsManager | None" = None,
+) -> Callable[[], Awaitable[bool]]:
+    async def _protect_current_canvas() -> bool:
+        """Save edits and verify the scene is still saved before replacing it.
+
+        Other scene-topic intents are not blocked by the library's mutation
+        guard, so a second WebSocket tab may edit while save_chat awaits
+        SQLite. Compare the *post-save* canvas to last_saved and retry a
+        bounded number of times rather than discarding late edits.
+        """
+        if canvas_document is None:
+            return True
+        for attempt in range(4):
+            if not canvas_document.nodes and canvas_document.current_chat_id is None:
+                return True
+            try:
+                current = build_chat_data(
+                    canvas_document, asset_store=store_for(resolved_path), settings_manager=settings_manager,
+                )
+                notes = current.pop("notes_data", [])
+                pins = current.pop("pins_data", [])
+                unchanged = (
+                    _content_digest(current, notes, pins) == _last_saved.get("digest")
+                    and canvas_document.current_chat_id == _last_saved.get("chat_id")
+                )
+            except Exception as exc:
+                if notifications is not None:
+                    notifications.show(f"Could not preserve the current graph before switching: {exc}", "error")
+                    await bus.publish("notification")
+                return False
+            if unchanged:
+                return True
+            if attempt < 3 and await save_chat() is not True:
+                return False
+
+        # Continuous concurrent edits prevented a stable save; do NOT clear
+        # the scene. A user can retry navigation after the edits settle.
+        if notifications is not None:
+            notifications.show(
+                "The graph is still changing. Wait for edits to finish before switching.", "warning",
+            )
+            await bus.publish("notification")
+        return False
+    return _protect_current_canvas
+
+
+def make_new_chat(
+    bus: SessionBus,
+    resolved_path: Path,
+    canvas_document: SceneDocument | None,
+    _last_saved: dict[str, Any],
+    _protect_current_canvas: Callable[[], Awaitable[bool]],
+):
+    async def new_chat(workspace_id: int | None = None):
+        # R6.5: the backend counterpart of legacy's "start with an empty
+        # scene" - there is no legacy method this ports 1:1 (Qt's
+        # ChatSessionManager has no "new chat" concept at all; a fresh scene
+        # is just whatever exists before the first load/save of a session),
+        # so this simply clears the live document and drops current_chat_id,
+        # exactly like clear_for_load already does for a session LOAD.
+        if canvas_document is None:
+            return
+
+        # ADR-020 stage 20.2: resolve/validate the caller's requested
+        # workspace BEFORE clear_for_load() below (which itself resets
+        # current_workspace_id to None) - an invalid/unknown workspaceId
+        # (never existed, or since deleted - there is no deleteWorkspace
+        # intent yet, but a caller could still send a stale/bogus id) falls
+        # back to None here. None is exactly what save_chat_atomically_row's
+        # own workspace_id=None default already resolves to the Default
+        # workspace for, via graphs.workspace_id's own schema DEFAULT (see
+        # that function's own docstring) - so "omitted or invalid ->
+        # Default" is satisfied by ONE fallback path, not two. Every OTHER
+        # caller of newChat in the codebase (e.g. commands.ts's palette "new
+        # chat" command) keeps calling this with zero args, which is
+        # `workspace_id=None` here - byte-identical pre-20.2 behavior.
+        resolved_workspace_id: int | None = None
+        if workspace_id is not None:
+            try:
+                candidate_workspace_id = int(workspace_id)
+            except (TypeError, ValueError):
+                candidate_workspace_id = None
+            if candidate_workspace_id is not None:
+                existing_workspace_ids = {
+                    workspace["id"]
+                    for workspace in await asyncio.to_thread(get_all_workspaces, resolved_path)
+                }
+                if candidate_workspace_id in existing_workspace_ids:
+                    resolved_workspace_id = candidate_workspace_id
+
+        # Resolve the destination first; another tab can mutate during the
+        # workspace lookup's await. The final stable save and clear must
+        # happen consecutively on the event loop.
+        if not await _protect_current_canvas():
+            return
+        canvas_document.clear_for_load()
+        canvas_document.current_workspace_id = resolved_workspace_id
+        # clear_for_load drops current_chat_id, so the save state that
+        # described the old document no longer describes anything.
+        _last_saved["digest"] = None
+        _last_saved["chat_id"] = None
+        _last_saved["updated_at"] = None
+        await bus.publish("scene")
+    return new_chat
+
+
+def make_import_workspace(
+    bus: SessionBus, resolved_path: Path, notifications: NotificationState | None,
+):
+    async def import_workspace(workspace_id: int) -> int:
+        # The path comes only from the user's native OPEN picker, never a
+        # client-supplied absolute path or a model tool argument.
+        try:
+            selected = await native_dialogs.pick_file(
+                file_types=("Graphlink Archive (*.graphlink)",),
+            )
+        except Exception as exc:
+            if notifications is not None:
+                notifications.show(f"Could not open the archive picker: {exc}", "error")
+                await bus.publish("notification")
+            return 0
+        if not selected:
+            return 0
+        try:
+            imported = await asyncio.to_thread(
+                import_workspace_rows_atomically, resolved_path, Path(selected), int(workspace_id),
+            )
+        except (workspace_archive.ArchiveError, OSError, ValueError, sqlite3.Error) as exc:
+            if notifications is not None:
+                notifications.show(f"Workspace import was refused: {exc}", "error")
+                await bus.publish("notification")
+            return 0
+        await bus.publish("app-chat-library")
+        if notifications is not None:
+            notifications.show(
+                f"Imported {len(imported)} graph(s) into the selected workspace.", "success",
+            )
+            await bus.publish("notification")
+        return len(imported)
+    return import_workspace
+
+
 def register_chat_library(
     bus: SessionBus,
     db_path: Path | None = None,
@@ -3187,47 +3336,10 @@ def register_chat_library(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
     )
 
-    async def _protect_current_canvas() -> bool:
-        """Save edits and verify the scene is still saved before replacing it.
-
-        Other scene-topic intents are not blocked by the library's mutation
-        guard, so a second WebSocket tab may edit while save_chat awaits
-        SQLite. Compare the *post-save* canvas to last_saved and retry a
-        bounded number of times rather than discarding late edits.
-        """
-        if canvas_document is None:
-            return True
-        for attempt in range(4):
-            if not canvas_document.nodes and canvas_document.current_chat_id is None:
-                return True
-            try:
-                current = build_chat_data(
-                    canvas_document, asset_store=store_for(resolved_path), settings_manager=settings_manager,
-                )
-                notes = current.pop("notes_data", [])
-                pins = current.pop("pins_data", [])
-                unchanged = (
-                    _content_digest(current, notes, pins) == _last_saved.get("digest")
-                    and canvas_document.current_chat_id == _last_saved.get("chat_id")
-                )
-            except Exception as exc:
-                if notifications is not None:
-                    notifications.show(f"Could not preserve the current graph before switching: {exc}", "error")
-                    await bus.publish("notification")
-                return False
-            if unchanged:
-                return True
-            if attempt < 3 and await save_chat() is not True:
-                return False
-
-        # Continuous concurrent edits prevented a stable save; do NOT clear
-        # the scene. A user can retry navigation after the edits settle.
-        if notifications is not None:
-            notifications.show(
-                "The graph is still changing. Wait for edits to finish before switching.", "warning",
-            )
-            await bus.publish("notification")
-        return False
+    _protect_current_canvas = make_protect_current_canvas(
+        bus, resolved_path, canvas_document, notifications,
+        _last_saved, save_chat, settings_manager,
+    )
 
     load_chat = make_load_chat(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
@@ -3235,56 +3347,9 @@ def register_chat_library(
     )
     load_graph_and_focus_node = make_load_graph_and_focus_node(resolved_path, canvas_document, load_chat)
 
-    async def new_chat(workspace_id: int | None = None):
-        # R6.5: the backend counterpart of legacy's "start with an empty
-        # scene" - there is no legacy method this ports 1:1 (Qt's
-        # ChatSessionManager has no "new chat" concept at all; a fresh scene
-        # is just whatever exists before the first load/save of a session),
-        # so this simply clears the live document and drops current_chat_id,
-        # exactly like clear_for_load already does for a session LOAD.
-        if canvas_document is None:
-            return
-
-        # ADR-020 stage 20.2: resolve/validate the caller's requested
-        # workspace BEFORE clear_for_load() below (which itself resets
-        # current_workspace_id to None) - an invalid/unknown workspaceId
-        # (never existed, or since deleted - there is no deleteWorkspace
-        # intent yet, but a caller could still send a stale/bogus id) falls
-        # back to None here. None is exactly what save_chat_atomically_row's
-        # own workspace_id=None default already resolves to the Default
-        # workspace for, via graphs.workspace_id's own schema DEFAULT (see
-        # that function's own docstring) - so "omitted or invalid ->
-        # Default" is satisfied by ONE fallback path, not two. Every OTHER
-        # caller of newChat in the codebase (e.g. commands.ts's palette "new
-        # chat" command) keeps calling this with zero args, which is
-        # `workspace_id=None` here - byte-identical pre-20.2 behavior.
-        resolved_workspace_id: int | None = None
-        if workspace_id is not None:
-            try:
-                candidate_workspace_id = int(workspace_id)
-            except (TypeError, ValueError):
-                candidate_workspace_id = None
-            if candidate_workspace_id is not None:
-                existing_workspace_ids = {
-                    workspace["id"]
-                    for workspace in await asyncio.to_thread(get_all_workspaces, resolved_path)
-                }
-                if candidate_workspace_id in existing_workspace_ids:
-                    resolved_workspace_id = candidate_workspace_id
-
-        # Resolve the destination first; another tab can mutate during the
-        # workspace lookup's await. The final stable save and clear must
-        # happen consecutively on the event loop.
-        if not await _protect_current_canvas():
-            return
-        canvas_document.clear_for_load()
-        canvas_document.current_workspace_id = resolved_workspace_id
-        # clear_for_load drops current_chat_id, so the save state that
-        # described the old document no longer describes anything.
-        _last_saved["digest"] = None
-        _last_saved["chat_id"] = None
-        _last_saved["updated_at"] = None
-        await bus.publish("scene")
+    new_chat = make_new_chat(
+        bus, resolved_path, canvas_document, _last_saved, _protect_current_canvas,
+    )
 
     # -- ADR-020 stage 20.2: the 6 new intents -------------------------------
     #
@@ -3358,36 +3423,7 @@ def register_chat_library(
         _serialize_mutating_intent(save_chat),
     )
 
-    async def import_workspace(workspace_id: int) -> int:
-        # The path comes only from the user's native OPEN picker, never a
-        # client-supplied absolute path or a model tool argument.
-        try:
-            selected = await native_dialogs.pick_file(
-                file_types=("Graphlink Archive (*.graphlink)",),
-            )
-        except Exception as exc:
-            if notifications is not None:
-                notifications.show(f"Could not open the archive picker: {exc}", "error")
-                await bus.publish("notification")
-            return 0
-        if not selected:
-            return 0
-        try:
-            imported = await asyncio.to_thread(
-                import_workspace_rows_atomically, resolved_path, Path(selected), int(workspace_id),
-            )
-        except (workspace_archive.ArchiveError, OSError, ValueError, sqlite3.Error) as exc:
-            if notifications is not None:
-                notifications.show(f"Workspace import was refused: {exc}", "error")
-                await bus.publish("notification")
-            return 0
-        await bus.publish("app-chat-library")
-        if notifications is not None:
-            notifications.show(
-                f"Imported {len(imported)} graph(s) into the selected workspace.", "success",
-            )
-            await bus.publish("notification")
-        return len(imported)
+    import_workspace = make_import_workspace(bus, resolved_path, notifications)
 
     bus.register_intent("app-chat-library", "renameChat", _serialize_mutating_intent(rename))
     # Serialized like every other mutating intent here. It was the one
