@@ -68,6 +68,12 @@ _CODE_EXTENSIONS = {
 PDF_INSTALL_MESSAGE = "PDF support is not installed. Please run: pip install pypdf"
 DOCX_INSTALL_MESSAGE = "Word document support is not installed. Please run: pip install python-docx"
 
+# Hard ceilings before untrusted file bytes or expanded document text enter
+# memory. Text/PDF/DOCX parsers can expand a much smaller on-disk file.
+MAX_STAGED_FILE_BYTES = 128 * 1024 * 1024
+MAX_DOCUMENT_TEXT_CHARS = 1_000_000
+MAX_PDF_PAGES = 400
+
 
 class AttachmentError(Exception):
     """A file could not be attached. The message is user-facing (surfaced
@@ -128,6 +134,16 @@ def _looks_like_text_file(sample: bytes) -> bool:
     return (non_text_count / len(sample)) < 0.30
 
 
+def _read_bounded_file(path: Path) -> bytes:
+    # Stat-based staging checks alone have a growth race; bound the actual
+    # bytes read as well, including image content-part staging.
+    with path.open("rb") as handle:
+        data = handle.read(MAX_STAGED_FILE_BYTES + 1)
+    if len(data) > MAX_STAGED_FILE_BYTES:
+        raise AttachmentError("Attachment exceeds the maximum supported file size.")
+    return data
+
+
 def _can_read_as_document(path: Path) -> bool:
     """Verbatim port of FileHandler.can_read_file, minus the PDF_AVAILABLE/
     DOCX_AVAILABLE gate - .pdf/.docx are always classified as document kind
@@ -143,7 +159,9 @@ def _can_read_as_document(path: Path) -> bool:
     if path.name in SUPPORTED_FILENAMES:
         return True
     try:
-        sample = path.read_bytes()[:4096]
+        # Read only what the sniff needs, not the entire unknown file.
+        with path.open("rb") as handle:
+            sample = handle.read(4096)
     except OSError:
         return False
     return _looks_like_text_file(sample)
@@ -151,7 +169,7 @@ def _can_read_as_document(path: Path) -> bool:
 
 def _read_text(path: Path) -> str:
     """Verbatim port of FileHandler._read_text's encoding fallback chain."""
-    raw_bytes = path.read_bytes()
+    raw_bytes = _read_bounded_file(path)
     for encoding in ("utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "latin-1"):
         try:
             return raw_bytes.decode(encoding)
@@ -198,12 +216,16 @@ def _read_pdf(path: Path) -> str:
     extracted_characters = 0
     with open(path, "rb") as f:
         reader = pdf_reader_lib.PdfReader(f)
+        if len(reader.pages) > MAX_PDF_PAGES:
+            raise AttachmentError(f"PDF exceeds the {MAX_PDF_PAGES}-page attachment limit.")
         for page_number, page in enumerate(reader.pages, start=1):
             page_text = _extract_pdf_page_text(page)
             if page_text:
                 normalized_text = page_text.strip()
-                content.append(normalized_text)
                 extracted_characters += len(normalized_text)
+                if extracted_characters > MAX_DOCUMENT_TEXT_CHARS:
+                    raise AttachmentError("PDF exceeds the extracted-text attachment limit.")
+                content.append(normalized_text)
             else:
                 content.append(f"[Page {page_number}: no extractable text found]")
 
@@ -227,8 +249,24 @@ def _read_docx(path: Path) -> str:
     # instead would not be an equivalent rewrite - the str branch runs an
     # os.path.isdir/is_zipfile probe first and raises PackageNotFoundError
     # for a missing file, where the Path branch raises FileNotFoundError.
+    from docx.table import Table
+
     document = docx.Document(path)  # type: ignore[arg-type]
-    return "\n".join(paragraph.text for paragraph in document.paragraphs)
+    # document.paragraphs silently omits all table cells. Walk the source
+    # blocks in order, preserving both paragraphs and table rows in context.
+    parts: list[str] = []
+    char_count = 0
+    for block in document.iter_inner_content():
+        rows = (
+            ("\t".join(cell.text for cell in row.cells) for row in block.rows)
+            if isinstance(block, Table) else (block.text,)
+        )
+        for text in rows:
+            char_count += len(text) + 1
+            if char_count > MAX_DOCUMENT_TEXT_CHARS:
+                raise AttachmentError("DOCX exceeds the extracted-text attachment limit.")
+            parts.append(text)
+    return "\n".join(parts)
 
 
 def _looks_like_code_text(extension: str) -> bool:
@@ -267,11 +305,15 @@ def stage_file(path: str) -> StagedAttachment:
 
     extension = resolved.suffix.lower()
     byte_size = resolved.stat().st_size
+    if byte_size > MAX_STAGED_FILE_BYTES:
+        raise AttachmentError(
+            f"Attachment exceeds the {MAX_STAGED_FILE_BYTES // (1024 * 1024)} MiB file limit."
+        )
     name = resolved.name
 
     if extension in IMAGE_EXTENSIONS:
         try:
-            data = resolved.read_bytes()
+            data = _read_bounded_file(resolved)
         except OSError as exc:
             raise AttachmentError(f"Could not read '{name}': {exc}") from None
         return StagedAttachment(
@@ -313,6 +355,8 @@ def stage_file(path: str) -> StagedAttachment:
             text = _read_docx(resolved)
         else:
             text = _read_text(resolved)
+        if len(text) > MAX_DOCUMENT_TEXT_CHARS:
+            raise AttachmentError("Document exceeds the extracted-text attachment limit.")
         return StagedAttachment(
             kind="document",
             name=name,
