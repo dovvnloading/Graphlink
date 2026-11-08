@@ -193,7 +193,7 @@ describe("ImageNodeView", () => {
     renderImageNode({ imageAssetId: "asset-abc", prompt: "sunset over the bay" });
 
     const fakeBlob = { type: "image/png" } as Blob;
-    const fetchMock = vi.fn().mockResolvedValue({ blob: () => Promise.resolve(fakeBlob) } as unknown as Response);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(fakeBlob) } as unknown as Response);
     vi.stubGlobal("fetch", fetchMock);
 
     const write = vi.fn().mockResolvedValue(undefined);
@@ -214,7 +214,7 @@ describe("ImageNodeView", () => {
     const fakeBlob = { type: "image/png" } as Blob;
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ blob: () => Promise.resolve(fakeBlob) } as unknown as Response),
+      vi.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(fakeBlob) } as unknown as Response),
     );
     const write = vi.fn().mockRejectedValue(new Error("permission denied"));
     Object.defineProperty(navigator, "clipboard", { value: { write }, configurable: true });
@@ -233,7 +233,7 @@ describe("ImageNodeView", () => {
     renderImageNode({ imageAssetId: "asset-xyz", prompt: "mountain lake" }, "n7");
 
     const fakeBlob = { type: "image/png" } as Blob;
-    const fetchMock = vi.fn().mockResolvedValue({ blob: () => Promise.resolve(fakeBlob) } as unknown as Response);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(fakeBlob) } as unknown as Response);
     vi.stubGlobal("fetch", fetchMock);
 
     // jsdom has no navigation implementation, so letting a real anchor.click()
@@ -272,7 +272,7 @@ describe("ImageNodeView", () => {
     const fakeBlob = { type: "image/png" } as Blob;
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ blob: () => Promise.resolve(fakeBlob) } as unknown as Response),
+      vi.fn().mockResolvedValue({ ok: true, blob: () => Promise.resolve(fakeBlob) } as unknown as Response),
     );
 
     const captured: { anchor: HTMLAnchorElement | null } = { anchor: null };
@@ -312,6 +312,48 @@ describe("ImageNodeView", () => {
 // must stay flat across an irrelevant/equivalent prop change (too-tight
 // would fail this) and must increment on a change to a prop the view
 // actually reads (too-loose would fail this).
+describe("ImageNodeView recovery and download validation", () => {
+  it("offers retry after a transient failure on the same asset", () => {
+    const { container } = renderImageNode();
+    fireEvent.error(container.querySelector("img")!);
+    expect(screen.getByText("Image unavailable")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry Image" }));
+    expect(container.querySelector("img")).not.toBeNull();
+  });
+
+  it("automatically attempts a replacement asset after an earlier asset failed", () => {
+    const data = {
+      imageAssetId: "broken", prompt: "image", onDelete: vi.fn(), onRegenerate: vi.fn(),
+      isBranchFocusActive: false, onToggleBranchFocus: vi.fn(),
+    };
+    const props = { id: "img", selected: false, data } as unknown as NodeProps<ImageFlowNode>;
+    const { container, rerender } = render(
+      <ReactFlowProvider><ImageNodeView {...props} /></ReactFlowProvider>,
+    );
+    fireEvent.error(container.querySelector("img")!);
+    rerender(
+      <ReactFlowProvider>
+        <ImageNodeView {...{ ...props, data: { ...data, imageAssetId: "repaired" } }} />
+      </ReactFlowProvider>,
+    );
+    expect(container.querySelector("img")).toHaveAttribute("src", "/api/assets/repaired");
+  });
+
+  it("refuses to download an HTTP error body disguised as a PNG", async () => {
+    renderImageNode({ prompt: "asset request error" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false, status: 404, blob: () => Promise.resolve(new Blob(["{\"error\":\"not found\"}"], { type: "application/json" })),
+    }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    fireEvent.contextMenu(screen.getByText("asset request error"));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Export Image" }));
+    await waitFor(() => expect(error).toHaveBeenCalled());
+    expect(click).not.toHaveBeenCalled();
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+  });
+});
+
 describe("ImageNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
   beforeEach(() => {
     lodVisibilityCalls.count = 0;
