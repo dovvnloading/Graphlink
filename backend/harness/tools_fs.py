@@ -203,6 +203,12 @@ def _write_atomic_text(target: Path, content: str) -> None:
             try:
                 with candidate.open("x", encoding="utf-8", newline="") as staged:
                     staged_path = candidate
+                    if target.exists():
+                        # A new "x" file respects the default umask (often
+                        # world-readable 0644). For an OVERWRITE, make the
+                        # temporary private BEFORE any new content is written;
+                        # restore the original mode only after staging ends.
+                        os.chmod(candidate, 0o600)
                     staged.write(content)
                     staged.flush()
                     os.fsync(staged.fileno())
