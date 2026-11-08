@@ -275,3 +275,42 @@ def test_docx_table_only_is_not_silently_empty(tmp_file):
 
     staged = stage_file(str(path))
     assert "Only text is here" in staged.extracted_text
+
+@pytest.mark.parametrize("encoding", ["utf-16-le", "utf-16-be"])
+def test_bomless_utf16_plain_text_is_read_correctly(tmp_file, encoding):
+    path = tmp_file("utf16.txt", "Hello UTF16".encode(encoding))
+    staged = stage_file(path)
+    assert staged.extracted_text == "Hello UTF16"
+
+
+def test_utf8_bom_is_stripped_before_token_counting(tmp_file):
+    path = tmp_file("with-bom.txt", "Hello world".encode("utf-8-sig"))
+    staged = stage_file(path)
+    assert staged.extracted_text == "Hello world"
+
+
+def test_docx_xml_size_is_checked_before_python_docx_parser(tmp_file, monkeypatch):
+    import zipfile
+    import backend.attachments as attachments_module
+
+    pytest.importorskip("docx")
+    path = tmp_file("inflated.docx", b"")
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", b"X" * 20_000)
+    monkeypatch.setattr(attachments_module, "MAX_DOCX_XML_PART_BYTES", 1000)
+    with pytest.raises(AttachmentError, match="XML part"):
+        stage_file(path)
+
+
+def test_docx_aggregate_expansion_is_bounded(tmp_file, monkeypatch):
+    import zipfile
+    import backend.attachments as attachments_module
+
+    pytest.importorskip("docx")
+    path = tmp_file("many-parts.docx", b"")
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", b"A" * 400)
+        archive.writestr("word/styles.xml", b"B" * 400)
+    monkeypatch.setattr(attachments_module, "MAX_DOCX_UNCOMPRESSED_BYTES", 500)
+    with pytest.raises(AttachmentError, match="uncompressed ZIP"):
+        stage_file(path)

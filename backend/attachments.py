@@ -29,7 +29,9 @@ dict lookup in sys.modules, not a real re-scan.
 from __future__ import annotations
 
 import base64
+import codecs
 import os
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -73,6 +75,11 @@ DOCX_INSTALL_MESSAGE = "Word document support is not installed. Please run: pip 
 MAX_STAGED_FILE_BYTES = 128 * 1024 * 1024
 MAX_DOCUMENT_TEXT_CHARS = 1_000_000
 MAX_PDF_PAGES = 400
+# DOCX is a ZIP container. File size and extracted-text caps alone do not
+# bound the XML/ZIP expansion that python-docx parses before text extraction.
+MAX_DOCX_MEMBERS = 2_048
+MAX_DOCX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
+MAX_DOCX_XML_PART_BYTES = 16 * 1024 * 1024
 
 
 class AttachmentError(Exception):
@@ -167,10 +174,40 @@ def _can_read_as_document(path: Path) -> bool:
     return _looks_like_text_file(sample)
 
 
+def _bomless_utf16_encoding(data: bytes) -> str | None:
+    """Detect the unambiguous alternating-NUL shape of ASCII-heavy UTF-16.
+
+    Without a BOM, arbitrary UTF-16 is not reliably distinguishable from
+    legacy single-byte encodings. Only claim an encoding when most pairs
+    have NUL bytes on exactly one side; otherwise use normal fallbacks.
+    """
+    sample = data[:4096]
+    pairs = len(sample) // 2
+    if pairs < 2:
+        return None
+    even = sample[:pairs * 2:2].count(0)
+    odd = sample[1:pairs * 2:2].count(0)
+    threshold = max(2, (3 * pairs + 4) // 5)
+    if odd >= threshold and even * 5 < pairs:
+        return "utf-16-le"
+    if even >= threshold and odd * 5 < pairs:
+        return "utf-16-be"
+    return None
+
+
 def _read_text(path: Path) -> str:
-    """Verbatim port of FileHandler._read_text's encoding fallback chain."""
+    """Decode text without retaining a BOM or misreading UTF-16 as NULs."""
     raw_bytes = _read_bounded_file(path)
-    for encoding in ("utf-8", "utf-8-sig", "utf-16", "utf-16-le", "utf-16-be", "latin-1"):
+    if raw_bytes.startswith((codecs.BOM_UTF32_LE, codecs.BOM_UTF32_BE)):
+        return raw_bytes.decode("utf-32")
+    if raw_bytes.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return raw_bytes.decode("utf-16")
+    if raw_bytes.startswith(codecs.BOM_UTF8):
+        return raw_bytes.decode("utf-8-sig")
+    detected = _bomless_utf16_encoding(raw_bytes)
+    if detected is not None:
+        return raw_bytes.decode(detected)
+    for encoding in ("utf-8", "utf-16", "utf-16-le", "utf-16-be", "latin-1"):
         try:
             return raw_bytes.decode(encoding)
         except UnicodeDecodeError:
@@ -237,8 +274,34 @@ def _read_pdf(path: Path) -> str:
     return "\n\n".join(part for part in content if part)
 
 
+def _check_docx_archive(path: Path) -> None:
+    """Refuse compressed packages that would inflate without a useful bound.
+
+    Check ZIP central-directory sizes *before* python-docx loads/parses XML.
+    The application-level text limit is a separate later safety check, not a
+    substitute for a bound on the structure being parsed.
+    """
+    if path.stat().st_size > MAX_STAGED_FILE_BYTES:
+        raise AttachmentError("DOCX exceeds the attachment file size limit.")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_DOCX_MEMBERS:
+                raise AttachmentError("DOCX contains too many ZIP members.")
+            uncompressed = 0
+            for member in members:
+                uncompressed += member.file_size
+                if uncompressed > MAX_DOCX_UNCOMPRESSED_BYTES:
+                    raise AttachmentError("DOCX exceeds the uncompressed ZIP size limit.")
+                if (member.filename.lower().endswith((".xml", ".rels"))
+                        and member.file_size > MAX_DOCX_XML_PART_BYTES):
+                    raise AttachmentError("DOCX XML part exceeds the expanded-size limit.")
+    except (zipfile.BadZipFile, zipfile.LargeZipFile) as exc:
+        raise AttachmentError("DOCX is not a readable ZIP archive.") from exc
+
+
 def _read_docx(path: Path) -> str:
-    """Verbatim port of FileHandler._read_docx."""
+    """Parse a bounded DOCX package and preserve its text/table ordering."""
     try:
         import docx
     except ImportError:
@@ -251,6 +314,7 @@ def _read_docx(path: Path) -> str:
     # for a missing file, where the Path branch raises FileNotFoundError.
     from docx.table import Table
 
+    _check_docx_archive(path)
     document = docx.Document(path)  # type: ignore[arg-type]
     # document.paragraphs silently omits all table cells. Walk the source
     # blocks in order, preserving both paragraphs and table rows in context.
