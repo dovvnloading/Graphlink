@@ -65,6 +65,26 @@ _POLL_SECONDS = 0.2
 # already in the pipe. Short: the process has already exited, so the pipe
 # is closed and the read is draining a buffer, not waiting on anyone.
 _READER_JOIN_SECONDS = 2.0
+_OUTPUT_READ_CHUNK_CHARS = 4096
+
+
+def _drain_bounded_output(stream, chunks: list[str]) -> None:
+    """Drain all stdout without ever storing a whole unbounded line.
+
+    The extra character lets the caller distinguish a truly 20K output
+    from a truncated one, preserving its existing truncation notice.
+    """
+    buffered = 0
+    budget = _OUTPUT_CAP_CHARS + 1
+    while True:
+        fragment = stream.read(_OUTPUT_READ_CHUNK_CHARS)
+        if not fragment:
+            return
+        if buffered < budget:
+            retained = fragment[:budget - buffered]
+            chunks.append(retained)
+            buffered += len(retained)
+
 
 SHELL_EXEC_SPEC = ToolSpec(
     name="shell.exec",
@@ -131,12 +151,8 @@ def _run_command(command: str, cwd, cancel_event) -> tuple[str, "int | None", st
             memory without being bounded in progress."""
             if stream is None:
                 return
-            buffered = 0
             try:
-                for line in stream:
-                    if buffered <= _OUTPUT_CAP_CHARS:
-                        chunks.append(line)
-                        buffered += len(line)
+                _drain_bounded_output(stream, chunks)
             except (ValueError, OSError):
                 return
 
