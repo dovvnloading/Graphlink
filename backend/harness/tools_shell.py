@@ -77,7 +77,9 @@ def _drain_bounded_output(stream, chunks: list[str]) -> None:
     buffered = 0
     budget = _OUTPUT_CAP_CHARS + 1
     while True:
-        fragment = stream.read(_OUTPUT_READ_CHUNK_CHARS)
+        # readline(size) returns promptly at a newline while still bounding
+        # a newline-free producer to fixed-size chunks.
+        fragment = stream.readline(_OUTPUT_READ_CHUNK_CHARS)
         if not fragment:
             return
         if buffered < budget:

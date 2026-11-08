@@ -752,10 +752,10 @@ class TestShellTool:
         class CappedReader(io.StringIO):
             reads = 0
 
-            def read(self, size=-1):
+            def readline(self, size=-1):
                 assert 0 < size <= 4096, "reading a whole logical line defeats the memory limit"
                 self.reads += 1
-                return super().read(size)
+                return super().readline(size)
 
         stream = CappedReader("x" * 300_000)
         chunks = []
