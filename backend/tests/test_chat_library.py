@@ -2189,11 +2189,10 @@ def test_reopening_a_saved_chat_continues_the_branch_from_its_saved_tip(db_path)
     assert [e.source for e in document.edges.values() if e.target == third.id] == [tip.id]
 
 
-def test_deleting_the_open_chat_clears_the_pointer_and_reenables_autosave(db_path):
-    # Audit finding (real bug): deleteChat left current_chat_id dangling and
-    # left the content-only digest looking "already saved", so a user who
-    # deleted their open chat and kept working had NO autosave protection
-    # until they happened to edit the canvas.
+def test_deleting_the_open_chat_clears_the_scene_without_autosave_resurrection(db_path):
+    # Deleting an active graph is an explicit destructive user action. The
+    # backend must clear the scene as well as its DB pointer so an autosave
+    # tick cannot silently re-insert the just-deleted contents.
     bus, document, notifications = _library_session(db_path)
     document.add_chat_node(0, 0, "hello", is_user=True)
     asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", []))
@@ -2203,15 +2202,16 @@ def test_deleting_the_open_chat_clears_the_pointer_and_reenables_autosave(db_pat
 
     assert get_all_chats(db_path) == []
     assert document.current_chat_id is None, "the pointer to a deleted row must not dangle"
+    assert document.nodes == {}, "the deleted graph must not stay open"
 
-    state = bus.chat_save_state
-    # The canvas is deliberately NOT touched - the pre-fix content-only guard
-    # could not tell this apart from "already saved" and skipped forever.
-    asyncio.run(autosave_tick(bus, db_path, document, notifications, state))
+    asyncio.run(autosave_tick(bus, db_path, document, notifications, bus.chat_save_state))
+    assert get_all_chats(db_path) == [], "autosave must not resurrect deleted content"
 
+    # A genuinely NEW edit after deletion must still receive autosave.
+    document.add_chat_node(0, 0, "new work after delete", is_user=True)
+    asyncio.run(autosave_tick(bus, db_path, document, notifications, bus.chat_save_state))
     rows = get_all_chats(db_path)
-    assert len(rows) == 1, "the still-open work must be re-protected under a fresh row"
-    assert rows[0]["id"] != saved_id
+    assert len(rows) == 1 and rows[0]["id"] != saved_id
 
 
 def test_deleting_a_different_chat_leaves_the_open_session_pointer_alone(db_path):
