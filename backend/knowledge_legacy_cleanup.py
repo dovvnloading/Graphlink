@@ -19,6 +19,7 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -134,11 +135,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.delete_id:
             outcome = delete_selected_legacy_branches(args.db, args.delete_id, confirm=args.confirm_delete)
-            print(json.dumps(outcome, indent=2))
+            sys.stdout.write(json.dumps(outcome, indent=2) + "\n")
         else:
             if args.confirm_delete:
                 parser.error("--confirm-delete also requires at least one --delete-id")
-            print(json.dumps({"legacy_documents": preview_legacy_branch_documents(args.db)}, indent=2))
+            sys.stdout.write(json.dumps({"legacy_documents": preview_legacy_branch_documents(args.db)}, indent=2) + "\n")
     except (OSError, sqlite3.Error, ValueError) as exc:
         parser.exit(2, f"Legacy knowledge cleanup refused: {exc}\n")
     return 0

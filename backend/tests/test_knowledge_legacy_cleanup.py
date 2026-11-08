@@ -61,9 +61,8 @@ def test_selected_cleanup_backups_database_then_removes_only_legacy_rows(tmp_pat
     manual = _insert(db, "manual.txt", "My notes", "unrelatedphrase")
     result = delete_selected_legacy_branches(db, [obsolete], confirm=True)
 
-    backup = tmp_path / result["backup_path"].split("/")[-1] if not os.path.isabs(result["backup_path"]) else result["backup_path"]
     from pathlib import Path
-    backup = Path(backup)
+    backup = Path(result["backup_path"])
     assert backup.is_file()
     if os.name != "nt":
         assert backup.stat().st_mode & 0o777 == 0o600
