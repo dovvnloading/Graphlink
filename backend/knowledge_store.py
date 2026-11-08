@@ -669,19 +669,19 @@ def replace_branch_document_with_chunks(
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (collection_id, source_uri, title, "text/branch", hash_value, _now_iso()),
             )
-            doc_id = cursor.lastrowid
-            if doc_id is None:
+            new_doc_id = cursor.lastrowid
+            if new_doc_id is None:
                 raise RuntimeError("SQLite did not return the inserted branch document id")
             conn.executemany(
                 "INSERT INTO chunks (document_id, ordinal, text, token_count, offset_start, offset_end) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 [
-                    (doc_id, part.ordinal, part.text, part.token_count, part.offset_start, part.offset_end)
+                    (new_doc_id, part.ordinal, part.text, part.token_count, part.offset_start, part.offset_end)
                     for part in chunks
                 ],
             )
             conn.commit()
-            return IngestOutcome(document_id=doc_id, chunk_count=len(chunks), was_new=True)
+            return IngestOutcome(document_id=new_doc_id, chunk_count=len(chunks), was_new=True)
         except BaseException:
             conn.rollback()
             raise
