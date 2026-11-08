@@ -3822,3 +3822,65 @@ class TestExportWorkspaceIntent:
         archive = workspace_archive_module.read_archive(target)
         titles = {chat["title"] for chat in archive["chats"]}
         assert titles == {"Graph A1", "Graph A2"}
+
+
+# -- Audit repair: graph navigation must never drop in-memory edits ---------
+
+def test_switching_to_another_chat_preserves_edits_before_replacing_scene(db_path):
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    node = document.add_chat_node(0, 0, "before switch", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    original_id = document.current_chat_id
+    other_id, _ = save_chat_atomically_row(
+        db_path, None, "Other Graph", {"nodes": []}, [], [],
+    )
+
+    # Not yet autosaved: switch through the same handler used by the library,
+    # Quick Switcher, and global search.
+    node.content = "edited immediately before switch"
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [other_id]))
+
+    assert document.current_chat_id == other_id
+    assert "edited immediately before switch" in json.dumps(load_chat_row(db_path, original_id)["data"])
+
+
+def test_new_chat_saves_unsaved_current_canvas_before_clearing(db_path):
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    document.add_chat_node(0, 0, "brand new unsaved graph", is_user=True)
+
+    asyncio.run(bus.dispatch_intent("app-chat-library", "newChat", []))
+
+    assert document.nodes == {}
+    rows = get_all_chats(db_path)
+    assert len(rows) == 1
+    assert "brand new unsaved graph" in json.dumps(load_chat_row(db_path, rows[0]["id"])["data"])
+
+
+def test_deleting_active_chat_clears_scene_so_autosave_cannot_resurrect_it(db_path):
+    bus, document, notifications = _bus_with_canvas(db_path)
+    document.add_chat_node(0, 0, "delete me", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    chat_id = document.current_chat_id
+
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "deleteChat", [chat_id])) is True
+    assert document.nodes == {}
+    assert document.current_chat_id is None
+
+    asyncio.run(autosave_tick(bus, db_path, document, notifications, bus.chat_save_state))
+    assert get_all_chats(db_path) == []
+
+
+def test_switch_aborts_if_preserving_current_edits_fails(db_path, monkeypatch):
+    bus, document, notifications = _bus_with_canvas(db_path)
+    original = document.add_chat_node(0, 0, "cannot save this", is_user=True)
+    other_id, _ = save_chat_atomically_row(db_path, None, "Other", {"nodes": []}, [], [])
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(chat_library_module, "save_chat_atomically_row", fail_write)
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [other_id]))
+
+    assert original.id in document.nodes
+    assert document.current_chat_id is None
+    assert notifications.visible and notifications.msg_type == "error"
