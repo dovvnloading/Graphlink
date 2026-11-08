@@ -4080,3 +4080,23 @@ def test_new_chat_preserves_edits_arriving_during_workspace_lookup(db_path, monk
     assert "edited while new chat destination loaded" in json.dumps(
         load_chat_row(db_path, initial_id)["data"]
     )
+
+
+def test_reopening_active_graph_never_restores_stale_pre_save_snapshot(db_path):
+    bus, document, _notifications = _bus_with_canvas(db_path)
+    node = document.add_chat_node(0, 0, "original", is_user=True)
+    assert asyncio.run(bus.dispatch_intent("app-chat-library", "saveChat", [])) is True
+    original_id = document.current_chat_id
+    original_node_id = node.id
+
+    # The loader used to read this row BEFORE the navigation safety gate,
+    # then save the edit and restore the now-outdated row it had read.
+    node.content = "new edit that must remain visible"
+    asyncio.run(bus.dispatch_intent("app-chat-library", "loadChat", [original_id]))
+
+    assert document.current_chat_id == original_id
+    assert original_node_id in document.nodes
+    assert document.nodes[original_node_id].content == "new edit that must remain visible"
+    assert "new edit that must remain visible" in json.dumps(
+        load_chat_row(db_path, original_id)["data"]
+    )
