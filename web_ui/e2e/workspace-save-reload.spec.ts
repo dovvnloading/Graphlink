@@ -78,8 +78,9 @@ test("saves a node, clears the canvas, then reloads it from the chat library", a
   await expect(savedRow).toHaveCount(1);
   const openSavedChat = savedRow.getByRole("button", { name: /^Open chat/ });
 
-  // Clears the live document server-side and closes the dialog (newChat()'s
-  // own overlays.close() call, ChatLibraryDialog.tsx).
+  // Confirm the user-visible graph switch. The New Chat action now saves
+  // pending edits before clearing rather than silently discarding them.
+  page.once("dialog", (dialog) => { void dialog.accept(); });
   await page.getByRole("button", { name: "New Chat", exact: true }).click();
   await expect(libraryDialog).toBeHidden();
   await expect(page.locator(".react-flow__node")).toHaveCount(0);
