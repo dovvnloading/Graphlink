@@ -80,13 +80,16 @@ export function useStreamBuffer(
     });
     return () => {
       unsubscribe();
-      // A requestId change (new run, or this run finished) makes any content
-      // still sitting in the buffer for the OLD request moot - the
-      // render-time subscribedRequestId reset above already clears
-      // streamedText to "" for a new id - but flush (rather than silently
-      // drop) here too, so no buffered byte is ever lost even in that narrow
-      // window.
-      flushStreamBuffer();
+      // An obsolete request must never flush its pending text into the
+      // newly reset state for a different requestId. The completed stream
+      // is already flushed synchronously on done; abandon only the old,
+      // not-yet-rendered delta when unmounting or switching request IDs.
+      if (rafHandleRef.current !== null) {
+        cancelAnimationFrame(rafHandleRef.current);
+        rafHandleRef.current = null;
+      }
+      pendingBufferRef.current = "";
+      pendingResetRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [requestId]);
