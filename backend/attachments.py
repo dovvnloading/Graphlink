@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import base64
 import codecs
+import hashlib
 import os
 import zipfile
 import zlib
@@ -159,6 +160,24 @@ def _read_bounded_file(path: Path) -> bytes:
     if len(data) > MAX_STAGED_FILE_BYTES:
         raise AttachmentError("Attachment exceeds the maximum supported file size.")
     return data
+
+
+def _fingerprint_staged_audio(path: Path) -> str:
+    """Bind a lazy audio path to the bytes actually checked at attachment time.
+
+    A file can grow while the user composes a message. Bound the *read*, not
+    just the earlier stat size, and hold only a SHA-256 digest, never a second
+    full audio buffer in memory.
+    """
+    digest = hashlib.sha256()
+    total = 0
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(64 * 1024), b""):
+            total += len(chunk)
+            if total > MAX_STAGED_FILE_BYTES:
+                raise AttachmentError("Attachment exceeds the maximum supported file size.")
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _can_read_as_document(path: Path) -> bool:
@@ -514,6 +533,10 @@ def stage_file(path: str) -> StagedAttachment:
         except AudioValidationError as exc:
             raise AttachmentError(str(exc)) from None
         duration = audio_info["duration_seconds"]
+        try:
+            staged_sha256 = _fingerprint_staged_audio(resolved)
+        except OSError as exc:
+            raise AttachmentError(f"Could not read '{name}': {exc}") from None
         return StagedAttachment(
             kind="audio",
             name=name,
@@ -526,7 +549,7 @@ def stage_file(path: str) -> StagedAttachment:
             # _read_attachment_bytes reads it lazily at send time, exactly
             # the same lazy-read shape audio already used before this
             # feature existed (it just had nothing that ever populated one).
-            content_part={"type": "audio_file", "path": str(resolved)},
+            content_part={"type": "audio_file", "path": str(resolved), "sha256": staged_sha256},
         )
 
     if _can_read_as_document(resolved):
