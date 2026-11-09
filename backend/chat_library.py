@@ -672,7 +672,7 @@ def _rescue_corrupt_chats_db(
             )
         return
 
-    restored_from = db_backup.restore_from_newest_backup(db_path)
+    restored_from = db_backup.restore_from_newest_backup(db_path, required_table=("chats", "graphs"))
     if restored_from is not None:
         message = (
             "Your chat history file was corrupted and has been restored from a recent backup. "

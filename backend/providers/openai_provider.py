@@ -152,7 +152,9 @@ def prepare_openai_messages(messages: list) -> list:
                         f"'{Path(path).name}' is a different container - convert it, or use "
                         "Ollama or Gemini for this attachment."
                     )
-                data = _read_attachment_bytes(path, "audio")
+                data = _read_attachment_bytes(
+                    path, "audio", **({"expected_sha256": part["sha256"]} if "sha256" in part else {})
+                )
                 parts.append({
                     "type": "input_audio",
                     "input_audio": {

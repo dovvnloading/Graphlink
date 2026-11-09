@@ -24,7 +24,19 @@ import time
 from urllib.parse import urljoin
 
 
-def _read_attachment_bytes(file_path: str, attachment_kind: str) -> bytes:
+def _read_attachment_bytes(
+    file_path: str, attachment_kind: str, expected_sha256: str | None = None,
+) -> bytes:
+    """Read only the staged attachment limit, rejecting files changed after staging.
+
+    A stat when the user attaches audio does not bound a later provider read:
+    another process can grow or replace the file while the user composes.
+    Keep the actual send capped and compare the stage-time content fingerprint.
+    """
+    import hashlib
+
+    from backend.attachments import MAX_STAGED_FILE_BYTES
+
     resolved_path = os.path.abspath(file_path or "")
     attachment_name = os.path.basename(resolved_path or file_path or "")
     if not resolved_path or not os.path.isfile(resolved_path):
@@ -32,14 +44,18 @@ def _read_attachment_bytes(file_path: str, attachment_kind: str) -> bytes:
             f"Attached {attachment_kind} file is no longer available: "
             f"{attachment_name or '[missing file]'}"
         )
-
     try:
         with open(resolved_path, "rb") as source_file:
-            return source_file.read()
+            data = source_file.read(MAX_STAGED_FILE_BYTES + 1)
     except OSError as exc:
         raise RuntimeError(
             f"Failed to read attached {attachment_kind} file '{attachment_name}': {exc}"
         ) from exc
+    if len(data) > MAX_STAGED_FILE_BYTES:
+        raise RuntimeError("Attached audio exceeds the file size limit; reattach a smaller file.")
+    if expected_sha256 is not None and hashlib.sha256(data).hexdigest() != expected_sha256:
+        raise RuntimeError("Attached audio changed since it was selected; reattach the file.")
+    return data
 
 
 def _decode_base64_image(image_data: str) -> bytes:

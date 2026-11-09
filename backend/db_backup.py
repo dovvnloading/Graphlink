@@ -47,6 +47,7 @@ without limit on a long-running install.
 from __future__ import annotations
 
 import logging
+from contextlib import closing
 import os
 import shutil
 import sqlite3
@@ -284,67 +285,76 @@ def take_backup(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> Path 
     return final_path
 
 
-def restore_from_newest_backup(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> Path | None:
-    """Copies the newest surviving backup for db_path INTO db_path,
-    overwriting whatever (if anything) is currently there. Returns the
-    backup path that was restored, or None when no backup exists at all
-    (db_path is left untouched in that case - see this function's own
-    caller, backend/chat_library.py's _rescue_corrupt_chats_db, for why a
-    missing-backup outcome must never fabricate a fresh empty file itself:
-    that decision belongs one layer up, where it can be reported honestly
-    rather than silently masked as "restored").
+def _valid_backup(path: Path, *, required_table: str | tuple[str, ...] | None = None) -> bool:
+    """Check a snapshot read-only before allowing it to replace the live DB.
 
-    ATOMICITY: reads the backup and writes to a TEMP name next to db_path
-    first, then os.replace's it into db_path only once the full copy has
-    landed and been fsync'd - the same atomic-rename discipline this
-    module's own take_backup and graphlink_settings_store.py's own
-    _save_state already use. This is the difference between "a second
-    crash mid-restore leaves db_path exactly as absent/quarantined as it
-    already was" (safe - the caller's own retry lands here again) and "a
-    second crash mid-restore leaves a half-written db_path that looks like
-    it might be fine" (exactly the kind of half-applied operation ground-
-    rule #2 for this whole stage forbids). The destination file is opened
-    with mode 0600 from its very first byte (this function's caller only
-    ever runs after the corrupt live file has already been fully removed
-    from db_path, so there is no pre-existing file whose permissions could
-    otherwise be inherited) and chmod'd again explicitly afterward for
-    certainty regardless of umask, matching this codebase's established
-    "chmod, don't assume" posture elsewhere.
-
-    The source backup file itself is never touched (not deleted, not
-    moved) - restoring from it must be repeatable, e.g. if this exact
-    restore is itself somehow interrupted and retried."""
-    source = newest_backup(db_path, prefix=prefix)
-    if source is None:
-        return None
-
-    tmp_path = db_path.with_name(db_path.name + ".restoring.tmp")
-    if tmp_path.exists():
-        try:
-            tmp_path.unlink()
-        except OSError:
-            logger.warning("could not remove stale restore temp file %s - continuing", tmp_path)
-
-    fd = os.open(tmp_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    A well-formed SQLite header is not enough: quick_check also validates
+    reachable pages and the sqlite_master check excludes empty databases.
+    Immutable read-only access avoids writing WAL/shm files alongside backups.
+    """
     try:
+        if not path.is_file() or path.stat().st_size < 100:
+            return False
+        with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro&immutable=1", uri=True, timeout=5)) as conn:
+            if conn.execute("PRAGMA quick_check").fetchone() != ("ok",):
+                return False
+            tables = {
+                str(row[0]) for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            if required_table is not None:
+                return any(name in tables for name in (required_table if isinstance(required_table, tuple) else (required_table,)))
+            return bool(tables)
+    except (OSError, sqlite3.DatabaseError, ValueError):
+        return False
+
+
+def restore_from_newest_backup(
+    db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX, required_table: str | tuple[str, ...] | None = None,
+) -> Path | None:
+    """Restore the newest *valid* retained SQLite snapshot, preserving older ones.
+
+    Damage to the latest backup must not prevent recovery from an older healthy
+    candidate. Validate both the source and the copied staging file before
+    replacing the live database. No candidate ever overwrites the live file
+    until both checks pass. Each attempt has its own secure staging pathname.
+    """
+    for source in list_backups(db_path, prefix=prefix):
+        if not _valid_backup(source, required_table=required_table):
+            logger.warning("skipping damaged SQLite backup %s", source)
+            continue
+
+        fd, staging = tempfile.mkstemp(
+            prefix=f".{db_path.name}.restoring.", suffix=".tmp", dir=db_path.parent,
+        )
+        tmp_path = Path(staging)
         try:
-            os.chmod(tmp_path, 0o600)
-        except OSError:
-            logger.warning("could not chmod %s to 0600 - continuing", tmp_path)
-        with os.fdopen(fd, "wb") as dest, open(source, "rb") as src:
-            shutil.copyfileobj(src, dest)
-            dest.flush()
-            os.fsync(dest.fileno())
-    except BaseException:
-        try:
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                logger.warning("could not chmod %s to 0600 - continuing", tmp_path)
+            with os.fdopen(fd, "wb") as dest:
+                try:
+                    with source.open("rb") as src:
+                        shutil.copyfileobj(src, dest)
+                except FileNotFoundError:
+                    logger.warning("backup disappeared while copying: %s", source)
+                    continue
+                dest.flush()
+                os.fsync(dest.fileno())
+
+            if not _valid_backup(tmp_path, required_table=required_table):
+                logger.warning("skipping backup damaged during restore copy %s", source)
+                continue
+
+            os.replace(tmp_path, db_path)
+            try:
+                os.chmod(db_path, 0o600)
+            except OSError:
+                logger.warning("could not chmod %s to 0600 - continuing", db_path)
+            return source
+        finally:
             tmp_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        raise
 
-    os.replace(tmp_path, db_path)
-    try:
-        os.chmod(db_path, 0o600)
-    except OSError:
-        logger.warning("could not chmod %s to 0600 - continuing", db_path)
-    return source
+    return None
