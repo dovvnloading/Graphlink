@@ -167,22 +167,22 @@ def _gemini_upload_file(
         payload = response.json()
     else:
         upload_request = _mod.urllib.request.Request(
-                upload_url,
-                data=audio_bytes,
-                headers={
-                    "Content-Length": str(file_size),
-                    "X-Goog-Upload-Offset": "0",
-                    "X-Goog-Upload-Command": "upload, finalize",
-                },
-                method="POST",
-            )
-            try:
-                with _mod.urllib.request.urlopen(upload_request, timeout=1800) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-                _mod._raise_if_cancelled(cancel_event)
-            except _mod.urllib.error.HTTPError as exc:
-                error_payload = exc.read().decode("utf-8", errors="replace")
-                raise RuntimeError(f"Gemini file upload failed: {error_payload}") from exc
+            upload_url,
+            data=audio_bytes,
+            headers={
+                "Content-Length": str(file_size),
+                "X-Goog-Upload-Offset": "0",
+                "X-Goog-Upload-Command": "upload, finalize",
+            },
+            method="POST",
+        )
+        try:
+            with _mod.urllib.request.urlopen(upload_request, timeout=1800) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            _mod._raise_if_cancelled(cancel_event)
+        except _mod.urllib.error.HTTPError as exc:
+            error_payload = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Gemini file upload failed: {error_payload}") from exc
 
     file_info = payload.get("file", {})
     file_uri = file_info.get("uri")
@@ -250,6 +250,7 @@ def _gemini_part_from_content(part: dict, uploaded_files: list, cancel_event=Non
             part.get("name"),
             cancel_event=cancel_event,
             api_key=api_key,
+            **({"expected_sha256": part["sha256"]} if "sha256" in part else {}),
         )
         uploaded_files.append(upload_info.get("name"))
         return {
