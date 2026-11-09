@@ -18,9 +18,11 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import threading
+from uuid import uuid4
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -33,6 +35,7 @@ logger = logging.getLogger(__name__)
 APPLY_LOCK = threading.RLock()
 _MAX_JOURNAL_FILES = 128
 _MAX_JOURNAL_BYTES = 64 * 1024 * 1024
+_OWNER_MARKER_BYTES = b"graphlink-apply-v1\\n"
 
 
 def _digest(data: bytes) -> str:
@@ -96,9 +99,7 @@ def _discard(journal: Path) -> None:
         return
     # Rename first: if interrupted while recursively deleting backup files,
     # the incomplete cleanup cannot masquerade as a still-live transaction.
-    finished = journal.with_name(journal.name + ".finished")
-    if finished.exists():
-        shutil.rmtree(finished)
+    finished = journal.with_name(journal.name + ".finished-" + uuid4().hex)
     os.replace(journal, finished)
     _sync_dir(journal.parent)
     shutil.rmtree(finished)
@@ -117,6 +118,15 @@ def begin_transaction(local_root: str | Path, changes: list[dict[str, Any]]) -> 
     manifest: dict[str, Any] = {"version": 1, "root": str(root), "entries": []}
     total = 0
     try:
+        # A coincidental pre-existing sibling directory must never be
+        # mistaken for Graphlink's own journal or deleted as "stale".
+        fd = os.open(journal / "owner", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "wb") as marker:
+            marker.write(_OWNER_MARKER_BYTES)
+            marker.flush()
+            os.fsync(marker.fileno())
+        _sync_dir(journal)
+
         for index, change in enumerate(changes):
             relative = change["path"]
             original = change["original"]
@@ -186,6 +196,13 @@ def recover_interrupted_apply(local_root: str | Path) -> bool:
         return False
     if journal.is_symlink() or not journal.is_dir():
         raise RuntimeError("Gitlink recovery path is not a safe directory.")
+    owner_marker = journal / "owner"
+    if (owner_marker.is_symlink() or not owner_marker.is_file()
+            or owner_marker.read_bytes() != _OWNER_MARKER_BYTES):
+        raise RuntimeError(
+            "Gitlink recovery directory has no valid ownership marker; "
+            "refusing to modify unknown files."
+        )
     if (journal / "committed").exists():
         _discard(journal)
         return False
@@ -218,7 +235,7 @@ def recover_interrupted_apply(local_root: str | Path) -> bool:
         expected_after = item.get("after_sha256")
         original: bytes | None = None
         if backup_name is not None:
-            if not isinstance(backup_name, str) or not backup_name.startswith("before-") or "/" in backup_name:
+            if not isinstance(backup_name, str) or re.fullmatch(r"before-[0-9]{3}\\.bin", backup_name) is None:
                 raise RuntimeError("Gitlink recovery backup path is invalid.")
             backup = journal / backup_name
             if backup.is_symlink() or not backup.is_file():
@@ -231,8 +248,14 @@ def recover_interrupted_apply(local_root: str | Path) -> bool:
                 raise RuntimeError("Gitlink recovery backup checksum mismatch.")
         elif expected_before is not None:
             raise RuntimeError("Gitlink recovery manifest has a missing backup.")
-        current = target.read_bytes() if target.is_file() else None
-        current_sha = _digest(current) if current is not None else None
+        if target.is_file():
+            with target.open("rb") as stream:
+                current = stream.read(_MAX_JOURNAL_BYTES + 1)
+            if len(current) > _MAX_JOURNAL_BYTES:
+                raise RuntimeError(f"Gitlink recovery target {path!r} is too large to verify safely.")
+            current_sha = _digest(current)
+        else:
+            current_sha = None
         if current_sha not in {expected_before, expected_after}:
             raise RuntimeError(
                 f"Gitlink recovery found independent edits in {path!r}; "
