@@ -239,6 +239,7 @@ def apply_change_set(local_root, pending_changes, *, require_review=False):
     from graphlink_plugins.gitlink.apply_transaction import (
         APPLY_LOCK,
         atomic_replace_file,
+        _sync_dir,
         begin_transaction,
         mark_committed,
         recover_interrupted_apply,
@@ -301,6 +302,7 @@ def apply_change_set(local_root, pending_changes, *, require_review=False):
                 if entry["desired"] is None:
                     if target.exists():
                         target.unlink()
+                        _sync_dir(target.parent)
                         written_files += 1
                 else:
                     atomic_replace_file(target, entry["desired"], entry["mode"])
