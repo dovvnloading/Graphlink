@@ -47,6 +47,7 @@ without limit on a long-running install.
 from __future__ import annotations
 
 import logging
+from contextlib import closing
 import os
 import shutil
 import sqlite3
@@ -294,7 +295,7 @@ def _valid_backup(path: Path, *, required_table: str | tuple[str, ...] | None = 
     try:
         if not path.is_file() or path.stat().st_size < 100:
             return False
-        with sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro&immutable=1", uri=True, timeout=5) as conn:
+        with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro&immutable=1", uri=True, timeout=5)) as conn:
             if conn.execute("PRAGMA quick_check").fetchone() != ("ok",):
                 return False
             tables = {
