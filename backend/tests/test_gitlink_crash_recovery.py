@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-
 import pytest
 
 from graphlink_plugins.gitlink.apply_transaction import (
