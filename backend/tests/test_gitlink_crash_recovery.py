@@ -156,3 +156,27 @@ def test_windows_journal_backups_are_private_from_first_byte(tmp_path):
         finally:
             kernel.CloseHandle(handle)
     assert recover_interrupted_apply(tmp_path) is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires Windows DACL API")
+def test_windows_recovery_of_deleted_private_file_keeps_private_acl(tmp_path):
+    from backend.headless import _write_token_file
+    from backend.windows_token_file import _api, _assert_private_dacl, _current_user_sid, _dacl_sddl
+
+    target = tmp_path / "private-deleted.py"
+    _write_token_file(target, "sensitive original")
+    begin_transaction(tmp_path, [
+        _change("private-deleted.py", b"sensitive original", None),
+    ])
+    target.unlink()
+
+    assert recover_interrupted_apply(tmp_path) is True
+    assert target.read_bytes() == b"sensitive original"
+    advapi, kernel = _api()
+    sid = _current_user_sid(advapi, kernel)
+    handle = kernel.CreateFileW(str(target), 0x80000000, 0x7, None, 3, 0x80, None)
+    assert handle not in (None, ctypes.c_void_p(-1).value)
+    try:
+        _assert_private_dacl(_dacl_sddl(handle, advapi, kernel), sid)
+    finally:
+        kernel.CloseHandle(handle)
