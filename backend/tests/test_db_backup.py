@@ -574,3 +574,54 @@ def test_restore_never_touches_the_source_backup_file(db_path):
 
     assert backup_path.exists()
     assert backup_path.read_bytes() == original_bytes
+
+
+def test_restore_skips_corrupt_latest_and_uses_older_valid_snapshot(db_path):
+    _make_real_db(db_path, title="Recover me")
+    candidate = take_backup(db_path)
+    old = candidate.with_name(backup_filename("20250101T120000Z"))
+    candidate.rename(old)
+    bad = old.with_name(backup_filename("20250102T120000Z"))
+    bad.write_bytes(b"not a SQLite database")
+    db_path.write_bytes(b"corrupt live DB")
+
+    recovered = restore_from_newest_backup(db_path, required_table="chats")
+
+    assert recovered == old
+    assert bad.read_bytes() == b"not a SQLite database"
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT title FROM chats").fetchall() == [("Recover me",)]
+    assert not list(db_path.parent.glob(".*.restoring.*.tmp"))
+
+
+def test_restore_skips_wrong_schema_and_honors_knowledge_prefix(db_path):
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO documents (id) VALUES (42)")
+    good = take_backup(db_path, prefix="knowledge-")
+    old = good.with_name(backup_filename("20250101T120000Z", prefix="knowledge-"))
+    good.rename(old)
+    # This backup passes PRAGMA quick_check but is not a knowledge database.
+    wrong_schema = old.with_name(backup_filename("20250102T120000Z", prefix="knowledge-"))
+    with sqlite3.connect(wrong_schema) as conn:
+        conn.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
+    db_path.write_bytes(b"corrupt live DB")
+
+    recovered = restore_from_newest_backup(
+        db_path, prefix="knowledge-", required_table="documents",
+    )
+
+    assert recovered == old
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT id FROM documents").fetchall() == [(42,)]
+
+
+def test_restore_with_only_corrupt_backups_preserves_original_live_file(db_path):
+    db_path.write_bytes(b"original quarantine candidate")
+    backups_dir = backups_dir_for(db_path)
+    backups_dir.mkdir(parents=True)
+    (backups_dir / backup_filename("20250102T120000Z")).write_bytes(b"invalid")
+    assert restore_from_newest_backup(db_path, required_table="chats") is None
+    assert db_path.read_bytes() == b"original quarantine candidate"
+    assert not list(db_path.parent.glob(".*.restoring.*.tmp"))
