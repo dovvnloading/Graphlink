@@ -19,6 +19,7 @@ changes. api_provider.py re-exports every name below, so every existing
 from __future__ import annotations
 
 import base64
+import io
 import json
 import os
 from typing import Any
@@ -114,12 +115,17 @@ def _gemini_upload_file(
     display_name: str | None = None,
     cancel_event=None,
     api_key: str | None = None,
+    expected_sha256: str | None = None,
 ) -> dict:
     import api_provider as _mod  # deferred: patch-seam safety (see module docstring)
     _mod._raise_if_cancelled(cancel_event)
     api_key = _mod._get_gemini_api_key(api_key)
     resolved_path = os.path.abspath(file_path)
-    file_size = os.path.getsize(resolved_path)
+    # Freeze the bytes before opening a remote upload. Streaming an ambient
+    # mutable pathname allowed growth/replacement after the stage-time check.
+    read_options = {"expected_sha256": expected_sha256} if expected_sha256 is not None else {}
+    audio_bytes = _mod._read_attachment_bytes(resolved_path, "audio", **read_options)
+    file_size = len(audio_bytes)
     upload_start = _mod.urllib.request.Request(
         f"{_mod.GEMINI_BASE_URL}/upload/v1beta/files",
         data=json.dumps({"file": {"display_name": display_name or os.path.basename(resolved_path)}}).encode("utf-8"),
@@ -144,7 +150,7 @@ def _gemini_upload_file(
         raise RuntimeError("Gemini file upload did not return an upload URL.")
 
     if _mod.REQUESTS_AVAILABLE:
-        with open(resolved_path, "rb") as source_file:
+        with io.BytesIO(audio_bytes) as source_file:
             response = _mod.requests.post(
                 upload_url,
                 headers={
@@ -160,10 +166,9 @@ def _gemini_upload_file(
             raise RuntimeError(f"Gemini file upload failed: {response.text}")
         payload = response.json()
     else:
-        with open(resolved_path, "rb") as source_file:
-            upload_request = _mod.urllib.request.Request(
+        upload_request = _mod.urllib.request.Request(
                 upload_url,
-                data=source_file.read(),
+                data=audio_bytes,
                 headers={
                     "Content-Length": str(file_size),
                     "X-Goog-Upload-Offset": "0",
