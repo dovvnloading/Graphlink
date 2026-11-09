@@ -8,6 +8,7 @@ anything touching persistence (see backend/chat_library.py's own tests)."""
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -589,14 +590,14 @@ def test_restore_skips_corrupt_latest_and_uses_older_valid_snapshot(db_path):
 
     assert recovered == old
     assert bad.read_bytes() == b"not a SQLite database"
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         assert conn.execute("SELECT title FROM chats").fetchall() == [("Recover me",)]
     assert not list(db_path.parent.glob(".*.restoring.*.tmp"))
 
 
 def test_restore_skips_wrong_schema_and_honors_knowledge_prefix(db_path):
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         conn.execute("CREATE TABLE documents (id INTEGER PRIMARY KEY)")
         conn.execute("INSERT INTO documents (id) VALUES (42)")
     good = take_backup(db_path, prefix="knowledge-")
@@ -604,7 +605,7 @@ def test_restore_skips_wrong_schema_and_honors_knowledge_prefix(db_path):
     good.rename(old)
     # This backup passes PRAGMA quick_check but is not a knowledge database.
     wrong_schema = old.with_name(backup_filename("20250102T120000Z", prefix="knowledge-"))
-    with sqlite3.connect(wrong_schema) as conn:
+    with closing(sqlite3.connect(wrong_schema)) as conn, conn:
         conn.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
     db_path.write_bytes(b"corrupt live DB")
 
@@ -613,7 +614,7 @@ def test_restore_skips_wrong_schema_and_honors_knowledge_prefix(db_path):
     )
 
     assert recovered == old
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         assert conn.execute("SELECT id FROM documents").fetchall() == [(42,)]
 
 
