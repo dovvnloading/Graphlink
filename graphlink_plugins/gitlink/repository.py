@@ -214,79 +214,93 @@ def validate_pending_changes(pending_changes):
 
 
 def apply_change_set(local_root, pending_changes, *, require_review=False):
-    # An Apply from the real Gitlink UI must have the same original bytes as
-    # the diff the user approved. Preflight the *entire* set before any write.
-    # The default remains compatible with existing internal direct callers;
-    # backend.agents._call_gitlink_apply always sets require_review=True.
-    reviewed = None
-    if require_review:
-        from graphlink_plugins.gitlink.change_review import verify_change_review
+    """Apply review-bound changes with durable crash recovery and atomic writes.
 
-        reviewed = verify_change_review(local_root, pending_changes)
-    # Backup-and-rollback (audit finding A1): previously a mid-loop failure
-    # (permission denied, a directory sitting where a file is expected, disk
-    # full, ...) left files 1..N-1 already written/deleted with no way back -
-    # the checkout ended half-applied while the UI reported the whole apply as
-    # failed. Every target's pre-state is now snapshotted BEFORE it is touched
-    # (so even the failing item's own partial write is restored); on any
-    # exception the applied entries are rolled back in reverse order and the
-    # original error re-raised. Rollback is best-effort: any path that cannot
-    # be restored is named in the raised error so the user knows exactly which
-    # files were left modified. Parent directories created by mkdir are not
-    # removed on rollback - empty leftover dirs are harmless.
-    written_files = 0
-    backups = []  # (target_path, original_bytes or None if the file did not exist)
-    try:
+    A previous interrupted batch is recovered *before* we verify a new
+    proposal. An exception rolls back immediately, while a hard crash leaves
+    a disk journal that is replayed on the next Gitlink use of this checkout.
+    """
+    from graphlink_plugins.gitlink.apply_transaction import (
+        APPLY_LOCK,
+        atomic_replace_file,
+        begin_transaction,
+        mark_committed,
+        recover_interrupted_apply,
+    )
+
+    with APPLY_LOCK:
+        if recover_interrupted_apply(local_root):
+            raise RuntimeError(
+                "An interrupted Gitlink Apply was restored. Regenerate and review the proposal "
+                "against the recovered checkout before applying again."
+            )
+
+        reviewed = None
+        if require_review:
+            from graphlink_plugins.gitlink.change_review import verify_change_review
+            reviewed = verify_change_review(local_root, pending_changes)
+
+        # Snapshot the *complete* input before any mutation. A durable journal
+        # records the originals and proposed hashes before the first write.
+        entries = []
+        seen_paths = set()
         for index, file_item in enumerate(pending_changes):
             path_text = file_item.get("path", "")
-            operation = file_item.get("operation", "update")
-            target_path = _safe_local_target(local_root, path_text)
+            canonical = _normalize_repo_path(path_text)
+            if canonical.casefold() in seen_paths:
+                raise RuntimeError(f"Duplicate Gitlink Apply path: {canonical}")
+            seen_paths.add(canonical.casefold())
+            target = _safe_local_target(local_root, canonical)
+            if target.exists() and not target.is_file():
+                raise IsADirectoryError(f"Gitlink target is not a regular file: {target}")
             if reviewed is not None:
-                # Recheck the target right before touching it, not only at
-                # the initial full-set preflight. If another process edited a
-                # later file during this Apply, roll back earlier writes.
                 from graphlink_plugins.gitlink.change_review import assert_target_unchanged
-
                 assert_target_unchanged(local_root, file_item, reviewed[index])
 
-            if operation == "delete":
-                if target_path.exists():
-                    backups.append((target_path, target_path.read_bytes()))
-                    target_path.unlink()
-                    written_files += 1
-                continue
+            operation = file_item.get("operation", "update")
+            if operation not in {"create", "update", "delete"}:
+                raise RuntimeError(f"Unknown Gitlink Apply operation: {operation}")
+            content = file_item.get("content")
+            if operation != "delete" and not isinstance(content, str):
+                raise RuntimeError(f"Proposed change for {canonical} is missing text content.")
+            original = target.read_bytes() if target.is_file() else None
+            desired = None if operation == "delete" else content.encode("utf-8")
+            mode = stat.S_IMODE(target.stat().st_mode) if original is not None else None
+            entries.append({
+                "path": canonical, "target": target, "original": original,
+                "desired": desired, "mode": mode,
+            })
 
-            backups.append((target_path, target_path.read_bytes() if target_path.exists() else None))
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            # newline="" writes the approved content byte-for-byte. The default
-            # (newline=None) translates on write - on Windows \n becomes \r\n
-            # and an existing \r\n becomes \r\r\n - so the file on disk would
-            # diverge from exactly what the user approved in the preview, which
-            # diffs via splitlines() (line-ending-agnostic) and so never
-            # surfaces the drift. The rollback path below already restores
-            # byte-exact via write_bytes; the forward write must match it.
-            target_path.write_text(file_item.get("content", ""), encoding="utf-8", newline="")
-            written_files += 1
+        if not entries:
+            return 0
+        begin_transaction(local_root, entries)
+        written_files = 0
+        try:
+            for index, (file_item, entry) in enumerate(zip(pending_changes, entries)):
+                if reviewed is not None:
+                    from graphlink_plugins.gitlink.change_review import assert_target_unchanged
+                    assert_target_unchanged(local_root, file_item, reviewed[index])
 
-        return written_files
-    except Exception as exc:
-        failed_restores = []
-        for target_path, original in reversed(backups):
-            try:
-                if original is None:
-                    if target_path.exists():
-                        target_path.unlink()
+                target = entry["target"]
+                if entry["desired"] is None:
+                    if target.exists():
+                        target.unlink()
+                        written_files += 1
                 else:
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    target_path.write_bytes(original)
-            except Exception:
-                failed_restores.append(str(target_path))
-        if failed_restores:
-            raise RuntimeError(
-                f"{exc} (rolled back all other changes, but could not restore: "
-                f"{', '.join(failed_restores)})"
-            ) from exc
-        raise
+                    atomic_replace_file(target, entry["desired"], entry["mode"])
+                    written_files += 1
+
+            mark_committed(local_root)
+            return written_files
+        except Exception as exc:
+            try:
+                recover_interrupted_apply(local_root)
+            except Exception as recovery_error:
+                raise RuntimeError(
+                    f"{exc} (Gitlink could not fully roll back the failed Apply: "
+                    f"{recovery_error})"
+                ) from exc
+            raise
 
 
 class ContextBundleResult(NamedTuple):
