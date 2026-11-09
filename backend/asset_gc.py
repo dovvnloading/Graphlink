@@ -21,7 +21,6 @@ import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 from backend.asset_store import _CONTENT_REF_RE, assets_dir_for
 from backend.db_backup import _valid_backup, list_backups
