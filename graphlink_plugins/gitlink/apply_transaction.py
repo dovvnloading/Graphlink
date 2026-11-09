@@ -235,7 +235,7 @@ def recover_interrupted_apply(local_root: str | Path) -> bool:
         expected_after = item.get("after_sha256")
         original: bytes | None = None
         if backup_name is not None:
-            if not isinstance(backup_name, str) or re.fullmatch(r"before-[0-9]{3}\\.bin", backup_name) is None:
+            if not isinstance(backup_name, str) or re.fullmatch(r"before-[0-9]{3}[.]bin", backup_name) is None:
                 raise RuntimeError("Gitlink recovery backup path is invalid.")
             backup = journal / backup_name
             if backup.is_symlink() or not backup.is_file():
