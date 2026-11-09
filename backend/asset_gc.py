@@ -18,6 +18,7 @@ import logging
 import os
 import sqlite3
 import stat
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -144,14 +145,13 @@ def collect_unreferenced_assets(
             deleted_assets += 1
             deleted_bytes += current.st_size
 
-        scanned_assets = len(refs)
+        scanned_assets = 0
         if root.exists():
-            scanned_assets += sum(
-                1 for _shard in root.iterdir() if _shard.is_dir() and not _shard.is_symlink()
-                for item in _shard.iterdir()
+            scanned_assets = sum(
+                1 for shard in root.iterdir() if shard.is_dir() and not shard.is_symlink()
+                for item in shard.iterdir()
                 if item.is_file() and not item.is_symlink()
-                and _CONTENT_REF_RE.fullmatch(item.name) and _shard.name == item.name[:2]
-                and item.name not in refs
+                and _CONTENT_REF_RE.fullmatch(item.name) and shard.name == item.name[:2]
             )
         return AssetGcReport(
             referenced_assets=len(refs),
@@ -181,11 +181,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (OSError, sqlite3.DatabaseError, RuntimeError, ValueError) as exc:
         parser.exit(2, f"Asset cleanup refused: {exc}\n")
-    print(
+    sys.stdout.write(
         f"Referenced refs: {report.referenced_assets}; scanned blobs: {report.scanned_assets}; "
         f"eligible orphans: {report.candidate_assets} ({report.candidate_bytes} bytes); "
         f"deleted: {report.deleted_assets} ({report.deleted_bytes} bytes). "
-        + ("Dry run; pass --apply to remove." if report.dry_run else "Cleanup completed.")
+        + ("Dry run; pass --apply to remove.\\n" if report.dry_run else "Cleanup completed.\\n")
     )
     return 0
 
