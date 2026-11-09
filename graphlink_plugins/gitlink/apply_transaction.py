@@ -128,7 +128,9 @@ def atomic_replace_file(target: Path, data: bytes, original_mode: int | None = N
     if target.is_symlink() or (target.exists() and not target.is_file()):
         raise IsADirectoryError(f"Gitlink target is not a regular file: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
-    if os.name == "nt" and target.is_file():
+    if os.name == "nt" and (target.is_file() or original_mode is not None):
+        # A deleted original also needs a private DACL when restored: the
+        # destination no longer exists for ReplaceFileW to inherit its ACL.
         from backend.windows_token_file import create_private_windows_staging
 
         fd, name = create_private_windows_staging(target)
