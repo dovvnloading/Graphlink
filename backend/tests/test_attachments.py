@@ -69,11 +69,12 @@ class TestAudioClassification:
             staged = stage_file(real_path)
             assert staged.kind == "audio"
             import hashlib
+            from pathlib import Path
 
             assert staged.content_part == {
                 "type": "audio_file",
                 "path": real_path,
-                "sha256": hashlib.sha256(open(real_path, "rb").read()).hexdigest(),
+                "sha256": hashlib.sha256(Path(real_path).read_bytes()).hexdigest(),
             }
             assert staged.duration_seconds == pytest.approx(1.0, abs=0.05)
             assert "Audio" in staged.context_label
