@@ -284,7 +284,7 @@ def take_backup(db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX) -> Path 
     return final_path
 
 
-def _valid_backup(path: Path, *, required_table: str | None = None) -> bool:
+def _valid_backup(path: Path, *, required_table: str | tuple[str, ...] | None = None) -> bool:
     """Check a snapshot read-only before allowing it to replace the live DB.
 
     A well-formed SQLite header is not enough: quick_check also validates
@@ -303,14 +303,14 @@ def _valid_backup(path: Path, *, required_table: str | None = None) -> bool:
                 )
             }
             if required_table is not None:
-                return required_table in tables
+                return any(name in tables for name in (required_table if isinstance(required_table, tuple) else (required_table,)))
             return bool(tables)
     except (OSError, sqlite3.DatabaseError, ValueError):
         return False
 
 
 def restore_from_newest_backup(
-    db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX, required_table: str | None = None,
+    db_path: Path, *, prefix: str = BACKUP_FILENAME_PREFIX, required_table: str | tuple[str, ...] | None = None,
 ) -> Path | None:
     """Restore the newest *valid* retained SQLite snapshot, preserving older ones.
 
