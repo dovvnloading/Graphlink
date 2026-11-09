@@ -72,12 +72,68 @@ def _safe_target(root: Path, relative: str) -> Path:
     return _safe_local_target(root, relative)
 
 
+def _write_private_file(path: Path, data: bytes) -> None:
+    """Persist a recovery record securely from its first written byte.
+
+    chmod(0600) does not restrict DACLs on Windows. Reuse the application's
+    verified CreateFileW private-DACL helper so an interrupted Apply cannot
+    leave secrets in a broadly readable journal file.
+    """
+    if os.name == "nt":
+        from backend.windows_token_file import create_private_windows_staging
+
+        fd, name = create_private_windows_staging(path)
+        staged = Path(name)
+    else:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        staged = None
+    try:
+        with os.fdopen(fd, "wb") as output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        if staged is not None:
+            if path.exists():
+                raise FileExistsError(f"Gitlink recovery record already exists: {path}")
+            os.replace(staged, path)
+    finally:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+
+
+def _windows_replace_preserving_acl(target: Path, staged: Path) -> None:
+    """ReplaceFileW keeps the original file's Windows DACL and attributes.
+
+    Plain os.replace() changes the file's security descriptor to the temp
+    file's inherited ACL. Fail closed instead of accidentally broadening
+    access to private repository source files.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    replace = kernel.ReplaceFileW
+    replace.argtypes = [
+        wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+        ctypes.c_void_p, ctypes.c_void_p,
+    ]
+    replace.restype = wintypes.BOOL
+    if not replace(str(target), str(staged), None, 0, None, None):
+        err = ctypes.get_last_error()
+        raise OSError(err, f"Windows could not safely replace {target.name} with preserved ACL")
+
+
 def atomic_replace_file(target: Path, data: bytes, original_mode: int | None = None) -> None:
     """Never truncate a live code file: fsync temp bytes and rename atomically."""
     if target.is_symlink() or (target.exists() and not target.is_file()):
         raise IsADirectoryError(f"Gitlink target is not a regular file: {target}")
     target.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=f".{target.name}.graphlink-", suffix=".tmp", dir=target.parent)
+    if os.name == "nt" and target.is_file():
+        from backend.windows_token_file import create_private_windows_staging
+
+        fd, name = create_private_windows_staging(target)
+    else:
+        fd, name = tempfile.mkstemp(prefix=f".{target.name}.graphlink-", suffix=".tmp", dir=target.parent)
     temp = Path(name)
     try:
         with os.fdopen(fd, "wb") as handle:
@@ -88,7 +144,10 @@ def atomic_replace_file(target: Path, data: bytes, original_mode: int | None = N
             # Preserve an existing mode. New files stay private (0600),
             # never more permissive than a user's potentially strict umask.
             os.chmod(temp, original_mode if original_mode is not None else 0o600)
-        os.replace(temp, target)
+        if os.name == "nt" and target.exists():
+            _windows_replace_preserving_acl(target, temp)
+        else:
+            os.replace(temp, target)
         _sync_dir(target.parent)
     finally:
         temp.unlink(missing_ok=True)
@@ -120,11 +179,7 @@ def begin_transaction(local_root: str | Path, changes: list[dict[str, Any]]) -> 
     try:
         # A coincidental pre-existing sibling directory must never be
         # mistaken for Graphlink's own journal or deleted as "stale".
-        fd = os.open(journal / "owner", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        with os.fdopen(fd, "wb") as marker:
-            marker.write(_OWNER_MARKER_BYTES)
-            marker.flush()
-            os.fsync(marker.fileno())
+        _write_private_file(journal / "owner", _OWNER_MARKER_BYTES)
         _sync_dir(journal)
 
         for index, change in enumerate(changes):
@@ -139,11 +194,7 @@ def begin_transaction(local_root: str | Path, changes: list[dict[str, Any]]) -> 
             backup_name = None
             if original is not None:
                 backup_name = f"before-{index:03d}.bin"
-                fd = os.open(journal / backup_name, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                with os.fdopen(fd, "wb") as output:
-                    output.write(original)
-                    output.flush()
-                    os.fsync(output.fileno())
+                _write_private_file(journal / backup_name, original)
             manifest["entries"].append({
                 "path": relative,
                 "before_sha256": _digest(original) if original is not None else None,
@@ -153,11 +204,7 @@ def begin_transaction(local_root: str | Path, changes: list[dict[str, Any]]) -> 
             })
 
         serialized = json.dumps(manifest, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-        fd = os.open(journal / "manifest.pending", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-        with os.fdopen(fd, "wb") as output:
-            output.write(serialized)
-            output.flush()
-            os.fsync(output.fileno())
+        _write_private_file(journal / "manifest.pending", serialized)
         os.replace(journal / "manifest.pending", journal / "manifest.json")
         _sync_dir(journal)
         _sync_dir(journal.parent)
@@ -172,11 +219,7 @@ def begin_transaction(local_root: str | Path, changes: list[dict[str, Any]]) -> 
 def mark_committed(local_root: str | Path) -> None:
     """Durable commit decision, then best-effort cleanup of the journal."""
     journal = _journal_dir(local_root)
-    fd = os.open(journal / "committed", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    with os.fdopen(fd, "wb") as output:
-        output.write(b"committed\n")
-        output.flush()
-        os.fsync(output.fileno())
+    _write_private_file(journal / "committed", b"committed\n")
     _sync_dir(journal)
     try:
         _discard(journal)
