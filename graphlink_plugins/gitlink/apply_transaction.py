@@ -83,9 +83,9 @@ def atomic_replace_file(target: Path, data: bytes, original_mode: int | None = N
             handle.flush()
             os.fsync(handle.fileno())
         if os.name != "nt":
-            # Preserve the pre-existing mode; newly-created source files get
-            # the same standard mode as a normal Python text-file creation.
-            os.chmod(temp, original_mode if original_mode is not None else 0o644)
+            # Preserve an existing mode. New files stay private (0600),
+            # never more permissive than a user's potentially strict umask.
+            os.chmod(temp, original_mode if original_mode is not None else 0o600)
         os.replace(temp, target)
         _sync_dir(target.parent)
     finally:
