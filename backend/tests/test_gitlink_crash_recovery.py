@@ -94,7 +94,15 @@ def test_atomic_replace_failure_preserves_previous_complete_file(tmp_path, monke
             raise PermissionError("simulated rename failure")
         return actual_replace(staged, destination)
 
-    monkeypatch.setattr(apply_transaction.os, "replace", interrupt)
+    if os.name == "nt":
+        # Existing files use ReplaceFileW on Windows specifically to retain
+        # DACLs, not Python's os.replace entry point.
+        def interrupt_windows(_target, _staged):
+            raise PermissionError("simulated rename failure")
+
+        monkeypatch.setattr(apply_transaction, "_windows_replace_preserving_acl", interrupt_windows)
+    else:
+        monkeypatch.setattr(apply_transaction.os, "replace", interrupt)
     with pytest.raises(PermissionError, match="rename failure"):
         atomic_replace_file(target, b"replacement bytes")
     assert target.read_bytes() == b"approved original"
@@ -134,7 +142,10 @@ def test_windows_apply_preserves_existing_private_file_acl(tmp_path):
     prior_acl = _acl(target)
     atomic_replace_file(target, b"after")
     assert target.read_bytes() == b"after"
-    assert _acl(target) == prior_acl
+    # ReplaceFileW may add the Windows DACL_AUTO_INHERITED control flag
+    # ("D:PAI") while retaining the exact protected DACL and ACE list.
+    # Verify the effective permission entries, not that cosmetic flag.
+    assert _acl(target).replace("D:PAI", "D:P") == prior_acl.replace("D:PAI", "D:P")
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires the Windows DACL API")
