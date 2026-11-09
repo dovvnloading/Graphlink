@@ -132,6 +132,14 @@ def default_import_root(repo_name, branch_name):
 
 
 def scan_local_repo_paths(local_root):
+    from graphlink_plugins.gitlink.apply_transaction import APPLY_LOCK, recover_interrupted_apply
+
+    with APPLY_LOCK:
+        if recover_interrupted_apply(local_root):
+            raise RuntimeError(
+                "Recovered a previously interrupted Gitlink Apply. Reload the file tree "
+                "before generating new changes."
+            )
     root_path = Path(local_root).expanduser()
     if not root_path.is_dir():
         raise RuntimeError("The selected local repo path does not exist.")
@@ -175,6 +183,14 @@ def resolve_scope_paths(scope_mode, selected_paths, repo_file_paths, local_root=
 
 
 def read_local_repo_file(local_root, repo_path):
+    from graphlink_plugins.gitlink.apply_transaction import APPLY_LOCK, recover_interrupted_apply
+
+    with APPLY_LOCK:
+        if recover_interrupted_apply(local_root):
+            raise RuntimeError(
+                "Recovered a previously interrupted Gitlink Apply. Reload the file tree "
+                "before generating new changes."
+            )
     file_path = _safe_local_target(local_root, repo_path)
     if not file_path.exists():
         raise RuntimeError(f"Local checkout is missing `{repo_path}`.")
