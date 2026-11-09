@@ -986,7 +986,10 @@ def _prepare_ollama_messages(messages: list) -> list:
                 elif part_type == "audio_file":
                     # Ollama's native Gemma 4 audio currently reuses the multimodal `images` field.
                     media_parts.append(
-                        _read_attachment_bytes(part.get("path", ""), "audio")
+                        _read_attachment_bytes(
+                            part.get("path", ""), "audio",
+                            **({"expected_sha256": part["sha256"]} if "sha256" in part else {}),
+                        )
                     )
 
             new_msg = {
