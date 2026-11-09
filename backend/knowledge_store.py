@@ -481,7 +481,7 @@ def _rescue_corrupt_knowledge_db(
             )
         return
 
-    restored_from = db_backup.restore_from_newest_backup(db_path, prefix=BACKUP_FILENAME_PREFIX)
+    restored_from = db_backup.restore_from_newest_backup(db_path, prefix=BACKUP_FILENAME_PREFIX, required_table="documents")
     if restored_from is not None:
         message = (
             "Your knowledge store was corrupted and has been restored from a recent backup. "
