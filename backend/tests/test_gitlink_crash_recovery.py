@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import ctypes
+import os
+
 import pytest
 
 from graphlink_plugins.gitlink.apply_transaction import (
@@ -106,3 +109,50 @@ def test_normal_apply_cleans_committed_journal(tmp_path):
     }]) == 1
     assert target.read_bytes() == b"after"
     assert not _journal_dir(tmp_path).exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires the Windows DACL API")
+def test_windows_apply_preserves_existing_private_file_acl(tmp_path):
+    from backend.headless import _write_token_file
+    from backend.windows_token_file import _api, _assert_private_dacl, _current_user_sid, _dacl_sddl
+
+    target = tmp_path / "private.py"
+    _write_token_file(target, "before")
+    advapi, kernel = _api()
+    current_sid = _current_user_sid(advapi, kernel)
+
+    def _acl(path):
+        handle = kernel.CreateFileW(str(path), 0x80000000, 0x7, None, 3, 0x80, None)
+        assert handle not in (None, ctypes.c_void_p(-1).value)
+        try:
+            observed = _dacl_sddl(handle, advapi, kernel)
+            _assert_private_dacl(observed, current_sid)
+            return observed
+        finally:
+            kernel.CloseHandle(handle)
+
+    prior_acl = _acl(target)
+    atomic_replace_file(target, b"after")
+    assert target.read_bytes() == b"after"
+    assert _acl(target) == prior_acl
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires the Windows DACL API")
+def test_windows_journal_backups_are_private_from_first_byte(tmp_path):
+    from backend.windows_token_file import _api, _assert_private_dacl, _current_user_sid, _dacl_sddl
+
+    target = tmp_path / "source.py"
+    target.write_bytes(b"private source content")
+    begin_transaction(tmp_path, [_change("source.py", target.read_bytes(), b"updated")])
+    journal = _journal_dir(tmp_path)
+    advapi, kernel = _api()
+    sid = _current_user_sid(advapi, kernel)
+    for name in ("owner", "manifest.json", "before-000.bin"):
+        path = journal / name
+        handle = kernel.CreateFileW(str(path), 0x80000000, 0x7, None, 3, 0x80, None)
+        assert handle not in (None, ctypes.c_void_p(-1).value)
+        try:
+            _assert_private_dacl(_dacl_sddl(handle, advapi, kernel), sid)
+        finally:
+            kernel.CloseHandle(handle)
+    assert recover_interrupted_apply(tmp_path) is True
