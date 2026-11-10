@@ -1012,8 +1012,9 @@ class HarnessState(NodeState):
     harness_awaiting_approval: bool = False
     harness_approval_tool_name: str = ""
     harness_approval_summary: str = ""
+    harness_approval_id: str = ""
     # §2.4's graded consent: whether the panel may offer "approve for this
-    # session" alongside once/deny. False for a dangerous command, which is
+    # session" alongside once/deny. False for Python/executable shell, which is
     # only ever once-or-deny - see backend/harness/shell_policy.py.
     harness_approval_session_offered: bool = False
     # H3 context accounting. `context_tokens` is the live estimate of the

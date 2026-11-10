@@ -9514,6 +9514,11 @@ mark.document-view-search-match-current {
   flex-wrap: wrap;
 }
 
+/* Source review must allow text selection inside React Flow's draggable card. */
+.harness-node .plan-node-approval-summary {
+  user-select: text;
+}
+
 /* -- Card buttons ---------------------------------------------------------
 
    Every button on this card was the same neutral chip, so "Start build"

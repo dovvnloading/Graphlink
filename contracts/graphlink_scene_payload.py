@@ -766,6 +766,7 @@ class SceneNodeRow:
     harnessAwaitingApproval: bool = False
     harnessApprovalToolName: str = ""
     harnessApprovalSummary: str = ""
+    harnessApprovalId: str = ""
     # PLAN-2026-08-24 §2.4's graded consent: whether the panel may offer
     # "approve for this session" alongside once/deny. False for a dangerous
     # command, which is only ever once-or-deny.

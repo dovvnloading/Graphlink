@@ -42,6 +42,7 @@ export interface HarnessNodeData extends Record<string, unknown> {
   harnessAwaitingApproval: boolean;
   harnessApprovalToolName: string;
   harnessApprovalSummary: string;
+  harnessApprovalId: string;
   harnessApprovalSessionOffered: boolean;
   harnessPlan: HarnessPlanStepData[];
   harnessAwaitingQuestion: boolean;
@@ -60,9 +61,9 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onDelete: () => void;
   onSend: (text: string) => void;
   onCancel: () => void;
-  onApproveTool: () => void;
+  onApproveTool: (approvalId?: string) => void;
   onApproveToolForSession: () => void;
-  onDenyTool: () => void;
+  onDenyTool: (approvalId?: string) => void;
   onAnswerQuestion: (answer: string) => void;
   onPickWorkspace: () => void;
   onUseScratch: () => void;
@@ -164,11 +165,30 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const running = data.harnessStatus === "running";
   const [draft, setDraft] = useState("");
   const [answerDraft, setAnswerDraft] = useState("");
+  const [submittedApprovalId, setSubmittedApprovalId] = useState("");
+  const submittedApprovalRef = useRef("");
   const denyButtonRef = useRef<HTMLButtonElement>(null);
   const activityDetailsRef = useRef<HTMLDetailsElement>(null);
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.harnessActivity.filter((row) => row.outcome !== "ok").length;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
+  const pythonApproval = data.harnessApprovalToolName === "python.exec";
+  const pythonDecisionPending = pythonApproval && (
+    !data.harnessApprovalId || submittedApprovalId === data.harnessApprovalId
+  );
+
+  function decideTool(approved: boolean): void {
+    const decide = approved ? data.onApproveTool : data.onDenyTool;
+    if (!pythonApproval) {
+      decide();
+      return;
+    }
+    const approvalId = data.harnessApprovalId;
+    if (!approvalId || submittedApprovalRef.current === approvalId) return;
+    submittedApprovalRef.current = approvalId;
+    setSubmittedApprovalId(approvalId);
+    decide(approvalId);
+  }
 
   // Deny is the safe default, so focus lands there the moment the panel
   // appears - same effect (and same `collapsed` dependency reasoning) as
@@ -177,7 +197,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
     if (data.harnessAwaitingApproval && !collapsed) {
       denyButtonRef.current?.focus();
     }
-  }, [data.harnessAwaitingApproval, collapsed]);
+  }, [data.harnessAwaitingApproval, data.harnessApprovalId, collapsed]);
 
   // "What is it doing?" is the question a running agent raises, and the
   // answer was one click away behind a closed <details>. Opened once, on
@@ -373,16 +393,25 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
           <div className="plan-node-approval-title">
             The agent wants to run: <code>{data.harnessApprovalToolName}</code>
           </div>
-          <pre className="plan-node-approval-summary">{data.harnessApprovalSummary}</pre>
+          <pre
+            className="plan-node-approval-summary nowheel nodrag"
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- the scrollable disclosure must be keyboard reachable, matching CodeExecutionApprovalPanel's code region
+            tabIndex={0}
+            role="region"
+            aria-label="Proposed tool call"
+          >{data.harnessApprovalSummary}</pre>
           <div className="plan-node-approval-actions">
-            <button type="button" className="plan-node-button nodrag" onClick={data.onApproveTool}>
+            <button
+              type="button"
+              className="plan-node-button nodrag"
+              onClick={() => decideTool(true)}
+              disabled={pythonDecisionPending}
+            >
               Approve once
             </button>
-            {/* PLAN §2.4 graded consent. Absent - not merely disabled - for a
-                dangerous command: the backend decides that (shell_policy) and
-                says so via harnessApprovalSessionOffered, so the broader
-                grant is never a button someone can reach for `rm -rf`. */}
-            {data.harnessApprovalSessionOffered && (
+            {/* Python always needs fresh consent. Other tools continue to use
+                the backend's existing graded-consent policy. */}
+            {data.harnessApprovalSessionOffered && data.harnessApprovalToolName !== "python.exec" && (
               <button
                 type="button"
                 className="plan-node-button nodrag"
@@ -395,7 +424,8 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
             <button
               type="button"
               className="plan-node-button plan-node-button-deny nodrag"
-              onClick={data.onDenyTool}
+              onClick={() => decideTool(false)}
+              disabled={pythonDecisionPending}
               ref={denyButtonRef}
             >
               Deny

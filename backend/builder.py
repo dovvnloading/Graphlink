@@ -417,6 +417,11 @@ def _approval_summary(call: ToolCall, document) -> str:
     code itself."""
     from backend.tools_graph import run_node_pending_disclosure
 
+    # The registry is shared with the harness. A Builder has no Python
+    # workspace and cannot execute this tool, but never disclose a truncated
+    # source if it is encountered through that shared registry.
+    if call.name == "python.exec":
+        return f"python.exec\n--- source\n{call.arguments['code']}"
     disclosure = run_node_pending_disclosure(document, call)
     if disclosure is not None:
         # SECURITY-FIX: NOT truncated. The cap below exists to keep an

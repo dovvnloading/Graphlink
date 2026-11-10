@@ -385,6 +385,8 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "harnessRunId", "harnessActivity", "harnessMaxTurns", "harnessSpentTurns",
     "harnessSpentTokens", "harnessAwaitingApproval", "harnessApprovalToolName",
     "harnessApprovalSummary", "harnessContextTokens", "harnessMaxContextTokens",
+    # Per-call Python approval identity, added with the approval hardening.
+    "harnessApprovalId",
     "harnessCompactions", "harnessWorkspacePath", "harnessWorkspaceActive",
     # PLAN-2026-08-24 H6: graded consent (§2.4) plus the plan.update /
     # user.ask interaction surfaces (§2.3).

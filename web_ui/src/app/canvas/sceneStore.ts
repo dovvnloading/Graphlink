@@ -961,12 +961,12 @@ export class SceneStore {
     this.transport.fireIntent("harness", "cancel", [requestId]);
   }
 
-  approveHarnessTool(requestId: string): void {
-    this.transport.fireIntent("harness", "approveTool", [requestId]);
+  approveHarnessTool(requestId: string, approvalId?: string): void {
+    this.transport.fireIntent("harness", "approveTool", approvalId ? [requestId, approvalId] : [requestId]);
   }
 
-  denyHarnessTool(requestId: string): void {
-    this.transport.fireIntent("harness", "denyTool", [requestId]);
+  denyHarnessTool(requestId: string, approvalId?: string): void {
+    this.transport.fireIntent("harness", "denyTool", approvalId ? [requestId, approvalId] : [requestId]);
   }
 
   // PLAN §2.4 graded consent: approve AND stop asking for this tool for the
