@@ -57,6 +57,10 @@ export default defineConfig({
     trace: "on-first-retry",
     actionTimeout: 30_000,
     navigationTimeout: 60_000,
+    // Optional local diagnostic browser; CI uses Playwright's pinned browser.
+    launchOptions: process.env.GRAPHLINK_E2E_CHROMIUM_EXECUTABLE
+      ? { executablePath: process.env.GRAPHLINK_E2E_CHROMIUM_EXECUTABLE }
+      : {},
   },
   webServer: {
     command: "python ../tests_e2e/run_backend.py",
