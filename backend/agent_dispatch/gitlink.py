@@ -253,7 +253,7 @@ class GitlinkDispatchOps(DispatcherParts):
                         return
                     proposal_markdown = agents_module._build_gitlink_proposal_markdown(repo, branch, result)
                     preview_text = agents_module._build_gitlink_preview_text(
-                        reviewed_files, local_root, repo, branch, original_texts=originals
+                        reviewed_files, local_root, repo, branch, original_bytes=originals
                     )
                     fingerprint = agents_module._fingerprint_changes(reviewed_files) if reviewed_files else None
                     # R5.3 post-review FIX 2: local_root is now forwarded to

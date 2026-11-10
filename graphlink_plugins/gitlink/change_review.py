@@ -19,12 +19,15 @@ from pathlib import Path, PurePosixPath
 from typing import Any, NamedTuple
 
 from graphlink_plugins.gitlink.agent import (
-    _decode_text_bytes,
     _normalize_repo_path,
     _safe_local_target,
 )
 
+from graphlink_plugins.gitlink.preview import decode_review_utf8, encode_review_utf8
+
 BASELINE_FIELD = "expected_sha256"
+REVIEW_FORMAT_FIELD = "review_format_version"
+REVIEW_FORMAT_VERSION = 1
 MAX_REVIEW_FILES = 128
 MAX_REVIEW_FILE_BYTES = 8 * 1024 * 1024
 MAX_REVIEW_TOTAL_BYTES = 32 * 1024 * 1024
@@ -95,7 +98,7 @@ def _snapshot_change_set(
             content = change.get("content")
             if not isinstance(content, str):
                 raise RuntimeError(f"Proposed change for `{relative}` is missing its file content.")
-            proposed_size = len(content.encode("utf-8"))
+            proposed_size = len(encode_review_utf8(content, relative))
             if proposed_size > MAX_REVIEW_FILE_BYTES:
                 raise RuntimeError(f"Proposed content for `{relative}` exceeds the safe-review size limit.")
             total += proposed_size
@@ -120,6 +123,14 @@ def _snapshot_change_set(
                 or any(c not in "0123456789abcdef" for c in expected)
             ):
                 raise RuntimeError(f"Gitlink proposal has an invalid baseline for `{relative}`.")
+            if (
+                type(change.get(REVIEW_FORMAT_FIELD)) is not int
+                or change[REVIEW_FORMAT_FIELD] != REVIEW_FORMAT_VERSION
+            ):
+                raise RuntimeError(
+                    "This proposal predates byte-faithful file previews. "
+                    "Regenerate and review it before applying; nothing was written."
+                )
             if actual != expected:
                 raise RuntimeError(
                     f"Local file `{relative}` changed since the preview. "
@@ -136,10 +147,10 @@ def _snapshot_change_set(
 
 def prepare_change_review(
     files: list[dict[str, Any]], local_root: str,
-) -> tuple[list[dict[str, Any]], dict[str, str | None] | None]:
+) -> tuple[list[dict[str, Any]], dict[str, bytes | None] | None]:
     """Bind server-read hashes to the proposal and capture the diff's originals.
 
-    The preview must use the *same* bytes as the baselines. Returning a text
+    The preview must use the *same* bytes as the baselines. Returning a raw-byte
     snapshot avoids a second disk read that could silently show a different
     original from the one the approval guards.
     """
@@ -149,14 +160,15 @@ def prepare_change_review(
         # but Apply will reject the unbound proposal.
         return clean_files, None
     snapshots = _snapshot_change_set(local_root, clean_files, require_baselines=False)
-    originals: dict[str, str | None] = {}
+    originals: dict[str, bytes | None] = {}
     for change, snapshot in zip(clean_files, snapshots):
+        if snapshot.original is not None:
+            decode_review_utf8(snapshot.original, snapshot.path)
+        change[REVIEW_FORMAT_FIELD] = REVIEW_FORMAT_VERSION
         change[BASELINE_FIELD] = (
             hashlib.sha256(snapshot.original).hexdigest() if snapshot.original is not None else None
         )
-        originals[snapshot.path] = (
-            _decode_text_bytes(snapshot.original) if snapshot.original is not None else None
-        )
+        originals[snapshot.path] = snapshot.original
     return clean_files, originals
 
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { splitGitlinkPreview } from "./gitlinkPreview";
+import { displayGitlinkPath, splitGitlinkPreview } from "./gitlinkPreview";
 
 const files = [
   { path: "src/a.py", operation: "update" },
@@ -40,8 +40,23 @@ describe("splitGitlinkPreview", () => {
       .toBeNull();
   });
 
-  it("does not transform HTML-like diff content; rendering uses a code fence", () => {
+  it("does not transform HTML-like diff content; rendering uses plain preformatted text", () => {
     const parsed = splitGitlinkPreview("### src/a.py [update]\n\n+<img src=x onerror=alert(1)>", [files[0]]);
     expect(parsed?.[0]).toContain("<img");
+  });
+
+  it("escapes paths consistently with backend headings and retains the full byte metadata", () => {
+    const path = "line\nname\u202e😀.txt";
+    const shown = '"line\\nname\\u202e\\ud83d\\ude00.txt"';
+    expect(displayGitlinkPath(path)).toBe(shown);
+    expect(displayGitlinkPath("src/normal.py")).toBe("src/normal.py");
+    const bytePreview = [
+      "### " + shown + " [update]", "",
+      "Bytes changed: 3 -> 2 bytes.",
+      "Line endings: CRLF=1, LF=0, CR=0 -> CRLF=0, LF=1, CR=0.",
+      "Final newline: CRLF -> LF.",
+      '-"x\\r\\n"', '+"x\\n"',
+    ].join("\n");
+    expect(splitGitlinkPreview(bytePreview, [{ path, operation: "update" }])).toEqual([bytePreview]);
   });
 });

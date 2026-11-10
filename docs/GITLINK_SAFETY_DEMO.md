@@ -88,8 +88,11 @@ during the complete preflight, before restoration begins.
   the internal `apply_change_set` helper can explicitly use its legacy
   `require_review=False` default. That helper is not a security boundary for
   hostile code running inside Graphlink's process.
-- Baseline hashes are byte-exact; the human preview is a text diff. Newline
-  style/final-newline-only changes are not reliably visible in that diff.
+- Baseline hashes and UTF-8 review previews use the same captured bytes.
+  Newline style, final-newline and UTF-8 BOM changes are explicit; non-UTF-8
+  originals are refused. Pre-upgrade previews require regeneration. See
+  [Byte-faithful reviewed previews](GITLINK_BYTE_PREVIEWS.md) for the supported
+  encoding boundary, reproduced failure, and focused regression commands.
 - These are file-content safeguards, not a sandbox, filesystem lock, or
   multi-file atomic transaction. Readers can observe a partially applied
   batch. An independent process can still race a validation check and write.
