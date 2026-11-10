@@ -29,15 +29,15 @@ from graphlink_plugins.gitlink.change_review import prepare_change_review
 
 ORIGINALS = {"first.py": b"first\r\n", "second.py": b"second\n"}
 PROPOSAL = [
-    {"path": "first.py", "operation": "update", "content": "first\n"},
-    {"path": "second.py", "operation": "update", "content": "reviewed second\n"},
-    {"path": "new.py", "operation": "create", "content": "reviewed new\n"},
+    {"path": "first.py", "operation": "update", "reason": "Review a newline-only change", "content": "first\n"},
+    {"path": "second.py", "operation": "update", "reason": "Review the second file", "content": "reviewed second\n"},
+    {"path": "new.py", "operation": "create", "reason": "Review a new file", "content": "reviewed new\n"},
 ]
 SPACED_ORIGINALS = {"a b.py": b"single-space original\n", "a  b.py": b"double-space original\n"}
 LONG_REVIEWED_SOURCE = "".join(f"reviewed single {index}\n" for index in range(60)) + "REVIEWED_SINGLE_SPACE_TAIL\n"
 SPACED_PROPOSAL = [
-    {"path": "a b.py", "operation": "update", "content": LONG_REVIEWED_SOURCE},
-    {"path": "a  b.py", "operation": "update", "content": "reviewed double-space file\n"},
+    {"path": "a b.py", "operation": "update", "reason": "Review the single-space path", "content": LONG_REVIEWED_SOURCE},
+    {"path": "a  b.py", "operation": "update", "reason": "Review the double-space path", "content": "reviewed double-space file\n"},
 ]
 # The tail is executable, harmless, and deliberately beyond character 400.
 # Identical code increments interpreter state, so a cached approval is observable.
