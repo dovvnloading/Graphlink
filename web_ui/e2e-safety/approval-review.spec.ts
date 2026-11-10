@@ -122,6 +122,7 @@ test("newline-only bytes are disclosed in the real UI and an approved action wri
 });
 
 test("long Gitlink review scrolls/selects without moving the canvas and preserves exact spaced-path selection", async ({ page, request }, info) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
   const before = await prepare(request, "gitlink-long");
   const intents = collectIntents(page);
   await openApp(page);
@@ -137,6 +138,16 @@ test("long Gitlink review scrolls/selects without moving the canvas and preserve
   const preview = page.getByRole("region", { name: "Gitlink file preview", exact: true });
   const body = page.locator(".gitlink-node-content");
   const viewport = page.locator(".react-flow__viewport");
+  // Opening the long proposal expands the initially framed Setup card. Use
+  // the real viewport control to keep its bottom clear of the floating
+  // composer; body-relative bounds alone do not establish visible text.
+  await page.getByRole("button", { name: "Fit All", exact: true }).click();
+  await expect.poll(async () => body.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth
+      && [rect.top + 16, rect.bottom - 16].every((y) =>
+        [rect.left + 16, rect.right - 16].every((x) => element.contains(document.elementFromPoint(x, y))));
+  })).toBe(true);
   const transform = await viewport.evaluate((element) => getComputedStyle(element).transform);
   await expect(preview).toContainText(`### ${singleLabel} [update]`);
   await expect(preview).toContainText("Bytes changed");
@@ -167,11 +178,22 @@ test("long Gitlink review scrolls/selects without moving the canvas and preserve
     range.setEnd(textNode, start + marker.length);
     const bounds = range.getBoundingClientRect();
     const clip = element.closest(".gitlink-node-content")!.getBoundingClientRect();
+    const previewBounds = element.getBoundingClientRect();
+    const middleY = (bounds.top + bounds.bottom) / 2;
     return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
-      clipTop: clip.top, clipBottom: clip.bottom };
+      clipLeft: Math.max(clip.left, previewBounds.left, 0),
+      clipRight: Math.min(clip.right, previewBounds.right, innerWidth),
+      clipTop: Math.max(clip.top, previewBounds.top, 0),
+      clipBottom: Math.min(clip.bottom, previewBounds.bottom, innerHeight),
+      startHitsPreview: element.contains(document.elementFromPoint(bounds.left, middleY)),
+      endHitsPreview: element.contains(document.elementFromPoint(bounds.right, middleY)) };
   });
+  expect(tail.left).toBeGreaterThanOrEqual(tail.clipLeft);
+  expect(tail.right).toBeLessThanOrEqual(tail.clipRight);
   expect(tail.top).toBeGreaterThanOrEqual(tail.clipTop);
   expect(tail.bottom).toBeLessThanOrEqual(tail.clipBottom);
+  expect(tail.startHitsPreview).toBe(true);
+  expect(tail.endHitsPreview).toBe(true);
   const middleY = (tail.top + tail.bottom) / 2;
   await page.mouse.move(tail.left, middleY);
   await page.mouse.down();
@@ -192,7 +214,8 @@ test("long Gitlink review scrolls/selects without moving the canvas and preserve
   expect(intents.find((row) => row.intent === "applyGitlinkChanges")?.args)
     .toEqual([before.node_id, before.fingerprint, ["a b.py"]]);
   await evidence(request, page, info, before, after,
-    "Long review is reachable by wheel/keyboard and selectable; escaped one-space/two-space labels remain distinct; exact selected raw path alone is written.");
+    "Long review is reachable by wheel/keyboard and selectable; escaped one-space/two-space labels remain distinct; exact selected raw path alone is written.",
+    { reviewInteraction: { tail, transform, reducedMotion: true, framedWith: "Fit All" } });
 });
 
 test("full Python source, existing session grant, repeated source, stale approval replay, and denial", async ({ page, request }, info) => {
