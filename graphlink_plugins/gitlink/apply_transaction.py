@@ -293,6 +293,14 @@ def recover_interrupted_apply(local_root: str | Path) -> bool:
                 raise RuntimeError("Gitlink recovery backup checksum mismatch.")
         elif expected_before is not None:
             raise RuntimeError("Gitlink recovery manifest has a missing backup.")
+        # A directory, FIFO or other external replacement is not a missing
+        # file. Reject it during the complete preflight, before restoring
+        # another entry or unlinking what now belongs to a separate writer.
+        if target.exists() and not target.is_file():
+            raise RuntimeError(
+                f"Gitlink recovery target {path!r} is not a regular file; "
+                "manual review required."
+            )
         if target.is_file():
             with target.open("rb") as stream:
                 current = stream.read(_MAX_JOURNAL_BYTES + 1)
