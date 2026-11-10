@@ -82,6 +82,48 @@ def test_recovery_refuses_to_overwrite_independent_external_edits(tmp_path):
     assert first.read_bytes() == b"original A"
 
 
+@pytest.mark.parametrize("operation", ["create", "delete"])
+@pytest.mark.parametrize("replacement", ["directory", "fifo"])
+def test_recovery_preflights_nonregular_targets_before_restoring_any_file(tmp_path, operation, replacement):
+    if replacement == "fifo" and not hasattr(os, "mkfifo"):
+        pytest.skip("named pipes require os.mkfifo")
+
+    replaced = tmp_path / "replaced.py"
+    other = tmp_path / "other.py"
+    original = b"original replaced" if operation == "delete" else None
+    desired = b"new replaced" if operation == "create" else None
+    if original is not None:
+        replaced.write_bytes(original)
+    other.write_bytes(b"original other")
+    # Recovery restores in reverse order. Put the nonregular target first
+    # so incomplete preflight would restore the other file before failing.
+    begin_transaction(tmp_path, [
+        _change("replaced.py", original, desired),
+        _change("other.py", b"original other", b"new other"),
+    ])
+    if desired is None:
+        replaced.unlink()
+    else:
+        atomic_replace_file(replaced, desired)
+        replaced.unlink()
+    atomic_replace_file(other, b"new other")
+    if replacement == "directory":
+        replaced.mkdir()
+    else:
+        os.mkfifo(replaced)
+    replacement_stat = replaced.stat()
+
+    with pytest.raises(RuntimeError, match="not a regular file"):
+        recover_interrupted_apply(tmp_path)
+
+    # Do not conflate a nonregular external replacement with a missing
+    # file, mutate it, or partially restore any other journal entry.
+    assert replaced.stat().st_ino == replacement_stat.st_ino
+    assert replaced.stat().st_mode == replacement_stat.st_mode
+    assert other.read_bytes() == b"new other"
+    assert _journal_dir(tmp_path).exists()
+
+
 def test_atomic_replace_failure_preserves_previous_complete_file(tmp_path, monkeypatch):
     from graphlink_plugins.gitlink import apply_transaction
 
