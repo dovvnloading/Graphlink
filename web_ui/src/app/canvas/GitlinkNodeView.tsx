@@ -5,7 +5,7 @@ import { Dialog, useOverlays } from "../overlays/overlays";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
-import { splitGitlinkPreview } from "./gitlinkPreview";
+import { displayGitlinkPath, splitGitlinkPreview } from "./gitlinkPreview";
 import { NodeMenu } from "./NodeMenu";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
@@ -45,16 +45,10 @@ import { useLodVisibility } from "./useLodVisibility";
  * "Scanned 1 files." for two different single-file selections), which would
  * otherwise silently skip a required refetch (R5.3 post-review FIX 6).
  *
- * Security note, not a style preference: the Proposal tab renders BOTH
- * data.gitlinkProposalMarkdown and data.gitlinkPreviewText (a unified diff)
- * through the exact same NodeMarkdown.tsx pipeline every sibling node view
- * uses - no rehype-raw, no dangerouslySetInnerHTML anywhere in this file or
- * that one. The diff text is wrapped in
- * a fenced ```diff code block first (toDiffFence, mirroring CodeNodeView's
- * own toFencedCodeBlock) purely so rehype-highlight can colorize it - it is
- * never treated as anything but inert text by the markdown pipeline, exactly
- * like the proposal markdown itself (which can indirectly embed untrusted
- * repo content by way of the model).
+ * The proposal summary uses NodeMarkdown; the byte-faithful review is plain
+ * text in pre/code. A filename or file body cannot end a Markdown fence and
+ * inject links, images, headings or formatting into the review. The backend
+ * escapes controls and line endings; React renders the resulting text intact.
  *
  * Apply confirmation: the first plugin in this codebase that mutates real
  * local files, so Apply does not fire data.onApply directly - it opens a
@@ -167,15 +161,6 @@ function GitlinkNodeMenu({
 }
 
 // -- helpers ----------------------------------------------------------------
-
-/** Wraps a raw unified diff in a markdown fenced code block tagged `diff` so
- * ReactMarkdown + rehype-highlight can colorize it for free - the same
- * technique CodeNodeView.tsx's own toFencedCodeBlock uses for source code,
- * applied here to diff text instead. Never treated as anything but inert
- * text by the pipeline either way. */
-function toDiffFence(diffText: string): string {
-  return "```diff\n" + diffText + "\n```";
-}
 
 type TabKey = "setup" | "context" | "proposal";
 const TABS: { key: TabKey; label: string }[] = [
@@ -402,7 +387,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </div>
       }
-      bodyClassName="gitlink-node-content"
+      bodyClassName="gitlink-node-content nowheel nodrag"
       menu={
         menuPosition && (
           <GitlinkNodeMenu
@@ -591,7 +576,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                             checked={selectedPaths.includes(path)}
                             onChange={() => togglePath(path)}
                           />
-                          {path}
+                          {displayGitlinkPath(path)}
                         </label>
                       </li>
                     ))
@@ -707,7 +692,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                       <div className="gitlink-node-review-file" key={change.path + ":" + index}>
                         <input
                           type="checkbox"
-                          aria-label={"Include " + change.path + " in Apply"}
+                          aria-label={"Include " + displayGitlinkPath(change.path) + " in Apply"}
                           checked={approvedSet.has(change.path)}
                           disabled={applying}
                           onChange={(event) => {
@@ -718,14 +703,14 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                         />
                         <button
                           type="button"
-                          aria-label={"Review " + change.operation + " " + change.path}
+                          aria-label={"Review " + change.operation + " " + displayGitlinkPath(change.path)}
                           aria-pressed={reviewIndex === index}
                           className={reviewIndex === index ? "active" : ""}
                           disabled={!reviewSections}
                           onClick={() => setReviewIndex(index)}
                         >
                           <span className="gitlink-node-review-operation">{change.operation}</span>
-                          <span>{change.path}</span>
+                          <span>{displayGitlinkPath(change.path)}</span>
                         </button>
                       </div>
                     ))}
@@ -740,12 +725,23 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                     Selected files are checked for conflicts before writing. Unchecked files
                     are skipped and discarded once the proposal is successfully applied.
                   </p>
+                  {data.gitlinkPendingChanges.some((change) => displayGitlinkPath(change.path) !== change.path) && (
+                    <p className="gitlink-node-review-note">
+                      Quoted paths use visible escapes: <code>{"\\u0020"}</code> means a space.
+                    </p>
+                  )}
                 </div>
               )}
 
               {data.gitlinkPreviewText && (
                 <div className="chat-node-content gitlink-node-proposal-diff">
-                  <NodeMarkdown content={toDiffFence(focusedPreview)} />
+                  <pre
+                    className="nowheel nodrag"
+                    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- the complete review must be keyboard reachable inside the scrollable node body
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Gitlink file preview"
+                  ><code>{focusedPreview}</code></pre>
                 </div>
               )}
 
@@ -789,7 +785,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                 <ul className="gitlink-node-apply-file-list">
                   {approvedChanges.map((change, index) => (
                     <li key={index}>
-                      {change.operation} — {change.path}
+                      {change.operation} — {displayGitlinkPath(change.path)}
                     </li>
                   ))}
                 </ul>

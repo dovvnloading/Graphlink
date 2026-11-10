@@ -556,7 +556,7 @@ describe("GitlinkNodeView", () => {
 
   // -- Proposal tab: markdown/diff rendering + security --------------------
 
-  it("renders the proposal markdown and the diff (as syntax-highlighted fenced code) through ReactMarkdown", async () => {
+  it("renders proposal markdown and the complete diff as plain preformatted text", async () => {
     const user = userEvent.setup();
     renderGitlinkNode({
       gitlinkProposalMarkdown: "# Add health check\n\nThis adds **a route**.",
@@ -586,6 +586,92 @@ describe("GitlinkNodeView", () => {
     await user.click(screen.getByRole("tab", { name: "Proposal" }));
     expect(document.querySelector("img")).toBeNull();
     expect(screen.queryByRole("img")).toBeNull();
+  });
+
+  it("renders byte-change, newline and BOM evidence verbatim in the real proposal view", async () => {
+    const user = userEvent.setup();
+    const preview = [
+      "### fixture.txt [update]", "",
+      "Bytes changed: 7 -> 6 bytes.",
+      "UTF-8 BOM: present -> absent.",
+      "Line endings: CRLF=1, LF=0, CR=0 -> CRLF=0, LF=1, CR=0.",
+      "Final newline: CRLF -> LF.",
+      '-"alpha\\r\\n"', '+"alpha\\n"',
+    ].join("\n");
+    renderGitlinkNode({ gitlinkPreviewText: preview });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    expect(screen.getByLabelText("Gitlink file preview").textContent).toBe(preview);
+    expect(screen.getByLabelText("Gitlink file preview").tagName).toBe("PRE");
+  });
+
+  it("makes the complete file review keyboard reachable and reserves its gestures for scrolling and selection", async () => {
+    const user = userEvent.setup();
+    const preview = "### long.txt [update]\n" + "reviewed line\\n\n".repeat(100) + "REVIEW TAIL";
+    renderGitlinkNode({ gitlinkPreviewText: preview });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    const review = screen.getByRole("region", { name: "Gitlink file preview" });
+    expect(review).toHaveAttribute("tabindex", "0");
+    expect(review).toHaveClass("nowheel", "nodrag");
+    expect(review.closest(".gitlink-node-content")).toHaveClass("nowheel", "nodrag");
+    review.focus();
+    expect(review).toHaveFocus();
+    expect(review.textContent).toBe(preview);
+  });
+
+  it("distinguishes space counts in file selection and confirmation while sending the exact selected path", async () => {
+    const user = userEvent.setup();
+    const paths = ["a b.txt", "a  b.txt"];
+    const shownPaths = ['"a\\u0020b.txt"', '"a\\u0020\\u0020b.txt"'];
+    const data = renderGitlinkNode({
+      gitlinkPendingChanges: paths.map((path) => ({ path, operation: "create", reason: "fixture", content: "" })),
+      gitlinkPreviewText: shownPaths.map((path) => "### " + path + " [create]\n\nFile creation: absent -> 0 bytes (empty file).").join("\n\n"),
+      gitlinkChangeFingerprint: "fp-spaced-paths",
+      gitlinkLocalRoot: "C:/checkout",
+    });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    expect(screen.getByText(shownPaths[0])).toBeInTheDocument();
+    expect(screen.getByText(shownPaths[1])).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Include " + shownPaths[0] + " in Apply" }));
+    await user.click(screen.getByRole("button", { name: "Apply selected (1)" }));
+    const confirmation = screen.getByRole("dialog", { name: "Apply Selected Changes?" });
+    expect(within(confirmation).getByText("create — " + shownPaths[1])).toBeInTheDocument();
+    expect(within(confirmation).queryByText("create — " + shownPaths[0])).toBeNull();
+    await user.click(within(confirmation).getByRole("button", { name: "Yes" }));
+    expect(data.onApply).toHaveBeenCalledWith("fp-spaced-paths", [paths[1]]);
+  });
+
+  it("does not interpret Markdown fences, links, images or HTML embedded in review text", async () => {
+    const user = userEvent.setup();
+    const preview = [
+      "### harmless.txt [update]", "```", "# Forged review heading",
+      "![remote image](https://example.invalid/image.png)",
+      "[approve me](https://example.invalid/approve)",
+      '<img src="x" onerror="alert(1)"><iframe src="https://example.invalid"></iframe>',
+      "```diff", '-"old\\n"', '+"new\\n"',
+    ].join("\n");
+    renderGitlinkNode({ gitlinkPreviewText: preview });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    const review = screen.getByLabelText("Gitlink file preview");
+    expect(review.textContent).toBe(preview);
+    expect(review.querySelector("a, img, iframe, h1, script")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Forged review heading" })).toBeNull();
+  });
+
+  it("shows paths containing controls as escaped text while Apply retains the exact path", async () => {
+    const user = userEvent.setup();
+    const path = "odd\nname\u202e.txt";
+    const shownPath = '"odd\\nname\\u202e.txt"';
+    const data = renderGitlinkNode({
+      gitlinkPendingChanges: [{ path, operation: "create", reason: "fixture", content: "" }],
+      gitlinkPreviewText: "### " + shownPath + " [create]\n\nFile creation: absent -> 0 bytes (empty file).",
+      gitlinkChangeFingerprint: "fp-control-path",
+      gitlinkLocalRoot: "C:/checkout",
+    });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    expect(screen.getByText(shownPath)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Apply selected (1)" }));
+    await user.click(screen.getByRole("button", { name: "Yes" }));
+    expect(data.onApply).toHaveBeenCalledWith("fp-control-path", [path]);
   });
 
 
