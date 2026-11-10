@@ -154,6 +154,7 @@ export interface SceneNodeRow {
   harnessAwaitingApproval: boolean;
   harnessApprovalToolName: string;
   harnessApprovalSummary: string;
+  harnessApprovalId: string;
   harnessApprovalSessionOffered: boolean;
   harnessPlan: HarnessPlanStepRow[];
   harnessAwaitingQuestion: boolean;
@@ -643,6 +644,7 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["harnessAwaitingApproval", "b", 0, false],
   ["harnessApprovalToolName", "s", 0, ""],
   ["harnessApprovalSummary", "s", 0, ""],
+  ["harnessApprovalId", "s", 0, ""],
   ["harnessApprovalSessionOffered", "b", 0, false],
   ["harnessPlan", { a: { o: HARNESS_PLAN_STEP_ROW_FIELDS } }, 0, []],
   ["harnessAwaitingQuestion", "b", 0, false],

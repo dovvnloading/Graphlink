@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from dataclasses import dataclass
 
 import graphlink_task_config as config
@@ -218,7 +219,7 @@ def _is_dangerous_call(call: ToolCall) -> bool:
     A dangerous-name blacklist is insufficient for arbitrary shell code:
     interpreters and wrappers can execute anything after a benign command.
     """
-    return shell_policy.requires_fresh_shell_approval(call.name, call.arguments)
+    return call.name == "python.exec" or shell_policy.requires_fresh_shell_approval(call.name, call.arguments)
 
 
 def _approval_summary(call: ToolCall) -> str:
@@ -227,6 +228,8 @@ def _approval_summary(call: ToolCall) -> str:
     content that will land on disk) rather than a JSON blob - and
     untruncated, per the cap comment above. Everything else falls back to
     capped sorted-JSON arguments, the builder's own default shape."""
+    if call.name == "python.exec":
+        return f"python.exec\n--- source\n{call.arguments['code']}"
     if call.name == "shell.exec":
         # §2.4: disclose one line per thing that will actually run, so a
         # dangerous tail cannot hide behind a benign head in a chain.
@@ -333,6 +336,12 @@ async def run_harness(
     async def request_approval(call: ToolCall) -> "bool | str":
         future: asyncio.Future = loop_handle.create_future()
         handle.approval_future = future
+        # A run can pause many times. Its request_id alone is not consent
+        # for the next Python call: a delayed/replayed click must still name
+        # the exact disclosure that was on screen when the user decided.
+        approval_token = uuid.uuid4().hex if call.name == "python.exec" else ""
+        handle.approval_token = approval_token
+        node.state.harness_approval_id = handle.approval_token
         node.state.harness_awaiting_approval = True
         node.state.harness_approval_tool_name = call.name
         node.state.harness_approval_summary = _approval_summary(call)
@@ -344,10 +353,15 @@ async def run_harness(
         try:
             approved = await future
         finally:
-            node.state.harness_awaiting_approval = False
-            node.state.harness_approval_tool_name = ""
-            node.state.harness_approval_summary = ""
-            node.state.harness_approval_session_offered = False
+            # Cancellation releases a run before this coroutine unwinds.
+            # An older Python prompt must not clear a newer run's surface.
+            if not approval_token or node.state.harness_approval_id == approval_token:
+                node.state.harness_awaiting_approval = False
+                node.state.harness_approval_tool_name = ""
+                node.state.harness_approval_summary = ""
+                node.state.harness_approval_session_offered = False
+                node.state.harness_approval_id = ""
+            handle.approval_token = ""
         await bus.publish("scene")
         return approved
 

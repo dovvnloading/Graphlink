@@ -165,6 +165,9 @@ class RunHandle:
     cancel_event: threading.Event | None = None
     on_cancel: Callable[[], None] | None = None
     approval_future: asyncio.Future | None = None
+    # Per-disclosure identity for Python approvals; empty for existing
+    # approval surfaces. Never persisted and never a proof of human consent.
+    approval_token: str = ""
     approval_snapshot_fn: Callable[[], Any] | None = None
     approval_snapshot: Any = None
     task: asyncio.Task | None = None

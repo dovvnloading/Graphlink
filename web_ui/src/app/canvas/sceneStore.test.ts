@@ -7,6 +7,21 @@ type StateListener = (payload: Record<string, unknown>) => void;
 type PatchListener = (patch: ScenePatch) => void;
 type VersionRejectionListener = (rejection: BridgeRejection | null) => void;
 
+describe("Python approval identity forwarding", () => {
+  it("forwards the displayed identity while preserving unrelated approval shapes", () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    store.approveHarnessTool("run", "python-first");
+    store.denyHarnessTool("run", "python-second");
+    store.approveHarnessTool("other-run");
+    expect(intents).toEqual([
+      { topic: "harness", intent: "approveTool", args: ["run", "python-first"] },
+      { topic: "harness", intent: "denyTool", args: ["run", "python-second"] },
+      { topic: "harness", intent: "approveTool", args: ["other-run"] },
+    ]);
+  });
+});
+
 // REVIEW-FIX: fireIntent's optional 7th arg (onSettled) is now read by
 // sendMessage (see sceneStore.ts's own comment on that call site) to defer
 // clearing the staged reply/synthesize target until the request has
@@ -268,6 +283,7 @@ function validScenePayload(overrides: Record<string, unknown> = {}) {
         harnessAwaitingApproval: false,
         harnessApprovalToolName: "",
         harnessApprovalSummary: "",
+        harnessApprovalId: "",
         harnessApprovalSessionOffered: false,
         harnessPlan: [],
         harnessAwaitingQuestion: false,

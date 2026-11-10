@@ -322,6 +322,8 @@ def _restore(live: dict, snapshot: dict) -> None:
                 restored.state.harness_awaiting_approval = False
                 restored.state.harness_approval_tool_name = ""
                 restored.state.harness_approval_summary = ""
+                restored.state.harness_approval_id = ""
+                restored.state.harness_approval_session_offered = False
                 restored.state.harness_awaiting_question = False
                 restored.state.harness_question = ""
             # review-fix (stage 8.7): builder_activity is documented as run
