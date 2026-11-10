@@ -766,6 +766,10 @@
             },
             "type": "array"
           },
+          "harnessApprovalId": {
+            "default": "",
+            "type": "string"
+          },
           "harnessApprovalSessionOffered": {
             "default": false,
             "type": "boolean"

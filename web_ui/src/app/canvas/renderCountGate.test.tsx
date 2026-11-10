@@ -223,6 +223,7 @@ function chatRow(id: string, x: number): SceneNodeRow {
         harnessAwaitingApproval: false,
         harnessApprovalToolName: "",
         harnessApprovalSummary: "",
+        harnessApprovalId: "",
         harnessApprovalSessionOffered: false,
         harnessPlan: [],
         harnessAwaitingQuestion: false,

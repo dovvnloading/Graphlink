@@ -342,6 +342,18 @@ jobs:
         working-directory: web_ui
         run: npm run test:e2e
 
+      - name: Run authenticated approval and review browser evidence
+        working-directory: web_ui
+        run: npm run test:e2e:safety
+
+      - name: Preserve approval and review evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: approval-review-browser-evidence
+          path: web_ui/test-results/
+          retention-days: 14
+
   # A fifth job, and the smallest. python-tests is the only job that runs
   # pytest and it is pinned to windows-latest for DPAPI, so the 9 tests that
   # assert POSIX file mode bits - on chats.db, the knowledge store, DB

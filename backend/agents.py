@@ -68,7 +68,6 @@ from __future__ import annotations
 # working unchanged. Removing an "unused" import here silently breaks
 # those seams and the mixins' name resolution at runtime.
 import asyncio  # noqa: F401
-import difflib
 import inspect  # noqa: F401
 import logging
 import threading
@@ -90,11 +89,12 @@ from graphlink_plugins.review_lens.diff_fetch import fetch_pr_review_bundle
 from graphlink_plugins.review_lens.pr_url import parse_pr_url
 from graphlink_plugins.review_lens.review_engine import ReviewLensAgent
 from graphlink_plugins.gitlink.change_review import prepare_change_review  # noqa: F401
+from graphlink_plugins.gitlink.preview import build_change_preview
 from graphlink_plugins.gitlink.repository import (
     GitlinkRepository,
     apply_change_set,
     default_import_root,
-    read_local_repo_file,
+    read_local_repo_file,  # noqa: F401 - existing test/caller patch seam
     validate_pending_changes,
 )
 from graphlink_plugins.common.python_repl import CodeAnalysisAgent
@@ -836,85 +836,16 @@ def _build_gitlink_proposal_markdown(repo, branch, result):
     return "\n".join(lines)
 
 
-def _build_gitlink_preview_text(files, local_root, repo, branch, *, original_texts=None):
-    """Replicates _build_preview_text's diff-building shape, reusing
-    read_local_repo_file for the original-content side of each update/delete
-    diff. DEVIATION from legacy, noted explicitly: legacy's own
-    _read_original_text_for_preview falls back to a live GitHub fetch when no
-    local_root is configured; this function does NOT - it degrades
-    gracefully (shows the proposed content with an explicit warning banner
-    instead of a diff) rather than spending a GitHub API call per changed
-    file purely for a preview render. `repo`/`branch` are used only in that
-    warning's text, never for a network fetch."""
-    preview_parts = []
-    for file_item in files:
-        path_text = file_item.get("path", "")
-        operation = file_item.get("operation", "update")
-        original_text = None
-        if original_texts is not None:
-            # Review-bound previews use the exact bytes hashed at proposal
-            # creation, not a second potentially stale filesystem read.
-            original_text = original_texts.get(path_text)
-        elif local_root:
-            try:
-                original_text = read_local_repo_file(local_root, path_text)
-            except Exception:
-                original_text = None
-        proposed_text = file_item.get("content", "") if operation in {"update", "create"} else ""
+def _build_gitlink_preview_text(files, local_root, repo, branch, *, original_bytes=None):
+    """Build an inert byte-faithful preview from the already hashed snapshot.
 
-        # None = the original could not be read (as opposed to "" = a real
-        # empty file). For update/delete that means no honest diff exists -
-        # say so explicitly instead of diffing against "" and rendering a
-        # misleading all-additions "create" diff. Creates never need the
-        # original, so they render normally either way. Mirrors the A2 fix
-        # already shipped for the legacy widget's own preview builder.
-        if original_text is None and operation in {"update", "delete"}:
-            preview_parts.append(f"### {path_text} [{operation}]\n")
-            preview_parts.append(
-                "!! WARNING: the original file could not be read (no local checkout is "
-                f"configured for {repo or 'this repository'}@{branch or 'unknown branch'}), "
-                "so no diff can be shown for this change."
-            )
-            if operation == "update":
-                preview_parts.append(
-                    "!! Applying will OVERWRITE the existing file with the full "
-                    "proposed content below:\n"
-                )
-                preview_parts.append(proposed_text if proposed_text else "[No content in proposal]")
-            else:
-                preview_parts.append("!! Applying will DELETE the file.")
-            preview_parts.append("")
-            continue
-        original_text = original_text or ""
-
-        if operation == "create":
-            diff_lines = list(
-                difflib.unified_diff(
-                    [], proposed_text.splitlines(), fromfile=f"a/{path_text}", tofile=f"b/{path_text}", lineterm="",
-                )
-            )
-        elif operation == "delete":
-            diff_lines = list(
-                difflib.unified_diff(
-                    original_text.splitlines(), [], fromfile=f"a/{path_text}", tofile=f"b/{path_text}", lineterm="",
-                )
-            )
-        else:
-            diff_lines = list(
-                difflib.unified_diff(
-                    original_text.splitlines(), proposed_text.splitlines(),
-                    fromfile=f"a/{path_text}", tofile=f"b/{path_text}", lineterm="",
-                )
-            )
-
-        preview_parts.append(f"### {path_text} [{operation}]\n")
-        if diff_lines:
-            preview_parts.append("\n".join(diff_lines))
-        else:
-            preview_parts.append("No textual diff available.")
-        preview_parts.append("")
-
-    return "\n".join(preview_parts).strip()
+    The repo/branch arguments remain for existing callers; no network or second
+    filesystem read is used. Without a checkout the explicit unbound preview
+    supports discovery only. Apply still requires server-captured review data.
+    """
+    if files and local_root and original_bytes is None:
+        raise RuntimeError("Missing captured review bytes; regenerate the proposal before reviewing it.")
+    return build_change_preview(files, original_bytes=original_bytes)
 
 
 def _call_gitlink_apply(local_root, pending_changes):

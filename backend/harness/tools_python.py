@@ -22,10 +22,10 @@ so `open("data.csv")` in executed code sees the same files `fs.read` and
 REPL is constructed with `manage_cwd=False` - we never chmod or age-sweep
 a directory the person owns (see PythonREPL's own docstring).
 
-Registered `approval="always"` under `code.execute`, exactly like
-`shell.exec`: arbitrary Python running with the user's full privileges is
-the same risk class as an arbitrary shell command, and the fingerprint
-memo means an identical repeat inside one run does not re-ask.
+Registered `approval="always"` with forced fresh consent under `code.execute`.
+Every call requires its own approval, including identical source and calls
+after a session grant. Persistent state makes a repeated source string a new
+execution with potentially different effects.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ import asyncio
 import threading
 from pathlib import Path
 
+from backend.harness.python_policy import source_error
 from backend.harness.workspace import WorkspaceError, ensure_workspace
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import CODE_EXECUTE, RunContext, ToolRegistry, ToolResult
@@ -44,7 +45,6 @@ from graphlink_plugins.common.python_repl import PythonREPL
 # loop surfaces as a timeout inside one turn rather than stalling the task.
 PYTHON_EXEC_TIMEOUT_SECONDS = 240
 _OUTPUT_CAP_CHARS = 20_000
-_CODE_CAP_CHARS = 20_000
 
 PYTHON_EXEC_SPEC = ToolSpec(
     name="python.exec",
@@ -127,11 +127,10 @@ def register_harness_python_tool(
     repl_registry = repls if repls is not None else PythonReplRegistry()
 
     async def python_exec(call: ToolCall, ctx: RunContext) -> ToolResult:
-        code = str(call.arguments.get("code") or "").strip()
-        if not code:
-            return ToolResult(content="python.exec needs non-empty code.", is_error=True)
-        if len(code) > _CODE_CAP_CHARS:
-            return ToolResult(content=f"Code longer than {_CODE_CAP_CHARS} characters.", is_error=True)
+        error = source_error(call.arguments)
+        if error is not None:
+            return ToolResult(content=error, is_error=True)
+        code = call.arguments["code"]
 
         workspace_id = getattr(ctx, "harness_workspace_id", None)
         if not isinstance(workspace_id, str) or not workspace_id:
@@ -177,4 +176,7 @@ def register_harness_python_tool(
             return ToolResult(content=f"[code raised]\n{output}" if output else "[code raised, no output]")
         return ToolResult(content=output or "(no output)")
 
-    registry.register(PYTHON_EXEC_SPEC, python_exec, scopes={CODE_EXECUTE}, approval="always")
+    registry.register(
+        PYTHON_EXEC_SPEC, python_exec, scopes={CODE_EXECUTE}, approval="always",
+        always_reprompt=lambda _call: True,
+    )

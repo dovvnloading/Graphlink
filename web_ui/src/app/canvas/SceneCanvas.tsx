@@ -897,15 +897,15 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
       const { n, store } = liveRef.current;
       if (n.pendingRequestId) store.cancelHarnessRun(n.pendingRequestId);
     },
-    // Zero-argument approve/deny closed over the CURRENT snapshot's
-    // pendingRequestId - the CodeExecutionApprovalPanel posture.
-    onApproveTool: () => {
+    // Python approval identifies the disclosure actually rendered by the
+    // view. Never substitute the newest token into an older click.
+    onApproveTool: (approvalId?: string) => {
       const { n, store } = liveRef.current;
-      if (n.pendingRequestId) store.approveHarnessTool(n.pendingRequestId);
+      if (n.pendingRequestId) store.approveHarnessTool(n.pendingRequestId, approvalId);
     },
-    onDenyTool: () => {
+    onDenyTool: (approvalId?: string) => {
       const { n, store } = liveRef.current;
-      if (n.pendingRequestId) store.denyHarnessTool(n.pendingRequestId);
+      if (n.pendingRequestId) store.denyHarnessTool(n.pendingRequestId, approvalId);
     },
     onApproveToolForSession: () => {
       const { n, store } = liveRef.current;
@@ -1605,6 +1605,7 @@ export function toFlowNodes(
           harnessAwaitingApproval: n.harnessAwaitingApproval,
           harnessApprovalToolName: n.harnessApprovalToolName,
           harnessApprovalSummary: n.harnessApprovalSummary,
+          harnessApprovalId: n.harnessApprovalId,
           harnessApprovalSessionOffered: n.harnessApprovalSessionOffered,
           harnessPlan: n.harnessPlan,
           harnessAwaitingQuestion: n.harnessAwaitingQuestion,

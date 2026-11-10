@@ -197,6 +197,7 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
   harnessAwaitingApproval: false,
   harnessApprovalToolName: "",
   harnessApprovalSummary: "",
+  harnessApprovalId: "",
   harnessApprovalSessionOffered: false,
   harnessPlan: [],
   harnessAwaitingQuestion: false,

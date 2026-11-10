@@ -893,7 +893,7 @@ class DispatcherCoreOps(DispatcherParts):
         # cancellation).
         self._runs.attach_task(handle, asyncio.create_task(_run()))
 
-    def _resolve_approval(self, request_id: str, approved: bool) -> bool:
+    def _resolve_approval(self, request_id: str, approved: bool, approval_id: str = "") -> bool:
         """The shared approve/deny primitive backing approve_code_execution/
         deny_code_execution below - looks up request_id directly in
         self._runs (a shared uuid4 namespace across every migrated kind, not
@@ -927,6 +927,10 @@ class DispatcherCoreOps(DispatcherParts):
         handle = self._runs.get(request_id)
         if handle is None or handle.approval_future is None:
             return False
+        # Both directions matter: an old Python token also cannot approve
+        # a later non-Python prompt whose token is empty.
+        if approval_id != handle.approval_token:
+            return False
         future = handle.approval_future
         if not future.done():
             if approved and handle.approval_snapshot_fn is not None:
@@ -934,11 +938,11 @@ class DispatcherCoreOps(DispatcherParts):
             future.set_result(approved)
         return True
 
-    def approve_code_execution(self, request_id: str) -> bool:
-        return self._resolve_approval(request_id, True)
+    def approve_code_execution(self, request_id: str, approval_id: str = "") -> bool:
+        return self._resolve_approval(request_id, True, approval_id)
 
-    def deny_code_execution(self, request_id: str) -> bool:
-        return self._resolve_approval(request_id, False)
+    def deny_code_execution(self, request_id: str, approval_id: str = "") -> bool:
+        return self._resolve_approval(request_id, False, approval_id)
 
     def cancel_all_pending_approvals(self) -> None:
         """Called ONLY from backend/app.py's ws_endpoint disconnect handler,

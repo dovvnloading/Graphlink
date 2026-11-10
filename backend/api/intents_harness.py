@@ -180,11 +180,17 @@ def register_harness_intents(
         node.state.harness_workspace_active = ""
         await publish_scene()
 
-    async def approve_tool(request_id):
-        agent_dispatcher.approve_code_execution(request_id)
+    async def approve_tool(request_id, approval_id=""):
+        if approval_id:
+            agent_dispatcher.approve_code_execution(request_id, approval_id)
+        else:
+            agent_dispatcher.approve_code_execution(request_id)
 
-    async def deny_tool(request_id):
-        agent_dispatcher.deny_code_execution(request_id)
+    async def deny_tool(request_id, approval_id=""):
+        if approval_id:
+            agent_dispatcher.deny_code_execution(request_id, approval_id)
+        else:
+            agent_dispatcher.deny_code_execution(request_id)
 
     async def approve_tool_for_session(request_id):
         """§2.4's graded consent - approve and stop asking for this tool for

@@ -99,7 +99,7 @@ class ReviewSession:
         reviewed, originals = prepare_change_review(PROPOSAL, str(root))
         self.fingerprint = _fingerprint_changes(reviewed)
         preview = _build_gitlink_preview_text(reviewed, str(root), "demo/local", "main",
-                                               original_texts=originals)
+                                               original_bytes=originals)
         self.document.complete_gitlink_run(self.node.id, "Scripted fixture, no model call", reviewed,
                                            preview, self.fingerprint, str(root))
 

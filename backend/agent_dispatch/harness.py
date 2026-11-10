@@ -45,7 +45,7 @@ class HarnessDispatchOps(DispatcherParts):
         request_id must never have its own pending approval resolved with a
         string it would then read as truthy consent."""
         handle = self._runs.get(request_id)
-        if handle is None or handle.kind != "harness":
+        if handle is None or handle.kind != "harness" or handle.approval_token:
             return False
         future = handle.approval_future
         if future is None or future.done():
@@ -60,7 +60,7 @@ class HarnessDispatchOps(DispatcherParts):
         reads that as "approve and add to ctx.session_grants". Kind-checked
         for the same reason answer_harness_question is."""
         handle = self._runs.get(request_id)
-        if handle is None or handle.kind != "harness":
+        if handle is None or handle.kind != "harness" or handle.approval_token:
             return False
         future = handle.approval_future
         if future is None or future.done():
@@ -190,6 +190,8 @@ class HarnessDispatchOps(DispatcherParts):
             node.state.harness_awaiting_approval = False
             node.state.harness_approval_tool_name = ""
             node.state.harness_approval_summary = ""
+            node.state.harness_approval_id = ""
+            node.state.harness_approval_session_offered = False
             if node.pending_request_id == handle.request_id:
                 node.pending_request_id = None
             await bus.publish("scene")

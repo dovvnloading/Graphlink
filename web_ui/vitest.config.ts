@@ -22,6 +22,6 @@ export default defineConfig({
     // the directory (rather than renaming the specs to some other suffix)
     // keeps the Playwright convention intact and matches how playwright.
     // config.ts already scopes itself with testDir: "./e2e".
-    exclude: ["**/node_modules/**", "**/dist/**", "e2e/**"],
+    exclude: ["**/node_modules/**", "**/dist/**", "e2e/**", "e2e-safety/**"],
   },
 });

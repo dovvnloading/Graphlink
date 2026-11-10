@@ -26,6 +26,7 @@ function makeData(overrides: Partial<HarnessNodeData> = {}): HarnessNodeData {
     harnessAwaitingApproval: false,
     harnessApprovalToolName: "",
     harnessApprovalSummary: "",
+    harnessApprovalId: "",
     harnessMaxTurns: 16,
     harnessSpentTurns: 3,
     harnessSpentTokens: 4321,
@@ -187,6 +188,50 @@ describe("HarnessNodeView", () => {
       harnessApprovalSessionOffered: false,
     }));
     expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
+  });
+
+  it("shows every Python source character as text and binds one decision to its disclosure", async () => {
+    const user = userEvent.setup();
+    const source = `\n# ${"harmless padding ".repeat(60)}\nprint('<img src=x onerror=alert(1)>')\n\n`;
+    const data = makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "python.exec",
+      harnessApprovalId: "python-disclosure-1",
+      harnessApprovalSummary: `python.exec\n--- source\n${source}`,
+      // Even a stale/malformed backend hint cannot reintroduce the option.
+      harnessApprovalSessionOffered: true,
+    });
+    const { container } = renderHarness(data);
+    expect(container.querySelector(".plan-node-approval-summary")?.textContent).toBe(data.harnessApprovalSummary);
+    expect(container.querySelector(".plan-node-approval-summary img")).toBeNull();
+    const sourceRegion = screen.getByRole("region", { name: "Proposed tool call" });
+    expect(sourceRegion).toHaveAttribute("tabindex", "0");
+    expect(sourceRegion).toHaveClass("nowheel", "nodrag");
+    sourceRegion.focus();
+    expect(sourceRegion).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
+    await user.dblClick(screen.getByRole("button", { name: "Approve once" }));
+    expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("python-disclosure-1");
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+  });
+
+  it("sends the Python disclosure identity on denial and refuses a missing identity", async () => {
+    const user = userEvent.setup();
+    const data = makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "python.exec",
+      harnessApprovalId: "python-disclosure-denied",
+    });
+    const { unmount } = renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Deny" }));
+    expect(data.onDenyTool).toHaveBeenCalledExactlyOnceWith("python-disclosure-denied");
+    unmount();
+    const missing = makeData({ harnessAwaitingApproval: true, harnessApprovalToolName: "python.exec" });
+    renderHarness(missing);
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+    expect(missing.onApproveTool).not.toHaveBeenCalled();
   });
 
   it("renders the agent's checklist with per-step status", () => {

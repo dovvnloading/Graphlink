@@ -9,6 +9,18 @@ export interface PreviewChange {
   operation: string;
 }
 
+/** Mirror the backend's display_review_path without interpreting file text.
+ * Simple ASCII paths stay readable. Spaces, quotes, backslashes, controls and
+ * non-ASCII text use visible JSON escapes, preventing collapsed whitespace or
+ * escaped-looking literal names from hiding a path difference. Selection
+ * still sends the original exact path.
+ */
+export function displayGitlinkPath(path: string): string {
+  if (/^[\x21-\x7e]+$/.test(path) && !/["\\]/.test(path)) return path;
+  return JSON.stringify(path).replace(/[\u0020\u007f-\uffff]/g, (char) =>
+    "\\u" + char.charCodeAt(0).toString(16).padStart(4, "0"));
+}
+
 export function splitGitlinkPreview(
   fullPreview: string,
   files: readonly PreviewChange[],
@@ -17,7 +29,7 @@ export function splitGitlinkPreview(
   const positions: number[] = [];
   let cursor = 0;
   for (const file of files) {
-    const heading = "### " + file.path + " [" + file.operation + "]";
+    const heading = "### " + displayGitlinkPath(file.path) + " [" + file.operation + "]";
     // _build_gitlink_preview_text emits headers on their own lines.
     let start = fullPreview.indexOf(heading, cursor);
     while (start >= 0 && start !== 0 && fullPreview[start - 1] !== "\n") {

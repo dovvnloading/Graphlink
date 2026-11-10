@@ -25,10 +25,9 @@ gates named in the ADR's own §2:
   code_sandbox approval gate already does ("reused here rather than
   reinvented" - node_states.py's own CodeSandboxState docstring), not a
   reinvented hash. Because the fingerprint is computed fresh from THIS call's
-  own arguments at invoke() time (never a separately-stored snapshot checked
-  again later), there is no TOCTOU window to guard against the way gitlink's
-  own atomic check-and-freeze does - a changed argument simply produces a
-  different fingerprint and is never considered pre-approved.
+  own arguments at invoke() time, changed arguments produce a different
+  fingerprint. Python is deliberately stricter: every call re-prompts,
+  arguments are copied before disclosure, and a pending mutation is refused.
 
 invoke() never raises for an EXPECTED denial (unknown tool, out-of-scope,
 approval denied, handler exception) - each becomes an error ToolResult, the
@@ -42,6 +41,7 @@ in-flight step is a provider call or a tool call.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Literal
 
@@ -145,9 +145,8 @@ class _Registration:
     # PLAN-2026-08-24 §2.4: an optional per-call predicate that forces a
     # FRESH prompt even when this exact (name, arguments) pair was already
     # approved in this run - "a dangerous-command list always re-prompts and
-    # defeats remembered grants". None (the default, and every tool but
-    # shell.exec today) leaves the fingerprint memo behaving exactly as it
-    # always has.
+    # defeats remembered grants". None leaves the existing fingerprint
+    # memo unchanged; arbitrary execution tools opt into fresh consent.
     always_reprompt: "Callable[[ToolCall], bool] | None" = None
 
 
@@ -155,8 +154,8 @@ def _tool_call_fingerprint(call: ToolCall) -> str:
     # Deliberately excludes call.id: id correlates a specific call to its
     # result (ToolCall's own docstring) and is provider-synthesized noise
     # for approval-memory purposes - two calls with the same name+arguments
-    # are the same DECISION to a human approver regardless of which id a
-    # provider happened to mint for either one.
+    # may reuse approval only when the tool's own policy permits it. Stateful
+    # Python and executable shell calls always require a new decision.
     return _fingerprint_changes({"name": call.name, "arguments": call.arguments})
 
 
@@ -242,6 +241,19 @@ class ToolRegistry:
                 is_error=True,
             )
 
+        # A ToolCall is frozen only at the dataclass level: its arguments
+        # dict is still mutable. Keep private execution arguments distinct
+        # from both the caller's object and the object sent to the approval
+        # callback. Refuse a changed pending request, without caching consent.
+        original_python_call = call if call.name == "python.exec" else None
+        if original_python_call is not None:
+            from backend.harness.python_policy import source_error
+
+            error = source_error(call.arguments)
+            if error is not None:
+                return ToolResult(content=error, is_error=True)
+            call = ToolCall(id=call.id, name=call.name, arguments=deepcopy(call.arguments))
+
         if registration.approval != "auto":
             fingerprint = _tool_call_fingerprint(call) if registration.approval == "always" else None
             # §2.4's dangerous-command rule: a predicate that says "always
@@ -277,7 +289,8 @@ class ToolRegistry:
                 # session; anything else truthy approves this call only. Every
                 # pre-existing caller returns a plain bool, which lands on the
                 # once-only branch exactly as it always did.
-                decision = await ctx.request_approval(call)
+                disclosure_call = deepcopy(call) if original_python_call is not None else call
+                decision = await ctx.request_approval(disclosure_call)
                 approved = bool(decision)
                 # The approval prompt is the one place this function can be
                 # awaiting for a genuinely long time (a human deciding) -
@@ -289,6 +302,14 @@ class ToolRegistry:
                 _raise_if_cancelled(ctx.cancel.event if ctx.cancel is not None else None)
                 if not approved:
                     return ToolResult(content=f"Tool call {call.name!r} was denied approval.", is_error=True)
+                if original_python_call is not None and (
+                    original_python_call.arguments != call.arguments
+                    or disclosure_call.arguments != call.arguments
+                ):
+                    return ToolResult(
+                        content="Python request changed while approval was pending; submit it for fresh approval.",
+                        is_error=True,
+                    )
                 if decision == "session" and ctx.session_grants is not None and not forced:
                     ctx.session_grants.add(call.name)
                 elif fingerprint is not None:

@@ -7290,6 +7290,11 @@ mark.document-view-search-match-current {
   overflow: visible;
 }
 
+/* Review text remains selectable inside React Flow's otherwise draggable card. */
+.gitlink-node-proposal-diff pre {
+  user-select: text;
+}
+
 .gitlink-node-review {
   display: flex;
   flex-direction: column;
@@ -9512,6 +9517,11 @@ mark.document-view-search-match-current {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* Source review must allow text selection inside React Flow's draggable card. */
+.harness-node .plan-node-approval-summary {
+  user-select: text;
 }
 
 /* -- Card buttons ---------------------------------------------------------

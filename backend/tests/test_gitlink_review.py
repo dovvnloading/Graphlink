@@ -36,7 +36,7 @@ def test_prepare_binds_byte_exact_originals_for_create_update_and_delete(tmp_pat
     assert reviewed[0][BASELINE_FIELD] == hashlib.sha256(b"old\r\n").hexdigest()
     assert reviewed[1][BASELINE_FIELD] is None
     assert reviewed[2][BASELINE_FIELD] == hashlib.sha256(b"gone").hexdigest()
-    assert originals == {"a.py": "old\r\n", "new.py": None, "remove.txt": "gone"}
+    assert originals == {"a.py": b"old\r\n", "new.py": None, "remove.txt": b"gone"}
     assert _fingerprint_changes(reviewed) != _fingerprint_changes(proposal)
 
     snapshots = verify_change_review(tmp_path, reviewed)
@@ -186,9 +186,9 @@ def test_preview_uses_exact_original_that_was_hashed_not_a_second_file_read(tmp_
         lambda *_: (_ for _ in ()).throw(AssertionError("unexpected second read"))
     )
     preview = _build_gitlink_preview_text(files, str(tmp_path), "owner/repo", "main",
-                                          original_texts=originals)
-    assert "-approved source" in preview
-    assert "-different source" not in preview
+                                          original_bytes=originals)
+    assert '-"approved source"' in preview
+    assert '-"different source"' not in preview
 
 
 def test_no_local_checkout_can_still_generate_preview_only_but_not_apply(tmp_path):
