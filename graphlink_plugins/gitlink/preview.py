@@ -17,8 +17,16 @@ from typing import Any
 
 
 def display_review_path(path: str) -> str:
-    """Keep ordinary paths readable; quote/escape controls and non-ASCII text."""
-    return path if all(" " <= char <= "~" for char in path) else json.dumps(path, ensure_ascii=True)
+    """Keep simple paths readable; visibly escape ambiguous or invisible text.
+
+    Labels and confirmation lists collapse HTML whitespace, unlike the pre.
+    Escape every ASCII space in a quoted path so all three show the same name.
+    Quote literal quotes/backslashes too: an escaped-looking real filename must
+    not collide with the display representation of another path.
+    """
+    if path and all("!" <= char <= "~" and char not in {'"', "\\"} for char in path):
+        return path
+    return json.dumps(path, ensure_ascii=True).replace(" ", r"\u0020")
 
 
 def decode_review_utf8(raw: bytes, path: str) -> str:

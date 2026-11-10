@@ -187,3 +187,15 @@ def test_unusual_paths_are_unambiguously_escaped_in_review_headings(path):
     assert preview.startswith("### " + display_review_path(path) + " [create]\n")
     assert "\x1b" not in preview and "\u202e" not in preview
     assert "\n### forged.txt" not in preview
+
+
+@pytest.mark.parametrize("path,shown", [
+    ("a b.txt", '"a\\u0020b.txt"'),
+    ("a  b.txt", '"a\\u0020\\u0020b.txt"'),
+    ("dir /file.txt", '"dir\\u0020/file.txt"'),
+    ('"a\\u0020b.txt"', '"\\"a\\\\u0020b.txt\\""'),
+])
+def test_space_counts_and_escape_like_pathnames_have_distinct_visible_representations(path, shown):
+    assert display_review_path(path) == shown
+    preview = build_change_preview([{"path": path, "operation": "create", "content": ""}], original_bytes={path: None})
+    assert preview.startswith("### " + shown + " [create]\n")

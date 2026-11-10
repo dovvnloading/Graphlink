@@ -387,7 +387,7 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </div>
       }
-      bodyClassName="gitlink-node-content"
+      bodyClassName="gitlink-node-content nowheel nodrag"
       menu={
         menuPosition && (
           <GitlinkNodeMenu
@@ -725,12 +725,23 @@ function GitlinkNodeViewImpl({ id, data, selected }: NodeProps<GitlinkFlowNode>)
                     Selected files are checked for conflicts before writing. Unchecked files
                     are skipped and discarded once the proposal is successfully applied.
                   </p>
+                  {data.gitlinkPendingChanges.some((change) => displayGitlinkPath(change.path) !== change.path) && (
+                    <p className="gitlink-node-review-note">
+                      Quoted paths use visible escapes: <code>{"\\u0020"}</code> means a space.
+                    </p>
+                  )}
                 </div>
               )}
 
               {data.gitlinkPreviewText && (
                 <div className="chat-node-content gitlink-node-proposal-diff">
-                  <pre aria-label="Gitlink file preview"><code>{focusedPreview}</code></pre>
+                  <pre
+                    className="nowheel nodrag"
+                    // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- the complete review must be keyboard reachable inside the scrollable node body
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Gitlink file preview"
+                  ><code>{focusedPreview}</code></pre>
                 </div>
               )}
 

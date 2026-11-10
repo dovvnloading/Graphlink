@@ -604,6 +604,42 @@ describe("GitlinkNodeView", () => {
     expect(screen.getByLabelText("Gitlink file preview").tagName).toBe("PRE");
   });
 
+  it("makes the complete file review keyboard reachable and reserves its gestures for scrolling and selection", async () => {
+    const user = userEvent.setup();
+    const preview = "### long.txt [update]\n" + "reviewed line\\n\n".repeat(100) + "REVIEW TAIL";
+    renderGitlinkNode({ gitlinkPreviewText: preview });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    const review = screen.getByRole("region", { name: "Gitlink file preview" });
+    expect(review).toHaveAttribute("tabindex", "0");
+    expect(review).toHaveClass("nowheel", "nodrag");
+    expect(review.closest(".gitlink-node-content")).toHaveClass("nowheel", "nodrag");
+    review.focus();
+    expect(review).toHaveFocus();
+    expect(review.textContent).toBe(preview);
+  });
+
+  it("distinguishes space counts in file selection and confirmation while sending the exact selected path", async () => {
+    const user = userEvent.setup();
+    const paths = ["a b.txt", "a  b.txt"];
+    const shownPaths = ['"a\\u0020b.txt"', '"a\\u0020\\u0020b.txt"'];
+    const data = renderGitlinkNode({
+      gitlinkPendingChanges: paths.map((path) => ({ path, operation: "create", reason: "fixture", content: "" })),
+      gitlinkPreviewText: shownPaths.map((path) => "### " + path + " [create]\n\nFile creation: absent -> 0 bytes (empty file).").join("\n\n"),
+      gitlinkChangeFingerprint: "fp-spaced-paths",
+      gitlinkLocalRoot: "C:/checkout",
+    });
+    await user.click(screen.getByRole("tab", { name: "Proposal" }));
+    expect(screen.getByText(shownPaths[0])).toBeInTheDocument();
+    expect(screen.getByText(shownPaths[1])).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Include " + shownPaths[0] + " in Apply" }));
+    await user.click(screen.getByRole("button", { name: "Apply selected (1)" }));
+    const confirmation = screen.getByRole("dialog", { name: "Apply Selected Changes?" });
+    expect(within(confirmation).getByText("create — " + shownPaths[1])).toBeInTheDocument();
+    expect(within(confirmation).queryByText("create — " + shownPaths[0])).toBeNull();
+    await user.click(within(confirmation).getByRole("button", { name: "Yes" }));
+    expect(data.onApply).toHaveBeenCalledWith("fp-spaced-paths", [paths[1]]);
+  });
+
   it("does not interpret Markdown fences, links, images or HTML embedded in review text", async () => {
     const user = userEvent.setup();
     const preview = [

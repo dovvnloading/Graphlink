@@ -7290,6 +7290,11 @@ mark.document-view-search-match-current {
   overflow: visible;
 }
 
+/* Review text remains selectable inside React Flow's otherwise draggable card. */
+.gitlink-node-proposal-diff pre {
+  user-select: text;
+}
+
 .gitlink-node-review {
   display: flex;
   flex-direction: column;

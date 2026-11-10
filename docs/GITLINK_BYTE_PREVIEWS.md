@@ -91,7 +91,13 @@ baseline is unavailable and requires a local checkout and regeneration.
 The UI renders review text directly in `<pre><code>` text nodes. File content
 cannot terminate a Markdown fence and add review headings, links, or images.
 Unusual paths are displayed with visible escapes; selection and Apply still
-send the exact original path. The `gitlinkPreviewText` wire field is unchanged.
+send the exact original path. Spaces are shown as `\u0020` in quoted paths, so
+HTML whitespace collapsing cannot hide repeated spaces in selection or
+confirmation labels. Literal quotes and backslashes are escaped too, avoiding
+collisions with names that merely look like escaped text. The review can be
+focused and scrolled with the keyboard, and its wheel/selection gestures are
+reserved for the review instead of moving the canvas. The `gitlinkPreviewText`
+wire field is unchanged.
 
 New reviewed rows include server-held `review_format_version=1`, which is
 covered by the existing full-proposal fingerprint. Reviewed Apply refuses

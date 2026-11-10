@@ -23,6 +23,16 @@ const preview = [
 ].join("\n");
 
 describe("splitGitlinkPreview", () => {
+  it("makes ASCII whitespace unambiguous without colliding with a literal escaped-looking path", () => {
+    expect(displayGitlinkPath("a b.txt")).toBe('"a\\u0020b.txt"');
+    expect(displayGitlinkPath("a  b.txt")).toBe('"a\\u0020\\u0020b.txt"');
+    expect(displayGitlinkPath('"a\\u0020b.txt"')).toBe('"\\"a\\\\u0020b.txt\\""');
+    expect(displayGitlinkPath("dir /file.txt")).toBe('"dir\\u0020/file.txt"');
+    const changes = ["a b.txt", "a  b.txt"].map((path) => ({ path, operation: "create" }));
+    const sections = changes.map(({ path }) => "### " + displayGitlinkPath(path) + " [create]\n\nFile creation: absent -> 0 bytes (empty file).");
+    expect(splitGitlinkPreview(sections.join("\n\n"), changes)).toEqual(sections);
+  });
+
   it("separates the approved files and retains their own diff content", () => {
     const parsed = splitGitlinkPreview(preview, files);
     expect(parsed).not.toBeNull();

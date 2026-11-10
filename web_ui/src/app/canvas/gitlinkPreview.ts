@@ -10,13 +10,14 @@ export interface PreviewChange {
 }
 
 /** Mirror the backend's display_review_path without interpreting file text.
- * Normal ASCII paths stay readable; control and non-ASCII code units are
- * visible JSON escapes, including bidirectional formatting and newlines.
- * Selection still sends the original exact path.
+ * Simple ASCII paths stay readable. Spaces, quotes, backslashes, controls and
+ * non-ASCII text use visible JSON escapes, preventing collapsed whitespace or
+ * escaped-looking literal names from hiding a path difference. Selection
+ * still sends the original exact path.
  */
 export function displayGitlinkPath(path: string): string {
-  if (/^[\x20-\x7e]*$/.test(path)) return path;
-  return JSON.stringify(path).replace(/[\u007f-\uffff]/g, (char) =>
+  if (/^[\x21-\x7e]+$/.test(path) && !/["\\]/.test(path)) return path;
+  return JSON.stringify(path).replace(/[\u0020\u007f-\uffff]/g, (char) =>
     "\\u" + char.charCodeAt(0).toString(16).padStart(4, "0"));
 }
 
