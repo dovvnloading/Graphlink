@@ -11,6 +11,7 @@ test("Cancel leaves every target byte unchanged and never enters the writer", as
   await openProposal(page);
   await page.getByRole("button", { name: "Apply selected (3)", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Apply Selected Changes?" });
+  await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(dialog).toBeHidden();
   const after = await state(request);
@@ -55,6 +56,7 @@ test("an open old confirmation and its old wire fingerprint cannot apply a repla
   await openProposal(page);
   await page.getByRole("button", { name: "Apply selected (3)", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Apply Selected Changes?" });
+  await expect(dialog).toBeVisible();
   const replacement = await action(request, "replace-proposal");
   expect(replacement.fingerprint).not.toBe(before.fingerprint);
   await expect(dialog.getByRole("alert")).toContainText("proposal changed");
@@ -122,7 +124,6 @@ test("newline-only bytes are disclosed in the real UI and an approved action wri
 });
 
 test("long Gitlink review scrolls/selects without moving the canvas and preserves exact spaced-path selection", async ({ page, request }, info) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   const before = await prepare(request, "gitlink-long");
   const intents = collectIntents(page);
   await openApp(page);
@@ -138,16 +139,6 @@ test("long Gitlink review scrolls/selects without moving the canvas and preserve
   const preview = page.getByRole("region", { name: "Gitlink file preview", exact: true });
   const body = page.locator(".gitlink-node-content");
   const viewport = page.locator(".react-flow__viewport");
-  // Opening the long proposal expands the initially framed Setup card. Use
-  // the real viewport control to keep its bottom clear of the floating
-  // composer; body-relative bounds alone do not establish visible text.
-  await page.getByRole("button", { name: "Fit All", exact: true }).click();
-  await expect.poll(async () => body.evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    return rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth
-      && [rect.top + 16, rect.bottom - 16].every((y) =>
-        [rect.left + 16, rect.right - 16].every((x) => element.contains(document.elementFromPoint(x, y))));
-  })).toBe(true);
   const transform = await viewport.evaluate((element) => getComputedStyle(element).transform);
   await expect(preview).toContainText(`### ${singleLabel} [update]`);
   await expect(preview).toContainText("Bytes changed");

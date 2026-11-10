@@ -97,6 +97,7 @@ export async function evidence(
   await testInfo.attach("safety-evidence.json", {
     body: JSON.stringify({ ...metadata, test: testInfo.title, expected, actual: "passed assertions",
       browser: page.context().browser()?.version(), node: process.version,
+      reducedMotion: await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches),
       before, after, ...extra }, null, 2),
     contentType: "application/json",
   });
@@ -104,7 +105,21 @@ export async function evidence(
 }
 
 export async function openProposal(page: Page): Promise<void> {
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.getByRole("tab", { name: "Proposal", exact: true }).click();
+  await expect(page.locator(".gitlink-node-proposal-tab")).toBeVisible();
+  // The Proposal tab expands the initially framed Setup card. Its bottom
+  // must clear the floating composer before any review/Apply interaction:
+  // scrolling an occluded button into view can scroll the React Flow wrapper
+  // temporarily and leave a click aimed at coordinates it immediately resets.
+  // Use ordinary UI navigation and actual hit-tests, never a forced click.
+  await page.getByRole("button", { name: "Fit All", exact: true }).click();
+  await expect.poll(async () => page.locator(".gitlink-node-content").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.top >= 0 && rect.bottom <= innerHeight && rect.left >= 0 && rect.right <= innerWidth
+      && [rect.top + 16, rect.bottom - 16].every((y) =>
+        [rect.left + 16, rect.right - 16].every((x) => element.contains(document.elementFromPoint(x, y))));
+  })).toBe(true);
 }
 
 export async function confirmApply(page: Page): Promise<void> {
