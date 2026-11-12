@@ -89,6 +89,12 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_browser_tests:
+        description: 'Run the optional Chromium browser tests'
+        type: boolean
+        default: false
 
 # ADR-015 stage 15.2: least-privilege token (this workflow only ever reads
 # the checkout - no job pushes, comments, or creates releases), and a
@@ -291,6 +297,8 @@ jobs:
 
   e2e-playwright:
     name: E2E (Playwright boot-smoke)
+    # Chromium is opt-in: ordinary pull requests never launch it.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_browser_tests
     # ubuntu, not windows - see this file's own module comment above for
     # why this suite specifically doesn't need a Windows runner.
     runs-on: ubuntu-latest
