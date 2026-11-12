@@ -103,6 +103,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    # Decides whether the browser tests need to run for this change. A job
+    # skipped by its `if` reports success, so required checks never hang.
+    name: Detect browser-relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      browser: ${{ steps.filter.outputs.browser }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+      - name: Classify the changed files
+        id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          SKIP_IF: '^(docs/.*|.*\.md|LICENSE|CODE_OF_CONDUCT\.md|mutation_tests/.*|tests/.*|backend/tests/.*|contracts/tests/.*|qt_burndown\.json|\.github/workflows/nightly-.*)$'
+        run: |
+          browser=true
+          changed=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            changed=$(git diff --name-only HEAD^1 HEAD)
+          elif [ "$EVENT_NAME" = "push" ] && [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ]; then
+            if git fetch -q --depth=1 origin "$BEFORE"; then changed=$(git diff --name-only "$BEFORE" HEAD); fi
+          fi
+          if [ -n "$changed" ]; then
+            if [ -n "${RUN_IF:-}" ]; then
+              echo "$changed" | grep -qE "$RUN_IF" || browser=false
+            else
+              echo "$changed" | grep -qvE "$SKIP_IF" || browser=false
+            fi
+          fi
+          echo "Changed files:"
+          echo "$changed"
+          echo "browser=$browser" | tee -a "$GITHUB_OUTPUT"
+
   python-tests:
     # ADR-015 stage 15.3: was "Python tests (offscreen)" - a Qt-removal-era
     # name for a job that no longer runs anything Qt-related (the offscreen
@@ -290,6 +327,8 @@ jobs:
         run: npm run check
 
   e2e-playwright:
+    needs: changes
+    if: needs.changes.outputs.browser == 'true'
     name: E2E (Playwright boot-smoke)
     # ubuntu, not windows - see this file's own module comment above for
     # why this suite specifically doesn't need a Windows runner.
