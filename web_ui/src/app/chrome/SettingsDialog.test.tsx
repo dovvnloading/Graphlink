@@ -27,6 +27,7 @@ const snapshot = {
   falNotice: "",
   falBusy: false,
   falSyncResultJson: "",
+  falDiscoveryJson: "",
   falUploadUrl: "",
   secretsEncryptedAtRest: true,
   logLevel: "INFO",
