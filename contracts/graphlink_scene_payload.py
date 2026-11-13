@@ -504,6 +504,12 @@ class SceneNodeRow:
     # themselves never appear in this payload - see the transport-decision
     # comment on backend/canvas.py's SceneDocument.image_assets.
     imageAssetId: str = ""
+    # Fal Media Studio keeps model inputs, queued job references and output
+    # URLs in a bounded JSON state, with catalog/schema results transient.
+    # No binary media, API keys, or credentials are sent over the scene wire.
+    falMediaJson: str = ""
+    falCatalogJson: str = ""
+    falSchemaJson: str = ""
     # R3.25: the ConversationNode's real persisted shape - a growing list of
     # role/content messages, populated for kind=="conversation" rows,
     # defaulted (empty list) for every other kind. The one R3 kind whose own
