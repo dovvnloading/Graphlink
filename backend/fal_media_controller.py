@@ -120,7 +120,11 @@ class FalMediaController:
         })
         await self._publish()
         try:
-            cache_key = (mode, operation, query, cursor)
+            # Rates can be account-specific. A credential switch must never
+            # reuse another account's cached catalog/prices.
+            credential = self.settings.get_fal_api_key()
+            cache_key = (hashlib.sha256(credential.encode("utf-8")).digest(),
+                         mode, operation, query, cursor)
             cached = self._catalog_cache.get(cache_key)
             if cached and time.monotonic() - cached[0] < _CACHE_TTL:
                 response = cached[1]
@@ -269,6 +273,13 @@ class FalMediaController:
             and quote.get("modelId") == model_id
             and quote.get("fingerprint") == _fingerprint(model_id, args)
         ):
+            if quote.get("status") == "ready" and node_id not in self._pending_quotes:
+                # A restored scene may display a persisted quote that cannot
+                # be authorized by this controller. Clear it so the UI offers
+                # a fresh price review instead of a dead confirmation button.
+                media["quote"] = None
+                store_media(node, media)
+                await self._publish()
             raise FalError("Quote expired or inputs changed. Review the cost again before generating.")
         # Consume this approval before ANY await. The in-flight marker lets
         # status refresh distinguish a live POST from a restart-interrupted one.
