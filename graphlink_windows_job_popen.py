@@ -299,8 +299,8 @@ class WindowsJobPopen(subprocess.Popen):
             cwd = os.fsdecode(cwd)
 
         sys.audit("subprocess.Popen", executable, args, cwd, env)
-        job_handle = self._graphlink_guard.duplicate_native_handle()
         try:
+            job_handle = self._graphlink_guard.duplicate_native_handle()
             try:
                 hp, ht, pid, _tid = _create_process_in_job(
                     executable, args, cwd, env, creationflags,
@@ -311,6 +311,8 @@ class WindowsJobPopen(subprocess.Popen):
                 # even if another thread closes the guard meanwhile.
                 _kernel32.CloseHandle(job_handle)
         finally:
+            # Also close child-facing pipe handles if obtaining the Job
+            # Object duplicate failed *before* CreateProcess was attempted.
             self._close_pipe_fds(
                 p2cread, p2cwrite, c2pread, c2pwrite, errread, errwrite,
             )
