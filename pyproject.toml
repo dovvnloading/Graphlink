@@ -204,7 +204,7 @@ source = [
     "graphlink_navigation_pins", "graphlink_note_agent", "graphlink_process_env",
     "graphlink_prompts", "graphlink_scratch_dirs", "graphlink_secrets",
     "graphlink_settings_store", "graphlink_task_config", "graphlink_token_estimator",
-    "graphlink_version", "graphlink_wire_schema",
+    "graphlink_version", "graphlink_wire_schema", "graphlink_windows_job_popen",
 ]
 omit = ["*/tests/*", "*/__pycache__/*"]
 
