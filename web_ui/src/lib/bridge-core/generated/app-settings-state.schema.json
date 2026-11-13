@@ -126,13 +126,19 @@
     "llamaCppNGpuLayers": {
       "type": "integer"
     },
-    "llamaCppNotice": {
-      "type": "string"
-    },
     "llamaCppNThreads": {
       "type": "integer"
     },
+    "llamaCppNotice": {
+      "type": "string"
+    },
     "llamaCppReasoningLevel": {
+      "type": "string"
+    },
+    "llamaCppScanStatus": {
+      "type": "string"
+    },
+    "llamaCppScanSummary": {
       "type": "string"
     },
     "llamaCppScannedModels": {
@@ -140,12 +146,6 @@
         "type": "string"
       },
       "type": "array"
-    },
-    "llamaCppScanStatus": {
-      "type": "string"
-    },
-    "llamaCppScanSummary": {
-      "type": "string"
     },
     "llamaCppTitleModelPath": {
       "type": "string"
@@ -243,17 +243,17 @@
     "ollamaReasoningLevel": {
       "type": "string"
     },
-    "ollamaScannedModels": {
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
-    },
     "ollamaScanStatus": {
       "type": "string"
     },
     "ollamaScanSummary": {
       "type": "string"
+    },
+    "ollamaScannedModels": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
     },
     "providerMode": {
       "type": "string"
