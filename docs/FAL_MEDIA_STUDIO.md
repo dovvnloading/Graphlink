@@ -77,8 +77,11 @@ are fetched again instead of persisting stale prices.
 - While a job is running, the node refuses edits that could change the
   model or input identity of that active job.
 - The app **never auto-retries a paid submission** on reload. If an
-  interruption happens before it receives the remote request ID, it shows
-  an explicit warning to check the Fal dashboard before resubmitting.
+  interruption or network error happens before it receives a remote
+  request ID, the Studio enters a **locked, unconfirmed** state. You must
+  visit your Fal dashboard, check whether the request was accepted, and
+  explicitly acknowledge the outcome to unlock the editor. This protects
+  against paying for the same job twice when a network response was lost.
 - Queue-status polling, manual refresh, and cancellation are not billable
   inference calls. Requests continue remotely if the desktop window is
   closed, and may incur usage charges even if cancellation is attempted.
