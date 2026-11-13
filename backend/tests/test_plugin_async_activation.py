@@ -358,3 +358,64 @@ def test_revoking_a_pending_worker_cancels_registration_and_cleans_up(tmp_path, 
 
     asyncio.run(scenario())
 
+
+
+def test_cross_session_regrant_waits_for_previous_worker_teardown(tmp_path, monkeypatch):
+    """Session B may not start worker #2 until A's worker #1 fully exits."""
+    registry = _metadata_only_registry(tmp_path)
+    _started, release, clients, invocations = _install_delayed_preparer(monkeypatch)
+    bus_a, doc_a, notifications_a, settings = _bus_and_settings(tmp_path)
+    bus_b, doc_b, notifications_b, _settings_b = _bus_and_settings(tmp_path)
+    register_plugins(bus_a, notifications_a, doc_a, settings, plugin_registry=registry)
+    register_plugins(bus_b, notifications_b, doc_b, settings, plugin_registry=registry)
+    release.set()
+
+    teardown_started = threading.Event()
+    finish_teardown = threading.Event()
+
+    async def scenario():
+        await bus_a.dispatch_intent("app-plugins", "setPluginGrant", ["deferred_worker", True])
+        first = clients[0]
+        close_original = first.close
+
+        def slow_close():
+            teardown_started.set()
+            assert finish_teardown.wait(timeout=10), "test teardown was never released"
+            close_original()
+
+        first.close = slow_close
+        revoke = asyncio.create_task(
+            bus_a.dispatch_intent("app-plugins", "setPluginGrant", ["deferred_worker", False])
+        )
+        try:
+            assert await asyncio.wait_for(
+                asyncio.to_thread(teardown_started.wait, 5), timeout=6,
+            )
+            assert "deferred_worker" in registry.draining_worker_ids
+            assert registry.draining_worker_events["deferred_worker"].is_set() is False
+
+            # Another session reapproves while the first OS teardown blocks.
+            approval = asyncio.create_task(
+                bus_b.dispatch_intent("app-plugins", "setPluginGrant", ["deferred_worker", True])
+            )
+            await asyncio.sleep(0.1)
+            assert not approval.done(), "approval must wait for old worker to finish"
+            assert invocations == ["deferred_worker"], "a duplicate worker started during draining"
+        finally:
+            finish_teardown.set()
+        await asyncio.wait_for(revoke, timeout=10)
+        await asyncio.wait_for(approval, timeout=10)
+        assert invocations == ["deferred_worker", "deferred_worker"]
+        assert registry.loaded_plugin_ids == {"deferred_worker"}
+        assert len(registry.worker_clients) == 1
+        assert registry.worker_clients["deferred_worker"] is clients[1]
+        assert "Deferred Widget" in registry.picker_entries
+        assert "deferred_worker" not in registry.draining_worker_ids
+        assert not registry.draining_worker_events
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        finish_teardown.set()
+        for client in clients:
+            client.close()
