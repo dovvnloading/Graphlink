@@ -16,6 +16,7 @@ const FILTER_KIND_LABELS: Record<string, string> = {
   thinking: "Thinking",
   html: "HTML",
   image: "Image",
+  fal_media: "Fal Media Studio",
   conversation: "Conversation",
   web_research: "Web Research",
   plan: "Plan",
