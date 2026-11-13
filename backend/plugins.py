@@ -835,27 +835,30 @@ def register_plugins(
         "app-plugins", "invokePluginIntent", invoke_plugin_intent, args_schema=InvokePluginIntentArgs,
     )
 
+    # Serialize in-flight approval updates. A later revoke must not
+    # overtake a worker startup and publish an inconsistent picker state.
+    grant_activation_lock = asyncio.Lock()
+
     async def set_plugin_grant(plugin_id: str, granted: bool):
-        # ADR-014 stage 14.4: the Settings > Plugins page's one write path -
-        # persists via SettingsManager.set_plugin_grant (single-plugin write,
-        # not a whole-collection replace - see that method's own docstring),
-        # then re-publishes "app-plugins" so both the picker and any
-        # Settings UI observing the same topic pick up the new granted/not-
-        # granted state immediately, same "mutate then re-publish this
-        # topic" shape every other settings-store write in this codebase
-        # already uses (e.g. setMcpServers).
-        plugin_id = str(plugin_id).strip()
-        settings_manager.set_plugin_grant(plugin_id, bool(granted))
-        if granted:
-            # The grant is the first moment an untrusted module may be
-            # imported or its worker launched. Refresh the serializers for
-            # node kinds that only became available after this approval.
-            activate_granted_plugins(plugin_registry, settings_manager)
-            for kind, kind_spec in plugin_registry.node_kinds.items():
-                if kind_spec.serialize is not None:
-                    canvas_document.plugin_node_serializers[kind] = _grant_gated_serialize(
-                        kind_spec.plugin_id, kind_spec.serialize, settings_manager,
-                    )
-        await bus.publish("app-plugins")
+        # User-initiated grants can start an out-of-process Python worker or
+        # import a third-party extension. Neither operation may block the
+        # WebSocket event loop while the user waits for registration.
+        async with grant_activation_lock:
+            plugin_id = str(plugin_id).strip()
+            settings_manager.set_plugin_grant(plugin_id, bool(granted))
+            if granted:
+                # SDK activation owns its own discovery lock. Keep worker
+                # startup and get_registrations RPC in a separate thread.
+                await asyncio.to_thread(
+                    activate_granted_plugins, plugin_registry, settings_manager,
+                )
+                # Mutate this session's canvas serializer hooks only AFTER
+                # the await, back on the owning event-loop thread.
+                for kind, kind_spec in plugin_registry.node_kinds.items():
+                    if kind_spec.serialize is not None:
+                        canvas_document.plugin_node_serializers[kind] = _grant_gated_serialize(
+                            kind_spec.plugin_id, kind_spec.serialize, settings_manager,
+                        )
+            await bus.publish("app-plugins")
 
     bus.register_intent("app-plugins", "setPluginGrant", set_plugin_grant, args_schema=SetPluginGrantArgs)
