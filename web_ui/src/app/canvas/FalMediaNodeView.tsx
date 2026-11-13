@@ -143,7 +143,6 @@ function ModelLibrary({
     (loaded ? catalog.models : []).filter((model) => !favoritesOnly || favorites.has(model.id)),
     sortOrder,
   ), [catalog.models, loaded, favoritesOnly, favorites, sortOrder]);
-  let lastGroup = "";
   return (
     <section className="fal-studio-library" aria-label="Fal model catalog">
       <div className="fal-studio-section-heading">
@@ -184,7 +183,7 @@ function ModelLibrary({
         <div className="fal-studio-compare-disclosure">
           Prices are live unit rates, grouped by billing unit. Final cost varies by output.
         </div>
-        <div className="fal-studio-model-list nowheel nodrag" role="region" aria-label="Available Fal models" tabIndex={0}>
+        <div className="fal-studio-model-list nowheel nodrag" role="region" aria-label="Available Fal models">
           {!loaded && <p className="fal-studio-quiet">Loading models for this category…</p>}
           {loaded && catalog.status === "error" && (
             <div className="fal-studio-inline-alert" role="alert">
@@ -196,10 +195,10 @@ function ModelLibrary({
           {loaded && catalog.pricingWarning && (
             <p className="fal-studio-inline-warning">{catalog.pricingWarning}</p>
           )}
-          {visible.map((model) => {
+          {visible.map((model, index) => {
             const group = comparableGroup(model);
-            const newGroup = sortOrder !== "name" && group !== lastGroup;
-            lastGroup = group;
+            const previousGroup = index > 0 ? comparableGroup(visible[index-1]) : "";
+            const newGroup = sortOrder !== "name" && group !== previousGroup;
             return (
               <div key={model.id}>
                 {newGroup && <div className="fal-studio-price-group">{group === "Unpriced" ? "Price unavailable" : `Billed in ${group}`}</div>}
@@ -287,7 +286,7 @@ function ModelInputs({
       {schema.warning && schema.modelId === draft.modelId && (
         <p className="fal-studio-inline-warning">{schema.warning}</p>
       )}
-      {!!fields.length && (
+      {fields.length > 0 && (
         <div className="fal-studio-schema-grid">
           {fields.map((field) => {
             const val = parsedInputs[field.name] ?? field.default;
@@ -378,9 +377,15 @@ function OutputGallery({ media, id }: { media: MediaState; id: string }) {
                         <img src={proxyUrl} alt={job.prompt || "Generated image"} loading="lazy"
                           referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.hidden = true; }} />
                       ) : item.kind === "video" && safeInlineMediaUrl(item.url) ? (
-                        <video src={item.url} controls playsInline preload="metadata" className="nowheel" />
+                        // Fal doesn't guarantee a VTT/SRT caption track. Never
+                        // invent inaccurate captions for generated video.
+                        // eslint-disable-next-line jsx-a11y/media-has-caption
+                        <video src={item.url} controls playsInline preload="metadata" className="nowheel" aria-label={job.prompt || "Generated video"} />
                       ) : item.kind === "audio" && safeInlineMediaUrl(item.url) ? (
-                        <audio src={item.url} controls preload="none" className="nowheel" />
+                        // Audio generation has no guaranteed transcript;
+                        // prompt and source link are displayed for context.
+                        // eslint-disable-next-line jsx-a11y/media-has-caption
+                        <audio src={item.url} controls preload="none" className="nowheel" aria-label={job.prompt || "Generated audio"} />
                       ) : (
                         <p className="fal-studio-quiet">Inline preview unavailable. Open the source link to view this asset.</p>
                       )}
@@ -407,11 +412,14 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
   const [draft, setDraft] = useState<StudioDraft>(() => fieldsFromMedia(media));
   const [localError, setLocalError] = useState("");
   const [uploadBusy, setUploadBusy] = useState(false);
+  const [clockSeconds, setClockSeconds] = useState(() => Math.floor(Date.now() / 1000));
   const dirtyRef = useRef(false);
   const draftRef = useRef(draft);
-  draftRef.current = draft;
+  useEffect(() => { draftRef.current = draft; }, [draft]);
   const serverDraft = fieldsFromMedia(media);
   const busy = isMediaBusy(media.status);
+  const onSaveDraft = data.onSaveDraft;
+  const onRefresh = data.onRefresh;
 
   useEffect(() => {
     if (equalDraft(serverDraft, draftRef.current)) dirtyRef.current = false;
@@ -432,25 +440,31 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
     const timer = window.setTimeout(() => {
       // Autosave after editing settles. Generation submission ALSO sends
       // its complete draft; billing can never race an outdated autosave.
-      data.onSaveDraft(draft);
+      onSaveDraft(draft);
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [data.onSaveDraft, draft, busy]);
+  }, [onSaveDraft, draft, busy]);
 
   useEffect(() => {
     if (!["queued", "running", "cancelling", "stalled"].includes(media.status)) return;
     // Resume after reopening/restarting. Keep polling bounded even when a
     // remote job is slow; backend deduplicates concurrent polls by node ID.
-    data.onRefresh();
+    onRefresh();
     const timer = window.setInterval(() => {
-      if (document.visibilityState !== "hidden") data.onRefresh();
+      if (document.visibilityState !== "hidden") onRefresh();
     }, 6000);
     return () => window.clearInterval(timer);
-  }, [data.onRefresh, media.status, media.requestId]);
+  }, [onRefresh, media.status, media.requestId]);
+
+  useEffect(() => {
+    if (media.quote?.status !== "ready") return;
+    const timer = window.setInterval(() => setClockSeconds(Math.floor(Date.now() / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [media.quote?.id, media.quote?.status]);
 
   const quote = media.quote && media.quote.status === "ready" ? media.quote : null;
-  const currentQuote = quote && !dirtyRef.current && quote.modelId === draft.modelId &&
-    (quote.expiresAt ?? 0) > Date.now() / 1000 ? quote : null;
+  const currentQuote = quote && equalDraft(draft, serverDraft) && quote.modelId === draft.modelId &&
+    (quote.expiresAt ?? 0) > clockSeconds ? quote : null;
 
   const chooseMode = (mode: MediaMode) => {
     if (mode === draft.mode || busy || uploadBusy) return;
