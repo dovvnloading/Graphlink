@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { QuickSwitcherDialog } from "./QuickSwitcherDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import type { WsTransport } from "../../lib/ws/transport";
@@ -40,6 +40,8 @@ function makeTransport() {
   const intents: unknown[][] = [];
   const resubscribes: string[] = [];
   const listeners = new Map<string, (payload: unknown) => void>();
+  const request = vi.fn<(topic: string, intent: string, args?: unknown[]) => Promise<unknown>>()
+    .mockResolvedValue(undefined);
   const transport = {
     subscribe: (topic: string, listener: (payload: unknown) => void) => {
       listeners.set(topic, listener);
@@ -54,10 +56,15 @@ function makeTransport() {
     fireIntent: (topic: string, intent: string, args: unknown[] = []) => {
       intents.push([topic, intent, args]);
     },
+    request: (topic: string, intent: string, args: unknown[] = []) => {
+      intents.push([topic, intent, args]);
+      return request(topic, intent, args);
+    },
   } as unknown as WsTransport;
   return {
     transport,
     intents,
+    request,
     resubscribes,
     push: (payload: Record<string, unknown>) => listeners.get("app-chat-library")?.(payload),
   };
@@ -157,6 +164,35 @@ describe("QuickSwitcherDialog", () => {
 
     expect(intents).toContainEqual(["app-chat-library", "loadChat", [2]]);
     expect(screen.queryByLabelText("Search graphs by title")).toBeNull();
+  });
+
+  it("never discards a partial graph without an explicit second confirmation", async () => {
+    const { user, push, intents, request } = setup();
+    request.mockResolvedValueOnce("discard-required");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    push(SNAPSHOT);
+    await user.click(screen.getByText("open quick switcher"));
+    await user.click(screen.getByText("Older Graph"));
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(confirm.mock.calls[0][0]).toMatch(/will NOT be saved/);
+    expect(intents).toEqual([["app-chat-library", "loadChat", [2]]]);
+    expect(screen.getByLabelText("Search graphs by title")).toBeInTheDocument();
+    confirm.mockRestore();
+  });
+
+  it("retries only after explicit consent to abandon the incomplete in-memory graph", async () => {
+    const { user, push, intents, request } = setup();
+    request.mockResolvedValueOnce("discard-required");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    push(SNAPSHOT);
+    await user.click(screen.getByText("open quick switcher"));
+    await user.click(screen.getByText("Older Graph"));
+    expect(intents).toEqual([
+      ["app-chat-library", "loadChat", [2]],
+      ["app-chat-library", "loadChat", [2, true]],
+    ]);
+    expect(screen.queryByLabelText("Search graphs by title")).toBeNull();
+    confirm.mockRestore();
   });
 
   it("resets the query on each fresh open", async () => {
