@@ -81,6 +81,9 @@
     "falBusy": {
       "type": "boolean"
     },
+    "falDiscoveryJson": {
+      "type": "string"
+    },
     "falJobsJson": {
       "type": "string"
     },
@@ -123,19 +126,13 @@
     "llamaCppNGpuLayers": {
       "type": "integer"
     },
-    "llamaCppNThreads": {
-      "type": "integer"
-    },
     "llamaCppNotice": {
       "type": "string"
     },
+    "llamaCppNThreads": {
+      "type": "integer"
+    },
     "llamaCppReasoningLevel": {
-      "type": "string"
-    },
-    "llamaCppScanStatus": {
-      "type": "string"
-    },
-    "llamaCppScanSummary": {
       "type": "string"
     },
     "llamaCppScannedModels": {
@@ -143,6 +140,12 @@
         "type": "string"
       },
       "type": "array"
+    },
+    "llamaCppScanStatus": {
+      "type": "string"
+    },
+    "llamaCppScanSummary": {
+      "type": "string"
     },
     "llamaCppTitleModelPath": {
       "type": "string"
@@ -240,17 +243,17 @@
     "ollamaReasoningLevel": {
       "type": "string"
     },
-    "ollamaScanStatus": {
-      "type": "string"
-    },
-    "ollamaScanSummary": {
-      "type": "string"
-    },
     "ollamaScannedModels": {
       "items": {
         "type": "string"
       },
       "type": "array"
+    },
+    "ollamaScanStatus": {
+      "type": "string"
+    },
+    "ollamaScanSummary": {
+      "type": "string"
     },
     "providerMode": {
       "type": "string"
@@ -287,6 +290,7 @@
     "falNotice",
     "falBusy",
     "falSyncResultJson",
+    "falDiscoveryJson",
     "falUploadUrl",
     "secretsEncryptedAtRest",
     "logLevel",
