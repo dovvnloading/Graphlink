@@ -392,22 +392,49 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
     return window.confirm(message);
   }
 
-  function loadChat(id: number) {
+  // #561: on a partially restored graph the backend refuses to save or
+  // navigate. It returns an explicit recovery signal rather than silently
+  // overwriting the original graph. A second request is only sent after the
+  // user has explicitly agreed to discard the *incomplete live copy*.
+  // Never infer consent from the ordinary "save before switching" prompt.
+  const discardIncompletePrompt =
+    "This graph contains missing or unreadable plugin nodes. Discard the incomplete ON-SCREEN copy and switch? " +
+    "Your changes to the incomplete live copy will NOT be saved. " +
+    "The original saved graph (including missing plugin nodes) will remain unchanged.";
+
+  async function loadChat(id: number) {
     if (!confirmNavigation("Open another chat? Current edits will be saved before switching.")) return;
-    transport.fireIntent("app-chat-library", "loadChat", [id]);
-    overlays.close();
+    try {
+      const outcome = await transport.request("app-chat-library", "loadChat", [id]);
+      if (outcome === "discard-required") {
+        if (!window.confirm(discardIncompletePrompt)) return;
+        const retry = await transport.request("app-chat-library", "loadChat", [id, true]);
+        if (retry === "discard-required") return;
+      }
+      overlays.close();
+    } catch (error) {
+      console.error("[chat-library] Could not switch graphs:", error);
+    }
   }
 
-  function newChat() {
+  async function newChat() {
     if (!confirmNavigation("Start a new chat? Your current edits will be saved before switching.")) return;
-    // ADR-020 stage 20.2: newChat's new trailing workspaceId param is
-    // optional/backward-compatible - omitted here whenever "All" is
-    // selected (selectedWorkspaceId === null), which resolves server-side
-    // to the Default workspace exactly like every pre-20.2 caller (e.g.
-    // commands.ts's palette "new chat" command, unaffected by this change).
+    // ADR-020 stage 20.2: workspaceId is optional; for a recovery retry,
+    // pass null explicitly so the final boolean is never confused for an id.
     const args = selectedWorkspaceId === null ? [] : [selectedWorkspaceId];
-    transport.fireIntent("app-chat-library", "newChat", args);
-    overlays.close();
+    try {
+      const outcome = await transport.request("app-chat-library", "newChat", args);
+      if (outcome === "discard-required") {
+        if (!window.confirm(discardIncompletePrompt)) return;
+        const retry = await transport.request(
+          "app-chat-library", "newChat", [selectedWorkspaceId, true],
+        );
+        if (retry === "discard-required") return;
+      }
+      overlays.close();
+    } catch (error) {
+      console.error("[chat-library] Could not start a new graph:", error);
+    }
   }
 
   function selectWorkspace(workspaceId: number | null) {
