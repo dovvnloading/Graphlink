@@ -147,7 +147,7 @@ _SIMPLE_NODE_PY_BODY = textwrap.dedent("""\
 
 
 
-_DEFERRED_IMPORT_PY_BODY = textwrap.dedent("""\\
+_DEFERRED_IMPORT_PY_BODY = textwrap.dedent("""\
     from pathlib import Path
 
     from backend.plugin_sdk import HostContext, PluginNodeSeed
