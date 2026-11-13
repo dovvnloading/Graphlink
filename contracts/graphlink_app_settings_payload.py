@@ -86,6 +86,15 @@ class AppSettingsStatePayload:
     enableSystemPrompt: bool
     notificationPreferences: dict[str, bool]
     githubTokenConfigured: bool
+    # Fal.ai is a separate inference workflow, not a chat provider. The API
+    # key is write-only; only its source and bounded result history cross WS.
+    falApiKeySource: str
+    falJobsJson: str
+    falNotice: str
+    falBusy: bool
+    falSyncResultJson: str
+    falDiscoveryJson: str
+    falUploadUrl: str
     # ADR-004 stage 4.4: True unless DPAPI is unavailable/failing on this
     # system, in which case every secret SettingsManager saves is being
     # written in plaintext - the Settings UI renders a persistent badge

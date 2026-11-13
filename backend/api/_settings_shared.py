@@ -341,3 +341,8 @@ class SettingsSessionState:
     llama_notice: str = ""
     llama_staged_chat_path: str = ""
     llama_staged_title_path: str = ""
+    fal_notice: str = ""
+    fal_busy: bool = False
+    fal_sync_result_json: str = ""
+    fal_discovery_json: str = ""
+    fal_upload_url: str = ""

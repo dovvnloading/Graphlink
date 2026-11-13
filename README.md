@@ -171,6 +171,22 @@ Loads a GGUF file directly (not an Ollama model store). Configure the chat model
 
 OpenAI-Compatible, Anthropic Claude, and Google Gemini are supported, with per-task model selection. Image generation works with OpenAI-Compatible and Google Gemini providers (not Anthropic Claude). Anthropic Claude accepts image attachments but not audio (use Gemini or Ollama for audio).
 
+### Fal.ai — universal media and model inference
+
+**Settings > Fal.ai** provides API-key configuration, arbitrary model IDs
+(including nested routes), **live model discovery, published OpenAPI schemas,
+up-to-date unit pricing, and cost estimates**, synchronous inference and queued jobs for images,
+video, audio, speech, 3D and other Fal-hosted endpoints. Supply the model's
+native JSON arguments and options; manage queued jobs with status refresh,
+result retrieval and cancellation. Generated media URLs and bounded results
+remain available in job history across restarts. The Builder agent also has
+seven approval-gated Fal tools; **every billable call and local file upload
+requires fresh approval**, even in Autopilot.
+
+For large media, install the optional upload/realtime SDK with
+`pip install -e ".[fal]"`. See the [Fal.ai integration guide](docs/FAL_AI.md)
+for setup, cost/privacy considerations, advanced request controls and examples.
+
 ### Environment variables
 
 The app reads these as fallbacks when no key is saved in Settings, or for model discovery. The in-app Settings flow is the primary configuration surface; these mostly matter during development.
@@ -180,6 +196,7 @@ The app reads these as fallbacks when no key is saved in Settings, or for model 
 | `GRAPHLINK_OPENAI_API_KEY` / `OPENAI_API_KEY` | OpenAI-Compatible key |
 | `GRAPHLINK_ANTHROPIC_API_KEY` / `ANTHROPIC_API_KEY` | Anthropic Claude key |
 | `GRAPHLINK_GEMINI_API_KEY` / `GEMINI_API_KEY` | Google Gemini key |
+| `GRAPHLINK_FAL_API_KEY` / `FAL_KEY` | Fal.ai inference and media key (separate from chat mode) |
 | `LLAMA_CPP_MODELS` | Root folder scanned for GGUF files in Llama.cpp mode |
 | `OLLAMA_MODELS` | Override for Ollama's model storage root during model discovery |
 

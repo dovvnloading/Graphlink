@@ -163,8 +163,8 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
   // SettingsDialog.tsx is a JSX inline arrow-function body ending in `)}`,
   // never `);` - a shape the old regex's required trailing `;` could never
   // match at all, independent of the comment-latching issue above. That
-  // silently dropped 22 of the file's 33 real call sites. This pins the
-  // full count (verified by hand against the file: 33 `fireIntent(`
+  // silently dropped 22 of the file's original 33 real call sites. The
+  // Fal.ai added seven inference actions plus four catalog/pricing intents (five call sites: search and pagination): 45 `fireIntent(` occurrences.
   // occurrences, all real calls, no bare mentions in comments) so a future
   // regression that drops any of them fails loudly instead of the guard's
   // other assertions just quietly evaluating fewer sites.
@@ -172,10 +172,10 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
     const sites = collectFireIntentCallSites().filter((s) =>
       s.file.replace(/\\/g, "/").endsWith("chrome/SettingsDialog.tsx"),
     );
-    expect(sites).toHaveLength(33);
+    expect(sites).toHaveLength(45);
     // Spot-check a few of the specific call sites that were among the 22
     // previously hidden by the `)}` JSX-arrow-body gap.
-    for (const intent of ["setTheme", "setLlamaCppNCtx", "pullOllamaModel", "setActiveSection"]) {
+    for (const intent of ["setTheme", "setLlamaCppNCtx", "pullOllamaModel", "setActiveSection", "submitFalJob", "cancelFalJob", "uploadFalFile", "searchFalModels", "inspectFalModel", "getFalModelPricing", "estimateFalModelCost"]) {
       expect(sites.some((s) => s.intent === intent)).toBe(true);
     }
   });

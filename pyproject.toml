@@ -45,6 +45,9 @@ dependencies = [
 # for newer Python versions, so requiring it would break installs for most users.
 [project.optional-dependencies]
 llamacpp = ["llama-cpp-python"]
+# fal-client is only needed for direct Fal CDN uploads / realtime sessions.
+# All ordinary inference/queue methods use the already-declared requests dependency.
+fal = ["fal-client"]
 # pywebview requires an OS-native window engine. Windows has pythonnet
 # through pywebview; Linux must opt into non-Qt GTK/PyGObject, and standalone
 # macOS Python needs Cocoa/WebKit PyObjC bindings. Do not force GTK builds

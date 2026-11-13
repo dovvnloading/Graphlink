@@ -35,6 +35,13 @@ export interface AppSettingsState {
   enableSystemPrompt: boolean;
   notificationPreferences: Record<string, boolean>;
   githubTokenConfigured: boolean;
+  falApiKeySource: string;
+  falJobsJson: string;
+  falNotice: string;
+  falBusy: boolean;
+  falSyncResultJson: string;
+  falDiscoveryJson: string;
+  falUploadUrl: string;
   secretsEncryptedAtRest: boolean;
   logLevel: string;
   autoModelPolicy: string;
@@ -104,6 +111,13 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["enableSystemPrompt", "b", 0],
   ["notificationPreferences", { d: "b" }, 0],
   ["githubTokenConfigured", "b", 0],
+  ["falApiKeySource", "s", 0],
+  ["falJobsJson", "s", 0],
+  ["falNotice", "s", 0],
+  ["falBusy", "b", 0],
+  ["falSyncResultJson", "s", 0],
+  ["falDiscoveryJson", "s", 0],
+  ["falUploadUrl", "s", 0],
   ["secretsEncryptedAtRest", "b", 0],
   ["logLevel", "s", 0],
   ["autoModelPolicy", "s", 0],

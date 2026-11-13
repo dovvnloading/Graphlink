@@ -75,6 +75,27 @@
     "enableSystemPrompt": {
       "type": "boolean"
     },
+    "falApiKeySource": {
+      "type": "string"
+    },
+    "falBusy": {
+      "type": "boolean"
+    },
+    "falDiscoveryJson": {
+      "type": "string"
+    },
+    "falJobsJson": {
+      "type": "string"
+    },
+    "falNotice": {
+      "type": "string"
+    },
+    "falSyncResultJson": {
+      "type": "string"
+    },
+    "falUploadUrl": {
+      "type": "string"
+    },
     "geminiStaticImageModels": {
       "items": {
         "type": "string"
@@ -264,6 +285,13 @@
     "enableSystemPrompt",
     "notificationPreferences",
     "githubTokenConfigured",
+    "falApiKeySource",
+    "falJobsJson",
+    "falNotice",
+    "falBusy",
+    "falSyncResultJson",
+    "falDiscoveryJson",
+    "falUploadUrl",
     "secretsEncryptedAtRest",
     "logLevel",
     "autoModelPolicy",
