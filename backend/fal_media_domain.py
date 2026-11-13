@@ -140,11 +140,14 @@ def _safe_url(value: object) -> str:
         return ""
     try:
         parsed = urlsplit(value)
+        # .port can itself throw (e.g. https://host:not-a-port). The entire
+        # URL is untrusted model output; never crash a paid result handler
+        # because a model returned one malformed attachment.
+        if parsed.scheme != "https" or not parsed.netloc or not parsed.hostname:
+            return ""
+        if parsed.username or parsed.password or parsed.port not in (None, 443):
+            return ""
     except ValueError:
-        return ""
-    if parsed.scheme != "https" or not parsed.netloc or not parsed.hostname:
-        return ""
-    if parsed.username or parsed.password or parsed.port not in (None, 443):
         return ""
     return value
 
