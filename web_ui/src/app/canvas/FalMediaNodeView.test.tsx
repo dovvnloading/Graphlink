@@ -170,6 +170,15 @@ describe("Fal Media Studio node", () => {
     expect(funcs.onGenerate).not.toHaveBeenCalled();
   });
 
+  it("checks a stranded submitting state without automatically rebilling", async () => {
+    const { funcs } = setup({ mediaOverride: {
+      status: "submitting", modelId: "fal-ai/model-economy", requestId: "",
+    } });
+    await waitFor(() => expect(funcs.onRefresh).toHaveBeenCalledOnce());
+    expect(screen.getAllByText(/Submitting to Fal/).length).toBeGreaterThan(0);
+    expect(funcs.onGenerate).not.toHaveBeenCalled();
+  });
+
   it("protects against ambiguous paid resubmission until dashboard acknowledgement", async () => {
     const { user, funcs } = setup({ mediaOverride: {
       status: "unconfirmed",

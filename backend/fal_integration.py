@@ -9,6 +9,7 @@ Optional fal-client unlocks direct CDN uploads and realtime WebSocket sessions.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 import time
@@ -127,11 +128,23 @@ def _queue_params(options: dict | None) -> dict[str, str | int]:
     webhook = options.get("webhook_url")
     if webhook is not None:
         from urllib.parse import urlsplit
-        parsed = urlsplit(webhook) if isinstance(webhook, str) else None
-        # HTTPS avoids transmitting outputs over cleartext. Local Graphlink
-        # cannot receive a public webhook; the user must supply their own.
-        if not parsed or parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        try:
+            parsed = urlsplit(webhook) if isinstance(webhook, str) else None
+            host = (parsed.hostname or "").lower() if parsed else ""
+            port = parsed.port if parsed else None
+        except ValueError:
+            raise FalError("webhook_url must be a public HTTPS URL.") from None
+        # A webhook is delivered by Fal's servers. Never allow the caller to
+        # target loopback, literal private IPs, or local-only hostnames.
+        if (not parsed or parsed.scheme != "https" or not host
+                or parsed.username or parsed.password or port not in (None, 443)
+                or host == "localhost" or host.endswith((".localhost", ".local"))):
             raise FalError("webhook_url must be a public HTTPS URL.")
+        try:
+            if not ipaddress.ip_address(host).is_global:
+                raise FalError("webhook_url must be a public HTTPS URL.")
+        except ValueError:
+            pass  # DNS hostname; not a literal IP address.
         params["fal_webhook"] = webhook
     length = options.get("max_queue_length")
     if length is not None:
@@ -195,20 +208,33 @@ class FalClient:
         try:
             response = self.session.request(
                 method, url, json=arguments, headers=auth_headers,
-                timeout=self.timeout, allow_redirects=False,
+                timeout=self.timeout, allow_redirects=False, stream=True,
             )
         except requests.RequestException as exc:
             raise FalError(f"Could not reach fal.ai ({type(exc).__name__}).") from None
         with response:
             if not 200 <= response.status_code < 300:
-                # The API might echo the submitted prompt/key in validation
-                # errors, so never send raw error bodies to agent/UI/logs.
+                # Never echo a provider body: validation failures may include
+                # submitted prompts, URLs, or API credentials.
                 raise FalError(f"fal.ai returned HTTP {response.status_code} for {method} {origin.split('//')[1]}.")
-            if len(response.content) > _MAX_RESPONSE_BYTES:
-                raise FalError("fal.ai returned a result larger than 4 MiB; retrieve media from its output URL.")
+            limit_error = "fal.ai returned a result larger than 4 MiB; retrieve media from its output URL."
+            length = response.headers.get("Content-Length")
             try:
-                return response.json()
-            except (ValueError, requests.exceptions.JSONDecodeError):
+                if length is not None and int(length) > _MAX_RESPONSE_BYTES:
+                    raise FalError(limit_error)
+            except ValueError:
+                pass  # Unknown/invalid length; the streaming bound still applies.
+            payload = bytearray()
+            try:
+                for chunk in response.iter_content(chunk_size=65536):
+                    if len(payload) + len(chunk) > _MAX_RESPONSE_BYTES:
+                        raise FalError(limit_error)
+                    payload.extend(chunk)
+            except requests.RequestException as exc:
+                raise FalError(f"fal.ai response interrupted ({type(exc).__name__}).") from None
+            try:
+                return json.loads(payload)
+            except (ValueError, UnicodeError):
                 raise FalError("fal.ai returned an invalid JSON response.") from None
 
     def search_models(self, query: str = "", *, category: str = "", limit: int = 20,

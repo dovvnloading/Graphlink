@@ -77,6 +77,10 @@ class FalMediaController:
         self.settings = settings_manager
         self._catalog_generation: dict[str, int] = {}
         self._schema_generation: dict[str, int] = {}
+        # Approvals never survive controller recreation or session restore.
+        self._quote_generation: dict[str, int] = {}
+        self._pending_quotes: dict[str, str] = {}
+        self._submissions_in_flight: set[str] = set()
         self._active_polls: set[str] = set()
         self._catalog_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
 
@@ -116,7 +120,11 @@ class FalMediaController:
         })
         await self._publish()
         try:
-            cache_key = (mode, operation, query, cursor)
+            # Rates can be account-specific. A credential switch must never
+            # reuse another account's cached catalog/prices.
+            credential = self.settings.get_fal_api_key()
+            cache_key = (hashlib.sha256(credential.encode("utf-8")).digest(),
+                         mode, operation, query, cursor)
             cached = self._catalog_cache.get(cache_key)
             if cached and time.monotonic() - cached[0] < _CACHE_TTL:
                 response = cached[1]
@@ -213,6 +221,9 @@ class FalMediaController:
         model_id = model_path(media["modelId"])
         args = request_arguments(media)
         fingerprint = _fingerprint(model_id, args)
+        seq = self._quote_generation.get(node_id, 0) + 1
+        self._quote_generation[node_id] = seq
+        self._pending_quotes.pop(node_id, None)
         media["quote"] = {"status": "loading"}
         store_media(node, media)
         await self._publish()
@@ -220,7 +231,7 @@ class FalMediaController:
             cost = await asyncio.to_thread(_quote_cost, self._client(), model_id)
         except (FalError, ValueError, TypeError) as exc:
             live = self._live(node_id)
-            if live is not None and live is node:
+            if live is node and self._quote_generation.get(node_id) == seq:
                 failed = read_media(live)
                 failed["quote"] = None
                 failed["error"] = str(exc)[:250]
@@ -228,13 +239,17 @@ class FalMediaController:
                 await self._publish()
             return
         live = self._live(node_id)
-        if live is None:
+        if live is not node or self._quote_generation.get(node_id) != seq:
             return
         current = read_media(live)
-        if current["modelId"] != model_id or _fingerprint(model_id, request_arguments(current)) != fingerprint:
+        if current["status"] in _ACTIVE or current["modelId"] != model_id:
             return
+        if _fingerprint(model_id, request_arguments(current)) != fingerprint:
+            return
+        nonce = secrets.token_urlsafe(24)
+        self._pending_quotes[node_id] = nonce
         current["quote"] = {
-            "status": "ready", "id": secrets.token_urlsafe(24),
+            "status": "ready", "id": nonce,
             "modelId": model_id, "fingerprint": fingerprint,
             "expiresAt": int(time.time()) + 180, **cost,
         }
@@ -253,55 +268,100 @@ class FalMediaController:
             isinstance(approval_id, str) and approval_id
             and quote.get("status") == "ready"
             and secrets.compare_digest(str(quote.get("id") or ""), approval_id)
+            and secrets.compare_digest(self._pending_quotes.get(node_id, ""), approval_id)
             and quote.get("expiresAt", 0) >= time.time()
             and quote.get("modelId") == model_id
             and quote.get("fingerprint") == _fingerprint(model_id, args)
         ):
-            raise FalError("Quote expired or inputs changed. Review the cost again before generating.")
-        media.update({"status": "submitting", "requestId": "", "queuePosition": 0,
-                      "error": "", "quote": None})
-        store_media(node, media)  # consume quote BEFORE awaiting network
-        await self._publish()
-        try:
-            response = await asyncio.to_thread(
-                self._client().submit, model_id, args,
-                options={"store_io": False},
-            )
-        except (FalError, TypeError, ValueError) as exc:
-            live = self._live(node_id)
-            if live is not None and live is node:
-                failed = read_media(live)
-                # A dropped POST response can mean Fal accepted a paid job
-                # but the client never received its UUID. Automatically
-                # allowing another submission risks double billing.
-                failed["status"] = "unconfirmed"
-                failed["error"] = (
-                    "Submission outcome is unknown. Fal may have accepted "
-                    "and charged this request. Check the Fal dashboard "
-                    "before unlocking this Studio to submit another. "
-                    f"({type(exc).__name__})"
-                )
-                store_media(live, failed)
+            if quote.get("status") == "ready" and node_id not in self._pending_quotes:
+                # A restored scene may display a persisted quote that cannot
+                # be authorized by this controller. Clear it so the UI offers
+                # a fresh price review instead of a dead confirmation button.
+                media["quote"] = None
+                store_media(node, media)
                 await self._publish()
-            return
-        request_id = str(response["request_id"])
-        # Even if the user deleted the node while Fal accepted the job, keep
-        # its ID in Settings job history; never silently lose a paid request.
-        await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
-                                model_id, request_id, str(response.get("status") or "IN_QUEUE"))
-        live = self._live(node_id)
-        if live is not None and live is node:
-            pending = read_media(live)
-            pending.update({"requestId": request_id, "status": "queued",
-                            "queuePosition": int(response.get("queue_position") or 0)})
-            store_media(live, pending)
+            raise FalError("Quote expired or inputs changed. Review the cost again before generating.")
+        # Consume this approval before ANY await. The in-flight marker lets
+        # status refresh distinguish a live POST from a restart-interrupted one.
+        self._pending_quotes.pop(node_id, None)
+        self._submissions_in_flight.add(node_id)
+        try:
+            media.update({"status": "submitting", "requestId": "", "queuePosition": 0,
+                          "error": "", "quote": None})
+            store_media(node, media)
             await self._publish()
+            try:
+                response = await asyncio.to_thread(
+                    self._client().submit, model_id, args,
+                    options={"store_io": False},
+                )
+            except (FalError, TypeError, ValueError) as exc:
+                live = self._live(node_id)
+                if live is node:
+                    failed = read_media(live)
+                    # A dropped POST response may mean Fal accepted a paid
+                    # job. A normal retry could double-bill the user.
+                    failed["status"] = "unconfirmed"
+                    failed["error"] = (
+                        "Submission outcome is unknown. Fal may have accepted "
+                        "and charged this request. Check the Fal dashboard "
+                        "before unlocking this Studio to submit another. "
+                        f"({type(exc).__name__})"
+                    )
+                    store_media(live, failed)
+                    await self._publish()
+                return
+
+            request_id = str(response["request_id"])  # validated by FalClient.submit
+            position = response.get("queue_position")
+            if isinstance(position, bool) or not isinstance(position, int) or position < 0:
+                position = 0
+            # Save the accepted request ID *before* the fallible Settings
+            # ledger write. Even if the disk is full, users can track a paid
+            # job from its Studio and will not be stuck in "submitting".
+            live = self._live(node_id)
+            if live is node:
+                pending = read_media(live)
+                pending.update({"requestId": request_id, "status": "queued",
+                                "queuePosition": position})
+                store_media(live, pending)
+                await self._publish()
+            try:
+                # Deleted nodes still get a ledger entry when storage works.
+                await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
+                                        model_id, request_id, str(response.get("status") or "IN_QUEUE"))
+            except Exception as exc:
+                logger.warning("Could not record accepted Fal job in settings (%s).", type(exc).__name__)
+                live = self._live(node_id)
+                if live is node and read_media(live)["requestId"] == request_id:
+                    warning = read_media(live)
+                    warning["error"] = (
+                        "Fal accepted this job but Settings history could not be saved. "
+                        "Keep this Studio and copy its Job ID for recovery."
+                    )
+                    store_media(live, warning)
+                    await self._publish()
+        finally:
+            self._submissions_in_flight.discard(node_id)
 
     async def refresh(self, node_id: str) -> None:
         node = require_node(self.document.nodes, node_id, "fal_media", FalMediaState)
         if node_id in self._active_polls:
             return  # One network request at a time per node.
         media = read_media(node)
+        if media["status"] == "submitting":
+            if node_id in self._submissions_in_flight:
+                return  # A POST is actually active in this controller.
+            # An interrupted POST may already have charged the user. Do not
+            # allow a retry without explicit dashboard acknowledgement.
+            media["status"] = "queued" if media["requestId"] else "unconfirmed"
+            if not media["requestId"]:
+                media["error"] = (
+                    "Graphlink restarted during submission. Fal may have accepted "
+                    "this paid request. Check the Fal dashboard before unlocking."
+                )
+            store_media(node, media)
+            await self._publish()
         model_id, request_id = media["modelId"], media["requestId"]
         if not request_id or media["status"] not in {"queued", "running", "cancelling", "stalled"}:
             return
@@ -329,6 +389,8 @@ class FalMediaController:
         if live is None or live is not node or read_media(live)["requestId"] != request_id:
             return
         update = read_media(live)
+        if update["status"] not in {"queued", "running", "cancelling", "stalled"}:
+            return  # Do not overwrite a terminal cancellation with stale polling.
         code = status["status"]
         if code == "COMPLETED":
             if status.get("error"):
@@ -337,12 +399,20 @@ class FalMediaController:
             else:
                 update = completed_media(update, result)
         else:
-            update["status"] = "queued" if code == "IN_QUEUE" else "running"
-            update["queuePosition"] = int(status.get("queue_position") or 0)
+            if update["status"] != "cancelling":
+                update["status"] = "queued" if code == "IN_QUEUE" else "running"
+            position = status.get("queue_position")
+            update["queuePosition"] = (
+                position if isinstance(position, int) and not isinstance(position, bool) and position >= 0 else 0
+            )
             update["error"] = ""
         store_media(live, update)
-        await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
-                                model_id, request_id, code, result)
+        try:
+            await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
+                                    model_id, request_id,
+                                    "FAILED" if code == "COMPLETED" and status.get("error") else code, result)
+        except Exception as exc:
+            logger.warning("Could not update Fal job history (%s).", type(exc).__name__)
         await self._publish()
 
     async def acknowledge_unconfirmed(self, node_id: str) -> None:
@@ -365,11 +435,29 @@ class FalMediaController:
         if media["status"] not in {"queued", "running", "stalled"} or not media["requestId"]:
             raise FalError("No cancellable Fal job exists for this node.")
         model_id, request_id = media["modelId"], media["requestId"]
-        output = await asyncio.to_thread(self._client().cancel, model_id, request_id)
+        # Commit cancellation intent before the network await so two clicks
+        # cannot send overlapping cancellation requests.
+        media["status"] = "cancelling"
+        store_media(node, media)
+        await self._publish()
+        try:
+            output = await asyncio.to_thread(self._client().cancel, model_id, request_id)
+        except (FalError, TypeError, ValueError):
+            live = self._live(node_id)
+            if live is node and read_media(live)["requestId"] == request_id:
+                update = read_media(live)
+                if update["status"] == "cancelling":
+                    update["status"] = "stalled"
+                    update["error"] = "Cancellation could not be confirmed. Check status or retry cancellation."
+                    store_media(live, update)
+                    await self._publish()
+            return
         live = self._live(node_id)
-        if live is None or live is not node or read_media(live)["requestId"] != request_id:
+        if live is not node or read_media(live)["requestId"] != request_id:
             return
         update = read_media(live)
+        if update["status"] not in {"queued", "running", "cancelling", "stalled"}:
+            return
         code = str(output.get("status") or "")
         if code == "OK":
             update["status"] = "cancelled"
@@ -378,6 +466,9 @@ class FalMediaController:
         else:
             update["status"] = "cancelling"
         store_media(live, update)
-        await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
-                                model_id, request_id, code)
+        try:
+            await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
+                                    model_id, request_id, code)
+        except Exception as exc:
+            logger.warning("Could not record Fal cancellation (%s).", type(exc).__name__)
         await self._publish()

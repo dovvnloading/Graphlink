@@ -451,7 +451,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
   }, [onSaveDraft, draft, busy]);
 
   useEffect(() => {
-    if (!["queued", "running", "cancelling", "stalled"].includes(media.status)) return;
+    if (!["submitting", "queued", "running", "cancelling", "stalled"].includes(media.status)) return;
     // Resume after reopening/restarting. Keep polling bounded even when a
     // remote job is slow; backend deduplicates concurrent polls by node ID.
     onRefresh();

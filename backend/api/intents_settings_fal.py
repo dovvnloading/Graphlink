@@ -124,8 +124,15 @@ def register_settings_fal_intents(
             arguments = _json_object(arguments_json, "Model arguments")
             options = _json_object(options_json, "Request options")
             response = FalClient(manager.get_fal_api_key()).submit(model_id, arguments, options=options)
-            run_locked(manager.upsert_fal_job, model_id, response["request_id"], response.get("status", "IN_QUEUE"))
-            return f"Queued Fal.ai request {response['request_id']}."
+            # Fal has already accepted a potentially billable request. A
+            # settings-file error must never hide its recovery ID.
+            request_id = response["request_id"]
+            try:
+                run_locked(manager.upsert_fal_job, model_id, request_id, response.get("status", "IN_QUEUE"))
+            except Exception:
+                return (f"Queued Fal.ai request {request_id}, but Settings history "
+                        "could not be saved. Copy this ID for recovery; do not resubmit.")
+            return f"Queued Fal.ai request {request_id}."
         await _perform(work)
 
     async def run_fal_sync(model_id: str, arguments_json: str, options_json: str = "{}") -> None:
