@@ -569,6 +569,7 @@ class PersistenceOps(SettingsManagerParts):
             "github_access_token": "",
             "fal_api_key": "",
             "fal_jobs": [],
+            "fal_media_favorites": [],
             # R8a: off by default - extended thinking on a paid API is an
             # opt-in cost/latency tradeoff, never a silent default (unlike
             # the local providers above, whose compute is free to the user).
