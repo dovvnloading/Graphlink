@@ -952,6 +952,12 @@ def build_chat_data(
     "no grant store available" and preserves the exact prior ungated
     behavior - real production callers (backend/chat_library.py's saveChat,
     backend/autosave.py's tick) pass a real one."""
+    if document.unrestored_node_count:
+        raise RuntimeError(
+            "Cannot overwrite this saved graph: one or more nodes could not be restored. "
+            "Reinstall or re-enable the missing plugins and reopen the original graph "
+            "before saving; its existing database row is still intact."
+        )
     token = _ACTIVE_SAVE_ASSET_STORE.set(asset_store)
     try:
         return _build_chat_data(document, plugin_registry, settings_manager)
