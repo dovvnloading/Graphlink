@@ -94,4 +94,4 @@ class SettingsManager(
     """
     # Settings fields that hold secrets - encrypted at rest via graphlink_secrets
     # (Windows DPAPI, "dpapi:"-prefixed values; see that module for the tradeoffs).
-    SECRET_KEYS = ("openai_api_key", "anthropic_api_key", "gemini_api_key", "github_access_token")
+    SECRET_KEYS = ("openai_api_key", "anthropic_api_key", "gemini_api_key", "github_access_token", "fal_api_key")
