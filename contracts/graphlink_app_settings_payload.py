@@ -93,6 +93,7 @@ class AppSettingsStatePayload:
     falNotice: str
     falBusy: bool
     falSyncResultJson: str
+    falDiscoveryJson: str
     falUploadUrl: str
     # ADR-004 stage 4.4: True unless DPAPI is unavailable/failing on this
     # system, in which case every secret SettingsManager saves is being
