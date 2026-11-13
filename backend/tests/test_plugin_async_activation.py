@@ -320,3 +320,38 @@ def test_load_waits_for_plugin_registration_before_restoring_saved_node(tmp_path
     for client in clients:
         client.close()
 
+
+def test_revoking_a_pending_worker_cancels_registration_and_cleans_up(tmp_path, monkeypatch):
+    """A cancelled worker startup must never resurrect a revoked plugin."""
+    from backend.plugin_sdk import deactivate_plugin_worker
+
+    registry = _metadata_only_registry(tmp_path)
+    started, release, clients, _invocations = _install_delayed_preparer(monkeypatch)
+    _bus, _doc, _notifications, settings = _bus_and_settings(tmp_path)
+    settings.set_plugin_grant("deferred_worker", True)
+
+    async def scenario():
+        task = activate_granted_plugins(registry, settings)[0]
+        try:
+            assert await asyncio.wait_for(asyncio.to_thread(started.wait, 2), timeout=3)
+            settings.set_plugin_grant("deferred_worker", False)
+            await asyncio.to_thread(deactivate_plugin_worker, registry, "deferred_worker")
+            try:
+                await asyncio.wait_for(task, timeout=3)
+                assert False, "revocation must cancel the pending activation task"
+            except asyncio.CancelledError:
+                pass
+            release.set()
+            for _ in range(200):
+                if clients and clients[0].closed.is_set():
+                    break
+                await asyncio.sleep(0.01)
+            assert clients and clients[0].closed.is_set()
+            assert "deferred_worker" not in registry.loaded_plugin_ids
+            assert "deferred_worker" not in registry.worker_clients
+            assert "Deferred Widget" not in registry.picker_entries
+        finally:
+            release.set()
+
+    asyncio.run(scenario())
+
