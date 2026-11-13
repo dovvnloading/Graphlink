@@ -200,7 +200,7 @@ export function formatMediaPrice(value: number | null | undefined, currency = "U
   return currency === "USD" || !currency ? `$${text}` : `${text} ${currency}`;
 }
 export function isMediaBusy(status: string): boolean {
-  return ["submitting", "queued", "running", "cancelling", "stalled"].includes(status);
+  return ["submitting", "queued", "running", "cancelling", "stalled", "unconfirmed"].includes(status);
 }
 export function editJsonValue(raw: string, key: string, value: unknown): string | null {
   try {
