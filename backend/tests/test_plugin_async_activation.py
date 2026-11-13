@@ -54,7 +54,7 @@ def _install_delayed_preparer(monkeypatch):
     clients: list[_FakeWorkerClient] = []
     invocations: list[str] = []
 
-    def prepare(manifest, plugin_dir):
+    def prepare(manifest, plugin_dir, *, on_client_created=None):
         invocations.append(manifest.id)
         started.set()
         release.wait(timeout=5)
@@ -69,6 +69,9 @@ def _install_delayed_preparer(monkeypatch):
         )
         client = _FakeWorkerClient()
         clients.append(client)
+        if on_client_created is not None and not on_client_created(client):
+            client.close()
+            raise RuntimeError("worker was revoked during preparation")
         return host, client
 
     monkeypatch.setattr(plugin_sdk, "_discover_out_of_process_plugin", prepare)
