@@ -185,7 +185,7 @@ def test_interrupted_submission_never_silently_retries_a_billable_job():
     media["status"] = "submitting"
     restored = _restore_fal_media_payload({"position": {"x": 0, "y": 0},
                                           "node_type": "fal_media", "media": media})
-    assert read_media(restored)["status"] == "failed"
+    assert read_media(restored)["status"] == "unconfirmed"
     assert "Check your Fal dashboard" in read_media(restored)["error"]
 
 
