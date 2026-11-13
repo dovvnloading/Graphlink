@@ -98,7 +98,7 @@ class FalMediaController:
         seq = self._catalog_generation.get(node_id, 0) + 1
         self._catalog_generation[node_id] = seq
         signature = _json({"mode": mode, "operation": operation, "query": query})
-        current = {}
+        current: dict[str, Any] = {}
         try:
             current = json.loads(node.state.catalog_json) if node.state.catalog_json else {}
         except ValueError:
@@ -246,7 +246,7 @@ class FalMediaController:
         media = read_media(node)
         if media["status"] in _ACTIVE:
             raise FalError("This node already has an active generation.")
-        quote = media.get("quote") if isinstance(media.get("quote"), dict) else {}
+        quote: dict[str, Any] = media["quote"] if isinstance(media.get("quote"), dict) else {}
         args = request_arguments(media)
         model_id = model_path(media["modelId"])
         if not (
