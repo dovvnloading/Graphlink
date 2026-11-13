@@ -27,7 +27,12 @@ class FakeResponse:
         self.status_code = status
         self.payload = payload
         self.content = json.dumps(payload).encode()
+        self.headers = {"Content-Type": "application/json"}
         self.lines = lines
+
+    def iter_content(self, chunk_size=65536):
+        for offset in range(0, len(self.content), chunk_size):
+            yield self.content[offset:offset+chunk_size]
 
     def json(self):
         return self.payload
@@ -160,6 +165,51 @@ def test_http_errors_are_sanitized_and_redirects_not_followed():
     c2, _ = client(FakeResponse({"detail": "https://evil.invalid"}, status=302))
     with pytest.raises(FalError, match="302"):
         c2.run("fal-ai/model", {})
+
+
+def test_http_response_is_bounded_while_streaming():
+    class OversizedResponse(FakeResponse):
+        def __init__(self):
+            super().__init__({})
+
+        def iter_content(self, chunk_size=65536):
+            for _ in range(80):
+                yield b"x" * chunk_size
+
+    c, session = client(OversizedResponse())
+    with pytest.raises(FalError, match="larger than 4 MiB"):
+        c.run("fal-ai/model", {})
+    assert session.calls[0][2]["stream"] is True
+
+
+def test_large_http_content_length_is_rejected_before_body_read():
+    response = FakeResponse({"ok": True})
+    response.headers["Content-Length"] = str(8 * 1024 * 1024)
+
+    def forbidden_stream(chunk_size=65536):
+        raise AssertionError("body should not be consumed")
+        yield b""  # pragma: no cover
+
+    response.iter_content = forbidden_stream
+    c, _ = client(response)
+    with pytest.raises(FalError, match="larger than 4 MiB"):
+        c.run("fal-ai/model", {})
+
+
+@pytest.mark.parametrize("webhook", [
+    "https://127.0.0.1/callback",
+    "https://[::1]/callback",
+    "https://10.1.2.3/callback",
+    "https://localhost/callback",
+    "https://my-server.local/callback",
+    "https://example.org:444/callback",
+    "https://example.org:notaport/callback",
+])
+def test_webhook_must_not_target_private_or_local_hosts(webhook):
+    c, session = client()
+    with pytest.raises(FalError, match="public HTTPS"):
+        c.submit("fal-ai/model", {}, options={"webhook_url": webhook})
+    assert session.calls == []
 
 
 def test_success_must_have_valid_request_uuid():
