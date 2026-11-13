@@ -76,7 +76,7 @@ describe("Fal Media Studio view models", () => {
   });
 
   it("only in-flight remote job states are busy", () => {
-    for (const state of ["submitting", "queued", "running", "cancelling"]) expect(isMediaBusy(state)).toBe(true);
-    for (const state of ["idle", "failed", "completed", "cancelled", "stalled"]) expect(isMediaBusy(state)).toBe(false);
+    for (const state of ["submitting", "queued", "running", "cancelling", "stalled"]) expect(isMediaBusy(state)).toBe(true);
+    for (const state of ["idle", "failed", "completed", "cancelled"]) expect(isMediaBusy(state)).toBe(false);
   });
 });
