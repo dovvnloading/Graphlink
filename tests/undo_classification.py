@@ -311,6 +311,15 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "setHasCompletedOnboarding", "B", "preference: first-run wizard's own completion flag, not document content"),
     Classified("app-settings", "setMcpServers", "B", "preference: MCP server list is settings-store configuration, not document content"),
 
+    # -- backend/api/intents_settings_fal.py (app-settings) ------------------
+    Classified("app-settings", "setFalApiKey", "B", "preference: protected, write-only fal API credential"),
+    Classified("app-settings", "clearFalApiKey", "B", "preference: clears a saved fal credential"),
+    Classified("app-settings", "submitFalJob", "B", "run-lifecycle: external billed job, not a graph edit"),
+    Classified("app-settings", "runFalSync", "B", "run-lifecycle: external billed inference, not a graph edit"),
+    Classified("app-settings", "refreshFalJob", "B", "run-lifecycle: query remote status/result"),
+    Classified("app-settings", "cancelFalJob", "B", "run-lifecycle: request remote cancellation"),
+    Classified("app-settings", "uploadFalFile", "B", "run-lifecycle: external media upload, not a graph edit"),
+
     # -- backend/api/intents_settings_api_provider.py (app-settings) --------
     Classified("app-settings", "setViewingApiProvider", "B", "preference: which provider sub-page is viewed"),
     Classified("app-settings", "loadApiModels", "B", "run-lifecycle: fetches a live model catalog"),
