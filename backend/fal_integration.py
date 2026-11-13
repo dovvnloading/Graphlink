@@ -152,7 +152,13 @@ def media_urls(data: Any, limit: int = 20) -> list[str]:
             url = item.get("url")
             if isinstance(url, str) and url.startswith("https://") and len(url) < 4000 and url not in urls:
                 urls.append(url)
-            stack.extend(list(item.values())[:80])
+            for key, value in list(item.items())[:80]:
+                if (key in {"image_url", "video_url", "audio_url", "mesh_url", "file_url", "output_url",
+                             "url", "music_url", "model_url", "texture_url", "download_url"}
+                    and isinstance(value, str) and value.startswith("https://")
+                    and len(value) < 4000 and value not in urls):
+                    urls.append(value)
+                stack.append(value)
         elif isinstance(item, list):
             stack.extend(item[:80])
     return urls
@@ -272,7 +278,8 @@ class FalClient:
         with response:
             if not 200 <= response.status_code < 300:
                 raise FalError(f"fal.ai status stream returned HTTP {response.status_code}.")
-            for line in response.iter_lines(decode_unicode=True):
+            for raw_line in response.iter_lines(decode_unicode=True):
+                line = raw_line.decode("utf-8", "replace") if isinstance(raw_line, bytes) else raw_line
                 if not line or not line.startswith("data:"):
                     continue
                 try:
