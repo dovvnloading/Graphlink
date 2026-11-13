@@ -667,6 +667,81 @@ def test_worker_client_close_is_idempotent(tmp_path):
     assert process.stderr is not None and process.stderr.closed
 
 
+
+def test_worker_reader_drops_idle_notifications_before_queueing(tmp_path):
+    """Idle plugin notifications must never accumulate in the host response queue."""
+    import io
+    import json
+    from unittest.mock import Mock
+
+    import backend.plugin_sdk as worker_sdk
+
+    worker = PluginWorkerClient(plugin_id="idle-reader-fixture", source_dir=tmp_path)
+    notifications = "".join(
+        json.dumps({"jsonrpc": "2.0", "method": "notifications/progress", "params": {"n": n}}) + "\n"
+        for n in range(100)
+    )
+    worker._process = Mock(stdout=io.StringIO(notifications))
+    worker._read_loop()
+    assert worker._responses.qsize() == 1
+    assert worker._responses.get_nowait() is worker_sdk._WORKER_READER_CLOSED
+
+
+def test_worker_reader_queue_is_bounded_for_repeated_matching_responses(tmp_path):
+    """Even responses using the currently pending id cannot grow the queue."""
+    import io
+    import json
+    from unittest.mock import Mock
+
+    import backend.plugin_sdk as worker_sdk
+
+    worker = PluginWorkerClient(plugin_id="duplicate-reader-fixture", source_dir=tmp_path)
+    worker._pending_id = 17
+    frames = "".join(
+        json.dumps({"jsonrpc": "2.0", "id": 17, "result": {"n": n}}) + "\n"
+        for n in range(100)
+    )
+    worker._process = Mock(stdout=io.StringIO(frames))
+    worker._read_loop()
+    queued = []
+    while not worker._responses.empty():
+        queued.append(worker._responses.get_nowait())
+    assert len(queued) <= worker_sdk._MAX_WORKER_PENDING_RESPONSES
+    assert queued[-1] is worker_sdk._WORKER_READER_CLOSED
+
+
+def test_worker_oversize_stdout_frame_is_rejected_before_json_parse(tmp_path, monkeypatch):
+    """One no-newline frame must be refused without allocating or queuing its tail."""
+    import io
+    from unittest.mock import Mock
+
+    import backend.plugin_sdk as worker_sdk
+
+    monkeypatch.setattr(worker_sdk, "_MAX_WORKER_FRAME_CHARS", 64)
+    worker = PluginWorkerClient(plugin_id="oversize-reader-fixture", source_dir=tmp_path)
+    worker._pending_id = 1
+    worker._process = Mock(stdout=io.StringIO("{" + "x" * 256 + "}\n"))
+    worker._process.poll.return_value = None
+    worker._read_loop()
+    assert worker._reader_error and "size limit" in worker._reader_error
+    assert worker.is_connected is False
+    assert worker._responses.get_nowait() is worker_sdk._WORKER_READER_CLOSED
+
+
+def test_worker_stderr_tail_bounds_single_newline_free_line(tmp_path):
+    """A bounded deque still needs a maximum entry size."""
+    import io
+    from unittest.mock import Mock
+
+    import backend.plugin_sdk as worker_sdk
+
+    worker = PluginWorkerClient(plugin_id="stderr-reader-fixture", source_dir=tmp_path)
+    worker._process = Mock(stderr=io.StringIO("x" * 10000))
+    worker._drain_stderr()
+    assert len(worker._stderr_tail) <= 32
+    assert all(len(chunk) <= worker_sdk._MAX_WORKER_STDERR_CHUNK_CHARS for chunk in worker._stderr_tail)
+
+
 # -- F: register_plugin_tools() flows plugin intents to the ToolRegistry ----
 
 
