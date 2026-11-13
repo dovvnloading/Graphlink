@@ -1192,6 +1192,7 @@ def _restore_node(
                     logger.exception(
                         "session load: plugin node of kind %r failed to restore - skipping it", node_type,
                     )
+                    document.unrestored_node_count += 1
                     return None, None
                 return document.register_restored_node(plugin_node), None
         # A saved node whose kind nothing currently registers. It is left out
@@ -1203,6 +1204,7 @@ def _restore_node(
         # because, before this, a plugin that failed discovery made its
         # nodes disappear from the canvas with zero signal anywhere.
         if node_type:
+            document.unrestored_node_count += 1
             logger.warning(
                 "session load: no restorer registered for node kind %r - the node stays in the "
                 "saved row but is not on this canvas (a plugin that failed to load?)", node_type,
