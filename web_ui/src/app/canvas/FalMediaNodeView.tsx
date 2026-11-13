@@ -82,14 +82,14 @@ function dateString(raw: string): string {
   return Number.isNaN(date.valueOf()) ? "" : date.toLocaleString();
 }
 function ModelCard({
-  model, selected, favorite, onSelect, onFavorite, compact = false,
+  model, selected, favorite, onSelect, onFavorite, compact = false, disabled = false,
 }: {
   model: MediaModel; selected: boolean; favorite: boolean;
-  onSelect: () => void; onFavorite: () => void; compact?: boolean;
+  onSelect: () => void; onFavorite: () => void; compact?: boolean; disabled?: boolean;
 }) {
   return (
     <div className={`fal-studio-model-card${selected ? " is-selected" : ""}${compact ? " is-compact" : ""}`}>
-      <button type="button" className="fal-studio-model-pick" onClick={onSelect}
+      <button type="button" className="fal-studio-model-pick" onClick={onSelect} disabled={disabled}
         aria-label={`Select ${model.name}`} aria-pressed={selected}>
         <span className="fal-studio-model-avatar" aria-hidden="true">
           {model.category.includes("video") ? "▣" : model.category.includes("audio") || model.category.includes("speech") ? "♫" : "◈"}
@@ -206,7 +206,7 @@ function ModelLibrary({
                 <ModelCard model={model} selected={draft.modelId === model.id}
                   favorite={favorites.has(model.id)} onSelect={() => onSelect(model)}
                   onFavorite={() => onFavorite(model.id, !favorites.has(model.id))}
-                  compact={favoritesOnly} />
+                  compact={favoritesOnly} disabled={isBusy} />
               </div>
             );
           })}
@@ -542,7 +542,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
               disabled={busy || uploadBusy} onClick={() => chooseOperation(op.id)}>{op.label}</button>
           ))}
         </div>
-        <ModelLibrary draft={draft} catalog={catalog} isBusy={busy}
+        <ModelLibrary draft={draft} catalog={catalog} isBusy={busy || uploadBusy}
           onSearch={data.onSearch} onSelect={chooseModel} onFavorite={data.onFavorite} />
         <div className="fal-studio-rule" />
         <ModelInputs draft={draft} schema={schema} busy={busy || uploadBusy}
