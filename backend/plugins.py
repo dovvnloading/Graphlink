@@ -762,7 +762,7 @@ def register_plugins(
     # separately-supplied reserved-name set.
     if plugin_registry is None:
         plugin_registry = discover_plugins()
-    activate_granted_plugins(plugin_registry, settings_manager)
+    pending_activation = activate_granted_plugins(plugin_registry, settings_manager)
 
     # ADR-014 stage 14.2: populate the live-wire half of the Plugin SDK's
     # generic persistence seam - see SceneDocument.plugin_node_serializers'
@@ -796,6 +796,29 @@ def register_plugins(
     # state for every non-built-in discovered plugin) - see
     # _plugin_grants_payload's own docstring.
     bus.register_topic("app-plugins", lambda: plugins_payload(plugin_registry, settings_manager))
+
+    if pending_activation:
+        async def _finish_background_activation() -> None:
+            # Previously approved workers register off-thread on the
+            # session-startup path. Publish their newly loaded picker entries
+            # and invalidate Builder tool caches once registration finishes.
+            await asyncio.gather(
+                *(asyncio.shield(task) for task in pending_activation),
+                return_exceptions=True,
+            )
+            for kind, kind_spec in plugin_registry.node_kinds.items():
+                if kind_spec.serialize is not None:
+                    canvas_document.plugin_node_serializers[kind] = _grant_gated_serialize(
+                        kind_spec.plugin_id, kind_spec.serialize, settings_manager,
+                    )
+            try:
+                from backend.session_context import get_session_context
+                get_session_context(bus).agent_dispatcher.invalidate_builder_registry()
+            except (LookupError, RuntimeError, AttributeError):
+                pass  # isolated SDK tests have no attached session context
+            await bus.publish("app-plugins")
+
+        asyncio.create_task(_finish_background_activation())
 
     async def execute_plugin(
         plugin_name: str, parent_node_id: str | None = None,
@@ -847,11 +870,13 @@ def register_plugins(
             plugin_id = str(plugin_id).strip()
             settings_manager.set_plugin_grant(plugin_id, bool(granted))
             if granted:
-                # SDK activation owns its own discovery lock. Keep worker
-                # startup and get_registrations RPC in a separate thread.
-                await asyncio.to_thread(
-                    activate_granted_plugins, plugin_registry, settings_manager,
-                )
+                # Out-of-process worker startup is scheduled off the
+                # event loop; wait only for this plugin's registration.
+                # The surrounding lock preserves grant/revoke ordering.
+                pending = activate_granted_plugins(plugin_registry, settings_manager)
+                task = plugin_registry.pending_worker_activations.get(plugin_id)
+                if task is not None and task in pending:
+                    await asyncio.shield(task)
                 # Mutate this session's canvas serializer hooks only AFTER
                 # the await, back on the owning event-loop thread.
                 for kind, kind_spec in plugin_registry.node_kinds.items():
