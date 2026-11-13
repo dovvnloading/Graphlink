@@ -194,6 +194,30 @@ def test_read_loop_never_accepts_boolean_as_a_numeric_rpc_request_id():
     assert client._responses.get_nowait()["result"] == {"correct": True}
 
 
+def test_many_matching_mcp_replies_cannot_exhaust_the_host_response_queue():
+    """Drop duplicate matching-id responses without blocking the reader or EOF."""
+    import io
+    from types import SimpleNamespace
+
+    import backend.mcp_client as mcp_module
+
+    client = McpStdioClient(command="unused")
+    client._pending_id = 1
+    flood = "".join(
+        '{"jsonrpc":"2.0","id":1,"result":{"ok":true}}\n'
+        for _ in range(100)
+    )
+    client._process = SimpleNamespace(stdout=io.StringIO(flood))
+    client._read_loop()
+
+    items = []
+    while not client._responses.empty():
+        items.append(client._responses.get_nowait())
+    assert len(items) <= mcp_module._MAX_PENDING_RESPONSES
+    assert items[-1] is mcp_module._READER_CLOSED
+    assert any(isinstance(item, dict) and item.get("id") == 1 for item in items[:-1])
+
+
 def test_call_tool_returns_the_text_content_as_a_tool_result(fake_fs_server, tmp_path):
     target = tmp_path / "hello.txt"
     target.write_text("hello from disk", encoding="utf-8")
