@@ -35,7 +35,7 @@ def make_client(*, with_key=True):
 
 
 class FakeUploader:
-    calls = []
+    calls: list[str] = []
 
     def __init__(self, key):
         assert key == "fake-fal-key"
