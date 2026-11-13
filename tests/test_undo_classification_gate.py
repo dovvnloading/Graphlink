@@ -291,10 +291,11 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 196 -> 197 when archive restoration added app-chat-library/importWorkspace.
     # 197 -> 204 when first-class fal.ai added seven settings intents.
     # 204 -> 208 when fal.ai live model search/schema/pricing/estimate landed.
-    # 208 -> 216 when Fal Media Studio added eight scene intents:
+    # 208 -> 216 when Fal Media Studio added eight scene intents.
+    # 216 -> 217 when ambiguous billed submissions gained explicit recovery:
     # key storage/clear, queue submit/status/cancel, synchronous run, CDN upload.
-    assert len(real) == 216, (
-        f"expected exactly 216 real registered intents, found {len(real)} - "
+    assert len(real) == 217, (
+        f"expected exactly 217 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"
