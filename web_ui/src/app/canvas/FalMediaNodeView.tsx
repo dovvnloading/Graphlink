@@ -32,6 +32,7 @@ export interface FalMediaNodeData extends Record<string, unknown> {
   onGenerate: (approvalId: string) => void;
   onRefresh: () => void;
   onCancel: () => void;
+  onAcknowledge: () => void;
   onDelete: () => void;
 }
 export type FalMediaFlowNode = Node<FalMediaNodeData, "fal_media">;
@@ -489,6 +490,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
     media.status === "cancelling" ? "Cancellation requested" :
     media.status === "stalled" ? "Connection interrupted" :
     media.status === "failed" ? "Generation failed" :
+    media.status === "unconfirmed" ? "Check Fal dashboard" :
     media.status === "cancelled" ? "Job cancelled" :
     media.status === "completed" ? "Creation ready" : "Ready to create";
 
@@ -551,13 +553,30 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
               <small>{draft.modelId}</small>
             </div>
           ) : <p className="fal-studio-quiet">Choose a model to review its cost and generate.</p>}
-          {!!(localError || media.error) && (
+          {!!(localError || (media.status === "unconfirmed" ? "" : media.error)) && (
             <div role="alert" className="fal-studio-inline-alert">
               <strong>{media.status === "failed" ? "The generation did not complete" : "Action needed"}</strong>
               <p>{localError || media.error}</p>
             </div>
           )}
-          {showQueue ? (
+          {media.status === "unconfirmed" ? (
+            <div className="fal-studio-job-progress" role="alert">
+              <strong>Submission outcome unknown</strong>
+              <p>Fal may have accepted and charged your last request, but Graphlink did not receive a job ID.
+                Do not submit it again until you have checked your Fal account.</p>
+              <a href="https://fal.ai/dashboard" target="_blank" rel="noreferrer"
+                className="fal-studio-dashboard-link">Open Fal dashboard ↗</a>
+              <div className="fal-studio-action-row">
+                <button type="button" className="fal-studio-button-outline"
+                  onClick={() => {
+                    if (window.confirm(
+                      "Have you checked the Fal dashboard for this generation? Only unlock if you have verified the previous submission's outcome. This will not cancel a remote job."
+                    )) data.onAcknowledge();
+                  }}>I've checked — unlock the Studio</button>
+              </div>
+              <small>Recovery requires your confirmation. Graphlink will never automatically retry an uncertain paid request.</small>
+            </div>
+          ) : showQueue ? (
             <div className="fal-studio-job-progress" role="status" aria-live="polite">
               <div className="fal-studio-progress-dots"><i/><i/><i/></div>
               <strong>{statusText}</strong>
@@ -623,6 +642,7 @@ function equalProps(prev: Readonly<NodeProps<FalMediaFlowNode>>, next: Readonly<
     prev.data.onGenerate === next.data.onGenerate &&
     prev.data.onRefresh === next.data.onRefresh &&
     prev.data.onCancel === next.data.onCancel &&
+    prev.data.onAcknowledge === next.data.onAcknowledge &&
     prev.data.onDelete === next.data.onDelete;
 }
 export const FalMediaNodeView = memo(FalMediaNodeViewImpl, equalProps);
