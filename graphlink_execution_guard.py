@@ -56,6 +56,8 @@ import logging
 import threading
 import sys
 
+_PLATFORM_IS_WINDOWS = sys.platform == "win32"
+
 logger = logging.getLogger(__name__)
 
 # ADR-005 Decision #2's own example figure ("up to 2 GB RAM"). A generous
@@ -155,6 +157,15 @@ if sys.platform == "win32":
     _kernel32.TerminateJobObject.argtypes = [_wintypes.HANDLE, _wintypes.UINT]
     _kernel32.CloseHandle.restype = _wintypes.BOOL
     _kernel32.CloseHandle.argtypes = [_wintypes.HANDLE]
+    _kernel32.GetCurrentProcess.restype = _wintypes.HANDLE
+    _kernel32.GetCurrentProcess.argtypes = []
+    _kernel32.DuplicateHandle.restype = _wintypes.BOOL
+    _kernel32.DuplicateHandle.argtypes = [
+        _wintypes.HANDLE, _wintypes.HANDLE, _wintypes.HANDLE,
+        ctypes.POINTER(_wintypes.HANDLE), _wintypes.DWORD,
+        _wintypes.BOOL, _wintypes.DWORD,
+    ]
+    _DUPLICATE_SAME_ACCESS = 0x00000002
 
     _JobObjectExtendedLimitInformation = 9
     _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
@@ -224,6 +235,29 @@ if sys.platform == "win32":
             # this module, not just the one that happened to add its own
             # locking.
             self._lock = threading.Lock()
+
+        def duplicate_native_handle(self) -> int:
+            """Own a stable job handle throughout a native CreateProcessW call.
+
+            The caller MUST CloseHandle() the duplicate. If a concurrent
+            Stop closes the original guard mid-launch, the duplicate keeps
+            the Job Object alive until creation finishes; after the last
+            handle closes, the new child is killed by KILL_ON_JOB_CLOSE.
+            """
+            with self._lock:
+                if self._handle is None:
+                    raise ExecutionGuardUnavailable("Windows execution guard is already closed.")
+                current = _kernel32.GetCurrentProcess()
+                duplicated = _wintypes.HANDLE()
+                if not _kernel32.DuplicateHandle(
+                    current, self._handle, current, ctypes.byref(duplicated),
+                    0, False, _DUPLICATE_SAME_ACCESS,
+                ):
+                    raise ExecutionGuardUnavailable(
+                        f"Could not duplicate Windows Job Object handle ({ctypes.get_last_error()}); "
+                        "refusing unguarded execution."
+                    )
+                return int(duplicated.value)
 
         def assign(self, pid: int) -> None:
             if self._handle is None:
@@ -451,3 +485,25 @@ def create_execution_guard(
          whether it exited on its own or is being forcibly stopped. Safe to
          call on a guard whose process already exited cleanly."""
     return _create_platform_guard(memory_limit_bytes, active_process_limit)
+
+
+def spawn_guarded_subprocess(guard: ExecutionResourceGuard, *args, **kwargs):
+    """Create a process without a Windows Popen-to-Job-Object execution gap.
+
+    Production Windows guards use native creation-time job assignment.
+    Test doubles and POSIX guards retain ordinary Popen semantics, so
+    existing lifecycle and POSIX process-group tests remain meaningful.
+    """
+    import subprocess
+
+    if _PLATFORM_IS_WINDOWS and isinstance(guard, _WindowsJobObjectGuard):
+        from graphlink_windows_job_popen import WindowsJobPopen
+
+        return WindowsJobPopen(*args, guard=guard, **kwargs)
+    return subprocess.Popen(*args, **kwargs)
+
+
+def assign_guarded_subprocess(guard: ExecutionResourceGuard, process) -> None:
+    """Only post-assign subprocesses not already attached atomically."""
+    if getattr(process, "_graphlink_atomic_job", None) is not True:
+        guard.assign(process.pid)
