@@ -146,9 +146,16 @@ def test_approval_revoked_during_background_start_drops_worker(tmp_path, monkeyp
 
 
 def test_grant_intent_waits_for_worker_off_thread_and_updates_picker(tmp_path, monkeypatch):
+    from unittest.mock import Mock
+    from backend.session_context import SessionContext, attach_session_context
+
     registry = _metadata_only_registry(tmp_path)
     started, release, clients, invocations = _install_delayed_preparer(monkeypatch)
     bus, document, notifications, settings = _bus_and_settings(tmp_path)
+    dispatcher = Mock()
+    attach_session_context(
+        bus, SessionContext(agent_dispatcher=dispatcher, canvas_document=document),
+    )
 
     async def scenario():
         register_plugins(bus, notifications, document, settings, plugin_registry=registry)
@@ -169,6 +176,7 @@ def test_grant_intent_waits_for_worker_off_thread_and_updates_picker(tmp_path, m
 
     asyncio.run(scenario())
     assert invocations == ["deferred_worker"]
+    assert dispatcher.invalidate_builder_registry.call_count == 1
     for client in clients:
         client.close()
 
