@@ -1190,6 +1190,39 @@ describe("Fal.ai settings page", () => {
     return fixture;
   }
 
+  it("searches current model metadata, selects an endpoint and inspects pricing without submitting it", async () => {
+    const { user, intents, push } = await goToFal();
+    await user.type(screen.getByPlaceholderText("e.g. text to video, music, image editing"), "text to video");
+    await user.click(screen.getByRole("button", { name: "Search Catalog" }));
+    expect(intents).toContainEqual(["app-settings", "searchFalModels", ["text to video", "", 20, ""]]);
+
+    act(() => push({
+      ...snapshot,
+      activeSection: "fal.ai",
+      falDiscoveryJson: JSON.stringify({
+        kind: "models",
+        data: {
+          models: [{ endpoint_id: "minimax/h3-max/text-to-video",
+            metadata: { display_name: "H3 Max", category: "text-to-video" } }],
+          next_cursor: "Mg==",
+          has_more: true,
+        },
+      }),
+    }));
+    expect(screen.getByText("H3 Max")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Use This Model" }));
+    expect(screen.getByPlaceholderText("fal-ai/flux/schnell")).toHaveValue("minimax/h3-max/text-to-video");
+    await user.click(screen.getByRole("button", { name: "Inspect Selected Model / Schema" }));
+    await user.click(screen.getByRole("button", { name: "Check Current Pricing" }));
+    await user.click(screen.getByRole("button", { name: "Estimate Cost" }));
+    expect(intents).toContainEqual(["app-settings", "inspectFalModel", ["minimax/h3-max/text-to-video"]]);
+    expect(intents).toContainEqual(["app-settings", "getFalModelPricing", ["minimax/h3-max/text-to-video"]]);
+    expect(intents).toContainEqual([
+      "app-settings", "estimateFalModelCost", ["minimax/h3-max/text-to-video", 1, "historical_api_price"],
+    ]);
+    expect(intents.some((intent) => intent[1] === "runFalSync" || intent[1] === "submitFalJob")).toBe(false);
+  });
+
   it("never displays a secret but permits explicit key replacement and clear", async () => {
     const { user, intents, push } = await goToFal();
     expect(screen.getByText(/No API key configured/)).toBeInTheDocument();
