@@ -301,6 +301,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "generateFalMedia", "B", "run-lifecycle: user-confirmed billable remote inference"),
     Classified("scene", "refreshFalMedia", "B", "run-lifecycle: remote queued job status/result refresh"),
     Classified("scene", "cancelFalMedia", "B", "run-lifecycle: request remote job cancellation"),
+    Classified("scene", "acknowledgeFalMediaSubmission", "B", "run-lifecycle: manual unlock after checking unconfirmed remote billing"),
 
     # -- backend/api/intents_settings_general.py (app-settings) -------------
     Classified("app-settings", "setActiveSection", "B", "preference: which Settings page is open"),
