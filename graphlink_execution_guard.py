@@ -92,14 +92,22 @@ DEFAULT_CPU_SECONDS = 60
 DEFAULT_FILE_SIZE_LIMIT_BYTES = 1 * 1024 * 1024 * 1024  # 1 GiB
 
 
+class ExecutionGuardUnavailable(RuntimeError):
+    """Windows required job-object limits could not be established or attached.
+
+    Callers must refuse the operation and terminate an already-spawned child:
+    returning a no-op guard would falsely claim resource limits were active.
+    """
+
+
 class ExecutionResourceGuard:
-    """No-op base: what non-Windows platforms get in this stage (the POSIX
-    tier is ADR-005 stage 5.3), and what Windows itself falls back to if
-    job-object creation fails for any reason. A guard that cannot enforce
-    limits must never block execution outright - the pre-existing,
-    unenforced behavior is the safe fallback, not a hard failure, matching
-    this codebase's established graceful-degradation precedent (DPAPI
-    falling back to plaintext off-Windows rather than refusing to save)."""
+    """No-op base, primarily used by isolated tests and unsupported platforms.
+
+    Windows production must NEVER fall back to this class when a requested
+    Job Object limit fails: create_execution_guard raises
+    ExecutionGuardUnavailable instead. POSIX keeps its existing rlimit
+    best-effort policy, which has a separate platform-specific threat model.
+    """
 
     def popen_kwargs(self) -> dict:
         """Extra kwargs to merge into the `subprocess.Popen(...)` call this
@@ -219,21 +227,18 @@ if sys.platform == "win32":
 
         def assign(self, pid: int) -> None:
             if self._handle is None:
-                return
+                raise ExecutionGuardUnavailable("Windows execution resource guard is already closed.")
             proc_handle = _kernel32.OpenProcess(_PROCESS_ACCESS_FOR_JOB_ASSIGNMENT, False, pid)
             if not proc_handle:
-                logger.warning(
-                    "execution guard: OpenProcess failed for pid %s (error %s) - "
-                    "this child will run WITHOUT resource caps",
-                    pid, ctypes.get_last_error(),
+                raise ExecutionGuardUnavailable(
+                    f"Windows execution guard could not open child pid {pid} "
+                    f"(error {ctypes.get_last_error()}); refusing unguarded execution."
                 )
-                return
             try:
                 if not _kernel32.AssignProcessToJobObject(self._handle, proc_handle):
-                    logger.warning(
-                        "execution guard: AssignProcessToJobObject failed for pid "
-                        "%s (error %s) - this child will run WITHOUT resource caps",
-                        pid, ctypes.get_last_error(),
+                    raise ExecutionGuardUnavailable(
+                        f"Windows execution guard could not attach child pid {pid} "
+                        f"(error {ctypes.get_last_error()}); refusing unguarded execution."
                     )
             finally:
                 _kernel32.CloseHandle(proc_handle)
@@ -264,12 +269,10 @@ if sys.platform == "win32":
     ) -> ExecutionResourceGuard:
         handle = _kernel32.CreateJobObjectW(None, None)
         if not handle:
-            logger.warning(
-                "execution guard: CreateJobObjectW failed (error %s) - "
-                "falling back to no resource caps for this run",
-                ctypes.get_last_error(),
+            raise ExecutionGuardUnavailable(
+                "Windows execution guard could not create a Job Object "
+                f"(error {ctypes.get_last_error()}); refusing unguarded execution."
             )
-            return ExecutionResourceGuard()
 
         info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
         flags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -284,13 +287,12 @@ if sys.platform == "win32":
         if not _kernel32.SetInformationJobObject(
             handle, _JobObjectExtendedLimitInformation, ctypes.byref(info), ctypes.sizeof(info)
         ):
-            logger.warning(
-                "execution guard: SetInformationJobObject failed (error %s) - "
-                "falling back to no resource caps for this run",
-                ctypes.get_last_error(),
-            )
+            error = ctypes.get_last_error()
             _kernel32.CloseHandle(handle)
-            return ExecutionResourceGuard()
+            raise ExecutionGuardUnavailable(
+                "Windows execution guard could not set Job Object limits "
+                f"(error {error}); refusing unguarded execution."
+            )
 
         return _WindowsJobObjectGuard(handle)
 
