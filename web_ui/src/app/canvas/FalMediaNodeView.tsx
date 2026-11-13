@@ -2,6 +2,7 @@ import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { withAuthToken } from "../../lib/auth/token";
 import { NodeShell } from "./NodeShell";
+import { FalMediaUploader } from "./FalMediaUploader";
 import { useLodVisibility } from "./useLodVisibility";
 import {
   MEDIA_OPERATIONS, comparableGroup, editJsonValue, formatMediaPrice,
@@ -234,9 +235,10 @@ function ModelLibrary({
 }
 
 function ModelInputs({
-  draft, schema, busy, setPrompt, setJson, onInspect,
+  draft, schema, busy, uploadDisabled, setPrompt, setJson, onInspect, onUploadBusy,
 }: {
-  draft: StudioDraft; schema: MediaSchema; busy: boolean;
+  draft: StudioDraft; schema: MediaSchema; busy: boolean; uploadDisabled: boolean;
+  onUploadBusy: (value: boolean) => void;
   setPrompt: (text: string) => void; setJson: (text: string) => void;
   onInspect: () => void;
 }) {
@@ -326,6 +328,10 @@ function ModelInputs({
           })}
         </div>
       )}
+      <FalMediaUploader mode={draft.mode} operation={draft.operation}
+        fields={fields.filter((field) => field.name.endsWith("_url") || field.format === "uri").map((field) => field.name)}
+        argumentsJson={draft.argumentsJson} disabled={uploadDisabled}
+        onJsonChange={setJson} onBusyChange={onUploadBusy} />
       <details className="fal-studio-advanced" open={showAdvanced} onToggle={(event) => {
         setShowAdvanced((event.currentTarget as HTMLDetailsElement).open);
       }}>
@@ -400,6 +406,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
   const schema = useMemo(() => parseMediaSchema(data.schemaJson), [data.schemaJson]);
   const [draft, setDraft] = useState<StudioDraft>(() => fieldsFromMedia(media));
   const [localError, setLocalError] = useState("");
+  const [uploadBusy, setUploadBusy] = useState(false);
   const dirtyRef = useRef(false);
   const draftRef = useRef(draft);
   draftRef.current = draft;
@@ -446,16 +453,16 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
     (quote.expiresAt ?? 0) > Date.now() / 1000 ? quote : null;
 
   const chooseMode = (mode: MediaMode) => {
-    if (mode === draft.mode || busy) return;
+    if (mode === draft.mode || busy || uploadBusy) return;
     updateDraft({ mode, operation: MEDIA_OPERATIONS[mode][0].id,
       modelId: "", modelName: "", argumentsJson: "{}" });
   };
   const chooseOperation = (operation: string) => {
-    if (operation === draft.operation || busy) return;
+    if (operation === draft.operation || busy || uploadBusy) return;
     updateDraft({ operation, modelId: "", modelName: "", argumentsJson: "{}" });
   };
   const chooseModel = (model: MediaModel) => {
-    if (busy) return;
+    if (busy || uploadBusy) return;
     const nextDraft = { ...draftRef.current, modelId: model.id, modelName: model.name, argumentsJson: "{}" };
     dirtyRef.current = true;
     setDraft(nextDraft);
@@ -464,6 +471,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
     setLocalError("");
   };
   const prepare = () => {
+    if (uploadBusy) { setLocalError("Finish the reference upload before generating."); return; }
     if (!draft.modelId) { setLocalError("Choose a model from the catalog first."); return; }
     try {
       const params: unknown = JSON.parse(draft.argumentsJson);
@@ -480,7 +488,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
     setLocalError("");
   };
   const confirmGenerate = () => {
-    if (!currentQuote?.id || busy) return;
+    if (!currentQuote?.id || busy || uploadBusy) return;
     data.onGenerate(currentQuote.id);
   };
   const showQueue = ["submitting", "queued", "running", "cancelling", "stalled"].includes(media.status);
@@ -523,7 +531,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
         <div className="fal-studio-mode-tabs" role="group" aria-label="Media generation type">
           {(["image", "video", "audio"] as const).map((mode) => (
             <button key={mode} type="button" aria-pressed={draft.mode === mode}
-              disabled={busy} onClick={() => chooseMode(mode)}>
+              disabled={busy || uploadBusy} onClick={() => chooseMode(mode)}>
               <span aria-hidden="true">{iconFor(mode)}</span> {mode[0].toUpperCase()+mode.slice(1)}
             </button>
           ))}
@@ -531,13 +539,14 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
         <div className="fal-studio-operation-tabs" role="group" aria-label="Generation workflow">
           {MEDIA_OPERATIONS[draft.mode].map((op) => (
             <button key={op.id} type="button" aria-pressed={draft.operation === op.id}
-              disabled={busy} onClick={() => chooseOperation(op.id)}>{op.label}</button>
+              disabled={busy || uploadBusy} onClick={() => chooseOperation(op.id)}>{op.label}</button>
           ))}
         </div>
         <ModelLibrary draft={draft} catalog={catalog} isBusy={busy}
           onSearch={data.onSearch} onSelect={chooseModel} onFavorite={data.onFavorite} />
         <div className="fal-studio-rule" />
-        <ModelInputs draft={draft} schema={schema} busy={busy}
+        <ModelInputs draft={draft} schema={schema} busy={busy || uploadBusy}
+          uploadDisabled={busy || !draft.modelId} onUploadBusy={setUploadBusy}
           setPrompt={(prompt) => updateDraft({ prompt })}
           setJson={(argumentsJson) => updateDraft({ argumentsJson })}
           onInspect={() => draft.modelId && data.onInspect(draft.modelId)} />
@@ -611,7 +620,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
             )}
             <div className="fal-studio-action-row">
               <button type="button" className="fal-studio-button-primary"
-                disabled={!draft.modelId || media.quote?.status === "loading"}
+                disabled={!draft.modelId || uploadBusy || media.quote?.status === "loading"}
                 onClick={currentQuote ? confirmGenerate : prepare}>
                 {media.quote?.status === "loading" ? "Checking price…" :
                   currentQuote ? "Confirm & generate ↗" : "Review cost & generate ↗"}
