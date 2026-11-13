@@ -293,6 +293,7 @@ py-modules = [
     "graphlink_token_estimator",
     "graphlink_version",
     "graphlink_wire_schema",
+    "graphlink_windows_job_popen",
 ]
 
 [tool.setuptools.packages.find]
@@ -400,6 +401,7 @@ files = [
     "graphlink_token_estimator.py",
     "graphlink_version.py",
     "graphlink_wire_schema.py",
+    "graphlink_windows_job_popen.py",
     # 2026-09-05: the three directories a coverage check found sitting outside
     # the gate - 14 files nobody was checking. plugins/ held six real errors
     # (an unguarded Optional and two unnarrowed node-state reads in the System
