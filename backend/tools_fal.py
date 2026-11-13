@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Any
 
 from backend.fal_integration import FalClient, FalError, media_urls, model_path
 from backend.providers.base import ToolCall, ToolSpec
@@ -23,7 +24,7 @@ _OPTIONS = {
     ),
 }
 _ID = {"type": "string", "description": "UUID returned by fal.submit"}
-_TOOL_DEFINITIONS = (
+_TOOL_DEFINITIONS: tuple[tuple[str, str, dict[str, Any], list[str], str], ...] = (
     ("fal.search_models", "Search Fal's live model registry by keywords/category and get endpoint IDs. Never guesses endpoints.", {
         "query": {"type": "string", "description": "Search text, e.g. text-to-video or speech"},
         "category": {"type": "string", "description": "Optional category, e.g. image-to-video"},
