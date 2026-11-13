@@ -38,8 +38,8 @@ def _suffix(filename: str) -> str | None:
     raw = unquote(filename)
     # Only the file extension is used for the server-side temporary name.
     # Accept Unicode filenames but not path traversal or control characters.
-    if len(raw) > 160 or raw in (".", "..") or any(
-        c in raw for c in ("/", "\\\\", "\\r", "\\n", "\\x00")
+    if len(raw) > 160 or raw in (".", "..") or "/" in raw or chr(92) in raw or any(
+        ord(character) < 32 or ord(character) == 127 for character in raw
     ):
         return None
     suffix = Path(raw).suffix.lower()
