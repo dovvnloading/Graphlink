@@ -546,6 +546,50 @@ def test_write_to_an_already_dead_worker_process_raises_plugin_worker_error_not_
         worker.close()
 
 
+
+def test_worker_stdin_write_completes_normally_with_bounded_writer(tmp_path):
+    import io
+    import json
+    from unittest.mock import Mock
+
+    worker = PluginWorkerClient(plugin_id="normal-write-fixture", source_dir=tmp_path)
+    capture = io.StringIO()
+    worker._process = Mock(stdin=capture)
+    worker._write({"jsonrpc": "2.0", "id": 1, "method": "test", "params": {}})
+    assert json.loads(capture.getvalue())["id"] == 1
+    assert worker._write_failed is False
+
+
+def test_worker_stalled_stdin_write_times_out_and_kills_worker(tmp_path):
+    """The deadline applies to stdin.write/flush, not just response reads."""
+    import threading
+    import time
+    from unittest.mock import Mock
+
+    writer_started = threading.Event()
+    reader_released = threading.Event()
+
+    class UndrainedStdin:
+        def write(self, _payload):
+            writer_started.set()
+            reader_released.wait(timeout=5)
+        def flush(self):
+            return None
+
+    worker = PluginWorkerClient(plugin_id="blocked-write-fixture", source_dir=tmp_path, timeout=0.1)
+    worker._process = Mock(stdin=UndrainedStdin())
+    worker._process.poll.return_value = None
+    worker._process.kill.side_effect = reader_released.set
+    start = time.monotonic()
+    with pytest.raises(PluginWorkerError, match="stdin write timed out"):
+        worker._write({"jsonrpc": "2.0", "id": 1, "method": "test", "params": {}})
+    assert writer_started.is_set()
+    assert reader_released.is_set()
+    assert worker._process.kill.called
+    assert worker._write_failed is True
+    assert worker.is_connected is False
+    assert time.monotonic() - start < 2.0
+
 _SLOW_INTENT_PY_BODY = textwrap.dedent("""\
     import time
 

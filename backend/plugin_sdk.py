@@ -958,6 +958,7 @@ class PluginWorkerClient:
         self._next_id = 0
         self._pending_id: int | None = None
         self._reader_error: str | None = None
+        self._write_failed = False
         self._write_lock = threading.Lock()
         self._call_lock = threading.Lock()
 
@@ -967,6 +968,7 @@ class PluginWorkerClient:
             self._process is not None
             and self._process.poll() is None
             and self._reader_error is None
+            and not self._write_failed
         )
 
     def connect(self) -> None:
@@ -1195,24 +1197,52 @@ class PluginWorkerClient:
 
     def _write(self, message: dict) -> None:
         process = self._process
-        if process is None or process.stdin is None:
+        if process is None:
             raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" is not connected.')
+        stdin_stream = process.stdin
+        if stdin_stream is None:
+            raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" has no input stream.')
+        # A resident plugin may stop draining stdin. A direct write/flush
+        # can then block forever BEFORE call() starts its response timeout,
+        # freezing the FastAPI thread invoking the synchronous plugin factory.
+        # The writer is daemonized but is not *abandoned* on timeout: killing
+        # the worker breaks the OS pipe and lets the writer unwind.
+        payload = json.dumps(message) + "\n"
+        write_timeout = min(max(0.1, self.timeout), 5.0)
         with self._write_lock:
-            try:
-                process.stdin.write(json.dumps(message) + "\n")
-                process.stdin.flush()
-            except (OSError, ValueError) as exc:
-                # ADR-014 review-fix: OSError (BrokenPipeError's own actual
-                # base class) replaces the narrower (BrokenPipeError,
-                # ValueError) this used to catch - empirically, writing to a
-                # crashed worker's stdin raises a PLAIN OSError on Windows
-                # (`[Errno 22] Invalid argument`), not BrokenPipeError, so it
-                # previously escaped uncaught as a raw platform-specific
-                # exception instead of the documented PluginWorkerError every
-                # other failure mode here raises. BrokenPipeError still
-                # matches first where it's the real cause (POSIX); this is a
-                # strict widening, not a behavior change for the case that
-                # already worked.
+            failures: list[BaseException] = []
+
+            def _send() -> None:
+                try:
+                    stdin_stream.write(payload)
+                    stdin_stream.flush()
+                except BaseException as exc:
+                    failures.append(exc)
+
+            writer = threading.Thread(
+                target=_send, name=f"graphlink-plugin-{self.plugin_id}-stdin", daemon=True,
+            )
+            writer.start()
+            writer.join(timeout=write_timeout)
+            if writer.is_alive():
+                self._write_failed = True
+                # No safe future reuse: a partial JSON frame may be stuck
+                # in the OS pipe. Terminate the child *before* anyone tries
+                # to close stdin (which can otherwise wait for its IO lock).
+                guard = self._guard
+                if guard is not None:
+                    guard.close()
+                try:
+                    process.kill()
+                except OSError:
+                    pass  # guard.close() may already have killed the child
+                writer.join(timeout=1.0)
+                raise PluginWorkerError(
+                    f'Plugin worker "{self.plugin_id}" stdin write timed out '
+                    f"after {write_timeout:g}s; worker terminated."
+                )
+            if failures:
+                exc = failures[0]
                 raise PluginWorkerError(
                     f'Plugin worker "{self.plugin_id}" is not accepting input: {exc}'
                 ) from exc
