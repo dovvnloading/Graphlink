@@ -1784,19 +1784,22 @@ def discover_plugins(
 
 
 def deactivate_plugin_worker(registry: PluginRegistry, plugin_id: str) -> tuple[str, ...]:
-    """Revoke a resident worker without holding the global lock across OS IO.
+    """Retire live and still-starting workers before reporting consent revoked.
 
-    Executable registrations disappear atomically under the SDK lock, but
-    TOML manifest metadata stays visible as ungranted in Settings. Worker
-    termination runs outside the lock to keep unrelated plugin discovery and
-    WebSocket/Builder initialization responsive.
+    The SDK lock guards only the registry mutation/reservation snapshot;
+    OS process shutdown (including a slow Popen) occurs OUTSIDE that lock.
+    A provisional reservation is registered before connect() can spawn, so
+    a concurrent revocation either kills the existing process or prevents
+    any future spawn after the revocation request.
     """
     with _REGISTRY_CACHE_LOCK:
         pending = registry.pending_worker_activations.get(plugin_id)
+        reservation = registry.pending_worker_reservations.get(plugin_id)
         worker = registry.worker_clients.pop(plugin_id, None)
         retired_kinds: tuple[str, ...] = ()
-        if worker is not None:
+        if worker is not None or reservation is not None or pending is not None:
             registry.draining_worker_ids.add(plugin_id)
+        if worker is not None:
             retired_kinds = tuple(
                 kind for kind, spec in registry.node_kinds.items()
                 if spec.plugin_id == plugin_id
@@ -1815,28 +1818,28 @@ def deactivate_plugin_worker(registry: PluginRegistry, plugin_id: str) -> tuple[
                 spec for spec in registry.intents if spec.plugin_id != plugin_id
             ]
 
-    # An approval may have been revoked while a startup registration task
-    # is still in-flight. Its to_thread cannot be cancelled at the OS level;
-    # cancelling the coroutine ensures it never publishes a late result
-    # and its pending preparation is closed when it eventually completes.
-    if pending is not None and not pending.done():
-        try:
-            pending.get_loop().call_soon_threadsafe(pending.cancel)
-        except RuntimeError:
-            pass  # the session event loop was already closed
-
-    if worker is None:
-        return retired_kinds
     try:
-        worker.close()
+        # Set the cancel bit and close the provisional client first. A
+        # worker stuck in a slow registration RPC is killed immediately,
+        # not only once its asyncio.to_thread operation returns.
+        if reservation is not None:
+            reservation.revoke()
+        if pending is not None and not pending.done():
+            try:
+                pending.get_loop().call_soon_threadsafe(pending.cancel)
+            except RuntimeError:
+                pass  # session event loop already closed
+        if worker is not None:
+            worker.close()
     finally:
         with _REGISTRY_CACHE_LOCK:
             registry.draining_worker_ids.discard(plugin_id)
     return retired_kinds
 
+
 async def _activate_granted_worker_task(
     registry: PluginRegistry, settings_manager, manifest: PluginManifest,
-    builtin_names: frozenset[str],
+    builtin_names: frozenset[str], reservation: _PendingWorkerReservation,
 ) -> None:
     """Prepare a granted worker off-thread; publish its registrations on the loop.
 
@@ -1849,7 +1852,10 @@ async def _activate_granted_worker_task(
     plugin_id = manifest.id
     client: PluginWorkerClient | None = None
     preparation = asyncio.create_task(
-        asyncio.to_thread(_discover_out_of_process_plugin, manifest, manifest.source_dir)
+        asyncio.to_thread(
+            _discover_out_of_process_plugin, manifest, manifest.source_dir,
+            on_client_created=reservation.register,
+        )
     )
     try:
         try:
@@ -1870,10 +1876,11 @@ async def _activate_granted_worker_task(
 
         # Approval may have been revoked while the worker booted. A
         # late result must never install a handler after revocation.
-        if not settings_manager.get_plugin_grants().get(plugin_id, False):
+        if reservation.cancelled or not settings_manager.get_plugin_grants().get(plugin_id, False):
             return
         with _REGISTRY_CACHE_LOCK:
-            if (plugin_id in registry.loaded_plugin_ids
+            if (reservation.cancelled
+                    or plugin_id in registry.loaded_plugin_ids
                     or plugin_id in registry.failed_plugin_ids
                     or plugin_id in registry.draining_worker_ids
                     or plugin_id not in registry.manifests):
@@ -1899,7 +1906,12 @@ async def _activate_granted_worker_task(
             # worker, but its close()/wait() can itself block briefly.
             await asyncio.shield(asyncio.to_thread(client.close))
         with _REGISTRY_CACHE_LOCK:
-            registry.pending_worker_activations.pop(plugin_id, None)
+            # An older, cancelled task must not erase a newer reservation
+            # created by a re-grant racing its async cleanup.
+            if registry.pending_worker_activations.get(plugin_id) is asyncio.current_task():
+                registry.pending_worker_activations.pop(plugin_id, None)
+            if registry.pending_worker_reservations.get(plugin_id) is reservation:
+                registry.pending_worker_reservations.pop(plugin_id, None)
 
 
 def activate_granted_plugins(
@@ -1946,11 +1958,13 @@ def activate_granted_plugins(
                 continue
 
             if loop is not None and manifest.runtime_isolation == "out-of-process":
+                reservation = _PendingWorkerReservation()
                 task = loop.create_task(
                     _activate_granted_worker_task(
-                        registry, settings_manager, manifest, builtin_names,
+                        registry, settings_manager, manifest, builtin_names, reservation,
                     )
                 )
+                registry.pending_worker_reservations[plugin_id] = reservation
                 registry.pending_worker_activations[plugin_id] = task
                 pending.append(task)
                 continue
