@@ -2189,7 +2189,7 @@ def make_load_chat(
     record_saved: Callable[..., None],
     last_saved: dict[str, Any],
     settings_manager: "SettingsManager | None" = None,
-    protect_current_canvas: Callable[[], Awaitable[bool]] | None = None,
+    protect_current_canvas: Callable[..., Awaitable[bool]] | None = None,
 ):
     """Factory for register_chat_library's own loadChat intent - lifted out
     to a top-level function purely to keep register_chat_library itself
@@ -2200,7 +2200,7 @@ def make_load_chat(
     couldn't already reach via bus.chat_save_state, which is the SAME dict
     passed in here as last_saved."""
 
-    async def load_chat(chat_id: int):
+    async def load_chat(chat_id: int, discard_incomplete: bool = False):
         # R6.4: replicates ChatSessionManager.load_chat's own orchestration
         # order (load row -> load notes/pins -> restore) and
         # SceneDeserializer._handle_load_error's "notification, not a
@@ -2245,15 +2245,27 @@ def make_load_chat(
             # Another attached WS tab can still edit the live scene during
             # load_chat_snapshot's await. The final protect and restore must
             # be adjacent, with no intervening await after protection.
-            if protect_current_canvas is not None and not await protect_current_canvas():
-                return
+            if protect_current_canvas is not None:
+                # The ordinary path still insists on a stable save. Only an
+                # explicit, user-confirmed recovery request may abandon a
+                # partially restored *live* scene. It never writes to the
+                # original database row; this is only a navigation opt-in.
+                protected = await (
+                    protect_current_canvas(discard_incomplete=True)
+                    if discard_incomplete is True else protect_current_canvas()
+                )
+                if not protected:
+                    return "discard-required" if canvas_document.unrestored_node_count else None
 
             # Reopening the graph already on screen must not restore the
             # snapshot read BEFORE the protection step. If that step saved
             # unsaved edits, this earlier row is now stale and restoring it
             # would revert the live scene. Global search already has the
             # same "already open" fast path.
-            if canvas_document.current_chat_id == int(chat_id):
+            if (
+                canvas_document.current_chat_id == int(chat_id)
+                and not canvas_document.unrestored_node_count
+            ):
                 return
 
             restore_chat_into_document(
@@ -3109,8 +3121,8 @@ def make_protect_current_canvas(
     _last_saved: dict[str, Any],
     save_chat: Callable[[], Awaitable[bool]],
     settings_manager: "SettingsManager | None" = None,
-) -> Callable[[], Awaitable[bool]]:
-    async def _protect_current_canvas() -> bool:
+) -> Callable[..., Awaitable[bool]]:
+    async def _protect_current_canvas(discard_incomplete: bool = False) -> bool:
         """Save edits and verify the scene is still saved before replacing it.
 
         Other scene-topic intents are not blocked by the library's mutation
@@ -3120,6 +3132,22 @@ def make_protect_current_canvas(
         """
         if canvas_document is None:
             return True
+        if canvas_document.unrestored_node_count:
+            if discard_incomplete is True:
+                # Never call build_chat_data/save_chat on an incomplete scene.
+                # The source row in SQLite remains exactly as it was; only
+                # the ephemeral on-screen partial copy may be cleared.
+                return True
+            if notifications is not None:
+                notifications.show(
+                    "This graph has missing or unreadable plugin nodes. "
+                    "Its original saved graph is still safe. To navigate away, "
+                    "open Chat Library and explicitly confirm discarding this "
+                    "incomplete on-screen copy; edits to this copy will not be saved.",
+                    "warning",
+                )
+                await bus.publish("notification")
+            return False
         for attempt in range(4):
             if not canvas_document.nodes and canvas_document.current_chat_id is None:
                 return True
@@ -3159,9 +3187,9 @@ def make_new_chat(
     resolved_path: Path,
     canvas_document: SceneDocument | None,
     _last_saved: dict[str, Any],
-    _protect_current_canvas: Callable[[], Awaitable[bool]],
+    _protect_current_canvas: Callable[..., Awaitable[bool]],
 ):
-    async def new_chat(workspace_id: int | None = None):
+    async def new_chat(workspace_id: int | None = None, discard_incomplete: bool = False):
         # R6.5: the backend counterpart of legacy's "start with an empty
         # scene" - there is no legacy method this ports 1:1 (Qt's
         # ChatSessionManager has no "new chat" concept at all; a fresh scene
@@ -3201,8 +3229,12 @@ def make_new_chat(
         # Resolve the destination first; another tab can mutate during the
         # workspace lookup's await. The final stable save and clear must
         # happen consecutively on the event loop.
-        if not await _protect_current_canvas():
-            return
+        protected = await (
+            _protect_current_canvas(discard_incomplete=True)
+            if discard_incomplete is True else _protect_current_canvas()
+        )
+        if not protected:
+            return "discard-required" if canvas_document.unrestored_node_count else None
         canvas_document.clear_for_load()
         canvas_document.current_workspace_id = resolved_workspace_id
         # clear_for_load drops current_chat_id, so the save state that
