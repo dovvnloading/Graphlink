@@ -341,6 +341,26 @@ function FalAiPage({
   const [optionsJson, setOptionsJson] = useState('{"priority": "normal", "store_io": false}');
   const [localPath, setLocalPath] = useState("");
   const [fileField, setFileField] = useState("image_url");
+  const [modelSearch, setModelSearch] = useState("");
+  const [modelCategory, setModelCategory] = useState("");
+  const [estimateQuantity, setEstimateQuantity] = useState(1);
+  const [estimateBasis, setEstimateBasis] = useState("historical_api_price");
+  let discovery: { kind: string; data?: unknown; truncated?: boolean } | null = null;
+  try {
+    const parsed: unknown = JSON.parse(state.falDiscoveryJson || "null");
+    if (parsed && typeof parsed === "object" && "kind" in parsed) {
+      discovery = parsed as { kind: string; data?: unknown; truncated?: boolean };
+    }
+  } catch {
+    // Ignore malformed transient discovery JSON without crashing Settings.
+  }
+  type FalModelEntry = { endpoint_id: string; metadata?: {
+    display_name?: string; category?: string; description?: string; status?: string;
+  }};
+  const discovered = discovery?.kind === "models" && discovery.data &&
+    typeof discovery.data === "object" ? discovery.data as {
+      models?: FalModelEntry[]; has_more?: boolean; next_cursor?: string;
+    } : null;
   const [localNotice, setLocalNotice] = useState("");
   let jobs: FalJobSummary[] = [];
   try {
@@ -431,6 +451,92 @@ function FalAiPage({
             Clear Stored Key
           </button>
         </div>
+      </fieldset>
+
+      <fieldset className="settings-fieldset">
+        <legend>Live model discovery &amp; pricing</legend>
+        <p className="settings-field-hint">
+          Search the current Fal catalog and inspect a model's OpenAPI schema before sending
+          model-specific inputs. Price checks and cost estimates do not run an inference or
+          charge for a generation. Estimates are not guaranteed final bills.
+        </p>
+        <label className="settings-field">
+          <span className="settings-field-label">Search models</span>
+          <input className="settings-select" value={modelSearch}
+            placeholder="e.g. text to video, music, image editing"
+            onChange={(event) => setModelSearch(event.target.value)} />
+        </label>
+        <label className="settings-field">
+          <span className="settings-field-label">Category (optional)</span>
+          <input className="settings-select" value={modelCategory}
+            placeholder="text-to-image, image-to-video, text-to-speech..."
+            onChange={(event) => setModelCategory(event.target.value)} />
+        </label>
+        <div className="settings-button-row">
+          <button type="button" className="settings-button settings-button-primary" disabled={state.falBusy}
+            onClick={() => transport.fireIntent("app-settings", "searchFalModels",
+              [modelSearch.trim(), modelCategory.trim(), 20, ""])}>Search Catalog</button>
+          <button type="button" className="settings-button" disabled={state.falBusy || !modelId.trim()}
+            onClick={() => transport.fireIntent("app-settings", "inspectFalModel", [modelId.trim()])}>
+            Inspect Selected Model / Schema
+          </button>
+          <button type="button" className="settings-button" disabled={state.falBusy || !modelId.trim()}
+            onClick={() => transport.fireIntent("app-settings", "getFalModelPricing", [modelId.trim()])}>
+            Check Current Pricing
+          </button>
+        </div>
+        {!!discovered?.models && (
+          <div className="settings-field">
+            <p className="settings-update-status">{discovered.models.length} matching endpoints on this page</p>
+            {discovered.models.filter((m) => typeof m.endpoint_id === "string").map((m) => (
+              <div key={m.endpoint_id} className="settings-field">
+                <span className="settings-field-label">{m.metadata?.display_name || m.endpoint_id}</span>
+                <span className="settings-field-hint">{m.endpoint_id} — {m.metadata?.category || "unknown category"}</span>
+                {!!m.metadata?.description && <p className="settings-field-hint">{m.metadata.description}</p>}
+                <button type="button" className="settings-button"
+                  onClick={() => setModelId(m.endpoint_id)}>Use This Model</button>
+              </div>
+            ))}
+            {discovered.has_more && typeof discovered.next_cursor === "string" && (
+              <button type="button" className="settings-button" disabled={state.falBusy}
+                onClick={() => transport.fireIntent("app-settings", "searchFalModels",
+                  [modelSearch.trim(), modelCategory.trim(), 20, discovered.next_cursor])}>
+                Next Catalog Page
+              </button>
+            )}
+          </div>
+        )}
+        <div className="settings-button-row">
+          <label className="settings-field">
+            <span className="settings-field-label">Cost estimate quantity</span>
+            <input type="number" className="settings-select" min={1} max={1000000}
+              value={estimateQuantity} onChange={(event) => setEstimateQuantity(Number(event.target.value))} />
+          </label>
+          <label className="settings-field">
+            <span className="settings-field-label">Estimate basis</span>
+            <select className="settings-select" value={estimateBasis}
+              onChange={(event) => setEstimateBasis(event.target.value)}>
+              <option value="historical_api_price">Historical cost per API call</option>
+              <option value="unit_price">Cost per billing unit</option>
+            </select>
+          </label>
+          <button type="button" className="settings-button" disabled={state.falBusy || !modelId.trim() ||
+            !Number.isInteger(estimateQuantity) || estimateQuantity < 1 || estimateQuantity > 1000000}
+            onClick={() => transport.fireIntent("app-settings", "estimateFalModelCost",
+              [modelId.trim(), estimateQuantity, estimateBasis])}>Estimate Cost</button>
+        </div>
+        {!!discovery && discovery.kind !== "models" && (
+          <details open className="settings-field">
+            <summary>{discovery.kind === "details" ? "Model metadata / OpenAPI schema" :
+              discovery.kind === "pricing" ? "Current model pricing" : "Cost estimate"}</summary>
+            <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 400, overflow: "auto" }}>
+              {JSON.stringify(discovery.data, null, 2)}
+            </pre>
+            {!!discovery.truncated && (
+              <p className="settings-field-hint">Schema preview is truncated. Consult Fal's official model page.</p>
+            )}
+          </details>
+        )}
       </fieldset>
 
       <fieldset className="settings-fieldset">
