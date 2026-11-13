@@ -73,6 +73,9 @@ def register_fal_media_intents(bus, document, settings_manager) -> None:
     async def refresh_fal_media(node_id: str) -> None:
         await controller.refresh(node_id)
 
+    async def acknowledge_fal_media_submission(node_id: str) -> None:
+        await controller.acknowledge_unconfirmed(node_id)
+
     async def cancel_fal_media(node_id: str) -> None:
         await controller.cancel(node_id)
 
@@ -84,3 +87,4 @@ def register_fal_media_intents(bus, document, settings_manager) -> None:
     bus.register_intent("scene", "generateFalMedia", generate_fal_media)
     bus.register_intent("scene", "refreshFalMedia", refresh_fal_media)
     bus.register_intent("scene", "cancelFalMedia", cancel_fal_media)
+    bus.register_intent("scene", "acknowledgeFalMediaSubmission", acknowledge_fal_media_submission)
