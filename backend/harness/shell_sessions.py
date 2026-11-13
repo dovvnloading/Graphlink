@@ -105,7 +105,26 @@ class LocalSubprocessBackend(ShellBackend):
         except Exception:
             guard.close()
             raise
-        guard.assign(process.pid)
+        try:
+            guard.assign(process.pid)
+        except BaseException:
+            # Do not return a live, unguarded session to the Harness.
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except (OSError, ValueError):
+                        pass
+            guard.close()
+            raise
         self._guards[id(process)] = guard
         return process
 
