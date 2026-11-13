@@ -588,15 +588,17 @@ class TestPythonReplConcurrentStopIsSafe:
 
 
 @WINDOWS_ONLY
-class TestFailOpenFallbackPaths:
-    def test_create_job_object_failure_falls_back_to_the_null_guard(self, monkeypatch):
-        monkeypatch.setattr(guard_module._kernel32, "CreateJobObjectW", lambda *a: None)
-        guard = create_execution_guard()
-        assert type(guard) is ExecutionResourceGuard
-        guard.assign(os.getpid())  # no-op, must not raise
-        guard.close()
+class TestFailClosedGuardPaths:
+    def test_create_job_object_failure_refuses_execution(self, monkeypatch):
+        from graphlink_execution_guard import ExecutionGuardUnavailable
 
-    def test_set_information_job_object_failure_falls_back_and_closes_the_handle(self, monkeypatch):
+        monkeypatch.setattr(guard_module._kernel32, "CreateJobObjectW", lambda *a: None)
+        with pytest.raises(ExecutionGuardUnavailable, match="could not create"):
+            create_execution_guard()
+
+    def test_set_information_job_object_failure_refuses_and_closes_the_handle(self, monkeypatch):
+        from graphlink_execution_guard import ExecutionGuardUnavailable
+
         closed_handles = []
         real_close = guard_module._kernel32.CloseHandle
 
@@ -607,10 +609,11 @@ class TestFailOpenFallbackPaths:
         monkeypatch.setattr(guard_module._kernel32, "SetInformationJobObject", lambda *a: 0)
         monkeypatch.setattr(guard_module._kernel32, "CloseHandle", recording_close)
 
-        guard = create_execution_guard()
-
-        assert type(guard) is ExecutionResourceGuard
-        assert len(closed_handles) == 1, "the job handle CreateJobObjectW allocated must be closed on this fallback path, not leaked"
+        with pytest.raises(ExecutionGuardUnavailable, match="could not set"):
+            create_execution_guard()
+        assert len(closed_handles) == 1, (
+            "the failed Job Object must be closed, not leaked or returned as a no-op guard"
+        )
 
 
 @WINDOWS_ONLY
