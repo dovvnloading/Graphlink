@@ -18,9 +18,11 @@ import json
 import types
 from unittest.mock import patch
 
+import pytest
 
 import api_provider
 import graphlink_task_config as config
+
 from backend.providers import (
     AnthropicProvider,
     CancelToken,
@@ -538,7 +540,7 @@ def test_gemini_stream_translates_tools_into_the_native_function_declarations_sh
 
     assert sse_calls["body"]["tools"] == [{
         "functionDeclarations": [
-            {"name": "echo", "description": "Echoes the given message back.", "parameters": ECHO_TOOL.input_schema},
+            {"name": "echo", "description": "Echoes the given message back.", "parametersJsonSchema": ECHO_TOOL.input_schema},
         ],
     }]
 
@@ -568,7 +570,14 @@ def test_gemini_tool_call_turn_reports_usage(monkeypatch):
     assert events[-1].usage == {"prompt_tokens": 22, "completion_tokens": 6}
 
 
-def test_gemini_round_trips_an_echo_tool_call(monkeypatch):
+@pytest.mark.parametrize("native_id,signature", [("", ""), ("gemini-call-42", "opaque-signed-part")])
+def test_gemini_round_trips_an_echo_tool_call(monkeypatch, native_id, signature):
+    function_call = {"name": "echo", "args": {"message": "hello"}}
+    if native_id:
+        function_call["id"] = native_id
+    part = {"functionCall": function_call}
+    if signature:
+        part["thoughtSignature"] = signature
     calls = []
 
     def fake_stream_sse(url, body, timeout=120, cancel_event=None, api_key=None):
@@ -577,7 +586,7 @@ def test_gemini_round_trips_an_echo_tool_call(monkeypatch):
             # Gemini delivers a function call whole in one part - no
             # incremental args accumulation, unlike OpenAI/Anthropic.
             yield {"candidates": [{"content": {"parts": [
-                {"functionCall": {"name": "echo", "args": {"message": "hello"}}},
+                part,
             ]}, "finishReason": "STOP"}]}
         else:
             yield _gemini_sse_payload({"text": "The echo said: hello"}, finish_reason="STOP")
@@ -594,7 +603,7 @@ def test_gemini_round_trips_an_echo_tool_call(monkeypatch):
     assert len(tool_call_events) == 1
     call = tool_call_events[0].tool_call
     assert isinstance(call, ToolCall)
-    assert call.id  # synthesized (Gemini gives no native id), but non-empty
+    assert call.id == (native_id or "call_0")
     assert call.name == "echo"
     assert call.arguments == {"message": "hello"}
     assert events[-1].text == ""  # a pure tool-call turn has no answer text yet
@@ -603,7 +612,7 @@ def test_gemini_round_trips_an_echo_tool_call(monkeypatch):
     # result, then calls stream() again - proving the round trip.
     messages = [
         {"role": "user", "content": "echo hello"},
-        {"role": "assistant", "content": "", "tool_calls": [{"id": call.id, "name": call.name, "arguments": call.arguments}]},
+        {"role": "assistant", "content": "", "tool_calls": [call.history_entry()]},
         {"role": "tool", "tool_call_id": call.id, "name": "echo", "content": "hello"},
     ]
     events2 = _collect(provider.stream(
@@ -613,13 +622,13 @@ def test_gemini_round_trips_an_echo_tool_call(monkeypatch):
 
     # The second call's contents carry Gemini's native functionCall/
     # functionResponse shapes, not the app's generic dicts verbatim - and
-    # the tool result travels on Gemini's own dedicated "function" role.
+    # the tool result travels in the next user turn.
     second_call_contents = calls[1]["contents"]
     assert second_call_contents[1] == {
         "role": "model",
-        "parts": [{"functionCall": {"name": "echo", "args": {"message": "hello"}}}],
+        "parts": [part],
     }
-    assert second_call_contents[2] == {
-        "role": "function",
-        "parts": [{"functionResponse": {"name": "echo", "response": {"result": "hello"}}}],
-    }
+    response = {"name": "echo", "response": {"result": "hello"}}
+    if native_id:
+        response["id"] = native_id
+    assert second_call_contents[2] == {"role": "user", "parts": [{"functionResponse": response}]}

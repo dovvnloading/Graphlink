@@ -155,9 +155,7 @@ async def run_subagent(
         tool_calls: list[ToolCall] = turn["tool_calls"]
         assistant_message: dict = {"role": "assistant", "content": last_text}
         if tool_calls:
-            assistant_message["tool_calls"] = [
-                {"id": c.id, "name": c.name, "arguments": c.arguments} for c in tool_calls
-            ]
+            assistant_message["tool_calls"] = [call.history_entry() for call in tool_calls]
         messages.append(assistant_message)
         if not tool_calls:
             return last_text

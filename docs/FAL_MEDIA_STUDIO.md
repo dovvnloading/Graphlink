@@ -1,12 +1,12 @@
 # Fal Media Studio
 
-A first-class **canvas node** for image, video and audio generation with Fal.
+A **canvas node** for running models from Fal’s live catalog and inspecting their results.
 The Studio is designed for both one-off creations and a longer creative
 workflow: browse → compare cost → configure → confirm → monitor → review.
 
 ## Launch
 
-1. Configure your Fal.ai key in **Settings → Fal.ai**, or set
+1. For pricing and generation, configure your Fal.ai key in **Settings → Fal.ai**, or set
    `FAL_KEY` / `GRAPHLINK_FAL_API_KEY` in the backend environment.
 2. Open Graphlink's **plugin picker** and select **Fal Media Studio** under
    **Build & Execution**. No node selection is required; the Studio can be
@@ -14,13 +14,18 @@ workflow: browse → compare cost → configure → confirm → monitor → revi
 3. Choose **Image**, **Video**, or **Audio**, and the kind of generation:
    text-to-image, image-to-image, text-to-video, image-to-video,
    video-to-video, text-to-audio, text-to-speech, or audio-to-audio.
+   Choose **All models** to search across every published category. Try
+   “transcription”, “image to 3D”, “background removal” or “LoRA training”.
+   Public catalog search and schema inspection work before you add a key.
 4. Search the live Fal catalog. Model cards expose **verified live unit
    prices** (and their billing units), descriptions, and the original
    endpoint ID. Save models with ☆. Favorites persist between sessions.
 5. Select a model to load its OpenAPI-backed parameter schema. Fill in the
    prompt and other visible controls, or expand **Advanced model JSON** for
    full, model-specific input fields (seeds, resolution, duration, image
-   reference URLs and anything else Fal supports).
+   reference URLs and anything else Fal supports). In **All models**, enter
+   the exact inputs the endpoint declares, including an empty object for
+   models whose inputs are all optional.
 6. Select **Review cost & generate**. The server checks live pricing and
    asks Fal for a per-request estimate. There is no billable call yet.
 7. Select **Confirm & generate**. This is the ONE user-approved, queue-backed
@@ -59,7 +64,7 @@ URL is inserted into the model's chosen input parameter
 The existing advanced parameters stay intact.
 
 Uploads use authenticated `POST /api/fal-media/upload`, with a server-side
-512 MiB maximum, a restricted list of media extensions, temporary-file
+512 MiB maximum, a restricted list of file extensions, temporary-file
 cleanup and the **optional official** `fal-client` Python dependency.
 Install it with `pip install -e ".[fal]"` for large reference media.
 No media bytes appear in the graph state or the canvas WebSocket; only
@@ -68,7 +73,7 @@ explicit, not triggered by choosing a model or browsing the catalog.
 Model-specific format limits still apply. Sensitive files should not be
 uploaded to external services without permission.
 
-## Image, video and audio previews
+## Files, text and structured results
 
 - Images are shown through Graphlink's **authenticated same-origin
   proxy**, which fetches only completed Fal CDN URLs from a particular
@@ -81,6 +86,10 @@ uploaded to external services without permission.
 - Inline video/audio playback is restricted to Fal-owned CDN hosts so a
   model cannot silently trigger browser requests to arbitrary third-party
   domains. A safe external **Open asset** link remains available instead.
+- Meshes, point clouds and other files appear as links. Transcripts,
+  captions, timing information and other structured data have a bounded
+  result preview in the gallery. For an exact field from a long response,
+  use the agent’s `fal.result` tool with the model and request ID.
 - The original HTTPS media links are provided for opening the file
   separately. Remote URL expiry and media browser compatibility are
   governed by Fal and the model, not Graphlink.
@@ -117,7 +126,7 @@ are fetched again instead of persisting stale prices.
 ## Current scope
 
 The Studio covers Fal-hosted inference endpoints surfaced by the public
-Model API, with schema-driven inputs, image/video/audio generation and
+Model API, with schema-driven inputs, media, text and structured data outputs, and
 persistent results. It is not a dedicated visual editor for the parameter
 schema of *every* current and future model; models with complex JSON
 parameters can be used through the advanced editor. Local media

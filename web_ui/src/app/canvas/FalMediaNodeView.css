@@ -104,7 +104,7 @@
 .fal-studio-hero h3 span {color: var(--gl-surface-text-label);}
 .fal-studio-hero > span {font-size: 11px; color: var(--gl-surface-text-secondary);}
 .fal-studio-mode-tabs {
-  display: grid; grid-template-columns: repeat(3, 1fr);
+  display: grid; grid-template-columns: repeat(4, 1fr);
   gap: 5px; margin: 0 24px 10px;
   background: var(--gl-surface-inset);
   border: 1px solid var(--gl-surface-border);
@@ -387,6 +387,8 @@
 .fal-studio-job-heading strong {font-size: 11px;}
 .fal-studio-job-heading time {font-size: 9px; color: var(--gl-surface-text-muted);}
 .fal-studio-job-prompt {font-size: 10px; color: var(--gl-surface-text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin: 9px 0;}
+.fal-studio-result {margin-top: 10px; font-size: 11px; color: var(--gl-surface-text-primary);}
+.fal-studio-result pre {max-height: 200px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere;}
 .fal-studio-asset-grid {display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin-top: 10px;}
 .fal-studio-asset {position: relative; display: flex; flex-direction: column; justify-content: center; min-width: 0; overflow: hidden; background: var(--gl-surface-field); border: 1px solid var(--gl-surface-border); border-radius: 8px;}
 .fal-studio-asset img, .fal-studio-asset video {width: 100%; max-height: 230px; object-fit: contain; display: block; background: var(--gl-surface-inset-deep);}

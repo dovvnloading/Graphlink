@@ -26,7 +26,7 @@ _execute = make_simple_child_node_handler(
 def register(host: HostContext) -> None:
     host.register_builtin_plugin(
         name="Fal Media Studio",
-        description="Generate images, video and audio with live Fal model discovery, price comparison and favorites.",
+        description="Search the Fal model catalog, compare prices, and run models with schema-specific inputs.",
         category="Build & Execution",
         handler=_execute,
         requires_parent=False,

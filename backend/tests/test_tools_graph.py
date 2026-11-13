@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
 
 import pytest
@@ -903,6 +904,37 @@ class TestChatTurnWithTools:
             "the specs must actually reach ChatRequest.tools - the exact gap "
             "this primitive exists to close"
         )
+
+    @pytest.mark.parametrize("provider_name", ["OpenAI-Compatible", "Anthropic Claude", "Google Gemini"])
+    def test_cloud_fal_names_round_trip_through_collisions_and_saved_history(self, monkeypatch, provider_name):
+        from graphlink_model_catalog import ModelRef
+
+        names = ["fal.submit", "fal_submit", "plugin:tools:" + "x" * 64]
+        tools = tuple(ToolSpec(name, "description", {"type": "object"}) for name in names)
+        history = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "old", "name": "fal.submit", "arguments": {"prompt": "fal.submit"}},
+            ]},
+            {"role": "tool", "tool_call_id": "old", "name": "fal.submit", "content": "job"},
+            {"role": "user", "content": "fal.submit"},
+        ]
+        provider = FakeProvider(
+            events=[tool_call_event("new", "fal_submit_1", {"prompt": "fal.submit"})],
+            capabilities=ProviderCapabilities(streaming=True, tools=True),
+        )
+        self._patch_provider(monkeypatch, provider)
+        result = api_provider.chat_turn_with_tools(
+            "task_chat", history, tools, model_ref=ModelRef(provider=provider_name, model_id="test"),
+        )
+        sent = provider.requests[0]
+        wire_names = [tool.name for tool in sent.tools]
+        assert wire_names[:2] == ["fal_submit_1", "fal_submit"]
+        assert all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", name) for name in wire_names)
+        assert sent.messages[0]["tool_calls"][0]["name"] == sent.messages[1]["name"] == wire_names[0]
+        assert sent.messages[0]["tool_calls"][0]["arguments"] == {"prompt": "fal.submit"}
+        assert sent.messages[2] == history[2]
+        assert history[0]["tool_calls"][0]["name"] == history[1]["name"] == "fal.submit"
+        assert result["tool_calls"] == [ToolCall("new", "fal.submit", {"prompt": "fal.submit"})]
 
     def test_a_non_tools_provider_is_rejected_before_any_request(self, monkeypatch):
         provider = FakeProvider(capabilities=ProviderCapabilities(streaming=True, tools=False))

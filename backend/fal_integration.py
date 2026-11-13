@@ -20,6 +20,8 @@ from uuid import UUID
 
 import requests
 
+from backend.fal_results import result_assets
+
 QUEUE_ORIGIN = "https://queue.fal.run"
 SYNC_ORIGIN = "https://fal.run"
 PLATFORM_ORIGIN = "https://api.fal.ai"
@@ -30,6 +32,10 @@ _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 class FalError(RuntimeError):
     """A safe, user-presentable failure (never contains credentials)."""
+
+
+class FalJobFailed(FalError):
+    """A terminal queue failure, distinct from a transient read error."""
 
 
 def model_path(model_id: str) -> str:
@@ -155,40 +161,24 @@ def _queue_params(options: dict | None) -> dict[str, str | int]:
 
 
 def media_urls(data: Any, limit: int = 20) -> list[str]:
-    """Collect likely generated media links from variable model output schemas."""
-    urls: list[str] = []
-    stack = [data]
-    examined = 0
-    while stack and examined < 2000 and len(urls) < limit:
-        item = stack.pop()
-        examined += 1
-        if isinstance(item, dict):
-            url = item.get("url")
-            if isinstance(url, str) and url.startswith("https://") and len(url) < 4000 and url not in urls:
-                urls.append(url)
-            for key, value in list(item.items())[:80]:
-                if (key in {"image_url", "video_url", "audio_url", "mesh_url", "file_url", "output_url",
-                             "url", "music_url", "model_url", "texture_url", "download_url"}
-                    and isinstance(value, str) and value.startswith("https://")
-                    and len(value) < 4000 and value not in urls):
-                    urls.append(value)
-                stack.append(value)
-        elif isinstance(item, list):
-            stack.extend(item[:80])
-    return urls
+    """Return output links in the same order as the Studio and agent asset index."""
+    return [asset["url"] for asset in result_assets(data, limit=limit)]
 
 
 class FalClient:
     """Safe HTTP transport for any fal-hosted model, including custom apps."""
 
     def __init__(self, api_key: str, *, session: requests.Session | None = None, timeout: float = 90.0):
-        if not isinstance(api_key, str) or not api_key.strip():
-            raise FalError("Configure a fal.ai API key in Settings > Fal.ai, or set FAL_KEY.")
-        if any(c in api_key for c in "\r\n"):
+        if not isinstance(api_key, str) or any(c in api_key for c in "\r\n"):
             raise FalError("Invalid fal API key.")
         self._key = api_key.strip()
         self.session = session or requests.Session()
         self.timeout = max(1.0, min(float(timeout), 300.0))
+
+    def _require_key(self) -> str:
+        if not self._key:
+            raise FalError("Configure a fal.ai API key in Settings > Fal.ai, or set FAL_KEY.")
+        return self._key
 
     def _call(self, method: str, origin: str, path: str, *,
               arguments: dict | None = None, params: dict | None = None,
@@ -200,10 +190,10 @@ class FalClient:
         url = origin + "/" + path
         if params:
             url += "?" + urlencode(params)
-        auth_headers = {
-            "Authorization": f"Key {self._key}",
-            "Content-Type": "application/json",
-        }
+        public_catalog = (method, origin, path) == ("GET", PLATFORM_ORIGIN, "v1/models")
+        auth_headers = {"Content-Type": "application/json"}
+        if self._key or not public_catalog:
+            auth_headers["Authorization"] = f"Key {self._require_key()}"
         auth_headers.update(headers or {})
         try:
             response = self.session.request(
@@ -383,7 +373,7 @@ class FalClient:
             status = self.status(model_id, request_id)
             if status["status"] == "COMPLETED":
                 if status.get("error"):
-                    raise FalError("fal.ai reported that this request failed; inspect status logs for details.")
+                    raise FalJobFailed("fal.ai reported that this request failed; inspect status logs for details.")
                 return self.result(model_id, request_id)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -393,6 +383,7 @@ class FalClient:
     def stream_status(self, model_id: str, request_id: str, *,
                       logs: bool = False, timeout: float = 300) -> Iterator[dict]:
         """Stream Fal's native SSE progress without arbitrary URL requests."""
+        self._require_key()
         path = request_path(model_id, request_id) + "/status/stream"
         url = QUEUE_ORIGIN + "/" + path + ("?logs=1" if logs else "")
         try:
@@ -421,6 +412,7 @@ class FalClient:
 
     def upload_file(self, path: str | Path, *, max_bytes: int = 512 * 1024 * 1024) -> str:
         """Upload local media to the fal CDN; requires optional fal-client."""
+        self._require_key()
         filename = Path(path).expanduser()
         if not filename.is_file() or filename.is_symlink():
             raise FalError("Upload path must be a regular, non-symlink file.")
@@ -444,6 +436,7 @@ class FalClient:
 
         The caller owns the connection lifetime; the key stays server-side.
         """
+        self._require_key()
         model_path(model_id)
         if not isinstance(path, str) or not path.startswith("/") or "//" in path or "?" in path:
             raise FalError("Invalid realtime path.")

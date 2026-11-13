@@ -216,18 +216,18 @@ describe("HarnessNodeView", () => {
     expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
   });
 
-  it("sends the Python disclosure identity on denial and refuses a missing identity", async () => {
+  it.each(["python.exec", "fal.submit"])("sends the %s disclosure identity on denial and refuses a missing identity", async (tool) => {
     const user = userEvent.setup();
     const data = makeData({
       harnessAwaitingApproval: true,
-      harnessApprovalToolName: "python.exec",
-      harnessApprovalId: "python-disclosure-denied",
+      harnessApprovalToolName: tool,
+      harnessApprovalId: "disclosure-denied",
     });
     const { unmount } = renderHarness(data);
     await user.click(screen.getByRole("button", { name: "Deny" }));
-    expect(data.onDenyTool).toHaveBeenCalledExactlyOnceWith("python-disclosure-denied");
+    expect(data.onDenyTool).toHaveBeenCalledExactlyOnceWith("disclosure-denied");
     unmount();
-    const missing = makeData({ harnessAwaitingApproval: true, harnessApprovalToolName: "python.exec" });
+    const missing = makeData({ harnessAwaitingApproval: true, harnessApprovalToolName: tool });
     renderHarness(missing);
     expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();

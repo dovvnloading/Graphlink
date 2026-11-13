@@ -112,11 +112,8 @@ class ToolSpec:
 
     `input_schema` is a JSON Schema object (Draft 2020-12, matching
     `respond_json`'s contract in 7.3) describing the call's arguments -
-    NOT a full Draft 2020-12 feature set on every provider: Gemini's
-    `parameters` field is an OpenAPI 3.0 Schema subset (no `$defs`, no
-    `additionalProperties`), a known, documented impedance mismatch rather
-    than a bug - callers targeting Gemini should keep schemas to the
-    OpenAPI-compatible subset (type/properties/required/enum/items).
+    each provider ultimately validates the subset it supports. Gemini uses
+    its parametersJsonSchema field to preserve open objects and nested inputs.
 
     Deliberately NO `annotations` (read_only/destructive/idempotent/
     requires_approval) field yet - the ADR's own §1 sketch marks that
@@ -135,13 +132,24 @@ class ToolCall:
     requested - `arguments` is always an already-parsed dict, regardless of
     whether the provider streamed it as JSON text fragments (OpenAI,
     Anthropic) or delivered it whole (Ollama, Gemini). `id` correlates this
-    call to the tool-result message fed back on the next turn; Ollama and
-    Gemini don't provide one natively, so their providers synthesize a
-    stable per-turn id (see each provider's own comment)."""
+    call to the tool-result message fed back on the next turn; providers that receive no
+    native ID synthesize a per-turn ID."""
 
     id: str
     name: str
     arguments: dict
+    # Gemini may sign a function-call part and return its own correlation ID.
+    # Keep this transport metadata out of arguments, approval and other providers.
+    gemini_signature: str = ""
+    gemini_call_id: str = ""
+
+    def history_entry(self) -> dict:
+        entry = {"id": self.id, "name": self.name, "arguments": self.arguments}
+        if self.gemini_signature:
+            entry["gemini_signature"] = self.gemini_signature
+        if self.gemini_call_id:
+            entry["gemini_call_id"] = self.gemini_call_id
+        return entry
 
 
 @dataclass(frozen=True)

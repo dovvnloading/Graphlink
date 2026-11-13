@@ -148,13 +148,11 @@ class GeminiProvider:
                 # ADR-007 stage 7.1: Gemini's native shape wraps every tool
                 # in one functionDeclarations list under a single tools[0]
                 # entry (not one tools[] entry per tool, unlike the other
-                # three providers) - `parameters` is the ToolSpec's own
-                # input_schema passed through untouched; see ToolSpec's own
-                # docstring for the OpenAPI-subset caveat that imposes on
-                # callers targeting Gemini.
+                # three providers). The JSON Schema field preserves dynamic objects
+                # such as a Fal model's arbitrary, endpoint-specific arguments.
                 request_body["tools"] = [{
                     "functionDeclarations": [
-                        {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}
+                        {"name": tool.name, "description": tool.description, "parametersJsonSchema": tool.input_schema}
                         for tool in request.tools
                     ],
                 }]
@@ -215,15 +213,16 @@ class GeminiProvider:
                             # ADR-007 stage 7.1: Gemini delivers a function
                             # call whole in one part - never incrementally,
                             # like Ollama and unlike OpenAI/Anthropic's
-                            # per-delta JSON buffering - and, like Ollama,
-                            # gives it no native id, so one is synthesized
-                            # from this turn's call position.
+                            # per-delta JSON buffering. Older models omit call IDs.
                             function_call = part.get("functionCall")
                             if function_call is not None:
+                                native_id = function_call.get("id") or ""
                                 tool_calls.append(ToolCall(
-                                    id=f"call_{len(tool_calls)}",
+                                    id=native_id or f"call_{len(tool_calls)}",
                                     name=function_call.get("name", ""),
                                     arguments=dict(function_call.get("args") or {}),
+                                    gemini_call_id=native_id,
+                                    gemini_signature=part.get("thoughtSignature") or "",
                                 ))
                                 continue
                             text = part.get("text")

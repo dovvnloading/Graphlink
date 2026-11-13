@@ -111,7 +111,7 @@ def invoke(bus, name, *args):
 def test_end_to_end_schema_selection_quote_billing_and_output(tmp_path, monkeypatch):
     doc, node, bus, manager, recorder = create_studio(tmp_path)
     fake = FakeFal()
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
 
     invoke(bus, "searchFalMediaCatalog", node.id, "image", "text-to-image", "flux", "")
     cat = json.loads(node.state.catalog_json)
@@ -171,7 +171,7 @@ def test_end_to_end_schema_selection_quote_billing_and_output(tmp_path, monkeypa
 def test_favorite_setting_is_replay_safe_and_reflected_in_catalog(tmp_path, monkeypatch):
     doc, node, bus, manager, _ = create_studio(tmp_path)
     fake = FakeFal()
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
     invoke(bus, "searchFalMediaCatalog", node.id, "image", "text-to-image", "", "")
     invoke(bus, "setFalMediaFavorite", node.id, "fal-ai/flux/schnell", True)
     invoke(bus, "setFalMediaFavorite", node.id, "fal-ai/flux/schnell", True)
@@ -184,7 +184,7 @@ def test_favorite_setting_is_replay_safe_and_reflected_in_catalog(tmp_path, monk
 def test_cannot_modify_active_generation_parameters(tmp_path, monkeypatch):
     _, node, bus, _, _ = create_studio(tmp_path)
     fake = FakeFal()
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
     initial = ("image", "text-to-image", "fal-ai/flux/schnell", "Schnell",
                "A solar eclipse", "{}")
     invoke(bus, "prepareFalMedia", node.id, *initial)
@@ -199,7 +199,7 @@ def test_cannot_modify_active_generation_parameters(tmp_path, monkeypatch):
 def test_stale_nonce_refused_if_inputs_changed(tmp_path, monkeypatch):
     _, node, bus, _, _ = create_studio(tmp_path)
     fake = FakeFal()
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
     initial = ("image", "text-to-image", "fal-ai/flux/schnell",
                "Schnell", "Initial text", "{}")
     invoke(bus, "prepareFalMedia", node.id, *initial)
@@ -214,7 +214,7 @@ def test_stale_nonce_refused_if_inputs_changed(tmp_path, monkeypatch):
 def test_remote_cancellation_is_user_initiated_and_does_not_rebill(tmp_path, monkeypatch):
     _, node, bus, manager, _ = create_studio(tmp_path)
     fake = FakeFal()
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
     invoke(bus, "prepareFalMedia", node.id, "image", "text-to-image",
            "fal-ai/flux/schnell", "Schnell", "A photograph", "{}")
     invoke(bus, "generateFalMedia", node.id, read_media(node)["quote"]["id"])
@@ -227,7 +227,7 @@ def test_remote_cancellation_is_user_initiated_and_does_not_rebill(tmp_path, mon
 def test_catalog_search_invalid_model_category_rejected_without_remote_call(tmp_path, monkeypatch):
     _, node, bus, _, _ = create_studio(tmp_path)
     fake = FakeFal()
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
     invoke(bus, "searchFalMediaCatalog", node.id, "image", "text-to-video", "", "")
     assert json.loads(node.state.catalog_json)["status"] == "error"
     assert fake.calls == []
@@ -241,7 +241,7 @@ def test_failed_submit_requires_explicit_dashboard_acknowledgement_before_retry(
         raise FalError("Could not reach fal.ai (ReadTimeout).")
 
     fake.submit = uncertain_submit
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
     invoke(bus, "prepareFalMedia", node.id, "image", "text-to-image",
            "fal-ai/flux/schnell", "Schnell", "A painting", "{}")
     nonce = read_media(node)["quote"]["id"]
@@ -273,7 +273,7 @@ def test_no_preview_when_remote_response_is_from_an_untrusted_origin(tmp_path):
 def test_accepted_paid_job_id_survives_settings_history_write_failure(tmp_path, monkeypatch):
     _, node, bus, manager, _ = create_studio(tmp_path)
     fake = FakeFal()
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
 
     def broken_ledger(*args):
         raise OSError("simulated disk failure")
@@ -295,7 +295,7 @@ def test_accepted_paid_job_id_survives_settings_history_write_failure(tmp_path, 
 def test_restored_quote_cannot_authorize_paid_generation(tmp_path, monkeypatch):
     doc, node, bus, manager, _ = create_studio(tmp_path)
     fake = FakeFal()
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
     invoke(bus, "prepareFalMedia", node.id, "image", "text-to-image",
            "fal-ai/flux/schnell", "Schnell", "Sunrise", "{}")
     previous_nonce = read_media(node)["quote"]["id"]
@@ -336,7 +336,7 @@ def test_interrupted_submission_requires_user_dashboard_check(tmp_path):
 def test_failed_fal_job_is_recorded_as_failed_not_completed(tmp_path, monkeypatch):
     _, node, bus, manager, _ = create_studio(tmp_path)
     fake = FakeFal()
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
     invoke(bus, "prepareFalMedia", node.id, "image", "text-to-image",
            "fal-ai/flux/schnell", "Schnell", "Sky", "{}")
     invoke(bus, "generateFalMedia", node.id, read_media(node)["quote"]["id"])
@@ -351,7 +351,7 @@ def test_stale_status_poll_cannot_undo_successful_cancellation(tmp_path, monkeyp
 
     doc, node, bus, manager, _ = create_studio(tmp_path)
     fake = FakeFal()
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
     invoke(bus, "prepareFalMedia", node.id, "image", "text-to-image",
            "fal-ai/flux/schnell", "Schnell", "Sky", "{}")
     invoke(bus, "generateFalMedia", node.id, read_media(node)["quote"]["id"])
@@ -384,7 +384,7 @@ def test_stale_status_poll_cannot_undo_successful_cancellation(tmp_path, monkeyp
 def test_fal_price_cache_changes_with_api_key(tmp_path, monkeypatch):
     _, node, bus, manager, _ = create_studio(tmp_path)
     fake = FakeFal()
-    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
 
     manager.set_fal_api_key("account-A")
     invoke(bus, "searchFalMediaCatalog", node.id, "image", "text-to-image", "flux", "")
@@ -394,3 +394,46 @@ def test_fal_price_cache_changes_with_api_key(tmp_path, monkeypatch):
     manager.set_fal_api_key("account-B")
     invoke(bus, "searchFalMediaCatalog", node.id, "image", "text-to-image", "flux", "")
     assert len([call for call in fake.calls if call[0] == "search"]) == 2
+
+
+def test_keyless_studio_can_browse_but_cannot_quote_or_submit(tmp_path, monkeypatch):
+    _, node, bus, manager, _ = create_studio(tmp_path)
+    monkeypatch.delenv("FAL_KEY", raising=False)
+    fake = FakeFal()
+    monkeypatch.setattr("backend.fal_media_controller.FalClient", lambda key: fake)
+    args = ("all", "all", "fal-ai/whisper", "Whisper", "", '{"audio_url":"https://fal.media/test.wav"}')
+    invoke(bus, "searchFalMediaCatalog", node.id, "all", "all", "whisper", "")
+    assert json.loads(node.state.catalog_json)["status"] == "ready"
+    invoke(bus, "prepareFalMedia", node.id, *args)
+    assert read_media(node)["quote"] is None
+    assert "API key" in read_media(node)["error"]
+    manager.set_fal_api_key("test-only")
+    invoke(bus, "prepareFalMedia", node.id, *args)
+    quote = read_media(node)["quote"]
+    manager.set_fal_api_key("")
+    invoke(bus, "generateFalMedia", node.id, quote["id"])
+    assert read_media(node)["status"] == "idle"
+    assert read_media(node)["quote"] is None
+    assert not any(call[0] == "submit" for call in fake.calls)
+
+
+def test_unfiltered_studio_can_page_beyond_first_120_models(tmp_path, monkeypatch):
+    _, node, bus, _, _ = create_studio(tmp_path)
+    fake = FakeFal()
+    def page(*, query, category, limit, cursor):
+        assert category == ""
+        start = int(cursor or 0)
+        return {"models": [{"endpoint_id": f"fal-ai/sample-{n}"} for n in range(start, start + limit)],
+                "has_more": True, "next_cursor": str(start + limit)}
+    fake.search_models = page
+    monkeypatch.setattr(FalMediaController, "_client", lambda self, **kwargs: fake)
+    cursor = ""
+    for _ in range(5):
+        invoke(bus, "searchFalMediaCatalog", node.id, "all", "all", "", cursor)
+        catalog = json.loads(node.state.catalog_json)
+        assert catalog["status"] == "ready"
+        assert catalog["hasMore"]
+        assert len(catalog["models"]) == 40
+        assert catalog["currentCursor"] == cursor
+        cursor = catalog["nextCursor"]
+    assert any(row["id"] == "fal-ai/sample-161" for row in catalog["models"])

@@ -328,28 +328,27 @@ def _prepare_gemini_contents(messages: list, cancel_event=None, api_key: str | N
     system_prompt = None
     contents: list[dict[str, Any]] = []
     uploaded_files: list[str] = []
+    native_call_ids: dict[str, str] = {}
 
     for msg in messages:
         _mod._raise_if_cancelled(cancel_event)
         role_name = msg.get("role")
 
-        # ADR-007 stage 7.1: the two tool-turn roles ChatRequest's docstring
-        # adds, translated to Gemini's native shape - checked before the
-        # system/text branches below. Gemini has its own dedicated
-        # "function" role for a tool's result (unlike Anthropic's user-role
-        # tool_result block) and, like Ollama, provides no native call id -
-        # GeminiProvider.stream() synthesizes one the same way Ollama's does.
+        # Replay signed function-call parts with their model-issued IDs.
+        # Older models omit IDs, so never send them Graphlink's synthetic IDs.
         if role_name == "tool":
-            parts: list[dict[str, Any]] = [{
-                "functionResponse": {
-                    "name": msg.get("name", ""),
-                    "response": {"result": str(msg.get("content") or "")},
-                },
-            }]
-            if contents and contents[-1]["role"] == "function":
+            response = {
+                "name": msg.get("name", ""),
+                "response": {"result": str(msg.get("content") or "")},
+            }
+            native_id = native_call_ids.get(msg.get("tool_call_id", ""))
+            if native_id:
+                response["id"] = native_id
+            parts: list[dict[str, Any]] = [{"functionResponse": response}]
+            if contents and contents[-1]["role"] == "user":
                 contents[-1]["parts"].extend(parts)
             else:
-                contents.append({"role": "function", "parts": parts})
+                contents.append({"role": "user", "parts": parts})
             continue
         tool_calls = msg.get("tool_calls")
         if tool_calls:
@@ -357,10 +356,16 @@ def _prepare_gemini_contents(messages: list, cancel_event=None, api_key: str | N
             lead_in_text = str(msg.get("content") or "").strip()
             if lead_in_text:
                 parts.append({"text": lead_in_text})
-            parts.extend(
-                {"functionCall": {"name": call["name"], "args": call["arguments"]}}
-                for call in tool_calls
-            )
+            native_call_ids.clear()
+            for call in tool_calls:
+                function_call = {"name": call["name"], "args": call["arguments"]}
+                if call.get("gemini_call_id"):
+                    function_call["id"] = call["gemini_call_id"]
+                    native_call_ids[call["id"]] = call["gemini_call_id"]
+                part: dict[str, Any] = {"functionCall": function_call}
+                if call.get("gemini_signature"):
+                    part["thoughtSignature"] = call["gemini_signature"]
+                parts.append(part)
             contents.append({"role": "model", "parts": parts})
             continue
 

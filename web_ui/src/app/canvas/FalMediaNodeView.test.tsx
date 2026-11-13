@@ -104,6 +104,38 @@ describe("Fal Media Studio node", () => {
     await waitFor(() => expect(funcs.onSearch).toHaveBeenCalledWith("audio", "text-to-audio", ""));
   });
 
+  it("searches all categories and uses exact model inputs for a transcription", async () => {
+    const { user, funcs } = setup({
+      mediaOverride: {mode: "all", operation: "all", modelId: "fal-ai/whisper", modelName: "Whisper"},
+      schemaOverride: {status: "ready", modelId: "fal-ai/whisper",
+        fields: [{name: "audio_url", type: "string", format: "uri", required: true}]},
+    });
+    await waitFor(() => expect(funcs.onSearch).toHaveBeenCalledWith("all", "all", ""));
+    expect(screen.queryByLabelText("Media generation prompt")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", {name: /audio url/i}), {
+      target: {value: "https://v3.fal.media/sample.wav"},
+    });
+    await user.click(screen.getByRole("button", {name: /Review cost & generate/}));
+    const [draft] = funcs.onPrepare.mock.calls[0];
+    expect(draft.prompt).toBe("");
+    expect(JSON.parse(draft.argumentsJson)).toEqual({audio_url: "https://v3.fal.media/sample.wav"});
+    expect(funcs.onGenerate).not.toHaveBeenCalled();
+  });
+
+  it("shows text and JSON responses and links to 3D files without loading them", () => {
+    const {container} = setup({mediaOverride: {history: [{
+      mode: "all", modelId: "example/model", outputs: [],
+      resultPreview: '{"text":"Hello from a transcript"}',
+    }, {
+      mode: "all", modelId: "example/mesh",
+      outputs: [{kind:"3d", url:"https://v3.fal.media/model.glb"}],
+    }]}});
+    expect(screen.getByText(/Hello from a transcript/)).toBeVisible();
+    expect(screen.getByRole("link", {name: /Open generated 3d/i})).toHaveAttribute(
+      "href", "https://v3.fal.media/model.glb");
+    expect(container.querySelector(".fal-studio-asset img, .fal-studio-asset video, .fal-studio-asset audio")).toBeNull();
+  });
+
   it("selecting a model persists its ID and triggers model schema retrieval", async () => {
     const { user, funcs } = setup();
     await user.click(screen.getByRole("button", { name: "Select Economy Model" }));

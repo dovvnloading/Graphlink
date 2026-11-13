@@ -98,6 +98,11 @@ def test_path_injection_and_executable_extensions_are_rejected(name):
     assert _suffix(name) is None
 
 
+@pytest.mark.parametrize("suffix", [".glb", ".obj", ".ply", ".pdf", ".zip", ".srt"])
+def test_generic_model_input_extensions(suffix):
+    assert _suffix("input" + suffix.upper()) == suffix
+
+
 def test_unicode_filename_only_passes_safe_extension():
     assert _suffix(quote("風景の動画.mp4")) == ".mp4"
     assert _suffix("reference-flower.jpeg") == ".jpeg"
