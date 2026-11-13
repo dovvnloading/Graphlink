@@ -65,6 +65,8 @@ register_settings_*_intents function in turn.
 
 from __future__ import annotations
 
+import json
+
 from typing import TYPE_CHECKING, Any
 
 import api_provider
@@ -85,6 +87,7 @@ from backend.api._settings_shared import (
 )
 from backend.api.intents_settings_api_provider import register_settings_api_provider_intents
 from backend.api.intents_settings_general import register_settings_general_intents
+from backend.api.intents_settings_fal import register_settings_fal_intents
 from backend.api.intents_settings_llama_cpp import register_settings_llama_cpp_intents
 from backend.api.intents_settings_ollama import register_settings_ollama_intents
 from backend.events import SessionBus
@@ -302,6 +305,12 @@ def _build_settings_payload(manager: SettingsManager, state: SettingsSessionStat
     # agents.py) applies at startup and setProviderMode persists at
     # runtime - one field, one source of truth.
     payload["providerMode"] = manager.get_current_mode()
+    payload["falApiKeySource"] = manager.get_fal_api_key_source()
+    payload["falJobsJson"] = json.dumps(manager.get_fal_jobs(), ensure_ascii=False)
+    payload["falNotice"] = state.fal_notice
+    payload["falBusy"] = state.fal_busy
+    payload["falSyncResultJson"] = state.fal_sync_result_json
+    payload["falUploadUrl"] = state.fal_upload_url
     viewing_provider = state.viewing_api_provider
     payload["activeApiProvider"] = manager.get_api_provider()
     payload["viewingApiProvider"] = viewing_provider
@@ -411,6 +420,7 @@ def register_settings(
     # ADR-006 stage 6.5: the general page now takes notifications too - its
     # new setProviderMode intent surfaces switch failures/success banners.
     register_settings_general_intents(bus, manager, state, notifications, agent_dispatcher)
+    register_settings_fal_intents(bus, manager, state)
     register_settings_api_provider_intents(bus, manager, notifications, state)
     register_settings_ollama_intents(bus, manager, state)
     register_settings_llama_cpp_intents(bus, manager, state)
