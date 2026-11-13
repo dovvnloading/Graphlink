@@ -119,6 +119,29 @@ def test_submit_sync_refresh_and_cancel_flow(tmp_path, monkeypatch):
     assert "test-credential" not in json.dumps(last_settings(recorder))
 
 
+def test_paid_settings_submit_shows_request_id_even_when_history_cannot_save(tmp_path, monkeypatch):
+    manager, bus, recorder = make_settings(tmp_path)
+    manager.set_fal_api_key("test-credential")
+
+    class MockFal:
+        def __init__(self, key):
+            assert key == "test-credential"
+
+        def submit(self, model_id, arguments, *, options=None):
+            return {"request_id": REQUEST_ID, "status": "IN_QUEUE"}
+
+    def broken_ledger(*args):
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(intents_settings_fal, "FalClient", MockFal)
+    monkeypatch.setattr(manager, "upsert_fal_job", broken_ledger)
+    invoke(bus, "submitFalJob", "fal-ai/flux/schnell", '{"prompt":"a moon"}', "{}")
+    notice = last_settings(recorder)["falNotice"]
+    assert REQUEST_ID in notice
+    assert "history could not be saved" in notice
+    assert "do not resubmit" in notice
+
+
 def test_broken_json_never_reaches_paid_client(tmp_path, monkeypatch):
     manager, bus, recorder = make_settings(tmp_path)
     manager.set_fal_api_key("some-key")
