@@ -251,7 +251,7 @@
             "type": "string"
           },
           "chartHeight": {
-            "default": 340.0,
+            "default": 340,
             "type": "number"
           },
           "chartSourceNodeId": {
@@ -263,11 +263,11 @@
             "type": "string"
           },
           "chartWidth": {
-            "default": 480.0,
+            "default": 480,
             "type": "number"
           },
           "chatScrollValue": {
-            "default": 0.0,
+            "default": 0,
             "type": "number"
           },
           "code": {
@@ -629,6 +629,18 @@
           "estimatedCostUsd": {
             "default": null,
             "type": "number"
+          },
+          "falCatalogJson": {
+            "default": "",
+            "type": "string"
+          },
+          "falMediaJson": {
+            "default": "",
+            "type": "string"
+          },
+          "falSchemaJson": {
+            "default": "",
+            "type": "string"
           },
           "filePath": {
             "default": "",
