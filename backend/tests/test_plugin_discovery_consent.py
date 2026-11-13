@@ -149,3 +149,124 @@ def test_unapproved_out_of_process_extension_does_not_start_worker(tmp_path):
     finally:
         for worker in registry.worker_clients.values():
             worker.close()
+
+def test_granting_a_plugin_keeps_the_session_loop_responsive(tmp_path, monkeypatch):
+    """A slow consented worker registration must not block unrelated intents."""
+    import threading
+
+    import backend.plugins as plugins_module
+
+    root = tmp_path / "plugins"
+    marker = _write_extension(root, "async_consent_worker", out_of_process=True)
+    settings = SettingsManager(tmp_path / "settings" / "session.dat")
+    registry = discover_plugins(root)
+    bus = SessionBus("async-activation-test")
+    document = SceneDocument()
+    notifications = NotificationState()
+    bus.register_topic("scene", document.scene_payload)
+    bus.register_topic("notification", notifications.payload)
+    register_plugins(bus, notifications, document, settings, plugin_registry=registry)
+
+    started = threading.Event()
+    proceed = threading.Event()
+    original_activate = plugins_module.activate_granted_plugins
+
+    def delayed_activation(*args, **kwargs):
+        started.set()
+        if not proceed.wait(timeout=5):
+            raise AssertionError("test setup did not release worker activation")
+        return original_activate(*args, **kwargs)
+
+    monkeypatch.setattr(plugins_module, "activate_granted_plugins", delayed_activation)
+
+    async def ping():
+        return "other intent still responsive"
+
+    bus.register_intent("notification", "ping", ping)
+
+    async def run():
+        grant = asyncio.create_task(
+            bus.dispatch_intent(
+                "app-plugins", "setPluginGrant", ["async_consent_worker", True],
+            )
+        )
+        try:
+            # The worker's activation runs in a background thread, while
+            # another WebSocket intent remains immediately dispatchable.
+            assert await asyncio.wait_for(
+                asyncio.to_thread(started.wait, 2), timeout=3,
+            )
+            assert not grant.done()
+            assert await asyncio.wait_for(
+                bus.dispatch_intent("notification", "ping", []), timeout=1,
+            ) == "other intent still responsive"
+        finally:
+            proceed.set()
+        await asyncio.wait_for(grant, timeout=10)
+
+    try:
+        asyncio.run(run())
+        assert registry.loaded_plugin_ids == {"async_consent_worker"}
+        assert marker.read_text(encoding="utf-8") == "imported\n"
+        assert "Consent Widget" in registry.picker_entries
+    finally:
+        proceed.set()
+        for worker in registry.worker_clients.values():
+            worker.close()
+
+
+def test_parallel_grant_revoke_intents_preserve_final_consent(tmp_path, monkeypatch):
+    """Serializing grants prevents late async registration from racing revoke."""
+    import threading
+
+    import backend.plugins as plugins_module
+
+    root = tmp_path / "plugins"
+    _write_extension(root, "ordered_consent", out_of_process=True)
+    settings = SettingsManager(tmp_path / "settings" / "session.dat")
+    registry = discover_plugins(root)
+    bus = SessionBus("ordered-activation-test")
+    document = SceneDocument()
+    notifications = NotificationState()
+    bus.register_topic("scene", document.scene_payload)
+    bus.register_topic("notification", notifications.payload)
+    register_plugins(bus, notifications, document, settings, plugin_registry=registry)
+
+    started = threading.Event()
+    proceed = threading.Event()
+    original_activate = plugins_module.activate_granted_plugins
+
+    def delayed_activation(*args, **kwargs):
+        started.set()
+        if not proceed.wait(timeout=5):
+            raise AssertionError("timed out waiting for release")
+        return original_activate(*args, **kwargs)
+
+    monkeypatch.setattr(plugins_module, "activate_granted_plugins", delayed_activation)
+
+    async def run():
+        grant = asyncio.create_task(
+            bus.dispatch_intent("app-plugins", "setPluginGrant", ["ordered_consent", True]),
+        )
+        try:
+            assert await asyncio.wait_for(asyncio.to_thread(started.wait, 2), timeout=3)
+            revoke = asyncio.create_task(
+                bus.dispatch_intent("app-plugins", "setPluginGrant", ["ordered_consent", False]),
+            )
+            await asyncio.sleep(0)
+            # Revoke cannot publish or modify grants until the first
+            # approval/registration finishes.
+            assert settings.get_plugin_grants()["ordered_consent"] is True
+        finally:
+            proceed.set()
+        await asyncio.wait_for(grant, timeout=10)
+        await asyncio.wait_for(revoke, timeout=10)
+
+    try:
+        asyncio.run(run())
+        assert settings.get_plugin_grants()["ordered_consent"] is False
+    finally:
+        proceed.set()
+        for worker in registry.worker_clients.values():
+            worker.close()
+
