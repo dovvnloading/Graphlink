@@ -24,6 +24,25 @@ _OPTIONS = {
 }
 _ID = {"type": "string", "description": "UUID returned by fal.submit"}
 _TOOL_DEFINITIONS = (
+    ("fal.search_models", "Search Fal's live model registry by keywords/category and get endpoint IDs. Never guesses endpoints.", {
+        "query": {"type": "string", "description": "Search text, e.g. text-to-video or speech"},
+        "category": {"type": "string", "description": "Optional category, e.g. image-to-video"},
+        "limit": {"type": "integer", "description": "Results per page (1-100, default 20)"},
+        "cursor": {"type": "string", "description": "Optional next_cursor from a previous result"},
+    }, [], "auto"),
+    ("fal.model_details", "Get live Fal model metadata and complete OpenAPI input/output schema before choosing arguments.", {
+        "model_id": _MODEL,
+        "include_schema": {"type": "boolean", "description": "Include expanded OpenAPI 3.0 schema (default true)"},
+    }, ["model_id"], "auto"),
+    ("fal.model_pricing", "Get live Fal.ai per-unit pricing (no charge incurred by lookup).", {
+        "model_id": _MODEL,
+    }, ["model_id"], "auto"),
+    ("fal.estimate_cost", "Ask Fal.ai to estimate model cost based on call count or billing units before a paid run.", {
+        "model_id": _MODEL,
+        "quantity": {"type": "integer", "description": "Positive count (default 1)"},
+        "basis": {"type": "string", "enum": ["historical_api_price", "unit_price"],
+                  "description": "Historical price per request or known price per billing unit"},
+    }, ["model_id"], "auto"),
     ("fal.submit", "Queue a paid fal.ai model invocation. Requires explicit approval for EACH call.", {
         "model_id": _MODEL, "arguments": _ARGS, "options": _OPTIONS,
     }, ["model_id", "arguments"], "always"),
@@ -59,6 +78,16 @@ def _format(value: object) -> str:
 def _invoke(manager, operation: str, arguments: dict) -> object:
     """One synchronous operation, always run off the event loop."""
     client = FalClient(manager.get_fal_api_key())
+    if operation == "fal.search_models":
+        query = arguments.get("query", "")
+        category = arguments.get("category", "")
+        limit = arguments.get("limit", 20)
+        cursor = arguments.get("cursor")
+        return {
+            "data": client.search_models(
+                query=query, category=category, limit=limit, cursor=cursor,
+            )
+        }
     if operation == "fal.upload":
         path = arguments.get("path")
         if not isinstance(path, str) or not path:
@@ -76,7 +105,16 @@ def _invoke(manager, operation: str, arguments: dict) -> object:
         # concurrently with Settings mutations and must not lose writes.
         from backend.api._settings_shared import run_locked
         run_locked(manager.upsert_fal_job, *args)
-    if operation == "fal.submit":
+    if operation == "fal.model_details":
+        output = client.model_details(model, include_schema=arguments.get("include_schema") is not False)
+    elif operation == "fal.model_pricing":
+        output = client.model_pricing(model)
+    elif operation == "fal.estimate_cost":
+        output = client.estimate_cost(
+            model, quantity=arguments.get("quantity", 1),
+            basis=arguments.get("basis", "historical_api_price"),
+        )
+    elif operation == "fal.submit":
         output = client.submit(model, arguments.get("arguments", {}), options=arguments.get("options"))
         record_job(model, output["request_id"], output.get("status", "IN_QUEUE"))
     elif operation == "fal.run":
