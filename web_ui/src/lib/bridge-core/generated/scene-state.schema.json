@@ -251,7 +251,7 @@
             "type": "string"
           },
           "chartHeight": {
-            "default": 340,
+            "default": 340.0,
             "type": "number"
           },
           "chartSourceNodeId": {
@@ -263,11 +263,11 @@
             "type": "string"
           },
           "chartWidth": {
-            "default": 480,
+            "default": 480.0,
             "type": "number"
           },
           "chatScrollValue": {
-            "default": 0,
+            "default": 0.0,
             "type": "number"
           },
           "code": {
