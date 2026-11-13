@@ -54,6 +54,7 @@ from backend.canvas import register_canvas
 from backend.chat_library import flush_dirty_session_before_teardown, register_chat_library
 from backend.composer import register_composer
 from backend.api.intents_diagnostics import register_diagnostics_intents
+from backend.api.intents_fal_media import register_fal_media_intents
 from backend.crash_recovery import maybe_show_crash_notice
 from backend.diagnostics import DiagnosticsState
 from backend.events import (
@@ -285,6 +286,8 @@ def _configure_session(
     # tallies node counts from), which does not exist until register_canvas
     # returns it, right above this line.
     register_diagnostics_intents(bus, canvas_document, diagnostics)
+    # First-class Fal Media Studio shares the live canvas and secure settings.
+    register_fal_media_intents(bus, canvas_document, settings_manager)
 
     # ADR-002 stage 2.1d: ONE typed reference from here on
     # (backend/session_context.py), replacing what used to be two loose
