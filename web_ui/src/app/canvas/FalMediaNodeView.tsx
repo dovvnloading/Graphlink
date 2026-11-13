@@ -43,10 +43,16 @@ function fieldsFromMedia(media: MediaState): StudioDraft {
     argumentsJson: media.argumentsJson,
   };
 }
+function normalizedJson(value: string): string {
+  // Python stores compact JSON, but the editor shows pretty-printed JSON.
+  // Comparing raw strings kept the draft permanently "dirty" and blocked
+  // the confirmation button despite an unchanged, server-approved quote.
+  try { return JSON.stringify(JSON.parse(value)); } catch { return value; }
+}
 function equalDraft(a: StudioDraft, b: StudioDraft): boolean {
   return a.mode === b.mode && a.operation === b.operation &&
     a.modelId === b.modelId && a.modelName === b.modelName &&
-    a.prompt === b.prompt && a.argumentsJson === b.argumentsJson;
+    a.prompt === b.prompt && normalizedJson(a.argumentsJson) === normalizedJson(b.argumentsJson);
 }
 function safeAssetUrl(url: string): boolean {
   try {
