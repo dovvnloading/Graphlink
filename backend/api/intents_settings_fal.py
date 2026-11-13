@@ -32,6 +32,19 @@ def _json_summary(result: Any) -> str:
     return text[:32000] + ("\n[truncated]" if len(text) > 32000 else "")
 
 
+def _discovery_snapshot(kind: str, data: Any) -> str:
+    payload = {"kind": kind, "data": data}
+    text = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+    if len(text) > 180000:
+        # Do not emit half of a JSON payload: preserve a usable valid result
+        # with its identity, and direct users to inspect the model online.
+        payload = {"kind": kind, "truncated": True,
+                   "data": {"endpoint_id": data.get("endpoint_id") if isinstance(data, dict) else "",
+                            "notice": "Model schema is too large for the Settings preview."}}
+        text = json.dumps(payload, ensure_ascii=False)
+    return text
+
+
 def register_settings_fal_intents(
     bus: SessionBus, manager: SettingsManager, state: SettingsSessionState,
 ) -> None:
@@ -55,6 +68,42 @@ def register_settings_fal_intents(
         finally:
             state.fal_busy = False
             await bus.publish("app-settings")
+
+    async def search_fal_models(query: str = "", category: str = "", limit: int = 20,
+                                cursor: str = "") -> None:
+        def work() -> str:
+            data = FalClient(manager.get_fal_api_key()).search_models(
+                query=query, category=category, limit=limit, cursor=cursor or None,
+            )
+            # Model metadata can contain verbose descriptions. Preserve valid JSON
+            # and stay comfortably within the app-settings WebSocket size budget.
+            state.fal_discovery_json = _discovery_snapshot("models", data)
+            return f"Found {len(data['models'])} model endpoints in the current catalog page."
+        await _perform(work)
+
+    async def inspect_fal_model(model_id: str) -> None:
+        def work() -> str:
+            data = FalClient(manager.get_fal_api_key()).model_details(model_id)
+            state.fal_discovery_json = _discovery_snapshot("details", data)
+            return f"Loaded model metadata and OpenAPI schema for {model_id}."
+        await _perform(work)
+
+    async def get_fal_model_pricing(model_id: str) -> None:
+        def work() -> str:
+            data = FalClient(manager.get_fal_api_key()).model_pricing(model_id)
+            state.fal_discovery_json = _discovery_snapshot("pricing", data)
+            return f"Loaded current Fal.ai pricing for {model_id}."
+        await _perform(work)
+
+    async def estimate_fal_model_cost(model_id: str, quantity: int = 1,
+                                      basis: str = "historical_api_price") -> None:
+        def work() -> str:
+            data = FalClient(manager.get_fal_api_key()).estimate_cost(
+                model_id, quantity=quantity, basis=basis,
+            )
+            state.fal_discovery_json = _discovery_snapshot("estimate", data)
+            return f"Loaded Fal.ai cost estimate for {model_id}."
+        await _perform(work)
 
     async def set_fal_api_key(api_key: str) -> None:
         if not isinstance(api_key, str) or not api_key.strip() or "\r" in api_key or "\n" in api_key:
@@ -119,6 +168,10 @@ def register_settings_fal_intents(
             return "File uploaded to Fal.ai CDN. Copy the URL into your model arguments."
         await _perform(work)
 
+    bus.register_intent("app-settings", "searchFalModels", search_fal_models)
+    bus.register_intent("app-settings", "inspectFalModel", inspect_fal_model)
+    bus.register_intent("app-settings", "getFalModelPricing", get_fal_model_pricing)
+    bus.register_intent("app-settings", "estimateFalModelCost", estimate_fal_model_cost)
     bus.register_intent("app-settings", "setFalApiKey", set_fal_api_key)
     bus.register_intent("app-settings", "clearFalApiKey", clear_fal_api_key)
     bus.register_intent("app-settings", "submitFalJob", submit_fal_job)
