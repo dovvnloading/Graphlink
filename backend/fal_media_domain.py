@@ -118,13 +118,20 @@ def parse_arguments(raw: str) -> dict[str, Any]:
 
 
 def request_arguments(media: dict) -> dict:
-    """Combine visible prompt with model-specific JSON; explicit JSON wins."""
+    """Merge the primary creative text with model-specific JSON.
+
+    Speech synthesis models predominantly expect `text`, not `prompt`.
+    Use the workflow's conventional field and allow explicit Advanced JSON
+    to override it. This avoids emitting a spurious `prompt` alongside
+    TTS parameters, which can be rejected by strict input schemas.
+    """
     args = parse_arguments(media.get("argumentsJson", "{}"))
     prompt = str(media.get("prompt") or "").strip()
-    if prompt and not args.get("prompt"):
-        args["prompt"] = prompt
+    primary_field = "text" if media.get("operation") == "text-to-speech" else "prompt"
+    if prompt and not args.get(primary_field):
+        args[primary_field] = prompt
     if not args:
-        raise FalError("Enter a prompt or model-specific input parameters before generating.")
+        raise FalError("Enter creative text or model-specific input parameters before generating.")
     return args
 
 
