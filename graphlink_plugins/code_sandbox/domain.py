@@ -46,7 +46,7 @@ from pathlib import Path
 
 import api_provider
 import graphlink_task_config as config
-from graphlink_execution_guard import create_execution_guard
+from graphlink_execution_guard import spawn_guarded_subprocess, assign_guarded_subprocess, create_execution_guard
 from backend.domain.node_states import (
     CODE_SANDBOX_MAX_CODE_CHARS,
     CODE_SANDBOX_MAX_REQUIREMENTS_CHARS,
@@ -382,15 +382,12 @@ class VirtualEnvSandbox:
         output_chunks = []
         output_chars = 0
         start_time = time.monotonic()
-        # ADR-005 stage 5.2/5.3: the guard is created BEFORE Popen so its
-        # popen_kwargs() can reach the spawn itself. Empty on Windows (the
-        # job object is applied to an already-running process by assign()
-        # below); on POSIX it carries the process-group request and the
-        # rlimit preexec hook, which must be in place between fork and
-        # exec - see graphlink_execution_guard's own docstring.
+        # Configure the guard BEFORE spawn. Windows creates the child
+        # inside the Job Object atomically; POSIX applies its process
+        # group/rlimits during exec. Never use a raw Windows Popen here.
         self.guard = create_execution_guard()
         try:
-            process = subprocess.Popen(
+            process = spawn_guarded_subprocess(self.guard,
                 args,
                 cwd=str(cwd) if cwd else None,
                 stdout=subprocess.PIPE,
@@ -409,11 +406,11 @@ class VirtualEnvSandbox:
             self.guard = None
             raise
         self.current_process = process
-        # Windows applies its resource guard after spawn. If assign() or
-        # usage bookkeeping fails, close the just-created child immediately
-        # rather than orphaning it before the reader/finally block exists.
+        # Native Windows membership is established at CreateProcessW.
+        # Assignment is still needed for POSIX/test guards. Any later
+        # bookkeeping failure must close the child immediately.
         try:
-            self.guard.assign(process.pid)
+            assign_guarded_subprocess(self.guard, process)
             if cwd:
                 touch_scratch_dir_usage(Path(cwd))
         except BaseException:

@@ -54,7 +54,7 @@ from backend.harness.shell_sessions import ShellSessionError, ShellSessionRegist
 from backend.harness.workspace import WorkspaceError, ensure_workspace
 from backend.providers.base import ToolCall, ToolSpec
 from backend.tools import CODE_EXECUTE, RunContext, ToolRegistry, ToolResult
-from graphlink_execution_guard import create_execution_guard
+from graphlink_execution_guard import spawn_guarded_subprocess, assign_guarded_subprocess, create_execution_guard
 from graphlink_process_env import safe_subprocess_env
 
 SHELL_EXEC_TIMEOUT_SECONDS = 120
@@ -108,7 +108,7 @@ SHELL_EXEC_SPEC = ToolSpec(
 
 def _run_command(command: str, cwd, cancel_event) -> tuple[str, "int | None", str]:
     """Blocking worker (called via to_thread): returns (output, exit_code,
-    ended) where ended is "ok" | "timeout" | "cancelled". guard-then-Popen,
+    ended) where ended is "ok" | "timeout" | "cancelled". Guarded spawn,
     then a poll loop so cancel/timeout kill the whole tree promptly.
 
     Output is drained CONCURRENTLY by a reader thread (the shell_sessions
@@ -130,7 +130,7 @@ def _run_command(command: str, cwd, cancel_event) -> tuple[str, "int | None", st
         # does not parse - quotes inside the command silently turn a
         # program's argument into a no-op expression (found by test:
         # `python -c "print(123)"` exited 0 printing nothing).
-        process = subprocess.Popen(
+        process = spawn_guarded_subprocess(guard,
             command,
             shell=True,
             stdin=subprocess.DEVNULL,
@@ -142,11 +142,11 @@ def _run_command(command: str, cwd, cancel_event) -> tuple[str, "int | None", st
             **kwargs,
         )
         try:
-            guard.assign(process.pid)
+            assign_guarded_subprocess(guard, process)
         except BaseException:
-            # Job Object failure on Windows is fail-closed. The child may
-            # have started before assignment, so guard.close() alone cannot
-            # terminate a process that was never attached to the job.
+            # A fallback/test-double post-assignment failure must still
+            # kill the direct child; native Windows job-list attachment
+            # fails before returning a process and never runs unguarded.
             try:
                 process.kill()
             except OSError:
