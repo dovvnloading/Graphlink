@@ -630,6 +630,18 @@
             "default": null,
             "type": "number"
           },
+          "falCatalogJson": {
+            "default": "",
+            "type": "string"
+          },
+          "falMediaJson": {
+            "default": "",
+            "type": "string"
+          },
+          "falSchemaJson": {
+            "default": "",
+            "type": "string"
+          },
           "filePath": {
             "default": "",
             "type": "string"

@@ -355,6 +355,10 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "codeSandboxAwaitingApproval", "codeSandboxCode", "codeSandboxError",
     "codeSandboxOutput", "codeSandboxPrompt", "codeSandboxRequirements", "color",
     "content", "contentParts", "durationSeconds", "estimatedCostUsd", "filePath",
+    # Fal Media Studio: persistent node state + transient catalog and schema
+    # previews. These are actual sparse wire fields, with empty-string defaults
+    # hydrated client-side; this golden key list must track intentional additions.
+    "falMediaJson", "falCatalogJson", "falSchemaJson",
     "gitlinkBranch",
     "gitlinkChangeFingerprint", "gitlinkChangeState", "gitlinkContextStats",
     "gitlinkContextSummary", "gitlinkContextVersion", "gitlinkError",

@@ -822,6 +822,52 @@ export class SceneStore {
     this.transport.fireIntent("scene", "addImageNode", [x, y, imageBytesBase64, prompt, parentId, mimeType]);
   }
 
+  // Native Fal Media Studio: browser never receives an API key or directly
+  // calls the Fal API. All paid requests require a backend quote nonce.
+  saveFalMediaDraft(nodeId: string, draft: {
+    mode: string; operation: string; modelId: string; modelName: string; prompt: string; argumentsJson: string;
+  }): void {
+    this.transport.fireIntent("scene", "saveFalMediaDraft", [
+      nodeId, draft.mode, draft.operation, draft.modelId, draft.modelName, draft.prompt, draft.argumentsJson,
+    ]);
+  }
+
+  searchFalMediaCatalog(nodeId: string, mode: string, operation: string, query: string, cursor = ""): void {
+    this.transport.fireIntent("scene", "searchFalMediaCatalog", [nodeId, mode, operation, query, cursor]);
+  }
+
+  inspectFalMediaModel(nodeId: string, modelId: string): void {
+    this.transport.fireIntent("scene", "inspectFalMediaModel", [nodeId, modelId]);
+  }
+
+  setFalMediaFavorite(nodeId: string, modelId: string, enabled: boolean): void {
+    this.transport.fireIntent("scene", "setFalMediaFavorite", [nodeId, modelId, enabled]);
+  }
+
+  prepareFalMedia(nodeId: string, draft: {
+    mode: string; operation: string; modelId: string; modelName: string; prompt: string; argumentsJson: string;
+  }): void {
+    this.transport.fireIntent("scene", "prepareFalMedia", [
+      nodeId, draft.mode, draft.operation, draft.modelId, draft.modelName, draft.prompt, draft.argumentsJson,
+    ]);
+  }
+
+  generateFalMedia(nodeId: string, approvalId: string): void {
+    this.transport.fireIntent("scene", "generateFalMedia", [nodeId, approvalId]);
+  }
+
+  refreshFalMedia(nodeId: string): void {
+    this.transport.fireIntent("scene", "refreshFalMedia", [nodeId]);
+  }
+
+  cancelFalMedia(nodeId: string): void {
+    this.transport.fireIntent("scene", "cancelFalMedia", [nodeId]);
+  }
+
+  acknowledgeFalMediaSubmission(nodeId: string): void {
+    this.transport.fireIntent("scene", "acknowledgeFalMediaSubmission", [nodeId]);
+  }
+
   // R3.25/R3.26: real conversation nodes - the only R3 kind shaped like a
   // growing message LIST (data.history) rather than one scalar content
   // field. addConversationNode has no real UI creation trigger yet, same

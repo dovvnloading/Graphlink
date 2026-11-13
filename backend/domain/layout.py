@@ -67,6 +67,7 @@ KIND_FALLBACK_FOOTPRINTS: dict[str, tuple[float, float]] = {
     "thinking": (420.0, 260.0),
     "html": (480.0, 400.0),
     "image": (420.0, 420.0),
+    "fal_media": (680.0, 720.0),
     "document": (380.0, 240.0),
     "note": (280.0, 200.0),
     "web_research": (440.0, 380.0),

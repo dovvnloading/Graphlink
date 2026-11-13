@@ -171,6 +171,19 @@ Loads a GGUF file directly (not an Ollama model store). Configure the chat model
 
 OpenAI-Compatible, Anthropic Claude, and Google Gemini are supported, with per-task model selection. Image generation works with OpenAI-Compatible and Google Gemini providers (not Anthropic Claude). Anthropic Claude accepts image attachments but not audio (use Gemini or Ollama for audio).
 
+### Fal Media Studio — image, video & audio on the canvas
+
+Add **Fal Media Studio** from the plugin picker under **Build & Execution**.
+It is a native canvas node for image, video and audio generation with a
+searchable live Fal model catalog, persistent favorites, economy-to-premium
+sorting **by comparable billing unit**, model-specific controls from Fal's
+OpenAPI schemas and an explicit priced confirmation before any paid call.
+Queue status, cancellation and a playable media gallery are part of the node;
+drafts and completed results survive session reloads.
+
+See the [Fal Media Studio guide](docs/FAL_MEDIA_STUDIO.md) for its complete
+workflow, privacy boundaries and billing safeguards.
+
 ### Fal.ai — universal media and model inference
 
 **Settings > Fal.ai** provides API-key configuration, arbitrary model IDs

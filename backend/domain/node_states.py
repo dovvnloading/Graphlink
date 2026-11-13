@@ -59,6 +59,17 @@ class ImageState(NodeState):
 
 
 @dataclass
+class FalMediaState(NodeState):
+    """Persistent workspace state + transient catalog/schema, kept off the
+    shared SceneNode fields. The browser sees only bounded JSON strings;
+    large media bytes and API keys never enter the scene wire."""
+
+    media_json: str = ""
+    catalog_json: str = ""
+    schema_json: str = ""
+
+
+@dataclass
 class HtmlState(NodeState):
     """Relocated verbatim from SceneNode.html_splitter_state (former
     backend/domain/model.py field, R6.3) - an HtmlViewNode's persisted

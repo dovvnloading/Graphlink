@@ -276,6 +276,25 @@ class FalClient:
             raise FalError("fal.ai pricing endpoint returned an invalid response.")
         return result
 
+    def model_pricing_batch(self, model_ids: list[str]) -> dict:
+        """Query live account-specific unit rates for up to 50 endpoints at once.
+
+        Fal Platform Pricing accepts repeated endpoint_id or CSV-separated IDs;
+        using one explicit comma-separated parameter bounds URL/HTTP overhead.
+        Never use these raw rates as comparable *total* generation costs when
+        their units differ (image vs. megapixel vs. video-second).
+        """
+        if not isinstance(model_ids, list) or not 1 <= len(model_ids) <= 50:
+            raise FalError("Pricing lookup requires 1-50 model IDs.")
+        paths = list(dict.fromkeys(model_path(value) for value in model_ids))
+        result = self._call(
+            "GET", PLATFORM_ORIGIN, "v1/models/pricing",
+            params={"endpoint_id": ",".join(paths)},
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("prices"), list):
+            raise FalError("fal.ai pricing lookup returned an invalid response.")
+        return result
+
     def estimate_cost(self, model_id: str, *, quantity: int = 1,
                       basis: str = "historical_api_price") -> dict:
         """Ask Fal for a nonbinding estimate; actual billing depends on output."""

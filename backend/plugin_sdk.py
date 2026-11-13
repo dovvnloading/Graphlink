@@ -504,7 +504,7 @@ class BuiltinActionSpec:
 # as the original 7.
 _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS = frozenset({
     "artifact", "code_sandbox", "conversation_node", "gitlink",
-    "html_renderer", "system_prompt", "web_research", "review_lens",
+    "html_renderer", "system_prompt", "web_research", "review_lens", "fal_media",
 })
 
 

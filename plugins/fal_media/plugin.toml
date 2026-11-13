@@ -1,0 +1,10 @@
+[plugin]
+id = "fal_media"
+name = "Fal Media Studio"
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "A creative canvas studio for Fal image, video and audio models, with transparent prices."
+
+[frontend]
+view = "generic"

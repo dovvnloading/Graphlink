@@ -25,7 +25,7 @@ import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
 import {
   ArtifactNodeView, ChartNodeView, ChatNodeView, CodeNodeView, CodeReviewNodeView,
   CodeSandboxNodeView, ConversationNodeView, DocumentNodeView, GitlinkNodeView,
-  GroupNodeView, HarnessNodeView, HtmlNodeView, ImageNodeView, NoteNodeView,
+  GroupNodeView, HarnessNodeView, HtmlNodeView, ImageNodeView, FalMediaNodeView, NoteNodeView,
   PlanNodeView, ThinkingNodeView, WebResearchNodeView,
 } from "./lazyNodeViews";
 import type { ArtifactFlowNode } from "./ArtifactNodeView";
@@ -40,6 +40,7 @@ import type { GitlinkFlowNode } from "./GitlinkNodeView";
 import type { GroupFlowNode } from "./GroupNodeView";
 import type { HtmlFlowNode } from "./HtmlNodeView";
 import type { ImageFlowNode } from "./ImageNodeView";
+import type { FalMediaFlowNode } from "./FalMediaNodeView";
 import type { NoteFlowNode } from "./NoteNodeView";
 import { OrthogonalEdge } from "./OrthogonalEdge";
 import type { ThinkingFlowNode } from "./ThinkingNodeView";
@@ -92,6 +93,7 @@ export type SceneFlowNode =
   | ThinkingFlowNode
   | HtmlFlowNode
   | ImageFlowNode
+  | FalMediaFlowNode
   | ConversationFlowNode
   | WebResearchFlowNode
   | ArtifactFlowNode
@@ -131,6 +133,7 @@ const NODE_TYPES = {
   thinking: ThinkingNodeView,
   html: HtmlNodeView,
   image: ImageNodeView,
+  fal_media: FalMediaNodeView,
   conversation: ConversationNodeView,
   web_research: WebResearchNodeView,
   artifact: ArtifactNodeView,
@@ -460,6 +463,7 @@ export const FILTERABLE_NODE_KINDS = [
   "thinking",
   "html",
   "image",
+  "fal_media",
   "conversation",
   "web_research",
   "plan",
@@ -791,6 +795,29 @@ function makeImageFns(id: string, liveRef: { current: DispatcherLive }) {
     // parent chat node internally.
     onRegenerate: () => liveRef.current.store.regenerateImage(id),
     onToggleBranchFocus: () => liveRef.current.onToggleBranchFocus(id),
+  };
+}
+
+function makeFalMediaFns(id: string, liveRef: { current: DispatcherLive }) {
+  return {
+    onSaveDraft: (draft: {
+      mode: "image" | "video" | "audio"; operation: string; modelId: string;
+      modelName: string; prompt: string; argumentsJson: string;
+    }) => liveRef.current.store.saveFalMediaDraft(id, draft),
+    onSearch: (mode: "image" | "video" | "audio", operation: string, query: string, cursor = "") =>
+      liveRef.current.store.searchFalMediaCatalog(id, mode, operation, query, cursor),
+    onInspect: (modelId: string) => liveRef.current.store.inspectFalMediaModel(id, modelId),
+    onFavorite: (modelId: string, enabled: boolean) =>
+      liveRef.current.store.setFalMediaFavorite(id, modelId, enabled),
+    onPrepare: (draft: {
+      mode: "image" | "video" | "audio"; operation: string; modelId: string;
+      modelName: string; prompt: string; argumentsJson: string;
+    }) => liveRef.current.store.prepareFalMedia(id, draft),
+    onGenerate: (approvalId: string) => liveRef.current.store.generateFalMedia(id, approvalId),
+    onRefresh: () => liveRef.current.store.refreshFalMedia(id),
+    onCancel: () => liveRef.current.store.cancelFalMedia(id),
+    onAcknowledge: () => liveRef.current.store.acknowledgeFalMediaSubmission(id),
+    onDelete: () => liveRef.current.store.removeNodes([id]),
   };
 }
 
@@ -1435,6 +1462,31 @@ export function toFlowNodes(
           prompt: n.content,
           // R8a: "Hide Other Branches" - see the chat branch above.
           isBranchFocusActive,
+          ...fns,
+        },
+      };
+      cache.flowNodes.set(n, { extraSig, flowNode });
+      flowNodes.push(flowNode);
+      continue;
+    }
+    if (n.kind === "fal_media") {
+      const dimmed = isDimmed(n.id);
+      const extraSig = dimmed ? "dim" : "normal";
+      const cached = cache.flowNodes.get(n);
+      const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeFalMediaFns);
+      if (cached && cached.extraSig === extraSig) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
+        id: n.id,
+        type: "fal_media" as const,
+        position: { x: n.x, y: n.y },
+        style: dimmed ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        data: {
+          mediaJson: n.falMediaJson,
+          catalogJson: n.falCatalogJson,
+          schemaJson: n.falSchemaJson,
           ...fns,
         },
       };

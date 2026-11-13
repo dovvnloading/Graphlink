@@ -25,6 +25,9 @@ export interface SceneNodeRow {
   previewLabel: string;
   isDocked: boolean;
   imageAssetId: string;
+  falMediaJson: string;
+  falCatalogJson: string;
+  falSchemaJson: string;
   history: ConversationMessageRow[];
   pendingRequestId?: string | null;
   researchStage: string;
@@ -515,6 +518,9 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["previewLabel", "s", 0, ""],
   ["isDocked", "b", 0, false],
   ["imageAssetId", "s", 0, ""],
+  ["falMediaJson", "s", 0, ""],
+  ["falCatalogJson", "s", 0, ""],
+  ["falSchemaJson", "s", 0, ""],
   ["history", { a: { o: CONVERSATION_MESSAGE_ROW_FIELDS } }, 0, []],
   ["pendingRequestId", "s", 1, null],
   ["researchStage", "s", 0, ""],

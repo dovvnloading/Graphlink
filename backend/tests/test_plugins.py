@@ -83,7 +83,7 @@ def test_get_plugin_categories_pins_the_original_curated_within_category_order_f
     assert by_category["Branch Foundations"] == ["System Prompt", "Conversation Node"]
     assert by_category["Reasoning & Research"] == ["Web Research"]
     assert by_category["Build & Execution"] == [
-        "Gitlink", "Virtual Environment Runner", "HTML Renderer",
+        "Gitlink", "Virtual Environment Runner", "HTML Renderer", "Fal Media Studio",
     ]
     assert by_category["Workflow & Drafting"] == ["Artifact / Drafter"]
 
@@ -665,7 +665,7 @@ def test_every_builtin_now_has_a_real_builtin_action_registration():
     # path reserved for third-party plugins and the demo plugins).
     handled = {
         "Web Research", "Artifact / Drafter", "Gitlink", "Virtual Environment Runner",
-        "System Prompt", "Conversation Node", "HTML Renderer", "Review Lens",
+        "System Prompt", "Conversation Node", "HTML Renderer", "Review Lens", "Fal Media Studio",
     }
     registry = discover_plugins()
     assert handled == set(registry.builtin_actions)

@@ -292,6 +292,17 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("harness", "pickWorkspace", "B", "run-config: binds the node to a trusted user dir and writes the settings trust grant, not document content"),
     Classified("harness", "useScratch", "B", "run-config: reverts the node to the scratch workspace"),
 
+    # -- backend/api/intents_fal_media.py (scene) ----------------------------
+    Classified("scene", "saveFalMediaDraft", "A", "content: undoable Fal Studio draft edit"),
+    Classified("scene", "prepareFalMedia", "A", "content: save an exact reviewed studio draft before producing a transient quote"),
+    Classified("scene", "searchFalMediaCatalog", "B", "read-only: external model catalog fetch and cache"),
+    Classified("scene", "inspectFalMediaModel", "B", "read-only: external model schema fetch and cache"),
+    Classified("scene", "setFalMediaFavorite", "B", "preference: persistent shared favorite model list"),
+    Classified("scene", "generateFalMedia", "B", "run-lifecycle: user-confirmed billable remote inference"),
+    Classified("scene", "refreshFalMedia", "B", "run-lifecycle: remote queued job status/result refresh"),
+    Classified("scene", "cancelFalMedia", "B", "run-lifecycle: request remote job cancellation"),
+    Classified("scene", "acknowledgeFalMediaSubmission", "B", "run-lifecycle: manual unlock after checking unconfirmed remote billing"),
+
     # -- backend/api/intents_settings_general.py (app-settings) -------------
     Classified("app-settings", "setActiveSection", "B", "preference: which Settings page is open"),
     Classified("app-settings", "setShowTokenCounter", "B", "preference: appearance toggle"),
