@@ -12,6 +12,8 @@ requires-python = ">=3.12"
 dependencies = [
     "anthropic",
     "beautifulsoup4",
+    # DoS advisory security floor; keep direct installs safe, not only the lock.
+    "soupsieve>=4.1",
     # Qt-removal complete (doc/QT_REMOVAL_PLAN.md, R7.6b): Python backend +
     # native pywebview shell. Do not add Qt dependencies - tests/
     # test_no_qt_anywhere.py fails the build if any manifest declares one.

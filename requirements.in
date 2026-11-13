@@ -1,5 +1,7 @@
 anthropic
 beautifulsoup4
+# Security floor: Soup Sieve >=4.1 patches CVE-2026-126190 and CVE-2026-126192.
+soupsieve>=4.1
 # Qt-removal target architecture (doc/QT_REMOVAL_PLAN.md): Python backend +
 # native pywebview shell. Qt removal completed at R7.6b - do not re-add
 # at the R7 cutover - do not add new Qt dependencies. Matches pyproject.toml's
