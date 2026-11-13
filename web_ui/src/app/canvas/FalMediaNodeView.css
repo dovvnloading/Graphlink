@@ -347,6 +347,11 @@
 }
 .fal-studio-button-secondary:hover, .fal-studio-button-outline:hover {border-color: var(--gl-surface-text-muted);}
 .fal-studio-consent {font-size: 10px; color: var(--gl-surface-text-muted); margin: 8px 0;}
+.fal-studio-dashboard-link {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  color: var(--gl-surface-text-primary); text-decoration: underline;
+  text-underline-offset: 3px; padding: 3px 0;
+}
 .fal-studio-job-progress {background: var(--gl-surface-inset); padding: 16px; border: 1px solid var(--gl-surface-border); border-radius: 10px; margin-top: 14px;}
 .fal-studio-job-progress strong {display: block; font-size: 12px; margin-top: 9px;}
 .fal-studio-job-progress p {font-size: 10px; color: var(--gl-surface-text-secondary); line-height: 1.5;}
