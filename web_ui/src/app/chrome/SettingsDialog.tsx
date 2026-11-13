@@ -141,6 +141,7 @@ const initialState: AppSettingsState = {
   falNotice: "",
   falBusy: false,
   falSyncResultJson: "",
+  falDiscoveryJson: "",
   falUploadUrl: "",
   // ADR-004 stage 4.4: optimistic default (true = encrypted) so the
   // persistent badge below never flashes a false warning before the
