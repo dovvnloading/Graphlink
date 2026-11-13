@@ -8,12 +8,11 @@ import asyncio
 import json
 import sys
 import types
-from uuid import uuid4
 
 import pytest
 
 from backend.fal_integration import (
-    FalClient, FalError, media_urls, model_path, request_path,
+    FalClient, FalError, media_urls,
 )
 from backend.providers.base import ToolCall
 from backend.tools import FS_READ, PROVIDER_CALL, RunContext, ToolRegistry
