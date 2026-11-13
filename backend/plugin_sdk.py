@@ -1048,10 +1048,11 @@ class PluginWorkerClient:
     def _connect_unlocked(self) -> None:
         """Spawns the worker subprocess. Call order, matching
         graphlink_execution_guard.create_execution_guard's own documented
-        contract exactly: (1) create the guard, (2) Popen with
-        guard.popen_kwargs() merged in - POSIX applies its rlimits between
-        fork and exec, so the guard must exist BEFORE the spawn, (3)
-        guard.assign(process.pid) once the real pid exists. `env=
+        contract exactly: (1) create the guard, (2) use
+        spawn_guarded_subprocess with guard.popen_kwargs() - Windows assigns
+        Job Object membership *during* CreateProcess, and POSIX applies
+        its process group/rlimits before exec, (3) invoke
+        assign_guarded_subprocess (no-op for native Windows). `env=
         safe_subprocess_env()` (graphlink_process_env.py's allowlist, NOT a
         blocklist of secret names) is the load-bearing containment
         primitive for this whole stage - the worker never inherits the
@@ -1071,7 +1072,7 @@ class PluginWorkerClient:
             # approval; guard cleanup below still runs on this path.
             if self._stop_requested.is_set():
                 raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" startup was revoked.')
-            self._process = spawn_guarded_subprocess(self._guard, 
+            self._process = spawn_guarded_subprocess(self._guard,
                 [sys.executable, "-m", "backend.plugin_worker", self.plugin_id, str(self.source_dir)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,

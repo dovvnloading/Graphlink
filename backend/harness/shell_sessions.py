@@ -90,7 +90,7 @@ class LocalSubprocessBackend(ShellBackend):
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         guard = create_execution_guard()
         try:
-            process = spawn_guarded_subprocess(guard, 
+            process = spawn_guarded_subprocess(guard,
                 command,
                 shell=True,
                 stdin=subprocess.PIPE,

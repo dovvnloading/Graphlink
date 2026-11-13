@@ -22,6 +22,13 @@ were empirically proven against real memory-bomb, fork-bomb, and
 orphan-grandchild scripts before this module was written, not assumed
 from the Win32 API documentation alone.
 
+ISSUE #545 FOLLOW-UP: On Windows, guarded processes must now be created via
+spawn_guarded_subprocess(), which attaches the already-configured Job Object
+during CreateProcessW using STARTUPINFOEX / PROC_THREAD_ATTRIBUTE_JOB_LIST.
+Calling raw subprocess.Popen() and assigning the job afterward would reopen
+the pre-attachment execution window. Native creation failure rejects launch;
+there is no unguarded fallback on production Windows.
+
 This is a **resource + lifecycle** boundary, not a security VM - see
 doc/adr/THREAT_MODEL.md's "Executed code is a resource boundary, not a
 security boundary" section. It does not stop a deliberately malicious
@@ -481,14 +488,16 @@ def create_execution_guard(
     """One guard per subprocess-management lifecycle (a PythonREPL's
     single long-lived child; one Code Sandbox subprocess invocation).
 
-    Call order matters, and is the same on every platform:
+    Required call order for executed code:
       1. `guard = create_execution_guard()`
-      2. `Popen(..., **guard.popen_kwargs())` - POSIX applies its rlimits
-         between fork and exec, so the guard must exist BEFORE the spawn.
-      3. `guard.assign(process.pid)`
-      4. `guard.close()` exactly once when that process is done with -
-         whether it exited on its own or is being forcibly stopped. Safe to
-         call on a guard whose process already exited cleanly."""
+      2. `process = spawn_guarded_subprocess(guard, ..., **guard.popen_kwargs())`
+         Windows creates the child IN its configured Job Object before its
+         first instruction; POSIX sets the process group/limits at spawn.
+      3. `assign_guarded_subprocess(guard, process)` records POSIX process
+         groups and handles test-double fallbacks; it is a no-op for native
+         creation-time Windows membership.
+      4. `guard.close()` on process exit or cancellation, including on
+         failed spawn. Never replace step 2 with raw Windows Popen."""
     return _create_platform_guard(memory_limit_bytes, active_process_limit)
 
 

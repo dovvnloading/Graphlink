@@ -180,17 +180,14 @@ while True:
             if self._manage_cwd:
                 prepare_scratch_dir(self.cwd)
 
-            # ADR-005 stage 5.2/5.3: the guard is created BEFORE Popen so
-            # its popen_kwargs() can reach the spawn itself. On Windows
-            # that dict is empty (a job object is applied to an already-
-            # running process by assign() below); on POSIX it carries the
-            # process-group request and the rlimit preexec hook, which have
-            # to be in place between fork and exec - see
-            # graphlink_execution_guard's own docstring.
+            # Configure the guard BEFORE spawn. Windows creates the Python
+            # REPL inside the Job Object atomically via the native launcher;
+            # POSIX passes its process group/limits to the child at exec.
+            # Never substitute raw Popen + post-spawn assignment on Windows.
             self.guard = create_execution_guard()
 
             try:
-                self.process = spawn_guarded_subprocess(self.guard, 
+                self.process = spawn_guarded_subprocess(self.guard,
                     [sys.executable, '-c', script],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
@@ -201,9 +198,9 @@ while True:
                     **self.guard.popen_kwargs(),
                     **kwargs
                 )
-                # Windows Job Object assignment occurs after Popen. Any
-                # failure must kill the now-unrestricted child, not silently
-                # continue as if resource limits and tree cleanup exist.
+                # Native Windows already attached the job at process
+                # creation; this helper is a no-op there and retains the
+                # POSIX/test-double post-spawn contract.
                 assign_guarded_subprocess(self.guard, self.process)
             except BaseException:
                 process = self.process
