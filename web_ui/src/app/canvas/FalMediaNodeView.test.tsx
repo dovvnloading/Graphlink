@@ -28,7 +28,7 @@ const media = {
 const callbacks = () => ({
   onSaveDraft: vi.fn(), onSearch: vi.fn(), onInspect: vi.fn(), onFavorite: vi.fn(),
   onPrepare: vi.fn(), onGenerate: vi.fn(), onRefresh: vi.fn(),
-  onCancel: vi.fn(), onDelete: vi.fn(),
+  onCancel: vi.fn(), onAcknowledge: vi.fn(), onDelete: vi.fn(),
 });
 function setup({
   mediaOverride = {}, catalogOverride = {}, schemaOverride = {},
@@ -167,6 +167,24 @@ describe("Fal Media Studio node", () => {
     });
     await waitFor(() => expect(funcs.onRefresh).toHaveBeenCalledOnce());
     expect(screen.getByText(/In the Fal queue/)).toBeInTheDocument();
+    expect(funcs.onGenerate).not.toHaveBeenCalled();
+  });
+
+  it("protects against ambiguous paid resubmission until dashboard acknowledgement", async () => {
+    const { user, funcs } = setup({ mediaOverride: {
+      status: "unconfirmed",
+      error: "The job may have been accepted by Fal without a returned ID.",
+      modelId: "fal-ai/model-economy",
+    } });
+    expect(screen.getByText("Submission outcome unknown")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Open Fal dashboard/ })).toHaveAttribute("href", "https://fal.ai/dashboard");
+    expect(screen.queryByRole("button", { name: /Review cost & generate/ })).not.toBeInTheDocument();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await user.click(screen.getByRole("button", { name: /I've checked/ }));
+    expect(funcs.onAcknowledge).not.toHaveBeenCalled();
+    confirm.mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: /I've checked/ }));
+    expect(funcs.onAcknowledge).toHaveBeenCalledOnce();
     expect(funcs.onGenerate).not.toHaveBeenCalled();
   });
 
