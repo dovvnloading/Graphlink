@@ -21,6 +21,7 @@ import requests
 
 QUEUE_ORIGIN = "https://queue.fal.run"
 SYNC_ORIGIN = "https://fal.run"
+PLATFORM_ORIGIN = "https://api.fal.ai"
 _SEGMENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 _MAX_BODY_BYTES = 24 * 1024 * 1024
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -181,7 +182,7 @@ class FalClient:
               headers: dict | None = None) -> Any:
         # Only our hardcoded hosts are used. Redirects are disabled to keep
         # the key from reaching a malicious location.
-        if origin not in {QUEUE_ORIGIN, SYNC_ORIGIN}:
+        if origin not in {QUEUE_ORIGIN, SYNC_ORIGIN, PLATFORM_ORIGIN}:
             raise FalError("Unapproved fal API host.")
         url = origin + "/" + path
         if params:
@@ -209,6 +210,88 @@ class FalClient:
                 return response.json()
             except (ValueError, requests.exceptions.JSONDecodeError):
                 raise FalError("fal.ai returned an invalid JSON response.") from None
+
+    def search_models(self, query: str = "", *, category: str = "", limit: int = 20,
+                      cursor: str | None = None, status: str = "active",
+                      sort: str = "relevant") -> dict:
+        """Search/list Fal's current public model catalog, not a hardcoded snapshot.
+
+        The Fal Platform API documents this read-only endpoint at
+        https://api.fal.ai/v1/models; an API key grants higher rate limits.
+        """
+        if not isinstance(query, str) or len(query) > 200:
+            raise FalError("Model search query must be a string of at most 200 characters.")
+        if not isinstance(category, str) or len(category) > 80 or any(
+            ord(ch) < 32 for ch in category
+        ):
+            raise FalError("Invalid model category.")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise FalError("Model search limit must be an integer between 1 and 100.")
+        if status not in {"active", "deprecated", "all"}:
+            raise FalError("Model status must be active, deprecated or all.")
+        if sort not in {"relevant", "recent"}:
+            raise FalError("Model sort must be relevant or recent.")
+        if cursor is not None and (not isinstance(cursor, str) or not 0 < len(cursor) <= 512
+                                   or not cursor.isascii()):
+            raise FalError("Invalid model catalog pagination cursor.")
+        params: dict[str, str | int] = {"limit": limit, "sort": sort}
+        if query.strip():
+            params["q"] = query.strip()
+        if category.strip():
+            params["category"] = category.strip()
+        if status != "all":
+            params["status"] = status
+        if cursor:
+            params["cursor"] = cursor
+        result = self._call("GET", PLATFORM_ORIGIN, "v1/models", params=params)
+        if not isinstance(result, dict) or not isinstance(result.get("models"), list):
+            raise FalError("fal.ai model catalog returned an invalid response.")
+        return result
+
+    def model_details(self, model_id: str, *, include_schema: bool = True) -> dict:
+        """Read current model metadata and optional OpenAPI 3.0 schema."""
+        path = model_path(model_id)
+        params: dict[str, str] = {"endpoint_id": path}
+        if include_schema:
+            params["expand"] = "openapi-3.0"
+        result = self._call("GET", PLATFORM_ORIGIN, "v1/models", params=params)
+        if not isinstance(result, dict) or not isinstance(result.get("models"), list):
+            raise FalError("fal.ai model lookup returned an invalid response.")
+        matching = [
+            item for item in result["models"]
+            if isinstance(item, dict) and item.get("endpoint_id") == path
+        ]
+        if not matching:
+            raise FalError("Fal.ai did not return metadata for this model endpoint.")
+        return matching[0]
+
+    def model_pricing(self, model_id: str) -> dict:
+        """Get live account-specific unit pricing; never infer a price."""
+        path = model_path(model_id)
+        result = self._call(
+            "GET", PLATFORM_ORIGIN, "v1/models/pricing",
+            params={"endpoint_id": path},
+        )
+        if not isinstance(result, dict) or not isinstance(result.get("prices"), list):
+            raise FalError("fal.ai pricing endpoint returned an invalid response.")
+        return result
+
+    def estimate_cost(self, model_id: str, *, quantity: int = 1,
+                      basis: str = "historical_api_price") -> dict:
+        """Ask Fal for a nonbinding estimate; actual billing depends on output."""
+        path = model_path(model_id)
+        if basis not in {"historical_api_price", "unit_price"}:
+            raise FalError("Cost estimate basis must be historical_api_price or unit_price.")
+        if isinstance(quantity, bool) or not isinstance(quantity, int) or not 1 <= quantity <= 1000000:
+            raise FalError("Cost estimate quantity must be a positive integer up to 1,000,000.")
+        quantity_key = "call_quantity" if basis == "historical_api_price" else "unit_quantity"
+        result = self._call(
+            "POST", PLATFORM_ORIGIN, "v1/models/pricing/estimate",
+            arguments={"estimate_type": basis, "endpoints": {path: {quantity_key: quantity}}},
+        )
+        if not isinstance(result, dict) or "total_cost" not in result:
+            raise FalError("fal.ai cost estimation endpoint returned an invalid response.")
+        return result
 
     def submit(self, model_id: str, arguments: dict, *, options: dict | None = None) -> dict:
         path = model_path(model_id)
