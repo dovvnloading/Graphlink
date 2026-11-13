@@ -26,7 +26,7 @@ from pathlib import Path
 
 import api_provider
 import graphlink_task_config as config
-from graphlink_execution_guard import create_execution_guard
+from graphlink_execution_guard import spawn_guarded_subprocess, assign_guarded_subprocess, create_execution_guard
 from graphlink_process_env import safe_subprocess_env
 from graphlink_scratch_dirs import (
     PYTHON_REPL_ROOT,
@@ -190,7 +190,7 @@ while True:
             self.guard = create_execution_guard()
 
             try:
-                self.process = subprocess.Popen(
+                self.process = spawn_guarded_subprocess(self.guard, 
                     [sys.executable, '-c', script],
                     stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
@@ -204,7 +204,7 @@ while True:
                 # Windows Job Object assignment occurs after Popen. Any
                 # failure must kill the now-unrestricted child, not silently
                 # continue as if resource limits and tree cleanup exist.
-                self.guard.assign(self.process.pid)
+                assign_guarded_subprocess(self.guard, self.process)
             except BaseException:
                 process = self.process
                 if process is not None:
