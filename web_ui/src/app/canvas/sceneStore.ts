@@ -864,6 +864,10 @@ export class SceneStore {
     this.transport.fireIntent("scene", "cancelFalMedia", [nodeId]);
   }
 
+  acknowledgeFalMediaSubmission(nodeId: string): void {
+    this.transport.fireIntent("scene", "acknowledgeFalMediaSubmission", [nodeId]);
+  }
+
   // R3.25/R3.26: real conversation nodes - the only R3 kind shaped like a
   // growing message LIST (data.history) rather than one scalar content
   // field. addConversationNode has no real UI creation trigger yet, same
