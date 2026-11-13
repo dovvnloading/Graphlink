@@ -816,6 +816,7 @@ function makeFalMediaFns(id: string, liveRef: { current: DispatcherLive }) {
     onGenerate: (approvalId: string) => liveRef.current.store.generateFalMedia(id, approvalId),
     onRefresh: () => liveRef.current.store.refreshFalMedia(id),
     onCancel: () => liveRef.current.store.cancelFalMedia(id),
+    onAcknowledge: () => liveRef.current.store.acknowledgeFalMediaSubmission(id),
     onDelete: () => liveRef.current.store.removeNodes([id]),
   };
 }
