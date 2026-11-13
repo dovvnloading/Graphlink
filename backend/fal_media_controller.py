@@ -26,7 +26,7 @@ from backend.fal_media_domain import (
 )
 
 logger = logging.getLogger(__name__)
-_ACTIVE = {"submitting", "queued", "running", "cancelling", "stalled"}
+_ACTIVE = {"submitting", "queued", "running", "cancelling", "stalled", "unconfirmed"}
 _CACHE_TTL = 150.0
 
 
@@ -271,8 +271,16 @@ class FalMediaController:
             live = self._live(node_id)
             if live is not None and live is node:
                 failed = read_media(live)
-                failed["status"] = "failed"
-                failed["error"] = str(exc)[:250]
+                # A dropped POST response can mean Fal accepted a paid job
+                # but the client never received its UUID. Automatically
+                # allowing another submission risks double billing.
+                failed["status"] = "unconfirmed"
+                failed["error"] = (
+                    "Submission outcome is unknown. Fal may have accepted "
+                    "and charged this request. Check the Fal dashboard "
+                    "before unlocking this Studio to submit another. "
+                    f"({type(exc).__name__})"
+                )
                 store_media(live, failed)
                 await self._publish()
             return
@@ -335,6 +343,20 @@ class FalMediaController:
         store_media(live, update)
         await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
                                 model_id, request_id, code, result)
+        await self._publish()
+
+    async def acknowledge_unconfirmed(self, node_id: str) -> None:
+        """Only the user may clear an ambiguous submission after checking Fal.
+
+        Deliberately no network or automatic retry: the dashboard is the
+        authority when Graphlink never received a request ID.
+        """
+        node = require_node(self.document.nodes, node_id, "fal_media", FalMediaState)
+        media = read_media(node)
+        if media["status"] != "unconfirmed":
+            raise FalError("This studio has no unconfirmed submission.")
+        media.update({"status": "idle", "error": "", "requestId": "", "quote": None})
+        store_media(node, media)
         await self._publish()
 
     async def cancel(self, node_id: str) -> None:
