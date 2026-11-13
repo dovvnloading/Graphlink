@@ -179,11 +179,13 @@ def test_native_job_attribute_failure_never_launches_unguarded_child(tmp_path, m
         guard.close()
 
 
-def test_native_guard_close_racing_create_does_not_leave_running_child(monkeypatch):
+def test_native_guard_close_racing_create_does_not_leave_running_child(tmp_path, monkeypatch):
     """A concurrent Stop between job-handle duplication and CreateProcess is contained."""
     import graphlink_windows_job_popen as native
 
     original_create = native._create_process_in_job
+    marker = tmp_path / "pre-creation-marker.txt"
+    script = "from pathlib import Path; Path(" + repr(str(marker)) + ").write_text('executed')"
     reached_create = threading.Event()
     resume_create = threading.Event()
     result: dict[str, object] = {}
@@ -199,7 +201,7 @@ def test_native_guard_close_racing_create_does_not_leave_running_child(monkeypat
 
     def launch():
         try:
-            result["process"] = _launch(guard, "import time;time.sleep(30)")
+            result["process"] = _launch(guard, script + "; import time;time.sleep(30)")
         except (ExecutionGuardUnavailable, OSError) as exc:
             result["denied"] = exc
 
@@ -207,6 +209,7 @@ def test_native_guard_close_racing_create_does_not_leave_running_child(monkeypat
     thread.start()
     try:
         assert reached_create.wait(timeout=6), "native launcher never reached job creation"
+        assert not marker.exists(), "child executed before native creation-time job attachment"
         # The native launcher has already duplicated the configured job
         # handle; closing its original cannot let a child escape the job.
         guard.close()
