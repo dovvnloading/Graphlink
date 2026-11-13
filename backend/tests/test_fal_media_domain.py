@@ -168,6 +168,19 @@ def test_output_gallery_handles_multiple_modalities_without_blob_inline():
     assert media["history"] == []
 
 
+def test_bad_media_url_ports_are_ignored_without_discarding_valid_outputs():
+    result = {
+        "images": [
+            {"url": "https://v3.fal.media:not-a-port/image.png"},
+            {"url": "https://v3.fal.media/files/good.png"},
+            {"url": "https://user:password@v3.fal.media/files/signed.png"},
+        ]
+    }
+    assert outputs_for(result, "image") == [
+        {"url": "https://v3.fal.media/files/good.png", "kind": "image"}
+    ]
+
+
 def test_node_media_serialization_only_saves_bounded_model_state():
     doc = SceneDocument()
     node = doc.add_plugin_node("fal_media", 20, 40, None,
