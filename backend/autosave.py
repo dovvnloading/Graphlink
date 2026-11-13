@@ -124,6 +124,11 @@ async def autosave_tick(
     a manual Save - see session_save.py's _serialize_plugin_node for the
     actual check. `None` (this parameter's own default) preserves the
     exact prior ungated behavior."""
+    if canvas_document.unrestored_node_count:
+        # loadChat already warned that this graph has unresolved nodes.
+        # Avoid a noisy error notification every 30 seconds: neither a
+        # manual Save nor an autosave may overwrite its original row.
+        return
     if not canvas_document.nodes and canvas_document.current_chat_id is None:
         # Mirrors saveChat's own "Nothing was added to the chat canvas yet"
         # guard - an empty, never-saved canvas has nothing worth protecting.
