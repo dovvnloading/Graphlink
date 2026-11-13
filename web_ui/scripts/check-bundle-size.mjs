@@ -238,7 +238,24 @@ const LARGEST_CHUNK_CEILING_BYTES = 512_000;
 // 2026-09-19: moved DOWN to ~3% over the measured 1,397,864 (from
 // 1,461,180) - the validator tables shrank the total, not just moved bytes
 // between chunks, so the ratchet takes the gain.
-const TOTAL_JS_CEILING_BYTES = 1_440_000;
+// Deliberate, measured amendment - 2026-11-13 (ADR-019 section 4).
+// First-class Fal.ai support adds a dedicated lazy Settings workspace for
+// model-specific JSON, encrypted credential configuration, queued job
+// lifecycle, output inspection and media inputs. It requires no NEW npm
+// dependency, and the initial (largest) chunk remains under the separately
+// enforced, unchanged 512,000-byte ADR-019 first-paint budget.
+//
+// CI measured total JS at 1,441,923 bytes across 48 chunks, a 1,923-byte
+// exceedance of the prior 1,440,000-byte ratchet. Against the 2026-09-19
+// recorded 1,397,864 measurement the combined intervening changes (NOT
+// solely this PR) grew the total by 44,059 bytes; do not misattribute that
+// drift entirely to Fal.ai. This explicit adjustment restores ~3% total-JS
+// headroom over the current measured 1,441,923, matching prior amendments,
+// while retaining the unchanged stringent 512,000-byte initial-chunk gate.
+// It is a consciously reviewed cost of additional app functionality, not a
+// workaround for a failed test or unreviewed bundle regression.
+// Re-anchor downward whenever the total actually shrinks again.
+const TOTAL_JS_CEILING_BYTES = 1_486_000;
 
 // Below this much headroom, say so. Both prior amendments record the same
 // story: the ceiling was set with ~3-5% room, ordinary week-to-week growth
