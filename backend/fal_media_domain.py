@@ -203,12 +203,14 @@ def model_catalog_page(client, *, mode: str, operation: str, query: str,
     models = search.get("models", [])
     if not isinstance(models, list):
         raise FalError("Fal returned an invalid model catalog.")
-    normalized = []
-    seen = set()
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for item in models[:50]:
         if not isinstance(item, dict):
             continue
         endpoint = item.get("endpoint_id")
+        if not isinstance(endpoint, str):
+            continue
         try:
             endpoint = model_path(endpoint)
         except FalError:
