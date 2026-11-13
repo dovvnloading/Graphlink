@@ -67,7 +67,7 @@ def test_fal_invalid_key_never_overwrites_existing_credential(tmp_path):
     manager.set_fal_api_key("valid-saved-key")
     invoke(bus, "setFalApiKey", "\r\nmalicious")
     assert manager.get_fal_api_key() == "valid-saved-key"
-    assert "valid" not in last_settings(recorder)["falNotice"]
+    assert last_settings(recorder)["falNotice"] == "Enter a valid Fal.ai API key."
 
 
 def test_submit_sync_refresh_and_cancel_flow(tmp_path, monkeypatch):
