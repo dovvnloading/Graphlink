@@ -49,16 +49,6 @@ _TOOL_DEFINITIONS = (
 )
 
 
-def _model_args(call: ToolCall) -> tuple[str, dict, dict]:
-    args = call.arguments
-    model = model_path(args.get("model_id"))
-    payload = args.get("arguments", {})
-    options = args.get("options") or {}
-    if not isinstance(payload, dict) or not isinstance(options, dict):
-        raise FalError("arguments and options must be JSON objects.")
-    return model, payload, options
-
-
 def _format(value: object) -> str:
     raw = json.dumps(value, ensure_ascii=False, default=str, allow_nan=False)
     if len(raw) > 24000:
@@ -74,28 +64,38 @@ def _invoke(manager, operation: str, arguments: dict) -> object:
         if not isinstance(path, str) or not path:
             raise FalError("path must be a local file path.")
         return {"url": client.upload_file(path)}
-    model = model_path(arguments.get("model_id"))
-    request_id = arguments.get("request_id")
+    candidate = arguments.get("model_id")
+    if not isinstance(candidate, str):
+        raise FalError("model_id must be a model endpoint string.")
+    model = model_path(candidate)
+    value = arguments.get("request_id")
+    request_id = value if isinstance(value, str) else ""
+
+    def record_job(*args):
+        # The same settings lock as all UI intents: Builder calls can run
+        # concurrently with Settings mutations and must not lose writes.
+        from backend.api._settings_shared import run_locked
+        run_locked(manager.upsert_fal_job, *args)
     if operation == "fal.submit":
         output = client.submit(model, arguments.get("arguments", {}), options=arguments.get("options"))
-        manager.upsert_fal_job(model, output["request_id"], output.get("status", "IN_QUEUE"))
+        record_job(model, output["request_id"], output.get("status", "IN_QUEUE"))
     elif operation == "fal.run":
         output = client.run(model, arguments.get("arguments", {}), options=arguments.get("options"))
     elif operation == "fal.status":
         output = client.status(model, request_id, logs=arguments.get("logs") is True)
-        manager.upsert_fal_job(model, request_id, output["status"])
+        record_job(model, request_id, output["status"])
     elif operation == "fal.result":
         output = client.result(model, request_id)
-        manager.upsert_fal_job(model, request_id, "COMPLETED", output)
+        record_job(model, request_id, "COMPLETED", output)
     elif operation == "fal.cancel":
         output = client.cancel(model, request_id)
-        manager.upsert_fal_job(model, request_id, str(output.get("status", "CANCELLATION_REQUESTED")))
+        record_job(model, request_id, str(output.get("status", "CANCELLATION_REQUESTED")))
     elif operation == "fal.wait":
         timeout = arguments.get("timeout", 180)
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
             raise FalError("timeout must be a number.")
         output = client.wait(model, request_id, timeout=float(timeout))
-        manager.upsert_fal_job(model, request_id, "COMPLETED", output)
+        record_job(model, request_id, "COMPLETED", output)
     else:
         raise FalError("Unknown fal tool.")
     return {"data": output, "media_urls": media_urls(output)}
