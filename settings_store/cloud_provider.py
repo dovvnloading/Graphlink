@@ -107,6 +107,37 @@ class CloudProviderSettingsOps(SettingsManagerParts):
         self.state["fal_api_key"] = self._protect_and_track(key.strip())
         self._save_state()
 
+    def get_fal_media_favorites(self) -> list[str]:
+        """Saved model favorites, separate from Fal's account-side asset favorites."""
+        raw = self.state.get("fal_media_favorites", [])
+        if not isinstance(raw, list):
+            return []
+        result = []
+        for value in raw[:500]:
+            try:
+                path = model_path(value)
+            except Exception:
+                continue
+            if path not in result:
+                result.append(path)
+        return result
+
+    def set_fal_media_favorite(self, model_id: str, enabled: bool) -> None:
+        """Idempotent setter: safe against a replayed WebSocket intent."""
+        path = model_path(model_id)
+        if not isinstance(enabled, bool):
+            raise ValueError("favorite setting must be boolean")
+        favorites = self.get_fal_media_favorites()
+        if enabled:
+            if path not in favorites:
+                if len(favorites) >= 500:
+                    raise ValueError("Maximum of 500 favorite models reached.")
+                favorites.append(path)
+        else:
+            favorites = [entry for entry in favorites if entry != path]
+        self.state["fal_media_favorites"] = favorites
+        self._save_state()
+
     def get_fal_jobs(self) -> list[dict]:
         # Bounded metadata only. Inputs and the API key are never stored in
         # this ledger. Full responses are capped per job for session.dat.
