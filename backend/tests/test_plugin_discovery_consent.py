@@ -171,11 +171,11 @@ def test_granting_a_plugin_keeps_the_session_loop_responsive(tmp_path, monkeypat
     proceed = threading.Event()
     original_prepare = plugin_sdk_module._discover_out_of_process_plugin
 
-    def delayed_preparation(manifest, plugin_dir):
+    def delayed_preparation(manifest, plugin_dir, *, on_client_created=None):
         started.set()
         if not proceed.wait(timeout=5):
             raise AssertionError("test setup did not release worker activation")
-        return original_prepare(manifest, plugin_dir)
+        return original_prepare(manifest, plugin_dir, on_client_created=on_client_created)
 
     monkeypatch.setattr(plugin_sdk_module, "_discover_out_of_process_plugin", delayed_preparation)
 
@@ -236,11 +236,11 @@ def test_parallel_grant_revoke_intents_preserve_final_consent(tmp_path, monkeypa
     proceed = threading.Event()
     original_prepare = plugin_sdk_module._discover_out_of_process_plugin
 
-    def delayed_preparation(manifest, plugin_dir):
+    def delayed_preparation(manifest, plugin_dir, *, on_client_created=None):
         started.set()
         if not proceed.wait(timeout=5):
             raise AssertionError("timed out waiting for release")
-        return original_prepare(manifest, plugin_dir)
+        return original_prepare(manifest, plugin_dir, on_client_created=on_client_created)
 
     monkeypatch.setattr(plugin_sdk_module, "_discover_out_of_process_plugin", delayed_preparation)
 
@@ -253,14 +253,14 @@ def test_parallel_grant_revoke_intents_preserve_final_consent(tmp_path, monkeypa
             revoke = asyncio.create_task(
                 bus.dispatch_intent("app-plugins", "setPluginGrant", ["ordered_consent", False]),
             )
-            await asyncio.sleep(0)
-            # Revoke cannot publish or modify grants until the first
-            # approval/registration finishes.
-            assert settings.get_plugin_grants()["ordered_consent"] is True
+            # A same-session revoke must now PREEMPT the slow approval,
+            # without waiting for its to_thread registration RPC to finish.
+            await asyncio.wait_for(revoke, timeout=3)
+            assert settings.get_plugin_grants()["ordered_consent"] is False
+            assert "ordered_consent" not in registry.loaded_plugin_ids
         finally:
             proceed.set()
         await asyncio.wait_for(grant, timeout=10)
-        await asyncio.wait_for(revoke, timeout=10)
 
     try:
         asyncio.run(run())
