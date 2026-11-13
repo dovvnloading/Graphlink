@@ -289,10 +289,11 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     real = _collect_real_registrations()
     # 194 -> 196 when engine-v2 added scene/setEdgeRole and scene/getEdgeRoles.
     # 196 -> 197 when archive restoration added app-chat-library/importWorkspace.
-    # 197 -> 204 when first-class fal.ai added seven settings intents:
+    # 197 -> 204 when first-class fal.ai added seven settings intents.
+    # 204 -> 208 when fal.ai live model search/schema/pricing/estimate landed:
     # key storage/clear, queue submit/status/cancel, synchronous run, CDN upload.
-    assert len(real) == 204, (
-        f"expected exactly 204 real registered intents, found {len(real)} - "
+    assert len(real) == 208, (
+        f"expected exactly 208 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"
