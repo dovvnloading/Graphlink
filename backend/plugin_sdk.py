@@ -838,13 +838,20 @@ class _PendingWorkerReservation:
         with self._lock:
             return self._cancelled
 
-    def revoke(self) -> None:
+    def cancel(self) -> "PluginWorkerClient | None":
+        """Set the cancellation bit without performing any blocking OS I/O.
+
+        Called while holding the SDK registry lock to make unregister and
+        revocation linearizable with the async task's publish step.
+        """
         with self._lock:
             self._cancelled = True
-            client = self._client
+            return self._client
+
+    def revoke(self) -> None:
+        client = self.cancel()
         if client is not None:
-            # Close may wait for an in-progress Popen/assign to finish, but
-            # it runs outside both the reservation and registry locks.
+            # Close may wait for Popen/assign, outside both registry locks.
             client.close()
 
 
@@ -1808,6 +1815,11 @@ def deactivate_plugin_worker(registry: PluginRegistry, plugin_id: str) -> tuple[
     with _REGISTRY_CACHE_LOCK:
         pending = registry.pending_worker_activations.get(plugin_id)
         reservation = registry.pending_worker_reservations.get(plugin_id)
+        # The pending activation publishes under this SAME global lock.
+        # Cancel atomically with the registry snapshot, otherwise it could
+        # publish a worker in the gap before its cancel flag was set and
+        # leave a closed-but-registered worker behind after revoke.
+        provisional = reservation.cancel() if reservation is not None else None
         worker = registry.worker_clients.pop(plugin_id, None)
         retired_kinds: tuple[str, ...] = ()
         owns_drain = worker is not None or reservation is not None or pending is not None
@@ -1840,8 +1852,8 @@ def deactivate_plugin_worker(registry: PluginRegistry, plugin_id: str) -> tuple[
         # Set the cancel bit and close the provisional client first. A
         # worker stuck in a slow registration RPC is killed immediately,
         # not only once its asyncio.to_thread operation returns.
-        if reservation is not None:
-            reservation.revoke()
+        if provisional is not None and provisional is not worker:
+            provisional.close()
         if pending is not None and not pending.done():
             try:
                 pending.get_loop().call_soon_threadsafe(pending.cancel)
