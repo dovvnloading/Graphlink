@@ -310,6 +310,7 @@ def _build_settings_payload(manager: SettingsManager, state: SettingsSessionStat
     payload["falNotice"] = state.fal_notice
     payload["falBusy"] = state.fal_busy
     payload["falSyncResultJson"] = state.fal_sync_result_json
+    payload["falDiscoveryJson"] = state.fal_discovery_json
     payload["falUploadUrl"] = state.fal_upload_url
     viewing_provider = state.viewing_api_provider
     payload["activeApiProvider"] = manager.get_api_provider()
