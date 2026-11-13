@@ -2313,7 +2313,15 @@ def make_load_chat(
         await bus.publish("scene")
         if notifications is not None:
             title = str(row.get("title") or "chat")
-            notifications.show(f'Loaded "{title}".', "success")
+            if canvas_document.unrestored_node_count:
+                notifications.show(
+                    f'Loaded "{title}" with missing or unreadable nodes. '
+                    "Saving is disabled to protect the original graph. "
+                    "Restore the missing plugin(s) and reopen this graph.",
+                    "warning",
+                )
+            else:
+                notifications.show(f'Loaded "{title}".', "success")
             await bus.publish("notification")
 
     return load_chat

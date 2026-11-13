@@ -224,6 +224,11 @@ class SceneDocument(
     # New Chat confirm skips only when the canvas is empty AND there is no
     # current chat - a predicate the frontend cannot evaluate without it.
     current_chat_id: int | None = None
+    # Restoration may intentionally omit unknown/missing-plugin nodes.
+    # Never treat a partial in-memory scene as a safe replacement for the
+    # original saved database row. Not persisted or published: this is a
+    # per-load safety latch reset by clear_for_load/newChat.
+    unrestored_node_count: int = 0
     # ADR-020 stage 20.2: which workspace the NEXT save of this document
     # should INSERT a brand-new graph row into, or None to fall back to the
     # Default workspace (see save_chat_atomically_row's own workspace_id
@@ -494,6 +499,7 @@ class SceneDocument(
         self.total_session_tokens = 0
         self.current_chat_id = None
         self.current_workspace_id = None
+        self.unrestored_node_count = 0
         self.branch_index_sources.clear()
         # ADR-010 stage 10.1: undo history does NOT survive a session load.
         # Every command in it references node/edge ids from the document
