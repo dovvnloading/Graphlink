@@ -354,6 +354,36 @@ class TestPdfAndDocx:
         with pytest.raises(AttachmentError, match="expanded-stream"):
             stage_file(str(path))
 
+    def test_a_small_valid_font_cmap_remains_extractable(self, tmp_path):
+        """Preflighting font streams must not reject normal ToUnicode maps."""
+        from pypdf import PdfWriter
+        from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        cmap = DecodedStreamObject()
+        cmap.set_data(
+            b"/CIDInit /ProcSet findresource begin\n"
+            b"12 dict begin\nbegincmap\n1 beginbfchar\n"
+            b"<41> <0041>\nendbfchar\nendcmap\nend\nend\n"
+        )
+        cmap_ref = writer._add_object(cmap.flate_encode())
+        font = writer._add_object(DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+            NameObject("/ToUnicode"): cmap_ref,
+        }))
+        page[NameObject("/Resources")] = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+        })
+        direct = DecodedStreamObject()
+        direct.set_data(b"BT /F1 12 Tf 36 720 Td (A) Tj ET")
+        page[NameObject("/Contents")] = writer._add_object(direct)
+        path = tmp_path / "valid-font-cmap.pdf"
+        writer.write(path)
+        assert "A" in stage_file(str(path)).extracted_text
+
     def test_pdf_total_decoded_stream_bytes_across_pages_is_bounded(
         self, tmp_path, monkeypatch,
     ):
