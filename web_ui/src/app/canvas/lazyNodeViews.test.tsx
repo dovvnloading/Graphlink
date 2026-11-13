@@ -93,8 +93,8 @@ describe("a chunk that is still loading", () => {
 describe("the exported node views", () => {
   it("are all wrapped, so no kind can bypass the boundary", () => {
     const views = Object.entries(lazyNodeViews).filter(([name]) => name.endsWith("NodeView"));
-    // 17 kinds; GroupNodeView backs both frame and container.
-    expect(views.length).toBe(17);
+    // 18 lazy views; GroupNodeView backs both frame and container.
+    expect(views.length).toBe(18);
     for (const [name, view] of views) {
       expect(typeof view, name).toBe("function");
       expect((view as ComponentType).displayName, name).toContain("LazyNodeView");
