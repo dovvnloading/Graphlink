@@ -13,7 +13,6 @@ import sys
 import threading
 import time
 import subprocess
-from pathlib import Path
 
 import pytest
 
