@@ -34,6 +34,13 @@ from graphlink_scratch_dirs import (
     safe_scratch_id,
     touch_scratch_dir_usage,
 )
+# stdout is controlled by code running in the child process. The child has
+# resource limits, but a parent-side unbounded readline()/output accumulator
+# would still allocate in the Graphlink host (before the Harness's 20k-char
+# display cap). Leave room under that cap for an explicit truncation marker.
+_REPL_READ_CHARS = 4_096
+_REPL_CAPTURE_CHARS = 19_000
+_REPL_TRUNCATION_NOTICE = "\n...[output truncated at 19,000 characters]"
 
 
 class PythonREPL:
@@ -217,16 +224,18 @@ while True:
             self.last_run_failed = True
             return f"Failed to send code to REPL: {e}"
 
-        output = []
+        captured: list[str] = []
+        captured_chars = 0
+        truncated = False
         while True:
-            line = self.process.stdout.readline()
+            # readline(size) bounds allocation BEFORE a child can emit one
+            # giant newline-free line. Keep reading after the capture cap:
+            # stopping at the cap would fill the child's stdout pipe and
+            # deadlock the REPL before its nonce-delimited boundary arrives.
+            line = self.process.stdout.readline(_REPL_READ_CHARS)
             if not line:
-                # EOF with no boundary line: the REPL process died mid-run
-                # (e.g. the executed code called sys.exit() or hard-crashed
-                # the interpreter). Reap it now - stdout EOF can arrive
-                # before poll() reports the exit, and without this the next
-                # execute() could write into the dying process's stdin
-                # (EINVAL) instead of restarting.
+                # EOF without a boundary: the interpreter exited mid-run.
+                # Reap it so the next call gets a fresh, synchronized REPL.
                 self.last_run_failed = True
                 self.stop()
                 break
@@ -237,9 +246,17 @@ while True:
             if stripped == self._boundary_prefix + "ERROR---":
                 self.last_run_failed = True
                 break
-            output.append(line)
+            if captured_chars < _REPL_CAPTURE_CHARS:
+                kept = line[:_REPL_CAPTURE_CHARS - captured_chars]
+                captured.append(kept)
+                captured_chars += len(kept)
+                if len(kept) != len(line):
+                    truncated = True
+            else:
+                truncated = True
 
-        return "".join(output).strip()
+        result = "".join(captured).strip()
+        return result + _REPL_TRUNCATION_NOTICE if truncated else result
 
     def stop(self):
         # Adversarial-review fix: serialized against a concurrent stop()
