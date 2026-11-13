@@ -103,12 +103,12 @@ describe("Fal Media Studio direct reference upload", () => {
       argumentsJson="{}" disabled={false}
       onJsonChange={vi.fn()} onBusyChange={vi.fn()}
     />);
-    expect(screen.getByRole("textbox", {name:"Media URL parameter"})).toHaveValue("video_url");
+    expect(screen.getByRole("combobox", {name:"Media URL parameter"})).toHaveValue("video_url");
     rerender(<FalMediaUploader
       mode="audio" operation="audio-to-audio" fields={[]}
       argumentsJson="{}" disabled={false}
       onJsonChange={vi.fn()} onBusyChange={vi.fn()}
     />);
-    expect(screen.getByRole("textbox", {name:"Media URL parameter"})).toHaveValue("audio_url");
+    expect(screen.getByRole("combobox", {name:"Media URL parameter"})).toHaveValue("audio_url");
   });
 });
