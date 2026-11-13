@@ -98,3 +98,41 @@ def test_a_dead_process_is_transparently_restarted_on_the_next_execute():
         assert repl.process is not None and repl.process.pid != dead_pid
     finally:
         repl.stop()
+
+def test_one_oversized_unterminated_stdout_line_is_bounded_and_repl_stays_synchronized():
+    """A child may emit many bytes before any newline; never buffer the full line."""
+    repl = PythonREPL(repl_id="core-oversized-line-test")
+    try:
+        output = repl.execute("print('a' * 50000, end='')")
+        assert "output truncated" in output
+        assert len(output) <= 20_000
+        assert repl.last_run_failed is False
+        # Must consume through the nonce marker despite truncating the output.
+        assert repl.execute("print(42)") == "42"
+    finally:
+        repl.stop()
+
+
+def test_many_short_stdout_lines_are_bounded_and_next_execution_works():
+    """Capping readline() alone is insufficient: total captured output needs a cap."""
+    repl = PythonREPL(repl_id="core-many-output-lines-test")
+    try:
+        output = repl.execute("for _ in range(11_000): print('x')")
+        assert "output truncated" in output
+        assert len(output) <= 20_000
+        assert repl.last_run_failed is False
+        assert repl.execute("print(7)") == "7"
+    finally:
+        repl.stop()
+
+
+def test_exactly_sized_reader_chunk_preserves_repl_framing():
+    """A real output line split by the bounded reader must not hide the sentinel."""
+    repl = PythonREPL(repl_id="core-reader-boundary-test")
+    try:
+        output = repl.execute("print('z' * 4096)")
+        assert output == "z" * 4096
+        assert repl.execute("print('next')") == "next"
+    finally:
+        repl.stop()
+
