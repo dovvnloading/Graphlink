@@ -312,6 +312,10 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("app-settings", "setMcpServers", "B", "preference: MCP server list is settings-store configuration, not document content"),
 
     # -- backend/api/intents_settings_fal.py (app-settings) ------------------
+    Classified("app-settings", "searchFalModels", "B", "read-only: fetch Fal live model catalog"),
+    Classified("app-settings", "inspectFalModel", "B", "read-only: fetch model metadata/OpenAPI schema"),
+    Classified("app-settings", "getFalModelPricing", "B", "read-only: current Fal model pricing"),
+    Classified("app-settings", "estimateFalModelCost", "B", "read-only: current nonbinding cost estimate"),
     Classified("app-settings", "setFalApiKey", "B", "preference: protected, write-only fal API credential"),
     Classified("app-settings", "clearFalApiKey", "B", "preference: clears a saved fal credential"),
     Classified("app-settings", "submitFalJob", "B", "run-lifecycle: external billed job, not a graph edit"),
