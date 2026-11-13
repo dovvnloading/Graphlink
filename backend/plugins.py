@@ -899,8 +899,25 @@ def register_plugins(
                     return
                 pending = activate_granted_plugins(plugin_registry, settings_manager)
                 task = plugin_registry.pending_worker_activations.get(plugin_id)
-                if task is None or task not in pending:
-                    break
+                drain_event = plugin_registry.draining_worker_events.get(plugin_id)
+            if drain_event is not None:
+                # A different session can re-approve while this plugin's
+                # previous worker is still shutting down. Do not silently
+                # publish "granted" with no executable registration, or
+                # start a replacement before the old process exits.
+                finished = await asyncio.to_thread(drain_event.wait, 20)
+                if not finished:
+                    if notifications is not None:
+                        notifications.show(
+                            "The previous plugin worker is still shutting down. "
+                            "Retry enabling it after shutdown completes.",
+                            "warning",
+                        )
+                        await bus.publish("notification")
+                    return
+                continue
+            if task is None or task not in pending:
+                break
             try:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
