@@ -10,6 +10,35 @@ This integration intentionally avoids an out-of-date hardcoded model list:
 the model-specific JSON input/output schema is taken from the model's
 documentation at <https://fal.ai/models>.
 
+## Live model discovery, schemas and cost checks
+
+Open **Settings > Fal.ai > Live model discovery & pricing**. Search the
+actual Fal registry by a keyword and/or category (such as `text-to-video`,
+`image-to-image`, `text-to-speech`, `image-to-3d`, `training`).
+Select **Use This Model** beside a result to set its exact endpoint ID,
+including subpaths. Next-page pagination is supported.
+
+For any selected endpoint, choose **Inspect Selected Model / Schema** to
+retrieve its published OpenAPI 3.0 input/output definitions. Choose
+**Check Current Pricing** to retrieve current per-billing-unit rates, or
+**Estimate Cost** with a quantity and one of Fal's two estimation modes:
+
+- `historical_api_price` estimates cost per API call using past usage.
+- `unit_price` estimates cost per billing unit (e.g. image or video second).
+
+These are **read-only requests**. They require no model execution approval
+and do not incur inference charges. Pricing and estimation are provisional:
+resolution, duration, quality and custom account rates may affect billing.
+The Model API itself will validate your actual argument JSON on submission;
+the UI intentionally accepts arbitrary model-specific fields rather than
+hardcoding a form for one version of a model.
+
+For Builder agents the four additional read-only tools are
+`fal.search_models`, `fal.model_details`, `fal.model_pricing`, and
+`fal.estimate_cost`. The Builder can therefore discover and price a model,
+inspect its schema, prepare valid arguments, and **then** request human
+approval before a billable `fal.submit` or `fal.run`.
+
 ## Setup
 
 1. Create a Fal API key from <https://fal.ai/dashboard/keys>.
@@ -118,6 +147,10 @@ Graphlink's Builder exposes these standard tool-registry tools:
 
 | Tool | Meaning | Approval |
 | --- | --- | --- |
+| `fal.search_models` | Search live model catalog with pagination | Automatic, if scoped |
+| `fal.model_details` | Fetch live endpoint metadata and OpenAPI schema | Automatic, if scoped |
+| `fal.model_pricing` | Check current billing-unit pricing | Automatic, if scoped |
+| `fal.estimate_cost` | Request historical/unit price estimate | Automatic, if scoped |
 | `fal.submit` | Queue a paid model inference | **Always, every call** |
 | `fal.run` | Synchronous paid inference | **Always, every call** |
 | `fal.status` | Read status / optional runner logs | Automatic, if scoped |
@@ -199,4 +232,7 @@ Official references:
 [status stream](https://fal.ai/docs/api-reference/inference-api/queue/status-stream),
 [cancel](https://fal.ai/docs/api-reference/inference-api/queue/cancel),
 [data retention](https://fal.ai/docs/documentation/model-apis/media-expiration),
-[Python SDK](https://fal-ai.github.io/fal/client/fal_client.html).
+[Python SDK](https://fal-ai.github.io/fal/client/fal_client.html),
+[Model search API](https://fal.ai/docs/platform-apis/v1/models),
+[Model pricing API](https://fal.ai/docs/platform-apis/v1/models/pricing),
+[Cost estimate API](https://fal.ai/docs/platform-apis/v1/models/pricing/estimate).
