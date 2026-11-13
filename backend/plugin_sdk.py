@@ -811,6 +811,43 @@ class PluginLoadError:
     message: str
 
 
+class _PendingWorkerReservation:
+    """Revocation handle published BEFORE a consented worker can spawn.
+
+    The launch thread owns connect()/registration, but the revoke thread may
+    asynchronously request shutdown of the same client. The reservation
+    prevents a late startup from spawning after revocation even if the
+    asyncio.to_thread call has not yet reached the plugin's first instruction.
+    Its own lock is never held through process IO.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._cancelled = False
+        self._client: "PluginWorkerClient | None" = None
+
+    def register(self, client: "PluginWorkerClient") -> bool:
+        with self._lock:
+            if self._cancelled:
+                return False
+            self._client = client
+            return True
+
+    @property
+    def cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def revoke(self) -> None:
+        with self._lock:
+            self._cancelled = True
+            client = self._client
+        if client is not None:
+            # Close may wait for an in-progress Popen/assign to finish, but
+            # it runs outside both the reservation and registry locks.
+            client.close()
+
+
 class PluginRegistry:
     def __init__(self) -> None:
         self.node_kinds: dict[str, NodeKindSpec] = {}  # namespaced kind -> spec
@@ -854,6 +891,9 @@ class PluginRegistry:
         # published into this registry on the loop. Retain tasks by id so
         # concurrent sessions/grant changes never start two workers.
         self.pending_worker_activations: dict[str, asyncio.Task[None]] = {}
+        # A handle is registered by the launch thread before connect/Popen.
+        # A revoke can terminate even a worker still awaiting registration.
+        self.pending_worker_reservations: dict[str, _PendingWorkerReservation] = {}
         # Reserve a revoked plugin while the old worker shuts down, without
         # holding the global discovery lock through OS waits/pipe closures.
         self.draining_worker_ids: set[str] = set()
@@ -970,6 +1010,11 @@ class PluginWorkerClient:
         self._write_failed = False
         self._write_lock = threading.Lock()
         self._call_lock = threading.Lock()
+        # close() is allowed from the revoke thread while connect() is
+        # still constructing Popen/assigning its guard. Serialize the
+        # handoff, then make the request visible before entering the lock.
+        self._lifecycle_lock = threading.RLock()
+        self._stop_requested = threading.Event()
 
     @property
     def is_connected(self) -> bool:
@@ -981,6 +1026,15 @@ class PluginWorkerClient:
         )
 
     def connect(self) -> None:
+        with self._lifecycle_lock:
+            if self._stop_requested.is_set():
+                raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" startup was revoked.')
+            self._connect_unlocked()
+            if self._stop_requested.is_set():
+                self.close()
+                raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" startup was revoked.')
+
+    def _connect_unlocked(self) -> None:
         """Spawns the worker subprocess. Call order, matching
         graphlink_execution_guard.create_execution_guard's own documented
         contract exactly: (1) create the guard, (2) Popen with
@@ -1034,6 +1088,11 @@ class PluginWorkerClient:
         self._stderr_thread.start()
 
     def close(self) -> None:
+        self._stop_requested.set()
+        with self._lifecycle_lock:
+            self._close_unlocked()
+
+    def _close_unlocked(self) -> None:
         # Terminate the entire guarded child tree BEFORE closing stdin:
         # a concurrent writer may be blocked on the pipe's IO lock, and
         # TextIOWrapper.close() would wait forever for that lock unless
@@ -1096,7 +1155,7 @@ class PluginWorkerClient:
         escaped _write()'s prior narrower except clause). _write() itself
         also now catches OSError as defense in depth for the remaining race
         (the process dying between this check and the actual write)."""
-        if not self.is_connected:
+        if self._stop_requested.is_set() or not self.is_connected:
             raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" is not connected.')
         with self._call_lock:
             self._next_id += 1
@@ -1334,6 +1393,7 @@ def _make_worker_intent_handler(worker_client: PluginWorkerClient, name: str) ->
 
 def _discover_out_of_process_plugin(
     manifest: PluginManifest, plugin_dir: Path,
+    *, on_client_created: "Callable[[PluginWorkerClient], bool] | None" = None,
 ) -> "tuple[HostContext, PluginWorkerClient]":
     """The out-of-process counterpart of discover_plugins()'s existing
     in-process branch (import module, construct HostContext, call
@@ -1371,6 +1431,10 @@ def _discover_out_of_process_plugin(
     finished loading."""
     worker_client = PluginWorkerClient(plugin_id=manifest.id, source_dir=plugin_dir)
     try:
+        # Notify the revoke path BEFORE any subprocess can be started. This
+        # callback is intentionally inside the exception/cleanup boundary.
+        if on_client_created is not None and not on_client_created(worker_client):
+            raise PluginWorkerError(f'Plugin worker "{manifest.id}" approval was revoked.')
         worker_client.connect()
         response = worker_client.call("get_registrations", {})
         host = HostContext(manifest.id)
