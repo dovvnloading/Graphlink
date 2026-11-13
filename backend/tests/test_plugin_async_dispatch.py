@@ -95,7 +95,10 @@ def test_slow_worker_factory_does_not_block_event_loop_and_still_creates_node(tm
             node_id = await asyncio.wait_for(task, timeout=3)
             assert node_id is not None
             assert document.nodes[node_id].content == "safe output"
-            assert document.nodes[node_id].parent_id == parent.id if hasattr(document.nodes[node_id], "parent_id") else True
+            assert any(
+                edge.source == parent.id and edge.target == node_id
+                for edge in document.edges.values()
+            )
             assert registry.node_kinds["fake.thing"].factory is not None
         finally:
             worker.release.set()
