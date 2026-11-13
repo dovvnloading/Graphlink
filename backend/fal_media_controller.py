@@ -270,44 +270,68 @@ class FalMediaController:
             and quote.get("fingerprint") == _fingerprint(model_id, args)
         ):
             raise FalError("Quote expired or inputs changed. Review the cost again before generating.")
-        media.update({"status": "submitting", "requestId": "", "queuePosition": 0,
-                      "error": "", "quote": None})
-        store_media(node, media)  # consume quote BEFORE awaiting network
-        await self._publish()
+        # Consume this approval before ANY await. The in-flight marker lets
+        # status refresh distinguish a live POST from a restart-interrupted one.
+        self._pending_quotes.pop(node_id, None)
+        self._submissions_in_flight.add(node_id)
         try:
-            response = await asyncio.to_thread(
-                self._client().submit, model_id, args,
-                options={"store_io": False},
-            )
-        except (FalError, TypeError, ValueError) as exc:
-            live = self._live(node_id)
-            if live is not None and live is node:
-                failed = read_media(live)
-                # A dropped POST response can mean Fal accepted a paid job
-                # but the client never received its UUID. Automatically
-                # allowing another submission risks double billing.
-                failed["status"] = "unconfirmed"
-                failed["error"] = (
-                    "Submission outcome is unknown. Fal may have accepted "
-                    "and charged this request. Check the Fal dashboard "
-                    "before unlocking this Studio to submit another. "
-                    f"({type(exc).__name__})"
-                )
-                store_media(live, failed)
-                await self._publish()
-            return
-        request_id = str(response["request_id"])
-        # Even if the user deleted the node while Fal accepted the job, keep
-        # its ID in Settings job history; never silently lose a paid request.
-        await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
-                                model_id, request_id, str(response.get("status") or "IN_QUEUE"))
-        live = self._live(node_id)
-        if live is not None and live is node:
-            pending = read_media(live)
-            pending.update({"requestId": request_id, "status": "queued",
-                            "queuePosition": int(response.get("queue_position") or 0)})
-            store_media(live, pending)
+            media.update({"status": "submitting", "requestId": "", "queuePosition": 0,
+                          "error": "", "quote": None})
+            store_media(node, media)
             await self._publish()
+            try:
+                response = await asyncio.to_thread(
+                    self._client().submit, model_id, args,
+                    options={"store_io": False},
+                )
+            except (FalError, TypeError, ValueError) as exc:
+                live = self._live(node_id)
+                if live is node:
+                    failed = read_media(live)
+                    # A dropped POST response may mean Fal accepted a paid
+                    # job. A normal retry could double-bill the user.
+                    failed["status"] = "unconfirmed"
+                    failed["error"] = (
+                        "Submission outcome is unknown. Fal may have accepted "
+                        "and charged this request. Check the Fal dashboard "
+                        "before unlocking this Studio to submit another. "
+                        f"({type(exc).__name__})"
+                    )
+                    store_media(live, failed)
+                    await self._publish()
+                return
+
+            request_id = str(response["request_id"])  # validated by FalClient.submit
+            position = response.get("queue_position")
+            if isinstance(position, bool) or not isinstance(position, int) or position < 0:
+                position = 0
+            # Save the accepted request ID *before* the fallible Settings
+            # ledger write. Even if the disk is full, users can track a paid
+            # job from its Studio and will not be stuck in "submitting".
+            live = self._live(node_id)
+            if live is node:
+                pending = read_media(live)
+                pending.update({"requestId": request_id, "status": "queued",
+                                "queuePosition": position})
+                store_media(live, pending)
+                await self._publish()
+            try:
+                # Deleted nodes still get a ledger entry when storage works.
+                await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
+                                        model_id, request_id, str(response.get("status") or "IN_QUEUE"))
+            except Exception as exc:
+                logger.warning("Could not record accepted Fal job in settings (%s).", type(exc).__name__)
+                live = self._live(node_id)
+                if live is node and read_media(live)["requestId"] == request_id:
+                    warning = read_media(live)
+                    warning["error"] = (
+                        "Fal accepted this job but Settings history could not be saved. "
+                        "Keep this Studio and copy its Job ID for recovery."
+                    )
+                    store_media(live, warning)
+                    await self._publish()
+        finally:
+            self._submissions_in_flight.discard(node_id)
 
     async def refresh(self, node_id: str) -> None:
         node = require_node(self.document.nodes, node_id, "fal_media", FalMediaState)
