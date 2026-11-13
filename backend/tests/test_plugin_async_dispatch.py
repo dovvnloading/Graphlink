@@ -162,7 +162,10 @@ def test_slow_worker_intent_does_not_block_bus_or_builder_tool(tmp_path):
         handler = _make_plugin_tool_handler(registry, settings, document, "fake", "answer")
         result = await check(lambda: handler(
             ToolCall(id="test", name="plugin:fake:answer", arguments={}),
-            RunContext(granted_scopes=frozenset()),
+            RunContext(
+                granted_scopes=frozenset(),
+                request_approval=lambda _call: asyncio.sleep(0, result=True),
+            ),
         ))
         assert result.is_error is False
         assert "worker action finished" in result.content
