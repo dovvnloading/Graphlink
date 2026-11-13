@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { authHeaders } from "../../lib/auth/token";
 import { editJsonValue, type MediaMode } from "./falMediaStudioModel";
 
@@ -14,6 +14,7 @@ export function FalMediaUploader({
   onJsonChange: (json: string) => void;
   onBusyChange: (uploading: boolean) => void;
 }) {
+  const urlFieldListId = useId();
   const initialField = useMemo(() =>
     operation === "image-to-image" || operation === "image-to-video" ? "image_url" :
       operation === "video-to-video" ? "video_url" :
@@ -130,11 +131,11 @@ export function FalMediaUploader({
         <label className="fal-studio-field">
           <span>Fal input field</span>
           <input className="fal-studio-control nodrag nopan" disabled={disabled || uploading}
-            list="fal-studio-url-fields" value={field}
+            list={urlFieldListId} value={field}
             aria-label="Media URL parameter"
             onChange={(event) => setFieldOverride({ scope, field: event.target.value })}
             placeholder="image_url" />
-          <datalist id="fal-studio-url-fields">
+          <datalist id={urlFieldListId}>
             {[...new Set(["image_url", "video_url", "audio_url", ...fields])].map((name) => <option key={name} value={name} />)}
           </datalist>
         </label>
