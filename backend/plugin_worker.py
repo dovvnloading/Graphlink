@@ -184,15 +184,13 @@ def main() -> None:
     # own subprocess.Popen call) but never consulted here - manifest.id below
     # is the authoritative identity HostContext uses, not whatever argv claims.
     source_dir = Path(sys.argv[2])
-    manifest_path = source_dir / MANIFEST_FILENAME
-    manifest = _load_manifest(manifest_path, source_dir)
-    _check_sdk_api_version(manifest)
-    module = _import_entry_module(manifest, source_dir)
-    _module_name, _, fn_name = manifest.entry_point.partition(":")
-    register_fn = getattr(module, fn_name)
-
-    host = HostContext(manifest.id)
-    register_fn(host)
+    # SECURITY: the parent creates the child with Popen() and only then
+    # attaches the Windows Job Object resource guard. Importing plugin.py
+    # here (before the first request) lets third-party code execute in the
+    # unguarded Popen-to-Assign window. The parent does not send ANY RPC
+    # until after guard.assign(pid) succeeds; defer all plugin imports and
+    # register() calls until that first guarded get_registrations request.
+    host: HostContext | None = None
 
     # Constructed once, never observed by anything outside this process - a
     # plugin's factory/intent handler calling run_ctx.notifications.show(...)
@@ -214,12 +212,27 @@ def main() -> None:
         params = request.get("params") or {}
         try:
             if method == "get_registrations":
+                if host is None:
+                    manifest_path = source_dir / MANIFEST_FILENAME
+                    manifest = _load_manifest(manifest_path, source_dir)
+                    _check_sdk_api_version(manifest)
+                    module = _import_entry_module(manifest, source_dir)
+                    _module_name, _, fn_name = manifest.entry_point.partition(":")
+                    register_fn = getattr(module, fn_name)
+                    # Publish the host only after the registration function
+                    # completes, so a failed first attempt cannot leave a
+                    # partially registered worker available for retry.
+                    candidate = HostContext(manifest.id)
+                    register_fn(candidate)
+                    host = candidate
                 result: dict[str, Any] = {
                     "node_kinds": _node_kinds_payload(host),
                     "picker_entries": _picker_entries_payload(host),
                     "intents": _intents_payload(host),
                 }
             elif method == "invoke_factory":
+                if host is None:
+                    raise ValueError("worker must initialize with get_registrations first")
                 local_kind = str(params.get("kind", ""))
                 namespaced_kind = f"{host.plugin_id}.{local_kind}"
                 kind_spec = host._node_kinds.get(namespaced_kind)
@@ -244,6 +257,8 @@ def main() -> None:
                     "state": _state_to_plain_dict(seed.state),
                 }
             elif method == "invoke_intent":
+                if host is None:
+                    raise ValueError("worker must initialize with get_registrations first")
                 name = str(params.get("name", ""))
                 spec = next((s for s in host._intents if s.name == name), None)
                 if spec is None:

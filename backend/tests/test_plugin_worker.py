@@ -146,6 +146,70 @@ _SIMPLE_NODE_PY_BODY = textwrap.dedent("""\
 """)
 
 
+
+_DEFERRED_IMPORT_PY_BODY = textwrap.dedent("""\
+    from pathlib import Path
+
+    from backend.plugin_sdk import HostContext, PluginNodeSeed
+
+    # Side effect of IMPORTING the plugin module, before register() runs.
+    (Path(__file__).parent / "imported.txt").write_text(
+        "plugin module imported", encoding="utf-8",
+    )
+
+    def _make(document, run_ctx, parent_id):
+        return PluginNodeSeed(title="Deferred", content="registered")
+
+    def register(host: HostContext):
+        host.register_node_kind("thing", _make, requires_parent=True)
+        host.register_picker_entry(
+            node_kind="thing", name="Deferred Import", description="d",
+        )
+""")
+
+
+def test_worker_does_not_import_third_party_code_before_guarded_registration_rpc(tmp_path):
+    """A running worker must not import a plugin until the parent sends get_registrations.
+
+    PluginWorkerClient.connect() attaches the OS resource guard before any
+    call() data is sent. Sending OTHER RPC requests proves the worker has
+    reached its stdin loop while the plugin's import marker is still absent;
+    this is stronger than a timing/sleep-based test.
+    """
+    plugin_dir = _write_out_of_process_plugin(
+        tmp_path / "plugins", "oop_deferred_import", py_body=_DEFERRED_IMPORT_PY_BODY,
+    )
+    marker = plugin_dir / "imported.txt"
+    worker = PluginWorkerClient(plugin_id="oop_deferred_import", source_dir=plugin_dir)
+    try:
+        worker.connect()
+
+        with pytest.raises(PluginWorkerError, match="unknown method"):
+            worker.call("unrecognized", {})
+        assert not marker.exists(), (
+            "the plugin was imported before any guarded registration request"
+        )
+
+        with pytest.raises(PluginWorkerError, match="get_registrations first"):
+            worker.call("invoke_factory", {
+                "kind": "thing", "parent_snapshot": {"id": "p", "title": "P"},
+            })
+        assert not marker.exists()
+
+        result = worker.call("get_registrations", {})
+        assert marker.read_text(encoding="utf-8") == "plugin module imported"
+        assert result["node_kinds"] == [{"local_kind": "thing", "requires_parent": True}]
+
+        # Once initialized, the normal RPC dispatch remains available.
+        created = worker.call("invoke_factory", {
+            "kind": "thing",
+            "parent_snapshot": {"id": "p", "title": "P", "content": "", "kind": "chat"},
+        })
+        assert created["title"] == "Deferred"
+    finally:
+        worker.close()
+
+
 def _wired_bus(registry, tmp_path, *, dirname="oop-store"):
     settings_manager = SettingsManager(tmp_path / dirname / "session.dat")
     notifications = NotificationState()
