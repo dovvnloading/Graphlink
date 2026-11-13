@@ -859,49 +859,68 @@ def register_plugins(
         "app-plugins", "invokePluginIntent", invoke_plugin_intent, args_schema=InvokePluginIntentArgs,
     )
 
-    # Serialize in-flight approval updates. A later revoke must not
-    # overtake a worker startup and publish an inconsistent picker state.
+    # Protect persisted consent updates, but NOT the blocking approval wait:
+    # a revoke must be able to interrupt a worker that is still registering.
+    # The SDK reservation handles cross-session/worker-thread coordination.
     grant_activation_lock = asyncio.Lock()
 
+    async def _publish_grant_change() -> None:
+        try:
+            from backend.session_context import get_session_context
+            get_session_context(bus).agent_dispatcher.invalidate_builder_registry()
+        except (LookupError, RuntimeError, AttributeError):
+            pass  # isolated SessionBus tests have no SessionContext
+        await bus.publish("app-plugins")
+
     async def set_plugin_grant(plugin_id: str, granted: bool):
-        # User-initiated grants can start an out-of-process Python worker or
-        # import a third-party extension. Neither operation may block the
-        # WebSocket event loop while the user waits for registration.
+        plugin_id = str(plugin_id).strip()
         async with grant_activation_lock:
-            plugin_id = str(plugin_id).strip()
             settings_manager.set_plugin_grant(plugin_id, bool(granted))
-            if granted:
-                # Out-of-process worker startup is scheduled off the
-                # event loop; wait only for this plugin's registration.
-                # The surrounding lock preserves grant/revoke ordering.
-                pending = activate_granted_plugins(plugin_registry, settings_manager)
-                task = plugin_registry.pending_worker_activations.get(plugin_id)
-                if task is not None and task in pending:
-                    await asyncio.shield(task)
-                # Mutate this session's canvas serializer hooks only AFTER
-                # the await, back on the owning event-loop thread.
-                for kind, kind_spec in plugin_registry.node_kinds.items():
-                    if kind_spec.serialize is not None:
-                        canvas_document.plugin_node_serializers[kind] = _grant_gated_serialize(
-                            kind_spec.plugin_id, kind_spec.serialize, settings_manager,
-                        )
-            else:
-                # Revoke the live OS worker, not only its future call grants.
-                # Close happens off-loop and OUTSIDE the SDK's global lock.
+            if not granted:
+                # This can terminate a provisional process before its
+                # get_registrations RPC returns. The awaited OS teardown
+                # runs off-loop and outside the SDK's process-wide lock.
                 retired_kinds = await asyncio.to_thread(
                     deactivate_plugin_worker, plugin_registry, plugin_id,
                 )
                 for kind in retired_kinds:
                     canvas_document.plugin_node_serializers.pop(kind, None)
-            # The Builder's cached registry may have been populated before
-            # this plugin appeared (or before a revocation). Invalidate
-            # after the final grant state is established, not while the
-            # worker is still registering.
+                await _publish_grant_change()
+                return
+
+        # Approval's startup wait is OUTSIDE the grant lock. Otherwise the
+        # same session's revoke would queue behind a hung worker, defeating
+        # immediate revocation. Recheck persisted consent before each stage.
+        # Two retries allow a rapid revoke/re-grant to wait out a cancelled
+        # prior activation and schedule exactly one fresh worker.
+        for _attempt in range(3):
+            async with grant_activation_lock:
+                if not settings_manager.get_plugin_grants().get(plugin_id, False):
+                    return
+                pending = activate_granted_plugins(plugin_registry, settings_manager)
+                task = plugin_registry.pending_worker_activations.get(plugin_id)
+                if task is None or task not in pending:
+                    break
             try:
-                from backend.session_context import get_session_context
-                get_session_context(bus).agent_dispatcher.invalidate_builder_registry()
-            except (LookupError, RuntimeError, AttributeError):
-                pass  # bare SessionBus tests do not attach a SessionContext
-            await bus.publish("app-plugins")
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # The underlying activation task is cancelled by a revoke.
+                # Do not silently swallow cancellation of THIS WebSocket
+                # intent on session shutdown.
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise
+            if plugin_id in plugin_registry.loaded_plugin_ids:
+                break
+
+        async with grant_activation_lock:
+            if not settings_manager.get_plugin_grants().get(plugin_id, False):
+                return  # a revoke won while startup was pending
+            for kind, kind_spec in plugin_registry.node_kinds.items():
+                if kind_spec.serialize is not None:
+                    canvas_document.plugin_node_serializers[kind] = _grant_gated_serialize(
+                        kind_spec.plugin_id, kind_spec.serialize, settings_manager,
+                    )
+            await _publish_grant_change()
 
     bus.register_intent("app-plugins", "setPluginGrant", set_plugin_grant, args_schema=SetPluginGrantArgs)
