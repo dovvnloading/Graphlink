@@ -24,6 +24,12 @@ the class wrapper is new.
 
 from __future__ import annotations
 
+import json
+import os
+from datetime import datetime, timezone
+
+from backend.fal_integration import media_urls, model_path, request_path
+
 from settings_store._composed import SettingsManagerParts
 
 import graphlink_secrets
@@ -80,6 +86,59 @@ class CloudProviderSettingsOps(SettingsManagerParts):
 
     def get_github_token(self):
         return graphlink_secrets.unprotect(self.state.get("github_access_token", ""))
+
+    def get_fal_api_key_source(self) -> str:
+        # Do not serialize the key into any WebSocket settings snapshot.
+        if self.state.get("fal_api_key"):
+            return "stored"
+        if os.environ.get("GRAPHLINK_FAL_API_KEY") or os.environ.get("FAL_KEY"):
+            return "environment"
+        return "none"
+
+    def get_fal_api_key(self) -> str:
+        saved = self.state.get("fal_api_key", "")
+        if saved:
+            return graphlink_secrets.unprotect(saved)
+        return os.environ.get("GRAPHLINK_FAL_API_KEY") or os.environ.get("FAL_KEY") or ""
+
+    def set_fal_api_key(self, key: str) -> None:
+        if not isinstance(key, str):
+            raise ValueError("fal API key must be a string.")
+        self.state["fal_api_key"] = self._protect_and_track(key.strip())
+        self._save_state()
+
+    def get_fal_jobs(self) -> list[dict]:
+        # Bounded metadata only. Inputs and the API key are never stored in
+        # this ledger. Full responses are capped per job for session.dat.
+        jobs = self.state.get("fal_jobs", [])
+        return [dict(item) for item in jobs if isinstance(item, dict)][:40] if isinstance(jobs, list) else []
+
+    def upsert_fal_job(self, model_id: str, request_id: str, status: str,
+                       result=None) -> None:
+        model_path(model_id)
+        request_path(model_id, request_id)
+        now = datetime.now(timezone.utc).isoformat()
+        jobs = self.get_fal_jobs()
+        job = next((item for item in jobs if item.get("requestId") == request_id), None)
+        if job is None:
+            job = {
+                "requestId": request_id, "modelId": model_id,
+                "createdAt": now, "resultJson": "", "mediaUrls": [],
+            }
+            jobs.insert(0, job)
+        elif job.get("modelId") != model_id:
+            raise ValueError("fal request ID is already associated with a different model.")
+        job["status"] = str(status)[:80]
+        job["updatedAt"] = now
+        if result is not None:
+            job["mediaUrls"] = media_urls(result)
+            try:
+                serialized = json.dumps(result, ensure_ascii=False, allow_nan=False)
+            except (TypeError, ValueError):
+                serialized = json.dumps({"notice": "Non-JSON response; inspect the remote result."})
+            job["resultJson"] = serialized[:32000] + ("\n[truncated]" if len(serialized) > 32000 else "")
+        self.state["fal_jobs"] = jobs[:40]
+        self._save_state()
 
     def get_api_models(self, provider: str | None = None):
         provider = provider or self.get_api_provider()
