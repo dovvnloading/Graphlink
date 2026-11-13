@@ -23,6 +23,59 @@ import io
 import json
 import os
 from typing import Any
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler
+
+
+_GEMINI_FILES_UPLOAD_HOST = "generativelanguage.googleapis.com"
+_MAX_GEMINI_UPLOAD_URL_CHARS = 4_096
+
+
+class _NoGeminiUploadRedirects(HTTPRedirectHandler):
+    """Reject redirects at BOTH stages of a credential/attachment upload.
+
+    The initialization request carries the API key; the final request carries
+    private attachment bytes. Neither may be redirected to a destination
+    which bypasses the validated Google host or changes the HTTP method.
+    """
+
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def _validated_gemini_upload_url(url: object) -> str:
+    """Accept only the HTTPS Gemini Files resumable-upload endpoint.
+
+    This header is returned by the initial Google API request, not generated
+    by Graphlink. Do not trust it as an arbitrary URL: the next request sends
+    the user's entire audio attachment. Keep the origin pinned to the known
+    Gemini Files API host, rather than allowing every Google-controlled or
+    public IP, and refuse URL credentials, nondefault ports and fragments.
+    """
+    if (not isinstance(url, str) or not url
+            or len(url) > _MAX_GEMINI_UPLOAD_URL_CHARS
+            or url != url.strip()
+            or any(ord(char) < 33 or ord(char) == 127 for char in url)):
+        raise RuntimeError("Gemini file upload returned an invalid destination URL.")
+    try:
+        parsed = urlsplit(url)
+        allowed = (
+            parsed.scheme == "https"
+            and parsed.hostname == _GEMINI_FILES_UPLOAD_HOST
+            and parsed.port in (None, 443)
+            and parsed.username is None
+            and parsed.password is None
+            and not parsed.fragment
+            and (
+                parsed.path == "/upload/v1beta/files"
+                or parsed.path.startswith("/upload/v1beta/files/")
+            )
+        )
+    except ValueError:
+        allowed = False
+    if not allowed:
+        raise RuntimeError("Gemini file upload returned an untrusted destination URL.")
+    return url
 
 
 def _gemini_headers(api_key: str, extra_headers: dict | None = None) -> dict:
@@ -138,8 +191,11 @@ def _gemini_upload_file(
         method="POST",
     )
 
+    # The opener rejects redirect hops before a credential-bearing request
+    # can be silently rerouted. Reuse it for the urllib upload fallback.
+    opener = _mod.urllib.request.build_opener(_NoGeminiUploadRedirects())
     try:
-        with _mod.urllib.request.urlopen(upload_start, timeout=300) as response:
+        with opener.open(upload_start, timeout=300) as response:
             upload_url = response.headers.get("X-Goog-Upload-URL")
         _mod._raise_if_cancelled(cancel_event)
     except _mod.urllib.error.HTTPError as exc:
@@ -148,6 +204,7 @@ def _gemini_upload_file(
 
     if not upload_url:
         raise RuntimeError("Gemini file upload did not return an upload URL.")
+    upload_url = _validated_gemini_upload_url(upload_url)
 
     if _mod.REQUESTS_AVAILABLE:
         with io.BytesIO(audio_bytes) as source_file:
@@ -160,8 +217,11 @@ def _gemini_upload_file(
                 },
                 data=source_file,
                 timeout=1800,
+                allow_redirects=False,
             )
         _mod._raise_if_cancelled(cancel_event)
+        if 300 <= response.status_code < 400:
+            raise RuntimeError("Gemini file upload refused a redirect response.")
         if not response.ok:
             raise RuntimeError(f"Gemini file upload failed: {response.text}")
         payload = response.json()
@@ -177,7 +237,7 @@ def _gemini_upload_file(
             method="POST",
         )
         try:
-            with _mod.urllib.request.urlopen(upload_request, timeout=1800) as response:
+            with opener.open(upload_request, timeout=1800) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             _mod._raise_if_cancelled(cancel_event)
         except _mod.urllib.error.HTTPError as exc:
