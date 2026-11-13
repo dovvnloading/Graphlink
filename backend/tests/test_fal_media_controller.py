@@ -231,3 +231,40 @@ def test_catalog_search_invalid_model_category_rejected_without_remote_call(tmp_
     invoke(bus, "searchFalMediaCatalog", node.id, "image", "text-to-video", "", "")
     assert json.loads(node.state.catalog_json)["status"] == "error"
     assert fake.calls == []
+
+
+def test_failed_submit_requires_explicit_dashboard_acknowledgement_before_retry(tmp_path, monkeypatch):
+    _, node, bus, manager, _ = create_studio(tmp_path)
+    fake = FakeFal()
+
+    def uncertain_submit(model_id, arguments, *, options=None):
+        raise FalError("Could not reach fal.ai (ReadTimeout).")
+
+    fake.submit = uncertain_submit
+    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+    invoke(bus, "prepareFalMedia", node.id, "image", "text-to-image",
+           "fal-ai/flux/schnell", "Schnell", "A painting", "{}")
+    nonce = read_media(node)["quote"]["id"]
+    invoke(bus, "generateFalMedia", node.id, nonce)
+    assert read_media(node)["status"] == "unconfirmed"
+    assert "Check the Fal dashboard" in read_media(node)["error"]
+    assert read_media(node)["requestId"] == ""
+    with pytest.raises(FalError, match="Wait"):
+        invoke(bus, "prepareFalMedia", node.id, "image", "text-to-image",
+               "fal-ai/flux/schnell", "Schnell", "A painting", "{}")
+    with pytest.raises(FalError, match="already"):
+        invoke(bus, "generateFalMedia", node.id, nonce)
+    assert manager.get_fal_jobs() == []
+
+    invoke(bus, "acknowledgeFalMediaSubmission", node.id)
+    assert read_media(node)["status"] == "idle"
+    assert read_media(node)["quote"] is None
+    with pytest.raises(FalError):
+        invoke(bus, "acknowledgeFalMediaSubmission", node.id)
+    with pytest.raises(FalError, match="Quote expired"):
+        invoke(bus, "generateFalMedia", node.id, nonce)
+
+
+def test_no_preview_when_remote_response_is_from_an_untrusted_origin(tmp_path):
+    from backend.fal_media_preview import safe_media_host
+    assert not safe_media_host("https://fal.media.evil.example/asset.mp4")
