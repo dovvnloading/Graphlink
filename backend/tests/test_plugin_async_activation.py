@@ -54,7 +54,7 @@ def _install_delayed_preparer(monkeypatch):
     clients: list[_FakeWorkerClient] = []
     invocations: list[str] = []
 
-    def prepare(manifest, plugin_dir):
+    def prepare(manifest, plugin_dir, *, on_client_created=None):
         invocations.append(manifest.id)
         started.set()
         release.wait(timeout=5)
@@ -69,6 +69,9 @@ def _install_delayed_preparer(monkeypatch):
         )
         client = _FakeWorkerClient()
         clients.append(client)
+        if on_client_created is not None and not on_client_created(client):
+            client.close()
+            raise RuntimeError("worker was revoked during preparation")
         return host, client
 
     monkeypatch.setattr(plugin_sdk, "_discover_out_of_process_plugin", prepare)
@@ -355,3 +358,111 @@ def test_revoking_a_pending_worker_cancels_registration_and_cleans_up(tmp_path, 
 
     asyncio.run(scenario())
 
+
+
+def test_cross_session_regrant_waits_for_previous_worker_teardown(tmp_path, monkeypatch):
+    """Session B may not start worker #2 until A's worker #1 fully exits."""
+    registry = _metadata_only_registry(tmp_path)
+    _started, release, clients, invocations = _install_delayed_preparer(monkeypatch)
+    bus_a, doc_a, notifications_a, settings = _bus_and_settings(tmp_path)
+    bus_b, doc_b, notifications_b, _settings_b = _bus_and_settings(tmp_path)
+    register_plugins(bus_a, notifications_a, doc_a, settings, plugin_registry=registry)
+    register_plugins(bus_b, notifications_b, doc_b, settings, plugin_registry=registry)
+    release.set()
+
+    teardown_started = threading.Event()
+    finish_teardown = threading.Event()
+
+    async def scenario():
+        await bus_a.dispatch_intent("app-plugins", "setPluginGrant", ["deferred_worker", True])
+        first = clients[0]
+        close_original = first.close
+
+        def slow_close():
+            teardown_started.set()
+            assert finish_teardown.wait(timeout=10), "test teardown was never released"
+            close_original()
+
+        first.close = slow_close
+        revoke = asyncio.create_task(
+            bus_a.dispatch_intent("app-plugins", "setPluginGrant", ["deferred_worker", False])
+        )
+        try:
+            assert await asyncio.wait_for(
+                asyncio.to_thread(teardown_started.wait, 5), timeout=6,
+            )
+            assert "deferred_worker" in registry.draining_worker_ids
+            assert registry.draining_worker_events["deferred_worker"].is_set() is False
+
+            # Another session reapproves while the first OS teardown blocks.
+            approval = asyncio.create_task(
+                bus_b.dispatch_intent("app-plugins", "setPluginGrant", ["deferred_worker", True])
+            )
+            await asyncio.sleep(0.1)
+            assert not approval.done(), "approval must wait for old worker to finish"
+            assert invocations == ["deferred_worker"], "a duplicate worker started during draining"
+        finally:
+            finish_teardown.set()
+        await asyncio.wait_for(revoke, timeout=10)
+        await asyncio.wait_for(approval, timeout=10)
+        assert invocations == ["deferred_worker", "deferred_worker"]
+        assert registry.loaded_plugin_ids == {"deferred_worker"}
+        assert len(registry.worker_clients) == 1
+        assert registry.worker_clients["deferred_worker"] is clients[1]
+        assert "Deferred Widget" in registry.picker_entries
+        assert "deferred_worker" not in registry.draining_worker_ids
+        assert not registry.draining_worker_events
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        finish_teardown.set()
+        for client in clients:
+            client.close()
+
+
+def test_revoke_cancels_pending_registration_while_holding_registry_lock(tmp_path, monkeypatch):
+    """No activation may publish between the worker snapshot and its cancel bit."""
+    from backend import plugin_sdk as sdk
+
+    registry = _metadata_only_registry(tmp_path)
+    started, release, clients, _invocations = _install_delayed_preparer(monkeypatch)
+    _bus, _doc, _notice, settings = _bus_and_settings(tmp_path)
+    settings.set_plugin_grant("deferred_worker", True)
+
+    observed_sdk_lock: list[bool] = []
+    original_cancel = sdk._PendingWorkerReservation.cancel
+
+    def observe_cancel(self):
+        acquired = sdk._REGISTRY_CACHE_LOCK.acquire(blocking=False)
+        if acquired:
+            sdk._REGISTRY_CACHE_LOCK.release()
+        observed_sdk_lock.append(not acquired)
+        return original_cancel(self)
+
+    monkeypatch.setattr(sdk._PendingWorkerReservation, "cancel", observe_cancel)
+
+    async def scenario():
+        task = activate_granted_plugins(registry, settings)[0]
+        try:
+            assert await asyncio.wait_for(asyncio.to_thread(started.wait, 5), timeout=6)
+            settings.set_plugin_grant("deferred_worker", False)
+            kinds = await asyncio.wait_for(
+                asyncio.to_thread(sdk.deactivate_plugin_worker, registry, "deferred_worker"),
+                timeout=5,
+            )
+            assert kinds == ()
+            assert observed_sdk_lock == [True], "reservation cancelled outside SDK registry lock"
+            assert "deferred_worker" not in registry.loaded_plugin_ids
+        finally:
+            release.set()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        assert not registry.worker_clients
+        assert not registry.picker_entries
+
+    asyncio.run(scenario())
+    for client in clients:
+        client.close()

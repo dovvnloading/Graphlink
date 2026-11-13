@@ -171,11 +171,11 @@ def test_granting_a_plugin_keeps_the_session_loop_responsive(tmp_path, monkeypat
     proceed = threading.Event()
     original_prepare = plugin_sdk_module._discover_out_of_process_plugin
 
-    def delayed_preparation(manifest, plugin_dir):
+    def delayed_preparation(manifest, plugin_dir, *, on_client_created=None):
         started.set()
         if not proceed.wait(timeout=5):
             raise AssertionError("test setup did not release worker activation")
-        return original_prepare(manifest, plugin_dir)
+        return original_prepare(manifest, plugin_dir, on_client_created=on_client_created)
 
     monkeypatch.setattr(plugin_sdk_module, "_discover_out_of_process_plugin", delayed_preparation)
 
@@ -236,11 +236,11 @@ def test_parallel_grant_revoke_intents_preserve_final_consent(tmp_path, monkeypa
     proceed = threading.Event()
     original_prepare = plugin_sdk_module._discover_out_of_process_plugin
 
-    def delayed_preparation(manifest, plugin_dir):
+    def delayed_preparation(manifest, plugin_dir, *, on_client_created=None):
         started.set()
         if not proceed.wait(timeout=5):
             raise AssertionError("timed out waiting for release")
-        return original_prepare(manifest, plugin_dir)
+        return original_prepare(manifest, plugin_dir, on_client_created=on_client_created)
 
     monkeypatch.setattr(plugin_sdk_module, "_discover_out_of_process_plugin", delayed_preparation)
 
@@ -253,14 +253,14 @@ def test_parallel_grant_revoke_intents_preserve_final_consent(tmp_path, monkeypa
             revoke = asyncio.create_task(
                 bus.dispatch_intent("app-plugins", "setPluginGrant", ["ordered_consent", False]),
             )
-            await asyncio.sleep(0)
-            # Revoke cannot publish or modify grants until the first
-            # approval/registration finishes.
-            assert settings.get_plugin_grants()["ordered_consent"] is True
+            # A same-session revoke must now PREEMPT the slow approval,
+            # without waiting for its to_thread registration RPC to finish.
+            await asyncio.wait_for(revoke, timeout=3)
+            assert settings.get_plugin_grants()["ordered_consent"] is False
+            assert "ordered_consent" not in registry.loaded_plugin_ids
         finally:
             proceed.set()
         await asyncio.wait_for(grant, timeout=10)
-        await asyncio.wait_for(revoke, timeout=10)
 
     try:
         asyncio.run(run())
@@ -342,3 +342,153 @@ def test_revoking_in_process_plugin_does_not_claim_to_unload_python(tmp_path):
     assert deactivate_plugin_worker(registry, "in_process_revoke") == ()
     assert "in_process_revoke" in registry.loaded_plugin_ids
     assert "Consent Widget" in registry.picker_entries
+
+
+def test_revoking_real_worker_during_registration_kills_process_before_ack(tmp_path, monkeypatch):
+    """A slow get_registrations may not keep an unregistered OS worker alive."""
+    import threading
+    from backend import plugin_sdk as sdk
+
+    root = tmp_path / "plugins"
+    marker = _write_extension(root, "provisional_revoke", out_of_process=True)
+    settings = SettingsManager(tmp_path / "settings" / "session.dat")
+    registry = discover_plugins(root)
+    bus = SessionBus("provisional-revoke-real-process")
+    document = SceneDocument()
+    notifications = NotificationState()
+    bus.register_topic("scene", document.scene_payload)
+    bus.register_topic("notification", notifications.payload)
+    register_plugins(bus, notifications, document, settings, plugin_registry=registry)
+
+    registration_started = threading.Event()
+    allow_registration = threading.Event()
+    original_call = sdk.PluginWorkerClient.call
+
+    def stall_registration(self, method, params):
+        if (self.plugin_id == "provisional_revoke"
+                and method == "get_registrations"
+                and not registration_started.is_set()):
+            registration_started.set()
+            assert allow_registration.wait(timeout=10), "fixture registration was not released"
+        return original_call(self, method, params)
+
+    monkeypatch.setattr(sdk.PluginWorkerClient, "call", stall_registration)
+
+    async def scenario():
+        grant = asyncio.create_task(
+            bus.dispatch_intent("app-plugins", "setPluginGrant", ["provisional_revoke", True])
+        )
+        try:
+            assert await asyncio.wait_for(
+                asyncio.to_thread(registration_started.wait, 5), timeout=6,
+            )
+            # connect() and guard assignment have already completed. The
+            # worker is live, but not yet in registry.worker_clients.
+            reservation = registry.pending_worker_reservations["provisional_revoke"]
+            client = reservation._client
+            assert client is not None
+            process = client._process
+            assert process is not None and process.poll() is None
+            assert "provisional_revoke" not in registry.worker_clients
+            assert not marker.exists(), "third-party registration ran before its first RPC"
+
+            # This same-session revoke must complete without releasing the
+            # stalled RPC. It must also terminate the actual OS process.
+            await asyncio.wait_for(
+                bus.dispatch_intent("app-plugins", "setPluginGrant", ["provisional_revoke", False]),
+                timeout=7,
+            )
+            assert process.poll() is not None, "revocation returned before worker exit"
+            assert not settings.get_plugin_grants()["provisional_revoke"]
+            assert "provisional_revoke" not in registry.loaded_plugin_ids
+            assert "Consent Widget" not in registry.picker_entries
+            assert "provisional_revoke" in registry.manifests
+        finally:
+            allow_registration.set()
+        await asyncio.wait_for(grant, timeout=10)
+        assert "provisional_revoke" not in registry.worker_clients
+
+        # The revoked startup must never publish late registrations. A
+        # subsequent *new* approval, however, must start one fresh worker.
+        await asyncio.wait_for(
+            bus.dispatch_intent("app-plugins", "setPluginGrant", ["provisional_revoke", True]),
+            timeout=10,
+        )
+        assert registry.worker_clients["provisional_revoke"].is_connected
+        assert marker.read_text(encoding="utf-8") == "imported\n"
+        await bus.dispatch_intent(
+            "app-plugins", "setPluginGrant", ["provisional_revoke", False],
+        )
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        allow_registration.set()
+        for worker in registry.worker_clients.values():
+            worker.close()
+
+
+def test_revocation_before_connect_spawns_no_worker(tmp_path, monkeypatch):
+    """A revoke during guarded startup prevents a late Popen entirely."""
+    import threading
+    from backend import plugin_sdk as sdk
+
+    root = tmp_path / "plugins"
+    marker = _write_extension(root, "pre_spawn_revoke", out_of_process=True)
+    settings = SettingsManager(tmp_path / "settings" / "session.dat")
+    registry = discover_plugins(root)
+    bus = SessionBus("revoke-before-popen")
+    document = SceneDocument()
+    notifications = NotificationState()
+    bus.register_topic("scene", document.scene_payload)
+    bus.register_topic("notification", notifications.payload)
+    register_plugins(bus, notifications, document, settings, plugin_registry=registry)
+
+    connect_started = threading.Event()
+    allow_connect = threading.Event()
+    original_connect = sdk.PluginWorkerClient._connect_unlocked
+
+    def pause_before_popen(self):
+        if self.plugin_id == "pre_spawn_revoke":
+            connect_started.set()
+            assert allow_connect.wait(timeout=10), "fixture connect not released"
+        return original_connect(self)
+
+    monkeypatch.setattr(sdk.PluginWorkerClient, "_connect_unlocked", pause_before_popen)
+
+    async def scenario():
+        grant = asyncio.create_task(
+            bus.dispatch_intent("app-plugins", "setPluginGrant", ["pre_spawn_revoke", True])
+        )
+        try:
+            assert await asyncio.wait_for(
+                asyncio.to_thread(connect_started.wait, 5), timeout=6,
+            )
+            reservation = registry.pending_worker_reservations["pre_spawn_revoke"]
+            client = reservation._client
+            assert client is not None and client._process is None
+            revoke = asyncio.create_task(
+                bus.dispatch_intent("app-plugins", "setPluginGrant", ["pre_spawn_revoke", False])
+            )
+            # Consent must flip while the approval task is still in Popen
+            # preparation, rather than waiting for the prior grant to finish.
+            for _ in range(100):
+                if settings.get_plugin_grants().get("pre_spawn_revoke") is False:
+                    break
+                await asyncio.sleep(0.01)
+            assert settings.get_plugin_grants()["pre_spawn_revoke"] is False
+        finally:
+            allow_connect.set()
+        await asyncio.wait_for(revoke, timeout=10)
+        await asyncio.wait_for(grant, timeout=10)
+        assert client._process is None
+        assert not marker.exists()
+        assert not registry.worker_clients
+        assert not registry.loaded_plugin_ids
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        allow_connect.set()
+        for worker in registry.worker_clients.values():
+            worker.close()
