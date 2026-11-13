@@ -630,10 +630,10 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
                 <div className="fal-studio-quote-row"><span>Live model rate</span>
                   <strong>{formatMediaPrice(currentQuote.price, currentQuote.currency)}{currentQuote.price != null ? ` / ${unitName(currentQuote.unit || "")}` : ""}</strong>
                 </div>
-                <div className="fal-studio-quote-row"><span>Estimated request</span>
+                <div className="fal-studio-quote-row"><span>Historical one-call estimate</span>
                   <strong>{formatMediaPrice(currentQuote.estimate, currentQuote.currency)}</strong>
                 </div>
-                <p>Estimates are informational, not spending limits. Actual billing depends on duration, size and output. Your approval authorizes one request.</p>
+                <p>Estimates are historical averages, not parameter-specific quotations or spending limits. Actual billing depends on duration, size and output. Your approval authorizes one request.</p>
                 {!!currentQuote.warning && <small className="fal-studio-inline-warning">{currentQuote.warning}</small>}
               </div>
             )}
