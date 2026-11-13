@@ -86,6 +86,10 @@ MAX_PDF_CONTENT_STREAM_BYTES = 1024 * 1024
 # compressed drawing/text streams and their own /Resources /XObject chains.
 MAX_PDF_FORM_OBJECTS = 128
 MAX_PDF_XOBJECT_RESOURCE_ENTRIES = 256
+MAX_PDF_FONT_RESOURCE_ENTRIES = 256
+# The 1 MiB page budget applies to every decoded content AND font CMap
+# stream; also cap total decoded streams across a multi-page document.
+MAX_PDF_DOCUMENT_STREAM_BYTES = 32 * 1024 * 1024
 # DOCX is a ZIP container. File size and extracted-text caps alone do not
 # bound the XML/ZIP expansion that python-docx parses before text extraction.
 MAX_DOCX_MEMBERS = 2_048
@@ -304,8 +308,8 @@ def _pdf_expanded_stream_size(stream, remaining: int) -> int:
     return expanded
 
 
-def _check_pdf_content_size(page) -> None:
-    """Guard direct page streams AND every nested Form XObject before parsing.
+def _check_pdf_content_size(page, *, remaining_document_bytes: int = MAX_PDF_DOCUMENT_STREAM_BYTES) -> int:
+    """Guard page streams, nested Forms and font ToUnicode CMaps before parsing.
 
     Direct /Contents alone is insufficient: a 10-byte /Fx Do can reference a
     Flate-compressed Form containing millions of characters. pypdf expands
@@ -320,8 +324,10 @@ def _check_pdf_content_size(page) -> None:
     pending: list[tuple[Any, Any, frozenset[int]]] = [
         (page.get("/Contents"), page.get("/Resources"), frozenset()),
     ]
+    page_budget = min(MAX_PDF_CONTENT_STREAM_BYTES, remaining_document_bytes)
     decoded_total = 0
     forms_seen = 0
+    fonts_seen = 0
 
     while pending:
         contents, resources, ancestors = pending.pop()
@@ -333,7 +339,7 @@ def _check_pdf_content_size(page) -> None:
             for entry in entries:
                 stream = _pdf_object(entry)
                 decoded_total += _pdf_expanded_stream_size(
-                    stream, MAX_PDF_CONTENT_STREAM_BYTES - decoded_total,
+                    stream, page_budget - decoded_total,
                 )
 
         resource_dict = _pdf_object(resources)
@@ -341,6 +347,27 @@ def _check_pdf_content_size(page) -> None:
             continue
         if not isinstance(resource_dict, dict):
             raise AttachmentError("PDF contains an invalid resource dictionary.")
+        # pypdf decodes a font's /ToUnicode CMap while preparing glyph
+        # maps, before our extracted-text cap has any effect. Treat those
+        # streams like page/Form contents, under the SAME cumulative budget.
+        font_resources = _pdf_object(resource_dict.get("/Font"))
+        if font_resources is not None:
+            if not isinstance(font_resources, dict):
+                raise AttachmentError("PDF contains an invalid font resource dictionary.")
+            fonts_seen += len(font_resources)
+            if fonts_seen > MAX_PDF_FONT_RESOURCE_ENTRIES:
+                raise AttachmentError("PDF contains too many font resources.")
+            for font_ref in font_resources.values():
+                font = _pdf_object(font_ref)
+                if not isinstance(font, dict):
+                    raise AttachmentError("PDF contains an invalid font resource.")
+                cmap = font.get("/ToUnicode")
+                if cmap is None:
+                    continue
+                decoded_total += _pdf_expanded_stream_size(
+                    _pdf_object(cmap), page_budget - decoded_total,
+                )
+
         objects = _pdf_object(resource_dict.get("/XObject"))
         if objects is None:
             continue
@@ -363,6 +390,8 @@ def _check_pdf_content_size(page) -> None:
             pending.append((
                 obj, obj.get("/Resources"), ancestors | {identity},
             ))
+    return decoded_total
+
 
 def _read_pdf(path: Path) -> str:
     """Verbatim port of FileHandler._read_pdf. Raises AttachmentError (not
@@ -386,12 +415,16 @@ def _read_pdf(path: Path) -> str:
         raise AttachmentError("PDF exceeds the attachment file size limit.")
     content: list[str] = []
     extracted_characters = 0
+    decoded_document_bytes = 0
     with open(path, "rb") as f:
         reader = pdf_reader_lib.PdfReader(f)
         if len(reader.pages) > MAX_PDF_PAGES:
             raise AttachmentError(f"PDF exceeds the {MAX_PDF_PAGES}-page attachment limit.")
         for page_number, page in enumerate(reader.pages, start=1):
-            _check_pdf_content_size(page)
+            decoded_document_bytes += _check_pdf_content_size(
+                page,
+                remaining_document_bytes=MAX_PDF_DOCUMENT_STREAM_BYTES - decoded_document_bytes,
+            )
             page_text = _extract_pdf_page_text(page)
             if page_text:
                 normalized_text = page_text.strip()
