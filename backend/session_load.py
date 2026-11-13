@@ -1128,8 +1128,12 @@ def _restore_fal_media_payload(payload: dict[str, Any]) -> SceneNode:
         media["history"] = []
     media["history"] = media["history"][:MAX_HISTORY]
     if media.get("status") == "submitting":
-        media["status"] = "failed"
-        media["error"] = "Submission interrupted. Check your Fal dashboard before trying again."
+        media["status"] = "unconfirmed"
+        media["error"] = (
+            "Submission interrupted before a request ID was received. "
+            "Fal may still have charged this job. Check your Fal dashboard "
+            "and acknowledge the outcome before trying again."
+        )
     return SceneNode(
         id="", x=x, y=y,
         title=str(payload.get("title") or "Fal Media Studio")[:120],
