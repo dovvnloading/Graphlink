@@ -811,6 +811,50 @@ class PluginLoadError:
     message: str
 
 
+class _PendingWorkerReservation:
+    """Revocation handle published BEFORE a consented worker can spawn.
+
+    The launch thread owns connect()/registration, but the revoke thread may
+    asynchronously request shutdown of the same client. The reservation
+    prevents a late startup from spawning after revocation even if the
+    asyncio.to_thread call has not yet reached the plugin's first instruction.
+    Its own lock is never held through process IO.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._cancelled = False
+        self._client: "PluginWorkerClient | None" = None
+
+    def register(self, client: "PluginWorkerClient") -> bool:
+        with self._lock:
+            if self._cancelled:
+                return False
+            self._client = client
+            return True
+
+    @property
+    def cancelled(self) -> bool:
+        with self._lock:
+            return self._cancelled
+
+    def cancel(self) -> "PluginWorkerClient | None":
+        """Set the cancellation bit without performing any blocking OS I/O.
+
+        Called while holding the SDK registry lock to make unregister and
+        revocation linearizable with the async task's publish step.
+        """
+        with self._lock:
+            self._cancelled = True
+            return self._client
+
+    def revoke(self) -> None:
+        client = self.cancel()
+        if client is not None:
+            # Close may wait for Popen/assign, outside both registry locks.
+            client.close()
+
+
 class PluginRegistry:
     def __init__(self) -> None:
         self.node_kinds: dict[str, NodeKindSpec] = {}  # namespaced kind -> spec
@@ -854,9 +898,16 @@ class PluginRegistry:
         # published into this registry on the loop. Retain tasks by id so
         # concurrent sessions/grant changes never start two workers.
         self.pending_worker_activations: dict[str, asyncio.Task[None]] = {}
+        # A handle is registered by the launch thread before connect/Popen.
+        # A revoke can terminate even a worker still awaiting registration.
+        self.pending_worker_reservations: dict[str, _PendingWorkerReservation] = {}
         # Reserve a revoked plugin while the old worker shuts down, without
         # holding the global discovery lock through OS waits/pipe closures.
         self.draining_worker_ids: set[str] = set()
+        # Cross-session re-grants wait outside the SDK lock for *all* revoke
+        # callers to finish OS teardown. Concurrent revokes share one event.
+        self.draining_worker_events: dict[str, threading.Event] = {}
+        self.draining_worker_counts: dict[str, int] = {}
 
     def resolve_picker_name(self, name: str) -> "tuple[NodeKindSpec, PickerEntrySpec] | None":
         entry = self.picker_entries.get(name)
@@ -970,6 +1021,11 @@ class PluginWorkerClient:
         self._write_failed = False
         self._write_lock = threading.Lock()
         self._call_lock = threading.Lock()
+        # close() is allowed from the revoke thread while connect() is
+        # still constructing Popen/assigning its guard. Serialize the
+        # handoff, then make the request visible before entering the lock.
+        self._lifecycle_lock = threading.RLock()
+        self._stop_requested = threading.Event()
 
     @property
     def is_connected(self) -> bool:
@@ -981,6 +1037,15 @@ class PluginWorkerClient:
         )
 
     def connect(self) -> None:
+        with self._lifecycle_lock:
+            if self._stop_requested.is_set():
+                raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" startup was revoked.')
+            self._connect_unlocked()
+            if self._stop_requested.is_set():
+                self.close()
+                raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" startup was revoked.')
+
+    def _connect_unlocked(self) -> None:
         """Spawns the worker subprocess. Call order, matching
         graphlink_execution_guard.create_execution_guard's own documented
         contract exactly: (1) create the guard, (2) Popen with
@@ -997,8 +1062,15 @@ class PluginWorkerClient:
         comment."""
         if self._process is not None:
             return
+        if self._stop_requested.is_set():
+            raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" startup was revoked.')
         self._guard = create_execution_guard()
         try:
+            # close() can set this bit while the guard is being created.
+            # Refuse to spawn rather than briefly executing with revoked
+            # approval; guard cleanup below still runs on this path.
+            if self._stop_requested.is_set():
+                raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" startup was revoked.')
             self._process = subprocess.Popen(
                 [sys.executable, "-m", "backend.plugin_worker", self.plugin_id, str(self.source_dir)],
                 stdin=subprocess.PIPE,
@@ -1010,10 +1082,12 @@ class PluginWorkerClient:
                 bufsize=1,
                 **self._guard.popen_kwargs(),
             )
-        except OSError as exc:
+        except (OSError, PluginWorkerError) as exc:
             guard, self._guard = self._guard, None
             if guard is not None:
                 guard.close()
+            if isinstance(exc, PluginWorkerError):
+                raise
             raise PluginWorkerError(
                 f'Failed to start plugin worker for "{self.plugin_id}": {exc}'
             ) from exc
@@ -1034,6 +1108,11 @@ class PluginWorkerClient:
         self._stderr_thread.start()
 
     def close(self) -> None:
+        self._stop_requested.set()
+        with self._lifecycle_lock:
+            self._close_unlocked()
+
+    def _close_unlocked(self) -> None:
         # Terminate the entire guarded child tree BEFORE closing stdin:
         # a concurrent writer may be blocked on the pipe's IO lock, and
         # TextIOWrapper.close() would wait forever for that lock unless
@@ -1096,7 +1175,7 @@ class PluginWorkerClient:
         escaped _write()'s prior narrower except clause). _write() itself
         also now catches OSError as defense in depth for the remaining race
         (the process dying between this check and the actual write)."""
-        if not self.is_connected:
+        if self._stop_requested.is_set() or not self.is_connected:
             raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" is not connected.')
         with self._call_lock:
             self._next_id += 1
@@ -1334,6 +1413,7 @@ def _make_worker_intent_handler(worker_client: PluginWorkerClient, name: str) ->
 
 def _discover_out_of_process_plugin(
     manifest: PluginManifest, plugin_dir: Path,
+    *, on_client_created: "Callable[[PluginWorkerClient], bool] | None" = None,
 ) -> "tuple[HostContext, PluginWorkerClient]":
     """The out-of-process counterpart of discover_plugins()'s existing
     in-process branch (import module, construct HostContext, call
@@ -1371,6 +1451,10 @@ def _discover_out_of_process_plugin(
     finished loading."""
     worker_client = PluginWorkerClient(plugin_id=manifest.id, source_dir=plugin_dir)
     try:
+        # Notify the revoke path BEFORE any subprocess can be started. This
+        # callback is intentionally inside the exception/cleanup boundary.
+        if on_client_created is not None and not on_client_created(worker_client):
+            raise PluginWorkerError(f'Plugin worker "{manifest.id}" approval was revoked.')
         worker_client.connect()
         response = worker_client.call("get_registrations", {})
         host = HostContext(manifest.id)
@@ -1720,19 +1804,32 @@ def discover_plugins(
 
 
 def deactivate_plugin_worker(registry: PluginRegistry, plugin_id: str) -> tuple[str, ...]:
-    """Revoke a resident worker without holding the global lock across OS IO.
+    """Retire live and still-starting workers before reporting consent revoked.
 
-    Executable registrations disappear atomically under the SDK lock, but
-    TOML manifest metadata stays visible as ungranted in Settings. Worker
-    termination runs outside the lock to keep unrelated plugin discovery and
-    WebSocket/Builder initialization responsive.
+    The SDK lock guards only the registry mutation/reservation snapshot;
+    OS process shutdown (including a slow Popen) occurs OUTSIDE that lock.
+    A provisional reservation is registered before connect() can spawn, so
+    a concurrent revocation either kills the existing process or prevents
+    any future spawn after the revocation request.
     """
     with _REGISTRY_CACHE_LOCK:
         pending = registry.pending_worker_activations.get(plugin_id)
+        reservation = registry.pending_worker_reservations.get(plugin_id)
+        # The pending activation publishes under this SAME global lock.
+        # Cancel atomically with the registry snapshot, otherwise it could
+        # publish a worker in the gap before its cancel flag was set and
+        # leave a closed-but-registered worker behind after revoke.
+        provisional = reservation.cancel() if reservation is not None else None
         worker = registry.worker_clients.pop(plugin_id, None)
         retired_kinds: tuple[str, ...] = ()
-        if worker is not None:
+        owns_drain = worker is not None or reservation is not None or pending is not None
+        if owns_drain:
             registry.draining_worker_ids.add(plugin_id)
+            registry.draining_worker_counts[plugin_id] = (
+                registry.draining_worker_counts.get(plugin_id, 0) + 1
+            )
+            registry.draining_worker_events.setdefault(plugin_id, threading.Event()).clear()
+        if worker is not None:
             retired_kinds = tuple(
                 kind for kind, spec in registry.node_kinds.items()
                 if spec.plugin_id == plugin_id
@@ -1751,28 +1848,37 @@ def deactivate_plugin_worker(registry: PluginRegistry, plugin_id: str) -> tuple[
                 spec for spec in registry.intents if spec.plugin_id != plugin_id
             ]
 
-    # An approval may have been revoked while a startup registration task
-    # is still in-flight. Its to_thread cannot be cancelled at the OS level;
-    # cancelling the coroutine ensures it never publishes a late result
-    # and its pending preparation is closed when it eventually completes.
-    if pending is not None and not pending.done():
-        try:
-            pending.get_loop().call_soon_threadsafe(pending.cancel)
-        except RuntimeError:
-            pass  # the session event loop was already closed
-
-    if worker is None:
-        return retired_kinds
     try:
-        worker.close()
+        # Set the cancel bit and close the provisional client first. A
+        # worker stuck in a slow registration RPC is killed immediately,
+        # not only once its asyncio.to_thread operation returns.
+        if provisional is not None and provisional is not worker:
+            provisional.close()
+        if pending is not None and not pending.done():
+            try:
+                pending.get_loop().call_soon_threadsafe(pending.cancel)
+            except RuntimeError:
+                pass  # session event loop already closed
+        if worker is not None:
+            worker.close()
     finally:
         with _REGISTRY_CACHE_LOCK:
-            registry.draining_worker_ids.discard(plugin_id)
+            if owns_drain:
+                remaining = registry.draining_worker_counts[plugin_id] - 1
+                if remaining > 0:
+                    registry.draining_worker_counts[plugin_id] = remaining
+                else:
+                    registry.draining_worker_counts.pop(plugin_id, None)
+                    registry.draining_worker_ids.discard(plugin_id)
+                    event = registry.draining_worker_events.pop(plugin_id, None)
+                    if event is not None:
+                        event.set()
     return retired_kinds
+
 
 async def _activate_granted_worker_task(
     registry: PluginRegistry, settings_manager, manifest: PluginManifest,
-    builtin_names: frozenset[str],
+    builtin_names: frozenset[str], reservation: _PendingWorkerReservation,
 ) -> None:
     """Prepare a granted worker off-thread; publish its registrations on the loop.
 
@@ -1785,7 +1891,10 @@ async def _activate_granted_worker_task(
     plugin_id = manifest.id
     client: PluginWorkerClient | None = None
     preparation = asyncio.create_task(
-        asyncio.to_thread(_discover_out_of_process_plugin, manifest, manifest.source_dir)
+        asyncio.to_thread(
+            _discover_out_of_process_plugin, manifest, manifest.source_dir,
+            on_client_created=reservation.register,
+        )
     )
     try:
         try:
@@ -1806,10 +1915,11 @@ async def _activate_granted_worker_task(
 
         # Approval may have been revoked while the worker booted. A
         # late result must never install a handler after revocation.
-        if not settings_manager.get_plugin_grants().get(plugin_id, False):
+        if reservation.cancelled or not settings_manager.get_plugin_grants().get(plugin_id, False):
             return
         with _REGISTRY_CACHE_LOCK:
-            if (plugin_id in registry.loaded_plugin_ids
+            if (reservation.cancelled
+                    or plugin_id in registry.loaded_plugin_ids
                     or plugin_id in registry.failed_plugin_ids
                     or plugin_id in registry.draining_worker_ids
                     or plugin_id not in registry.manifests):
@@ -1835,7 +1945,12 @@ async def _activate_granted_worker_task(
             # worker, but its close()/wait() can itself block briefly.
             await asyncio.shield(asyncio.to_thread(client.close))
         with _REGISTRY_CACHE_LOCK:
-            registry.pending_worker_activations.pop(plugin_id, None)
+            # An older, cancelled task must not erase a newer reservation
+            # created by a re-grant racing its async cleanup.
+            if registry.pending_worker_activations.get(plugin_id) is asyncio.current_task():
+                registry.pending_worker_activations.pop(plugin_id, None)
+            if registry.pending_worker_reservations.get(plugin_id) is reservation:
+                registry.pending_worker_reservations.pop(plugin_id, None)
 
 
 def activate_granted_plugins(
@@ -1882,11 +1997,13 @@ def activate_granted_plugins(
                 continue
 
             if loop is not None and manifest.runtime_isolation == "out-of-process":
+                reservation = _PendingWorkerReservation()
                 task = loop.create_task(
                     _activate_granted_worker_task(
-                        registry, settings_manager, manifest, builtin_names,
+                        registry, settings_manager, manifest, builtin_names, reservation,
                     )
                 )
+                registry.pending_worker_reservations[plugin_id] = reservation
                 registry.pending_worker_activations[plugin_id] = task
                 pending.append(task)
                 continue
