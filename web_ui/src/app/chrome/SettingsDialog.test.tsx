@@ -1226,7 +1226,7 @@ describe("Fal.ai settings page", () => {
     const argsEditor = editors.find((el) => el.getAttribute("aria-label") === "Fal model arguments JSON");
     expect(argsEditor).toBeTruthy();
     await user.clear(argsEditor!);
-    await user.type(argsEditor!, "[not valid json");
+    await user.type(argsEditor!, "not valid json");
     await user.click(screen.getByRole("button", { name: "Submit to Queue" }));
     expect(screen.getByText(/must both be valid JSON objects/)).toBeInTheDocument();
     expect(intents.some((entry) => entry[1] === "submitFalJob")).toBe(false);
