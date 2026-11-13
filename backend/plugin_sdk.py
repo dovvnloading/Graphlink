@@ -906,6 +906,13 @@ _WORKER_READER_CLOSED = object()
 
 _DEFAULT_WORKER_TIMEOUT = 30.0
 
+# Resident plugin output is untrusted, even for a user-approved plugin.
+# The worker's Job Object limits do not cap allocations in the host's
+# stdout reader, JSON decoder, stderr tail, or response queue.
+_MAX_WORKER_FRAME_CHARS = 1_048_576
+_MAX_WORKER_STDERR_CHUNK_CHARS = 4_096
+_MAX_WORKER_PENDING_RESPONSES = 4
+
 
 class PluginWorkerError(RuntimeError):
     """Raised for any plugin-worker-level failure: the subprocess failed to
@@ -946,15 +953,21 @@ class PluginWorkerClient:
         # never arrives and call() hangs until the timeout on every request.
         # A traceback from an uncaught exception in plugin code is easily
         # that large. Mirrors McpStdioClient's own stderr drainer.
-        self._stderr_tail: "collections.deque[str]" = collections.deque(maxlen=200)
-        self._responses: "queue.Queue[Any]" = queue.Queue()
+        self._stderr_tail: "collections.deque[str]" = collections.deque(maxlen=32)
+        self._responses: "queue.Queue[Any]" = queue.Queue(maxsize=_MAX_WORKER_PENDING_RESPONSES)
         self._next_id = 0
+        self._pending_id: int | None = None
+        self._reader_error: str | None = None
         self._write_lock = threading.Lock()
         self._call_lock = threading.Lock()
 
     @property
     def is_connected(self) -> bool:
-        return self._process is not None and self._process.poll() is None
+        return (
+            self._process is not None
+            and self._process.poll() is None
+            and self._reader_error is None
+        )
 
     def connect(self) -> None:
         """Spawns the worker subprocess. Call order, matching
@@ -1058,41 +1071,43 @@ class PluginWorkerClient:
         with self._call_lock:
             self._next_id += 1
             request_id = self._next_id
-            self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
-            deadline = time.monotonic() + self.timeout
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise PluginWorkerError(
-                        f'Plugin worker "{self.plugin_id}" timed out after {self.timeout}s '
-                        f"calling {method!r}."
-                    )
-                try:
-                    payload = self._responses.get(timeout=remaining)
-                except queue.Empty:
-                    raise PluginWorkerError(
-                        f'Plugin worker "{self.plugin_id}" timed out after {self.timeout}s '
-                        f"calling {method!r}."
-                    )
-                if payload is _WORKER_READER_CLOSED:
-                    stderr_tail = self._stderr_tail_text()
-                    raise PluginWorkerError(
-                        f'Plugin worker "{self.plugin_id}" closed its output unexpectedly '
-                        f"while calling {method!r}."
-                        + (f" stderr: {stderr_tail}" if stderr_tail.strip() else "")
-                    )
-                if not isinstance(payload, dict) or payload.get("id") != request_id:
-                    # Malformed/unsolicited line - can't happen from a
-                    # well-behaved worker (one call in flight at a time
-                    # under _call_lock), but a corrupted or unexpected line
-                    # must not be mistaken for our response. Matches
-                    # McpStdioClient._call's own tolerance exactly.
-                    continue
-                if "error" in payload:
-                    error = payload["error"]
-                    message_text = error.get("message", error) if isinstance(error, dict) else error
-                    raise PluginWorkerError(f'plugin worker "{self.plugin_id}" {method} failed: {message_text}')
-                return payload.get("result", {}) or {}
+            # The reader only accepts the current call's id. Notifications
+            # and late replies must not accumulate during long idle periods.
+            self._pending_id = request_id
+            try:
+                self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+                deadline = time.monotonic() + self.timeout
+                while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise PluginWorkerError(
+                            f'Plugin worker "{self.plugin_id}" timed out after {self.timeout}s '
+                            f"calling {method!r}."
+                        )
+                    try:
+                        payload = self._responses.get(timeout=remaining)
+                    except queue.Empty:
+                        raise PluginWorkerError(
+                            f'Plugin worker "{self.plugin_id}" timed out after {self.timeout}s '
+                            f"calling {method!r}."
+                        )
+                    if payload is _WORKER_READER_CLOSED:
+                        stderr_tail = self._stderr_tail_text()
+                        read_error = f" {self._reader_error}" if self._reader_error else ""
+                        raise PluginWorkerError(
+                            f'Plugin worker "{self.plugin_id}" closed its output unexpectedly '
+                            f"while calling {method!r}.{read_error}"
+                            + (f" stderr: {stderr_tail}" if stderr_tail.strip() else "")
+                        )
+                    if not isinstance(payload, dict) or payload.get("id") != request_id:
+                        continue
+                    if "error" in payload:
+                        error = payload["error"]
+                        message_text = error.get("message", error) if isinstance(error, dict) else error
+                        raise PluginWorkerError(f'plugin worker "{self.plugin_id}" {method} failed: {message_text}')
+                    return payload.get("result", {}) or {}
+            finally:
+                self._pending_id = None
 
     # -- JSON-RPC framing (mirrors McpStdioClient's own private methods) ----
 
@@ -1105,17 +1120,51 @@ class PluginWorkerClient:
             # with no hint that the process simply was not connected.
             raise RuntimeError("read loop started before the process was connected")
         try:
-            for line in process.stdout:
-                line = line.strip()
+            while True:
+                # TextIOWrapper's unbounded iteration/readline can allocate
+                # arbitrarily large newline-free output in the HOST process.
+                raw = process.stdout.readline(_MAX_WORKER_FRAME_CHARS)
+                if not raw:
+                    self._reader_error = "Worker stdout reached EOF."
+                    break
+                if len(raw) >= _MAX_WORKER_FRAME_CHARS and not raw.endswith("\n"):
+                    # A partial JSON-RPC frame cannot be parsed or safely
+                    # resynchronized. Refuse this worker rather than trying
+                    # to drain an arbitrarily long or never-ending line.
+                    self._reader_error = "Worker output exceeded the IPC frame size limit."
+                    break
+                line = raw.strip()
                 if not line:
                     continue
                 try:
                     payload = json.loads(line)
                 except json.JSONDecodeError:
-                    continue  # not a JSON-RPC line - skip, don't crash the reader
-                self._responses.put(payload)
+                    continue  # unrelated log output is not a JSON-RPC response
+                pending_id = self._pending_id
+                if (pending_id is not None and isinstance(payload, dict)
+                        and type(payload.get("id")) is int and payload["id"] == pending_id):
+                    try:
+                        # Even a malicious worker repeatedly answering the
+                        # current id cannot grow a host-side queue unbounded.
+                        self._responses.put_nowait(payload)
+                    except queue.Full:
+                        pass
+        except (OSError, ValueError):
+            self._reader_error = "Worker stdout stream failed."
         finally:
-            self._responses.put(_WORKER_READER_CLOSED)
+            # Never block the reader thread behind an undrained queue. Make
+            # room for the close sentinel when a worker flooded responses.
+            try:
+                self._responses.put_nowait(_WORKER_READER_CLOSED)
+            except queue.Full:
+                try:
+                    self._responses.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._responses.put_nowait(_WORKER_READER_CLOSED)
+                except queue.Full:
+                    pass
 
     def _drain_stderr(self) -> None:
         """Continuously read the worker's stderr into a bounded ring buffer,
@@ -1126,7 +1175,12 @@ class PluginWorkerClient:
         if process is None or process.stderr is None:
             return
         try:
-            for line in process.stderr:
+            while True:
+                # A bounded deque does NOT bound a single huge/no-newline
+                # entry; size-limit each read before storing it.
+                line = process.stderr.readline(_MAX_WORKER_STDERR_CHUNK_CHARS)
+                if not line:
+                    break
                 self._stderr_tail.append(line)
         except (ValueError, OSError):
             # stderr closed out from under us (close() race) - nothing left
