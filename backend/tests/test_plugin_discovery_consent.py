@@ -415,7 +415,7 @@ def test_revoking_real_worker_during_registration_kills_process_before_ack(tmp_p
             timeout=10,
         )
         assert registry.worker_clients["provisional_revoke"].is_connected
-        assert marker.read_text(encoding="utf-8") == "imported\\n"
+        assert marker.read_text(encoding="utf-8") == "imported\n"
         await bus.dispatch_intent(
             "app-plugins", "setPluginGrant", ["provisional_revoke", False],
         )
