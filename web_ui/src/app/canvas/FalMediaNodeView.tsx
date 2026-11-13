@@ -19,7 +19,7 @@ interface StudioDraft {
   prompt: string;
   argumentsJson: string;
 }
-type StudioInput = Omit<StudioDraft, never>;
+type StudioInput = StudioDraft;
 export interface FalMediaNodeData extends Record<string, unknown> {
   mediaJson: string;
   catalogJson: string;
@@ -112,12 +112,10 @@ function ModelLibrary({
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [sortOrder, setSortOrder] = useState<PriceSort>("economy");
   const [showLibrary, setShowLibrary] = useState(true);
-  const initialLoad = useRef("");
   const searchSignature = `${draft.mode}|${draft.operation}|${query}`;
   useEffect(() => {
     // Query is a deliberate network read; debounce each keystroke.
     const timer = window.setTimeout(() => {
-      initialLoad.current = searchSignature;
       onSearch(draft.mode, draft.operation, query);
     }, query.trim() ? 450 : 180);
     return () => window.clearTimeout(timer);
@@ -413,7 +411,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
       data.onSaveDraft(draft);
     }, 800);
     return () => window.clearTimeout(timer);
-  }, [data, draft, busy]);
+  }, [data.onSaveDraft, draft, busy]);
 
   useEffect(() => {
     if (!["queued", "running", "cancelling", "stalled"].includes(media.status)) return;
@@ -424,7 +422,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
       if (document.visibilityState !== "hidden") data.onRefresh();
     }, 6000);
     return () => window.clearInterval(timer);
-  }, [data, media.status, media.requestId]);
+  }, [data.onRefresh, media.status, media.requestId]);
 
   const quote = media.quote && media.quote.status === "ready" ? media.quote : null;
   const currentQuote = quote && !dirtyRef.current && quote.modelId === draft.modelId &&
