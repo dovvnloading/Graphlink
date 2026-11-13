@@ -256,6 +256,51 @@ describe("ChatLibraryDialog", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("requires a separate explicit confirmation before discarding a partial live graph", async () => {
+    const { user, request, intents } = setup();
+    request.mockResolvedValueOnce("discard-required").mockResolvedValueOnce(undefined);
+    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: /Open chat "Second Chat"/ }));
+    expect(confirmation).toHaveBeenCalledOnce();
+    expect(confirmation.mock.calls[0][0]).toMatch(/will NOT be saved/);
+    expect(intents.filter((entry) => entry[1] === "loadChat")).toEqual([
+      ["app-chat-library", "loadChat", [2]],
+      ["app-chat-library", "loadChat", [2, true]],
+    ]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    confirmation.mockRestore();
+  });
+
+  it("declining incomplete-copy discard leaves the library open and never retries", async () => {
+    const { user, request, intents } = setup();
+    request.mockResolvedValueOnce("discard-required");
+    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: /Open chat "Second Chat"/ }));
+    expect(confirmation).toHaveBeenCalledOnce();
+    expect(intents.filter((entry) => entry[1] === "loadChat")).toEqual([
+      ["app-chat-library", "loadChat", [2]],
+    ]);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    confirmation.mockRestore();
+  });
+
+  it("requires the same explicit confirmation for New Chat with no workspace selected", async () => {
+    const { user, request, intents } = setup();
+    request.mockResolvedValueOnce("discard-required").mockResolvedValueOnce(undefined);
+    const confirmation = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await user.click(screen.getByText("open library"));
+    await user.click(screen.getByRole("button", { name: "New Chat" }));
+    expect(confirmation).toHaveBeenCalledOnce();
+    expect(intents.filter((entry) => entry[1] === "newChat")).toEqual([
+      ["app-chat-library", "newChat", []],
+      ["app-chat-library", "newChat", [null, true]],
+    ]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    confirmation.mockRestore();
+  });
+
   it("groups rows under the correct date headers, most recent group first", async () => {
     const { user, push } = setup();
     act(() =>

@@ -101,9 +101,23 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
 
   if (!isOpen) return null;
 
-  function jumpTo(id: number) {
-    overlays.close();
-    transport.fireIntent("app-chat-library", "loadChat", [id]);
+  async function jumpTo(id: number) {
+    try {
+      const outcome = await transport.request("app-chat-library", "loadChat", [id]);
+      if (outcome === "discard-required") {
+        const confirmed = window.confirm(
+          "This graph is incomplete because plugin nodes could not be restored. " +
+          "Discard the incomplete ON-SCREEN copy to switch? " +
+          "Changes to this live copy will NOT be saved; the original saved graph stays intact.",
+        );
+        if (!confirmed) return;
+        const retry = await transport.request("app-chat-library", "loadChat", [id, true]);
+        if (retry === "discard-required") return;
+      }
+      overlays.close();
+    } catch (error) {
+      console.error("[quick-switcher] Could not switch graphs:", error);
+    }
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
