@@ -424,11 +424,29 @@ class FalMediaController:
         if media["status"] not in {"queued", "running", "stalled"} or not media["requestId"]:
             raise FalError("No cancellable Fal job exists for this node.")
         model_id, request_id = media["modelId"], media["requestId"]
-        output = await asyncio.to_thread(self._client().cancel, model_id, request_id)
+        # Commit cancellation intent before the network await so two clicks
+        # cannot send overlapping cancellation requests.
+        media["status"] = "cancelling"
+        store_media(node, media)
+        await self._publish()
+        try:
+            output = await asyncio.to_thread(self._client().cancel, model_id, request_id)
+        except (FalError, TypeError, ValueError):
+            live = self._live(node_id)
+            if live is node and read_media(live)["requestId"] == request_id:
+                update = read_media(live)
+                if update["status"] == "cancelling":
+                    update["status"] = "stalled"
+                    update["error"] = "Cancellation could not be confirmed. Check status or retry cancellation."
+                    store_media(live, update)
+                    await self._publish()
+            return
         live = self._live(node_id)
-        if live is None or live is not node or read_media(live)["requestId"] != request_id:
+        if live is not node or read_media(live)["requestId"] != request_id:
             return
         update = read_media(live)
+        if update["status"] not in {"queued", "running", "cancelling", "stalled"}:
+            return
         code = str(output.get("status") or "")
         if code == "OK":
             update["status"] = "cancelled"
@@ -437,6 +455,9 @@ class FalMediaController:
         else:
             update["status"] = "cancelling"
         store_media(live, update)
-        await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
-                                model_id, request_id, code)
+        try:
+            await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
+                                    model_id, request_id, code)
+        except Exception as exc:
+            logger.warning("Could not record Fal cancellation (%s).", type(exc).__name__)
         await self._publish()
