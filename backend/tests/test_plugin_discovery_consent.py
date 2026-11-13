@@ -270,3 +270,75 @@ def test_parallel_grant_revoke_intents_preserve_final_consent(tmp_path, monkeypa
         for worker in registry.worker_clients.values():
             worker.close()
 
+def test_revoking_out_of_process_plugin_terminates_worker_and_allows_fresh_regrant(tmp_path):
+    """Disabling a resident worker must revoke its OS process, not just its UI grant."""
+    root = tmp_path / "plugins"
+    marker = _write_extension(root, "revoked_worker", out_of_process=True)
+    settings = SettingsManager(tmp_path / "settings" / "session.dat")
+    registry = discover_plugins(root)
+    bus = SessionBus("revoke-runtime-test")
+    document = SceneDocument()
+    notifications = NotificationState()
+    bus.register_topic("scene", document.scene_payload)
+    bus.register_topic("notification", notifications.payload)
+    register_plugins(bus, notifications, document, settings, plugin_registry=registry)
+
+    async def run():
+        await bus.dispatch_intent(
+            "app-plugins", "setPluginGrant", ["revoked_worker", True],
+        )
+        worker = registry.worker_clients["revoked_worker"]
+        running_process = worker._process
+        assert running_process is not None
+        assert running_process.poll() is None
+        assert "Consent Widget" in registry.picker_entries
+
+        await bus.dispatch_intent(
+            "app-plugins", "setPluginGrant", ["revoked_worker", False],
+        )
+        assert not worker.is_connected
+        assert running_process.poll() is not None, "revoked OS worker remained alive"
+        assert "revoked_worker" not in registry.worker_clients
+        assert "revoked_worker" not in registry.loaded_plugin_ids
+        assert "Consent Widget" not in registry.picker_entries
+        assert "revoked_worker.thing" not in registry.node_kinds
+        assert "revoked_worker" in registry.manifests
+        assert not settings.get_plugin_grants()["revoked_worker"]
+        grants = plugins_payload(registry, settings)["grants"]
+        assert any(r["pluginId"] == "revoked_worker" and not r["granted"] for r in grants)
+
+        # Revocation preserves the metadata, but not the executable
+        # registrations. Re-approval must spawn exactly one fresh worker.
+        await bus.dispatch_intent(
+            "app-plugins", "setPluginGrant", ["revoked_worker", True],
+        )
+        restarted = registry.worker_clients["revoked_worker"]
+        assert restarted is not worker
+        assert restarted.is_connected
+        assert "Consent Widget" in registry.picker_entries
+        assert registry.loaded_plugin_ids == {"revoked_worker"}
+        assert marker.read_text(encoding="utf-8") == "imported\nimported\n"
+
+    try:
+        asyncio.run(run())
+    finally:
+        for worker in registry.worker_clients.values():
+            worker.close()
+
+
+def test_revoking_in_process_plugin_does_not_claim_to_unload_python(tmp_path):
+    """Import-time Python cannot be reversed; only runtime entry points are gated."""
+    from backend.plugin_sdk import deactivate_plugin_worker
+
+    root = tmp_path / "plugins"
+    marker = _write_extension(root, "in_process_revoke", out_of_process=False)
+    settings = SettingsManager(tmp_path / "settings" / "session.dat")
+    registry = discover_plugins(root)
+    settings.set_plugin_grant("in_process_revoke", True)
+    activate_granted_plugins(registry, settings)
+    assert marker.read_text(encoding="utf-8") == "imported\n"
+
+    settings.set_plugin_grant("in_process_revoke", False)
+    assert deactivate_plugin_worker(registry, "in_process_revoke") == ()
+    assert "in_process_revoke" in registry.loaded_plugin_ids
+    assert "Consent Widget" in registry.picker_entries

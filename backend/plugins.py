@@ -54,6 +54,7 @@ from backend.plugin_sdk import (
     _worker_parent_snapshot,
     _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS,
     activate_granted_plugins,
+    deactivate_plugin_worker,
     discover_plugins,
     intent_input_schema,
     resolve_intent_call_args,
@@ -884,6 +885,14 @@ def register_plugins(
                         canvas_document.plugin_node_serializers[kind] = _grant_gated_serialize(
                             kind_spec.plugin_id, kind_spec.serialize, settings_manager,
                         )
+            else:
+                # Revoke the live OS worker, not only its future call grants.
+                # Close happens off-loop and OUTSIDE the SDK's global lock.
+                retired_kinds = await asyncio.to_thread(
+                    deactivate_plugin_worker, plugin_registry, plugin_id,
+                )
+                for kind in retired_kinds:
+                    canvas_document.plugin_node_serializers.pop(kind, None)
             # The Builder's cached registry may have been populated before
             # this plugin appeared (or before a revocation). Invalidate
             # after the final grant state is established, not while the
