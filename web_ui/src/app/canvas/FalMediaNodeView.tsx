@@ -254,7 +254,9 @@ function ModelInputs({
   } catch {
     jsonError = "Correct the JSON syntax before generating.";
   }
-  const fields = schema.modelId === draft.modelId ? schema.fields.filter((field) => field.name !== "prompt") : [];
+  const primaryField = draft.operation === "text-to-speech" ? "text" : "prompt";
+  const fields = schema.modelId === draft.modelId
+    ? schema.fields.filter((field) => field.name !== primaryField) : [];
   const updateField = (name: string, value: unknown) => {
     const next = editJsonValue(draft.argumentsJson, name, value);
     if (next !== null) setJson(next);
@@ -264,20 +266,23 @@ function ModelInputs({
       <div className="fal-studio-section-heading">
         <div>
           <span className="fal-studio-kicker">02 / CREATE</span>
-          <h4>Describe your creation</h4>
+          <h4>{draft.operation === "text-to-speech" ? "Write what to say" : "Describe your creation"}</h4>
         </div>
         {draft.modelId && <button type="button" className="fal-studio-mini-link" onClick={onInspect}
           disabled={schema.status === "loading"}>↻ Model schema</button>}
       </div>
       <label className="fal-studio-field">
-        <span>Prompt <small>Describe the outcome you want</small></span>
+        <span>{primaryField === "text" ? "Speech text" : "Prompt"} <small>{
+          primaryField === "text" ? "The exact words to speak" : "Describe the outcome you want"
+        }</small></span>
         <textarea className="fal-studio-prompt nodrag nopan nowheel"
           value={draft.prompt} disabled={busy} rows={3} maxLength={16000}
           placeholder={draft.mode === "image" ? "A moody editorial photograph, soft daylight, sculptural architecture…" :
             draft.mode === "video" ? "A slow cinematic dolly shot through a glowing glass forest…" :
-            "Warm, expressive narration with natural pauses and a calm voice…"}
+            draft.operation === "text-to-speech" ? "Hello. Welcome to our studio. This is the text to narrate…" :
+            "Warm, expressive music, ambience or a sound effect…"}
           onChange={(event) => setPrompt(event.target.value)}
-          aria-label="Media generation prompt" />
+          aria-label={primaryField === "text" ? "Text to speak" : "Media generation prompt"} />
         <small className="fal-studio-field-meta">{draft.prompt.length.toLocaleString()} / 16,000</small>
       </label>
       {draft.modelId && schema.status === "loading" && (
