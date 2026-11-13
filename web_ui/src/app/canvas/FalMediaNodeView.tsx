@@ -64,6 +64,14 @@ function safeAssetUrl(url: string): boolean {
 function unitName(unit: string) {
   return unit.replace(/_/g, " ") || "billing unit";
 }
+function safeInlineMediaUrl(url: string): boolean {
+  if (!safeAssetUrl(url)) return false;
+  // Browser <video>/<audio> load without a click. Keep that automatic
+  // traffic on Fal-owned media hosts only; non-Fal result links are still
+  // available by explicit user action rather than silently tracking users.
+  const host = new URL(url).hostname.toLowerCase();
+  return host === "fal.media" || host.endsWith(".fal.media");
+}
 function iconFor(mode: MediaMode): string {
   return mode === "image" ? "▧" : mode === "video" ? "▣" : "♫";
 }
@@ -359,13 +367,15 @@ function OutputGallery({ media, id }: { media: MediaState; id: string }) {
                   const proxyUrl = withAuthToken(`/api/fal-media/preview/${encodeURIComponent(id)}/${j}/${i}`);
                   return (
                     <div key={item.url} className="fal-studio-asset">
-                      {item.kind === "image" ? (
+                      {item.kind === "image" && safeInlineMediaUrl(item.url) ? (
                         <img src={proxyUrl} alt={job.prompt || "Generated image"} loading="lazy"
                           referrerPolicy="no-referrer" onError={(event) => { event.currentTarget.hidden = true; }} />
-                      ) : item.kind === "video" ? (
+                      ) : item.kind === "video" && safeInlineMediaUrl(item.url) ? (
                         <video src={item.url} controls playsInline preload="metadata" className="nowheel" />
-                      ) : (
+                      ) : item.kind === "audio" && safeInlineMediaUrl(item.url) ? (
                         <audio src={item.url} controls preload="none" className="nowheel" />
+                      ) : (
+                        <p className="fal-studio-quiet">Inline preview unavailable. Open the source link to view this asset.</p>
                       )}
                       <a href={item.url} target="_blank" rel="noreferrer"
                         aria-label={`Open generated ${item.kind} ${i+1} in a new tab`}>↗ Open {item.kind}</a>
