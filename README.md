@@ -174,7 +174,8 @@ OpenAI-Compatible, Anthropic Claude, and Google Gemini are supported, with per-t
 ### Fal.ai — universal media and model inference
 
 **Settings > Fal.ai** provides API-key configuration, arbitrary model IDs
-(including nested routes), synchronous inference and queued jobs for images,
+(including nested routes), **live model discovery, published OpenAPI schemas,
+up-to-date unit pricing, and cost estimates**, synchronous inference and queued jobs for images,
 video, audio, speech, 3D and other Fal-hosted endpoints. Supply the model's
 native JSON arguments and options; manage queued jobs with status refresh,
 result retrieval and cancellation. Generated media URLs and bounded results
