@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SettingsDialog, parseEnvLines } from "./SettingsDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { ExecutionLimitsProvider } from "../canvas/ExecutionLimitsContext";
@@ -22,6 +22,12 @@ const snapshot = {
   enableSystemPrompt: true,
   notificationPreferences: { info: true, success: true, warning: true, error: true },
   githubTokenConfigured: false,
+  falApiKeySource: "none",
+  falJobsJson: "[]",
+  falNotice: "",
+  falBusy: false,
+  falSyncResultJson: "",
+  falUploadUrl: "",
   secretsEncryptedAtRest: true,
   logLevel: "INFO",
   autoModelPolicy: "cheapest-capable",
@@ -1170,6 +1176,80 @@ describe("SettingsDialog", () => {
 
       expect(intents).toContainEqual(["app-plugins", "setPluginGrant", ["counter_node", false]]);
     });
+  });
+});
+
+
+describe("Fal.ai settings page", () => {
+  async function goToFal() {
+    const fixture = setup();
+    await fixture.user.click(screen.getByText("open settings"));
+    await fixture.user.click(screen.getByRole("button", { name: "Fal.ai" }));
+    act(() => fixture.push({ ...snapshot, activeSection: "fal.ai" }));
+    return fixture;
+  }
+
+  it("never displays a secret but permits explicit key replacement and clear", async () => {
+    const { user, intents, push } = await goToFal();
+    expect(screen.getByText(/No API key configured/)).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText("Paste key (never returned to the browser)"), "private-key");
+    await user.click(screen.getByRole("button", { name: "Save API Key" }));
+    expect(intents).toContainEqual(["app-settings", "setFalApiKey", ["private-key"]]);
+    act(() => push({ ...snapshot, activeSection: "fal.ai", falApiKeySource: "stored" }));
+    expect(screen.getByText(/An API key is saved/)).toBeInTheDocument();
+    expect(screen.queryByText("private-key")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Clear Stored Key" }));
+    expect(intents).toContainEqual(["app-settings", "clearFalApiKey", []]);
+  });
+
+  it("submits arbitrary model JSON through its dedicated billed queue intent", async () => {
+    const { user, intents } = await goToFal();
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      await user.click(screen.getByRole("button", { name: "Submit to Queue" }));
+      expect(confirm).toHaveBeenCalled();
+      expect(intents).toContainEqual([
+        "app-settings", "submitFalJob", [
+          "fal-ai/flux/schnell",
+          '{"prompt": "A cinematic mountain landscape at sunrise"}',
+          '{"priority": "normal", "store_io": false}',
+        ],
+      ]);
+    } finally {
+      confirm.mockRestore();
+    }
+  });
+
+  it("rejects malformed model input before any billable request", async () => {
+    const { user, intents } = await goToFal();
+    const editors = screen.getAllByRole("textbox");
+    const argsEditor = editors.find((el) => el.getAttribute("aria-label") === "Fal model arguments JSON");
+    expect(argsEditor).toBeTruthy();
+    await user.clear(argsEditor!);
+    await user.type(argsEditor!, "[not valid json");
+    await user.click(screen.getByRole("button", { name: "Submit to Queue" }));
+    expect(screen.getByText(/must both be valid JSON objects/)).toBeInTheDocument();
+    expect(intents.some((entry) => entry[1] === "submitFalJob")).toBe(false);
+  });
+
+  it("can inspect output assets and refresh a saved job", async () => {
+    const { user, intents, push } = await goToFal();
+    act(() => push({
+      ...snapshot,
+      activeSection: "fal.ai",
+      falJobsJson: JSON.stringify([{
+        modelId: "fal-ai/flux/schnell", requestId: "764cabcf-b745-4b3e-ae38-1200304cf45b",
+        status: "COMPLETED", resultJson: '{"images":[]}',
+        mediaUrls: ["https://v3.fal.media/files/output.png"],
+      }]),
+    }));
+    await user.click(screen.getByText(/fal-ai\/flux\/schnell/));
+    expect(screen.getByText(/Open generated asset/)).toHaveAttribute("href", "https://v3.fal.media/files/output.png");
+    await user.click(screen.getByRole("button", { name: "Refresh / Fetch Result" }));
+    expect(intents).toContainEqual([
+      "app-settings", "refreshFalJob",
+      ["fal-ai/flux/schnell", "764cabcf-b745-4b3e-ae38-1200304cf45b", true],
+    ]);
   });
 });
 
