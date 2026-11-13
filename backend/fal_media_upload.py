@@ -11,7 +11,6 @@ gates; never provide an auth-exempt or unauthenticated route.
 from __future__ import annotations
 
 import asyncio
-import re
 import tempfile
 from pathlib import Path
 from urllib.parse import unquote
@@ -30,7 +29,6 @@ _ALLOWED_SUFFIXES = frozenset({
     ".mp4", ".webm", ".mov", ".m4v", ".avi",
     ".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac",
 })
-_SAFE_FILENAME = re.compile(r"^[a-zA-Z0-9_.() -]{1,160}$")
 _UPLOAD_SLOTS = asyncio.Semaphore(2)
 
 
@@ -38,7 +36,11 @@ def _suffix(filename: str) -> str | None:
     if not isinstance(filename, str) or len(filename) > 400:
         return None
     raw = unquote(filename)
-    if not _SAFE_FILENAME.fullmatch(raw) or raw in (".", ".."):
+    # Only the file extension is used for the server-side temporary name.
+    # Accept Unicode filenames but not path traversal or control characters.
+    if len(raw) > 160 or raw in (".", "..") or any(
+        c in raw for c in ("/", "\\\\", "\\r", "\\n", "\\x00")
+    ):
         return None
     suffix = Path(raw).suffix.lower()
     return suffix if suffix in _ALLOWED_SUFFIXES else None
