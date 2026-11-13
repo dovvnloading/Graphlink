@@ -1051,8 +1051,15 @@ class PluginWorkerClient:
         comment."""
         if self._process is not None:
             return
+        if self._stop_requested.is_set():
+            raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" startup was revoked.')
         self._guard = create_execution_guard()
         try:
+            # close() can set this bit while the guard is being created.
+            # Refuse to spawn rather than briefly executing with revoked
+            # approval; guard cleanup below still runs on this path.
+            if self._stop_requested.is_set():
+                raise PluginWorkerError(f'Plugin worker "{self.plugin_id}" startup was revoked.')
             self._process = subprocess.Popen(
                 [sys.executable, "-m", "backend.plugin_worker", self.plugin_id, str(self.source_dir)],
                 stdin=subprocess.PIPE,
@@ -1064,10 +1071,12 @@ class PluginWorkerClient:
                 bufsize=1,
                 **self._guard.popen_kwargs(),
             )
-        except OSError as exc:
+        except (OSError, PluginWorkerError) as exc:
             guard, self._guard = self._guard, None
             if guard is not None:
                 guard.close()
+            if isinstance(exc, PluginWorkerError):
+                raise
             raise PluginWorkerError(
                 f'Failed to start plugin worker for "{self.plugin_id}": {exc}'
             ) from exc
