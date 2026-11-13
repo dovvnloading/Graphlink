@@ -2225,6 +2225,22 @@ def make_load_chat(
             if canvas_document is None:
                 return
 
+            # A previously approved out-of-process plugin may still be
+            # registering in the background after session startup. Loading
+            # before that registration finishes would SKIP every saved node
+            # of the plugin's kind (_restore_node treats unknown kinds as
+            # missing). A subsequent Save could then persist an incomplete
+            # graph. Await readiness BEFORE the protect-and-restore sequence
+            # below, which must stay adjacent to prevent stale snapshots.
+            if settings_manager is not None:
+                from backend.plugin_sdk import activate_granted_plugins, discover_plugins
+                plugin_registry = discover_plugins()
+                pending = activate_granted_plugins(plugin_registry, settings_manager)
+                if pending:
+                    await asyncio.gather(
+                        *(asyncio.shield(task) for task in pending),
+                    )
+
             # Read the target BEFORE protecting the currently open graph.
             # Another attached WS tab can still edit the live scene during
             # load_chat_snapshot's await. The final protect and restore must

@@ -103,6 +103,7 @@ not part of this repo)."""
 
 from __future__ import annotations
 
+import asyncio
 import collections
 import importlib.util
 import json
@@ -848,6 +849,11 @@ class PluginRegistry:
         # explicitly closed either (both rely on OS process-exit cleanup, an
         # accepted gap ADR-007 stage 8.5 already ships with, not new here).
         self.worker_clients: dict[str, "PluginWorkerClient"] = {}
+        # The session may be created on an active WebSocket event loop.
+        # Third-party worker registration is staged off-thread, then
+        # published into this registry on the loop. Retain tasks by id so
+        # concurrent sessions/grant changes never start two workers.
+        self.pending_worker_activations: dict[str, asyncio.Task[None]] = {}
 
     def resolve_picker_name(self, name: str) -> "tuple[NodeKindSpec, PickerEntrySpec] | None":
         entry = self.picker_entries.get(name)
@@ -1699,28 +1705,126 @@ def discover_plugins(
         return registry
 
 
+
+async def _activate_granted_worker_task(
+    registry: PluginRegistry, settings_manager, manifest: PluginManifest,
+    builtin_names: frozenset[str],
+) -> None:
+    """Prepare a granted worker off-thread; publish its registrations on the loop.
+
+    Import/worker startup is the untrusted, potentially blocking part. The
+    worker gets a JSON-only parent snapshot and runs with safe_subprocess_env,
+    exactly as before. Do not mutate the shared registry off-thread:
+    registration collisions and the complete registry update happen in
+    this coroutine, synchronously, under the existing discovery lock.
+    """
+    plugin_id = manifest.id
+    client: PluginWorkerClient | None = None
+    preparation = asyncio.create_task(
+        asyncio.to_thread(_discover_out_of_process_plugin, manifest, manifest.source_dir)
+    )
+    try:
+        try:
+            host, client = await asyncio.shield(preparation)
+        except asyncio.CancelledError:
+            # Cancelling a to_thread await does NOT cancel the OS process
+            # startup. Arrange cleanup of its eventual returned client,
+            # rather than losing the only handle to a resident worker.
+            def _cleanup_if_preparation_finishes(done: asyncio.Task) -> None:
+                try:
+                    _host, orphan = done.result()
+                except BaseException:
+                    return
+                threading.Thread(target=orphan.close, daemon=True).start()
+
+            preparation.add_done_callback(_cleanup_if_preparation_finishes)
+            raise
+
+        # Approval may have been revoked while the worker booted. A
+        # late result must never install a handler after revocation.
+        if not settings_manager.get_plugin_grants().get(plugin_id, False):
+            return
+        with _REGISTRY_CACHE_LOCK:
+            if (plugin_id in registry.loaded_plugin_ids
+                    or plugin_id in registry.failed_plugin_ids
+                    or plugin_id not in registry.manifests):
+                return
+            if client is None:
+                raise PluginWorkerError("Worker startup completed without a process client.")
+            _merge_into_registry(registry, host, builtin_names)
+            registry.loaded_plugin_ids.add(plugin_id)
+            registry.worker_clients[plugin_id] = client
+            client = None  # the registry now owns the process
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        with _REGISTRY_CACHE_LOCK:
+            registry.failed_plugin_ids.add(plugin_id)
+            registry.load_errors.append(
+                PluginLoadError(plugin_id, f"{type(exc).__name__}: {exc}")
+            )
+        logger.warning("approved plugin activation failed: %s (%s)", plugin_id, exc)
+    finally:
+        if client is not None:
+            # A rejected or duplicate registration must not retain a
+            # worker, but its close()/wait() can itself block briefly.
+            await asyncio.shield(asyncio.to_thread(client.close))
+        with _REGISTRY_CACHE_LOCK:
+            registry.pending_worker_activations.pop(plugin_id, None)
+
+
 def activate_granted_plugins(
     registry: PluginRegistry, settings_manager,
     *, builtin_names: frozenset[str] = frozenset(),
-) -> None:
-    """Activate previously discovered extensions only after an explicit grant.
+) -> tuple[asyncio.Task[None], ...]:
+    """Activate consented extensions without blocking a running event loop.
 
-    In-place activation preserves references held by the session, Builder,
-    and serializers to the memoized registry. The discovery lock also
-    serializes concurrent grant requests so no worker starts twice.
+    In ordinary synchronous tests/offline save/load, preserve the existing
+    eager behavior. On a live ASGI event loop, third-party out-of-process
+    plugin startup/registration is scheduled as a task instead of blocking
+    session creation, Builder registration or Settings grant changes.
+
+    One pending task per plugin is reserved under _REGISTRY_CACHE_LOCK,
+    preventing duplicate workers; the async task publishes the completed
+    registrations on the event-loop thread after rechecking consent.
+    Callers that must publish UI changes after activation may await the
+    returned tasks. In-process plugins intentionally retain their existing
+    synchronous registration behavior (they are already approved Python
+    executed inside the host and cannot be made safe by offloading RPC).
     """
     grants = settings_manager.get_plugin_grants()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    pending: list[asyncio.Task[None]] = []
     with _REGISTRY_CACHE_LOCK:
         for plugin_id, granted in grants.items():
-            if (
-                not granted
-                or plugin_id in registry.loaded_plugin_ids
-                or plugin_id in registry.failed_plugin_ids
-            ):
+            if (not granted
+                    or plugin_id in registry.loaded_plugin_ids
+                    or plugin_id in registry.failed_plugin_ids):
                 continue
             manifest = registry.manifests.get(plugin_id)
             if manifest is None:
                 continue
+
+            existing = registry.pending_worker_activations.get(plugin_id)
+            if existing is not None and not existing.done():
+                if loop is not None and existing.get_loop() is loop:
+                    pending.append(existing)
+                continue
+
+            if loop is not None and manifest.runtime_isolation == "out-of-process":
+                task = loop.create_task(
+                    _activate_granted_worker_task(
+                        registry, settings_manager, manifest, builtin_names,
+                    )
+                )
+                registry.pending_worker_activations[plugin_id] = task
+                pending.append(task)
+                continue
+
             try:
                 _load_declared_plugin(registry, manifest, builtin_names)
             except Exception as exc:
@@ -1729,3 +1833,4 @@ def activate_granted_plugins(
                     PluginLoadError(plugin_id, f"{type(exc).__name__}: {exc}")
                 )
                 logger.warning("approved plugin activation failed: %s (%s)", plugin_id, exc)
+    return tuple(pending)

@@ -154,7 +154,7 @@ def test_granting_a_plugin_keeps_the_session_loop_responsive(tmp_path, monkeypat
     """A slow consented worker registration must not block unrelated intents."""
     import threading
 
-    import backend.plugins as plugins_module
+    import backend.plugin_sdk as plugin_sdk_module
 
     root = tmp_path / "plugins"
     marker = _write_extension(root, "async_consent_worker", out_of_process=True)
@@ -169,15 +169,15 @@ def test_granting_a_plugin_keeps_the_session_loop_responsive(tmp_path, monkeypat
 
     started = threading.Event()
     proceed = threading.Event()
-    original_activate = plugins_module.activate_granted_plugins
+    original_prepare = plugin_sdk_module._discover_out_of_process_plugin
 
-    def delayed_activation(*args, **kwargs):
+    def delayed_preparation(manifest, plugin_dir):
         started.set()
         if not proceed.wait(timeout=5):
             raise AssertionError("test setup did not release worker activation")
-        return original_activate(*args, **kwargs)
+        return original_prepare(manifest, plugin_dir)
 
-    monkeypatch.setattr(plugins_module, "activate_granted_plugins", delayed_activation)
+    monkeypatch.setattr(plugin_sdk_module, "_discover_out_of_process_plugin", delayed_preparation)
 
     async def ping():
         return "other intent still responsive"
@@ -219,7 +219,7 @@ def test_parallel_grant_revoke_intents_preserve_final_consent(tmp_path, monkeypa
     """Serializing grants prevents late async registration from racing revoke."""
     import threading
 
-    import backend.plugins as plugins_module
+    import backend.plugin_sdk as plugin_sdk_module
 
     root = tmp_path / "plugins"
     _write_extension(root, "ordered_consent", out_of_process=True)
@@ -234,15 +234,15 @@ def test_parallel_grant_revoke_intents_preserve_final_consent(tmp_path, monkeypa
 
     started = threading.Event()
     proceed = threading.Event()
-    original_activate = plugins_module.activate_granted_plugins
+    original_prepare = plugin_sdk_module._discover_out_of_process_plugin
 
-    def delayed_activation(*args, **kwargs):
+    def delayed_preparation(manifest, plugin_dir):
         started.set()
         if not proceed.wait(timeout=5):
             raise AssertionError("timed out waiting for release")
-        return original_activate(*args, **kwargs)
+        return original_prepare(manifest, plugin_dir)
 
-    monkeypatch.setattr(plugins_module, "activate_granted_plugins", delayed_activation)
+    monkeypatch.setattr(plugin_sdk_module, "_discover_out_of_process_plugin", delayed_preparation)
 
     async def run():
         grant = asyncio.create_task(
