@@ -87,7 +87,7 @@ def validate_edit(media: dict, mode: str, operation: str, model_id: str,
         raise FalError("The prompt cannot exceed 16,000 characters.")
     arguments = parse_arguments(arguments_json)
     updated = copy.deepcopy(media)
-    active = updated.get("status") in {"submitting", "queued", "running", "cancelling", "stalled"}
+    active = updated.get("status") in {"submitting", "queued", "running", "cancelling", "stalled", "unconfirmed"}
     if active and (
         mode != updated["mode"] or operation != updated["operation"]
         or model_id != updated["modelId"] or model_name != updated["modelName"]
