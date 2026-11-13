@@ -1125,6 +1125,7 @@ class PluginWorkerClient:
                 # arbitrarily large newline-free output in the HOST process.
                 raw = process.stdout.readline(_MAX_WORKER_FRAME_CHARS)
                 if not raw:
+                    self._reader_error = "Worker stdout reached EOF."
                     break
                 if len(raw) >= _MAX_WORKER_FRAME_CHARS and not raw.endswith("\n"):
                     # A partial JSON-RPC frame cannot be parsed or safely
