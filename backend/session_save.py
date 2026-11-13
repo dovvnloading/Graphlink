@@ -120,6 +120,7 @@ from backend.domain.node_states import (
     HarnessState,
     HtmlState,
     ImageState,
+    FalMediaState,
     NoteState,
     PlanState,
     WebResearchState,
@@ -160,7 +161,7 @@ _ACTIVE_SAVE_ASSET_STORE: contextvars.ContextVar = contextvars.ContextVar(
 # entire fix; both serializer and restorer already existed and are correct.
 _REGULAR_KINDS = (
     "chat", "code", "document", "image", "thinking", "conversation", "html",
-    "web_research", "artifact", "gitlink", "code_review", "code_sandbox", "plan", "harness",
+    "web_research", "artifact", "gitlink", "code_review", "code_sandbox", "plan", "harness", "fal_media",
 )
 
 
@@ -656,11 +657,29 @@ def _serialize_plugin_node(
     return payload
 
 
+def _serialize_fal_media_node(raw_node: SceneNode) -> dict[str, Any]:
+    """Persist studio drafts, durable job IDs and a bounded output gallery.
+    Catalog caches, pricing quotes and transient schema previews never enter
+    session.dat (model catalog and costs must be refreshed when reopened).
+    """
+    from backend.fal_media_domain import read_media
+    node = with_state(raw_node, FalMediaState)
+    media = read_media(node)
+    media["quote"] = None
+    return {
+        "node_type": "fal_media",
+        "title": node.title,
+        "media": media,
+        "is_collapsed": bool(node.is_collapsed),
+    }
+
+
 _NODE_SERIALIZERS = {
     "chat": lambda node, document: _serialize_chat_node(node),
     "code": lambda node, document: _serialize_code_node(node),
     "document": lambda node, document: _serialize_document_node(node),
     "image": lambda node, document: _serialize_image_node(node, document, _ACTIVE_SAVE_ASSET_STORE.get()),
+    "fal_media": lambda node, document: _serialize_fal_media_node(node),
     "thinking": lambda node, document: _serialize_thinking_node(node),
     "conversation": lambda node, document: _serialize_conversation_node(node),
     "html": lambda node, document: _serialize_html_node(node),
