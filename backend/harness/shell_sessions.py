@@ -41,7 +41,7 @@ from abc import ABC, abstractmethod
 from collections import deque
 from pathlib import Path
 
-from graphlink_execution_guard import ExecutionResourceGuard, create_execution_guard
+from graphlink_execution_guard import spawn_guarded_subprocess, assign_guarded_subprocess, ExecutionResourceGuard, create_execution_guard
 from graphlink_process_env import safe_subprocess_env
 
 # Per-session output ring. Lines, not bytes: a line is the unit anyone
@@ -90,7 +90,7 @@ class LocalSubprocessBackend(ShellBackend):
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         guard = create_execution_guard()
         try:
-            process = subprocess.Popen(
+            process = spawn_guarded_subprocess(guard, 
                 command,
                 shell=True,
                 stdin=subprocess.PIPE,
@@ -106,7 +106,7 @@ class LocalSubprocessBackend(ShellBackend):
             guard.close()
             raise
         try:
-            guard.assign(process.pid)
+            assign_guarded_subprocess(guard, process)
         except BaseException:
             # Do not return a live, unguarded session to the Harness.
             try:
