@@ -1,22 +1,5 @@
 import type { SceneNodeRow } from "../../lib/bridge-core/generated/scene-state";
 
-/**
- * How the minimap classifies a node - the information design of the map,
- * kept out of the component so it can be tested directly.
- *
- * React Flow's MiniMap draws only the nodes in ITS OWN store, which is
- * populated by measurement inside a live <ReactFlow>. Under jsdom nothing
- * measures, so no rect is ever emitted and a DOM-level assertion about the
- * map's contents can only ever be vacuous. The classification is the part
- * with real decisions in it; it lives here and is tested as a function,
- * while the drawing is verified in a browser.
- *
- * Its own module rather than an export from SceneMinimap.tsx: a component
- * file that also exports plain functions trips react-refresh's
- * only-export-components rule (the same reason AppBarIcon.tsx is separate
- * from AppBar.tsx).
- */
-
 /** How a node is drawn on the map. */
 export type MinimapCategory = "conversation" | "content" | "tool" | "group";
 
@@ -30,15 +13,6 @@ export interface MinimapNodeMeta {
   color?: string;
 }
 
-/**
- * Fifteen kinds, four treatments.
- *
- * This palette is a deliberate monochrome, so there is no hue to spend on
- * kind, and fifteen distinguishable greys do not exist at minimap scale.
- * Four categories do, and they are the four questions actually asked of a
- * map: where is the conversation, where is the material, where is the thing
- * that is doing work, and where are the boundaries I drew.
- */
 const CATEGORY_BY_KIND: Record<string, MinimapCategory> = {
   chat: "conversation",
   conversation: "conversation",
@@ -56,6 +30,7 @@ const CATEGORY_BY_KIND: Record<string, MinimapCategory> = {
   gitlink: "tool",
   code_review: "tool",
   code_sandbox: "tool",
+  fal_media: "tool",
   frame: "group",
   container: "group",
 };

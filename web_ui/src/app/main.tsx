@@ -13,6 +13,7 @@ import "../lib/ui/base.css";
 // Settings field.
 import "../lib/tokens/gl-vars-dev.css";
 import "./styles.css";
+import "./canvas/workspace.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

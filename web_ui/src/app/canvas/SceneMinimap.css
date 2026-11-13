@@ -1,0 +1,143 @@
+.scene-minimap-panel.react-flow__panel {
+  margin: var(--gl-chrome-inset);
+  z-index: var(--gl-z-canvas-hud);
+  width: var(--map-width);
+  box-sizing: content-box;
+  overflow: hidden;
+  isolation: isolate;
+  color: var(--gl-surface-text-primary);
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 12px;
+  background: var(--gl-graph-surface);
+  box-shadow: var(--gl-shadow-2);
+}
+
+.scene-minimap-panel.collapsed { width: auto; }
+
+.scene-minimap-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px;
+}
+
+.scene-minimap-toggle,
+.scene-minimap-waiting {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 26px;
+  border: 0;
+  border-radius: 6px;
+  font: 600 11px/1 var(--gl-font-family);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.scene-minimap-toggle {
+  flex: 1;
+  color: var(--gl-surface-text-secondary);
+  background: transparent;
+  padding: 0 5px;
+}
+
+.scene-minimap-toggle:hover { background: var(--gl-neutral-button-background); }
+.scene-minimap-toggle:focus-visible, .scene-minimap-waiting:focus-visible {
+  outline: 2px solid var(--gl-graph-selection);
+  outline-offset: -2px;
+}
+.scene-minimap-icon, .scene-minimap-chevron {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+}
+.scene-minimap-count { white-space: nowrap; }
+.scene-minimap-icon { color: var(--gl-graph-selection); }
+.scene-minimap-chevron {
+  width: 11px;
+  margin-left: auto;
+  color: var(--gl-surface-text-muted);
+}
+.scene-minimap-waiting {
+  padding: 0 6px;
+  color: var(--gl-graph-tool);
+  background: color-mix(in srgb, var(--gl-graph-tool) 12%, var(--gl-graph-surface));
+}
+.scene-minimap-waiting:hover {
+  background: color-mix(in srgb, var(--gl-graph-tool) 22%, var(--gl-graph-surface));
+}
+
+.scene-minimap-map { border-top: 1px solid var(--gl-graph-border); }
+.scene-minimap.react-flow__minimap {
+  position: static;
+  margin: 0;
+  background: var(--gl-graph-canvas);
+}
+.scene-minimap svg { cursor: grab; }
+.scene-minimap svg:active { cursor: grabbing; }
+.scene-minimap .react-flow__minimap-mask {
+  pointer-events: none;
+  fill: var(--gl-graph-canvas);
+  fill-opacity: .46;
+  stroke: var(--gl-graph-selection);
+  stroke-opacity: .82;
+  stroke-width: 1.25;
+  vector-effect: non-scaling-stroke;
+}
+.scene-minimap-links {
+  pointer-events: none;
+  fill: none;
+  stroke: var(--gl-surface-text-muted);
+  stroke-opacity: .7;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.scene-minimap-node {
+  fill: color-mix(in srgb, var(--map-node-color) 64%, var(--gl-graph-surface));
+  stroke: var(--map-node-color);
+  stroke-width: 1;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  cursor: pointer;
+}
+.scene-minimap-node-conversation { --map-node-color: var(--gl-graph-conversation); }
+.scene-minimap-node-content { --map-node-color: var(--gl-graph-content); }
+.scene-minimap-node-tool { --map-node-color: var(--gl-graph-tool); }
+.scene-minimap-node-group {
+  --map-node-color: var(--gl-surface-text-muted);
+  fill: none;
+  stroke-dasharray: 3 2;
+}
+.scene-minimap-node.selected,
+.scene-minimap-node:hover {
+  stroke: var(--gl-surface-text-bright);
+  stroke-width: 2;
+}
+.scene-minimap-node-running {
+  stroke-dasharray: 3 2;
+  animation: scene-map-running 2s linear infinite;
+}
+.scene-minimap-node-attention {
+  stroke: var(--gl-graph-tool);
+  stroke-width: 2;
+}
+.scene-minimap-node-failed {
+  stroke: var(--gl-surface-text-bright);
+  stroke-dasharray: 1 2;
+  stroke-width: 2;
+}
+@keyframes scene-map-running {
+  to { stroke-dashoffset: -10; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scene-minimap-node-running { animation: none; }
+}

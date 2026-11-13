@@ -4,6 +4,7 @@ import { downloadTextFile } from "./downloadTextFile";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -226,14 +227,11 @@ export const CodeNodeView = memo(function CodeNodeView({
       kindClassName="code-node"
       selected={!!selected}
       collapsed={collapsed}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setMenuPosition({ x: event.clientX, y: event.clientY });
-      }}
+      onMenuChange={setMenuPosition}
       header={
-        <div className="scene-node-title code-node-language">
+        <NodeHeading glyph="code" className="code-node-language">
           <span>{data.language || "code"}</span>
-        </div>
+        </NodeHeading>
       }
       bodyClassName="code-node-content chat-node-content"
       menu={

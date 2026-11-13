@@ -5,6 +5,7 @@ import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { useStreamBuffer } from "./useStreamBuffer";
@@ -427,15 +428,12 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
       kindClassName="conversation-node"
       selected={!!selected}
       collapsed={collapsed}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setMenuPosition({ x: event.clientX, y: event.clientY });
-      }}
+      onMenuChange={setMenuPosition}
       header={
-        <div className="scene-node-title chat-node-role">
+        <NodeHeading glyph="conversation" className="chat-node-role">
           <span>Conversation</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
-        </div>
+        </NodeHeading>
       }
       bodyClassName="conversation-node-content"
       menu={

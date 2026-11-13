@@ -4,6 +4,7 @@ import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { reviewDiffContext } from "./reviewDiffFocus";
 import { useLodVisibility } from "./useLodVisibility";
@@ -389,15 +390,12 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
       kindClassName="code-review-node"
       selected={!!selected}
       collapsed={collapsed}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setMenuPosition({ x: event.clientX, y: event.clientY });
-      }}
+      onMenuChange={setMenuPosition}
       header={
-        <div className="scene-node-title chat-node-role">
+        <NodeHeading glyph="review" className="chat-node-role">
           <span>Review Lens</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
-        </div>
+        </NodeHeading>
       }
       bodyClassName="code-review-node-content"
       menu={

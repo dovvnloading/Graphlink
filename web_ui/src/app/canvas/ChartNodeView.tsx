@@ -10,6 +10,7 @@ import {
   CHART_RESIZE_DEBOUNCE_MS,
 } from "./canvasConstants";
 import { downloadBlob } from "./downloadTextFile";
+import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -19,6 +20,7 @@ import { useLodVisibility } from "./useLodVisibility";
 // ChatLibraryDialog/HelpDialog/SettingsDialog already are. Defined once at
 // module scope (not inside the component) so every chart node on the canvas
 // shares the same lazy promise instead of each mounting its own chunk load.
+const LazyChartOverview = lazy(() => import("./charts/ChartOverview"));
 const LazyChartRenderer = lazy(() => import("./charts/ChartRenderer"));
 
 /**
@@ -212,7 +214,7 @@ export const ChartNodeView = memo(function ChartNodeView({
   data,
   selected,
 }: NodeProps<ChartFlowNode>) {
-  const collapsed = useLodVisibility();
+  const overview = useLodVisibility();
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(
@@ -229,12 +231,12 @@ export const ChartNodeView = memo(function ChartNodeView({
     <NodeShell
       kindClassName="chart-node"
       selected={!!selected}
-      collapsed={collapsed}
+      collapsed={false}
       style={{ width: "100%", height: "100%" }}
       resizer={
         <NodeResizer
           nodeId={id}
-          isVisible={selected && !collapsed}
+          isVisible={selected && !overview}
           minWidth={CHART_MIN_WIDTH}
           minHeight={CHART_MIN_HEIGHT}
           maxWidth={CHART_MAX_WIDTH}
@@ -246,7 +248,7 @@ export const ChartNodeView = memo(function ChartNodeView({
         />
       }
       header={
-        <div className="scene-node-title chart-node-title">
+        <NodeHeading glyph="chart" className="chart-node-title">
           <span className="chart-node-name">{title}</span>
           <span className="chart-node-badge">{chartTypeBadgeLabel(data.chartType)}</span>
           {data.chartError && (
@@ -254,14 +256,16 @@ export const ChartNodeView = memo(function ChartNodeView({
               ⚠
             </span>
           )}
-        </div>
+        </NodeHeading>
       }
       bodyClassName="chart-node-content"
     >
       <Suspense fallback={<div className="chart-node-placeholder">Loading chart…</div>}>
-        <LazyChartRenderer chartType={data.chartType} chartData={data.chartData} />
+        {overview
+          ? <LazyChartOverview chartType={data.chartType} chartData={data.chartData} />
+          : <LazyChartRenderer chartType={data.chartType} chartData={data.chartData} />}
       </Suspense>
-      <div className="chart-node-toolbar nodrag">
+      {!overview && <div className="chart-node-toolbar nodrag">
         <button
           type="button"
           className="chart-node-btn"
@@ -287,7 +291,7 @@ export const ChartNodeView = memo(function ChartNodeView({
         >
           Export SVG
         </button>
-      </div>
+      </div>}
     </NodeShell>
   );
 }, chartNodePropsAreEqual);

@@ -55,13 +55,7 @@
   font-size: 24px;
 }
 .fal-studio-header-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.fal-studio-eyebrow, .fal-studio-kicker {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.13em;
-  color: var(--gl-surface-text-label);
-}
-.fal-studio-header-copy strong { font-size: 15px; font-weight: 750; letter-spacing: -0.025em; }
+.fal-studio-header-copy h3 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.025em; }
 .fal-studio-status {
   display: flex; align-items: center; gap: 7px; flex-shrink: 0;
   font-size: 10px; color: var(--gl-surface-text-secondary);
@@ -95,17 +89,9 @@
   color: var(--gl-surface-text-primary);
   background: var(--gl-surface-node-body);
 }
-.fal-studio-hero {padding: 24px 24px 19px;}
-.fal-studio-hero p {margin: 0 0 8px; font-size: 9px; letter-spacing: .15em; font-weight: 800; color: var(--gl-surface-text-label);}
-.fal-studio-hero h3 {
-  margin: 0 0 4px; line-height: 1.1; letter-spacing: -.045em;
-  font-size: 27px; font-weight: 800; color: var(--gl-surface-text-strong);
-}
-.fal-studio-hero h3 span {color: var(--gl-surface-text-label);}
-.fal-studio-hero > span {font-size: 11px; color: var(--gl-surface-text-secondary);}
 .fal-studio-mode-tabs {
   display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 5px; margin: 0 24px 10px;
+  gap: 5px; margin: 16px 24px 10px;
   background: var(--gl-surface-inset);
   border: 1px solid var(--gl-surface-border);
   padding: 4px; border-radius: 11px;
@@ -407,11 +393,10 @@
 }
 @keyframes fal-pulse {from {opacity: .35; transform: scale(.8);} to {opacity: 1; transform: scale(1.2);}}
 @media (max-width: 600px) {
-  .fal-studio-hero, .fal-studio-library, .fal-studio-inputs, .fal-studio-generate, .fal-studio-gallery {padding-left: 15px; padding-right: 15px;}
+  .fal-studio-library, .fal-studio-inputs, .fal-studio-generate, .fal-studio-gallery {padding-left: 15px; padding-right: 15px;}
   .fal-studio-rule {margin-left: 15px; margin-right: 15px;}
   .fal-studio-mode-tabs {margin-left: 15px; margin-right: 15px;}
   .fal-studio-operation-tabs {padding-left: 15px;}
-  .fal-studio-hero h3 {font-size: 23px;}
   .fal-studio-schema-grid, .fal-studio-asset-grid, .fal-studio-uploader-grid {grid-template-columns: 1fr;}
   .fal-studio-model-desc {display: none;}
 }

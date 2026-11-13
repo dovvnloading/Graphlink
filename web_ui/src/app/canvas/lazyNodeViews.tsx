@@ -27,6 +27,7 @@
 // component renders, so an empty fallback would collapse the card and let
 // edges snap to a zero-size box for a frame or two.
 
+import "./NodeCards.css";
 import { Component, lazy, Suspense, type ComponentType, type ReactNode } from "react";
 
 /** The shell shown while a kind's chunk is still loading. */

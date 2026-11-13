@@ -3,6 +3,8 @@ import { memo, useEffect, useRef, useState } from "react";
 import { resolveShortcut } from "../chrome/shortcuts";
 import { GroupColorPicker } from "./GroupColorPicker";
 import { NodeMarkdown } from "./NodeMarkdown";
+import { NodeHeading } from "./NodeHeading";
+import { swatchStyle } from "./nodeSwatch";
 import { NodeShell } from "./NodeShell";
 
 /**
@@ -133,9 +135,9 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
       // picks Purple for a note body. The meaning is carried by shape
       // instead: .note-node.system-prompt's dashed 2px border, plus the ⚙
       // badge in the header. See styles.css for the token it borders in.
-      style={{ backgroundColor: data.color ?? undefined }}
+      style={swatchStyle(data.color)}
       header={
-        <div className="scene-node-title note-node-header" style={{ backgroundColor: data.headerColor ?? undefined }}>
+        <NodeHeading glyph="note" className="note-node-header" style={swatchStyle(data.headerColor)}>
           <span className="note-node-badges">
             <span>Note</span>
             {data.isSystemPrompt && (
@@ -164,7 +166,7 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
               ×
             </button>
           </div>
-        </div>
+        </NodeHeading>
       }
       bodyClassName="note-node-content"
       onBodyDoubleClick={beginEdit}

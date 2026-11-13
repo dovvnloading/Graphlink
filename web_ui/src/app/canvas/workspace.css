@@ -1,0 +1,145 @@
+.app-topbar {
+  height: 48px;
+  flex: none;
+  padding-inline: 14px;
+  background: var(--gl-graph-surface);
+  border-color: var(--gl-graph-border);
+}
+
+.app-brand-mark {
+  box-sizing: content-box;
+  width: 17px;
+  height: 17px;
+  padding: 6px;
+  color: var(--gl-graph-conversation);
+  background: color-mix(in srgb, var(--gl-graph-conversation) 13%, transparent);
+  border-radius: 8px;
+}
+
+.app-title { font-size: 15px; letter-spacing: -.035em; }
+.appbar-btn { height: 32px; }
+.appbar-btn-icon { width: 32px; }
+
+.app-canvas-content { container: graph-workspace / inline-size; }
+.scene-canvas .react-flow {
+  background-color: var(--gl-graph-canvas);
+  --xy-connectionline-stroke: var(--gl-connection-active);
+  --xy-connectionline-stroke-width: 2;
+  --xy-selection-background-color: color-mix(in srgb, var(--gl-graph-selection) 12%, transparent);
+  --xy-selection-border: 1px solid var(--gl-graph-selection);
+}
+
+.scene-canvas .react-flow__background { z-index: -2; }
+
+.scene-canvas .viewport-dock {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 4px;
+  margin: var(--gl-chrome-inset);
+  border: 1px solid var(--gl-graph-border);
+  background: var(--gl-graph-surface);
+  border-radius: 11px;
+  box-shadow: var(--gl-shadow-1);
+}
+
+.viewport-dock button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0;
+  color: var(--gl-surface-text-secondary);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.viewport-dock button:hover:enabled {
+  color: var(--gl-surface-text-bright);
+  background: color-mix(in srgb, var(--gl-graph-selection) 13%, transparent);
+}
+
+.viewport-dock button:disabled { color: var(--gl-surface-text-muted); opacity: .5; cursor: default; }
+.viewport-dock button:focus-visible,
+.empty-graph button:focus-visible { outline: 2px solid var(--gl-graph-selection); outline-offset: 1px; }
+.viewport-dock .icon { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.viewport-dock .viewport-scale { width: 43px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.viewport-divider { width: 1px; height: 15px; margin-inline: 3px; background: var(--gl-graph-border); }
+
+.empty-graph {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  width: min(400px, 88%);
+  text-align: center;
+  pointer-events: none;
+}
+
+.empty-graph-diagram { width: 176px; height: 74px; margin-bottom: 14px; overflow: visible; }
+.diagram-links { stroke: var(--gl-connection-line); stroke-width: 1.5; }
+.diagram-card rect { fill: var(--gl-graph-surface); stroke: var(--gl-graph-border); }
+.diagram-card path { fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
+.diagram-chat { color: var(--gl-graph-conversation); }
+.diagram-content { color: var(--gl-graph-content); }
+.diagram-tool { color: var(--gl-graph-tool); }
+.empty-graph h1 { margin: 0; color: var(--gl-surface-text-strong); font-size: 29px; line-height: 1.2; font-weight: 600; letter-spacing: -.045em; }
+.empty-graph p { margin: 8px 0 18px; color: var(--gl-surface-text-secondary); font-size: 14px; line-height: 1.5; }
+.empty-graph-actions { display: flex; gap: 8px; justify-content: center; }
+.empty-graph button {
+  padding: 8px 13px;
+  background: var(--gl-graph-surface);
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 7px;
+  color: var(--gl-surface-text-primary);
+  font: 600 12px/1.4 var(--gl-font-family);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.empty-graph button:first-child {
+  background: var(--gl-graph-selection);
+  color: var(--gl-graph-canvas);
+  border-color: transparent;
+}
+.empty-graph button:hover { border-color: var(--gl-graph-selection); box-shadow: var(--gl-shadow-1); }
+.app-shell:not([data-connection-status="open"]) .empty-graph { visibility: hidden; }
+
+.app-composer-layer {
+  bottom: var(--gl-chrome-inset);
+  left: 186px;
+  right: 230px;
+}
+.app-composer-layer > .composer-dock {
+  width: min(680px, 100%);
+  min-width: 0;
+  background: var(--gl-graph-surface);
+  border-color: var(--gl-graph-border);
+  border-radius: 14px;
+  box-shadow: var(--gl-shadow-2);
+}
+.app-composer-layer > .composer-dock:focus-within {
+  border-color: var(--gl-graph-selection);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--gl-graph-selection) 15%, transparent), var(--gl-shadow-2);
+}
+.composer-input { color: var(--gl-surface-text-primary); }
+.composer-send-button { background: var(--gl-graph-selection); color: var(--gl-graph-canvas); }
+
+@container graph-workspace (max-width: 850px) {
+  .app-composer-layer { left: var(--gl-chrome-inset); right: 230px; bottom: 65px; }
+}
+@container graph-workspace (max-width: 700px) {
+  .app-composer-layer { right: var(--gl-chrome-inset); }
+  .scene-canvas:has(.scene-minimap-panel:not(.collapsed)) ~ .app-composer-layer { bottom: 154px; }
+}
+@media (max-height: 530px) {
+  .empty-graph { top: 35%; }
+  .empty-graph-diagram { display: none; }
+}
+
+/* React Flow raises selected nodes with an inline z-index. A group is a
+   backdrop: raising it would intercept the clicks meant for its children. */
+.scene-canvas .react-flow__node-frame.selected { z-index: -1 !important; }
+.scene-canvas .react-flow__node-container.selected { z-index: -2 !important; }

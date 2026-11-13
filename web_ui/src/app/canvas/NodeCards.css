@@ -1,0 +1,439 @@
+.scene-node-card {
+  --node-accent: var(--gl-graph-content);
+}
+
+/* Card geometry stays in the node views. Only the inner surface clips:
+   React Flow's ports and resize handles straddle the outside border. */
+.scene-node.scene-node-card {
+  --node-surface: var(--gl-graph-surface);
+  --node-line: var(--gl-graph-border);
+  position: relative;
+  /* Saved desktop families (e.g. Segoe UI) may be absent on another OS. */
+  font-family: var(--gl-node-font-family, var(--gl-font-family)), system-ui, sans-serif;
+  overflow: visible;
+  border-radius: 13px;
+  background-color: var(--node-surface);
+  border-color: var(--node-line);
+  box-shadow: var(--gl-shadow-1);
+}
+
+.scene-node-card:is(.chat-node, .conversation-node, .thinking-node, .code-node) {
+  --node-accent: var(--gl-graph-conversation);
+}
+
+.scene-node-card:is(.plan-node, .harness-node, .gitlink-node, .code-sandbox-node, .code-review-node, .web-research-node, .fal-studio-node) {
+  --node-accent: var(--gl-graph-tool);
+}
+
+.scene-node-surface {
+  min-width: 0;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.chart-node > .scene-node-surface {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.scene-node.scene-node-card:hover {
+  border-color: color-mix(in srgb, var(--node-accent) 48%, var(--node-line));
+  box-shadow: var(--gl-shadow-2);
+}
+
+.scene-node-card.scene-node.selected,
+.react-flow__node.dragging .scene-node.selected:hover {
+  border-color: var(--gl-graph-selection);
+  box-shadow: 0 0 0 1px var(--gl-graph-selection),
+    0 0 0 5px color-mix(in srgb, var(--gl-graph-selection) 13%, transparent),
+    var(--gl-shadow-2);
+}
+
+.react-flow__node:focus-visible:has(.scene-node-surface) {
+  border-radius: 13px;
+  outline-offset: 6px;
+}
+
+.node-card-header > .node-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-content: center;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 49px;
+  padding: 9px 13px;
+  box-sizing: border-box;
+  background-color: color-mix(in srgb, var(--node-accent) 5%, var(--node-surface));
+  border-bottom: 0;
+  color: var(--gl-node-font-color, var(--gl-surface-text-strong));
+  font-size: calc(var(--gl-node-font-size, 12px) + 1px);
+  font-weight: 650;
+  line-height: 1.3;
+  letter-spacing: -.012em;
+}
+
+/* Specificity also overrides the legacy user-only header fill. */
+.chat-node.user .node-card-header > .node-heading {
+  background-color: color-mix(in srgb, var(--node-accent) 3%, var(--node-surface));
+}
+
+.node-heading-icon {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--node-accent) 11%, var(--node-surface));
+  border: 1px solid color-mix(in srgb, var(--node-accent) 26%, transparent);
+  color: var(--node-accent);
+}
+
+.node-glyph {
+  width: 18px;
+  height: 18px;
+  display: block;
+  flex: 0 0 auto;
+}
+
+.node-heading-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+}
+
+.node-heading-row > :is(.chat-node-title-actions, .chat-node-collapse-btn, .note-node-controls, .html-node-controls) {
+  margin-inline-start: auto;
+  flex-shrink: 0;
+}
+
+.node-heading-row > span:only-child,
+.document-node .node-heading-row > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-heading-detail {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.scene-node.collapsed .node-card-header > .node-heading {
+  min-height: 56px;
+  border-bottom: 0;
+}
+
+.node-heading-detail .node-overview-excerpt {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gl-node-font-color, var(--gl-surface-text-secondary));
+}
+
+.chat-node-role-group {
+  min-width: 0;
+}
+
+.node-heading-row .chat-node-status-badge {
+  width: 6px;
+  height: 6px;
+}
+
+.chat-node-metadata {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px 9px;
+  padding-bottom: 1px;
+  line-height: 1.35;
+  letter-spacing: normal;
+  font-weight: 500;
+}
+
+.chat-node-metadata > span {
+  line-height: 1.35;
+  max-width: 100%;
+}
+
+.chat-node-metadata .chat-node-usage-badge {
+  font-variant-numeric: tabular-nums;
+  color: var(--gl-surface-text-muted);
+}
+
+.scene-node .chat-node-collapse-btn,
+.scene-node .chat-node-quick-action {
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 6px;
+  color: var(--gl-surface-text-muted);
+}
+
+.scene-node .chat-node-collapse-btn {
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+.chat-node-collapse-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.scene-node .chat-node-collapse-btn:hover,
+.scene-node .chat-node-quick-action:hover {
+  color: var(--gl-surface-text-strong);
+  background: color-mix(in srgb, var(--node-accent) 12%, var(--node-surface));
+}
+
+.node-heading :is(button, input):focus-visible,
+.node-card-menu-trigger:focus-visible,
+.scene-node-body :is(button, summary):focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
+
+.node-heading-row .plan-node-badge,
+.node-heading-row .chart-node-badge {
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--node-accent) 24%, transparent);
+  color: var(--node-accent);
+  background: transparent;
+  font-size: 9px;
+  letter-spacing: .045em;
+}
+
+.scene-node-surface > .scene-node-body:not(.fal-studio-body) {
+  padding: 12px 14px;
+  font-size: var(--gl-node-font-size, 12px);
+  line-height: 1.55;
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+}
+
+.scene-node-surface .chat-node-content {
+  line-height: 1.62;
+  overflow-wrap: anywhere;
+}
+
+.scene-node-surface .chat-node-content :is(h1, h2, h3, h4) {
+  color: var(--gl-node-font-color, var(--gl-surface-text-strong));
+  line-height: 1.24;
+  letter-spacing: -.023em;
+}
+
+.scene-node-surface .chat-node-content a {
+  color: var(--node-accent);
+  text-underline-offset: .16em;
+}
+
+.scene-node-surface .chat-node-content blockquote {
+  border-inline-start: 2px solid var(--node-accent);
+  color: var(--gl-node-font-color, var(--gl-surface-text-secondary));
+  padding-inline-start: 11px;
+}
+
+.scene-node-surface .node-md-code-block {
+  border-color: var(--node-line);
+  background-color: var(--gl-surface-inset-deep);
+  border-radius: 8px;
+}
+
+.scene-node-surface .node-md-code-block-header {
+  background-color: var(--gl-surface-inset);
+  border-color: var(--node-line);
+}
+
+.chat-node-reading-area {
+  position: relative;
+  min-width: 0;
+}
+
+.scene-node .chat-node-content-fade {
+  height: 32px;
+  background: linear-gradient(transparent, var(--node-surface));
+}
+
+.scene-node .chat-node-show-more {
+  margin-top: 6px;
+  padding: 7px;
+  color: var(--node-accent);
+  border-color: var(--node-line);
+}
+
+.scene-node .conversation-node-bubble {
+  border-color: var(--node-line);
+  background: color-mix(in srgb, var(--node-surface), var(--gl-graph-canvas) 43%);
+  border-radius: 9px;
+}
+
+.scene-node .conversation-node-bubble.user {
+  background: color-mix(in srgb, var(--node-accent) 7%, var(--node-surface));
+}
+
+.scene-node .conversation-node-bubble .chat-node-avatar {
+  border-radius: 4px;
+  color: var(--node-accent);
+  background-color: color-mix(in srgb, var(--node-accent) 15%, var(--node-surface));
+}
+
+.scene-node .scene-node-handle {
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid color-mix(in srgb, var(--node-accent) 65%, var(--node-line));
+  border-radius: 50%;
+  background: var(--node-surface);
+}
+
+.scene-node .scene-node-handle.source {
+  background: color-mix(in srgb, var(--node-accent) 56%, var(--node-surface));
+}
+
+.scene-node.selected .scene-node-handle,
+.scene-node .scene-node-handle:hover {
+  border-color: var(--gl-graph-selection);
+}
+
+.scene-node .fal-studio-header-icon {
+  color: var(--node-accent);
+  background: color-mix(in srgb, var(--node-accent) 12%, var(--node-surface));
+}
+
+.scene-node.scene-node-loading {
+  border-radius: 13px;
+  border-color: var(--gl-graph-border);
+  background: var(--gl-graph-surface);
+}
+
+.scene-node-loading .scene-node-title {
+  border: 0;
+  background: transparent;
+  padding: 14px;
+  color: var(--gl-surface-text-secondary);
+}
+
+.group-node-header > .node-glyph {
+  width: 14px;
+  height: 14px;
+  margin-inline-end: 4px;
+}
+
+.scene-canvas .group-node:not(.collapsed, .has-body-color) {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--gl-graph-border), var(--gl-surface-text-muted) 35%);
+  background-color: color-mix(in srgb, var(--gl-graph-surface) 22%, transparent);
+}
+
+.scene-canvas .group-node.selected:not(.collapsed) {
+  border-color: var(--gl-graph-selection);
+}
+
+.group-node .group-node-label-chip,
+.group-node .group-node-pill-header {
+  gap: 5px;
+  border-radius: 8px;
+  color: var(--gl-surface-text-primary);
+  background-color: var(--gl-graph-surface);
+}
+
+.group-node .group-node-pill-header > .group-node-controls {
+  margin-inline-start: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-node.scene-node-card,
+  .scene-node .chat-node-quick-actions {
+    transition: none;
+  }
+}
+
+.node-card-header {
+  position: relative;
+  flex-shrink: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--node-line) 76%, transparent);
+}
+
+.scene-node.collapsed .node-card-header,
+.fal-studio-node .node-card-header {
+  border-bottom: 0;
+}
+
+.scene-node[aria-haspopup="menu"] .node-heading {
+  padding-inline-end: 43px;
+}
+
+.node-card-menu-trigger {
+  position: absolute;
+  inset-inline-end: 10px;
+  top: 12px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--gl-surface-text-muted);
+  cursor: pointer;
+}
+
+.node-card-menu-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+.node-card-menu-trigger:is(:hover, [aria-expanded="true"]) {
+  background-color: color-mix(in srgb, var(--node-accent) 13%, var(--node-surface));
+  color: var(--gl-surface-text-strong);
+}
+
+
+/* Body and header swatches are independent. Inline styles carry only the
+   swatch and its contrast ink. Theme defaults still apply to an uncoloured
+   header, editor, inset code block, and menu. */
+.note-node .scene-node-surface > .note-node-content {
+  color: var(--gl-node-font-color, var(--node-swatch-ink, var(--gl-surface-text-primary)));
+}
+
+.note-node .note-node-markdown :is(p, li, h1, h2, h3, h4, h5, h6, a, blockquote) {
+  color: var(--gl-node-font-color, var(--node-swatch-ink, inherit));
+}
+
+.note-node .node-heading {
+  --node-swatch-ink: initial;
+  color: var(--node-swatch-ink, var(--gl-node-font-color, var(--gl-surface-text-strong)));
+}
+
+.note-node .node-heading :is(.note-node-badge, .note-node-delete-btn) {
+  color: var(--node-swatch-ink, var(--gl-surface-text-muted));
+}
+
+.group-node .group-node-header,
+.group-node .group-node-controls-chip,
+.group-node-header .group-node-btn,
+.group-node-controls-chip .group-node-btn {
+  color: var(--node-swatch-ink, var(--gl-surface-text-secondary));
+}
+
+.chart-node .chart-overview {
+  color: var(--gl-graph-content);
+}
+
+.chart-overview > svg {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+}

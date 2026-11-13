@@ -131,10 +131,14 @@ export function NodeMenu({
   }, [position.x, position.y]);
 
   useEffect(() => {
+    const trigger = triggerRef.current;
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
       if (menuRef.current?.contains(target)) return;
       if (ignoreRef?.current?.contains(target)) return;
+      // A header button toggles its own menu on click. Closing on the
+      // preceding pointerdown would reopen it as soon as that click fires.
+      if (trigger?.matches(".node-card-menu-trigger") && trigger.contains(target)) return;
       onClose();
     };
     const onKeyDown = (event: KeyboardEvent) => {

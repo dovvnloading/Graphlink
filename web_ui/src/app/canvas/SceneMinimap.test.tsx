@@ -1,8 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { ReactFlowProvider, type useReactFlow as UseReactFlowType } from "@xyflow/react";
+import { ReactFlowProvider, type Node, type useReactFlow as UseReactFlowType } from "@xyflow/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SceneNodeRow } from "../../lib/bridge-core/generated/scene-state";
+import type { SceneEdgeRow, SceneNodeRow } from "../../lib/bridge-core/generated/scene-state";
 import { initialSceneState } from "./sceneStore";
 import type { SceneStore } from "./sceneStore";
 
@@ -42,18 +42,18 @@ function node(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
   } as unknown as SceneNodeRow;
 }
 
-function makeStore(nodes: SceneNodeRow[]): SceneStore {
-  const scene = { ...initialSceneState, nodes };
+function makeStore(nodes: SceneNodeRow[], edges: SceneEdgeRow[] = []): SceneStore {
+  const scene = { ...initialSceneState, nodes, edges };
   return {
     subscribe: () => () => {},
     getScene: () => scene,
   } as unknown as SceneStore;
 }
 
-function renderMap(nodes: SceneNodeRow[]) {
+function renderMap(nodes: SceneNodeRow[], edges: SceneEdgeRow[] = [], flowNodes?: Node[]) {
   return render(
-    <ReactFlowProvider>
-      <SceneMinimap store={makeStore(nodes)} />
+    <ReactFlowProvider defaultNodes={flowNodes} initialWidth={1200} initialHeight={800}>
+      <SceneMinimap store={makeStore(nodes, edges)} />
     </ReactFlowProvider>,
   );
 }
@@ -79,6 +79,33 @@ describe("SceneMinimap", () => {
   it("says node, not nodes, when there is one", () => {
     renderMap([node({ id: "a" })]);
     expect(screen.getByText("1 node")).toBeInTheDocument();
+  });
+
+  it("omits docked nodes and collapsed group members from the count and waiting action", () => {
+    renderMap([
+      node({ id: "frame", kind: "frame", isCollapsed: true, itemIds: ["inside"] }),
+      node({ id: "inside", harnessAwaitingQuestion: true }),
+      node({ id: "docked", isDocked: true, builderAwaitingToolApproval: true }),
+    ]);
+    expect(screen.getByText("1 node")).toBeInTheDocument();
+    expect(screen.queryByText(/waiting/)).toBeNull();
+  });
+
+  it("draws links between mapped nodes and selects a clicked node at its center", () => {
+    const rows = [node({ id: "a", title: "Question" }), node({ id: "b", title: "Answer", x: 200, y: 180 })];
+    const flowNodes = rows.map(({ id, x, y }) => ({
+      id, position: { x, y }, width: 100, height: 60, data: {},
+    }));
+    const { container } = renderMap(rows, [
+      { id: "link", source: "a", target: "b" },
+      { id: "missing", source: "ghost", target: "b" },
+    ], flowNodes);
+    expect(container.querySelector(".scene-minimap-links")).toHaveAttribute("d", "M50 60 L250 180");
+    const answer = screen.getByText("Answer", { selector: "title" }).parentElement!;
+    fireEvent.click(answer);
+    expect(answer).toHaveClass("selected");
+    expect(setCenterCalls).toHaveLength(1);
+    expect(setCenterCalls[0]).toEqual([250, 210, expect.objectContaining({ zoom: 0.75 })]);
   });
 
   describe("the waiting chip", () => {

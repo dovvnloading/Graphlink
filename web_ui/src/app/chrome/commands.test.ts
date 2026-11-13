@@ -42,6 +42,7 @@ function makeRf(nodes: Array<{ id: string; selected?: boolean; type?: string }> 
   return {
     zoomIn: vi.fn(),
     zoomOut: vi.fn(),
+    zoomTo: vi.fn(),
     fitView: vi.fn(),
     setViewport: vi.fn(),
     getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
@@ -288,7 +289,7 @@ describe("buildCommands", () => {
     // the capture's duration - see that module's own doc. Asserted as
     // "any function" rather than a specific reference since it's a fresh
     // arrow closure over `store` on every run(), not a stable callback.
-    expect(exportCanvasAsPngMock).toHaveBeenCalledWith(rf, "--gl-surface-window", expect.any(Function));
+    expect(exportCanvasAsPngMock).toHaveBeenCalledWith(rf, "--gl-graph-canvas", expect.any(Function));
   });
 
   // ADR-021 stage 21.5: the two branch agents were reachable ONLY by

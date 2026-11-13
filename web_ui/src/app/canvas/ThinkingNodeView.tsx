@@ -3,6 +3,7 @@ import { memo, useState } from "react";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -127,14 +128,11 @@ function ThinkingNodeViewImpl({ data, selected }: NodeProps<ThinkingFlowNode>) {
       kindClassName="thinking-node"
       selected={!!selected}
       collapsed={collapsed}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setMenuPosition({ x: event.clientX, y: event.clientY });
-      }}
+      onMenuChange={setMenuPosition}
       header={
-        <div className="scene-node-title thinking-node-label">
+        <NodeHeading glyph="thinking" className="thinking-node-label">
           <span>Thinking</span>
-        </div>
+        </NodeHeading>
       }
       bodyClassName="thinking-node-content chat-node-content"
       menu={

@@ -12,16 +12,9 @@ import type { ChartMarksProps } from "./BarChartMarks";
 import { formatValue } from "./chartScales";
 import { tooltipPositionFromEvent } from "./chartLayout";
 
-const MAX_SLICES = 10;
+import { buildSlices } from "./pieSlices";
 const RING_WIDTH_FRACTION = 0.38;
 const LEGEND_ITEM_HEIGHT = 18;
-
-interface Slice {
-  label: string;
-  value: number;
-  startAngle: number;
-  endAngle: number;
-}
 
 function polarToCartesian(cx: number, cy: number, radius: number, angleDeg: number): { x: number; y: number } {
   const rad = ((angleDeg - 90) * Math.PI) / 180;
@@ -42,24 +35,6 @@ function describeDonutSlice(cx: number, cy: number, outerR: number, innerR: numb
     `A ${innerR} ${innerR} 0 ${largeArc} 0 ${endInner.x} ${endInner.y}`,
     "Z",
   ].join(" ");
-}
-
-function buildSlices(labels: string[], values: number[]): Slice[] {
-  let entries = labels.map((label, index) => ({ label, value: values[index] }));
-  if (entries.length > MAX_SLICES) {
-    const ranked = [...entries].sort((a, b) => b.value - a.value);
-    const top = ranked.slice(0, MAX_SLICES - 1);
-    const remainder = ranked.slice(MAX_SLICES - 1).reduce((sum, entry) => sum + entry.value, 0);
-    entries = [...top, { label: "Other", value: remainder }];
-  }
-  const total = entries.reduce((sum, entry) => sum + entry.value, 0) || 1;
-  let cursor = 0;
-  return entries.map((entry) => {
-    const sweep = (entry.value / total) * 360;
-    const slice: Slice = { label: entry.label, value: entry.value, startAngle: cursor, endAngle: cursor + sweep };
-    cursor += sweep;
-    return slice;
-  });
 }
 
 export function PieChartMarks({ chartData, theme, width, height, onHover, wrapperRef }: ChartMarksProps) {

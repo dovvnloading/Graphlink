@@ -72,13 +72,18 @@ describe("NodeShell (ADR-012 stage 12.5)", () => {
     expect(screen.queryByText("body text")).not.toBeInTheDocument();
   });
 
-  it("wires onContextMenu and stamps aria-haspopup only when a handler is passed", () => {
-    const onContextMenu = vi.fn();
-    const { container, rerender } = renderShell({ onContextMenu });
+  it("opens the actions menu from its trigger and from the pointer coordinates of a context click", () => {
+    const onMenuChange = vi.fn();
+    const { container, rerender } = renderShell({ onMenuChange });
     const wrapper = container.querySelector(".scene-node")!;
     expect(wrapper).toHaveAttribute("aria-haspopup", "menu");
-    fireEvent.contextMenu(wrapper);
-    expect(onContextMenu).toHaveBeenCalledOnce();
+    fireEvent.contextMenu(wrapper, { clientX: 30, clientY: 45 });
+    expect(onMenuChange).toHaveBeenCalledWith({ x: 30, y: 45 });
+
+    const trigger = screen.getByRole("button", { name: "Node actions" });
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue(new DOMRect(12, 10, 24, 24));
+    fireEvent.click(trigger);
+    expect(onMenuChange).toHaveBeenLastCalledWith({ x: 12, y: 38 });
 
     rerender(
       <ReactFlowProvider>
@@ -94,6 +99,7 @@ describe("NodeShell (ADR-012 stage 12.5)", () => {
       </ReactFlowProvider>,
     );
     expect(container.querySelector(".scene-node")).not.toHaveAttribute("aria-haspopup");
+    expect(screen.queryByRole("button", { name: "Node actions" })).toBeNull();
   });
 
   it("renders the menu slot as-is, after the body", () => {

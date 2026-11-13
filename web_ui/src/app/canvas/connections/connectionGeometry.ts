@@ -117,6 +117,55 @@ function bezierAt(p: ConnectionPath, t: number): Point {
   };
 }
 
+/** SVG export uses the same anchors, bends, and control points as live paint. */
+export function connectionSvgPath({ source, target, c1, c2, orthogonal, midY }: ConnectionPath): string {
+  const start = `M ${source.x},${source.y}`;
+  return orthogonal
+    ? `${start} L ${source.x},${midY} L ${target.x},${midY} L ${target.x},${target.y}`
+    : `${start} C ${c1.x},${c1.y} ${c2.x},${c2.y} ${target.x},${target.y}`;
+}
+
+/** Draw a small open chevron along an active route, pointing towards its target. */
+export function drawDirection(ctx: CanvasRenderingContext2D, path: ConnectionPath, zoom: number) {
+  const { source, target, c1, c2 } = path;
+  if (Math.hypot(target.x - source.x, target.y - source.y) * zoom < 40) return;
+
+  let center: Point;
+  let dx: number;
+  let dy: number;
+  if (path.orthogonal) {
+    // The horizontal step can be too short to host a marker. In that case
+    // use the middle of the final vertical segment, clear of its corner.
+    if (Math.abs(target.x - source.x) * zoom >= 20) {
+      center = { x: (target.x + source.x) / 2, y: path.midY };
+      dx = target.x - source.x;
+      dy = 0;
+    } else {
+      center = { x: target.x, y: (path.midY + target.y) / 2 };
+      dx = 0;
+      dy = target.y - path.midY;
+    }
+  } else {
+    center = bezierAt(path, 0.5);
+    // Cubic derivative at t=0.5 (the constant cancels during normalization).
+    dx = c2.x - c1.x + target.x - source.x;
+    dy = c2.y - c1.y + target.y - source.y;
+  }
+  const length = Math.hypot(dx, dy);
+  if (!length) return;
+  const ux = dx / length;
+  const uy = dy / length;
+  const halfWidth = 3.5 / zoom;
+  const halfLength = 2.75 / zoom;
+  const x = center.x - ux * halfLength;
+  const y = center.y - uy * halfLength;
+  ctx.beginPath();
+  ctx.moveTo(x - uy * halfWidth, y + ux * halfWidth);
+  ctx.lineTo(center.x + ux * halfLength, center.y + uy * halfLength);
+  ctx.lineTo(x + uy * halfWidth, y - ux * halfWidth);
+  ctx.stroke();
+}
+
 /** Squared distance from a point to a segment - no square roots in the loop. */
 function distanceToSegmentSquared(p: Point, a: Point, b: Point): number {
   const vx = b.x - a.x;

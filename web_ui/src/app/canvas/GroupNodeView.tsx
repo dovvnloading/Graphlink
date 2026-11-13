@@ -1,5 +1,7 @@
 import { NodeResizer, type Node, type NodeProps } from "@xyflow/react";
 import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { swatchStyle } from "./nodeSwatch";
+import { NodeGlyph } from "./NodeHeading";
 import { GroupColorPicker } from "./GroupColorPicker";
 import { GROUP_RESIZE_MIN_HEIGHT, GROUP_RESIZE_MIN_WIDTH } from "./canvasConstants";
 
@@ -119,11 +121,8 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
   // tint visible around them - the collapsed pill IS the whole visible
   // object, so it falls back to the body color too (same headerColor-first
   // fallback GroupColorPicker's own swatch trigger already uses).
-  const chipStyle: CSSProperties | undefined = hasHeaderColor
-    ? { backgroundColor: data.headerColor ?? undefined }
-    : undefined;
-  const pillStyle: CSSProperties | undefined =
-    hasHeaderColor || hasBodyColor ? { backgroundColor: data.headerColor ?? data.color ?? undefined } : undefined;
+  const chipStyle = swatchStyle(data.headerColor);
+  const pillStyle = swatchStyle(data.headerColor ?? data.color);
 
   function beginEdit() {
     setDraft(data.label);
@@ -257,6 +256,7 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
           style={pillStyle}
           onDoubleClick={beginEdit}
         >
+          <NodeGlyph name={data.groupKind} />
           {labelNode}
           <div className="group-node-controls nodrag">
             <button
@@ -278,6 +278,7 @@ function GroupNodeViewImpl({ id, data, selected }: NodeProps<GroupFlowNode>) {
             style={chipStyle}
             onDoubleClick={beginEdit}
           >
+            <NodeGlyph name={data.groupKind} />
             {labelNode}
           </div>
           <div className="group-node-controls-row nodrag">

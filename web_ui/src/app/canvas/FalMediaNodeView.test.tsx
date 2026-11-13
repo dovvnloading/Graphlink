@@ -57,9 +57,9 @@ function setup({
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe("Fal Media Studio node", () => {
-  it("renders a premium native Studio with Image, Video and Audio tabs", () => {
+  it("renders the studio with image, video and audio tabs", () => {
     setup();
-    expect(screen.getByRole("heading", { name: /Create without limits/ })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Fal Media Studio" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Media generation type" })).toBeInTheDocument();
     expect(within(screen.getByRole("group", { name: "Media generation type" })).getByRole("button", { name: /Image/ })).toHaveAttribute("aria-pressed", "true");
     expect(within(screen.getByRole("group", { name: "Media generation type" })).getByRole("button", { name: /Video/ })).toBeEnabled();

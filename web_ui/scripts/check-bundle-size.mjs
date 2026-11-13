@@ -255,7 +255,12 @@ const LARGEST_CHUNK_CEILING_BYTES = 512_000;
 // It is a consciously reviewed cost of additional app functionality, not a
 // workaround for a failed test or unreviewed bundle regression.
 // Re-anchor downward whenever the total actually shrinks again.
-const TOTAL_JS_CEILING_BYTES = 1_486_000;
+// 2026-11-13, graph workspace redesign. Same lockfile, clean builds:
+// main 1,481,140 total bytes over 49 chunks; redesign 1,494,112 over
+// 53 chunks (+12,972 bytes, 0.88%). The node glyphs, overview chart,
+// minimap links and viewport controls use existing dependencies. Restore
+// the customary ~3% total headroom. The initial-chunk budget stays 512 kB.
+const TOTAL_JS_CEILING_BYTES = 1_539_000;
 
 // Below this much headroom, say so. Both prior amendments record the same
 // story: the ceiling was set with ~3-5% room, ordinary week-to-week growth

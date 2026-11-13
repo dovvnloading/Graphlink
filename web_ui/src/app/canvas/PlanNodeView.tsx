@@ -3,6 +3,7 @@ import type { Node, NodeProps } from "@xyflow/react";
 import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
+import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -362,16 +363,13 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
       kindClassName="plan-node"
       selected={!!selected}
       collapsed={collapsed}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setMenuPosition({ x: event.clientX, y: event.clientY });
-      }}
+      onMenuChange={setMenuPosition}
       header={
-        <div className="scene-node-title plan-node-title">
+        <NodeHeading glyph="plan" className="plan-node-title">
           <span className="plan-node-badge">Build</span>
           <span className="plan-node-goal">{data.planGoal || "Untitled build"}</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
-        </div>
+        </NodeHeading>
       }
       bodyClassName="plan-node-body"
       menu={

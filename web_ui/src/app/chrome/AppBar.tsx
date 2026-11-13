@@ -1,7 +1,5 @@
-import { useReactFlow, useStore } from "@xyflow/react";
+import { useReactFlow } from "@xyflow/react";
 import { useSyncExternalStore } from "react";
-import { FIT_VIEW_MAX_ZOOM } from "../canvas/canvasConstants";
-import { motionDuration } from "../reducedMotion";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
 import { AppBarIcon, type AppBarIconName } from "./AppBarIcon";
@@ -56,16 +54,6 @@ import { AppBarIcon, type AppBarIconName } from "./AppBarIcon";
  * accessible name stays the bare verb, so a screen reader announces the
  * control rather than reciting its shortcut.
  *
- * ZOOM READOUT. The viewport group's middle control is the live zoom
- * percentage, and clicking it resets to 100%. It replaces an icon button
- * whose glyph (two concentric circles) named neither its action nor the
- * current state - it read as a record button. Every canvas tool this app
- * is measured against shows the zoom level as text for the same reason:
- * the number is the one part of viewport state that cannot be inferred by
- * looking at the canvas. It subscribes to the React Flow transform in its
- * OWN component so a wheel-zoom re-renders one <button> rather than all
- * twenty controls in this bar (ADR-011).
- *
  * HELP MENU. Help, Diagnostics and About are three low-frequency
  * destinations that were three permanent icons in the right-hand cluster,
  * carrying the same visual weight as Search and the Builder. They are one
@@ -75,8 +63,6 @@ import { AppBarIcon, type AppBarIconName } from "./AppBarIcon";
  * `open-help`/`open-about`) and still its own item in the overflow menu.
  *
  * Intent routing, surface by surface, against the ToolbarBridge @Slot list:
- * - zoomIn/zoomOut/resetZoom/fitAll -> React Flow viewport ops (they were
- *   pure ChatView viewport calls; the viewport lives HERE now)
  * - Organize -> the previewable organization dialog; legacy backend intent remains compatible
  * - togglePins -> the pins overlay (R2.4: full search + rename/note editing)
  * - toggleControls -> the View popover (audit P5: ONE popover for
@@ -87,8 +73,7 @@ import { AppBarIcon, type AppBarIconName } from "./AppBarIcon";
  *   app-chat-library topic - see SceneStore's own comment on why)
  * - Export PNG -> real as of R6.8, a net-new capability (no legacy
  *   canvas-wide export exists) - pure client-side DOM rasterization via
- *   exportCanvasAsPng, same "zero backend round-trip" shape as the
- *   Zoom/Fit All buttons right next to it, not an intent dispatch.
+ *   exportCanvasAsPng.
  *
  * R8a (UI/UX issue list finding #8): the provider-mode <select> that used to
  * sit here was permanently `disabled`, held exactly one hardcoded option
@@ -253,56 +238,22 @@ function BarMenuButton({
   );
 }
 
-/**
- * The live zoom readout and the reset-to-100% control, in one.
- *
- * Its own component purely so the transform subscription is scoped: a
- * wheel-zoom pushes a new transform every animation frame, and reading it
- * in AppBar itself would re-render the whole bar at that rate for a
- * three-character label - ADR-011's entire subject. Tabular figures and a
- * fixed min-width (styles.css) keep the controls either side of it from
- * shifting as the number changes width.
- */
-function ZoomLevelButton({ onReset }: { onReset: () => void }) {
-  const zoom = useStore((s) => s.transform[2]);
-  return (
-    <button
-      type="button"
-      className="appbar-btn appbar-btn-zoom"
-      title="Reset zoom to 100%"
-      aria-label="Reset zoom to 100%"
-      onClick={onReset}
-    >
-      {Math.round(zoom * 100)}%
-    </button>
-  );
-}
-
 export function AppBar({ store }: { store: SceneStore }) {
   const overlays = useOverlays();
   // ADR-010 stage 10.2: the backend owns the undo stack, so enablement AND
   // the action name both come off the scene payload - the frontend never
   // guesses what the next undo would do.
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
-  const { zoomIn, zoomOut, setViewport, fitView, getViewport, getNodes } = useReactFlow();
+  const { setViewport, getViewport, getNodes } = useReactFlow();
 
   const chip = (surface: string) =>
     "appbar-btn appbar-btn-checkable" + (overlays.isOpen(surface) ? " checked" : "");
 
-  const resetZoom = () => {
-    const viewport = getViewport();
-    setViewport({ ...viewport, zoom: 1 }, { duration: motionDuration(200) });
-  };
-  // Imported on click, not at module scope: exportCanvasAsPng pulls in
-  // html-to-image (13 KB of the initial chunk) to rasterize the canvas, and
-  // a session that never exports a PNG never needs it. The await lands
-  // inside the handler, so the "export in progress" flag the callback below
-  // sets still brackets the real work exactly as before.
   const exportPng = async () => {
     const { exportCanvasAsPng } = await import("../canvas/exportCanvasPng");
     await exportCanvasAsPng(
       { getNodes, getViewport, setViewport },
-      "--gl-surface-window",
+      "--gl-graph-canvas",
       (value) => store.setExportInProgress(value),
     );
   };
@@ -310,7 +261,7 @@ export function AppBar({ store }: { store: SceneStore }) {
   // Overlay-opening actions (Pins/View/Plugins/About/Help) close the open
   // menu for free via OverlayProvider's own single-open policy - opening any
   // surface replaces whatever else was open, "toolbar-overflow" included.
-  // Plain actions (Zoom/Fit/Export) never touch the overlay
+  // Plain actions (Undo/Redo/Export) never touch the overlay
   // registry at all, so their menu copies close it explicitly.
   const closeMenu = () => overlays.close();
   const menuItem = (surface: string) =>
@@ -357,31 +308,6 @@ export function AppBar({ store }: { store: SceneStore }) {
           className="appbar-btn"
           disabled={!scene.canRedo}
           onClick={() => store.redo()}
-        />
-      </div>
-
-      {/* VIEWPORT - wheel and trackpad cover zooming, so these fold early
-          too. Out / readout / in reads left to right as one continuous
-          scale, with Fit All after it as the "show me everything" escape. */}
-      <div className="appbar-group appbar-tier">
-        <BarIconButton
-          icon="zoom-out"
-          label="Zoom Out"
-          className="appbar-btn"
-          onClick={() => zoomOut({ duration: motionDuration(150) })}
-        />
-        <ZoomLevelButton onReset={resetZoom} />
-        <BarIconButton
-          icon="zoom-in"
-          label="Zoom In"
-          className="appbar-btn"
-          onClick={() => zoomIn({ duration: motionDuration(150) })}
-        />
-        <BarIconButton
-          icon="fit"
-          label="Fit All"
-          className="appbar-btn"
-          onClick={() => fitView({ duration: motionDuration(200), maxZoom: FIT_VIEW_MAX_ZOOM })}
         />
       </div>
 
@@ -458,7 +384,7 @@ export function AppBar({ store }: { store: SceneStore }) {
         className="appbar-menu appbar-overflow-menu"
       >
         <p className="appbar-menu-heading">
-          Edit and view
+          Edit
         </p>
         <button
           type="button"
@@ -482,47 +408,6 @@ export function AppBar({ store }: { store: SceneStore }) {
         >
           Redo
         </button>
-        <button
-          type="button"
-          className="appbar-menu-item appbar-overflow-item"
-          onClick={() => {
-            zoomIn({ duration: motionDuration(150) });
-            closeMenu();
-          }}
-        >
-          Zoom In
-        </button>
-        <button
-          type="button"
-          className="appbar-menu-item appbar-overflow-item"
-          onClick={() => {
-            zoomOut({ duration: motionDuration(150) });
-            closeMenu();
-          }}
-        >
-          Zoom Out
-        </button>
-        <button
-          type="button"
-          className="appbar-menu-item appbar-overflow-item"
-          onClick={() => {
-            resetZoom();
-            closeMenu();
-          }}
-        >
-          Reset
-        </button>
-        <button
-          type="button"
-          className="appbar-menu-item appbar-overflow-item"
-          onClick={() => {
-            fitView({ duration: motionDuration(200), maxZoom: FIT_VIEW_MAX_ZOOM });
-            closeMenu();
-          }}
-        >
-          Fit All
-        </button>
-
         <p className="appbar-menu-heading">
           Arrange
         </p>

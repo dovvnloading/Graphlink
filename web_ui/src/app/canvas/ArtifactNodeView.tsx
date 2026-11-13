@@ -6,6 +6,7 @@ import { downloadTextFile } from "./downloadTextFile";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -311,15 +312,12 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
       kindClassName="artifact-node"
       selected={!!selected}
       collapsed={collapsed}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setMenuPosition({ x: event.clientX, y: event.clientY });
-      }}
+      onMenuChange={setMenuPosition}
       header={
-        <div className="scene-node-title chat-node-role">
+        <NodeHeading glyph="artifact" className="chat-node-role">
           <span>Artifact</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
-        </div>
+        </NodeHeading>
       }
       bodyClassName="artifact-node-content"
       menu={
