@@ -139,3 +139,65 @@ def test_fal_history_is_bounded_and_does_not_persist_inputs(tmp_path):
         manager.upsert_fal_job("fal-ai/flux/schnell", request_id, "IN_QUEUE")
     assert len(manager.get_fal_jobs()) == 40
     assert "prompt" not in json.dumps(manager.get_fal_jobs())
+
+
+def test_catalog_pricing_and_estimate_intents_do_not_submit_paid_jobs(tmp_path, monkeypatch):
+    manager, bus, recorder = make_settings(tmp_path)
+    manager.set_fal_api_key("metadata-key")
+    calls = []
+
+    class MockCatalog:
+        def __init__(self, key):
+            assert key == "metadata-key"
+
+        def search_models(self, query="", *, category="", limit=20, cursor=None):
+            calls.append(("search", query, category, limit, cursor))
+            return {"models": [
+                {"endpoint_id": "fal-ai/flux/schnell", "metadata": {"display_name": "FLUX"}}
+            ], "next_cursor": None, "has_more": False}
+
+        def model_details(self, model_id, *, include_schema=True):
+            calls.append(("details", model_id, include_schema))
+            return {"endpoint_id": model_id, "openapi": {"openapi": "3.0.0"}}
+
+        def model_pricing(self, model_id):
+            calls.append(("pricing", model_id))
+            return {"prices": [{"endpoint_id": model_id, "unit_price": 0.003, "unit": "megapixel"}]}
+
+        def estimate_cost(self, model_id, *, quantity=1, basis="historical_api_price"):
+            calls.append(("estimate", model_id, quantity, basis))
+            return {"estimate_type": basis, "total_cost": 0.012, "currency": "USD"}
+
+    monkeypatch.setattr(intents_settings_fal, "FalClient", MockCatalog)
+    invoke(bus, "searchFalModels", "image", "text-to-image", 10, "")
+    result = json.loads(last_settings(recorder)["falDiscoveryJson"])
+    assert result["kind"] == "models"
+    assert result["data"]["models"][0]["metadata"]["display_name"] == "FLUX"
+
+    invoke(bus, "inspectFalModel", "fal-ai/flux/schnell")
+    assert json.loads(last_settings(recorder)["falDiscoveryJson"])["data"]["openapi"]["openapi"] == "3.0.0"
+
+    invoke(bus, "getFalModelPricing", "fal-ai/flux/schnell")
+    assert json.loads(last_settings(recorder)["falDiscoveryJson"])["data"]["prices"][0]["unit"] == "megapixel"
+
+    invoke(bus, "estimateFalModelCost", "fal-ai/flux/schnell", 4, "unit_price")
+    assert json.loads(last_settings(recorder)["falDiscoveryJson"])["data"]["total_cost"] == 0.012
+
+    assert manager.get_fal_jobs() == []
+    assert calls == [
+        ("search", "image", "text-to-image", 10, None),
+        ("details", "fal-ai/flux/schnell", True),
+        ("pricing", "fal-ai/flux/schnell"),
+        ("estimate", "fal-ai/flux/schnell", 4, "unit_price"),
+    ]
+    assert "metadata-key" not in json.dumps(last_settings(recorder))
+
+
+def test_discovery_snapshot_truncates_as_valid_json_not_half_json():
+    from backend.api.intents_settings_fal import _discovery_snapshot
+    text = _discovery_snapshot("details", {"endpoint_id": "fal-ai/example",
+                                         "openapi": {"schema": "x" * 200000}})
+    parsed = json.loads(text)
+    assert parsed["truncated"] is True
+    assert parsed["data"]["endpoint_id"] == "fal-ai/example"
+    assert len(text) < 1000
