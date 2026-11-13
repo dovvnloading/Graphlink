@@ -27,7 +27,7 @@ from backend.fal_media_domain import (
 )
 
 logger = logging.getLogger(__name__)
-_ACTIVE = {"submitting", "queued", "running", "cancelling"}
+_ACTIVE = {"submitting", "queued", "running", "cancelling", "stalled"}
 _CACHE_TTL = 150.0
 
 
@@ -217,7 +217,17 @@ class FalMediaController:
         media["quote"] = {"status": "loading"}
         store_media(node, media)
         await self._publish()
-        cost = await asyncio.to_thread(_quote_cost, self._client(), model_id)
+        try:
+            cost = await asyncio.to_thread(_quote_cost, self._client(), model_id)
+        except (FalError, ValueError, TypeError) as exc:
+            live = self._live(node_id)
+            if live is not None and live is node:
+                failed = read_media(live)
+                failed["quote"] = None
+                failed["error"] = str(exc)[:250]
+                store_media(live, failed)
+                await self._publish()
+            return
         live = self._live(node_id)
         if live is None:
             return
