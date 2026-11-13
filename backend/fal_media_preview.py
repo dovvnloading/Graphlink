@@ -110,7 +110,7 @@ def register_fal_media_preview(app: FastAPI, event_bus: EventBus) -> None:
         if not isinstance(output, dict) or output.get("kind") != "image":
             return JSONResponse({"error": "media not found"}, status_code=404)
         url = output.get("url")
-        if not safe_media_host(url):
+        if not isinstance(url, str) or not safe_media_host(url):
             return JSONResponse({"error": "media cannot be previewed safely"}, status_code=404)
         try:
             content, mime = await asyncio.to_thread(_image_bytes, url)
