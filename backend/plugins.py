@@ -37,6 +37,7 @@ catch-all appended last."""
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from dataclasses import dataclass
@@ -48,6 +49,9 @@ from backend.notifications import NotificationState
 from backend.plugin_sdk import (
     PluginRegistry,
     PluginRunContext,
+    PluginNodeSeed,
+    GenericPluginState,
+    _worker_parent_snapshot,
     _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS,
     activate_granted_plugins,
     discover_plugins,
@@ -377,8 +381,57 @@ async def _execute_discovered_plugin(
         spawn_x=spawn_x, spawn_y=spawn_y,
     )
 
+    # A worker-backed factory blocks while waiting for stdio RPC. That
+    # must never happen inside record_command's synchronous mutator on the
+    # ASGI/WebSocket event loop. Capture *only* plain parent fields here,
+    # then perform the worker RPC on a separate thread. The worker never
+    # receives the live (mutable, non-thread-safe) SceneDocument.
+    prepared_seed: PluginNodeSeed | None = None
+    worker_client = plugin_registry.worker_clients.get(kind_spec.plugin_id)
+    if worker_client is not None:
+        if effective_parent is None:
+            notifications.show("An out-of-process plugin needs a selected parent.", "warning")
+            await bus.publish("notification")
+            return None
+        source_parent = canvas_document.nodes[effective_parent]
+        parent_snapshot = _worker_parent_snapshot(canvas_document, effective_parent)
+        graph_identity = (canvas_document.current_chat_id, canvas_document.current_workspace_id)
+        response = await asyncio.to_thread(
+            worker_client.call, "invoke_factory",
+            {"kind": kind_spec.kind.removeprefix(f"{kind_spec.plugin_id}."),
+             "parent_snapshot": parent_snapshot},
+        )
+        raw_state = response.get("state")
+        prepared_seed = PluginNodeSeed(
+            title=str(response.get("title", "")),
+            content=str(response.get("content", "")),
+            state=GenericPluginState(data=dict(raw_state)) if isinstance(raw_state, dict) else None,
+        )
+
+        # A plugin worker may return long after a user switches graphs,
+        # deletes/edits its parent, or revokes the plugin's grant. Unlike
+        # the old synchronous call, there is now an await before mutation.
+        # Refuse stale results rather than writing to a different scene.
+        live_parent = canvas_document.nodes.get(effective_parent)
+        if (not _is_plugin_granted(settings_manager, kind_spec.plugin_id)
+                or live_parent is not source_parent
+                or (live_parent is not None and (
+                    live_parent.title != parent_snapshot["title"]
+                    or live_parent.content != parent_snapshot["content"]
+                    or live_parent.kind != parent_snapshot["kind"]
+                ))
+                or graph_identity != (canvas_document.current_chat_id, canvas_document.current_workspace_id)):
+            notifications.show(
+                "Plugin result was discarded because its approval or parent graph changed; try again.",
+                "warning",
+            )
+            await bus.publish("notification")
+            return None
+
     def _mutator():
-        seed = kind_spec.factory(canvas_document, run_ctx, effective_parent)
+        seed = prepared_seed if prepared_seed is not None else kind_spec.factory(
+            canvas_document, run_ctx, effective_parent,
+        )
         if effective_parent is not None:
             x, y = canvas_document.place_child(effective_parent, kind_spec.kind)
         else:
@@ -473,6 +526,14 @@ async def _invoke_discovered_plugin_intent(
     run_ctx = PluginRunContext(plugin_id=plugin_id, notifications=notifications)
     if inspect.iscoroutinefunction(spec.handler):
         return await spec.handler(canvas_document, run_ctx, *extra_args)
+    if plugin_id in plugin_registry.worker_clients:
+        # The out-of-process wrapper only forwards JSON args, never uses
+        # the live document or context. Move the blocking worker RPC off the
+        # event loop while preserving synchronous in-process handlers.
+        result = await asyncio.to_thread(spec.handler, canvas_document, run_ctx, *extra_args)
+        if not _is_plugin_granted(settings_manager, plugin_id):
+            return None  # grant revoked while the worker was responding
+        return result
     return spec.handler(canvas_document, run_ctx, *extra_args)
 
 
@@ -610,11 +671,17 @@ def _make_plugin_tool_handler(
                 is_error=True,
             )
         run_ctx = PluginRunContext(plugin_id=plugin_id, notifications=NotificationState())
-        result = (
-            await spec.handler(canvas_document, run_ctx, *extra_args)
-            if inspect.iscoroutinefunction(spec.handler)
-            else spec.handler(canvas_document, run_ctx, *extra_args)
-        )
+        if inspect.iscoroutinefunction(spec.handler):
+            result = await spec.handler(canvas_document, run_ctx, *extra_args)
+        elif plugin_id in plugin_registry.worker_clients:
+            result = await asyncio.to_thread(spec.handler, canvas_document, run_ctx, *extra_args)
+            if not _is_plugin_granted(settings_manager, plugin_id):
+                return ToolResult(
+                    content=f'Plugin "{plugin_id}" approval was revoked during execution.',
+                    is_error=True,
+                )
+        else:
+            result = spec.handler(canvas_document, run_ctx, *extra_args)
         return ToolResult(content="" if result is None else str(result), is_error=False)
 
     return _handler
