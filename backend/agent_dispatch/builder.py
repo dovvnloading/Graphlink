@@ -53,6 +53,7 @@ class BuilderDispatchOps(DispatcherParts):
             from backend.tools import ToolRegistry
             from backend.tools_graph import register_graph_tools, register_run_node_tool
             from backend.tools_knowledge import register_knowledge_tools
+            from backend.tools_fal import register_fal_tools
 
             registry = ToolRegistry()
             register_graph_tools(registry, document)
@@ -65,6 +66,7 @@ class BuilderDispatchOps(DispatcherParts):
             register_knowledge_tools(registry, document=document)
             register_builder_control_tools(registry)
             self._register_configured_mcp_tools(registry)
+            register_fal_tools(registry, self._settings_manager)
             self._register_plugin_tools(registry, document)
             self._builder_registry = registry
         return registry
