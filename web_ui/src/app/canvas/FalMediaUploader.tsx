@@ -16,10 +16,11 @@ export function FalMediaUploader({
 }) {
   const urlFieldListId = useId();
   const initialField = useMemo(() =>
-    operation === "image-to-image" || operation === "image-to-video" ? "image_url" :
+    mode === "all" ? fields[0] || "" :
+      operation === "image-to-image" || operation === "image-to-video" ? "image_url" :
       operation === "video-to-video" ? "video_url" :
         mode === "audio" ? "audio_url" : mode === "video" ? "video_url" : "image_url",
-  [mode, operation]);
+  [mode, operation, fields]);
   // Keep a user-customized parameter only within its matching workflow.
   // No setState-in-effect reset on modality changes: derive the default.
   const scope = `${mode}|${operation}`;
@@ -118,13 +119,12 @@ export function FalMediaUploader({
         <strong>Bring your own source</strong>
       </div>
       <p className="fal-studio-quiet">
-        Add a photo, clip or recording for editing and reference-based models.
-        Uploads go directly to Fal CDN, not into your Graphlink file or scene state.
+        Upload a reference file to the Fal CDN and attach its URL to a model input.
       </p>
       <div className="fal-studio-uploader-grid">
         <label className="fal-studio-field">
           <span>Source file</span>
-          <input type="file" accept="image/*,audio/*,video/*" disabled={disabled || uploading}
+          <input type="file" accept={mode === "all" ? "image/*,audio/*,video/*,.glb,.gltf,.obj,.ply,.stl,.fbx,.usdz,.pdf,.zip,.csv,.srt,.vtt" : "image/*,audio/*,video/*"} disabled={disabled || uploading}
             onChange={(event) => selection(event.target.files?.[0])}
             className="fal-studio-file-input nodrag nopan" />
         </label>

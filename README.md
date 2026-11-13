@@ -171,10 +171,11 @@ Loads a GGUF file directly (not an Ollama model store). Configure the chat model
 
 OpenAI-Compatible, Anthropic Claude, and Google Gemini are supported, with per-task model selection. Image generation works with OpenAI-Compatible and Google Gemini providers (not Anthropic Claude). Anthropic Claude accepts image attachments but not audio (use Gemini or Ollama for audio).
 
-### Fal Media Studio — image, video & audio on the canvas
+### Fal Media Studio on the canvas
 
 Add **Fal Media Studio** from the plugin picker under **Build & Execution**.
-It is a native canvas node for image, video and audio generation with a
+Choose Image, Video or Audio for common workflows, or **All models** for
+3D, transcription, training and other categories. The Studio includes a
 searchable live Fal model catalog, persistent favorites, economy-to-premium
 sorting **by comparable billing unit**, model-specific controls from Fal's
 OpenAPI schemas and an explicit priced confirmation before any paid call.
@@ -192,9 +193,10 @@ up-to-date unit pricing, and cost estimates**, synchronous inference and queued 
 video, audio, speech, 3D and other Fal-hosted endpoints. Supply the model's
 native JSON arguments and options; manage queued jobs with status refresh,
 result retrieval and cancellation. Generated media URLs and bounded results
-remain available in job history across restarts. The Builder agent also has
-seven approval-gated Fal tools; **every billable call and local file upload
-requires fresh approval**, even in Autopilot.
+remain available in job history across restarts. **Builder and Workspace Agent**
+can inspect a model’s exact inputs and outputs and pass a previous job’s
+asset, transcript or structured data into the next model by reference.
+Each paid stage and workspace upload requires fresh approval.
 
 For large media, install the optional upload/realtime SDK with
 `pip install -e ".[fal]"`. See the [Fal.ai integration guide](docs/FAL_AI.md)

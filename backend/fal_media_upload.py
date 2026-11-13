@@ -28,6 +28,8 @@ _ALLOWED_SUFFIXES = frozenset({
     ".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif",
     ".mp4", ".webm", ".mov", ".m4v", ".avi",
     ".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac",
+    ".glb", ".gltf", ".obj", ".ply", ".stl", ".fbx", ".usdz",
+    ".pdf", ".zip", ".csv", ".srt", ".vtt",
 })
 _UPLOAD_SLOTS = asyncio.Semaphore(2)
 
@@ -53,7 +55,7 @@ def register_fal_media_upload(app: FastAPI, manager: SettingsManager) -> None:
         extension = _suffix(file_header)
         if not extension:
             return JSONResponse(
-                {"error": "Choose an image, video or audio file with a supported extension."},
+                {"error": "Choose a supported media, 3D, document, caption or dataset file."},
                 status_code=415,
             )
         length = request.headers.get("content-length")

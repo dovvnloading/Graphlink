@@ -234,6 +234,20 @@ class TestShellConsentBypassRegression:
         assert requests == [tool_name], "remembered consent must not authorize new execution"
 
 
+def test_fal_approval_panels_disclose_full_model_inputs_and_bindings():
+    from backend.builder import _approval_summary as builder_summary
+    from backend.harness.loop import _approval_summary as harness_summary
+
+    call = ToolCall("c", "fal.submit", {
+        "arguments": {"prompt": "generate " * 80},
+        "model_id": "example/speech",
+        "input_bindings": [{"model_id": "example/text", "request_id": "prior-job", "pointer": "/transcript"}],
+    })
+    for summary in (builder_summary(call, None), harness_summary(call)):
+        assert call.arguments["arguments"]["prompt"] in summary
+        assert "example/speech" in summary and "prior-job" in summary
+
+
 class TestGradedConsentAndReprompt:
     def test_an_identical_repeat_is_remembered_within_one_run(self):
         """The pre-existing fingerprint memo, unchanged - the baseline the

@@ -54,6 +54,13 @@ describe("Fal Media Studio view models", () => {
     expect(parseMediaState('{"mode":"hacked","operation":"other"}').mode).toBe("image");
   });
 
+  it("preserves large schema-specific inputs when a saved full-catalog draft reopens", () => {
+    const argumentsJson = JSON.stringify({frames: "a".repeat(300_000)});
+    const restored = parseMediaState(JSON.stringify({mode: "all", operation: "all", argumentsJson}));
+    expect(restored.mode).toBe("all");
+    expect(restored.argumentsJson).toBe(argumentsJson);
+  });
+
   it("parses category results and favorites independently of selected model state", () => {
     const parsed = parseMediaCatalog(JSON.stringify({
       status: "ready", mode: "image", operation: "text-to-image", query: "flux",

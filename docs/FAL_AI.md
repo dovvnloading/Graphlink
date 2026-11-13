@@ -7,8 +7,7 @@ custom deployed endpoints, and future models. Fal is a **generation and
 inference service**, not a substitute for Graphlink's chat LLM provider.
 
 This integration intentionally avoids an out-of-date hardcoded model list:
-the model-specific JSON input/output schema is taken from the model's
-documentation at <https://fal.ai/models>.
+the model-specific JSON input/output schema is taken from Fal’s live catalog at <https://fal.ai/docs/platform-apis/v1/models>.
 
 ## Live model discovery, schemas and cost checks
 
@@ -33,11 +32,10 @@ The Model API itself will validate your actual argument JSON on submission;
 the UI intentionally accepts arbitrary model-specific fields rather than
 hardcoding a form for one version of a model.
 
-For Builder agents the four additional read-only tools are
-`fal.search_models`, `fal.model_details`, `fal.model_pricing`, and
-`fal.estimate_cost`. The Builder can therefore discover and price a model,
-inspect its schema, prepare valid arguments, and **then** request human
-approval before a billable `fal.submit` or `fal.run`.
+Builder and Workspace Agent can search the public catalog and inspect schemas
+before an API key is configured. Account pricing, cost estimates, inference
+and remote job access use the configured key. A custom endpoint that Fal
+doesn't list can still be run by its exact ID with known arguments.
 
 ## Setup
 
@@ -141,20 +139,33 @@ optional dependency. Realtime is useful for models exposing the
 `/realtime` WebSocket interface; its connection lifetime is owned by
 the caller rather than by a persistent Graphlink UI socket.
 
-## Builder agent tools
+## Using Fal from Builder or Workspace Agent
 
-Graphlink's Builder exposes these standard tool-registry tools:
+Ask the Builder to create something on the canvas, or use Workspace Agent
+for a task that involves files in its workspace. For example:
+
+> Find an image-to-3D model that accepts my image URL. Show me the required
+> inputs and current pricing. After approval, queue it and put the resulting
+> mesh and preview on my canvas.
+
+> Transcribe the recording in this workspace with speaker timestamps.
+> Show me the transcript, then look up a speech model that can read it back.
+
+Both agents use the model catalog, schemas, and inference tools below.
+Local file upload also requires the workspace file-read scope.
 
 | Tool | Meaning | Approval |
 | --- | --- | --- |
 | `fal.search_models` | Search live model catalog with pagination | Automatic, if scoped |
 | `fal.model_details` | Fetch live endpoint metadata and OpenAPI schema | Automatic, if scoped |
+| `fal.model_io` | Inspect inference inputs, final outputs and their referenced definitions, with JSON Pointer and pagination | Automatic, if scoped |
+| `fal.list_jobs` | List saved model IDs, request IDs and last known status, optionally filtered by model | Automatic, if scoped |
 | `fal.model_pricing` | Check current billing-unit pricing | Automatic, if scoped |
 | `fal.estimate_cost` | Request historical/unit price estimate | Automatic, if scoped |
 | `fal.submit` | Queue a paid model inference | **Always, every call** |
 | `fal.run` | Synchronous paid inference | **Always, every call** |
 | `fal.status` | Read status / optional runner logs | Automatic, if scoped |
-| `fal.result` | Fetch completed output | Automatic, if scoped |
+| `fal.result` | Read the full result or a selected field, including typed asset URLs and their JSON Pointers | Automatic, if scoped |
 | `fal.wait` | Wait (bounded poll) and retrieve result | Automatic, if scoped |
 | `fal.cancel` | Request cancellation | **Always, every call** |
 | `fal.upload` | Upload local file bytes | **Always, every call** |
@@ -182,10 +193,48 @@ Examples the Builder can execute after approval:
  "request_id": "764cabcf-b745-4b3e-ae38-1200304cf45b"}
 ```
 
-A model run does **not** automatically produce a Graphlink canvas image
-node. Its result is returned to the Builder (including media URLs); the
-Builder can then use the existing graph tools to create the appropriate
-artifact or link.
+### Chaining model outputs
+
+Use `fal.model_io` to inspect the destination model's input names and types.
+On `fal.result`, `pointer` selects an exact field such as `/images/0/url`
+or `/text`. Large values provide `next_offset` or a list of keys to inspect.
+On queued jobs, `fal.list_jobs` can recover the model and request ID after
+a restart. Use `fal.status` for the current remote state.
+
+For a second `fal.submit` or `fal.run`, supply static values in
+`arguments` and dynamic values in `input_bindings`. Each binding names a
+top-level destination field and a source job and pointer. Graphlink fetches
+the original value after approval, preserving arrays, objects, numbers,
+text and asset URLs. A missing pointer fails before the destination is
+submitted. A queued source can be reused while its result is available
+from Fal. Synchronous calls have no durable queue ID for this handoff.
+
+To place a queued result on the canvas, use `graph.attach_fal_result` with
+its `model_id`, `request_id`, and optionally a `parent_id`. This creates an
+undoable Fal Media Studio node from the saved result, or retrieves the
+existing remote result if the saved JSON was truncated. Repeating it for
+the same destination reuses the node.
+
+For example, after looking up a destination that accepts `image_url`,
+the agent can fill that input from the first image of a completed job:
+
+```json
+{
+  "model_id": "fal-ai/trellis",
+  "arguments": {},
+  "input_bindings": [{
+    "argument": "image_url",
+    "model_id": "fal-ai/flux/schnell",
+    "request_id": "764cabcf-b745-4b3e-ae38-1200304cf45b",
+    "pointer": "/images/0/url"
+  }]
+}
+```
+
+Replace the example request ID with the source job's real ID. Each
+billable stage gets its own approval. For work with long transcripts,
+training outputs or many files, use the queue so the agent can reopen
+the result and inspect individual fields.
 
 ## Supported request controls
 

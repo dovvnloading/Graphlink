@@ -4,8 +4,9 @@ Models are ranked by VERIFIED unit rates only within identical billing units:
 a cheap $/megapixel model cannot be claimed to be cheaper per finished image
 than a $/image model. Unpriced endpoints always sort last.
 */
-export type MediaMode = "image" | "video" | "audio";
+export type MediaMode = "image" | "video" | "audio" | "all";
 export const MEDIA_OPERATIONS: Record<MediaMode, { id: string; label: string }[]> = {
+  all: [{ id: "all", label: "All categories" }],
   image: [
     { id: "text-to-image", label: "Text to image" },
     { id: "image-to-image", label: "Image edit" },
@@ -24,7 +25,7 @@ export const MEDIA_OPERATIONS: Record<MediaMode, { id: string; label: string }[]
 
 export interface MediaAsset {
   url: string;
-  kind: MediaMode;
+  kind: "image" | "video" | "audio" | "3d" | "file";
 }
 export interface MediaJob {
   modelId: string;
@@ -34,6 +35,7 @@ export interface MediaJob {
   requestId: string;
   createdAt: string;
   outputs: MediaAsset[];
+  resultPreview?: string;
 }
 export interface MediaQuote {
   status: "loading" | "ready";
@@ -78,6 +80,7 @@ export interface MediaCatalog {
   favorites: string[];
   hasMore: boolean;
   nextCursor: string;
+  currentCursor: string;
   mode: MediaMode;
   operation: string;
   query: string;
@@ -106,7 +109,7 @@ const initialMedia: MediaState = {
 };
 const initialCatalog: MediaCatalog = {
   status: "idle", models: [], favorites: [], hasMore: false,
-  nextCursor: "", mode: "image", operation: "text-to-image", query: "",
+  nextCursor: "", currentCursor: "", mode: "image", operation: "text-to-image", query: "",
   error: "", pricingWarning: "",
 };
 const initialSchema: MediaSchema = { status: "idle", modelId: "", fields: [], warning: "" };
@@ -115,15 +118,17 @@ function asObject(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown> : null;
 }
-function safeDecode(value: string): Record<string, unknown> | null {
-  if (!value || value.length > 250_000) return null;
+function safeDecode(value: string, maxChars = 250_000): Record<string, unknown> | null {
+  if (!value || value.length > maxChars) return null;
   try { return asObject(JSON.parse(value)); } catch { return null; }
 }
 function validMode(value: unknown): value is MediaMode {
-  return value === "image" || value === "video" || value === "audio";
+  return value === "image" || value === "video" || value === "audio" || value === "all";
 }
 export function parseMediaState(raw: string): MediaState {
-  const value = safeDecode(raw);
+  // The server accepts 24 MiB of arguments; their JSON quoting, gallery and prompt
+  // also count toward the serialized scene field.
+  const value = safeDecode(raw, 50 * 1024 * 1024);
   if (!value) return initialMedia;
   const mode = validMode(value.mode) ? value.mode : "image";
   const operation = MEDIA_OPERATIONS[mode].some((item) => item.id === value.operation)
@@ -157,6 +162,7 @@ export function parseMediaCatalog(raw: string): MediaCatalog {
     favorites: Array.isArray(value.favorites)
       ? value.favorites.filter((v): v is string => typeof v === "string").slice(0, 500) : [],
     hasMore: value.hasMore === true,
+    currentCursor: typeof value.currentCursor === "string" ? value.currentCursor : "",
     nextCursor: typeof value.nextCursor === "string" ? value.nextCursor : "",
     mode: validMode(value.mode) ? value.mode : "image",
     operation: typeof value.operation === "string" ? value.operation : "text-to-image",

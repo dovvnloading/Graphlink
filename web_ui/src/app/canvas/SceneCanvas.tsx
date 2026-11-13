@@ -40,6 +40,7 @@ import type { GitlinkFlowNode } from "./GitlinkNodeView";
 import type { GroupFlowNode } from "./GroupNodeView";
 import type { HtmlFlowNode } from "./HtmlNodeView";
 import type { ImageFlowNode } from "./ImageNodeView";
+import type { MediaMode } from "./falMediaStudioModel";
 import type { FalMediaFlowNode } from "./FalMediaNodeView";
 import type { NoteFlowNode } from "./NoteNodeView";
 import { OrthogonalEdge } from "./OrthogonalEdge";
@@ -801,16 +802,16 @@ function makeImageFns(id: string, liveRef: { current: DispatcherLive }) {
 function makeFalMediaFns(id: string, liveRef: { current: DispatcherLive }) {
   return {
     onSaveDraft: (draft: {
-      mode: "image" | "video" | "audio"; operation: string; modelId: string;
+      mode: MediaMode; operation: string; modelId: string;
       modelName: string; prompt: string; argumentsJson: string;
     }) => liveRef.current.store.saveFalMediaDraft(id, draft),
-    onSearch: (mode: "image" | "video" | "audio", operation: string, query: string, cursor = "") =>
+    onSearch: (mode: MediaMode, operation: string, query: string, cursor = "") =>
       liveRef.current.store.searchFalMediaCatalog(id, mode, operation, query, cursor),
     onInspect: (modelId: string) => liveRef.current.store.inspectFalMediaModel(id, modelId),
     onFavorite: (modelId: string, enabled: boolean) =>
       liveRef.current.store.setFalMediaFavorite(id, modelId, enabled),
     onPrepare: (draft: {
-      mode: "image" | "video" | "audio"; operation: string; modelId: string;
+      mode: MediaMode; operation: string; modelId: string;
       modelName: string; prompt: string; argumentsJson: string;
     }) => liveRef.current.store.prepareFalMedia(id, draft),
     onGenerate: (approvalId: string) => liveRef.current.store.generateFalMedia(id, approvalId),

@@ -172,14 +172,14 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.harnessActivity.filter((row) => row.outcome !== "ok").length;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
-  const pythonApproval = data.harnessApprovalToolName === "python.exec";
-  const pythonDecisionPending = pythonApproval && (
+  const boundApproval = data.harnessApprovalToolName === "python.exec" || data.harnessApprovalToolName.startsWith("fal.");
+  const decisionPending = boundApproval && (
     !data.harnessApprovalId || submittedApprovalId === data.harnessApprovalId
   );
 
   function decideTool(approved: boolean): void {
     const decide = approved ? data.onApproveTool : data.onDenyTool;
-    if (!pythonApproval) {
+    if (!boundApproval) {
       decide();
       return;
     }
@@ -405,13 +405,11 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
               type="button"
               className="plan-node-button nodrag"
               onClick={() => decideTool(true)}
-              disabled={pythonDecisionPending}
+              disabled={decisionPending}
             >
               Approve once
             </button>
-            {/* Python always needs fresh consent. Other tools continue to use
-                the backend's existing graded-consent policy. */}
-            {data.harnessApprovalSessionOffered && data.harnessApprovalToolName !== "python.exec" && (
+            {data.harnessApprovalSessionOffered && !boundApproval && (
               <button
                 type="button"
                 className="plan-node-button nodrag"
@@ -425,7 +423,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
               type="button"
               className="plan-node-button plan-node-button-deny nodrag"
               onClick={() => decideTool(false)}
-              disabled={pythonDecisionPending}
+              disabled={decisionPending}
               ref={denyButtonRef}
             >
               Deny

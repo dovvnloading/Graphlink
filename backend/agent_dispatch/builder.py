@@ -56,7 +56,7 @@ class BuilderDispatchOps(DispatcherParts):
             from backend.tools_fal import register_fal_tools
 
             registry = ToolRegistry()
-            register_graph_tools(registry, document)
+            register_graph_tools(registry, document, self._settings_manager)
             register_run_node_tool(registry, document, self)
             # SECURITY-FIX: document scopes knowledge.search to THIS
             # session's own current workspace - see that tool's own

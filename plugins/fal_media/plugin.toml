@@ -4,7 +4,7 @@ name = "Fal Media Studio"
 version = "1.0.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
-description = "A creative canvas studio for Fal image, video and audio models, with transparent prices."
+description = "Browse the Fal model catalog, review pricing and run models on the canvas."
 
 [frontend]
 view = "generic"

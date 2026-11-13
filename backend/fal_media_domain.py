@@ -12,11 +12,13 @@ import json
 import math
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlsplit
 
-from backend.fal_integration import FalError, media_urls, model_path
+from backend.fal_integration import FalError, model_path
+from backend.fal_model_contract import model_contract
+from backend.fal_results import result_assets, result_preview, safe_https_url
 
 MODES = {
+    "all": ("all",),
     "image": ("text-to-image", "image-to-image"),
     "video": ("text-to-video", "image-to-video", "video-to-video"),
     "audio": ("text-to-audio", "text-to-speech", "audio-to-audio"),
@@ -76,7 +78,7 @@ def validate_edit(media: dict, mode: str, operation: str, model_id: str,
                   model_name: str, prompt: str, arguments_json: str) -> dict:
     """Strictly validate an incoming user draft without modifying the caller."""
     if mode not in MODES or operation not in MODES[mode]:
-        raise FalError("Select a valid Image, Video, or Audio generation category.")
+        raise FalError("Select a valid Fal model category.")
     if not isinstance(model_id, str):
         raise FalError("Model ID must be text.")
     if model_id:
@@ -126,6 +128,8 @@ def request_arguments(media: dict) -> dict:
     TTS parameters, which can be rejected by strict input schemas.
     """
     args = parse_arguments(media.get("argumentsJson", "{}"))
+    if media.get("mode") == "all":
+        return args  # Send exactly the model-specific fields, including {} for optional inputs.
     prompt = str(media.get("prompt") or "").strip()
     primary_field = "text" if media.get("operation") == "text-to-speech" else "prompt"
     if prompt and not args.get(primary_field):
@@ -135,43 +139,12 @@ def request_arguments(media: dict) -> dict:
     return args
 
 
-def _safe_url(value: object) -> str:
-    if not isinstance(value, str) or len(value) > 4096:
-        return ""
-    try:
-        parsed = urlsplit(value)
-        # .port can itself throw (e.g. https://host:not-a-port). The entire
-        # URL is untrusted model output; never crash a paid result handler
-        # because a model returned one malformed attachment.
-        if parsed.scheme != "https" or not parsed.netloc or not parsed.hostname:
-            return ""
-        if parsed.username or parsed.password or parsed.port not in (None, 443):
-            return ""
-    except ValueError:
-        return ""
-    return value
-
-
 def outputs_for(data: Any, mode: str) -> list[dict[str, str]]:
-    """Extract HTTPS media URLs, retaining modality for browser playback."""
-    result: list[dict[str, str]] = []
-    for raw_url in media_urls(data, limit=MAX_RESULTS * 2):
-        url = _safe_url(raw_url)
-        if not url or any(item["url"] == url for item in result):
-            continue
-        suffix = urlsplit(url).path.lower()
-        if suffix.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif")):
-            kind = "image"
-        elif suffix.endswith((".mp4", ".webm", ".mov", ".m4v")):
-            kind = "video"
-        elif suffix.endswith((".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a")):
-            kind = "audio"
-        else:
-            kind = mode
-        result.append({"url": url, "kind": kind})
-        if len(result) >= MAX_RESULTS:
-            break
-    return result
+    """Gallery entries retain the saved-session URL/kind shape."""
+    return [
+        {"url": asset["url"], "kind": asset["kind"]}
+        for asset in result_assets(data, limit=MAX_RESULTS)
+    ]
 
 
 def completed_media(media: dict, result: Any, *, now: str | None = None) -> dict:
@@ -189,6 +162,7 @@ def completed_media(media: dict, result: Any, *, now: str | None = None) -> dict
         "requestId": updated["requestId"],
         "createdAt": now or datetime.now(timezone.utc).isoformat(),
         "outputs": outputs,
+        **({"resultPreview": result_preview(result)} if not outputs or updated["mode"] == "all" else {}),
     }, *updated["history"]][:MAX_HISTORY]
     return updated
 
@@ -209,7 +183,8 @@ def model_catalog_page(client, *, mode: str, operation: str, query: str,
         raise FalError("Search must be 200 characters or less.")
     if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
         raise FalError("Catalog page size must be 1-50.")
-    search = client.search_models(query=query, category=operation, limit=limit, cursor=cursor)
+    category = "" if mode == "all" else operation
+    search = client.search_models(query=query, category=category, limit=limit, cursor=cursor)
     models = search.get("models", [])
     if not isinstance(models, list):
         raise FalError("Fal returned an invalid model catalog.")
@@ -230,12 +205,12 @@ def model_catalog_page(client, *, mode: str, operation: str, query: str,
         seen.add(endpoint)
         meta = item.get("metadata")
         meta = meta if isinstance(meta, dict) else {}
-        thumbnail = _safe_url(meta.get("thumbnail_url"))
+        thumbnail = safe_https_url(meta.get("thumbnail_url"))
         normalized.append({
             "id": endpoint,
             "name": str(meta.get("display_name") or endpoint)[:120],
             "description": str(meta.get("description") or "")[:400],
-            "category": str(meta.get("category") or operation)[:70],
+            "category": str(meta.get("category") or category)[:70],
             "thumbnailUrl": thumbnail,
             "tags": [str(v)[:30] for v in (meta.get("tags") or [])[:6]
                      if isinstance(v, str)] if isinstance(meta.get("tags"), list) else [],
@@ -284,6 +259,12 @@ def summarize_schema(details: dict) -> dict:
     openapi = details.get("openapi") or {}
     if not isinstance(openapi, dict):
         return {"fields": [], "required": [], "warning": "Model schema unavailable"}
+    found = None
+    if details.get("endpoint_id"):
+        try:
+            found = model_contract(details).get("input")
+        except FalError:
+            pass  # Older documents may declare only a relative POST and no servers.
     components = openapi.get("components", {})
     defs = components.get("schemas", {}) if isinstance(components, dict) else {}
     def deref(value, depth=0):
@@ -300,25 +281,22 @@ def summarize_schema(details: dict) -> dict:
                 merged["required"].extend(child.get("required", []))
             return merged
         return value
-    found = {}
-    for route in (openapi.get("paths") or {}).values():
-        if not isinstance(route, dict):
-            continue
-        post = route.get("post", {})
-        if not isinstance(post, dict):
-            continue
-        content = (post.get("requestBody") or {}).get("content", {})
-        if isinstance(content, dict):
-            json_body = content.get("application/json", {})
+    if found is None:
+        paths = openapi.get("paths")
+        posts = [route["post"] for route in paths.values()
+                 if isinstance(route, dict) and isinstance(route.get("post"), dict)
+                 ] if isinstance(paths, dict) else []
+        if len(posts) == 1:
+            body = posts[0].get("requestBody")
+            content = body.get("content") if isinstance(body, dict) else None
+            json_body = content.get("application/json") if isinstance(content, dict) else None
             if isinstance(json_body, dict):
-                found = deref(json_body.get("schema", {}))
-                if found:
-                    break
-    if not found:
-        for name, schema in (defs.items() if isinstance(defs, dict) else []):
-            if isinstance(name, str) and name.endswith("Input") and isinstance(schema, dict):
-                found = deref(schema)
-                break
+                found = json_body.get("schema")
+        elif not posts and isinstance(defs, dict):
+            inputs = [schema for name, schema in defs.items() if name.endswith("Input")]
+            if len(inputs) == 1:
+                found = inputs[0]
+    found = deref(found)
     properties = found.get("properties", {}) if isinstance(found, dict) else {}
     required = found.get("required", []) if isinstance(found, dict) else []
     fields: list[dict[str, Any]] = []

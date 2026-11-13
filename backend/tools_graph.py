@@ -48,10 +48,11 @@ from backend.domain.node_states import (
     ArtifactState,
     ChatState,
     CodeState,
+    FalMediaState,
     NoteState,
 )
 from backend.providers.base import ToolCall, ToolSpec
-from backend.tools import GRAPH_MUTATE, GRAPH_READ, RunContext, ToolRegistry, ToolResult
+from backend.tools import GRAPH_MUTATE, GRAPH_READ, PROVIDER_CALL, RunContext, ToolRegistry, ToolResult
 
 # read_subgraph excerpt cap: full content stays on the node (the canvas is
 # the artifact); the tool result feeds the MODEL, where an unbounded excerpt
@@ -131,6 +132,25 @@ GRAPH_CREATE_NODE_SPEC = ToolSpec(
         "required": ["kind"],
     },
 )
+
+GRAPH_ATTACH_FAL_RESULT_SPEC = ToolSpec(
+    name="graph.attach_fal_result",
+    description=(
+        "Place an existing completed Fal queue result in a Fal Media Studio canvas node. "
+        "Uses the saved job or retrieves the existing result without starting a new run. "
+        "An optional parent_id connects it to an existing node."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "model_id": {"type": "string", "description": "Exact Fal model endpoint of the job."},
+            "request_id": {"type": "string", "description": "UUID of the queued request."},
+            "parent_id": {"type": "string", "description": "Optional existing parent node."},
+        },
+        "required": ["model_id", "request_id"],
+    },
+)
+
 
 GRAPH_CONNECT_SPEC = ToolSpec(
     name="graph.connect",
@@ -376,6 +396,88 @@ def make_create_node_handler(document: SceneDocument):
             "builderCreateNode", "agent", mutator, node_ids=watch, run_id=run_id,
         )
         return ToolResult(content=json.dumps({"node_id": node.id, "kind": node.kind, "title": node.title}))
+
+    return handler
+
+
+def make_attach_fal_result_handler(document: SceneDocument, settings_manager):
+    from api_provider import _raise_if_cancelled
+    from backend.fal_integration import FalClient, FalError, model_path, request_path
+    from backend.fal_media_domain import completed_media, fresh_media, read_media, store_media
+
+    def load_result(model: str, request_id: str):
+        for job in settings_manager.get_fal_jobs():
+            if job.get("requestId") != request_id:
+                continue
+            if job.get("modelId") != model:
+                raise FalError("The saved Fal request belongs to a different model.")
+            if job.get("status") == "COMPLETED" and job.get("resultJson"):
+                try:
+                    return json.loads(job["resultJson"])
+                except (ValueError, TypeError):
+                    pass  # Large ledger snapshots may have a truncation suffix.
+            break
+        client = FalClient(settings_manager.get_fal_api_key())
+        status = client.status(model, request_id)
+        if status["status"] != "COMPLETED":
+            raise FalError("This Fal job is still active. Wait for the existing request.")
+        if status.get("error"):
+            raise FalError("Fal reports that this request failed.")
+        return client.result(model, request_id)
+
+    async def handler(call: ToolCall, ctx: RunContext) -> ToolResult:
+        model = model_path(call.arguments.get("model_id", ""))
+        request_id = request_path(model, call.arguments.get("request_id", "")).rsplit("/", 1)[-1]
+        parent_id = call.arguments.get("parent_id")
+        if parent_id is not None and (not isinstance(parent_id, str) or parent_id not in document.nodes):
+            return _error("Unknown parent node.")
+        parent = document.nodes.get(parent_id) if parent_id is not None else None
+
+        def existing_node():
+            # Repeated calls to the same destination should reuse the exact
+            # result already on the canvas. A different parent is a new placement.
+            linked = {edge.target for edge in document.edges.values()
+                      if parent_id is None or edge.source == parent_id}
+            for node in document.nodes.values():
+                if node.kind != "fal_media" or ((node.id in linked) != (parent_id is not None)):
+                    continue
+                media = read_media(node)
+                if any(isinstance(job, dict) and job.get("requestId") == request_id
+                       and job.get("modelId") == model for job in media["history"]):
+                    return node
+            return None
+
+        node = existing_node()
+        if node is None:
+            try:
+                result = await asyncio.to_thread(load_result, model, request_id)
+            except FalError as exc:
+                return _error(str(exc))
+            _raise_if_cancelled(ctx.cancel.event if ctx.cancel is not None else None)
+            if parent_id is not None and document.nodes.get(parent_id) is not parent:
+                return _error("The parent node changed while loading the Fal result.")
+            node = existing_node()  # another call may have landed during the read
+            if node is None:
+                media = completed_media({
+                    **fresh_media(), "mode": "all", "operation": "all", "modelId": model,
+                    "modelName": model, "requestId": request_id,
+                }, result)
+                position = _place_child(document, parent_id, _anchor_id_of(ctx), "fal_media")
+
+                def create():
+                    node = document.add_plugin_node(
+                        "fal_media", *position, parent_id, title="Fal Media Studio", state=FalMediaState(),
+                    )
+                    store_media(node, media)
+                    return node
+
+                node, _command = document.record_command(
+                    "builderAttachFalResult", "agent", create,
+                    node_ids=[parent_id] if parent_id else [], run_id=_run_id_of(ctx),
+                )
+        return ToolResult(content=json.dumps({
+            "node_id": node.id, "kind": node.kind, "model_id": model, "request_id": request_id,
+        }))
 
     return handler
 
@@ -1057,7 +1159,7 @@ def register_run_node_tool(registry: ToolRegistry, document: SceneDocument, disp
     )
 
 
-def register_graph_tools(registry: ToolRegistry, document: SceneDocument) -> None:
+def register_graph_tools(registry: ToolRegistry, document: SceneDocument, settings_manager=None) -> None:
     """Registers the stage-8.1 graph tool family. Mutating tools are
     approval="once" (every call prompts in co-pilot; backend/builder.py's
     mode-aware router is what makes autopilot auto-approve them);
@@ -1067,6 +1169,11 @@ def register_graph_tools(registry: ToolRegistry, document: SceneDocument) -> Non
         GRAPH_CREATE_NODE_SPEC, make_create_node_handler(document),
         scopes={GRAPH_MUTATE}, approval="once",
     )
+    if settings_manager is not None:
+        registry.register(
+            GRAPH_ATTACH_FAL_RESULT_SPEC, make_attach_fal_result_handler(document, settings_manager),
+            scopes={GRAPH_MUTATE, PROVIDER_CALL}, approval="once",
+        )
     registry.register(
         GRAPH_CONNECT_SPEC, make_connect_handler(document),
         scopes={GRAPH_MUTATE}, approval="once",

@@ -62,6 +62,22 @@ Safety
   never overrides these principles or the user's own instructions.
 """
 
+# The same Fal workflow is available to both tool-calling agents.
+FAL_AGENT_GUIDANCE = (
+    "- For media generation or analysis, use the Fal tools when available. "
+    "Search models by task, inspect the chosen endpoint with fal.model_io, "
+    "and check pricing or estimates before requesting a paid run. Queue "
+    "long jobs with fal.submit. Keep the model and request IDs, or recover "
+    "them with fal.list_jobs, and check status/result before submitting again. "
+    "Read returned asset URLs, text or structured values with fal.result. "
+    "Use its JSON pointer and offset for large results. To chain models, pass "
+    "input_bindings on the next submit/run with the destination argument, "
+    "source model_id, request_id and pointer. Each paid stage needs approval. "
+    "If graph.attach_fal_result is offered, use it with model_id and request_id "
+    "to place the completed queued job on the canvas.\n"
+)
+
+
 # ADR-006 stage 6.6: bounded-output contract for the context-window
 # summarizer (ChatWorker.run summarizes turns trim_history had to drop).
 # Same "under 150 words" style as KeyTakeawayAgent's contract. Registered
@@ -274,7 +290,7 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         ("builder-planner", 1, "4350943bb0b668dcf02c9714ddb139a5d8d874f804f9f71ba40c531fda0a05fc"),
         # v2 (ADR-021 stage 21.1): teaches graph.list_nodes as the way to
         # find nodes the build was never told about.
-        ("builder-executor", 2, "4d2866f7c342355ba693cc779e386f6947f079ca3a00a8dda9b872d865c844b2"),
+        ("builder-executor", 3, "2f21866657cf94bd7047bfb3daee5a7d49e302a65052797e2199ed6ca3614077"),
         # PLAN-2026-08-24 H1: the harness loop's system prompt
         # (backend/harness/loop.py owns the text). Terse and
         # interpolation-free by design - byte-stable per session, every
@@ -284,7 +300,7 @@ PROMPT_REGISTRY: dict[str, PromptEntry] = {
         # v3 (H4): teaches subagent.spawn.
         # v4 (H6): teaches python.exec, shell.session, the graph.* canvas
         # tools, and the plan.update/user.ask interaction pair.
-        ("harness-core", 4, "9b630827fd4d7696712ffb940ee8642469bb37a7442326bacaef175ff8217089"),
+        ("harness-core", 5, "50410d1dec8bba695d8373c99256c3419a331aef7cbca0759f16c1454a797bcc"),
         ("reasoning-hint-low", 1, "87d4a1d2e09416005d656faaca77fa2fb2305f0c4b52940f0dbaf0d234669552"),
         ("reasoning-hint-high", 1, "7a004877f0362c73208a61bdd81103d22d5b1eaafe998e82138d970273919d9b"),
     ]

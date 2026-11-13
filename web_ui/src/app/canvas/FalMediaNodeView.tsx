@@ -75,7 +75,7 @@ function safeInlineMediaUrl(url: string): boolean {
   return host === "fal.media" || host.endsWith(".fal.media");
 }
 function iconFor(mode: MediaMode): string {
-  return mode === "image" ? "▧" : mode === "video" ? "▣" : "♫";
+  return mode === "image" ? "▧" : mode === "video" ? "▣" : mode === "audio" ? "♫" : "⌕";
 }
 function dateString(raw: string): string {
   const date = new Date(raw);
@@ -165,7 +165,7 @@ function ModelLibrary({
         <div className="fal-studio-library-controls">
           <div className="fal-studio-choice" aria-label="Model filter">
             <button type="button" aria-pressed={!favoritesOnly} onClick={() => setFavoritesOnly(false)}>
-              All models
+              All results
             </button>
             <button type="button" aria-pressed={favoritesOnly} onClick={() => setFavoritesOnly(true)}>
               <span aria-hidden="true">★</span> Favorites
@@ -217,11 +217,15 @@ function ModelLibrary({
                 "Try another search or generation category."}</p>
             </div>
           )}
+          {loaded && draft.mode === "all" && !!catalog.currentCursor && !favoritesOnly && (
+            <button type="button" className="fal-studio-loadmore" disabled={catalog.status === "loading"}
+              onClick={() => onSearch(draft.mode, draft.operation, query)}>First page</button>
+          )}
           {loaded && catalog.hasMore && !favoritesOnly && (
             <button type="button" className="fal-studio-loadmore"
               disabled={catalog.status === "loading" || isBusy || !catalog.nextCursor}
               onClick={() => onSearch(draft.mode, draft.operation, query, catalog.nextCursor)}>
-              {catalog.status === "loading" ? "Loading…" : "Show more models"}
+              {catalog.status === "loading" ? "Loading…" : draft.mode === "all" ? "Next page" : "Show more models"}
             </button>
           )}
         </div>
@@ -254,7 +258,7 @@ function ModelInputs({
   } catch {
     jsonError = "Correct the JSON syntax before generating.";
   }
-  const primaryField = draft.operation === "text-to-speech" ? "text" : "prompt";
+  const primaryField = draft.mode === "all" ? null : draft.operation === "text-to-speech" ? "text" : "prompt";
   const fields = schema.modelId === draft.modelId
     ? schema.fields.filter((field) => field.name !== primaryField) : [];
   const updateField = (name: string, value: unknown) => {
@@ -266,12 +270,12 @@ function ModelInputs({
       <div className="fal-studio-section-heading">
         <div>
           <span className="fal-studio-kicker">02 / CREATE</span>
-          <h4>{draft.operation === "text-to-speech" ? "Write what to say" : "Describe your creation"}</h4>
+          <h4>{draft.mode === "all" ? "Model inputs" : draft.operation === "text-to-speech" ? "Write what to say" : "Describe your creation"}</h4>
         </div>
         {draft.modelId && <button type="button" className="fal-studio-mini-link" onClick={onInspect}
           disabled={schema.status === "loading"}>↻ Model schema</button>}
       </div>
-      <label className="fal-studio-field">
+      {primaryField && <label className="fal-studio-field">
         <span>{primaryField === "text" ? "Speech text" : "Prompt"} <small>{
           primaryField === "text" ? "The exact words to speak" : "Describe the outcome you want"
         }</small></span>
@@ -284,7 +288,7 @@ function ModelInputs({
           onChange={(event) => setPrompt(event.target.value)}
           aria-label={primaryField === "text" ? "Text to speak" : "Media generation prompt"} />
         <small className="fal-studio-field-meta">{draft.prompt.length.toLocaleString()} / 16,000</small>
-      </label>
+      </label>}
       {draft.modelId && schema.status === "loading" && (
         <p className="fal-studio-quiet">Checking required inputs for this model…</p>
       )}
@@ -332,7 +336,7 @@ function ModelInputs({
           })}
         </div>
       )}
-      <FalMediaUploader mode={draft.mode} operation={draft.operation}
+      <FalMediaUploader key={draft.modelId} mode={draft.mode} operation={draft.operation}
         fields={fields.filter((field) => field.name.endsWith("_url") || field.format === "uri").map((field) => field.name)}
         argumentsJson={draft.argumentsJson} disabled={uploadDisabled}
         onJsonChange={setJson} onBusyChange={onUploadBusy} />
@@ -340,7 +344,7 @@ function ModelInputs({
         setShowAdvanced((event.currentTarget as HTMLDetailsElement).open);
       }}>
         <summary>Advanced model JSON <small>Full API control</small></summary>
-        <p>Set model-specific options such as image dimensions, duration, seed, or reference media URLs. JSON fields take precedence over the prompt box.</p>
+        <p>{draft.mode === "all" ? "Enter the input object from this model’s API schema." : "Set model-specific options such as image dimensions, duration, seed, or reference media URLs. JSON fields take precedence over the prompt box."}</p>
         <textarea className="fal-studio-code nodrag nopan nowheel" aria-label="Advanced Fal model JSON"
           spellCheck={false} rows={5} disabled={busy} value={draft.argumentsJson}
           onChange={(event) => setJson(event.target.value)} />
@@ -361,7 +365,7 @@ function OutputGallery({ media, id }: { media: MediaState; id: string }) {
         <div className="fal-studio-gallery-empty">
           <span aria-hidden="true">◈</span>
           <strong>Made here, saved here.</strong>
-          <p>Your finished images, videos and audio will appear in this studio's history.</p>
+          <p>Completed jobs appear here with their output files or model response.</p>
         </div>
       ) : (
         <div className="fal-studio-gallery-list nowheel nodrag">
@@ -399,8 +403,14 @@ function OutputGallery({ media, id }: { media: MediaState; id: string }) {
                     </div>
                   );
                 })}
-                {(!job.outputs || job.outputs.length === 0) && <p className="fal-studio-quiet">The model returned no downloadable media URLs.</p>}
+                {!job.resultPreview && (!job.outputs || job.outputs.length === 0) && <p className="fal-studio-quiet">The model returned no downloadable media URLs.</p>}
               </div>
+              {typeof job.resultPreview === "string" && job.resultPreview.length > 0 && (
+                <details className="fal-studio-result" open={!job.outputs?.length}>
+                  <summary>Model response</summary>
+                  <pre className="nowheel nodrag">{job.resultPreview}</pre>
+                </details>
+              )}
             </div>
           ))}
         </div>
@@ -474,7 +484,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
   const chooseMode = (mode: MediaMode) => {
     if (mode === draft.mode || busy || uploadBusy) return;
     updateDraft({ mode, operation: MEDIA_OPERATIONS[mode][0].id,
-      modelId: "", modelName: "", argumentsJson: "{}" });
+      modelId: "", modelName: "", argumentsJson: "{}", prompt: mode === "all" ? "" : draft.prompt });
   };
   const chooseOperation = (operation: string) => {
     if (operation === draft.operation || busy || uploadBusy) return;
@@ -495,7 +505,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
     try {
       const params: unknown = JSON.parse(draft.argumentsJson);
       if (!params || Array.isArray(params) || typeof params !== "object") throw Error("not an object");
-      if (!draft.prompt.trim() && !Object.keys(params).length) {
+      if (draft.mode !== "all" && !draft.prompt.trim() && !Object.keys(params).length) {
         setLocalError("Add a prompt or model-specific parameters before generating.");
         return;
       }
@@ -545,22 +555,22 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
         <div className="fal-studio-hero">
           <p>IDEA TO ASSET</p>
           <h3>Create without limits<span>.</span></h3>
-          <span>One studio for image, motion, and sound.</span>
+          <span>Search the Fal catalog or browse by media type.</span>
         </div>
         <div className="fal-studio-mode-tabs" role="group" aria-label="Media generation type">
-          {(["image", "video", "audio"] as const).map((mode) => (
+          {(["image", "video", "audio", "all"] as const).map((mode) => (
             <button key={mode} type="button" aria-pressed={draft.mode === mode}
               disabled={busy || uploadBusy} onClick={() => chooseMode(mode)}>
-              <span aria-hidden="true">{iconFor(mode)}</span> {mode[0].toUpperCase()+mode.slice(1)}
+              <span aria-hidden="true">{iconFor(mode)}</span> {mode === "all" ? "All models" : mode[0].toUpperCase()+mode.slice(1)}
             </button>
           ))}
         </div>
-        <div className="fal-studio-operation-tabs" role="group" aria-label="Generation workflow">
+        {draft.mode !== "all" && <div className="fal-studio-operation-tabs" role="group" aria-label="Generation workflow">
           {MEDIA_OPERATIONS[draft.mode].map((op) => (
             <button key={op.id} type="button" aria-pressed={draft.operation === op.id}
               disabled={busy || uploadBusy} onClick={() => chooseOperation(op.id)}>{op.label}</button>
           ))}
-        </div>
+        </div>}
         <ModelLibrary draft={draft} catalog={catalog} isBusy={busy || uploadBusy}
           onSearch={data.onSearch} onSelect={chooseModel} onFavorite={data.onFavorite} />
         <div className="fal-studio-rule" />

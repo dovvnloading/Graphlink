@@ -225,3 +225,65 @@ def test_favorite_state_is_global_bounded_idempotent_and_survives_restart(tmp_pa
     assert SettingsManager(path).get_fal_media_favorites() == ["fal-ai/model", "fal-ai/second"]
     manager.set_fal_media_favorite("fal-ai/model", False)
     assert manager.get_fal_media_favorites() == ["fal-ai/second"]
+
+
+def test_full_catalog_omits_category_and_all_mode_sends_exact_json():
+    client = FakeCatalogClient()
+    result = model_catalog_page(client, mode="all", operation="all", query="transcribe")
+    assert client.searches == [("transcribe", "", 40, None)]
+    assert result["mode"] == "all"
+    raw = '{"audio_url":"https://v3.fal.media/input.wav","chunk_level":"word"}'
+    media = validate_edit(fresh_media(), "all", "all", "fal-ai/whisper", "Whisper",
+                          "This field is from a previous draft", raw)
+    assert request_arguments(media) == json.loads(raw)
+    media["argumentsJson"] = "{}"
+    assert request_arguments(media) == {}
+
+
+def test_model_results_index_nested_files_and_escape_pointer_tokens():
+    from backend.fal_results import result_assets
+    root = "https://v3.fal.media/"
+    data = {
+        "out/~model": [{"url": root + "opaque", "content_type": "model/gltf-binary"}],
+        "files": [{"url": root + "sound", "file_name": "voice.mp3"}],
+        "nested": [root + "training.zip", root + "opaque", "not a link"],
+        "images": [root + "no-extension"],
+        "bad": ["https://user:pass@host/path", "data:image/png;base64,aaa"],
+    }
+    assert result_assets(data) == [
+        {"path": "/out~1~0model/0/url", "kind": "3d", "url": root + "opaque"},
+        {"path": "/files/0/url", "kind": "audio", "url": root + "sound"},
+        {"path": "/nested/0", "kind": "file", "url": root + "training.zip"},
+        {"path": "/images/0", "kind": "image", "url": root + "no-extension"},
+    ]
+    assert result_assets(data, limit=1) == result_assets(data)[:1]
+    assert result_assets(root + "mesh.ply")[0]["path"] == ""
+
+
+def test_completed_history_keeps_text_and_structured_results_bounded():
+    media = fresh_media()
+    media.update(mode="all", operation="all")
+    transcript = {"text": "Hello world", "chunks": [{"timestamp": [0, 1.0], "text": "Hello"}]}
+    entry = completed_media(media, transcript)["history"][0]
+    assert entry["outputs"] == []
+    assert json.loads(entry["resultPreview"]) == transcript
+
+    data = {"inline": "data:image/png;base64,SENSITIVE", "bytes_base64": "SENSITIVE",
+            "model": {"url": "https://v3.fal.media/model.glb"}, "text": "x" * 10_000}
+    mixed = completed_media(media, data)["history"][0]
+    assert mixed["outputs"][0]["kind"] == "3d"
+    assert "SENSITIVE" not in mixed["resultPreview"]
+    assert len(mixed["resultPreview"]) <= 4096
+    assert mixed["resultPreview"].endswith("…")
+
+
+def test_form_follows_the_selected_endpoint_when_another_post_comes_first():
+    endpoint = "fal-ai/example/mesh"
+    def route(field):
+        return {"post": {"requestBody": {"content": {"application/json": {
+            "schema": {"type": "object", "properties": {field: {"type": "string"}}}
+        }}}}}
+    result = summarize_schema({"endpoint_id": endpoint, "openapi": {"paths": {
+        "/fal-ai/example": route("prompt"), "/" + endpoint: route("input_mesh"),
+    }}})
+    assert [field["name"] for field in result["fields"]] == ["input_mesh"]

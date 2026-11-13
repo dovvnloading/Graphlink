@@ -326,7 +326,7 @@ def test_tool_registration_and_fresh_billable_approval(monkeypatch, tmp_path):
         "fal.submit", "fal.run", "fal.status", "fal.result",
         "fal.cancel", "fal.wait", "fal.upload",
         "fal.search_models", "fal.model_details", "fal.model_pricing",
-        "fal.estimate_cost",
+        "fal.estimate_cost", "fal.model_io", "fal.list_jobs",
     }
     assert registry.approval_for("fal.submit") == "always"
     assert registry.scopes_for("fal.upload") == frozenset({PROVIDER_CALL, FS_READ})

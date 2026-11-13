@@ -8,6 +8,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, NamedTuple, NoReturn
 from urllib.parse import urlparse
@@ -2252,6 +2253,18 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 "in the model override or configure a tools-capable chat model."
             )
 
+        # Keep canonical names in the registry and transcript. Only cloud
+        # declarations, history and responses need portable function names.
+        provider_name = model_ref.provider if model_ref is not None else (
+            state.api_provider_type if state.use_api_mode else state.local_provider_type
+        )
+        wire_tools = tuple(tools)
+        wire_messages = messages
+        canonical_names: dict[str, str] = {}
+        if provider_name in (config.API_PROVIDER_OPENAI, config.API_PROVIDER_ANTHROPIC, config.API_PROVIDER_GEMINI):
+            from backend.providers.tool_names import cloud_tool_names
+
+            wire_tools, wire_messages, canonical_names = cloud_tool_names(wire_tools, messages)
         if model_ref is not None:
             transport_retry_allowed = model_ref.provider != config.LOCAL_PROVIDER_LLAMACPP
         else:
@@ -2267,13 +2280,16 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
             try:
                 for event in provider.stream(
                     ChatRequest(
-                        task=task, messages=messages, extra_kwargs=kwargs,
-                        tools=tuple(tools), model_ref=model_ref,
+                        task=task, messages=wire_messages, extra_kwargs=kwargs,
+                        tools=wire_tools, model_ref=model_ref,
                     ),
                     CancelToken(cancel_event),
                 ):
                     if event.type == "tool_call" and event.tool_call is not None:
-                        tool_calls.append(event.tool_call)
+                        call = event.tool_call
+                        if call.name in canonical_names:
+                            call = replace(call, name=canonical_names[call.name])
+                        tool_calls.append(call)
                     elif event.type == "reset":
                         # A reasoning-retry discarded the prior attempt
                         # wholesale - its collected tool calls go with it,

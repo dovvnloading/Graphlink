@@ -90,8 +90,11 @@ class FalMediaController:
     async def _publish(self):
         await self.bus.publish("scene")
 
-    def _client(self) -> FalClient:
-        return FalClient(self.settings.get_fal_api_key())
+    def _client(self, *, public: bool = False) -> FalClient:
+        key = self.settings.get_fal_api_key()
+        if not public and not key:
+            raise FalError("Configure a Fal.ai API key in Settings before running a model.")
+        return FalClient(key)
 
     def _favorites(self) -> list[str]:
         return self.settings.get_fal_media_favorites()
@@ -130,7 +133,7 @@ class FalMediaController:
                 response = cached[1]
             else:
                 response = await asyncio.to_thread(
-                    model_catalog_page, self._client(),
+                    model_catalog_page, self._client(public=True),
                     mode=mode, operation=operation, query=query,
                     cursor=cursor or None, limit=40,
                 )
@@ -152,7 +155,8 @@ class FalMediaController:
         live = self._live(node_id)
         if live is None or self._catalog_generation.get(node_id) != seq:
             return
-        models = retained + response["models"]
+        # Unfiltered browsing uses one page at a time so every cursor remains reachable.
+        models = response["models"] if mode == "all" else retained + response["models"]
         unique = {row["id"]: row for row in models if isinstance(row, dict) and isinstance(row.get("id"), str)}
         sorted_rows = sorted(unique.values(), key=lambda x: (
             x.get("price") is None,
@@ -162,7 +166,8 @@ class FalMediaController:
         ))[:MAX_CATALOG_MODELS]
         live.state.catalog_json = _json({
             "status": "ready", "models": sorted_rows,
-            "hasMore": bool(response["hasMore"]) and len(sorted_rows) < MAX_CATALOG_MODELS,
+            "hasMore": bool(response["hasMore"]) and (mode == "all" or len(sorted_rows) < MAX_CATALOG_MODELS),
+            "currentCursor": cursor,
             "nextCursor": response["nextCursor"],
             "signature": signature, "mode": mode,
             "operation": operation, "query": query,
@@ -180,7 +185,7 @@ class FalMediaController:
         await self._publish()
         try:
             def lookup():
-                client = self._client()
+                client = self._client(public=True)
                 details = client.model_details(model_id)
                 schema = summarize_schema(details)
                 # A model's display metadata is untrusted; never insert it
@@ -281,6 +286,15 @@ class FalMediaController:
                 store_media(node, media)
                 await self._publish()
             raise FalError("Quote expired or inputs changed. Review the cost again before generating.")
+        # Missing local credentials are recoverable without reconciling a remote job.
+        try:
+            client = self._client()
+        except FalError as exc:
+            self._pending_quotes.pop(node_id, None)
+            media.update({"quote": None, "error": str(exc)})
+            store_media(node, media)
+            await self._publish()
+            return
         # Consume this approval before ANY await. The in-flight marker lets
         # status refresh distinguish a live POST from a restart-interrupted one.
         self._pending_quotes.pop(node_id, None)
@@ -292,7 +306,7 @@ class FalMediaController:
             await self._publish()
             try:
                 response = await asyncio.to_thread(
-                    self._client().submit, model_id, args,
+                    client.submit, model_id, args,
                     options={"store_io": False},
                 )
             except (FalError, TypeError, ValueError) as exc:
