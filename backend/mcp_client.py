@@ -107,6 +107,10 @@ _CLIENT_VERSION = "1.0"
 # dict), so `is` identity unambiguously marks "the server's stdout closed",
 # never confusable with a legitimate (if unusual) server response.
 _READER_CLOSED = object()
+# A malicious MCP server can send repeated responses with the current
+# request ID. Filtering notifications and mismatched IDs alone does not
+# bound the host-side queue that stores matching parsed JSON payloads.
+_MAX_PENDING_RESPONSES = 4
 
 # SECURITY-FIX: a tool's `description` in an MCP server's tools/list
 # response is untrusted input per this module's own threat model (see the
@@ -238,7 +242,7 @@ class McpStdioClient:
         # request. A ring buffer keeps the diagnostic tail close() and the
         # unexpected-close path want, without unbounded memory growth.
         self._stderr_tail: "collections.deque[str]" = collections.deque(maxlen=200)
-        self._responses: "queue.Queue[Any]" = queue.Queue()
+        self._responses: "queue.Queue[Any]" = queue.Queue(maxsize=_MAX_PENDING_RESPONSES)
         self._next_id = 0
         # REVIEW-FIX: the id of the ONE request _call is currently waiting
         # on (None when idle) - see _read_loop's own comment for why the
@@ -480,9 +484,27 @@ class McpStdioClient:
                         and type(payload.get("id")) is int and payload["id"] == pending_id):
                     # bool is a subclass of int in Python, but JSON-RPC
                     # prohibits boolean ids. True must not satisfy id=1.
-                    self._responses.put(payload)
+                    try:
+                        self._responses.put_nowait(payload)
+                    except queue.Full:
+                        # Keep draining the pipe so the server cannot wedge
+                        # on stdout backpressure; discard excess replies
+                        # rather than growing the host's parsed-object queue.
+                        pass
         finally:
-            self._responses.put(_READER_CLOSED)
+            # Never block the reader on a full queue when the subprocess
+            # exits. Preserve an EOF signal even after a response flood.
+            try:
+                self._responses.put_nowait(_READER_CLOSED)
+            except queue.Full:
+                try:
+                    self._responses.get_nowait()
+                except queue.Empty:
+                    pass
+                try:
+                    self._responses.put_nowait(_READER_CLOSED)
+                except queue.Full:
+                    pass
 
     def _drain_stderr(self) -> None:
         """Continuously read the server's stderr into a bounded ring buffer.
