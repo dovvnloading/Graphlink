@@ -257,7 +257,12 @@ if sys.platform == "win32":
                         f"Could not duplicate Windows Job Object handle ({ctypes.get_last_error()}); "
                         "refusing unguarded execution."
                     )
-                return int(duplicated.value)
+                duplicated_handle = duplicated.value
+                if not duplicated_handle:
+                    raise ExecutionGuardUnavailable(
+                        "Windows duplicated Job Object handle is invalid; refusing unguarded execution."
+                    )
+                return int(duplicated_handle)
 
         def assign(self, pid: int) -> None:
             if self._handle is None:
