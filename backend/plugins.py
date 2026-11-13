@@ -884,6 +884,15 @@ def register_plugins(
                         canvas_document.plugin_node_serializers[kind] = _grant_gated_serialize(
                             kind_spec.plugin_id, kind_spec.serialize, settings_manager,
                         )
+            # The Builder's cached registry may have been populated before
+            # this plugin appeared (or before a revocation). Invalidate
+            # after the final grant state is established, not while the
+            # worker is still registering.
+            try:
+                from backend.session_context import get_session_context
+                get_session_context(bus).agent_dispatcher.invalidate_builder_registry()
+            except (LookupError, RuntimeError, AttributeError):
+                pass  # bare SessionBus tests do not attach a SessionContext
             await bus.publish("app-plugins")
 
     bus.register_intent("app-plugins", "setPluginGrant", set_plugin_grant, args_schema=SetPluginGrantArgs)
