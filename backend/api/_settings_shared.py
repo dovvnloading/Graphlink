@@ -344,4 +344,5 @@ class SettingsSessionState:
     fal_notice: str = ""
     fal_busy: bool = False
     fal_sync_result_json: str = ""
+    fal_discovery_json: str = ""
     fal_upload_url: str = ""
