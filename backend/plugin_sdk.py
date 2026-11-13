@@ -138,7 +138,7 @@ from backend.tools import KNOWN_SCOPES
 # never reinvented, for the out-of-process plugin worker's own Popen call.
 # See PluginWorkerClient.connect's own docstring for the full call-order
 # contract these two enforce together.
-from graphlink_execution_guard import ExecutionResourceGuard, create_execution_guard
+from graphlink_execution_guard import spawn_guarded_subprocess, assign_guarded_subprocess, ExecutionResourceGuard, create_execution_guard
 # ADR-021 stage 21.4: a plugin intent's declared args_schema is a
 # dataclass, described and validated with the SAME ADR-003 machinery
 # every wire payload already uses - not a second, plugin-only scheme.
@@ -999,7 +999,7 @@ class PluginWorkerClient:
             return
         self._guard = create_execution_guard()
         try:
-            self._process = subprocess.Popen(
+            self._process = spawn_guarded_subprocess(self._guard, 
                 [sys.executable, "-m", "backend.plugin_worker", self.plugin_id, str(self.source_dir)],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -1018,7 +1018,7 @@ class PluginWorkerClient:
                 f'Failed to start plugin worker for "{self.plugin_id}": {exc}'
             ) from exc
         try:
-            self._guard.assign(self._process.pid)
+            assign_guarded_subprocess(self._guard, self._process)
         except BaseException:
             # Refuse activation if the worker started but Windows could
             # not attach its required memory/process-count limits. Closing
