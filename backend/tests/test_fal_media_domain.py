@@ -136,6 +136,18 @@ def test_bad_model_json_is_rejected_before_any_remote_call(bad):
         parse_arguments(bad)
 
 
+def test_speech_prompt_maps_to_text_parameter_not_image_prompt():
+    media = validate_edit(fresh_media(), "audio", "text-to-speech",
+                          "fal-ai/elevenlabs/tts/multilingual-v2",
+                          "ElevenLabs", "Welcome to our studio", '{"voice":"calm"}')
+    assert request_arguments(media) == {
+        "voice": "calm", "text": "Welcome to our studio",
+    }
+    media["argumentsJson"] = '{"text":"Advanced transcript","voice":"calm"}'
+    assert request_arguments(media)["text"] == "Advanced transcript"
+    assert "prompt" not in request_arguments(media)
+
+
 def test_output_gallery_handles_multiple_modalities_without_blob_inline():
     results = {
         "images": [{"url": "https://v3.fal.media/files/one.png"}],
