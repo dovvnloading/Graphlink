@@ -19,13 +19,16 @@ export function FalMediaUploader({
       operation === "video-to-video" ? "video_url" :
         mode === "audio" ? "audio_url" : mode === "video" ? "video_url" : "image_url",
   [mode, operation]);
-  const [field, setField] = useState(initialField);
+  // Keep a user-customized parameter only within its matching workflow.
+  // No setState-in-effect reset on modality changes: derive the default.
+  const scope = `${mode}|${operation}`;
+  const [fieldOverride, setFieldOverride] = useState<{ scope: string; field: string } | null>(null);
+  const field = fieldOverride?.scope === scope ? fieldOverride.field : initialField;
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const xhrRef = useRef<XMLHttpRequest | null>(null);
-  useEffect(() => setField(initialField), [initialField]);
   useEffect(() => () => { xhrRef.current?.abort(); }, []);
 
   const selection = (next: File | undefined) => {
@@ -129,7 +132,7 @@ export function FalMediaUploader({
           <input className="fal-studio-control nodrag nopan" disabled={disabled || uploading}
             list="fal-studio-url-fields" value={field}
             aria-label="Media URL parameter"
-            onChange={(event) => setField(event.target.value)}
+            onChange={(event) => setFieldOverride({ scope, field: event.target.value })}
             placeholder="image_url" />
           <datalist id="fal-studio-url-fields">
             {[...new Set(["image_url", "video_url", "audio_url", ...fields])].map((name) => <option key={name} value={name} />)}
