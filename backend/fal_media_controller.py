@@ -77,6 +77,10 @@ class FalMediaController:
         self.settings = settings_manager
         self._catalog_generation: dict[str, int] = {}
         self._schema_generation: dict[str, int] = {}
+        # Approvals never survive controller recreation or session restore.
+        self._quote_generation: dict[str, int] = {}
+        self._pending_quotes: dict[str, str] = {}
+        self._submissions_in_flight: set[str] = set()
         self._active_polls: set[str] = set()
         self._catalog_cache: OrderedDict[tuple, tuple[float, dict]] = OrderedDict()
 
@@ -213,6 +217,9 @@ class FalMediaController:
         model_id = model_path(media["modelId"])
         args = request_arguments(media)
         fingerprint = _fingerprint(model_id, args)
+        seq = self._quote_generation.get(node_id, 0) + 1
+        self._quote_generation[node_id] = seq
+        self._pending_quotes.pop(node_id, None)
         media["quote"] = {"status": "loading"}
         store_media(node, media)
         await self._publish()
@@ -220,7 +227,7 @@ class FalMediaController:
             cost = await asyncio.to_thread(_quote_cost, self._client(), model_id)
         except (FalError, ValueError, TypeError) as exc:
             live = self._live(node_id)
-            if live is not None and live is node:
+            if live is node and self._quote_generation.get(node_id) == seq:
                 failed = read_media(live)
                 failed["quote"] = None
                 failed["error"] = str(exc)[:250]
@@ -228,13 +235,17 @@ class FalMediaController:
                 await self._publish()
             return
         live = self._live(node_id)
-        if live is None:
+        if live is not node or self._quote_generation.get(node_id) != seq:
             return
         current = read_media(live)
-        if current["modelId"] != model_id or _fingerprint(model_id, request_arguments(current)) != fingerprint:
+        if current["status"] in _ACTIVE or current["modelId"] != model_id:
             return
+        if _fingerprint(model_id, request_arguments(current)) != fingerprint:
+            return
+        nonce = secrets.token_urlsafe(24)
+        self._pending_quotes[node_id] = nonce
         current["quote"] = {
-            "status": "ready", "id": secrets.token_urlsafe(24),
+            "status": "ready", "id": nonce,
             "modelId": model_id, "fingerprint": fingerprint,
             "expiresAt": int(time.time()) + 180, **cost,
         }
@@ -253,6 +264,7 @@ class FalMediaController:
             isinstance(approval_id, str) and approval_id
             and quote.get("status") == "ready"
             and secrets.compare_digest(str(quote.get("id") or ""), approval_id)
+            and secrets.compare_digest(self._pending_quotes.get(node_id, ""), approval_id)
             and quote.get("expiresAt", 0) >= time.time()
             and quote.get("modelId") == model_id
             and quote.get("fingerprint") == _fingerprint(model_id, args)
