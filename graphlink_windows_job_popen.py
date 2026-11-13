@@ -180,9 +180,16 @@ def _create_process_in_job(
         info.StartupInfo.dwFlags = startupinfo.dwFlags
         info.StartupInfo.wShowWindow = startupinfo.wShowWindow
         if startupinfo.dwFlags & _winapi.STARTF_USESTDHANDLES:
-            info.StartupInfo.hStdInput = int(startupinfo.hStdInput)
-            info.StartupInfo.hStdOutput = int(startupinfo.hStdOutput)
-            info.StartupInfo.hStdError = int(startupinfo.hStdError)
+            stdin_handle = startupinfo.hStdInput
+            stdout_handle = startupinfo.hStdOutput
+            stderr_handle = startupinfo.hStdError
+            if stdin_handle is None or stdout_handle is None or stderr_handle is None:
+                raise ExecutionGuardUnavailable(
+                    "Windows child standard stream handle missing; refusing unguarded execution."
+                )
+            info.StartupInfo.hStdInput = int(stdin_handle)
+            info.StartupInfo.hStdOutput = int(stdout_handle)
+            info.StartupInfo.hStdError = int(stderr_handle)
         info.lpAttributeList = attributes
         command_buffer = ctypes.create_unicode_buffer(command)
         environment = _environment_block(env)
