@@ -897,6 +897,10 @@ class PluginRegistry:
         # Reserve a revoked plugin while the old worker shuts down, without
         # holding the global discovery lock through OS waits/pipe closures.
         self.draining_worker_ids: set[str] = set()
+        # Cross-session re-grants wait outside the SDK lock for *all* revoke
+        # callers to finish OS teardown. Concurrent revokes share one event.
+        self.draining_worker_events: dict[str, threading.Event] = {}
+        self.draining_worker_counts: dict[str, int] = {}
 
     def resolve_picker_name(self, name: str) -> "tuple[NodeKindSpec, PickerEntrySpec] | None":
         entry = self.picker_entries.get(name)
@@ -1806,8 +1810,13 @@ def deactivate_plugin_worker(registry: PluginRegistry, plugin_id: str) -> tuple[
         reservation = registry.pending_worker_reservations.get(plugin_id)
         worker = registry.worker_clients.pop(plugin_id, None)
         retired_kinds: tuple[str, ...] = ()
-        if worker is not None or reservation is not None or pending is not None:
+        owns_drain = worker is not None or reservation is not None or pending is not None
+        if owns_drain:
             registry.draining_worker_ids.add(plugin_id)
+            registry.draining_worker_counts[plugin_id] = (
+                registry.draining_worker_counts.get(plugin_id, 0) + 1
+            )
+            registry.draining_worker_events.setdefault(plugin_id, threading.Event()).clear()
         if worker is not None:
             retired_kinds = tuple(
                 kind for kind, spec in registry.node_kinds.items()
@@ -1842,7 +1851,16 @@ def deactivate_plugin_worker(registry: PluginRegistry, plugin_id: str) -> tuple[
             worker.close()
     finally:
         with _REGISTRY_CACHE_LOCK:
-            registry.draining_worker_ids.discard(plugin_id)
+            if owns_drain:
+                remaining = registry.draining_worker_counts[plugin_id] - 1
+                if remaining > 0:
+                    registry.draining_worker_counts[plugin_id] = remaining
+                else:
+                    registry.draining_worker_counts.pop(plugin_id, None)
+                    registry.draining_worker_ids.discard(plugin_id)
+                    event = registry.draining_worker_events.pop(plugin_id, None)
+                    if event is not None:
+                        event.set()
     return retired_kinds
 
 
