@@ -712,6 +712,31 @@ def test_worker_client_close_is_idempotent(tmp_path):
 
 
 
+def test_worker_guard_close_error_still_terminates_direct_child(tmp_path):
+    """Guard API failure must not skip the final direct-process cleanup."""
+    import io
+    from unittest.mock import Mock
+
+    worker = PluginWorkerClient(plugin_id="guard-failure-fixture", source_dir=tmp_path)
+    process = Mock(pid=12345)
+    process.poll.return_value = None
+    process.wait.return_value = 0
+    process.stdin = io.StringIO()
+    process.stdout = io.StringIO()
+    process.stderr = io.StringIO()
+    worker._process = process
+    guard = Mock()
+    guard.close.side_effect = OSError("injected guard close failure")
+    worker._guard = guard
+
+    worker.close()
+
+    assert process.terminate.called
+    assert process.wait.called
+    assert process.stdin.closed and process.stdout.closed and process.stderr.closed
+    assert worker._guard is None and worker._process is None
+
+
 def test_worker_reader_drops_idle_notifications_before_queueing(tmp_path):
     """Idle plugin notifications must never accumulate in the host response queue."""
     import io
@@ -1337,3 +1362,47 @@ def test_arguments_to_an_intent_that_declares_none_are_rejected():
 
     assert extra == ()
     assert errors and "no arguments" in errors[0]
+
+def test_revoked_worker_close_does_not_hold_global_discovery_lock():
+    """A hung subprocess cannot stall unrelated session plugin discovery."""
+    import threading
+    from backend.plugin_sdk import (
+        PluginRegistry, _REGISTRY_CACHE_LOCK, deactivate_plugin_worker,
+    )
+
+    registry = PluginRegistry()
+    started = threading.Event()
+    release = threading.Event()
+
+    class SlowWorker:
+        def close(self):
+            started.set()
+            assert release.wait(timeout=3), "fixture close was never released"
+
+    registry.worker_clients["slow"] = SlowWorker()
+    registry.loaded_plugin_ids.add("slow")
+    errors = []
+
+    def revoke():
+        try:
+            deactivate_plugin_worker(registry, "slow")
+        except Exception as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=revoke, daemon=True)
+    thread.start()
+    try:
+        assert started.wait(timeout=2)
+        assert "slow" in registry.draining_worker_ids
+        assert _REGISTRY_CACHE_LOCK.acquire(timeout=0.5), (
+            "OS shutdown must not hold the global registry lock"
+        )
+        _REGISTRY_CACHE_LOCK.release()
+        assert "slow" not in registry.worker_clients
+    finally:
+        release.set()
+        thread.join(timeout=3)
+    assert not thread.is_alive()
+    assert errors == []
+    assert "slow" not in registry.draining_worker_ids
+

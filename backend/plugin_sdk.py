@@ -854,6 +854,9 @@ class PluginRegistry:
         # published into this registry on the loop. Retain tasks by id so
         # concurrent sessions/grant changes never start two workers.
         self.pending_worker_activations: dict[str, asyncio.Task[None]] = {}
+        # Reserve a revoked plugin while the old worker shuts down, without
+        # holding the global discovery lock through OS waits/pipe closures.
+        self.draining_worker_ids: set[str] = set()
 
     def resolve_picker_name(self, name: str) -> "tuple[NodeKindSpec, PickerEntrySpec] | None":
         entry = self.picker_entries.get(name)
@@ -1031,40 +1034,49 @@ class PluginWorkerClient:
         self._stderr_thread.start()
 
     def close(self) -> None:
-        process = self._process
-        self._process = None
-        if process is not None:
+        # Terminate the entire guarded child tree BEFORE closing stdin:
+        # a concurrent writer may be blocked on the pipe's IO lock, and
+        # TextIOWrapper.close() would wait forever for that lock unless
+        # the child is killed first. This path is used for consent revoke,
+        # failed activation and normal cleanup.
+        process, self._process = self._process, None
+        guard, self._guard = self._guard, None
+        if guard is not None:
             try:
-                if process.stdin:
-                    process.stdin.close()
+                guard.close()
             except Exception:
-                pass
+                # A failed Job Object/process-group teardown must never
+                # prevent the direct child from being terminated too.
+                logger.exception("plugin worker guard close failed for %s", self.plugin_id)
+        if process is None:
+            return
+        try:
+            if process.poll() is None:
+                try:
+                    process.terminate()
+                except (OSError, ProcessLookupError):
+                    pass  # closing the guard may already have killed it
             try:
-                process.terminate()
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    process.kill()
+                except (OSError, ProcessLookupError):
+                    pass
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    process.kill()
+                    pass
+        finally:
+            for thread in (self._reader_thread, self._stderr_thread):
+                if thread is not None and thread is not threading.current_thread():
+                    thread.join(timeout=1)
+            for stream in (process.stdin, process.stdout, process.stderr):
+                if stream is not None:
                     try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        pass
-            finally:
-                for thread in (self._reader_thread, self._stderr_thread):
-                    if thread is not None and thread is not threading.current_thread():
-                        thread.join(timeout=1)
-                for stream in (process.stdin, process.stdout, process.stderr):
-                    if stream is not None:
                         stream.close()
-        # Exactly-once close, whether or not a process was ever spawned -
-        # create_execution_guard()'s own close() is itself idempotent
-        # (double-close-safe, see graphlink_execution_guard.py's own
-        # adversarial-review fix comment), but this guards the ATTRIBUTE
-        # (None-out after) so a second PluginWorkerClient.close() call is
-        # unambiguously a no-op too.
-        guard, self._guard = self._guard, None
-        if guard is not None:
-            guard.close()
+                    except (OSError, ValueError):
+                        pass
 
     def call(self, method: str, params: dict) -> dict:
         """Synchronous, blocking - see this section's own module-level
@@ -1706,6 +1718,58 @@ def discover_plugins(
 
 
 
+
+def deactivate_plugin_worker(registry: PluginRegistry, plugin_id: str) -> tuple[str, ...]:
+    """Revoke a resident worker without holding the global lock across OS IO.
+
+    Executable registrations disappear atomically under the SDK lock, but
+    TOML manifest metadata stays visible as ungranted in Settings. Worker
+    termination runs outside the lock to keep unrelated plugin discovery and
+    WebSocket/Builder initialization responsive.
+    """
+    with _REGISTRY_CACHE_LOCK:
+        pending = registry.pending_worker_activations.get(plugin_id)
+        worker = registry.worker_clients.pop(plugin_id, None)
+        retired_kinds: tuple[str, ...] = ()
+        if worker is not None:
+            registry.draining_worker_ids.add(plugin_id)
+            retired_kinds = tuple(
+                kind for kind, spec in registry.node_kinds.items()
+                if spec.plugin_id == plugin_id
+            )
+            registry.loaded_plugin_ids.discard(plugin_id)
+            registry.failed_plugin_ids.discard(plugin_id)
+            for kind in retired_kinds:
+                del registry.node_kinds[kind]
+            for name, entry in list(registry.picker_entries.items()):
+                if entry.plugin_id == plugin_id:
+                    del registry.picker_entries[name]
+            for name, action in list(registry.builtin_actions.items()):
+                if action.plugin_id == plugin_id:
+                    del registry.builtin_actions[name]
+            registry.intents[:] = [
+                spec for spec in registry.intents if spec.plugin_id != plugin_id
+            ]
+
+    # An approval may have been revoked while a startup registration task
+    # is still in-flight. Its to_thread cannot be cancelled at the OS level;
+    # cancelling the coroutine ensures it never publishes a late result
+    # and its pending preparation is closed when it eventually completes.
+    if pending is not None and not pending.done():
+        try:
+            pending.get_loop().call_soon_threadsafe(pending.cancel)
+        except RuntimeError:
+            pass  # the session event loop was already closed
+
+    if worker is None:
+        return retired_kinds
+    try:
+        worker.close()
+    finally:
+        with _REGISTRY_CACHE_LOCK:
+            registry.draining_worker_ids.discard(plugin_id)
+    return retired_kinds
+
 async def _activate_granted_worker_task(
     registry: PluginRegistry, settings_manager, manifest: PluginManifest,
     builtin_names: frozenset[str],
@@ -1747,6 +1811,7 @@ async def _activate_granted_worker_task(
         with _REGISTRY_CACHE_LOCK:
             if (plugin_id in registry.loaded_plugin_ids
                     or plugin_id in registry.failed_plugin_ids
+                    or plugin_id in registry.draining_worker_ids
                     or plugin_id not in registry.manifests):
                 return
             if client is None:
@@ -1803,7 +1868,8 @@ def activate_granted_plugins(
         for plugin_id, granted in grants.items():
             if (not granted
                     or plugin_id in registry.loaded_plugin_ids
-                    or plugin_id in registry.failed_plugin_ids):
+                    or plugin_id in registry.failed_plugin_ids
+                    or plugin_id in registry.draining_worker_ids):
                 continue
             manifest = registry.manifests.get(plugin_id)
             if manifest is None:
