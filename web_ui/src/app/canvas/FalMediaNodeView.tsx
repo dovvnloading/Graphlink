@@ -295,7 +295,7 @@ function ModelInputs({
               <label key={field.name} className="fal-studio-field">
                 <span>{field.name.replace(/_/g, " ")} {field.required && <em>Required</em>}</span>
                 {!!field.description && <small title={field.description}>{field.description}</small>}
-                {!!field.enum?.length ? (
+                {(field.enum?.length ?? 0) > 0 ? (
                   <select className="fal-studio-control nodrag nopan" disabled={busy}
                     value={value}
                     onChange={(event) => {
