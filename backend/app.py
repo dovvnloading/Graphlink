@@ -43,6 +43,7 @@ from backend.about import register_about
 from backend.agents import bootstrap_provider_state, register_agents
 from backend.assets import register_assets
 from backend.fal_media_preview import register_fal_media_preview
+from backend.fal_media_upload import register_fal_media_upload
 from backend.auth import (
     AUTH_HEADER,
     AUTH_QUERY_PARAM,
@@ -631,6 +632,7 @@ def create_app(
     # backend/assets.py's docstring for the transport decision behind it).
     register_assets(app, bus)
     register_fal_media_preview(app, bus)
+    register_fal_media_upload(app, settings_manager)
 
     # Headless/stdio MCP clients use the SAME running EventBus and DB as
     # the UI. These read-only routes inherit /api bearer-token, loopback
