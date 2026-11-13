@@ -40,6 +40,7 @@ export interface AppSettingsState {
   falNotice: string;
   falBusy: boolean;
   falSyncResultJson: string;
+  falDiscoveryJson: string;
   falUploadUrl: string;
   secretsEncryptedAtRest: boolean;
   logLevel: string;
@@ -115,6 +116,7 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["falNotice", "s", 0],
   ["falBusy", "b", 0],
   ["falSyncResultJson", "s", 0],
+  ["falDiscoveryJson", "s", 0],
   ["falUploadUrl", "s", 0],
   ["secretsEncryptedAtRest", "b", 0],
   ["logLevel", "s", 0],
