@@ -304,6 +304,7 @@ def test_restored_quote_cannot_authorize_paid_generation(tmp_path, monkeypatch):
     restarted_controller = FalMediaController(bus, doc, manager)
     with pytest.raises(FalError, match="Quote expired"):
         asyncio.run(restarted_controller.generate(node.id, previous_nonce))
+    assert read_media(node)["quote"] is None  # UI can review a new quote.
     assert not [call for call in fake.calls if call[0] == "submit"]
 
 
@@ -378,3 +379,18 @@ def test_stale_status_poll_cannot_undo_successful_cancellation(tmp_path, monkeyp
 
     asyncio.run(race())
     assert read_media(node)["status"] == "cancelled"
+
+
+def test_fal_price_cache_changes_with_api_key(tmp_path, monkeypatch):
+    _, node, bus, manager, _ = create_studio(tmp_path)
+    fake = FakeFal()
+    monkeypatch.setattr(FalMediaController, "_client", lambda self: fake)
+
+    manager.set_fal_api_key("account-A")
+    invoke(bus, "searchFalMediaCatalog", node.id, "image", "text-to-image", "flux", "")
+    invoke(bus, "searchFalMediaCatalog", node.id, "image", "text-to-image", "flux", "")
+    assert len([call for call in fake.calls if call[0] == "search"]) == 1
+
+    manager.set_fal_api_key("account-B")
+    invoke(bus, "searchFalMediaCatalog", node.id, "image", "text-to-image", "flux", "")
+    assert len([call for call in fake.calls if call[0] == "search"]) == 2
