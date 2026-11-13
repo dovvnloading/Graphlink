@@ -88,8 +88,12 @@ def validate_edit(media: dict, mode: str, operation: str, model_id: str,
     arguments = parse_arguments(arguments_json)
     updated = copy.deepcopy(media)
     active = updated.get("status") in {"submitting", "queued", "running", "cancelling"}
-    if active and (mode != updated["mode"] or model_id != updated["modelId"]):
-        raise FalError("A job is active. Wait for it to finish or cancel before changing models.")
+    if active and (
+        mode != updated["mode"] or operation != updated["operation"]
+        or model_id != updated["modelId"] or model_name != updated["modelName"]
+        or prompt != updated["prompt"] or arguments != parse_arguments(updated["argumentsJson"])
+    ):
+        raise FalError("A job is active. Wait for it to finish before editing its inputs.")
     updated.update({
         "mode": mode, "operation": operation, "modelId": model_id,
         "modelName": model_name.strip(), "prompt": prompt,
