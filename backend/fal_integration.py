@@ -10,7 +10,6 @@ Optional fal-client unlocks direct CDN uploads and realtime WebSocket sessions.
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from pathlib import Path
