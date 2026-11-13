@@ -338,6 +338,19 @@ class FalMediaController:
         if node_id in self._active_polls:
             return  # One network request at a time per node.
         media = read_media(node)
+        if media["status"] == "submitting":
+            if node_id in self._submissions_in_flight:
+                return  # A POST is actually active in this controller.
+            # An interrupted POST may already have charged the user. Do not
+            # allow a retry without explicit dashboard acknowledgement.
+            media["status"] = "queued" if media["requestId"] else "unconfirmed"
+            if not media["requestId"]:
+                media["error"] = (
+                    "Graphlink restarted during submission. Fal may have accepted "
+                    "this paid request. Check the Fal dashboard before unlocking."
+                )
+            store_media(node, media)
+            await self._publish()
         model_id, request_id = media["modelId"], media["requestId"]
         if not request_id or media["status"] not in {"queued", "running", "cancelling", "stalled"}:
             return
@@ -365,6 +378,8 @@ class FalMediaController:
         if live is None or live is not node or read_media(live)["requestId"] != request_id:
             return
         update = read_media(live)
+        if update["status"] not in {"queued", "running", "cancelling", "stalled"}:
+            return  # Do not overwrite a terminal cancellation with stale polling.
         code = status["status"]
         if code == "COMPLETED":
             if status.get("error"):
@@ -373,12 +388,20 @@ class FalMediaController:
             else:
                 update = completed_media(update, result)
         else:
-            update["status"] = "queued" if code == "IN_QUEUE" else "running"
-            update["queuePosition"] = int(status.get("queue_position") or 0)
+            if update["status"] != "cancelling":
+                update["status"] = "queued" if code == "IN_QUEUE" else "running"
+            position = status.get("queue_position")
+            update["queuePosition"] = (
+                position if isinstance(position, int) and not isinstance(position, bool) and position >= 0 else 0
+            )
             update["error"] = ""
         store_media(live, update)
-        await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
-                                model_id, request_id, code, result)
+        try:
+            await asyncio.to_thread(run_locked, self.settings.upsert_fal_job,
+                                    model_id, request_id,
+                                    "FAILED" if code == "COMPLETED" and status.get("error") else code, result)
+        except Exception as exc:
+            logger.warning("Could not update Fal job history (%s).", type(exc).__name__)
         await self._publish()
 
     async def acknowledge_unconfirmed(self, node_id: str) -> None:
