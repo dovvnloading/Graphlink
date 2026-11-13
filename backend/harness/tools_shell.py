@@ -141,7 +141,21 @@ def _run_command(command: str, cwd, cancel_event) -> tuple[str, "int | None", st
             **guard.popen_kwargs(),
             **kwargs,
         )
-        guard.assign(process.pid)
+        try:
+            guard.assign(process.pid)
+        except BaseException:
+            # Job Object failure on Windows is fail-closed. The child may
+            # have started before assignment, so guard.close() alone cannot
+            # terminate a process that was never attached to the job.
+            try:
+                process.kill()
+            except OSError:
+                pass
+            try:
+                process.wait(timeout=3)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            raise
         chunks: list[str] = []
         stream = process.stdout
 

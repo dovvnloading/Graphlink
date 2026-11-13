@@ -1002,10 +1002,20 @@ class PluginWorkerClient:
                 **self._guard.popen_kwargs(),
             )
         except OSError as exc:
+            guard, self._guard = self._guard, None
+            if guard is not None:
+                guard.close()
             raise PluginWorkerError(
                 f'Failed to start plugin worker for "{self.plugin_id}": {exc}'
             ) from exc
-        self._guard.assign(self._process.pid)
+        try:
+            self._guard.assign(self._process.pid)
+        except BaseException:
+            # Refuse activation if the worker started but Windows could
+            # not attach its required memory/process-count limits. Closing
+            # the client terminates a child that was never in the Job Object.
+            self.close()
+            raise
         self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
         self._reader_thread.start()
         # Drain stderr continuously (see _stderr_tail's own comment): a

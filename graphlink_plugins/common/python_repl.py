@@ -189,23 +189,44 @@ while True:
             # graphlink_execution_guard's own docstring.
             self.guard = create_execution_guard()
 
-            self.process = subprocess.Popen(
-                [sys.executable, '-c', script],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                cwd=str(self.cwd),
-                **self.guard.popen_kwargs(),
-                **kwargs
-            )
-            # Windows applies its cap here, after the child exists. An
-            # accepted tradeoff over CREATE_SUSPENDED: the child hasn't run
-            # any of its own code yet, so the window for it to spawn an
-            # unassigned grandchild first is negligible. On POSIX this
-            # records the process-group id that close() will kill.
-            self.guard.assign(self.process.pid)
+            try:
+                self.process = subprocess.Popen(
+                    [sys.executable, '-c', script],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    cwd=str(self.cwd),
+                    **self.guard.popen_kwargs(),
+                    **kwargs
+                )
+                # Windows Job Object assignment occurs after Popen. Any
+                # failure must kill the now-unrestricted child, not silently
+                # continue as if resource limits and tree cleanup exist.
+                self.guard.assign(self.process.pid)
+            except BaseException:
+                process = self.process
+                if process is not None:
+                    try:
+                        process.kill()
+                    except OSError:
+                        pass
+                    try:
+                        process.wait(timeout=3)
+                    except (OSError, subprocess.TimeoutExpired):
+                        pass
+                    for stream in (process.stdin, process.stdout, process.stderr):
+                        if stream is not None:
+                            try:
+                                stream.close()
+                            except (OSError, ValueError):
+                                pass
+                    self.process = None
+                guard, self.guard = self.guard, None
+                if guard is not None:
+                    guard.close()
+                raise
 
     def execute(self, code):
         if not self.process or self.process.poll() is not None:

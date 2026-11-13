@@ -143,12 +143,17 @@ class TestJobObjectMechanism:
         guard.close()
         guard.close()  # must not raise
 
-    def test_assign_on_an_already_dead_pid_does_not_raise(self):
-        proc = subprocess.Popen([sys.executable, "-c", "pass"])
-        proc.wait()
+    def test_assign_on_invalid_pid_fails_closed(self):
+        from graphlink_execution_guard import ExecutionGuardUnavailable
+
         guard = create_execution_guard()
-        guard.assign(proc.pid)  # pid may already be reused/invalid - must not raise
-        guard.close()
+        try:
+            # OpenProcess(0) is invalid on Windows and cannot accidentally
+            # target a recycled PID. A failed attach must not be tolerated.
+            with pytest.raises(ExecutionGuardUnavailable, match="refusing unguarded"):
+                guard.assign(0)
+        finally:
+            guard.close()
 
     def test_the_windows_guard_contributes_no_popen_kwargs(self):
         # The Windows tier applies its cap to an ALREADY-running process via
@@ -172,6 +177,116 @@ class TestNullGuardNeverRaises:
         guard.assign(0)
         guard.close()
         guard.close()
+
+
+
+@WINDOWS_ONLY
+def test_job_object_creation_failure_refuses_execution(monkeypatch):
+    from graphlink_execution_guard import ExecutionGuardUnavailable
+
+    monkeypatch.setattr(guard_module._kernel32, "CreateJobObjectW", lambda *_: 0)
+    with pytest.raises(ExecutionGuardUnavailable, match="could not create"):
+        create_execution_guard()
+
+
+@WINDOWS_ONLY
+def test_job_object_limits_failure_refuses_execution_and_closes_handle(monkeypatch):
+    from graphlink_execution_guard import ExecutionGuardUnavailable
+
+    real_close = guard_module._kernel32.CloseHandle
+    closed_handles = []
+
+    def record_close(handle):
+        closed_handles.append(handle)
+        return real_close(handle)
+
+    monkeypatch.setattr(guard_module._kernel32, "SetInformationJobObject", lambda *_: 0)
+    monkeypatch.setattr(guard_module._kernel32, "CloseHandle", record_close)
+
+    with pytest.raises(ExecutionGuardUnavailable, match="could not set"):
+        create_execution_guard()
+    assert len(closed_handles) == 1
+
+
+@WINDOWS_ONLY
+def test_windows_job_attach_errors_do_not_allow_unguarded_execution(monkeypatch):
+    from graphlink_execution_guard import ExecutionGuardUnavailable
+
+    guard = create_execution_guard()
+    try:
+        with monkeypatch.context() as context:
+            context.setattr(guard_module._kernel32, "OpenProcess", lambda *_: 0)
+            with pytest.raises(ExecutionGuardUnavailable, match="could not open child"):
+                guard.assign(os.getpid())
+
+        with monkeypatch.context() as context:
+            context.setattr(guard_module._kernel32, "AssignProcessToJobObject", lambda *_: 0)
+            with pytest.raises(ExecutionGuardUnavailable, match="could not attach child"):
+                guard.assign(os.getpid())
+    finally:
+        guard.close()
+
+
+def test_repl_launch_kills_child_when_guard_assignment_fails(tmp_path):
+    from graphlink_execution_guard import ExecutionGuardUnavailable
+
+    class Guard(_FakeGuard):
+        def assign(self, pid):
+            self.assigned_pids.append(pid)
+            raise ExecutionGuardUnavailable("test-only Windows attach failure")
+
+    fake = Guard()
+    with patch("graphlink_plugins.common.python_repl.create_execution_guard", return_value=fake):
+        repl = PythonREPL(repl_id="fail-closed-start-test")
+        with pytest.raises(ExecutionGuardUnavailable, match="test-only"):
+            repl.start()
+        assert repl.process is None
+        assert repl.guard is None
+        assert fake.closed is True
+
+
+def test_shell_exec_kills_child_when_guard_assignment_fails(tmp_path):
+    from unittest.mock import Mock
+    from backend.harness.tools_shell import _run_command
+    from graphlink_execution_guard import ExecutionGuardUnavailable
+
+    class Guard(_FakeGuard):
+        def assign(self, pid):
+            raise ExecutionGuardUnavailable("test-only shell attach failure")
+
+    fake = Guard()
+    proc = Mock(pid=1234)
+    with patch("backend.harness.tools_shell.create_execution_guard", return_value=fake), (
+        patch("backend.harness.tools_shell.subprocess.Popen", return_value=proc)
+    ):
+        with pytest.raises(ExecutionGuardUnavailable, match="test-only"):
+            _run_command("echo harmless", tmp_path, None)
+    assert proc.kill.called
+    assert proc.wait.called
+    assert fake.closed is True
+
+
+def test_shell_session_reaps_child_when_guard_assignment_fails(tmp_path):
+    from unittest.mock import Mock
+    from backend.harness.shell_sessions import LocalSubprocessBackend
+    from graphlink_execution_guard import ExecutionGuardUnavailable
+
+    class Guard(_FakeGuard):
+        def assign(self, pid):
+            raise ExecutionGuardUnavailable("test-only session attach failure")
+
+    fake = Guard()
+    proc = Mock(pid=1234)
+    backend = LocalSubprocessBackend()
+    with patch("backend.harness.shell_sessions.create_execution_guard", return_value=fake), (
+        patch("backend.harness.shell_sessions.subprocess.Popen", return_value=proc)
+    ):
+        with pytest.raises(ExecutionGuardUnavailable, match="test-only"):
+            backend.spawn("echo harmless", tmp_path)
+    assert proc.kill.called
+    assert proc.wait.called
+    assert fake.closed is True
+    assert not backend._guards
 
 
 # -- PythonREPL wiring --------------------------------------------------------
@@ -473,15 +588,17 @@ class TestPythonReplConcurrentStopIsSafe:
 
 
 @WINDOWS_ONLY
-class TestFailOpenFallbackPaths:
-    def test_create_job_object_failure_falls_back_to_the_null_guard(self, monkeypatch):
-        monkeypatch.setattr(guard_module._kernel32, "CreateJobObjectW", lambda *a: None)
-        guard = create_execution_guard()
-        assert type(guard) is ExecutionResourceGuard
-        guard.assign(os.getpid())  # no-op, must not raise
-        guard.close()
+class TestFailClosedGuardPaths:
+    def test_create_job_object_failure_refuses_execution(self, monkeypatch):
+        from graphlink_execution_guard import ExecutionGuardUnavailable
 
-    def test_set_information_job_object_failure_falls_back_and_closes_the_handle(self, monkeypatch):
+        monkeypatch.setattr(guard_module._kernel32, "CreateJobObjectW", lambda *a: None)
+        with pytest.raises(ExecutionGuardUnavailable, match="could not create"):
+            create_execution_guard()
+
+    def test_set_information_job_object_failure_refuses_and_closes_the_handle(self, monkeypatch):
+        from graphlink_execution_guard import ExecutionGuardUnavailable
+
         closed_handles = []
         real_close = guard_module._kernel32.CloseHandle
 
@@ -492,10 +609,11 @@ class TestFailOpenFallbackPaths:
         monkeypatch.setattr(guard_module._kernel32, "SetInformationJobObject", lambda *a: 0)
         monkeypatch.setattr(guard_module._kernel32, "CloseHandle", recording_close)
 
-        guard = create_execution_guard()
-
-        assert type(guard) is ExecutionResourceGuard
-        assert len(closed_handles) == 1, "the job handle CreateJobObjectW allocated must be closed on this fallback path, not leaked"
+        with pytest.raises(ExecutionGuardUnavailable, match="could not set"):
+            create_execution_guard()
+        assert len(closed_handles) == 1, (
+            "the failed Job Object must be closed, not leaked or returned as a no-op guard"
+        )
 
 
 @WINDOWS_ONLY
