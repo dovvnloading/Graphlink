@@ -211,7 +211,7 @@ from backend.domain.model import EDGE_ROLES, EdgeRole
 from backend.domain.node_access import with_state
 # Not re-exported by backend.canvas, unlike the kinds above - imported
 # from the domain package directly, as session_save.py does.
-from backend.domain.node_states import ARTIFACT_MAX_CHARS, ChartState, FrameState, NoteState
+from backend.domain.node_states import ARTIFACT_MAX_CHARS, ChartState, FrameState, NoteState, FalMediaState
 from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 from graphlink_navigation_pins import NavigationPinRecord
@@ -1111,11 +1111,41 @@ def _restore_plugin_payload(
     )
 
 
+def _restore_fal_media_payload(payload: dict[str, Any]) -> SceneNode:
+    """Restore in-flight queue IDs so progress resumes after an app restart.
+    A run still at `submitting` has no confirmed ID, so never retry
+    automatically: the Fal server might have received and charged the job.
+    """
+    import json
+    from backend.fal_media_domain import fresh_media, MAX_HISTORY
+    x, y = _position(payload)
+    media = fresh_media()
+    raw = payload.get("media", {})
+    if isinstance(raw, dict):
+        media.update({key: value for key, value in raw.items() if key in media})
+    media["quote"] = None
+    if not isinstance(media.get("history"), list):
+        media["history"] = []
+    media["history"] = media["history"][:MAX_HISTORY]
+    if media.get("status") == "submitting":
+        media["status"] = "failed"
+        media["error"] = "Submission interrupted. Check your Fal dashboard before trying again."
+    return SceneNode(
+        id="", x=x, y=y,
+        title=str(payload.get("title") or "Fal Media Studio")[:120],
+        kind="fal_media", state=FalMediaState(
+            media_json=json.dumps(media, ensure_ascii=False, default=str),
+        ),
+        is_collapsed=bool(payload.get("is_collapsed", False)),
+    )
+
+
 _NODE_RESTORERS = {
     "chat": lambda payload, document: _restore_chat_payload(payload),
     "code": lambda payload, document: _restore_code_payload(payload),
     "document": lambda payload, document: _restore_document_payload(payload),
     "image": lambda payload, document: _restore_image_payload(payload, document),
+    "fal_media": lambda payload, document: _restore_fal_media_payload(payload),
     "thinking": lambda payload, document: _restore_thinking_payload(payload),
     "conversation": lambda payload, document: _restore_conversation_payload(payload),
     "html": lambda payload, document: _restore_html_payload(payload),
