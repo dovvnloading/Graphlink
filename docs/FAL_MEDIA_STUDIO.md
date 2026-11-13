@@ -48,6 +48,26 @@ a live rate per model billing unit and a nonbinding estimated cost for one
 request. An estimate is **not** a spending limit or guaranteed bill.
 Longer videos or higher resolutions can incur higher final costs.
 
+## Upload reference images, video or audio directly
+
+The Studio includes **Bring your own source**, an in-node file uploader.
+After selecting a model, choose an image, clip or recording, confirm that
+its contents may be transferred to Fal, and choose **Upload reference**.
+A progress indicator tracks the transfer, and the resulting hosted HTTPS
+URL is inserted into the model's chosen input parameter
+(`image_url`, `video_url`, `audio_url` or a custom schema field).
+The existing advanced parameters stay intact.
+
+Uploads use authenticated `POST /api/fal-media/upload`, with a server-side
+512 MiB maximum, a restricted list of media extensions, temporary-file
+cleanup and the **optional official** `fal-client` Python dependency.
+Install it with `pip install -e ".[fal]"` for large reference media.
+No media bytes appear in the graph state or the canvas WebSocket; only
+the returned Fal CDN URL is saved with the node. Reference uploads are
+explicit, not triggered by choosing a model or browsing the catalog.
+Model-specific format limits still apply. Sensitive files should not be
+uploaded to external services without permission.
+
 ## Image, video and audio previews
 
 - Images are shown through Graphlink's **authenticated same-origin
@@ -58,6 +78,9 @@ Longer videos or higher resolutions can incur higher final costs.
   allowed raster MIME types and a 20 MiB maximum.
 - Videos use the native HTML5 player with playback controls.
 - Audio uses the native HTML5 player with seek/pause controls.
+- Inline video/audio playback is restricted to Fal-owned CDN hosts so a
+  model cannot silently trigger browser requests to arbitrary third-party
+  domains. A safe external **Open asset** link remains available instead.
 - The original HTTPS media links are provided for opening the file
   separately. Remote URL expiry and media browser compatibility are
   governed by Fal and the model, not Graphlink.
