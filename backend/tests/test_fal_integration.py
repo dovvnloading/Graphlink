@@ -275,6 +275,8 @@ def test_tool_registration_and_fresh_billable_approval(monkeypatch, tmp_path):
     assert set(s.name for s in registry.specs()) == {
         "fal.submit", "fal.run", "fal.status", "fal.result",
         "fal.cancel", "fal.wait", "fal.upload",
+        "fal.search_models", "fal.model_details", "fal.model_pricing",
+        "fal.estimate_cost",
     }
     assert registry.approval_for("fal.submit") == "always"
     assert registry.scopes_for("fal.upload") == frozenset({PROVIDER_CALL, FS_READ})
@@ -298,3 +300,82 @@ def test_tool_registration_and_fresh_billable_approval(monkeypatch, tmp_path):
     ))
     assert denied.is_error
     assert approvals == ["fal.submit", "fal.submit"]
+
+
+def test_live_model_search_including_cursor_and_category():
+    c, session = client(FakeResponse({
+        "models": [
+            {"endpoint_id": "fal-ai/flux/schnell", "metadata": {"category": "text-to-image"}}
+        ],
+        "next_cursor": "Mg==", "has_more": True,
+    }))
+    results = c.search_models("image", category="text-to-image", limit=5, cursor="MQ==")
+    assert results["models"][0]["endpoint_id"] == "fal-ai/flux/schnell"
+    assert session.calls[0][0] == "GET"
+    assert session.calls[0][1].startswith("https://api.fal.ai/v1/models?")
+    assert "q=image" in session.calls[0][1]
+    assert "category=text-to-image" in session.calls[0][1]
+    assert "cursor=MQ%3D%3D" in session.calls[0][1]
+    assert session.calls[0][2]["headers"]["Authorization"].startswith("Key ")
+
+
+def test_live_model_schema_lookup_and_pricing():
+    c, session = client(
+        FakeResponse({"models": [{
+            "endpoint_id": "fal-ai/flux/schnell", "openapi": {"openapi": "3.0.0"}
+        }]}),
+        FakeResponse({"prices": [{
+            "endpoint_id": "fal-ai/flux/schnell", "unit_price": 0.01, "unit": "megapixel"
+        }]}),
+        FakeResponse({"estimate_type": "historical_api_price", "total_cost": 0.03, "currency": "USD"}),
+    )
+    details = c.model_details("fal-ai/flux/schnell")
+    assert details["openapi"]["openapi"] == "3.0.0"
+    assert "expand=openapi-3.0" in session.calls[0][1]
+    prices = c.model_pricing("fal-ai/flux/schnell")
+    assert prices["prices"][0]["unit_price"] == 0.01
+    assert session.calls[1][1].startswith("https://api.fal.ai/v1/models/pricing?")
+    estimate = c.estimate_cost("fal-ai/flux/schnell", quantity=3)
+    assert estimate["currency"] == "USD"
+    assert session.calls[2][1] == "https://api.fal.ai/v1/models/pricing/estimate"
+    assert session.calls[2][2]["json"] == {
+        "estimate_type": "historical_api_price",
+        "endpoints": {"fal-ai/flux/schnell": {"call_quantity": 3}},
+    }
+
+
+@pytest.mark.parametrize("bad", [
+    {"limit": 0}, {"limit": 101}, {"limit": True}, {"sort": "random"},
+    {"status": "hacked"}, {"cursor": "x" * 513}, {"query": "q" * 201},
+])
+def test_catalog_rejects_malformed_parameters_without_network(bad):
+    c, session = client()
+    with pytest.raises(FalError):
+        c.search_models(**bad)
+    assert session.calls == []
+
+
+def test_estimate_cost_rejects_invalid_quantities_before_http():
+    c, session = client()
+    with pytest.raises(FalError):
+        c.estimate_cost("fal-ai/flux/schnell", quantity=-1)
+    with pytest.raises(FalError):
+        c.estimate_cost("fal-ai/flux/schnell", basis="not-a-basis")
+    assert session.calls == []
+
+
+def test_platform_api_rejects_unexpected_hostname_even_with_key():
+    c, session = client()
+    with pytest.raises(FalError, match="Unapproved"):
+        c._call("POST", "https://evil.example", "v1/models",
+                arguments={"data": "private"})
+    assert session.calls == []
+
+
+def test_tool_model_discovery_is_auto_and_only_requires_provider_scope():
+    manager = SettingsManager.__new__(SettingsManager)
+    registry = ToolRegistry()
+    register_fal_tools(registry, manager)
+    for operation in ("fal.search_models", "fal.model_details", "fal.model_pricing", "fal.estimate_cost"):
+        assert registry.approval_for(operation) == "auto"
+        assert registry.scopes_for(operation) == frozenset({PROVIDER_CALL})
