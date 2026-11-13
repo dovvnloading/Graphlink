@@ -294,6 +294,94 @@ class TestPdfAndDocx:
         with pytest.raises(AttachmentError, match="expanded-stream"):
             stage_file(str(path))
 
+    @pytest.mark.parametrize("inside_form", [False, True])
+    def test_compressed_font_cmap_is_refused_before_text_extraction(
+        self, tmp_path, monkeypatch, inside_form,
+    ):
+        """ToUnicode is decoded by pypdf before Graphlink's extracted-text cap."""
+        import backend.attachments as attachments_module
+        from pypdf import PdfWriter
+        from pypdf._page import PageObject
+        from pypdf.generic import (
+            ArrayObject, DecodedStreamObject, DictionaryObject, FloatObject, NameObject,
+        )
+
+        writer = PdfWriter()
+        page = writer.add_blank_page(width=612, height=792)
+        cmap = DecodedStreamObject()
+        cmap.set_data(b"% harmless CMap padding\n" * 2_000)
+        cmap_ref = writer._add_object(cmap.flate_encode())
+        font = writer._add_object(DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+            NameObject("/ToUnicode"): cmap_ref,
+        }))
+        font_resources = DictionaryObject({
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+        })
+        direct = DecodedStreamObject()
+        if inside_form:
+            form = DecodedStreamObject()
+            form.set_data(b"BT /F1 12 Tf (A) Tj ET")
+            form.update({
+                NameObject("/Type"): NameObject("/XObject"),
+                NameObject("/Subtype"): NameObject("/Form"),
+                NameObject("/BBox"): ArrayObject([
+                    FloatObject(0), FloatObject(0), FloatObject(100), FloatObject(100),
+                ]),
+                NameObject("/Resources"): font_resources,
+            })
+            form_ref = writer._add_object(form)
+            page[NameObject("/Resources")] = DictionaryObject({
+                NameObject("/XObject"): DictionaryObject({NameObject("/Fx"): form_ref}),
+            })
+            direct.set_data(b"q /Fx Do Q")
+        else:
+            page[NameObject("/Resources")] = font_resources
+            direct.set_data(b"BT /F1 12 Tf (A) Tj ET")
+        page[NameObject("/Contents")] = writer._add_object(direct)
+        path = tmp_path / "font-cmap.pdf"
+        writer.write(path)
+        assert path.stat().st_size < 5000
+
+        monkeypatch.setattr(attachments_module, "MAX_PDF_CONTENT_STREAM_BYTES", 2048)
+
+        def forbidden_parse(*_args, **_kwargs):
+            pytest.fail("large font CMap must be rejected before extract_text")
+
+        monkeypatch.setattr(PageObject, "extract_text", forbidden_parse)
+        with pytest.raises(AttachmentError, match="expanded-stream"):
+            stage_file(str(path))
+
+    def test_pdf_total_decoded_stream_bytes_across_pages_is_bounded(
+        self, tmp_path, monkeypatch,
+    ):
+        import backend.attachments as attachments_module
+        from pypdf import PdfWriter
+        from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+        writer = PdfWriter()
+        font = writer._add_object(DictionaryObject({
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }))
+        for _ in range(3):
+            page = writer.add_blank_page(width=612, height=792)
+            page[NameObject("/Resources")] = DictionaryObject({
+                NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+            })
+            contents = DecodedStreamObject()
+            contents.set_data(b"BT /F1 12 Tf 36 720 Td (Normal text here) Tj ET")
+            page[NameObject("/Contents")] = writer._add_object(contents)
+        path = tmp_path / "three-pages.pdf"
+        writer.write(path)
+
+        monkeypatch.setattr(attachments_module, "MAX_PDF_DOCUMENT_STREAM_BYTES", 100)
+        with pytest.raises(AttachmentError, match="expanded-stream"):
+            stage_file(str(path))
+
     def test_regular_compressed_pdf_content_still_extracts(self, tmp_path):
         pytest.importorskip("pypdf")
         from pypdf import PdfWriter
