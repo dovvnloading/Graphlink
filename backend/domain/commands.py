@@ -79,7 +79,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterable, TypeVar
 
-from backend.domain.node_states import HarnessState, PlanState
+from backend.domain.node_states import HarnessState, NoteState, PlanState
 
 if TYPE_CHECKING:
     from backend.domain.model import SceneEdge, SceneNode
@@ -377,6 +377,9 @@ _COMMAND_LABELS = {
     "addImageNode": "Add Image",
     "addConversationNode": "Add Conversation",
     "addNote": "Add Note",
+    "bindNoteTextInput": "Connect Text Input",
+    "runNoteTextInput": "Run Text Input",
+    "unbindNoteTextInput": "Disconnect Text Input",
     "removeNodes": "Delete",
     "deleteChatNode": "Delete Message",
     "deleteConversationMessage": "Delete Message",
@@ -594,8 +597,12 @@ class CommandOps(SceneDocumentParts):
         is caught by the id-set diff below either way; removeEdges' targets
         have no other discovery path since the node(s) they touch are not
         being deleted)."""
-        watch_node_ids = set(node_ids) | {
-            n.id for n in self.nodes.values() if n.kind in ("frame", "container")
+        named_node_ids = set(node_ids)
+        # Removing a text source also clears its surviving readers' bindings.
+        watch_node_ids = named_node_ids | {
+            n.id for n in self.nodes.values()
+            if n.kind in ("frame", "container")
+            or (isinstance(n.state, NoteState) and n.state.text_input_source_id in named_node_ids)
         }
         watch_edge_ids = set(edge_ids) | {
             e.id for e in self.edges.values() if e.source in watch_node_ids or e.target in watch_node_ids
@@ -608,7 +615,7 @@ class CommandOps(SceneDocumentParts):
             eid: copy.deepcopy(self.edges[eid]) for eid in watch_edge_ids if eid in self.edges
         }
         asset_snapshot_before: dict[str, tuple[bytes, str]] = {}
-        for nid in set(node_ids):
+        for nid in named_node_ids:
             node = self.nodes.get(nid)
             if node is None or node.state is None:
                 continue

@@ -25,6 +25,7 @@ import {
   type MeasuredSizeSource,
   type SceneFlowNode,
 } from "./SceneCanvas";
+import { availableTextSources, textSourceLabel } from "./textInputs";
 import type { ConversationMessage } from "./ConversationNodeView";
 import { SceneStore, initialSceneState } from "./sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
@@ -150,6 +151,9 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     isSystemPrompt: false,
     isSummaryNote: false,
     isBranchComparison: false,
+    textInputSourceId: "",
+    textInputOperation: "copy",
+    textInputStatus: "unbound",
     itemIds: [],
     isLocked: true,
     groupWidth: null,
@@ -3433,5 +3437,51 @@ describe("typed edge roles keep frontend ancestry aligned with the backend", () 
     expect((second.data as { dockedChildren: unknown[] }).dockedChildren).toEqual([
       { id: "thinking", label: "Thinking" },
     ]);
+  });
+});
+
+describe("note text inputs", () => {
+  it("filters sources by text type and excludes the entire downstream chain", () => {
+    const target = baseNode({ id: "target", kind: "note" });
+    const candidates = availableTextSources([
+      target,
+      baseNode({ id: "up", kind: "note", content: "Upstream" }),
+      baseNode({ id: "reply", kind: "chat", content: "Chat reply" }),
+      baseNode({ id: "draft", kind: "artifact", content: "Prompt", artifactContent: "Document body" }),
+      baseNode({ id: "system", kind: "note", isSystemPrompt: true }),
+      baseNode({ id: "summary", kind: "note", isSummaryNote: true }),
+      baseNode({ id: "compare", kind: "note", isBranchComparison: true }),
+      baseNode({ id: "file", kind: "document" }),
+      baseNode({ id: "child", kind: "note", textInputSourceId: "target" }),
+      baseNode({ id: "grandchild", kind: "note", textInputSourceId: "child" }),
+    ], target.id);
+    expect(candidates.map(textSourceLabel)).toEqual([
+      "Note · Upstream (up)", "Chat · Chat reply (reply)", "Drafter · Document body (draft)",
+    ]);
+  });
+
+  it("refreshes the destination's source label even when only the source row changes", () => {
+    const source = baseNode({ id: "a", kind: "chat", content: "First" });
+    const target = baseNode({ id: "b", kind: "note", textInputSourceId: source.id, textInputOperation: "word_count" });
+    const cache = createToFlowNodesCache();
+    const store = makeStore();
+    const map = (chat: SceneNodeRow) => toFlowNodes(baseScene({ nodes: [chat, target] }), store, undefined, null, undefined, false, cache);
+    expect(map(source)[1]?.data).toMatchObject({ textInputSourceLabel: "Chat · First (a)", textInputOperation: "word_count" });
+    expect(map({ ...source, content: "Revised" })[1]?.data).toMatchObject({ textInputSourceLabel: "Chat · Revised (a)" });
+  });
+
+  it("draws a distinct value connection alongside a structural edge between the same endpoints", () => {
+    const source = baseNode({ id: "a", kind: "chat", content: "Text" });
+    const target = baseNode({ id: "b", kind: "note", textInputSourceId: "a" });
+    const structural = { id: "e1", source: "a", target: "b", role: "reference" as const };
+    const scene = baseScene({ nodes: [source, target], edges: [structural] });
+    expect(toFlowEdges(scene, null)).toMatchObject([
+      { id: "e1", data: { role: "reference" } },
+      { source: "a", target: "b", sourceHandle: "text-output", targetHandle: "text-input", data: { role: "text-input" } },
+    ]);
+    expect(scene.edges).toEqual([structural]);
+    expect(toFlowEdges({ ...scene, nodes: [source, { ...target, isDocked: true }] }, null)).toEqual([]);
+    const frame = baseNode({ id: "frame", kind: "frame", isCollapsed: true, itemIds: [source.id] });
+    expect(toFlowEdges({ ...scene, nodes: [source, target, frame] }, null)).toEqual([]);
   });
 });

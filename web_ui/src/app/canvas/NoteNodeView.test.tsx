@@ -1,8 +1,10 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GROUP_NAMED_COLORS } from "./GroupColorPicker";
+import { initialSceneState } from "./sceneStore";
+import { validateSceneState, type SceneState } from "../../lib/bridge-core/generated/scene-state";
 
 // ADR-011 stage 11.1: NoteNodeView has no LOD hook to spy on (see its own
 // module doc - it never auto-collapses), so instead this wraps NodeMarkdown
@@ -66,6 +68,86 @@ describe("NoteNodeView", () => {
     renderNoteNode();
     expect(screen.getByText("world")).toBeInTheDocument(); // bold text still renders as text
   });
+
+  it("selects a source and operation with the keyboard and clears a deleted choice before binding", async () => {
+    const user = userEvent.setup();
+    const validated = validateSceneState({
+      ...initialSceneState,
+      nodes: [
+        { id: "n0", x: 0, y: 0, title: "", kind: "note" },
+        { id: "reply", x: 100, y: 0, title: "", kind: "chat", content: "Reply" },
+        { id: "draft", x: 200, y: 0, title: "", kind: "artifact", artifactContent: "Drafter text" },
+      ],
+    });
+    if (!validated.ok) throw new Error(validated.errors.join("\n"));
+    let scene: SceneState = validated.value;
+    const listeners = new Set<() => void>();
+    const onBindTextInput = vi.fn();
+    const onRunTextInput = vi.fn();
+    renderNoteNode({
+      targetId: "n0",
+      getScene: () => scene,
+      subscribeScene: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      onBindTextInput, onRunTextInput,
+    });
+    screen.getByRole("button", { name: "Text input" }).focus();
+    await user.keyboard("{Enter}");
+    const chooser = screen.getByLabelText("Text source");
+    await user.tab();
+    expect(chooser).toHaveFocus();
+    await user.selectOptions(chooser, "draft");
+    act(() => {
+      scene = { ...scene, nodes: scene.nodes.filter((row) => row.id !== "draft") };
+      listeners.forEach((listener) => listener());
+    });
+    expect(chooser).toHaveValue("");
+    const connect = screen.getByRole("button", { name: "Connect" });
+    expect(connect).toBeDisabled();
+    await user.selectOptions(chooser, "reply");
+    await user.tab();
+    await user.selectOptions(screen.getByLabelText("Operation"), "word_count");
+    await user.tab();
+    expect(connect).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onBindTextInput).toHaveBeenCalledWith("reply", "word_count");
+    expect(onRunTextInput).not.toHaveBeenCalled();
+  });
+
+  it("shows durable upstream freshness and waits for a run acknowledgement", async () => {
+    const user = userEvent.setup();
+    const onRunTextInput = vi.fn();
+    const onUnbindTextInput = vi.fn();
+    const onBindTextInput = vi.fn();
+    const { onSetContent } = renderNoteNode({
+      textInputSourceId: "chat-1",
+      textInputSourceLabel: "Chat · Original (chat-1)",
+      textInputOperation: "copy",
+      textInputStatus: "stale",
+      onBindTextInput, onRunTextInput, onUnbindTextInput,
+    });
+    expect(screen.getByText("Text from Chat · Original (chat-1)")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Source changed · rerun to update");
+    const run = screen.getByRole("button", { name: "Run text input" });
+    await user.click(run);
+    expect(run).toBeDisabled();
+    act(() => onRunTextInput.mock.calls[0]![0](false));
+    expect(screen.getByRole("status")).toHaveTextContent("Run failed");
+    expect(run).toBeEnabled();
+    await user.selectOptions(screen.getByLabelText("Operation"), "word_count");
+    expect(onBindTextInput).toHaveBeenCalledWith("chat-1", "word_count");
+    await user.click(screen.getByRole("button", { name: "Disconnect text input" }));
+    expect(onUnbindTextInput).toHaveBeenCalledOnce();
+    expect(onSetContent).not.toHaveBeenCalled();
+    expect(onRunTextInput).toHaveBeenCalledOnce();
+  });
+
+  it.each(["isSystemPrompt", "isSummaryNote", "isBranchComparison"] as const)(
+    "keeps semantic notes (%s) out of text workflows", (flag) => {
+      const { container } = renderNoteNode({ [flag]: true });
+      expect(screen.queryByRole("button", { name: "Text input" })).toBeNull();
+      expect(container.querySelectorAll(".scene-text-handle")).toHaveLength(0);
+    },
+  );
 
   it("double-click enters edit mode with a textarea pre-filled with content", () => {
     const { container } = renderNoteNode({ content: "original text" });

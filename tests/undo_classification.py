@@ -205,6 +205,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
     # -- backend/api/intents_groups.py (scene) -------------------------------
     Classified("scene", "addNote", "A", "content: create"),
     Classified("scene", "setNoteContent", "A", "content: text edit"),
+    Classified("scene", "bindNoteTextInput", "A", "content: bind a note to a text source and operation"),
+    Classified("scene", "runNoteTextInput", "A", "content: replace note text with the selected operation's result"),
+    Classified("scene", "unbindNoteTextInput", "A", "content: remove a note's text input binding"),
     Classified("scene", "createFrame", "A", "content: create/group"),
     Classified("scene", "createContainer", "A", "content: create/group"),
     Classified("scene", "setGroupLabel", "A", "content: label edit"),

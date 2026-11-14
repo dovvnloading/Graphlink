@@ -168,6 +168,9 @@ WIRE_DEFAULTS: dict[str, Any] = {
     "isSystemPrompt": False,
     "isSummaryNote": False,
     "isBranchComparison": False,
+    "textInputSourceId": "",
+    "textInputOperation": "copy",
+    "textInputStatus": "unbound",
     "itemIds": [],
     "isLocked": True,
     "groupWidth": None,
@@ -605,6 +608,8 @@ _STATE_FIELDS: dict[type, tuple[_Entry, ...]] = {
         ("isSystemPrompt", "is_system_prompt"),
         ("isSummaryNote", "is_summary_note"),
         ("isBranchComparison", "is_branch_comparison"),
+        ("textInputSourceId", "text_input_source_id"),
+        ("textInputOperation", "text_input_operation"),
     ),
     # groupManualWidth/Height are DELIBERATELY absent - server-side
     # bookkeeping only (R6.1).
@@ -698,7 +703,9 @@ def _put_non_default(wire: dict[str, Any], source: object, entries: tuple[_Entry
         wire[key] = value
 
 
-def node_wire(node: SceneNode, *, is_final_deliverable: bool, plugin_state: dict[str, str]) -> dict[str, Any]:
+def node_wire(
+    node: SceneNode, *, is_final_deliverable: bool, plugin_state: dict[str, str], text_input_status: str = "unbound",
+) -> dict[str, Any]:
     """One node's sparse wire row: identity keys, then every field whose
     value differs from its wire default. See the module docstring for the
     contract this relies on and the tests that pin it."""
@@ -714,6 +721,8 @@ def node_wire(node: SceneNode, *, is_final_deliverable: bool, plugin_state: dict
         wire["isFinalDeliverable"] = True
     if node.state is not None:
         _put_non_default(wire, node.state, _fields_for(type(node.state)))
+    if text_input_status != "unbound":
+        wire["textInputStatus"] = text_input_status
     if plugin_state:
         # ADR-014 stage 14.2: the Plugin SDK's generic live-wire fallback -
         # see SceneDocument._plugin_state_wire.
@@ -727,5 +736,5 @@ def wire_keys() -> frozenset[str]:
     keys.update(entry[0] for entry in _NODE_FIELDS)
     for entries in _STATE_FIELDS.values():
         keys.update(entry[0] for entry in entries)
-    keys.update(("isFinalDeliverable", "pluginState"))
+    keys.update(("isFinalDeliverable", "pluginState", "textInputStatus"))
     return frozenset(keys)

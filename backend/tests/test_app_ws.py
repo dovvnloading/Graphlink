@@ -407,7 +407,7 @@ def test_junk_args_never_crash_or_disconnect_any_registered_intent():
         assert ws.receive_json()["kind"] == "result"
 
 
-def test_args_schema_is_scoped_to_exactly_the_known_18_intents():
+def test_args_schema_is_scoped_to_the_known_intents():
     # ADR-003 stage 3.2 review-fix: the fuzz sweep above proves every intent
     # replies safely, but it only checks message["kind"], not the error TEXT
     # - a schema-validation rejection and an unmigrated handler's own generic
@@ -461,6 +461,9 @@ def test_args_schema_is_scoped_to_exactly_the_known_18_intents():
             ("app-chat-library", "importWorkspace"),
             ("knowledge", "search"),
             ("scene", "setChatIndexIntoKnowledge"),
+            ("scene", "bindNoteTextInput"),
+            ("scene", "runNoteTextInput"),
+            ("scene", "unbindNoteTextInput"),
         }
 
 

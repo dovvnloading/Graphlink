@@ -440,10 +440,10 @@ def test_a_patch_publish_builds_every_node_payload_exactly_once():
         built = 0
         original = SceneDocument._node_wire
 
-        def counting(self, node):
+        def counting(self, node, source_digests=None):
             nonlocal built
             built += 1
-            return original(self, node)
+            return original(self, node, source_digests)
 
         document.move_node(next(iter(document.nodes)), 5, 5)
         SceneDocument._node_wire = counting

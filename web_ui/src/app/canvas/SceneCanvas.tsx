@@ -38,6 +38,8 @@ import type { ImageFlowNode } from "./ImageNodeView";
 import type { MediaMode } from "./falMediaStudioModel";
 import type { FalMediaFlowNode } from "./FalMediaNodeView";
 import type { NoteFlowNode } from "./NoteNodeView";
+import { availableTextSources, isPlainNote, textSourceLabel, TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE, type TextInputOperation } from "./textInputs";
+import type { ConnectionRole } from "./connections/connectionAppearance";
 import { CurvedEdge, OrthogonalEdge } from "./OrthogonalEdge";
 import type { ThinkingFlowNode } from "./ThinkingNodeView";
 import type { WebResearchFlowNode } from "./WebResearchNodeView";
@@ -1028,6 +1030,9 @@ function makeCodeSandboxFns(id: string, liveRef: { current: DispatcherLive }) {
 
 function makeNoteFns(id: string, liveRef: { current: DispatcherLive }) {
   return {
+    onBindTextInput: (sourceId: string, operation: TextInputOperation) => liveRef.current.store.bindNoteTextInput(sourceId, id, operation),
+    onRunTextInput: (onSettled: (success: boolean) => void) => liveRef.current.store.runNoteTextInput(id, onSettled),
+    onUnbindTextInput: () => liveRef.current.store.unbindNoteTextInput(id),
     onSetContent: (content: string) => liveRef.current.store.setNoteContent(id, content),
     onSetColor: (color: string | null, headerColor: string | null) =>
       liveRef.current.store.setGroupColor(id, color, headerColor),
@@ -1856,7 +1861,9 @@ export function toFlowNodes(
       // filter's own opacity dimming is unaffected by that, since it's
       // driven by this style prop, not the collapsed gate.
       const dimmedVal = isDimmed(n.id);
-      const extraSig = dimmedVal ? "1" : "0";
+      const textSource = nodesById.get(n.textInputSourceId);
+      const sourceLabel = textSource ? textSourceLabel(textSource) : n.textInputSourceId;
+      const extraSig = `${dimmedVal ? 1 : 0}|${sourceLabel}`;
       const cached = cache.flowNodes.get(n);
       const fns = getDispatcher(cache, n.id, { n, store, onOpenDocumentView, onToggleBranchFocus }, makeNoteFns);
       if (cached && cached.extraSig === extraSig) {
@@ -1879,6 +1886,13 @@ export function toFlowNodes(
           // own comment on backend/domain/model.py.
           isBranchComparison: n.isBranchComparison,
           compareSourceNodeIds: n.itemIds,
+          targetId: n.id,
+          textInputSourceId: n.textInputSourceId,
+          textInputSourceLabel: sourceLabel,
+          textInputOperation: n.textInputOperation,
+          textInputStatus: n.textInputStatus,
+          getScene: store.getScene,
+          subscribeScene: store.subscribe,
           ...fns,
         },
       };
@@ -2414,7 +2428,7 @@ export function withPreservedFlowState(
 // Exported standalone for direct unit testing, same posture as toFlowNodes
 // above - R7.5b-1's fade-connections opacity logic doesn't need a mounted
 // <ReactFlow> to verify.
-export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Edge<{ role: SceneEdgeRow["role"] }>[] {
+export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Edge<{ role: ConnectionRole }>[] {
   // ADR-011 stage 11.1: dockedNodeIds now comes from the SAME
   // buildSceneIndexes pass toFlowNodes above uses (was its own standalone
   // `scene.nodes.filter(...)` here) - kindOf is looked up straight off
@@ -2425,7 +2439,7 @@ export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Ed
   // Rendering, hit-testing, and export must agree: a hidden member has no
   // visible node or connection. This applies to either endpoint (including
   // docked sources), not only the traditional docked target.
-  return scene.edges
+  const flowEdges: Edge<{ role: ConnectionRole }>[] = scene.edges
     .filter((e) =>
       !dockedNodeIds.has(e.target) && !dockedNodeIds.has(e.source)
       && !collapsedHiddenIds.has(e.target) && !collapsedHiddenIds.has(e.source)
@@ -2444,6 +2458,20 @@ export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Ed
         ? { style: { opacity: FADED_CONNECTION_OPACITY } }
         : {}),
     }));
+  for (const target of scene.nodes) {
+    const source = target.textInputSourceId;
+    if (!source || !nodesById.has(source) || dockedNodeIds.has(source) || dockedNodeIds.has(target.id)
+      || collapsedHiddenIds.has(source) || collapsedHiddenIds.has(target.id)) continue;
+    const id = `text-input:${target.id}`;
+    flowEdges.push({
+      id, source, target: target.id,
+      sourceHandle: TEXT_OUTPUT_HANDLE, targetHandle: TEXT_INPUT_HANDLE,
+      data: { role: "text-input" },
+      ariaLabel: `Text input from ${source} to ${target.id}`,
+      ...(scene.fadeConnectionsEnabled && id !== hoveredEdgeId ? { style: { opacity: FADED_CONNECTION_OPACITY } } : {}),
+    });
+  }
+  return flowEdges;
 }
 
 // R6.3: the debounce wrapper for viewport (pan/zoom) reporting - same posture
@@ -2744,6 +2772,7 @@ function CanvasInner({
   const connections = useMemo<ConnectionSpec[]>(
     () => edges.map((e) => ({
       id: e.id, source: e.source, target: e.target, role: e.data?.role, orthogonal: e.type === "orthogonal",
+      sourceHandle: e.sourceHandle, targetHandle: e.targetHandle,
     })),
     [edges],
   );
@@ -2776,12 +2805,23 @@ function CanvasInner({
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      if (connection.source && connection.target) {
+      if (connection.sourceHandle === TEXT_OUTPUT_HANDLE && connection.targetHandle === TEXT_INPUT_HANDLE) {
+        store.bindNoteTextInput(connection.source, connection.target);
+      } else if (!connection.sourceHandle && !connection.targetHandle) {
         store.connectNodes(connection.source, connection.target);
       }
     },
     [store],
   );
+
+  const isValidConnection = useCallback((connection: Connection | Edge) => {
+    if (!connection.sourceHandle && !connection.targetHandle) return true;
+    if (connection.sourceHandle !== TEXT_OUTPUT_HANDLE || connection.targetHandle !== TEXT_INPUT_HANDLE) return false;
+    const { nodes } = store.getScene();
+    const target = nodes.find((node) => node.id === connection.target);
+    return !!target && isPlainNote(target) && !target.textInputSourceId &&
+      availableTextSources(nodes, target.id).some((node) => node.id === connection.source);
+  }, [store]);
 
   const onSelectionChange = useCallback(
     ({ nodes: sel }: { nodes: { id: string }[] }) => handleSelectionChange(store, sel),
@@ -2837,12 +2877,14 @@ function CanvasInner({
       const target = event.target as HTMLElement | null;
       // Never while typing.
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
-      store.removeEdges([selectedConnectionId]);
+      const connection = edges.find((edge) => edge.id === selectedConnectionId);
+      if (connection?.data?.role === "text-input") store.unbindNoteTextInput(connection.target);
+      else if (connection) store.removeEdges([connection.id]);
       setSelectedConnectionId(null);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [selectedConnectionId, store]);
+  }, [edges, selectedConnectionId, store]);
 
   // The spawn point for anything created with nothing selected - the plugin
   // picker's own creation path. Registered as a PROVIDER rather than a
@@ -2903,6 +2945,7 @@ function CanvasInner({
         edgeTypes={EDGE_TYPES}
         onNodesChange={onNodesChange}
         onConnect={onConnect}
+        isValidConnection={isValidConnection}
         onDelete={onDelete}
         onMove={onMove}
         // R5.1: mirrors React Flow's own selection state into the store so

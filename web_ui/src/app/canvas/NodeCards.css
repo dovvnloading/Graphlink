@@ -443,3 +443,46 @@
   .scene-node.scene-node-card,
   .scene-node .chat-node-quick-actions { transition: none; }
 }
+
+/* Side sockets carry text. Top and bottom sockets carry canvas relationships. */
+.scene-node-card .scene-text-handle {
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--gl-graph-surface);
+  border-radius: 2px;
+  background: var(--gl-surface-text-muted);
+}
+.scene-node-card .scene-text-handle:is(:hover, .connectionindicator.valid) {
+  background: var(--gl-graph-selection);
+}
+.note-text-input {
+  padding: 5px 8px;
+  border-top: 1px solid var(--gl-surface-border);
+  color: var(--gl-surface-text-secondary);
+  background: var(--gl-graph-surface);
+  font: 11px/1.45 var(--gl-font-family, inherit);
+}
+.note-text-input button, .note-text-input select {
+  font: inherit;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-surface-window);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+.note-text-input button { cursor: pointer; }
+.note-text-input button:disabled { cursor: default; opacity: 0.55; }
+.note-text-input button.note-text-input-toggle {
+  background: transparent;
+  border: 0;
+  padding-inline: 0;
+}
+.note-text-input-toggle::before { content: "＋ "; }
+.note-text-input-toggle[aria-expanded="true"]::before { content: "− "; }
+.note-text-input-fields { display: grid; gap: 5px; margin-top: 4px; }
+.note-text-input-fields label { display: grid; grid-template-columns: auto minmax(90px, 1fr); gap: 8px; align-items: center; }
+.note-text-input-fields select { width: 100%; max-width: 210px; }
+.note-text-input-fields p { margin: 0; }
+.note-text-input-fields button { justify-self: start; }
+.note-text-input-actions { display: flex; align-items: center; gap: 6px; }
+.note-text-input-source { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

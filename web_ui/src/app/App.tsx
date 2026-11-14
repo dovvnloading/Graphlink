@@ -31,7 +31,6 @@ import { ComposerStore } from "./chrome/composerStore";
 import { NotificationBanner } from "./chrome/NotificationBanner";
 import { OnboardingDialog } from "./chrome/OnboardingDialog";
 import { PluginPicker } from "./chrome/PluginPicker";
-import { SearchOverlay } from "./chrome/SearchOverlay";
 import { OverlayProvider, useOverlays } from "./overlays/overlays";
 
 // ADR-011 stage 11.6: ChatLibraryDialog, HelpDialog (+ its 76-item static
@@ -75,6 +74,7 @@ const KnowledgeSearchDialog = lazy(() =>
 const QuickSwitcherDialog = lazy(() =>
   import("./chrome/QuickSwitcherDialog").then((m) => ({ default: m.QuickSwitcherDialog })),
 );
+const SearchOverlay = lazy(() => import("./chrome/SearchOverlay").then((m) => ({ default: m.SearchOverlay })));
 const PinOverlay = lazy(() => import("./chrome/PinOverlay").then((m) => ({ default: m.PinOverlay })));
 const ViewPopover = lazy(() => import("./chrome/ViewPopover").then((m) => ({ default: m.ViewPopover })));
 
@@ -486,7 +486,9 @@ function App() {
                         getComposerRoute={getComposerRoute}
                       />
                       <div className="app-search-layer">
-                        <SearchOverlay store={sceneStore} />
+                        <LazySurface overlayName="search" fallback={null}>
+                          <SearchOverlay store={sceneStore} />
+                        </LazySurface>
                       </div>
                     </CanvasSearchProvider>
                     <LazySurface overlayName="pins" fallback={null}>

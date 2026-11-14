@@ -1022,6 +1022,17 @@ def _build_chat_data(
 
     nodes_index = {n.id: i for i, n in enumerate(all_nodes)}
     notes_index = {n.id: i for i, n in enumerate(notes)}
+    comparison_notes = {
+        n.id: list(n.item_ids) for n in notes if isinstance(n.state, NoteState) and n.state.is_branch_comparison
+    }
+    note_text_inputs = {
+        n.id: {
+            "source": n.state.text_input_source_id,
+            "operation": n.state.text_input_operation,
+            "last_source_sha256": n.state.text_input_last_source_sha256,
+        }
+        for n in notes if isinstance(n.state, NoteState) and n.state.text_input_source_id
+    }
     kind_by_id = {n.id: n.kind for n in document.nodes.values()}
 
     node_slot_count = len(all_nodes)
@@ -1165,6 +1176,10 @@ def _build_chat_data(
             if nid in document.nodes and document.nodes[nid].kind == "chat"
         },
         "notes_data": [_serialize_note(n) for n in notes],
+        # notes_data goes into a fixed-column SQLite table. Keep cross-node
+        # bindings alongside the graph's other saved-id references.
+        **({"note_text_inputs": note_text_inputs} if note_text_inputs else {}),
+        **({"comparison_notes": comparison_notes} if comparison_notes else {}),
         "pins_data": [_serialize_pin(r) for r in document.pins.records],
         # The 12 basic connection lists all draw from the SAME classified
         # "connections" bucket - this backend has no way to tell which of

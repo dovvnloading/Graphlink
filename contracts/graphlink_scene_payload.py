@@ -694,6 +694,10 @@ class SceneNodeRow:
     isSystemPrompt: bool = False
     isSummaryNote: bool = False
     isBranchComparison: bool = False
+    # An ordinary note can explicitly read another node's text when run.
+    textInputSourceId: str = ""
+    textInputOperation: Literal["copy", "word_count"] = "copy"
+    textInputStatus: Literal["unbound", "unrun", "current", "stale"] = "unbound"
     itemIds: list[str] = field(default_factory=list)
     isLocked: bool = True
     groupWidth: float | None = None

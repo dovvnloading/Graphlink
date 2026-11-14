@@ -6,6 +6,7 @@ import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeHeading } from "./NodeHeading";
 import { swatchStyle } from "./nodeSwatch";
 import { NodeShell } from "./NodeShell";
+import { NoteTextInput, type NoteTextInputProps } from "./NoteTextInput";
 
 /**
  * The note node (Qt-removal plan R6.1) - the free-floating markdown sticky
@@ -39,7 +40,7 @@ import { NodeShell } from "./NodeShell";
  * how many source branches compareSourceNodeIds records.
  */
 
-export interface NoteNodeData extends Record<string, unknown> {
+export interface NoteNodeData extends Record<string, unknown>, NoteTextInputProps {
   content: string;
   color: string | null;
   headerColor: string | null;
@@ -120,8 +121,12 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
     commit(draft);
   }
 
+  const plain = !data.isSystemPrompt && !data.isSummaryNote && !data.isBranchComparison;
   return (
     <NodeShell
+      textInput={plain}
+      textOutput={plain}
+      footer={plain && <NoteTextInput {...data} />}
       kindClassName={"note-node" + (data.isSystemPrompt ? " system-prompt" : "")}
       selected={!!selected}
       // Notes render NO Handle-driven collapse/LOD posture of their own -
@@ -224,6 +229,16 @@ function noteNodeDataAreEqual(prev: NoteNodeData, next: NoteNodeData): boolean {
     prev.isSummaryNote === next.isSummaryNote &&
     prev.isBranchComparison === next.isBranchComparison &&
     stringArraysEqual(prev.compareSourceNodeIds, next.compareSourceNodeIds) &&
+    prev.targetId === next.targetId &&
+    prev.textInputSourceId === next.textInputSourceId &&
+    prev.textInputSourceLabel === next.textInputSourceLabel &&
+    prev.textInputOperation === next.textInputOperation &&
+    prev.textInputStatus === next.textInputStatus &&
+    prev.getScene === next.getScene &&
+    prev.subscribeScene === next.subscribeScene &&
+    prev.onBindTextInput === next.onBindTextInput &&
+    prev.onRunTextInput === next.onRunTextInput &&
+    prev.onUnbindTextInput === next.onUnbindTextInput &&
     prev.onSetContent === next.onSetContent &&
     prev.onSetColor === next.onSetColor &&
     prev.onDelete === next.onDelete
