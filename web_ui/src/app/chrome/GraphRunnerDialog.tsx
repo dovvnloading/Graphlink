@@ -304,7 +304,7 @@ function Runner({ store }: { store: SceneStore }) {
         </li>)}
       </ol>
     </section>}
-    {busy && <p role="status">{busy}</p>
+    {busy && <p role="status">{busy}</p>}
     {error && <div className="runner-error">
       <p role="alert">{error}</p>
       <button type="button" className="appbar-btn" disabled={!!busy} onClick={() => void perform("Checking run status…", async () => {
