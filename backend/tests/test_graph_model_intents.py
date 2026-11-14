@@ -82,7 +82,7 @@ def test_model_preview_is_read_only_and_dispatch_checkpoints_before_request(tmp_
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("changed", ["source", "destination", "provider", "model"])
+@pytest.mark.parametrize("changed", ["source", "destination", "provider", "model", "endpoint"])
 def test_preview_staleness_refuses_model_calls(tmp_path, monkeypatch, changed):
     async def scenario():
         _path, _bus, doc, source, target, send = session(tmp_path)
@@ -96,8 +96,10 @@ def test_preview_staleness_refuses_model_calls(tmp_path, monkeypatch, changed):
             target.content = "hand-written content"
         elif changed == "provider":
             args[2] = "OpenAI"
-        else:
+        elif changed == "model":
             args[3] = "other-model"
+        else:
+            monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
         with pytest.raises(IntentValidationError):
             await send("executeGraphModel", *args, preview["previewToken"], "stale-model-run")
         assert not calls and doc.graph_runs == []
@@ -194,6 +196,9 @@ def test_non_loopback_ollama_endpoint_is_rejected_before_preview(tmp_path, monke
         with pytest.raises(IntentValidationError, match="loopback"):
             await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         monkeypatch.setenv("OLLAMA_HOST", "http://localhost.evil.test:11434")
+        with pytest.raises(IntentValidationError, match="loopback"):
+            await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        monkeypatch.setenv("OLLAMA_HOST", "http://[")
         with pytest.raises(IntentValidationError, match="loopback"):
             await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
