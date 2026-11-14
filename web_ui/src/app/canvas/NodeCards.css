@@ -1,0 +1,445 @@
+/* The ports and resize handles straddle the perimeter. Only the content
+   surface clips, so the full target stays available at every zoom. */
+.scene-node.scene-node-card {
+  --node-edge: var(--gl-graph-border);
+  --node-paper: var(--gl-graph-surface);
+  position: relative;
+  overflow: visible;
+  font-family: var(--gl-node-font-family, var(--gl-font-family)), system-ui, sans-serif;
+  border-radius: 6px;
+  border-color: var(--node-edge);
+  background: var(--node-paper);
+  box-shadow: none;
+  transition: border-color 100ms ease;
+}
+
+.scene-node.scene-node-card:hover {
+  box-shadow: none;
+  border-color: var(--gl-surface-text-muted);
+}
+
+.scene-node.scene-node-card.selected,
+.react-flow__node.dragging .scene-node.scene-node-card.selected:hover {
+  border-color: var(--gl-graph-selection);
+  box-shadow: inset 0 0 0 1px var(--gl-graph-selection);
+}
+
+.react-flow__node:focus-visible:has(.scene-node-card) {
+  border-radius: 6px;
+  outline-offset: 3px;
+}
+
+.scene-node-surface {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: inherit;
+}
+
+.chart-node > .scene-node-surface {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.node-card-header {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.node-card-header > .node-heading,
+.chat-node.user .node-card-header > .node-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 38px;
+  padding: 7px 14px;
+  background: transparent;
+  border: 0;
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+  font-size: calc(var(--gl-node-font-size, 12px) + 1px);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+/* An unboxed type mark identifies a file, figure, or code block whose own
+   title is freeform. Titles like "Web Research" already identify their kind. */
+.node-heading:has(> .node-glyph) {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 7px;
+}
+
+.node-glyph {
+  display: block;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  color: inherit;
+}
+
+.node-heading > .node-glyph {
+  color: var(--gl-surface-text-muted);
+}
+
+.node-heading-row,
+.chat-node-role-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.node-heading-row > :is(.chat-node-title-actions, .chat-node-collapse-btn, .note-node-controls, .html-node-controls) {
+  flex-shrink: 0;
+  margin-inline-start: auto;
+}
+
+.node-heading-row > span:only-child,
+.document-node .node-heading-row > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.node-card-header .node-heading-detail {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.scene-node-surface > .scene-node-body:not(.fal-studio-body) {
+  padding: 8px 14px 13px;
+  font-size: var(--gl-node-font-size, 12px);
+  line-height: 1.55;
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+}
+
+/* A message reads like a paragraph with an attribution. The role and
+   metadata share a surface with its text; no title bar divides a turn. */
+.scene-node.chat-node {
+  min-height: 0;
+}
+
+.chat-node .node-card-header > .node-heading,
+.chat-node.user .node-card-header > .node-heading {
+  min-height: 0;
+  padding-block: 9px 1px;
+}
+
+.chat-node .chat-node-role-group {
+  color: var(--gl-node-font-color, var(--gl-surface-text-secondary));
+  font-size: var(--gl-node-font-size, 12px);
+  font-weight: 600;
+}
+
+.chat-node .scene-node-surface > .chat-node-content-shell {
+  padding-block: 2px 15px;
+}
+
+.node-heading-row .chat-node-status-badge {
+  width: 5px;
+  height: 5px;
+}
+
+.chat-node-status-badge[data-status="active"] {
+  opacity: 0;
+}
+
+.chat-node:is(:hover, :focus-within) .chat-node-status-badge[data-status="active"] {
+  opacity: 1;
+}
+
+.chat-node-metadata {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 3px 9px;
+  padding-block: 1px 4px;
+  color: var(--gl-surface-text-muted);
+  font-weight: 400;
+}
+
+.chat-node-metadata > span {
+  max-width: 100%;
+  line-height: 1.35;
+}
+
+.node-heading .plan-node-badge,
+.node-heading .chart-node-badge {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--gl-surface-text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.node-heading .plan-node-badge {
+  padding-inline-end: 6px;
+  border-inline-end: 1px solid var(--node-edge);
+  border-radius: 0;
+}
+
+.scene-node.scene-node-card.collapsed {
+  min-height: 0;
+}
+
+.scene-node-card.collapsed .node-card-header > .node-heading {
+  min-height: 36px;
+  padding-block: 6px;
+}
+
+.scene-node-card.collapsed .node-heading:has(.node-overview-excerpt) {
+  padding-block: 6px 10px;
+}
+
+.node-overview-excerpt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: calc(var(--gl-node-font-size, 12px) + 2px);
+  font-weight: 400;
+  line-height: 1.37;
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+}
+
+.node-card-menu-trigger,
+.scene-node .chat-node-collapse-btn,
+.scene-node .chat-node-quick-action {
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--gl-surface-text-muted);
+  cursor: pointer;
+}
+
+.node-card-menu-trigger {
+  position: absolute;
+  inset-inline-end: 8px;
+  top: 7px;
+}
+
+.scene-node[aria-haspopup="menu"] .node-card-header > .node-heading {
+  padding-inline-end: 37px;
+}
+
+.node-card-menu-trigger svg,
+.chat-node-collapse-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.node-card-menu-trigger:is(:hover, [aria-expanded="true"]),
+.scene-node .chat-node-collapse-btn:hover,
+.scene-node .chat-node-quick-action:hover {
+  background: var(--gl-neutral-button-hover);
+  color: var(--gl-surface-text-primary);
+}
+
+.node-card-header :is(button, input):focus-visible,
+.scene-node-body :is(button, summary):focus-visible {
+  outline: 2px solid var(--gl-focus-ring);
+  outline-offset: 1px;
+}
+
+/* Mouse users see actions at the point of use; keyboard focus reveals the
+   row as soon as RF or any child is focused. Touch keeps the controls. */
+@media (hover: hover) and (pointer: fine) {
+  .react-flow__node:not(:hover, :focus-within) .scene-node-card:not(.selected)
+  .node-card-header :is(.node-card-menu-trigger, .chat-node-collapse-btn[aria-expanded="true"], .note-node-controls) {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+
+@media (hover: none) {
+  .scene-node .chat-node-quick-actions {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
+}
+
+.scene-node-surface .chat-node-content {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.scene-node-surface .chat-node-content :is(h1, h2, h3, h4) {
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+  line-height: 1.3;
+}
+
+.scene-node-surface .chat-node-content a {
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+  text-decoration: underline;
+  text-underline-offset: .16em;
+}
+
+.scene-node-surface .chat-node-content blockquote {
+  border-inline-start: 2px solid var(--node-edge);
+  color: var(--gl-node-font-color, var(--gl-surface-text-secondary));
+}
+
+.scene-node-surface .node-md-code-block {
+  border-color: var(--node-edge);
+  border-radius: 4px;
+}
+
+.chat-node-reading-area {
+  position: relative;
+  min-width: 0;
+}
+
+.scene-node .chat-node-content-fade {
+  height: 20px;
+  background: linear-gradient(transparent, var(--node-paper));
+}
+
+.scene-node .chat-node-show-more {
+  padding: 5px;
+  color: var(--gl-surface-text-secondary);
+  border-color: var(--node-edge);
+}
+
+.scene-node .conversation-node-bubble {
+  border: 0;
+  border-bottom: 1px solid var(--node-edge);
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 0 10px;
+}
+
+.scene-node .conversation-node-bubble.user { background: transparent; }
+
+.scene-node-card .scene-node-handle {
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border: 0;
+  background: transparent;
+}
+
+.scene-node-card .scene-node-handle::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 50%;
+  background: var(--node-edge);
+}
+
+.scene-node-card:is(:hover, .selected) .scene-node-handle::after {
+  background: var(--gl-surface-text-muted);
+}
+
+.scene-node.scene-node-loading {
+  border-color: var(--gl-graph-border);
+  border-radius: 6px;
+  background: var(--gl-graph-surface);
+  box-shadow: none;
+}
+
+.scene-node-loading .scene-node-title {
+  border: 0;
+  background: transparent;
+  padding: 12px 14px;
+  color: var(--gl-surface-text-secondary);
+}
+
+.group-node-header > .node-glyph {
+  width: 12px;
+  height: 12px;
+}
+
+.scene-canvas .group-node:not(.collapsed, .has-body-color) {
+  background: transparent;
+  border-color: var(--gl-graph-border);
+  border-radius: 5px;
+  box-shadow: none;
+}
+
+.scene-canvas .group-node.selected:not(.collapsed) {
+  border-color: var(--gl-graph-selection);
+}
+
+.group-node .group-node-label-chip,
+.group-node .group-node-pill-header {
+  gap: 6px;
+  border-radius: 4px;
+  background-color: var(--gl-graph-surface);
+}
+
+.group-node:not(.has-header-color) .group-node-label-chip {
+  border-color: transparent;
+  background: var(--gl-graph-canvas);
+  padding-inline: 3px;
+  color: var(--gl-surface-text-secondary);
+}
+
+.group-node .group-node-pill-header > .group-node-controls {
+  margin-inline-start: auto;
+}
+
+/* User-selected body and header swatches remain independent. */
+.note-node .scene-node-surface > .note-node-content {
+  color: var(--gl-node-font-color, var(--node-swatch-ink, var(--gl-surface-text-primary)));
+}
+
+.note-node .note-node-markdown :is(p, li, h1, h2, h3, h4, h5, h6, a, blockquote) {
+  color: var(--gl-node-font-color, var(--node-swatch-ink, inherit));
+}
+
+.note-node .node-heading {
+  --node-swatch-ink: initial;
+  color: var(--node-swatch-ink, var(--gl-node-font-color, var(--gl-surface-text-primary)));
+}
+
+.note-node .node-heading :is(.note-node-badge, .note-node-delete-btn) {
+  color: var(--node-swatch-ink, var(--gl-surface-text-muted));
+}
+
+.group-node .group-node-header,
+.group-node .group-node-controls-chip,
+.group-node-header .group-node-btn,
+.group-node-controls-chip .group-node-btn {
+  color: var(--node-swatch-ink, var(--gl-surface-text-secondary));
+}
+
+.scene-node .fal-studio-header {
+  background: transparent;
+}
+
+.scene-node .fal-studio-header-icon {
+  width: auto;
+  height: auto;
+  flex-basis: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--gl-surface-text-muted);
+}
+
+.chart-node .chart-overview { color: var(--gl-surface-text-muted); }
+.chart-overview polyline { stroke: var(--gl-surface-text-primary); }
+
+.chart-overview > svg {
+  width: 100%;
+  height: 100%;
+  position: absolute;
+  inset: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-node.scene-node-card,
+  .scene-node .chat-node-quick-actions { transition: none; }
+}

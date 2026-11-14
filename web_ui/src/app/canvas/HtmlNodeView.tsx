@@ -8,6 +8,8 @@ import {
   HTML_SPLIT_TOTAL_PX,
   HTML_SPLITTER_REPORT_DEBOUNCE_MS,
 } from "./canvasConstants";
+import { CollapseToggleButton } from "./CollapseToggleButton";
+import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { nextHtmlSplitterKeyboardValue } from "./htmlSplitterControls";
 import { useLodVisibility } from "./useLodVisibility";
@@ -366,12 +368,10 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
       selected={!!selected}
       collapsed={collapsed}
       header={
-        <div className="scene-node-title html-node-header">
+        <NodeHeading className="html-node-header">
           <span>HTML</span>
           <div className="html-node-controls">
-            <button type="button" className="html-node-header-btn" onClick={data.onToggleCollapse}>
-              {data.isCollapsed ? "Expand" : "Collapse"}
-            </button>
+            <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
             {/* No Popout control. It shipped as a permanently disabled
                 button with its reason in a tooltip, which is a dead control
                 on a card the user cannot do anything about - the rationale
@@ -380,13 +380,13 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
                 first, and until that happens there is nothing to render. */}
             <button
               type="button"
-              className="html-node-header-btn html-node-delete-btn"
+              className="html-node-header-btn html-node-delete-btn nodrag"
               onClick={data.onDelete}
             >
               Delete
             </button>
           </div>
-        </div>
+        </NodeHeading>
       }
       bodyClassName="html-node-content"
     >

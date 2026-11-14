@@ -20,6 +20,7 @@ function makeStore(
   const scene = { ...initialSceneState, nodes, pins: [], hasSavedChat };
   return {
     getScene: () => scene,
+    getSpawnPoint: () => ({ x: 135, y: -24 }),
     organizeNodes: vi.fn(),
     removeNodes: vi.fn(),
     removeEdges: vi.fn(),
@@ -42,6 +43,7 @@ function makeRf(nodes: Array<{ id: string; selected?: boolean; type?: string }> 
   return {
     zoomIn: vi.fn(),
     zoomOut: vi.fn(),
+    zoomTo: vi.fn(),
     fitView: vi.fn(),
     setViewport: vi.fn(),
     getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
@@ -120,7 +122,7 @@ describe("buildCommands", () => {
     const commands = buildCommands(store, makeRf(), makeOverlays());
     commands.find((c) => c.id === "add-pin")!.run();
     expect(store.addPin).toHaveBeenCalledTimes(1);
-    expect(store.addPin.mock.calls[0][0]).toBe("Pin 1");
+    expect(store.addPin).toHaveBeenCalledWith("Pin 1", 135, -24);
   });
 
   it("add-note is always enabled and calls addNote with the viewport center", () => {
@@ -130,7 +132,7 @@ describe("buildCommands", () => {
     const addNote = commands.find((c) => c.id === "add-note")!;
     expect(addNote.enabled()).toBe(true);
     addNote.run();
-    expect(store.addNote).toHaveBeenCalledTimes(1);
+    expect(store.addNote).toHaveBeenCalledWith(135, -24);
   });
 
   it("create-frame/create-container are disabled with 0 or 1 selected nodes", () => {
@@ -288,7 +290,7 @@ describe("buildCommands", () => {
     // the capture's duration - see that module's own doc. Asserted as
     // "any function" rather than a specific reference since it's a fresh
     // arrow closure over `store` on every run(), not a stable callback.
-    expect(exportCanvasAsPngMock).toHaveBeenCalledWith(rf, "--gl-surface-window", expect.any(Function));
+    expect(exportCanvasAsPngMock).toHaveBeenCalledWith(rf, "--gl-graph-canvas", expect.any(Function));
   });
 
   // ADR-021 stage 21.5: the two branch agents were reachable ONLY by

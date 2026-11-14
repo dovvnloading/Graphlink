@@ -1,6 +1,7 @@
 import type { Node, NodeProps } from "@xyflow/react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { withAuthToken } from "../../lib/auth/token";
+import { NodeGlyph } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { FalMediaUploader } from "./FalMediaUploader";
 import { useLodVisibility } from "./useLodVisibility";
@@ -147,8 +148,7 @@ function ModelLibrary({
     <section className="fal-studio-library" aria-label="Fal model catalog">
       <div className="fal-studio-section-heading">
         <div>
-          <span className="fal-studio-kicker">01 / MODEL LIBRARY</span>
-          <h4>Find the right model <span>{loaded ? catalog.models.length : "—"}</span></h4>
+          <h4>Model catalog <span>{loaded ? catalog.models.length : "—"}</span></h4>
         </div>
         <button type="button" className="fal-studio-icon-button" aria-label={showLibrary ? "Collapse catalog" : "Expand catalog"}
           onClick={() => setShowLibrary(!showLibrary)}>{showLibrary ? "⌃" : "⌄"}</button>
@@ -269,7 +269,6 @@ function ModelInputs({
     <section className="fal-studio-inputs" aria-label="Generation inputs">
       <div className="fal-studio-section-heading">
         <div>
-          <span className="fal-studio-kicker">02 / CREATE</span>
           <h4>{draft.mode === "all" ? "Model inputs" : draft.operation === "text-to-speech" ? "Write what to say" : "Describe your creation"}</h4>
         </div>
         {draft.modelId && <button type="button" className="fal-studio-mini-link" onClick={onInspect}
@@ -359,7 +358,7 @@ function OutputGallery({ media, id }: { media: MediaState; id: string }) {
   return (
     <section className="fal-studio-gallery" aria-label="Generated media library">
       <div className="fal-studio-section-heading">
-        <div><span className="fal-studio-kicker">04 / OUTPUTS</span><h4>Your creations <span>{jobs.length}</span></h4></div>
+        <div><h4>Outputs <span>{jobs.length}</span></h4></div>
       </div>
       {jobs.length === 0 ? (
         <div className="fal-studio-gallery-empty">
@@ -535,10 +534,9 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
     <NodeShell kindClassName="fal-studio-node" selected={!!selected}
       collapsed={lodCollapsed} bodyClassName="fal-studio-body"
       header={<div className="fal-studio-header">
-        <div className="fal-studio-header-icon" aria-hidden="true">◈</div>
+        <div className="fal-studio-header-icon" aria-hidden="true"><NodeGlyph name="media" /></div>
         <div className="fal-studio-header-copy">
-          <span className="fal-studio-eyebrow">FAL.AI · CREATIVE WORKSPACE</span>
-          <strong>Media Studio</strong>
+          <h3>Fal Media Studio</h3>
         </div>
         <div className="fal-studio-status" data-status={media.status}>
           <i aria-hidden="true" />{statusText}
@@ -552,11 +550,6 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
           }}>×</button>
       </div>}>
       <div className="fal-studio-app nodrag nopan">
-        <div className="fal-studio-hero">
-          <p>IDEA TO ASSET</p>
-          <h3>Create without limits<span>.</span></h3>
-          <span>Search the Fal catalog or browse by media type.</span>
-        </div>
         <div className="fal-studio-mode-tabs" role="group" aria-label="Media generation type">
           {(["image", "video", "audio", "all"] as const).map((mode) => (
             <button key={mode} type="button" aria-pressed={draft.mode === mode}
@@ -582,7 +575,7 @@ function FalMediaNodeViewImpl({ id, selected, data }: NodeProps<FalMediaFlowNode
         <div className="fal-studio-rule" />
         <section className="fal-studio-generate" aria-label="Cost review and generation">
           <div className="fal-studio-section-heading">
-            <div><span className="fal-studio-kicker">03 / REVIEW & GENERATE</span><h4>Make it real</h4></div>
+            <h4>Review and generate</h4>
           </div>
           {draft.modelId ? (
             <div className="fal-studio-selected-summary">

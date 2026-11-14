@@ -27,6 +27,7 @@
 // component renders, so an empty fallback would collapse the card and let
 // edges snap to a zero-size box for a frame or two.
 
+import "./NodeCards.css";
 import { Component, lazy, Suspense, type ComponentType, type ReactNode } from "react";
 
 /** The shell shown while a kind's chunk is still loading. */
@@ -162,6 +163,9 @@ export const FalMediaNodeView = withNodeSuspense(
 );
 export const NoteNodeView = withNodeSuspense(
   lazy(() => import("./NoteNodeView").then((m) => ({ default: m.NoteNodeView }))),
+);
+export const PlaceholderNodeView = withNodeSuspense(
+  lazy(() => import("./PlaceholderNodeView").then((m) => ({ default: m.PlaceholderNodeView }))),
 );
 export const PlanNodeView = withNodeSuspense(
   lazy(() => import("./PlanNodeView").then((m) => ({ default: m.PlanNodeView }))),

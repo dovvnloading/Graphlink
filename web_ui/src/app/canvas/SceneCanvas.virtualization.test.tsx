@@ -284,6 +284,19 @@ describe("SceneCanvas <ReactFlow> wiring (ADR-011 stages 11.2/11.3)", () => {
       expect(lastProps().edges).toEqual([]);
     });
 
+    it("mounts vector connections in the captured viewport only during PNG export", () => {
+      const { store, stateListeners } = mount();
+      publish(stateListeners, {
+        nodes: [chatRow("a", 0), chatRow("b", 200)],
+        edges: [{ id: "e1", source: "a", target: "b", role: "reference" }],
+        orthogonalRouting: true,
+      });
+      act(() => store.setExportInProgress(true));
+      expect(lastProps().edges).toMatchObject([{ id: "e1", type: "orthogonal", data: { role: "reference" } }]);
+      act(() => store.setExportInProgress(false));
+      expect(lastProps().edges).toEqual([]);
+    });
+
     it("keeps the edge model stable across a hover, since fading is applied while drawing", () => {
       // Hover used to rebuild the whole edge array to restyle one edge. The
       // canvas applies the faded-connections lens itself, so the model is a

@@ -33,6 +33,7 @@ describe("minimapCategory", () => {
     ["gitlink", "tool"],
     ["code_review", "tool"],
     ["code_sandbox", "tool"],
+    ["fal_media", "tool"],
     ["frame", "group"],
     ["container", "group"],
   ])("draws a %s node as %s", (kind, category) => {

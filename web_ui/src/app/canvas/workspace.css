@@ -1,0 +1,178 @@
+.app-topbar {
+  height: 44px;
+  flex: none;
+  padding-inline: 14px;
+  background: var(--gl-graph-surface);
+  border-color: var(--gl-graph-border);
+}
+
+.app-title { font-size: 15px; letter-spacing: -.025em; }
+.appbar-btn { height: 32px; border-radius: 4px; }
+.appbar-btn-icon { width: 32px; }
+
+.app-canvas-content {
+  display: flex;
+  flex-direction: column;
+  container: graph-workspace / inline-size;
+}
+
+.graph-stage {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.scene-canvas .react-flow {
+  background-color: var(--gl-graph-canvas);
+  --xy-connectionline-stroke: var(--gl-connection-active);
+  --xy-connectionline-stroke-width: 2;
+  --xy-selection-background-color: color-mix(in srgb, var(--gl-graph-selection) 9%, transparent);
+  --xy-selection-border: 1px solid var(--gl-graph-selection);
+}
+
+.scene-canvas .react-flow__background { z-index: -2; }
+
+.scene-canvas .viewport-dock {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 2px;
+  margin: var(--gl-chrome-inset);
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 5px;
+  background: var(--gl-graph-surface);
+}
+
+.viewport-dock button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 3px;
+  padding: 0;
+  color: var(--gl-surface-text-secondary);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.viewport-dock button:hover:enabled {
+  color: var(--gl-surface-text-bright);
+  background: var(--gl-neutral-button-hover);
+}
+
+.viewport-dock button:disabled { opacity: .45; cursor: default; }
+.viewport-dock button:focus-visible,
+.empty-graph button:focus-visible { outline: 2px solid var(--gl-graph-selection); outline-offset: 1px; }
+.viewport-dock .icon { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.viewport-dock .viewport-scale { width: 43px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.viewport-divider { width: 1px; height: 15px; margin-inline: 3px; background: var(--gl-graph-border); }
+
+.empty-graph {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(350px, 90%);
+  text-align: center;
+  pointer-events: none;
+}
+
+.empty-graph h1 {
+  margin: 0 0 16px;
+  color: var(--gl-surface-text-strong);
+  font-size: 25px;
+  line-height: 1.2;
+  font-weight: 550;
+  letter-spacing: -.035em;
+}
+
+.empty-graph-actions { display: flex; gap: 8px; justify-content: center; }
+.empty-graph button {
+  padding: 7px 12px;
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 4px;
+  color: var(--gl-surface-text-secondary);
+  background: var(--gl-graph-surface);
+  font: 500 13px/1.4 var(--gl-font-family);
+  pointer-events: auto;
+  cursor: pointer;
+}
+.empty-graph button:hover { color: var(--gl-surface-text-primary); border-color: var(--gl-surface-text-muted); }
+.app-shell:not([data-connection-status="open"]) .empty-graph { visibility: hidden; }
+
+/* React Flow measures its own stage above this row. A growing draft, an
+   attachment or a narrower document split changes the actual visible area. */
+.app-composer-layer {
+  position: relative;
+  flex: none;
+  display: flex;
+  justify-content: center;
+  z-index: var(--gl-z-app-layer);
+  background: var(--gl-graph-surface);
+  border-top: 1px solid var(--gl-graph-border);
+}
+
+.composer-dock {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 6px 14px;
+  box-sizing: border-box;
+  width: min(100%, 1360px);
+  padding: 8px 16px;
+}
+
+.composer-reply-target,
+.composer-synthesize-target,
+.composer-attachment-chips { grid-column: 1 / -1; }
+
+.composer-input-wrap { grid-column: 1; min-width: 0; }
+
+.composer-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--gl-graph-border);
+  border-radius: 4px;
+  background: var(--gl-graph-canvas);
+  line-height: 18px;
+}
+
+.composer-input:focus {
+  outline: 1px solid var(--gl-graph-selection);
+  outline-offset: -1px;
+}
+
+.composer-controls {
+  grid-column: 2;
+  min-width: 0;
+  min-height: 34px;
+  padding-top: 0;
+}
+
+.composer-control { min-width: 0; border-radius: 4px; }
+.composer-icon-button { flex: none; }
+.composer-control-value-reasoning { width: auto; }
+.composer-control-value-model { width: auto; max-width: 150px; }
+.composer-send-button { border-radius: 4px; }
+.composer-controls .token-counter-trigger { flex: none; }
+
+@container graph-workspace (max-width: 780px) {
+  .composer-dock { grid-template-columns: minmax(0, 1fr); gap: 3px; padding: 8px 10px 6px; }
+  .composer-controls { grid-column: 1; gap: 2px; }
+}
+
+@container graph-workspace (max-width: 480px) {
+  .composer-control { padding-inline: 5px; gap: 3px; }
+  .composer-control-value-model { max-width: 18cqw; }
+}
+
+/* A selected group remains underneath the cards contained in it. */
+.scene-canvas .react-flow__node-frame.selected { z-index: -1 !important; }
+.scene-canvas .react-flow__node-container.selected { z-index: -2 !important; }

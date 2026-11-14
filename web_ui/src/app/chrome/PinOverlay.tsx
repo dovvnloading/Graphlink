@@ -23,7 +23,7 @@ const MAX_PIN_NOTE_LENGTH = 4000;
  */
 export function PinOverlay({ store }: { store: SceneStore }) {
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
-  const { getViewport, setCenter } = useReactFlow();
+  const { setCenter } = useReactFlow();
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
@@ -51,11 +51,9 @@ export function PinOverlay({ store }: { store: SceneStore }) {
   const addPinHere = useCallback(() => {
     // Pin the current view center - the R1/R2 equivalent of the Qt canvas's
     // "Pin this location" context-menu verb.
-    const viewport = getViewport();
-    const centerX = (window.innerWidth / 2 - viewport.x) / viewport.zoom;
-    const centerY = (window.innerHeight / 2 - viewport.y) / viewport.zoom;
-    store.addPin(`Pin ${scene.pins.length + 1}`, centerX, centerY);
-  }, [getViewport, scene.pins.length, store]);
+    const { x, y } = store.getSpawnPoint();
+    store.addPin(`Pin ${scene.pins.length + 1}`, x, y);
+  }, [scene.pins.length, store]);
 
   function startEditing(pinId: string, title: string, note: string) {
     setEditingId(pinId);

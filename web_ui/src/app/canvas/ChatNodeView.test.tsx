@@ -1,5 +1,5 @@
-import { createElement } from "react";
-import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
+import { createElement, useEffect } from "react";
+import { ReactFlowProvider, useStoreApi, type NodeProps } from "@xyflow/react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -58,7 +58,13 @@ afterEach(() => {
 // useStore(zoom) read - not RF's node-mounting/measurement pipeline - a
 // bare ReactFlowProvider is enough, and the component renders immediately
 // visible with no jsdom polyfills required.
-function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected: boolean = false) {
+function SetZoom({ zoom }: { zoom: number }) {
+  const store = useStoreApi();
+  useEffect(() => { store.setState({ transform: [0, 0, zoom] }); }, [store, zoom]);
+  return null;
+}
+
+function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected: boolean = false, zoom = 1) {
   const onToggleCollapse = vi.fn();
   const onDelete = vi.fn();
   const onUndockChild = vi.fn();
@@ -128,6 +134,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
 
   const { container, rerender } = render(
     <ReactFlowProvider>
+      <SetZoom zoom={zoom} />
       <ChatNodeView {...buildProps(overrides)} />
     </ReactFlowProvider>,
   );
@@ -138,6 +145,7 @@ function renderChatNode(overrides: Partial<ChatFlowNode["data"]> = {}, selected:
   function rerenderWithData(dataOverrides: Partial<ChatFlowNode["data"]>) {
     rerender(
       <ReactFlowProvider>
+        <SetZoom zoom={zoom} />
         <ChatNodeView {...buildProps(dataOverrides)} />
       </ReactFlowProvider>,
     );
@@ -163,6 +171,27 @@ describe("ChatNodeView", () => {
     renderChatNode({ isUser: false, isCollapsed: true });
     expect(screen.getByText("Assistant")).toBeInTheDocument();
     expect(screen.queryByText(/Hello/)).toBeNull();
+  });
+
+  it("shows a bounded excerpt at overview zoom and respects an explicit fold", () => {
+    const content = "A long reply. ".repeat(80);
+    const { container, rerenderWithData } = renderChatNode({ content }, false, 0.3);
+    expect(container.querySelector(".node-overview-excerpt")?.textContent).toEqual(content.slice(0, 160).trim());
+    expect(container.querySelector(".chat-node-reading-area")).toBeNull();
+    rerenderWithData({ isCollapsed: true, content });
+    expect(container.querySelector(".node-overview-excerpt")).toBeNull();
+  });
+
+  it("opens and dismisses the node menu from its header action", async () => {
+    const user = userEvent.setup();
+    renderChatNode();
+    const actions = screen.getByRole("button", { name: "Node actions" });
+    await user.click(actions);
+    expect(actions).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("menuitem", { name: "Copy Text" })).toHaveFocus();
+    await user.click(actions);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(actions).toHaveFocus();
   });
 
   it("the inline collapse button calls onToggleCollapse", async () => {
@@ -687,15 +716,12 @@ describe("ChatNodeView Collapse Branch (ADR-002 Workstream 1)", () => {
 // hover-revealed quick-action row (Copy/Branch from Here/Open Document
 // View) - all 3 buttons deliberately call the SAME handlers the card menu
 // below already uses, just reached without a right-click first.
-describe("ChatNodeView Stage 3 card chrome: avatar + quick actions", () => {
-  it("renders the avatar chip with 'U' for a user node and 'A' for an assistant node, both aria-hidden", () => {
-    const { container: userContainer } = renderChatNode({ isUser: true });
-    const userAvatar = userContainer.querySelector(".chat-node-avatar");
-    expect(userAvatar).toHaveTextContent("U");
-    expect(userAvatar).toHaveAttribute("aria-hidden", "true");
-
-    const { container: assistantContainer } = renderChatNode({ isUser: false });
-    expect(assistantContainer.querySelector(".chat-node-avatar")).toHaveTextContent("A");
+describe("ChatNodeView role labels and quick actions", () => {
+  it("labels chat roles without a redundant avatar", () => {
+    renderChatNode({ isUser: true });
+    renderChatNode({ isUser: false });
+    expect(screen.getByText("You")).toBeVisible();
+    expect(screen.getByText("Assistant")).toBeVisible();
   });
 
   it("the quick-action Copy button copies data.content directly (not routed through the card menu) and flashes a check glyph", async () => {
@@ -756,23 +782,17 @@ describe("ChatNodeView Stage 3 card chrome: avatar + quick actions", () => {
     expect(container.querySelector(".chat-node")).toHaveClass("selected");
   });
 
-  // An adversarial review (node redesign stage 3) found that the avatar chip
-  // and quick-actions row, stacked with the header's existing conditional
-  // badges (model/synthesis/docked/final - which can legitimately all
-  // co-occur on one node), overflowed the 290px collapsed pill and pushed
-  // the collapse button itself outside .scene-node's overflow:hidden clip,
-  // making it unclickable. Both are now suppressed while collapsed.
-  describe("suppressed while collapsed (overflow fix)", () => {
-    it("hides the avatar chip and the quick-actions row, but keeps the collapse button, when isCollapsed is true", () => {
+  describe("collapsed title bar", () => {
+    it("keeps the role label and expand button while hiding the quick actions on a folded card", () => {
       const { container } = renderChatNode({ isCollapsed: true, model: "claude-opus-4-1-20250805" });
-      expect(container.querySelector(".chat-node-avatar")).toBeNull();
+      expect(screen.getByText("You")).toBeVisible();
       expect(container.querySelector(".chat-node-quick-actions")).toBeNull();
       expect(screen.getByRole("button", { name: "Expand" })).toBeInTheDocument();
     });
 
-    it("shows the avatar chip and the quick-actions row again once expanded", () => {
+    it("shows the role and quick actions when expanded", () => {
       const { container } = renderChatNode({ isCollapsed: false });
-      expect(container.querySelector(".chat-node-avatar")).not.toBeNull();
+      expect(screen.getByText("You")).toBeVisible();
       expect(container.querySelector(".chat-node-quick-actions")).not.toBeNull();
     });
   });

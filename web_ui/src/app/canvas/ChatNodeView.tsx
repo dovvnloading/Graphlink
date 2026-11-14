@@ -8,6 +8,7 @@ import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { useStreamBuffer } from "./useStreamBuffer";
@@ -633,10 +634,10 @@ function ChatNodeIcon({ name }: { name: ChatNodeIconName }) {
 }
 
 // Node redesign, stage 3's own deferred sub-item ("content fade + Show more,
-// replacing the hard 560px cutoff"), implemented now: must match
+// replacing the hard 300px cutoff"), implemented now: must match
 // .chat-node-content's own max-height in styles.css exactly, or the fade/
 // button would appear (or fail to appear) at the wrong point.
-export const CHAT_CONTENT_COLLAPSED_MAX_HEIGHT = 560;
+export const CHAT_CONTENT_COLLAPSED_MAX_HEIGHT = 300;
 
 /** Pure comparison, exported standalone for the same direct-unit-testability
  * reason makeDebouncedScrollReport above already is - jsdom never lays out
@@ -779,19 +780,15 @@ export const ChatNodeView = memo(function ChatNodeView({
   }
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
 
-  // R6.3: restore the saved scroll position once on mount (an empty dep
-  // array - deliberate, not a lint oversight: re-running this on every scene
-  // snapshot/re-render would fight the user's own live scrolling every time
-  // an unrelated field on this node changes). scrollTimerRef carries the
-  // debounce state across scroll events (see makeDebouncedScrollReport
-  // above).
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Restore only when the reading area mounts (also after overview/manual
+  // folding). A backend scroll report should never move a visible reader.
   useEffect(() => {
     if (contentRef.current) contentRef.current.scrollTop = data.chatScrollValue;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [collapsed]);
 
   useEffect(
     () => () => {
@@ -838,8 +835,8 @@ export const ChatNodeView = memo(function ChatNodeView({
     // an embedded image (NodeMarkdown's own ZoomImage) has no intrinsic
     // height until it finishes loading, well after this effect first runs.
     // Observing contentEl itself still works once content crosses the
-    // 560px cap: at that crossing point the element's OWN rendered height
-    // changes (uncapped natural size -> capped 560px), which is exactly
+    // 300px cap: at that crossing point the element's OWN rendered height
+    // changes (uncapped natural size -> capped 300px), which is exactly
     // the resize event this needs to catch; further growth past the cap
     // doesn't change the boolean this is tracking, so no further event is
     // needed. vitest.setup.ts's ResizeObserver stub never fires its
@@ -848,172 +845,89 @@ export const ChatNodeView = memo(function ChatNodeView({
     const observer = new ResizeObserver(measure);
     observer.observe(contentEl);
     return () => observer.disconnect();
-  }, [data.content]);
+  }, [data.content, streamedContent, collapsed]);
+
+  const hasUsage = data.promptTokens != null || data.completionTokens != null;
+  const hasMetadata = Boolean(data.model || data.overrideModelId || hasUsage);
+  // At map scale, keep a bounded plain-text excerpt; mounting Markdown for every
+  // off-screen turn would defeat the level-of-detail optimization. Respect a
+  // user's explicit fold even while the viewport is in overview.
+  const overview = lodCollapsed && !data.isCollapsed
+    ? (data.pendingRequestId ? streamedContent : data.content).slice(0, 160).trim()
+    : "";
+  const headerDetail = overview ? (
+    <span className="node-overview-excerpt">{overview}</span>
+  ) : hasMetadata && (
+    <div className="chat-node-metadata">
+      {data.model && (
+        <span className="chat-node-model-badge" title={data.provider ?? undefined}>{data.model}</span>
+      )}
+      {data.overrideModelId && (
+        <span className="chat-node-model-override-badge"
+          title={`Pinned to ${data.overrideProvider} - ${data.overrideModelId}`}>📌 {data.overrideModelId}</span>
+      )}
+      {hasUsage && (
+        <span className="chat-node-usage-badge"
+          title={`Prompt: ${data.promptTokens ?? "?"} · Completion: ${data.completionTokens ?? "?"}`}>
+          {`${data.promptTokens ?? "?"}→${data.completionTokens ?? "?"}`}
+          {data.estimatedCostUsd != null && ` · $${data.estimatedCostUsd.toFixed(4)}`}
+        </span>
+      )}
+    </div>
+  );
 
   return (
     <NodeShell
       kindClassName={`chat-node${data.isUser ? " user" : " assistant"}`}
       selected={!!selected}
       collapsed={collapsed}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setMenuPosition({ x: event.clientX, y: event.clientY });
-      }}
+      onMenuChange={setMenuPosition}
       header={
-        <div className="scene-node-title chat-node-role">
-        <span className="chat-node-role-group">
-          {/* Node redesign, stage 3: a small avatar chip - purely visual
-              (aria-hidden, the real role text right after it already
-              carries the semantics) - so scanning a dense graph of many
-              chat nodes doesn't depend on reading "You"/"Assistant" text
-              at small zoom levels. User/Assistant differentiated by the
-              same background shade .chat-node.user already tints its own
-              title bar with, not a new color - this app's palette stays
-              deliberately greyscale. Suppressed while collapsed - an
-              adversarial review measured a real overflow: the collapsed
-              pill is only 290px, and this chip stacked with the header's
-              existing conditional badges (model/synthesis/docked/final,
-              which can legitimately all co-occur) plus the quick-actions
-              row below pushed the collapse button entirely outside
-              .scene-node's overflow:hidden clip, making it unclickable. */}
-          {!collapsed && (
-            <span className="chat-node-avatar" aria-hidden="true">
-              {data.isUser ? "U" : "A"}
-            </span>
-          )}
-          <span>{data.isUser ? "You" : "Assistant"}</span>
-          {/* ADR-002 Workstream 1 ("Branch status and lifecycle"): always
-              rendered (unlike every other badge here, which is conditional)
-              - branchStatus always has a real value ("active" for the vast
-              majority of nodes, never null/undefined), so this is always
-              meaningful to show, not just for a rare marked case. */}
-          <span
-            className="chat-node-status-badge"
-            style={{ backgroundColor: BRANCH_STATUS_COLORS[data.branchStatus] ?? BRANCH_STATUS_COLORS.active }}
-            title={`Branch status: ${data.branchStatus}`}
-            aria-label={`Branch status: ${data.branchStatus}`}
-          />
-          {data.dockedChildren.length > 0 && (
-            <span className="chat-node-docked-badge" title="Docked items">
-              {data.dockedChildren.length}
-            </span>
-          )}
-          {data.isBranchSynthesis && (
-            // ADR-002 Workstream 1 ("Synthesize Branches"): reuses the same
-            // "join/combine" glyph as NoteNodeView's Compare Branches badge
-            // (⇄) - the two features are different renderers (note vs.
-            // chat) so there is no shared component to factor this into,
-            // but the visual vocabulary for "derived from multiple
-            // branches" stays consistent across both.
+        <NodeHeading
+          className="chat-node-role"
+          detail={headerDetail}
+        >
+          <span className="chat-node-role-group">
+            <span>{data.isUser ? "You" : "Assistant"}</span>
             <span
-              className="chat-node-synthesis-badge"
-              title={`Branch Synthesis (${data.synthesisSourceNodeIds.length} sources): ${data.synthesisInstructions}`}
-              aria-label="Branch Synthesis"
-            >
-              ⇄
-            </span>
-          )}
-          {data.model && (
-            <span className="chat-node-model-badge" title={data.provider ?? undefined}>
-              {data.model}
-            </span>
-          )}
-          {data.overrideModelId && (
-            // ADR-018 stage 18.3: a distinct badge from chat-node-model-
-            // badge above - that one is OUTPUT provenance (what a completed
-            // reply was generated by), this is an INPUT pin (what the NEXT
-            // reply will be generated by); both can legitimately show at
-            // once on a node whose last reply predates its current pin.
-            <span
-              className="chat-node-model-override-badge"
-              title={`Pinned to ${data.overrideProvider} - ${data.overrideModelId}`}
-            >
-              📌 {data.overrideModelId}
-            </span>
-          )}
-          {(data.promptTokens != null || data.completionTokens != null) && (
-            // ADR-016 stage 16.2: real usage on the node itself - data
-            // exists on the wire since ADR-006 stage 6.8 but was never
-            // rendered until now (only the composer's own live counter
-            // showed it). estimatedCostUsd is null for local providers'
-            // genuine $0 vs an unpriced model - the "$" prefix distinguishes
-            // a real, if free, answer from nothing to show.
-            <span
-              className="chat-node-usage-badge"
-              title={`Prompt: ${data.promptTokens ?? "?"} · Completion: ${data.completionTokens ?? "?"}`}
-            >
-              {`${data.promptTokens ?? "?"}→${data.completionTokens ?? "?"}`}
-              {data.estimatedCostUsd != null && ` · $${data.estimatedCostUsd.toFixed(4)}`}
-            </span>
-          )}
-          {data.isFinalDeliverable && (
-            // ADR-002 Workstream 1 ("Branch status and lifecycle"): reuses
-            // the synthesis badge's "single glyph, no pill" shape - at most
-            // one node in the whole scene can ever show this (server-
-            // computed against the document's one final_deliverable_
-            // node_id pointer).
-            <span
-              className="chat-node-final-badge"
-              title="Final Deliverable"
-              aria-label="Final Deliverable"
-            >
-              ★
-            </span>
-          )}
-        </span>
-        {/* A single wrapper span, not two separate top-level flex children -
-            .chat-node-role's own layout is justify-content:space-between
-            (see .chat-node-role-group's own comment above for why a 3rd
-            top-level child gets pushed to the CENTER by that, not grouped
-            with the collapse button on the right where it belongs). */}
-        <span className="chat-node-title-actions">
-          {/* Node redesign, stage 3: hover-revealed quick actions - the 3
-              most-reached-for items from the card menu below (Copy Text,
-              Branch from here, Open Document View), surfaced without a
-              right-click. Hidden by default (opacity:0, matching
-              .group-node-controls-chip's own established hover-reveal
-              convention exactly) and revealed on hover OR while selected,
-              so they're still discoverable without a mouse hovering right
-              there after a click-to-select. nodrag on every button - these
-              sit inside a React Flow node, and without it a click here
-              would also start dragging the card. */}
-          {/* Suppressed while collapsed - same overflow reason as the
-              avatar chip's own comment above; this row alone was the
-              larger contributor to the measured overflow. */}
-          {!collapsed && (
-            <span className="chat-node-quick-actions">
-              <button
-                type="button"
-                className="chat-node-quick-action nodrag"
-                onClick={onQuickCopy}
-                title="Copy text"
-                aria-label="Copy text"
-              >
-                <ChatNodeIcon name={copied ? "check" : "copy"} />
-              </button>
-              <button
-                type="button"
-                className="chat-node-quick-action nodrag"
-                onClick={data.onBranchFromHere}
-                title="Branch from here"
-                aria-label="Branch from here"
-              >
-                <ChatNodeIcon name="branch" />
-              </button>
-              <button
-                type="button"
-                className="chat-node-quick-action nodrag"
-                onClick={data.onOpenDocumentView}
-                title="Open Document View"
-                aria-label="Open Document View"
-              >
-                <ChatNodeIcon name="document" />
-              </button>
-            </span>
-          )}
-          <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
-        </span>
-      </div>
+              className="chat-node-status-badge"
+              data-status={data.branchStatus}
+              style={{ backgroundColor: BRANCH_STATUS_COLORS[data.branchStatus] ?? BRANCH_STATUS_COLORS.active }}
+              title={`Branch status: ${data.branchStatus}`}
+              aria-label={`Branch status: ${data.branchStatus}`}
+            />
+            {data.dockedChildren.length > 0 && (
+              <span className="chat-node-docked-badge" title="Docked items">{data.dockedChildren.length}</span>
+            )}
+            {data.isBranchSynthesis && (
+              <span className="chat-node-synthesis-badge"
+                title={`Branch Synthesis (${data.synthesisSourceNodeIds.length} sources): ${data.synthesisInstructions}`}
+                aria-label="Branch Synthesis">⇄</span>
+            )}
+            {data.isFinalDeliverable && (
+              <span className="chat-node-final-badge" title="Final Deliverable" aria-label="Final Deliverable">★</span>
+            )}
+          </span>
+          <span className="chat-node-title-actions">
+            {!collapsed && (
+              <span className="chat-node-quick-actions">
+                <button type="button" className="chat-node-quick-action nodrag" onClick={onQuickCopy}
+                  title="Copy text" aria-label="Copy text">
+                  <ChatNodeIcon name={copied ? "check" : "copy"} />
+                </button>
+                <button type="button" className="chat-node-quick-action nodrag" onClick={data.onBranchFromHere}
+                  title="Branch from here" aria-label="Branch from here">
+                  <ChatNodeIcon name="branch" />
+                </button>
+                <button type="button" className="chat-node-quick-action nodrag" onClick={data.onOpenDocumentView}
+                  title="Open Document View" aria-label="Open Document View">
+                  <ChatNodeIcon name="document" />
+                </button>
+              </span>
+            )}
+            <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
+          </span>
+        </NodeHeading>
       }
       bodyClassName="chat-node-content-shell"
       menu={
@@ -1050,57 +964,35 @@ export const ChatNodeView = memo(function ChatNodeView({
         )
       }
     >
-      {/* ADR-012 stage 12.5 (NodeShell migration): this file's body is
-          uniquely shaped among content-card node kinds - a positioned shell
-          (for the content-fade overlay), a scrollable content div carrying
-          its own ref/onScroll (scroll-position restore + debounced
-          reporting, R6.3), and three further conditionally-rendered panels
-          (tool invocations, the streaming Stop action, the interrupted
-          banner) that legacy rendered as SIBLINGS of the padded content div,
-          not descendants of it. NodeShell owns exactly one padded wrapper
-          div per its own fixed contract (bodyClassName="chat-node-content-
-          shell" above supplies the position:relative role that div used to
-          carry itself); everything below is that div's children, unwrapped,
-          with the redundant per-block `!collapsed &&` checks dropped since
-          NodeShell's own children slot already gates all of this on
-          !collapsed. Net effect versus the pre-migration DOM: the primary
-          message text and the fade overlay render at an IDENTICAL position
-          (padding relocated one level up nets out to the same inset for the
-          text; the fade's absolute offsets resolve against the padding edge
-          either way - unaffected by how much padding that edge encloses).
-          The Show more/less button and the three trailing panels, being
-          normal-flow children of a now-padded ancestor instead of a
-          zero-padding one, render inset ~10px further from the card's edges
-          than before - a real, flagged, secondary-chrome-only deviation
-          from a byte-for-byte "pure" wrapper swap, forced by NodeShell
-          having no slot for "sibling of the body div, still gated on
-          !collapsed." */}
-      <div
-        className={`chat-node-content${contentExpanded ? " expanded" : ""}`}
-        ref={contentRef}
-        onScroll={onScroll}
-      >
-        {/* ADR-006 stage 6.4: while a Regenerate is in flight, shows live
-            streamed deltas instead of the persisted content; once it
-            completes (pendingRequestId back to null), falls back to the
-            static, already-persisted content field - same render swap as
-            CodeSandboxNodeView's live terminal. Review fix: before the
-            first delta lands, an empty markdown body rendered as a blank
-            card - the placeholder covers that window, same posture as
-            ConversationNodeView's own streaming bubble. */}
-        {data.pendingRequestId && !streamedContent ? (
-          <span className="chat-node-streaming-placeholder">Waiting for response…</span>
-        ) : (
-          <NodeMarkdown content={data.pendingRequestId ? streamedContent : data.content} />
+      <div className="chat-node-reading-area">
+        <div
+          className={`chat-node-content${contentExpanded ? " expanded" : ""}`}
+          ref={contentRef}
+          onScroll={onScroll}
+        >
+          {/* ADR-006 stage 6.4: while a Regenerate is in flight, shows live
+              streamed deltas instead of the persisted content; once it
+              completes (pendingRequestId back to null), falls back to the
+              static, already-persisted content field - same render swap as
+              CodeSandboxNodeView's live terminal. Review fix: before the
+              first delta lands, an empty markdown body rendered as a blank
+              card - the placeholder covers that window, same posture as
+              ConversationNodeView's own streaming bubble. */}
+          {data.pendingRequestId && !streamedContent ? (
+            <span className="chat-node-streaming-placeholder">Waiting for response…</span>
+          ) : (
+            <NodeMarkdown content={data.pendingRequestId ? streamedContent : data.content} />
+          )}
+        </div>
+        {contentOverflows && !contentExpanded && (
+          <div className="chat-node-content-fade" aria-hidden="true" />
         )}
       </div>
-      {contentOverflows && !contentExpanded && (
-        <div className="chat-node-content-fade" aria-hidden="true" />
-      )}
       {contentOverflows && (
         <button
           type="button"
           className="chat-node-show-more nodrag"
+          aria-expanded={contentExpanded}
           onClick={() => setContentExpanded((expanded) => !expanded)}
         >
           {contentExpanded ? "Show less" : "Show more"}

@@ -32,11 +32,15 @@ import { Position, useStoreApi } from "@xyflow/react";
 import {
   anchorPoint,
   connectionPath,
+  drawDirection,
   traceConnection,
   type ConnectionPath,
   type HandleGeometry,
   type HandleSide,
 } from "./connectionGeometry";
+
+import { ReturnRouteCache } from "./returnRoute";
+import { connectionDashes, type ConnectionRole } from "./connectionAppearance";
 
 /** One link to draw, in the terms this canvas needs. */
 export interface ConnectionSpec {
@@ -44,6 +48,7 @@ export interface ConnectionSpec {
   source: string;
   target: string;
   orthogonal: boolean;
+  role?: ConnectionRole;
 }
 
 export interface ConnectionCanvasProps {
@@ -52,7 +57,7 @@ export interface ConnectionCanvasProps {
   hoveredId: string | null;
   /** Link currently selected, drawn emphasised. */
   selectedId: string | null;
-  /** Dim every link except the hovered one. */
+  /** Dim unrelated links while keeping the active routes visible. */
   fadeEnabled: boolean;
   /** Resting stroke colour, supplied by the theme. */
   stroke: string;
@@ -107,6 +112,7 @@ export function ConnectionCanvas({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const storeApi = useStoreApi();
   const frameRef = useRef<number | null>(null);
+  const routeCache = useRef(new ReturnRouteCache());
   // The draw inputs are read inside the frame loop rather than captured in
   // its closure, so the loop never has to be torn down and rebuilt when a
   // colour or a hover changes.
@@ -150,6 +156,7 @@ export function ConnectionCanvas({
     // Stroke width is set per connection below (selected links are drawn
     // heavier), so none is set here.
     ctx.lineCap = "round";
+    ctx.lineJoin = "round";
 
     const {
       connections: specs,
@@ -162,7 +169,30 @@ export function ConnectionCanvas({
       onGeometry: report,
     } = propsRef.current;
 
+    routeCache.current.update(nodeLookup, specs);
     const geometry = new Map<string, ConnectionPath>();
+    type Highlight = "neighbor" | "hovered" | "selected";
+    type HighlightedLink = { path: ConnectionPath; role: ConnectionRole };
+    const foreground: Record<Highlight, HighlightedLink[]> = { neighbor: [], hovered: [], selected: [] };
+    const dashes = new Map<ConnectionRole, number[]>();
+    function paint(context: CanvasRenderingContext2D, path: ConnectionPath, role: ConnectionRole, highlight?: Highlight) {
+      let dash = dashes.get(role);
+      if (!dash) {
+        dash = connectionDashes(role, zoom);
+        dashes.set(role, dash);
+      }
+      context.setLineDash(dash);
+      context.strokeStyle = highlight ? activeStroke : baseStroke;
+      context.globalAlpha = highlight === "neighbor" ? 0.78 : fade && !highlight ? dimmed : 1;
+      const width = highlight ? 2 : 1.5;
+      context.lineWidth = width / zoom;
+      traceConnection(context, path);
+      if (highlight === "selected") {
+        context.setLineDash([]);
+        context.lineWidth = 1.8 / zoom;
+        drawDirection(context, path, zoom);
+      }
+    }
     for (const spec of specs) {
       const sourceNode = nodeLookup.get(spec.source);
       const targetNode = nodeLookup.get(spec.target);
@@ -184,13 +214,19 @@ export function ConnectionCanvas({
         targetHandle,
       );
       const path = connectionPath(from, sourceHandle.side, to, targetHandle.side, spec.orthogonal);
+      if (sourceHandle.side === "bottom" && targetHandle.side === "top" && to.y < from.y) {
+        path.waypoints = routeCache.current.route(spec.id, from, to, sourceNode, targetNode);
+      }
       geometry.set(spec.id, path);
 
-      const isSelected = spec.id === selected;
-      ctx.globalAlpha = fade && spec.id !== hovered ? dimmed : 1;
-      ctx.strokeStyle = isSelected ? activeStroke : baseStroke;
-      ctx.lineWidth = (isSelected ? 2.5 : 1.5) / zoom;
-      traceConnection(ctx, path);
+      if (spec.id === selected) foreground.selected.push({ path, role: spec.role });
+      else if (spec.id === hovered) foreground.hovered.push({ path, role: spec.role });
+      else if (sourceNode.selected || targetNode.selected) foreground.neighbor.push({ path, role: spec.role });
+      else paint(ctx, path, spec.role);
+    }
+    // At crossings, draw the path the user is tracing above resting links.
+    for (const highlight of ["neighbor", "hovered", "selected"] as const) {
+      for (const link of foreground[highlight]) paint(ctx, link.path, link.role, highlight);
     }
     ctx.globalAlpha = 1;
     report?.(geometry);

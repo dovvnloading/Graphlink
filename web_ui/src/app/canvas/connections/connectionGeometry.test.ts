@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   anchorPoint,
   connectionPath,
+  drawDirection,
   isPointOnConnection,
   traceConnection,
   type ConnectionPath,
@@ -181,5 +182,24 @@ describe("traceConnection", () => {
     };
     traceConnection(ctx, path);
     expect(calls).toEqual(["beginPath", "moveTo 0,0", "lineTo 0,50", "lineTo 100,50", "lineTo 100,100", "stroke"]);
+  });
+});
+
+
+describe("direction marker", () => {
+  it.each([true, false])("points from right to left when the target is to the left (stepped=%s)", (orthogonal) => {
+    const path = connectionPath({ x: 100, y: 0 }, "bottom", { x: 0, y: 100 }, "top", orthogonal);
+    const ctx = { beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn() };
+    drawDirection(ctx as unknown as CanvasRenderingContext2D, path, 1);
+    const [wingX] = ctx.moveTo.mock.calls[0];
+    const [tipX] = ctx.lineTo.mock.calls[0];
+    expect(tipX).toBeLessThan(wingX);
+  });
+
+  it("leaves a short projected span free of marks at overview zoom", () => {
+    const path = connectionPath({ x: 0, y: 0 }, "bottom", { x: 0, y: 100 }, "top", true);
+    const ctx = { beginPath: vi.fn() };
+    drawDirection(ctx as unknown as CanvasRenderingContext2D, path, 0.2);
+    expect(ctx.beginPath).not.toHaveBeenCalled();
   });
 });

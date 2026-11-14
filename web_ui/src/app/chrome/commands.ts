@@ -1,6 +1,6 @@
 import type { ReactFlowInstance } from "@xyflow/react";
 import { applyCompareBranches, applySynthesizeBranches } from "../canvas/branchActions";
-import { FIT_VIEW_MAX_ZOOM } from "../canvas/canvasConstants";
+import { GRAPH_FIT_OPTIONS } from "../canvas/canvasConstants";
 import type { SceneStore } from "../canvas/sceneStore";
 import type { OverlayContextValue } from "../overlays/overlays";
 import { motionDuration } from "../reducedMotion";
@@ -85,14 +85,14 @@ export function buildCommands(
       id: "fit-all",
       name: "Fit All to View",
       aliases: ["fit screen", "zoom fit"],
-      run: () => rf.fitView({ duration: motionDuration(200), maxZoom: FIT_VIEW_MAX_ZOOM }),
+      run: () => rf.fitView({ duration: motionDuration(200), ...GRAPH_FIT_OPTIONS }),
       enabled: hasNodes,
     },
     {
       id: "reset-view",
       name: "Reset View",
       aliases: ["reset zoom", "default view"],
-      run: () => rf.setViewport({ ...rf.getViewport(), zoom: 1 }, { duration: motionDuration(200) }),
+      run: () => rf.zoomTo(1, { duration: motionDuration(200) }),
       enabled: () => true,
     },
     {
@@ -102,7 +102,7 @@ export function buildCommands(
       // Imported on run, not at module scope - see AppBar.tsx's exportPng.
       run: () =>
         void import("../canvas/exportCanvasPng").then(({ exportCanvasAsPng }) =>
-          exportCanvasAsPng(rf, "--gl-surface-window", (value) => store.setExportInProgress(value)),
+          exportCanvasAsPng(rf, "--gl-graph-canvas", (value) => store.setExportInProgress(value)),
         ),
       enabled: hasNodes,
     },
@@ -173,9 +173,7 @@ export function buildCommands(
       name: "Add Navigation Pin",
       aliases: ["create pin", "bookmark location", "pin current view"],
       run: () => {
-        const viewport = rf.getViewport();
-        const x = (window.innerWidth / 2 - viewport.x) / viewport.zoom;
-        const y = (window.innerHeight / 2 - viewport.y) / viewport.zoom;
+        const { x, y } = store.getSpawnPoint();
         store.addPin(`Pin ${store.getScene().pins.length + 1}`, x, y);
       },
       enabled: () => true,
@@ -265,7 +263,7 @@ export function buildCommands(
     },
     {
       // R6.1: plain, ungated - creates a blank note near the current
-      // viewport center. Same center-of-viewport formula "add-pin" above
+      // viewport center. Uses the same visible canvas center "add-pin" above
       // already uses; "Add System Prompt Note" is a DIFFERENT, existing
       // path (the plugin picker's generic executePlugin("System Prompt", ...)
       // - see backend/plugins.py) and is deliberately not duplicated here.
@@ -273,9 +271,7 @@ export function buildCommands(
       name: "Add Note",
       aliases: ["sticky note", "create note", "new note"],
       run: () => {
-        const viewport = rf.getViewport();
-        const x = (window.innerWidth / 2 - viewport.x) / viewport.zoom;
-        const y = (window.innerHeight / 2 - viewport.y) / viewport.zoom;
+        const { x, y } = store.getSpawnPoint();
         store.addNote(x, y);
       },
       enabled: () => true,

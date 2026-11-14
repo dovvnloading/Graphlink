@@ -185,10 +185,8 @@ const ANCHOR_GAP = 6;
  * never runs off either edge - mirroring NodeMenu's own flip-and-clamp
  * effect (same problem, a click point there vs. a trigger rect here).
  *
- * Reasoning/Model (Composer.tsx) deliberately do NOT use this - they
- * already render next to their own trigger via ordinary CSS (anchored to
- * the composer dock, not a shared top-right/top-left corner div), so
- * anchoring them here would be solving a problem they don't have.
+ * The composer's model and reasoning pickers use this placement to open by
+ * their controls in both the inline desktop footer and its narrow layout.
  */
 function useAnchoredPlacement(
   panelRef: RefObject<HTMLElement | null>,

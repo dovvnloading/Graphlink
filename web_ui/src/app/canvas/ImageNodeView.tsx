@@ -4,6 +4,7 @@ import { withAuthToken } from "../../lib/auth/token";
 import { downloadBlob } from "./downloadTextFile";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMenu } from "./NodeMenu";
+import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -218,14 +219,11 @@ function ImageNodeViewImpl({ id, data, selected }: NodeProps<ImageFlowNode>) {
       kindClassName="image-node"
       selected={!!selected}
       collapsed={collapsed}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setMenuPosition({ x: event.clientX, y: event.clientY });
-      }}
+      onMenuChange={setMenuPosition}
       header={
-        <div className="scene-node-title image-node-title">
+        <NodeHeading glyph="image" className="image-node-title">
           <span>{data.prompt || "Image"}</span>
-        </div>
+        </NodeHeading>
       }
       bodyClassName="image-node-content"
       menu={

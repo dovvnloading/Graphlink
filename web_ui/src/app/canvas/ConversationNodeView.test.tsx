@@ -216,18 +216,14 @@ describe("ConversationNodeView", () => {
   // history") since, unlike ChatNodeView, N of these buttons can share one
   // node card - an adversarial review flagged the un-disambiguated static
   // names as a real accessibility gap.
-  describe("per-bubble chrome: avatar + role label + quick actions", () => {
-    it("renders an avatar chip with 'U'/'A' (aria-hidden) plus a visible 'You'/'Assistant' role label for each bubble", () => {
+  describe("message roles and quick actions", () => {
+    it("shows who wrote each message", () => {
       renderConversationNode();
       const userBubble = screen.getByText("world").closest(".conversation-node-bubble") as HTMLElement;
       const assistantBubble = screen.getByText("Hi there").closest(".conversation-node-bubble") as HTMLElement;
 
-      const userAvatar = userBubble.querySelector(".chat-node-avatar");
-      expect(userAvatar).toHaveTextContent("U");
-      expect(userAvatar).toHaveAttribute("aria-hidden", "true");
       expect(within(userBubble).getByText("You")).toBeInTheDocument();
 
-      expect(assistantBubble.querySelector(".chat-node-avatar")).toHaveTextContent("A");
       expect(within(assistantBubble).getByText("Assistant")).toBeInTheDocument();
     });
 
@@ -332,10 +328,9 @@ describe("ConversationNodeView", () => {
     });
   });
 
-  it("a single assistant-only message still renders the avatar chip, 'Assistant' role label, and quick actions", () => {
+  it("a lone assistant message still shows its author and actions", () => {
     renderConversationNode({ history: [{ role: "assistant", content: "Solo reply", incomplete: false }] });
     const bubble = screen.getByText("Solo reply").closest(".conversation-node-bubble") as HTMLElement;
-    expect(bubble.querySelector(".chat-node-avatar")).toHaveTextContent("A");
     expect(within(bubble).getByText("Assistant")).toBeInTheDocument();
     expect(within(bubble).getByRole("button", { name: "Copy message 1" })).toBeInTheDocument();
   });

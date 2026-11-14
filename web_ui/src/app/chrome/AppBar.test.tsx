@@ -144,10 +144,6 @@ describe("AppBar", () => {
         "Organize",
         "View",
         "Plugins",
-        "Zoom In",
-        "Zoom Out",
-        "Reset",
-        "Fit All",
         "About",
         "Help",
         "Diagnostics",
@@ -163,7 +159,7 @@ describe("AppBar", () => {
     // Organize happened to be correct. One shared assertion per action
     // closes that exact gap for good, rather than re-opening it the next
     // time a plain action is added.
-    it.each(["Export PNG", "Zoom In", "Zoom Out", "Reset", "Fit All"])(
+    it.each(["Export PNG"])(
       "clicking the overflow copy of a plain action (%s) closes the menu",
       async (label) => {
         const user = userEvent.setup();
@@ -222,19 +218,10 @@ describe("AppBar", () => {
 
       // Groups collapse whole and all at once, so an inline action and its
       // menu copy have to appear and disappear together (styles.css, the
-      // single @container rule). Matched by substring rather than exact
-      // string because one pair deliberately differs: the inline zoom
-      // control is a live readout named "Reset zoom to 100%" while its menu
-      // copy is plain "Reset". Disambiguating the two hits by DOM position
-      // rather than by string stays correct for every label uniformly
-      // instead of special-casing the one that needs it.
+      // single @container rule).
       const collapsible = [
         "Undo",
         "Redo",
-        "Zoom In",
-        "Zoom Out",
-        "Reset",
-        "Fit All",
         "Organize",
         "Pins",
         "Export PNG",
@@ -329,26 +316,6 @@ describe("AppBar", () => {
       expect(trigger.className).toContain("checked");
       await user.click(trigger);
       expect(trigger.className).not.toContain("checked");
-    });
-  });
-
-  describe("zoom readout", () => {
-    it("shows the live zoom level and names its action, not its value", () => {
-      renderAppBar();
-      // React Flow's default transform is [0, 0, 1] before any viewport
-      // interaction, so 100% is the honest initial reading here.
-      const zoom = screen.getByRole("button", { name: "Reset zoom to 100%" });
-      expect(zoom).toHaveTextContent("100%");
-      // The accessible name is the ACTION. A control named "100%" would
-      // announce its current state and never say what activating it does.
-      expect(zoom).toHaveAttribute("aria-label", "Reset zoom to 100%");
-    });
-
-    it("replaced the concentric-circles reset icon rather than adding to it", () => {
-      renderAppBar();
-      // Exactly one inline control resets the zoom; the other "Reset" in the
-      // DOM belongs to the overflow menu, which is closed here.
-      expect(screen.getAllByRole("button", { name: /Reset/ })).toHaveLength(1);
     });
   });
 

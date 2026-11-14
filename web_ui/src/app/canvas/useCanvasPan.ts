@@ -64,8 +64,9 @@ export function useCanvasPan(
   const onCanvasMouseMove = useCallback(
     (event: PointerEvent) => {
       if (!fadeConnectionsEnabled) return;
-      if (draggingRef.current) return;
-      const id = connectionAt(event.clientX, event.clientY);
+      if (draggingRef.current || event.buttons) return;
+      const pane = (event.target as Element).matches(".react-flow__pane");
+      const id = pane ? connectionAt(event.clientX, event.clientY) : null;
       setHoveredEdgeId((current) => (current === id ? current : id));
     },
     [connectionAt, fadeConnectionsEnabled, draggingRef, setHoveredEdgeId],
@@ -74,13 +75,18 @@ export function useCanvasPan(
   const panStateRef = useRef<{ lastX: number; lastY: number } | null>(null);
   const onCanvasMouseDown = useCallback(
     (event: PointerEvent) => {
-      if ((event.target as HTMLElement).closest(".react-flow__node")) return;
+      if ((event.target as HTMLElement).closest(".react-flow__node")) {
+        setSelectedConnectionId(null);
+        return;
+      }
+      // Floating controls and the minimap can overlay a link. Their presses
+      // belong to the control, regardless of the graph underneath it.
+      if (!(event.target as Element).closest(".react-flow__pane")) return;
       const id = connectionAt(event.clientX, event.clientY);
       setSelectedConnectionId(id);
       // Begin a pan on a background press (left or middle button), unless
       // Shift is held - that remains React Flow's selection-box gesture.
-      const onPane = (event.target as HTMLElement).closest(".react-flow__pane");
-      if (onPane && !event.shiftKey && (event.button === 0 || event.button === 1) && id === null) {
+      if (!event.shiftKey && (event.button === 0 || event.button === 1) && id === null) {
         panStateRef.current = { lastX: event.clientX, lastY: event.clientY };
         canvasWrapperRef.current?.classList.add("panning");
       }
@@ -132,11 +138,14 @@ export function useCanvasPan(
     if (!el) return;
     const move = (event: PointerEvent) => onCanvasMouseMove(event);
     const down = (event: PointerEvent) => onCanvasMouseDown(event);
+    const leave = () => setHoveredEdgeId(() => null);
+    el.addEventListener("pointerleave", leave);
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerdown", down);
     return () => {
+      el.removeEventListener("pointerleave", leave);
       el.removeEventListener("pointermove", move);
       el.removeEventListener("pointerdown", down);
     };
-  }, [onCanvasMouseMove, onCanvasMouseDown, canvasWrapperRef]);
+  }, [onCanvasMouseMove, onCanvasMouseDown, canvasWrapperRef, setHoveredEdgeId]);
 }

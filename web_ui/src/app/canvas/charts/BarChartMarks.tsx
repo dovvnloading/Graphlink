@@ -86,7 +86,6 @@ export function BarChartMarks({ chartData, theme, width, height, onHover, wrappe
         const barX = index * slot + slot / 2 - barWidth / 2;
         const barY = Math.min(zeroY, yScale(value));
         const barHeight = Math.max(0.5, Math.abs(yScale(value) - zeroY));
-        const color = theme.categorical[index % theme.categorical.length];
         const label = labels[index] ?? "";
         return (
           <g key={`${label}-${index}`}>
@@ -95,7 +94,7 @@ export function BarChartMarks({ chartData, theme, width, height, onHover, wrappe
               y={barY}
               width={barWidth}
               height={barHeight}
-              fill={color}
+              fill={theme.textMuted}
               stroke={theme.text}
               strokeOpacity={0.16}
               rx={2}

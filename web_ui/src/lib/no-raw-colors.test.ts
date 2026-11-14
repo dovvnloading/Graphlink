@@ -123,11 +123,7 @@ const PINNED_APP_CSS_LITERALS: Record<string, string[]> = {
     "rgba(0, 0, 0, 0.45)",
     "rgba(0, 0, 0, 0.43)",
     "rgba(0, 0, 0, 0.55)",
-    // R8a: .composer-dock and .composer-stream-preview's box-shadow - the
-    // composer island reuses the SAME 0 8px 28px rgba(0,0,0,0.45) value
-    // already pinned above for .overlay-popover, not a new distinct raw
-    // color, so it's added to the ratchet rather than tokenized alone.
-    "rgba(0, 0, 0, 0.45)",
+    // .composer-stream-preview uses the shared popover shadow.
     "rgba(0, 0, 0, 0.45)",
     // R8a follow-up: .token-counter-popout's box-shadow - the Token usage
     // hover fold-out (TokenCounter.tsx), same reasoning as the composer

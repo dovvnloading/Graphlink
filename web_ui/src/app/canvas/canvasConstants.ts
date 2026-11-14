@@ -3,24 +3,11 @@
  * all collapse at the same zoom level. */
 export const LOD_ZOOM_THRESHOLD = 0.5;
 
-/** The ceiling every "fit the viewport to content" call uses - the
- * automatic initial fitView (SceneCanvas.tsx's own `fitView` prop) AND
- * every manual "Fit All" trigger (AppBar.tsx's toolbar button and overflow-
- * menu duplicate, CommandPalette's "fit-all" command via commands.ts) share
- * this ONE constant so none of them can drift back to the ambient
- * interactive `maxZoom` (2.5, SceneCanvas.tsx's own <ReactFlow> prop) that
- * caused the original bug: fitting a canvas holding just one small node
- * zooms in until that node alone fills the viewport (up to whatever
- * maxZoom ceiling applies) - the real-footprint placement engine
- * (backend/domain/layout.py) can then legitimately place that node's first
- * child 200-400+ px away, landing outside a viewport already zoomed in
- * that tight, with zero visual feedback that anything was created. Capping
- * every fit at 1x leaves realistic headroom around a small scene; fitting
- * genuinely large content still zooms OUT below 1x as needed (this only
- * lowers the upper bound); a user's own scroll-zoom is unaffected. NOT
- * applied to "Focus Selection" (commands.ts) - deliberately zooming in
- * tight on a selection is a different, wanted behavior. */
-export const FIT_VIEW_MAX_ZOOM = 1;
+/** The flow surface ends above the composer, so the same margin applies on all sides. */
+export const GRAPH_FIT_OPTIONS = {
+  maxZoom: 1,
+  padding: { x: "5%", y: "6%" },
+} as const;
 
 /** R6.1: Notes/Frames/Containers. The backend owns all real size/position
  * math for frame/container nodes (backend/canvas.py's _recompute_group_bounds -

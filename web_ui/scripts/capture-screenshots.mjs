@@ -68,20 +68,52 @@ function run(cmd, args, opts = {}) {
   });
 }
 
-/** Fit All frames the graph in the whole canvas region, which the composer
- *  island overlays the bottom ~150px of. Nudge the viewport up by dragging
- *  empty canvas at the far left, clear of every node at fit zoom. */
-async function panUp(page, dy) {
-  await page.mouse.move(150, 320);
-  await page.mouse.down();
-  await page.mouse.move(150, 320 - dy, { steps: 12 });
-  await page.mouse.up();
-  await sleep(400);
-}
-
 async function fitAll(page) {
   await page.locator('[aria-label="Fit All"]').click();
   await sleep(900);
+}
+
+async function captureNodeDetails(page) {
+  const excerpts = [
+    "p99 on /v1/events jumped from",
+    "Start at the database, because",
+    "Check the response path before",
+    "Roll back first and diagnose offline",
+  ];
+  // Center the middle reply so the whole branch sits above the navigation
+  // controls and minimap. Search jumps to the result at exactly 100%
+  // without dragging the cards or the frame containing them.
+  await page.keyboard.press("Control+f");
+  const search = page.getByRole("textbox", { name: "Search the canvas" });
+  await search.fill(excerpts[2]);
+  await search.press("Enter");
+  await page.getByRole("button", { name: "Reset zoom to 100%" }).filter({ hasText: /^100%$/ }).waitFor();
+  await search.fill(""); // Remove search highlights before photographing the content.
+  await search.press("Escape");
+  await page.mouse.move(0, 0);
+
+  const cards = excerpts.map((text) => page.locator(".react-flow__node-chat").filter({ hasText: text }));
+  const groupLabel = page.locator(".group-node-header").filter({ hasText: "Triage: 8x p99 regression" });
+  const bounds = await Promise.all([...cards, groupLabel].map((locator) => locator.boundingBox()));
+  if (bounds.some((box) => !box)) throw new Error("A seeded triage card or frame label is missing.");
+
+  const margin = 14;
+  const x = Math.floor(Math.min(...bounds.map((box) => box.x))) - margin;
+  const y = Math.floor(Math.min(...bounds.map((box) => box.y))) - margin;
+  const right = Math.ceil(Math.max(...bounds.map((box) => box.x + box.width))) + margin;
+  const bottom = Math.ceil(Math.max(...bounds.map((box) => box.y + box.height))) + margin;
+  if (x < 0 || y < 0 || right > VIEWPORT.width || bottom > VIEWPORT.height) {
+    throw new Error("The complete triage branch is outside the screenshot viewport.");
+  }
+  const clip = { x, y, width: right - x, height: bottom - y };
+
+  const schemes = [["dark", "node-detail.png"], ["light", "node-detail-light.png"]];
+  for (const [colorScheme, filename] of schemes) {
+    await page.emulateMedia({ colorScheme });
+    await page.waitForFunction((scheme) => globalThis.matchMedia(`(prefers-color-scheme: ${scheme})`).matches, colorScheme, { timeout: 5_000 });
+    await page.screenshot({ path: join(OUT_DIR, filename), clip, timeout: 30_000 });
+    console.log(`captured ${filename} at 100% zoom (${clip.width} × ${clip.height} CSS pixels)`);
+  }
 }
 
 async function main() {
@@ -107,8 +139,10 @@ async function main() {
       viewport: VIEWPORT,
       deviceScaleFactor: 2,
       colorScheme: "dark",
+      reducedMotion: "reduce",
     });
 
+    page.setDefaultTimeout(15_000);
     await page.goto(BASE);
     await page.locator('.app-shell[data-connection-status="open"]').waitFor();
 
@@ -136,10 +170,8 @@ async function main() {
     if (await toastClose.isVisible().catch(() => false)) await toastClose.click();
     await sleep(1200);
 
-    // Every capture is the full canvas at Fit All - no zoomed or clipped
-    // figures. A canvas app's screenshots should show the canvas.
+    // The overview and launcher use the complete fitted graph.
     await fitAll(page);
-    await panUp(page, 30);
     await page.screenshot({ path: join(OUT_DIR, "canvas-branching.png") });
     console.log("captured canvas-branching.png");
 
@@ -155,12 +187,7 @@ async function main() {
     await page.keyboard.press("Escape");
     await sleep(400);
 
-    // NOTE: no light-theme capture. The node font color is scene state with
-    // a near-white default chosen for the dark theme, so flipping the
-    // emulated color scheme currently produces white-on-white node text - a
-    // real product bug, tracked separately. Re-add a light capture once the
-    // default adapts to the theme.
-
+    await captureNodeDetails(page);
   } finally {
     if (browser) await browser.close();
     backend.kill();

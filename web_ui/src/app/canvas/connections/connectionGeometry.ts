@@ -88,6 +88,8 @@ export interface ConnectionPath {
   c2: Point;
   /** Right-angle routing rather than a curve. */
   orthogonal: boolean;
+  /** Measured return route around card boundaries, including its endpoints. */
+  waypoints?: readonly Point[];
   /** The mid-line a right-angle route steps across. */
   midY: number;
 }
@@ -115,6 +117,73 @@ function bezierAt(p: ConnectionPath, t: number): Point {
     x: a * p.source.x + b * p.c1.x + c * p.c2.x + d * p.target.x,
     y: a * p.source.y + b * p.c1.y + c * p.c2.y + d * p.target.y,
   };
+}
+
+/** SVG export uses the same anchors, bends, and control points as live paint. */
+export function connectionSvgPath({ source, target, c1, c2, orthogonal, midY, waypoints }: ConnectionPath): string {
+  const start = `M ${source.x},${source.y}`;
+  if (waypoints) return start + waypoints.slice(1).map(p => ` L ${p.x},${p.y}`).join("");
+  return orthogonal
+    ? `${start} L ${source.x},${midY} L ${target.x},${midY} L ${target.x},${target.y}`
+    : `${start} C ${c1.x},${c1.y} ${c2.x},${c2.y} ${target.x},${target.y}`;
+}
+
+/** Draw a small open chevron along an active route, pointing towards its target. */
+export function drawDirection(ctx: CanvasRenderingContext2D, path: ConnectionPath, zoom: number) {
+  const { source, target, c1, c2 } = path;
+  if (Math.hypot(target.x - source.x, target.y - source.y) * zoom < 40) return;
+
+  let center: Point;
+  let dx: number;
+  let dy: number;
+  if (path.waypoints) {
+    let longest = 0;
+    let a = source;
+    let b = source;
+    for (let i = 1; i < path.waypoints.length; i++) {
+      const prev = path.waypoints[i - 1];
+      const next = path.waypoints[i];
+      const length = Math.hypot(next.x - prev.x, next.y - prev.y);
+      if (length > longest) {
+        longest = length;
+        a = prev;
+        b = next;
+      }
+    }
+    center = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    dx = b.x - a.x;
+    dy = b.y - a.y;
+  } else if (path.orthogonal) {
+    // The horizontal step can be too short to host a marker. In that case
+    // use the middle of the final vertical segment, clear of its corner.
+    if (Math.abs(target.x - source.x) * zoom >= 20) {
+      center = { x: (target.x + source.x) / 2, y: path.midY };
+      dx = target.x - source.x;
+      dy = 0;
+    } else {
+      center = { x: target.x, y: (path.midY + target.y) / 2 };
+      dx = 0;
+      dy = target.y - path.midY;
+    }
+  } else {
+    center = bezierAt(path, 0.5);
+    // Cubic derivative at t=0.5 (the constant cancels during normalization).
+    dx = c2.x - c1.x + target.x - source.x;
+    dy = c2.y - c1.y + target.y - source.y;
+  }
+  const length = Math.hypot(dx, dy);
+  if (!length) return;
+  const ux = dx / length;
+  const uy = dy / length;
+  const halfWidth = 3.5 / zoom;
+  const halfLength = 2.75 / zoom;
+  const x = center.x - ux * halfLength;
+  const y = center.y - uy * halfLength;
+  ctx.beginPath();
+  ctx.moveTo(x - uy * halfWidth, y + ux * halfWidth);
+  ctx.lineTo(center.x + ux * halfLength, center.y + uy * halfLength);
+  ctx.lineTo(x + uy * halfWidth, y - ux * halfWidth);
+  ctx.stroke();
 }
 
 /** Squared distance from a point to a segment - no square roots in the loop. */
@@ -150,8 +219,8 @@ export function isPointOnConnection(
 ): boolean {
   const toleranceSquared = tolerance * tolerance;
   let previous: Point = path.source;
-  if (path.orthogonal) {
-    const corners: Point[] = [
+  if (path.waypoints || path.orthogonal) {
+    const corners = path.waypoints ?? [
       path.source,
       { x: path.source.x, y: path.midY },
       { x: path.target.x, y: path.midY },
@@ -174,7 +243,9 @@ export function isPointOnConnection(
 export function traceConnection(ctx: CanvasRenderingContext2D, path: ConnectionPath): void {
   ctx.beginPath();
   ctx.moveTo(path.source.x, path.source.y);
-  if (path.orthogonal) {
+  if (path.waypoints) {
+    for (let i = 1; i < path.waypoints.length; i++) ctx.lineTo(path.waypoints[i].x, path.waypoints[i].y);
+  } else if (path.orthogonal) {
     ctx.lineTo(path.source.x, path.midY);
     ctx.lineTo(path.target.x, path.midY);
     ctx.lineTo(path.target.x, path.target.y);

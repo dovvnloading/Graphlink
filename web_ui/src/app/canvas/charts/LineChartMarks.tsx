@@ -59,7 +59,7 @@ export function LineChartMarks({ chartData, theme, width, height, onHover, wrapp
     lines: wrapLabel(labels[index] ?? "", 14, 2),
   }));
 
-  const lineColor = theme.categorical[0];
+  const lineColor = theme.text;
 
   return (
     <g transform={`translate(${marginLeft} ${marginTop})`}>
@@ -75,7 +75,7 @@ export function LineChartMarks({ chartData, theme, width, height, onHover, wrapp
         rotateXTicks={rotate}
         zeroLineY={domainMin < 0 && domainMax > 0 ? yScale(0) : null}
       />
-      {areaPath && <path d={areaPath} fill={lineColor} fillOpacity={0.15} stroke="none" />}
+      {areaPath && <path d={areaPath} fill={lineColor} fillOpacity={0.06} stroke="none" />}
       <path d={linePath} fill="none" stroke={lineColor} strokeWidth={2.8} strokeLinejoin="round" strokeLinecap="round" />
       {positions.map((x, index) => {
         const value = values[index];

@@ -18,6 +18,7 @@ function makeStore(pins: Array<{ id: string; title: string; note: string; x: num
       return () => listeners.delete(l);
     },
     getScene: () => scene,
+    getSpawnPoint: () => ({ x: 524, y: 309 }),
     addPin,
     updatePin,
     removePin,
@@ -52,6 +53,13 @@ describe("PinOverlay", () => {
     const { store } = makeStore([]);
     renderOpen(store);
     expect(screen.getByText("No pins yet.")).toBeInTheDocument();
+  });
+
+  it("pins the center of the visible graph", async () => {
+    const { store, addPin } = makeStore([]);
+    renderOpen(store);
+    await userEvent.setup().click(screen.getByRole("button", { name: "+ Pin view" }));
+    expect(addPin).toHaveBeenCalledWith("Pin 1", 524, 309);
   });
 
   it("filters pins by title or note via search", async () => {

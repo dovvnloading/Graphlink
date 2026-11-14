@@ -5,6 +5,7 @@ import { CollapseToggleButton } from "./CollapseToggleButton";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
+import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { useStreamBuffer } from "./useStreamBuffer";
@@ -285,44 +286,8 @@ function ConversationBubble({
         setMenuPosition({ x: event.clientX, y: event.clientY });
       }}
     >
-      {/* Per-bubble chrome, extending node redesign stage 3's ChatNodeView
-          treatment to conversation-node bubbles: an avatar chip (reuses
-          .chat-node-avatar verbatim - same 16px circular chip, same
-          role-differentiated background shade, styled here via a
-          .conversation-node-bubble.user override in styles.css) and a
-          hover-revealed quick-action row surfacing the SAME 2 items
-          ConversationBubbleMenu below already offers (Copy Message, Delete
-          from History) - there are only 2 in this menu, so both qualify as
-          "most reached for", unlike ChatNodeView's pick of 3 out of a larger
-          menu.
-
-          Unlike ChatNodeView, the avatar here is NOT aria-hidden alone - an
-          adversarial review caught that ChatNodeView's own aria-hidden
-          choice is only safe because a VISIBLE "You"/"Assistant" span sits
-          right next to it (its own comment says so explicitly); this bubble
-          had no such text anywhere, so a screen-reader user had zero way to
-          tell who said what. The new .conversation-node-bubble-role span is
-          that visible, accessible label - the avatar stays aria-hidden
-          exactly because this text now carries the semantics, mirroring
-          ChatNodeView's own reasoning instead of skipping the part that
-          made it valid.
-
-          Quick-action labels also include this bubble's 1-based position
-          (adversarial review finding): with N messages in one node card,
-          unqualified "Copy Message"/"Delete from History" names would be
-          identical across every bubble, leaving a screen-reader user no way
-          to tell which button acts on which message - unlike ChatNodeView,
-          where each button is the only one of its name on that whole node. */}
       <div className="conversation-node-bubble-header">
-        {/* Grouped together (not 2 separate top-level flex children) for the
-            same reason .chat-node-role-group exists on ChatNodeView's own
-            header - a 3rd top-level child would get pushed to the CENTER
-            by this row's justify-content:space-between, instead of sitting
-            with the avatar on the left where it belongs. */}
         <span className="conversation-node-bubble-role-group">
-          <span className="chat-node-avatar" aria-hidden="true">
-            {message.role === "user" ? "U" : "A"}
-          </span>
           <span className="conversation-node-bubble-role">{message.role === "user" ? "You" : "Assistant"}</span>
           {/* ADR-006 stage 6.4 (partial-output preservation): marks a
               message whose text was committed from a killed stream - see
@@ -427,15 +392,12 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
       kindClassName="conversation-node"
       selected={!!selected}
       collapsed={collapsed}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        setMenuPosition({ x: event.clientX, y: event.clientY });
-      }}
+      onMenuChange={setMenuPosition}
       header={
-        <div className="scene-node-title chat-node-role">
+        <NodeHeading className="chat-node-role">
           <span>Conversation</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
-        </div>
+        </NodeHeading>
       }
       bodyClassName="conversation-node-content"
       menu={
@@ -482,9 +444,6 @@ function ConversationNodeViewImpl({ data, selected }: NodeProps<ConversationFlow
           <div className="conversation-node-bubble assistant conversation-node-bubble-streaming">
             <div className="conversation-node-bubble-header">
               <span className="conversation-node-bubble-role-group">
-                <span className="chat-node-avatar" aria-hidden="true">
-                  A
-                </span>
                 <span className="conversation-node-bubble-role">Assistant</span>
               </span>
             </div>

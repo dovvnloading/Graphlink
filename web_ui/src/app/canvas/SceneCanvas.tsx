@@ -1,8 +1,4 @@
 import {
-  Background,
-  BackgroundVariant,
-  Handle,
-  Position,
   ReactFlow,
   ViewportPortal,
   useReactFlow,
@@ -11,7 +7,6 @@ import {
   type Edge,
   type Node,
   type NodeChange,
-  type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -26,7 +21,7 @@ import {
   ArtifactNodeView, ChartNodeView, ChatNodeView, CodeNodeView, CodeReviewNodeView,
   CodeSandboxNodeView, ConversationNodeView, DocumentNodeView, GitlinkNodeView,
   GroupNodeView, HarnessNodeView, HtmlNodeView, ImageNodeView, FalMediaNodeView, NoteNodeView,
-  PlanNodeView, ThinkingNodeView, WebResearchNodeView,
+  PlaceholderNodeView, PlanNodeView, ThinkingNodeView, WebResearchNodeView,
 } from "./lazyNodeViews";
 import type { ArtifactFlowNode } from "./ArtifactNodeView";
 import type { ChartFlowNode } from "./ChartNodeView";
@@ -43,13 +38,13 @@ import type { ImageFlowNode } from "./ImageNodeView";
 import type { MediaMode } from "./falMediaStudioModel";
 import type { FalMediaFlowNode } from "./FalMediaNodeView";
 import type { NoteFlowNode } from "./NoteNodeView";
-import { OrthogonalEdge } from "./OrthogonalEdge";
+import { CurvedEdge, OrthogonalEdge } from "./OrthogonalEdge";
 import type { ThinkingFlowNode } from "./ThinkingNodeView";
 import type { WebResearchFlowNode } from "./WebResearchNodeView";
 import type { PlanFlowNode, PlanStepData } from "./PlanNodeView";
 import type { HarnessFlowNode } from "./HarnessNodeView";
 import {
-  FIT_VIEW_MAX_ZOOM,
+  GRAPH_FIT_OPTIONS,
   GROUP_FALLBACK_HEIGHT,
   GROUP_FALLBACK_WIDTH,
   VIEWPORT_REPORT_DEBOUNCE_MS,
@@ -60,7 +55,9 @@ import { computeSmartGuideSnap, type GuideLine, type Rect } from "./smartGuides"
 import { ConnectionCanvas, type ConnectionSpec } from "./connections/ConnectionCanvas";
 import type { ConnectionPath } from "./connections/connectionGeometry";
 import { isPointOnConnection } from "./connections/connectionGeometry";
-import { useLodVisibility } from "./useLodVisibility";
+import { EmptyGraph } from "./EmptyGraph";
+import { CanvasGrid } from "./CanvasGrid";
+import { ViewportDock } from "./ViewportDock";
 import { SceneMinimap } from "./SceneMinimap";
 import { useCanvasFontVars } from "./useCanvasFontVars";
 import { useBranchFocus } from "./useBranchFocus";
@@ -78,12 +75,6 @@ import { hiddenGroupMemberIds } from "./collapsedGroups";
  * node type (chat); R3.5/R3.6 add code. Every other kind still renders as a
  * placeholder.
  */
-
-const GRID_VARIANTS: Record<string, BackgroundVariant> = {
-  Dots: BackgroundVariant.Dots,
-  Lines: BackgroundVariant.Lines,
-  Cross: BackgroundVariant.Cross,
-};
 
 type PlaceholderNode = Node<{ title: string }, "placeholder">;
 export type SceneFlowNode =
@@ -106,25 +97,6 @@ export type SceneFlowNode =
   | ChartFlowNode
   | PlanFlowNode
   | HarnessFlowNode;
-
-function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
-  // ADR-011 stage 11.6/11.1 dedup: was its own local
-  // `useStore((s) => s.transform[2]); zoom < LOD_ZOOM_THRESHOLD` pair (one of
-  // the 14 duplicated call sites) - now the shared extraction. Zero behavior
-  // change, see useLodVisibility.ts's own doc.
-  const collapsed = useLodVisibility();
-  return (
-    <div className={`scene-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}>
-      {/* Connection endpoints mirror the Qt canvas's flow: children hang off
-          the bottom of a parent (vertical layout), so target on top, source
-          on bottom. */}
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title">{data.title}</div>
-      {!collapsed && <div className="scene-node-body">Placeholder node</div>}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-    </div>
-  );
-}
 
 const NODE_TYPES = {
   placeholder: PlaceholderNodeView,
@@ -157,11 +129,9 @@ const NODE_TYPES = {
   harness: HarnessNodeView,
 };
 
-// R7.5b-2: the first custom edge type registered in this codebase - see
-// OrthogonalEdge.tsx's own module doc. Edges not classified as "orthogonal"
-// by isOrthogonalEligible below fall through to defaultEdgeOptions's stock
-// bezier via an `undefined` type, same as before this feature existed.
+// Vector paths for full-graph PNG export. The live canvas draws connections itself.
 const EDGE_TYPES = {
+  default: CurvedEdge,
   orthogonal: OrthogonalEdge,
 };
 
@@ -2444,7 +2414,7 @@ export function withPreservedFlowState(
 // Exported standalone for direct unit testing, same posture as toFlowNodes
 // above - R7.5b-1's fade-connections opacity logic doesn't need a mounted
 // <ReactFlow> to verify.
-export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Edge[] {
+export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Edge<{ role: SceneEdgeRow["role"] }>[] {
   // ADR-011 stage 11.1: dockedNodeIds now comes from the SAME
   // buildSceneIndexes pass toFlowNodes above uses (was its own standalone
   // `scene.nodes.filter(...)` here) - kindOf is looked up straight off
@@ -2464,6 +2434,7 @@ export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Ed
       id: e.id,
       source: e.source,
       target: e.target,
+      ...(e.role ? { data: { role: e.role } } : {}),
       type:
         scene.orthogonalRouting &&
         isOrthogonalEligible(nodesById.get(e.source)?.kind, nodesById.get(e.target)?.kind)
@@ -2533,21 +2504,34 @@ export function collectChangedNodeSizes(
   return changed;
 }
 
-// R8a: reads a real design-token value at render time rather than
-// hardcoding a hex literal - needed anywhere a color has to be a plain JS
-// string (an SVG-attribute-producing prop like MiniMap's nodeColor/
-// nodeStrokeColor), not a CSS declaration value or a style={{}} block, so
-// it falls outside what the no-raw-colors lint gate can enforce for us.
-function useCssVar(name: string, fallback: string): string {
-  // A lazy initializer, not an effect: the token's value is static for the
-  // component's lifetime (no live theme-switching exists yet), so reading
-  // it once during the initial render avoids both a spurious extra render
-  // AND a one-frame flash of `fallback` before the real value lands.
-  const [value] = useState(() => {
-    const computed = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    return computed || fallback;
-  });
-  return value;
+// Canvas2D requires a resolved color string. Refresh both explicit app
+// themes and system-mode changes without reading computed style per frame.
+function subscribeTheme(onChange: () => void) {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  const media = window.matchMedia("(prefers-color-scheme: light)");
+  media.addEventListener("change", onChange);
+  return () => {
+    observer.disconnect();
+    media.removeEventListener("change", onChange);
+  };
+}
+
+function readTheme() {
+  return document.documentElement.dataset.theme ??
+    (window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+}
+
+function useConnectionColors() {
+  const theme = useSyncExternalStore(subscribeTheme, readTheme);
+  return useMemo(() => {
+    const style = getComputedStyle(document.documentElement);
+    const light = theme === "light";
+    return {
+      stroke: style.getPropertyValue("--gl-connection-line").trim() || (light ? "#76787A" : "#747679"),
+      selectedStroke: style.getPropertyValue("--gl-connection-active").trim() || (light ? "#50687B" : "#A5B6C4"),
+    };
+  }, [theme]);
 }
 
 function CanvasInner({
@@ -2758,7 +2742,9 @@ function CanvasInner({
   // store each frame rather than carried on these objects, which is the
   // whole point of the canvas approach.
   const connections = useMemo<ConnectionSpec[]>(
-    () => edges.map((e) => ({ id: e.id, source: e.source, target: e.target, orthogonal: e.type === "orthogonal" })),
+    () => edges.map((e) => ({
+      id: e.id, source: e.source, target: e.target, role: e.data?.role, orthogonal: e.type === "orthogonal",
+    })),
     [edges],
   );
   // The geometry the canvas last drew, reported back so hit-testing runs
@@ -2769,8 +2755,7 @@ function CanvasInner({
     connectionGeometryRef.current = paths;
   }, []);
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
-  const connectionStroke = useCssVar("--gl-surface-border-strong", "#505050");
-  const connectionSelectedStroke = useCssVar("--gl-surface-text-primary", "#E0E0E0");
+  const connectionColors = useConnectionColors();
 
   // Pointer interaction for connections. The canvas is presentational and
   // never receives events itself, so hover and selection are resolved here
@@ -2911,7 +2896,9 @@ function CanvasInner({
            store write. Scene snapshots from the backend are pushed in
            explicitly via the store (see the scene-sync effect above). */
         defaultNodes={EMPTY_NODES}
-        edges={EMPTY_EDGES}
+        // PNG capture clones only the viewport. The screen-space canvas
+        // sits outside it; render equivalent vector paths for that capture.
+        edges={exportInProgress ? edges : EMPTY_EDGES}
         nodeTypes={NODE_TYPES}
         edgeTypes={EDGE_TYPES}
         onNodesChange={onNodesChange}
@@ -2935,13 +2922,7 @@ function CanvasInner({
         // node editor has is the better use of the gesture.
         zoomOnDoubleClick
         fitView
-        // The initial fitView's OWN zoom ceiling, independent of maxZoom
-        // below (which only bounds interactive/manual zoom) - see
-        // FIT_VIEW_MAX_ZOOM's own doc (canvasConstants.ts) for the bug this
-        // prevents and why every OTHER "fit to content" trigger (AppBar's
-        // Fit All button/overflow duplicate, the command-palette twin)
-        // must share this exact constant, not just this one call site.
-        fitViewOptions={{ maxZoom: FIT_VIEW_MAX_ZOOM }}
+        fitViewOptions={GRAPH_FIT_OPTIONS}
         minZoom={0.1}
         maxZoom={2.5}
         deleteKeyCode={DELETE_KEY_CODES}
@@ -2989,22 +2970,19 @@ function CanvasInner({
       >
         {/* Every connection on the scene is drawn here, redrawn each frame
             from live node positions - see ConnectionCanvas's module doc. */}
-        <ConnectionCanvas
-          connections={connections}
-          hoveredId={hoveredEdgeId}
-          selectedId={selectedConnectionId}
-          fadeEnabled={scene.fadeConnectionsEnabled}
-          stroke={connectionStroke}
-          selectedStroke={connectionSelectedStroke}
-          fadedOpacity={FADED_CONNECTION_OPACITY}
-          onGeometry={onConnectionGeometry}
-        />
-        <Background
-          variant={GRID_VARIANTS[grid.gridStyle] ?? BackgroundVariant.Dots}
-          gap={grid.gridSize}
-          color={grid.gridColor}
-          style={{ opacity: grid.gridOpacityPercent / 100 }}
-        />
+        {!exportInProgress && (
+          <ConnectionCanvas
+            connections={connections}
+            hoveredId={scene.fadeConnectionsEnabled ? hoveredEdgeId : null}
+            selectedId={selectedConnectionId}
+            fadeEnabled={scene.fadeConnectionsEnabled}
+            {...connectionColors}
+            fadedOpacity={FADED_CONNECTION_OPACITY}
+            onGeometry={onConnectionGeometry}
+          />
+        )}
+        <CanvasGrid grid={grid} />
+        <ViewportDock hasNodes={scene.nodes.length > 0} />
         <SceneMinimap store={store} />
         {/* R7.5b-3: smart-guide lines. Legacy's guides were QGraphicsLineItems
             in the same unified scene as the nodes, panning/zooming for free -
@@ -3075,6 +3053,7 @@ function CanvasInner({
           </ViewportPortal>
         )}
       </ReactFlow>
+      {scene.nodes.length === 0 && <EmptyGraph store={store} />}
     </div>
   );
 }
