@@ -4,41 +4,29 @@ Thanks for contributing to Graphlink.
 
 ## Before You Start
 
-- The UI product name and the module/folder naming are both **Graphlink** (the codebase was renamed from its earlier **Graphite** naming).
+- Use **Graphlink** for the product name and `graphlink` for Python modules.
 - The app is currently developed primarily on Windows.
 - The repository is script-oriented, so the launch working directory matters.
 
 ## Local Setup
 
-```powershell
-py -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-The desktop app requires the frontend to already be built - install [Node.js](https://nodejs.org/) 22 or newer first (22 is the enforced floor; `web_ui/.nvmrc` pins the specific newer version this project is actually developed and tested against, for anyone using `nvm`/`fnm`), then:
+Use Python 3.12 and Node.js 24 to match CI. Open PowerShell in the repository root.
 
 ```powershell
-cd web_ui
-npm install
-npm run build
-cd ..
-```
-
-This produces `web_ui/dist/app/index.html`. Launching from a **source checkout** does not build it automatically - if it's missing, `graphlink_desktop.py` exits with a helpful error. Installed wheels bundle the prebuilt SPA.
-
-For GTK-based Linux and Cocoa/macOS native window prerequisites (not installed by the base requirements lock), see [Platform GUI installation](docs/PLATFORM_GUI_INSTALL.md). Windows requires WebView2 Runtime.
-
-Then launch from the repo root:
-
-```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m pip install pytest pytest-cov pytest-xdist hypothesis ruff mypy
+npm --prefix web_ui ci
+npm --prefix web_ui run build
 python graphlink_desktop.py
 ```
 
-This starts the Python backend (FastAPI via uvicorn) on a free localhost port in a background thread, waits for it to report healthy, then opens a single native OS webview window (WebView2 on Windows - not a browser tab) pointed at that backend. The backend serves the built frontend, the API, and the WebSocket all from that one origin.
+The second pip command installs the development tools listed in the project's `dev` extra. The runtime lock alone omits pytest and its required plugins. The frontend build produces `web_ui/dist/app/index.html`. Rebuild after editing the UI, then relaunch the desktop app to try the change. An installed wheel includes the built frontend.
 
-**Iterating on frontend code:** run `npm run dev` inside `web_ui/` for a live-reloading Vite dev server (`127.0.0.1:5173`), which proxies `/api` and `/ws` requests to `http://127.0.0.1:8765`. This assumes a backend is already running on port 8765. `backend/app.py` has an opt-in `GRAPHLINK_DEV_WS_ORIGIN` env var for exactly this case - it lets a manually-run backend accept both WebSocket connections and `/api` fetch requests from Vite's dev origin (the name predates the `/api` half, added in ADR-004 stage 4.2 - Vite's proxy rewrites the Host header it forwards to match the backend's own address, but leaves Origin as the real `http://127.0.0.1:5173` page origin, so both the WS handshake and every proxied fetch need the same opt-in). However, there is currently no documented or scripted way to launch just the backend standalone; `graphlink_desktop.py` always boots the full backend+webview flow together. You'll also need `GRAPHLINK_DEV_AUTH_TOKEN` (ADR-004 stage 4.1) set to the same value on both the backend and appended to requests, since a manually-run backend has no desktop shell to mint and inject a capability token for you. This is a known gap, not a documented workflow - if you need frontend-only iteration against a live backend, you'll have to bridge it yourself for now.
+Windows uses WebView2. For Linux GTK/WebKitGTK or macOS Cocoa prerequisites, follow the [platform GUI installation guide](docs/PLATFORM_GUI_INSTALL.md).
+
+To inspect a workspace without a desktop window, follow the [headless backend and MCP guide](docs/HEADLESS_MCP.md). It covers the loopback server, scoped access tokens and MCP client setup.
 
 ## Development Rules
 
@@ -57,7 +45,7 @@ The standing branch → push → PR → merge process for this repository. It co
 - **Branch naming:** `agent/<short-kebab-slug>` for AI-agent-authored work (Claude Code, Codex, or similar), or a short descriptive kebab-case slug for human-authored branches. Examples from history: `agent/composer-react-qwebengine`, `agent/sota-model-settings`, `codex/navigation-pins-refactor`.
 - **Scope each branch to one reviewable unit of work** — the same "keep changes focused" rule from Development Rules, applied at the branch level. Large multi-part efforts should land as a sequence of scoped branches and PRs rather than one oversized branch.
 - **Push the branch to `origin`**, then open a pull request against `main` using `.github/pull_request_template.md`.
-- **Run local validation before opening the PR** (see Validation below). `.github/workflows/ci.yml` also re-runs the same checks on every PR, but treat that as a backstop, not a substitute for running validation locally first.
+- **Run local validation before opening the PR** (see [Validation](#validation)).
 - **Merge strategy: squash-merge into `main`**, then delete the branch. Merged commit titles carry the PR number, e.g. `Refactor navigation pins and interaction surfaces (#17)`.
 
 ## Pull Request Expectations
@@ -72,21 +60,20 @@ Please include:
 
 ## Validation
 
-Run the Python test suite and a compile smoke check from the repo root, then the frontend checks from `web_ui/` - this matches CI exactly (`.github/workflows/ci.yml`, two jobs, both on `windows-latest`):
+With the development environment active, run these checks from the repository root. The performance tests run separately so parallel workers and coverage tracing do not affect their timing.
 
 ```powershell
-python -m pytest -q
-python -m compileall -q .
+python -m compileall -q backend contracts plugins
+python -m ruff check .
+python -m mypy
+python -m pytest -q --cov --ignore=backend/tests/perf
+python -m pytest -q -n0 backend/tests/perf
+npm --prefix web_ui run check
 ```
 
-```powershell
-cd web_ui
-npm run check
-```
+The frontend check verifies generated schemas, TypeScript types, lint, Vitest tests, the production build and its bundle-size limit. The [CI workflow](.github/workflows/ci.yml) runs Python checks on Windows, including DPAPI tests. Ubuntu runs frontend checks, an isolated wheel installation and POSIX permission tests. For browser coverage, dispatch **CI** manually with **Run optional Chromium browser tests** enabled to run the Playwright suites against the built app.
 
-`npm run check` runs schema-drift detection against `contracts/` (`codegen.py --check`), typecheck, lint, the vitest suite, and a production build, in that order.
-
-The Python-side coverage is plain headless Python - no Qt, no offscreen platform plugin involved anymore - covering plugin registration, scene/session serialization, path-safety and JSON helpers, and the backend's canvas/domain logic. The frontend has its own real, browser-driven test suite (vitest) covering the React UI. Please also validate the app manually when relevant:
+For changes that affect the desktop experience, check the workflow in the native app.
 
 1. Launch the app successfully.
 2. Create or load a chat session.
