@@ -389,6 +389,7 @@ _COMMAND_LABELS = {
     "unbindGraphModel": "Disconnect Model Input",
     "addModelNode": "Add Model Node",
     "configureModelNode": "Configure Model Node",
+    "connectModelInput": "Connect Model Input",
     "removeNodes": "Delete",
     "deleteChatNode": "Delete Message",
     "deleteConversationMessage": "Delete Message",
