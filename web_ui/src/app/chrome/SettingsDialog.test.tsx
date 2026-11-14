@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SettingsDialog, parseEnvLines } from "./SettingsDialog";
@@ -44,8 +44,23 @@ const snapshot = {
   apiBaseUrl: "https://api.openai.com/v1",
   apiKeyConfigured: { openai: false, anthropic: false, gemini: false },
   apiKeySource: { openai: "none", anthropic: "none", gemini: "none" },
+  apiProviders: [
+    { id: "OpenAI-Compatible", label: "Custom endpoint", group: "Custom", description: "OpenAI-compatible API",
+      docsUrl: "", defaultBaseUrl: "https://api.openai.com/v1", editableEndpoint: true, endpointHint: "",
+      supportsCatalog: true, supportsImageGeneration: true, keySlot: "openai", envVar: "OPENAI_API_KEY" },
+    { id: "Anthropic Claude", label: "Anthropic", group: "Model labs", description: "Claude",
+      docsUrl: "https://platform.claude.com/docs", defaultBaseUrl: "https://api.anthropic.com", editableEndpoint: false,
+      endpointHint: "", supportsCatalog: true, supportsImageGeneration: false, keySlot: "anthropic", envVar: "ANTHROPIC_API_KEY" },
+    { id: "Google Gemini", label: "Google Gemini", group: "Model labs", description: "Gemini",
+      docsUrl: "", defaultBaseUrl: "", editableEndpoint: false, endpointHint: "", supportsCatalog: true,
+      supportsImageGeneration: true, keySlot: "gemini", envVar: "GEMINI_API_KEY" },
+    { id: "Azure OpenAI", label: "Azure OpenAI", group: "Cloud platforms", description: "Deployment names",
+      docsUrl: "", defaultBaseUrl: "", editableEndpoint: true, endpointHint: "Use your resource endpoint.",
+      supportsCatalog: false, supportsImageGeneration: false, keySlot: "azure", envVar: "" },
+  ],
   apiModels: {},
   apiModelCatalog: [],
+  apiCatalogBaseUrl: "",
   apiCatalogStatus: "idle",
   apiCatalogMessage: "Model catalog has not been refreshed yet.",
   geminiStaticModels: ["gemini-2.5-flash", "gemini-2.5-pro"],
@@ -400,14 +415,6 @@ describe("SettingsDialog", () => {
     expect(screen.getByText("Model 'bogus' was not found on the Ollama hub.")).toBeInTheDocument();
   });
 
-  it("the API key field always starts blank, even when a key is already configured", async () => {
-    const { user, push } = setup();
-    await goToApiEndpoint(user, push, { apiKeyConfigured: { openai: true, anthropic: false, gemini: false } });
-
-    const keyField = screen.getByPlaceholderText("A key is configured - enter a new one to replace it");
-    expect(keyField).toHaveValue("");
-  });
-
   it("shows a persistent unencrypted-secrets warning when DPAPI is unavailable, regardless of section", async () => {
     const { user, push } = setup();
     await user.click(screen.getByText("open settings"));
@@ -431,194 +438,205 @@ describe("SettingsDialog", () => {
     expect(screen.queryByText(/API keys are stored unencrypted on this system/)).toBeNull();
   });
 
-  it("shows an environment-variable hint next to the API Key field when that provider's key comes from the environment", async () => {
+  it("keeps the API key blank and shows the viewed provider's credential source", async () => {
     const { user, push } = setup();
     await goToApiEndpoint(user, push, {
-      apiKeySource: { openai: "environment", anthropic: "none", gemini: "none" },
+      viewingApiProvider: "Anthropic Claude",
+      apiKeySource: { anthropic: "environment" },
     });
 
-    expect(
-      screen.getByText("Key provided by an environment variable, not Settings."),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("API Key")).toHaveValue("");
+    expect(screen.getByText("From environment")).toBeVisible();
+    expect(screen.getByText("ANTHROPIC_API_KEY")).toBeVisible();
+    expect(screen.getByRole("link", { name: /setup guide/i })).toHaveAttribute("href", "https://platform.claude.com/docs");
+    expect(screen.queryByLabelText("Base URL")).toBeNull();
+    expect(screen.getByRole("button", { name: /load available models/i })).toBeEnabled();
   });
 
-  it("hides the environment-variable hint when the viewed provider's key is stored or absent", async () => {
-    const { user, push } = setup();
-    await goToApiEndpoint(user, push, {
-      apiKeySource: { openai: "stored", anthropic: "none", gemini: "none" },
-    });
-
-    expect(
-      screen.queryByText("Key provided by an environment variable, not Settings."),
-    ).toBeNull();
-  });
-
-  it("switching the provider select fires setViewingApiProvider", async () => {
+  it("searches by model family, selects with Enter, and drops the previous provider's drafts", async () => {
     const { user, push, intents } = setup();
     await goToApiEndpoint(user, push);
+    const trigger = screen.getByRole("button", { name: /choose provider/i });
+    await user.type(screen.getByLabelText("API Key"), "draft-key");
+    await user.type(screen.getByLabelText("Default text model"), "private-model");
+    await user.click(trigger);
+    const search = screen.getByRole("combobox", { name: "Search providers" });
+    expect(search).toHaveFocus();
+    await user.type(search, "not-a-provider");
+    expect(screen.getByRole("status")).toHaveTextContent("No providers match");
+    await user.clear(search);
+    await user.type(search, "claude");
+    const results = screen.getByRole("listbox", { name: "Providers" });
+    expect(within(results).getByRole("option", { name: /Anthropic/ })).toBeVisible();
+    expect(within(results).queryByRole("option", { name: /Custom endpoint/ })).toBeNull();
+    await user.keyboard("{Enter}");
+    expect(intents).toContainEqual(["app-settings", "setViewingApiProvider", ["Anthropic Claude"]]);
+    expect(trigger).toHaveFocus();
+    act(() => push({ ...snapshot, activeSection: "api endpoint", viewingApiProvider: "Anthropic Claude" }));
+    expect(screen.getByLabelText("API Key")).toHaveValue("");
+    expect(screen.getByLabelText("Default text model")).toHaveValue("");
+    expect(screen.queryByLabelText("Base URL")).toBeNull();
+  });
 
-    await chooseCustomOption(user, "API Provider", "Anthropic Claude");
-
+  it("keeps keyboard navigation and Escape inside Settings", async () => {
+    const { user, push, intents } = setup();
+    await goToApiEndpoint(user, push);
+    const trigger = screen.getByRole("button", { name: /choose provider/i });
+    await user.click(trigger);
+    await user.keyboard("{ArrowDown}{Escape}");
+    expect(screen.queryByRole("listbox", { name: "Providers" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Settings" })).toBeVisible();
+    expect(trigger).toHaveFocus();
+    await user.click(trigger);
+    await user.keyboard("{ArrowDown}{Enter}");
     expect(intents).toContainEqual(["app-settings", "setViewingApiProvider", ["Anthropic Claude"]]);
   });
 
-  it("Load Available Models is hidden for Gemini (no live catalog endpoint)", async () => {
-    const { user, push } = setup();
-    await goToApiEndpoint(user, push, { viewingApiProvider: "Google Gemini" });
-
-    expect(screen.queryByText("Load Available Models")).toBeNull();
-  });
-
-  it("Save Configuration stays disabled until the key and every required model are filled in", async () => {
-    const { user, push } = setup();
-    await goToApiEndpoint(user, push);
-
-    const saveButton = screen.getByText("Save Configuration");
-    expect(saveButton).toBeDisabled();
-
-    await user.type(screen.getByPlaceholderText("Enter your API key..."), "sk-test");
-    expect(saveButton).toBeDisabled(); // still missing every per-task model
-
-    // ADR-006 stage 6.5: Image Generation is deliberately absent from this
-    // list - it is optional for every provider now (see the test below).
-    for (const label of [
-      "Chat Naming / Session Title",
-      "Chat, Explain, Takeaways (main model)",
-      "Chart Generation (code-capable model)",
-      "Web Content Validation",
-      "Web Content Summarization",
-    ]) {
-      await user.type(screen.getByLabelText(label), "gpt-4o-mini");
-    }
-
-    expect(saveButton).toBeEnabled();
-  });
-
-  it("Image Generation is visible but optional for OpenAI-Compatible (capability-gated at call time)", async () => {
-    // ADR-006 stage 6.5: a text-only OpenAI-compatible endpoint (vLLM,
-    // LM Studio, llama-server) must save cleanly without an image model -
-    // the backend raises an actionable error at image-generation time
-    // instead of blocking Save up front.
-    const { user, push } = setup();
-    await goToApiEndpoint(user, push);
-
-    // Still rendered (unlike Anthropic, which hides it entirely), labeled
-    // optional the same way the Llama.cpp page labels its optional field.
-    expect(screen.getByLabelText("Image Generation (optional)")).toBeInTheDocument();
-
-    await user.type(screen.getByPlaceholderText("Enter your API key..."), "sk-test");
-    for (const label of [
-      "Chat Naming / Session Title",
-      "Chat, Explain, Takeaways (main model)",
-      "Chart Generation (code-capable model)",
-      "Web Content Validation",
-      "Web Content Summarization",
-    ]) {
-      await user.type(screen.getByLabelText(label), "gpt-4o-mini");
-    }
-
-    expect(screen.getByText("Save Configuration")).toBeEnabled();
-  });
-
-  it("Anthropic does not require an Image Generation model to enable Save", async () => {
-    const { user, push } = setup();
-    await goToApiEndpoint(user, push, { viewingApiProvider: "Anthropic Claude", activeApiProvider: "Anthropic Claude" });
-
-    await user.type(screen.getByPlaceholderText("Enter your API key..."), "sk-ant-test");
-    expect(screen.queryByLabelText("Image Generation")).toBeNull();
-
-    for (const label of [
-      "Chat Naming / Session Title",
-      "Chat, Explain, Takeaways (main model)",
-      "Chart Generation (code-capable model)",
-      "Web Content Validation",
-      "Web Content Summarization",
-    ]) {
-      await user.type(screen.getByLabelText(label), "claude-sonnet");
-    }
-
-    expect(screen.getByText("Save Configuration")).toBeEnabled();
-  });
-
-  it("Save fires saveApiConfiguration with the typed draft and clears the key field afterward", async () => {
+  it("saves one text default, leaves overrides inherited, and clears the key", async () => {
     const { user, push, intents } = setup();
     await goToApiEndpoint(user, push);
-
-    await user.type(screen.getByPlaceholderText("Enter your API key..."), "sk-super-secret");
-    for (const label of [
-      "Chat Naming / Session Title",
-      "Chat, Explain, Takeaways (main model)",
-      "Chart Generation (code-capable model)",
-      "Image Generation (optional)",
-      "Web Content Validation",
-      "Web Content Summarization",
-    ]) {
-      await user.type(screen.getByLabelText(label), "gpt-4o-mini");
-    }
-    await user.click(screen.getByText("Save Configuration"));
-
-    const saveCall = intents.find(([, intent]) => intent === "saveApiConfiguration");
-    expect(saveCall).toBeDefined();
-    const [, , args] = saveCall as [string, string, unknown[]];
-    expect(args[0]).toBe("OpenAI-Compatible");
-    expect(args[2]).toBe("sk-super-secret");
-    expect(screen.getByPlaceholderText("Enter your API key...")).toHaveValue("");
+    const save = screen.getByRole("button", { name: "Save and activate" });
+    expect(save).toBeDisabled();
+    await user.type(screen.getByLabelText("API Key"), "test-key");
+    expect(save).toBeDisabled();
+    await user.type(screen.getByLabelText("Default text model"), "custom-chat");
+    await user.click(save);
+    expect(intents).toContainEqual(["app-settings", "saveApiConfiguration", [
+      "OpenAI-Compatible", snapshot.apiBaseUrl, "test-key", {
+        task_chat: "custom-chat",
+      },
+    ]]);
+    expect(screen.getByLabelText("API Key")).toHaveValue("");
   });
 
-  it("Reset API Settings does nothing on the first click - it only arms the confirmation", async () => {
-    // Reset irreversibly wipes every provider's saved key, so it must not
-    // be a single-click action. Legacy gated it behind a "This cannot be
-    // undone" Yes/No prompt.
+  it("preserves existing task assignments and sends only explicit overrides", async () => {
+    const { user, push, intents } = setup();
+    await goToApiEndpoint(user, push, {
+      apiKeySource: { openai: "stored" }, apiKeyConfigured: { openai: true },
+      apiModels: { task_chat: "old", task_title: "cheap", task_chart: "old", task_image_gen: "image" },
+    });
+    await user.clear(screen.getByLabelText("Default text model"));
+    await user.type(screen.getByLabelText("Default text model"), "new");
+    await user.click(screen.getByRole("button", { name: /per-task models/i }));
+    expect(screen.getByLabelText("Chat naming")).toHaveValue("cheap");
+    expect(screen.getByLabelText("Chart generation")).toHaveValue("old");
+    expect(screen.getByLabelText("Image generation")).toHaveValue("image");
+    await user.clear(screen.getByLabelText("Chart generation"));
+    await user.type(screen.getByLabelText("Chart generation"), "code");
+    await user.click(screen.getByRole("button", { name: "Save and activate" }));
+    expect(intents).toContainEqual(["app-settings", "saveApiConfiguration", [
+      "OpenAI-Compatible", snapshot.apiBaseUrl, "", {
+        task_chat: "new", task_title: "cheap", task_chart: "code",
+        task_image_gen: "image",
+      },
+    ]]);
+  });
+
+  it("requests a fresh key when the editable endpoint changes before load or save", async () => {
+    const { user, push, intents } = setup();
+    await goToApiEndpoint(user, push, {
+      apiKeySource: { openai: "stored" }, apiKeyConfigured: { openai: true }, apiModels: { task_chat: "chat" },
+    });
+    const baseUrl = screen.getByLabelText("Base URL");
+    const load = screen.getByRole("button", { name: /load available models/i });
+    const save = screen.getByRole("button", { name: "Save and activate" });
+    expect(save).toBeEnabled();
+    await user.click(load);
+    expect(intents).toContainEqual(["app-settings", "loadApiModels", ["OpenAI-Compatible", "", snapshot.apiBaseUrl]]);
+    await user.clear(baseUrl);
+    await user.type(baseUrl, "https://new.example/v1");
+    expect(load).toBeDisabled();
+    expect(save).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Enter a key for the new endpoint");
+    await user.type(screen.getByLabelText("API Key"), "replacement");
+    expect(load).toBeEnabled();
+    expect(save).toBeEnabled();
+  });
+
+  it("allows a local custom endpoint without a key and keeps remote endpoints credential-gated", async () => {
+    const { user, push, intents } = setup();
+    await goToApiEndpoint(user, push, { apiKeyConfigured: { openai: true }, apiModels: { task_chat: "local-model" } });
+    const save = screen.getByRole("button", { name: "Save and activate" });
+    const load = screen.getByRole("button", { name: /load available models/i });
+    const base = screen.getByLabelText("Base URL");
+    await user.clear(base);
+    await user.type(base, "http://localhost.example/v1");
+    expect(save).toBeDisabled();
+    await user.clear(base);
+    await user.type(base, "http://127.0.0.1:8080/v1");
+    expect(screen.getByText("Optional for this local endpoint.")).toBeVisible();
+    expect(save).toBeEnabled();
+    await user.click(load);
+    expect(intents).toContainEqual(["app-settings", "loadApiModels", ["OpenAI-Compatible", "", "http://127.0.0.1:8080/v1"]]);
+  });
+
+  it("offers cached model IDs only for the endpoint that produced them", async () => {
+    const { user, push } = setup();
+    await goToApiEndpoint(user, push, {
+      apiCatalogBaseUrl: "https://previous.example/v1/",
+      apiModelCatalog: [{ modelId: "previous/model", provider: "OpenAI-Compatible", capabilities: [], ready: true, available: true }],
+    });
+    const field = screen.getByLabelText("Default text model") as HTMLInputElement;
+    expect(field.list?.options).toHaveLength(0);
+    await user.clear(screen.getByLabelText("Base URL"));
+    await user.type(screen.getByLabelText("Base URL"), "https://previous.example/v1");
+    expect(field.list?.options[0]?.value).toBe("previous/model");
+  });
+
+  it("keeps manual deployment IDs usable without a model listing", async () => {
+    const { user, push } = setup();
+    await goToApiEndpoint(user, push, { viewingApiProvider: "Azure OpenAI", apiBaseUrl: "" });
+    expect(screen.queryByRole("button", { name: /load available models/i })).toBeNull();
+    await user.type(screen.getByLabelText("API Key"), "azure-test");
+    await user.type(screen.getByLabelText("Default text model"), "my-deployment");
+    expect(screen.getByRole("button", { name: "Save and activate" })).toBeDisabled();
+    await user.type(screen.getByLabelText("Base URL"), "https://resource.example/openai/v1");
+    expect(screen.getByRole("button", { name: "Save and activate" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: /per-task models/i }));
+    expect(screen.queryByLabelText("Image generation")).toBeNull();
+  });
+
+  it("preserves Gemini offline suggestions and offers a live refresh", async () => {
+    const { user, push } = setup();
+    await goToApiEndpoint(user, push, {
+      viewingApiProvider: "Google Gemini", apiKeySource: { gemini: "environment" },
+      apiModelCatalog: [{ modelId: "gemini-new", provider: "Google Gemini", capabilities: ["text"], ready: true, available: true }],
+    });
+    expect(screen.getByRole("button", { name: /load available models/i })).toBeEnabled();
+    const field = screen.getByLabelText("Default text model") as HTMLInputElement;
+    expect(Array.from(field.list?.options ?? [], (option) => option.value)).toEqual([
+      "gemini-new", ...snapshot.geminiStaticModels,
+    ]);
+    await user.click(screen.getByRole("button", { name: /per-task models/i }));
+    expect(screen.getByLabelText("Image generation")).toBeVisible();
+  });
+
+  it("explains a failed refresh while retaining the manual save path", async () => {
+    const { user, push } = setup();
+    await goToApiEndpoint(user, push, {
+      apiCatalogStatus: "error", apiCatalogMessage: "Model discovery is unavailable.",
+      apiKeyConfigured: { openai: true }, apiModels: { task_chat: "manual-model" },
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("Model discovery is unavailable");
+    expect(screen.getByRole("button", { name: "Save and activate" })).toBeEnabled();
+  });
+
+  it("requires confirmation to reset all providers and clears local drafts too", async () => {
     const { user, push, intents } = setup();
     await goToApiEndpoint(user, push);
-
+    await user.clear(screen.getByLabelText("Base URL"));
+    await user.type(screen.getByLabelText("Base URL"), "https://custom.example/v1");
+    await user.type(screen.getByLabelText("Default text model"), "test");
     await user.click(screen.getByText("Reset API Settings"));
-
     expect(intents.some(([, intent]) => intent === "resetApiSettings")).toBe(false);
-    expect(screen.getByText(/cannot be undone/)).toBeInTheDocument();
-    expect(screen.getByText("Confirm Reset")).toBeInTheDocument();
-  });
-
-  it("Cancel backs out of an armed Reset without firing anything", async () => {
-    const { user, push, intents } = setup();
-    await goToApiEndpoint(user, push);
-
-    await user.click(screen.getByText("Reset API Settings"));
+    expect(screen.getByRole("alert")).toHaveTextContent(/cannot be undone/);
     await user.click(screen.getByText("Cancel"));
-
-    expect(intents.some(([, intent]) => intent === "resetApiSettings")).toBe(false);
     expect(screen.queryByText("Confirm Reset")).toBeNull();
-    expect(screen.getByText("Reset API Settings")).toBeInTheDocument();
-  });
-
-  it("Confirm Reset fires resetApiSettings", async () => {
-    const { user, push, intents } = setup();
-    await goToApiEndpoint(user, push);
-
     await user.click(screen.getByText("Reset API Settings"));
     await user.click(screen.getByText("Confirm Reset"));
-
     expect(intents).toContainEqual(["app-settings", "resetApiSettings", []]);
-  });
-
-  it("Confirm Reset clears the local Base URL and model drafts too, not just the key", async () => {
-    // Regression test: Reset originally only cleared draftApiKey, leaving
-    // draftBaseUrl/draftModels showing their pre-reset values (the resync
-    // effect only fires on a genuine provider switch, which Reset doesn't
-    // cause) - a subsequent Save could silently re-persist exactly what
-    // Reset was meant to clear.
-    const { user, push } = setup();
-    await goToApiEndpoint(user, push);
-
-    await user.clear(screen.getByPlaceholderText("https://api.openai.com/v1"));
-    await user.type(screen.getByPlaceholderText("https://api.openai.com/v1"), "https://custom-gateway.example/v1");
-    await user.type(screen.getByLabelText("Chat, Explain, Takeaways (main model)"), "gpt-4o");
-
-    await user.click(screen.getByText("Reset API Settings"));
-    await user.click(screen.getByText("Confirm Reset"));
-
-    expect(screen.getByPlaceholderText("https://api.openai.com/v1")).toHaveValue("https://api.openai.com/v1");
-    expect(screen.getByLabelText("Chat, Explain, Takeaways (main model)")).toHaveValue("");
+    expect(screen.getByLabelText("Base URL")).toHaveValue(snapshot.apiBaseUrl);
+    expect(screen.getByLabelText("Default text model")).toHaveValue("");
   });
 
   it("clicking a reasoning level radio fires setLlamaCppReasoningLevel", async () => {
@@ -851,20 +869,19 @@ describe("SettingsDialog", () => {
     expect(intents).toContainEqual(["app-settings", "setProviderMode", ["Llama.cpp (Local)"]]);
   });
 
-  it("API Endpoint page shows itself as the active provider mode and renders no switch button when it already is", async () => {
+  it("reports the active cloud profile even when a different provider is being viewed", async () => {
     const { user, push } = setup();
-    await goToApiEndpoint(user, push, { providerMode: "API Endpoint" });
-
-    expect(screen.getByText("API Endpoint is the active provider mode.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Use This Provider" })).toBeNull();
+    await goToApiEndpoint(user, push, {
+      providerMode: "API Endpoint", viewingApiProvider: "Anthropic Claude",
+    });
+    expect(screen.getByText("Custom endpoint")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /use saved/i })).toBeNull();
   });
 
-  it("API Endpoint page offers a switch action when a different mode is active, and it fires setProviderMode", async () => {
+  it("can reactivate the saved cloud profile while a local mode is active", async () => {
     const { user, push, intents } = setup();
-    await goToApiEndpoint(user, push, { providerMode: "Ollama (Local)" });
-
-    await user.click(screen.getByRole("button", { name: "Use This Provider" }));
-
+    await goToApiEndpoint(user, push, { apiKeySource: { openai: "stored" } });
+    await user.click(screen.getByRole("button", { name: "Use saved Custom endpoint" }));
     expect(intents).toContainEqual(["app-settings", "setProviderMode", ["API Endpoint"]]);
   });
 

@@ -170,7 +170,7 @@ def _native_kwargs_for_active_provider(state, schema: dict, schema_name: str) ->
             return {"response_format": {"type": "json_object", "schema": schema}}
         return None
 
-    if state.api_provider_type == config.API_PROVIDER_OPENAI:
+    if state.api_provider_type in (config.API_PROVIDER_OPENAI, "OpenAI"):
         # Verified against the installed openai SDK's
         # ResponseFormatJSONSchema/JSONSchema TypedDicts - the modern
         # Structured Outputs shape, strict=True for hard schema adherence.

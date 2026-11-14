@@ -33,6 +33,8 @@ from backend.fal_integration import media_urls, model_path, request_path
 from settings_store._composed import SettingsManagerParts
 
 import graphlink_secrets
+from graphlink_cloud_providers import CLOUD_PROVIDERS, DEFAULT_CLOUD_PROVIDER
+from graphlink_task_config import API_PROVIDER_OPENAI, MODE_API_ENDPOINT, MODE_OLLAMA_LOCAL
 from graphlink_model_catalog import normalize_model_id
 
 
@@ -72,8 +74,54 @@ class CloudProviderSettingsOps(SettingsManagerParts):
     def get_api_provider(self):
         return self.state.get("api_provider", "OpenAI-Compatible")
 
-    def get_api_base_url(self):
-        return self.state.get("api_base_url", "https://api.openai.com/v1")
+    def get_api_base_url(self, provider: str | None = None) -> str:
+        provider = provider or self.get_api_provider()
+        profile = CLOUD_PROVIDERS.get(provider)
+        if profile is None:  # older/unrecognized profile, preserved on disk
+            return str(self.state.get("api_base_url", "https://api.openai.com/v1"))
+        if not profile.editable_endpoint:
+            return profile.base_url
+        endpoints = self.state.get("api_base_urls_by_provider", {})
+        if isinstance(endpoints, dict) and provider in endpoints:
+            return str(endpoints[provider] or "")
+        if provider == API_PROVIDER_OPENAI:
+            # Older versions wrote one global URL. A native-provider save could
+            # overwrite it with "" while leaving a custom key behind. A lost
+            # binding requires re-entry, never a guess at the key's destination.
+            if self.get_api_provider() == provider or self.state.get(profile.secret_field):
+                return str(self.state.get("api_base_url") or "")
+        return profile.base_url
+
+    def get_provider_key(self, provider: str) -> str:
+        return graphlink_secrets.unprotect(self.state.get(CLOUD_PROVIDERS[provider].secret_field, ""))
+
+    def save_cloud_profile(self, provider: str, endpoint: str, entered_key: str, models: dict[str, str]) -> None:
+        """Commit one complete connection, leaving sibling secret blobs untouched."""
+        profile = CLOUD_PROVIDERS[provider]
+        state = dict(self.state)
+        urls = dict(state.get("api_base_urls_by_provider") or {})
+        # Record the old binding before overwriting the legacy active-url slot.
+        urls.setdefault(API_PROVIDER_OPENAI, self.get_api_base_url(API_PROVIDER_OPENAI))
+        urls[provider] = endpoint
+        profiles = dict(state.get("api_models_by_provider") or {})
+        profiles[provider] = dict(models)
+        state.update(api_provider=provider, api_base_url=endpoint, api_base_urls_by_provider=urls,
+                     api_models=dict(models), api_models_by_provider=profiles, current_mode=MODE_API_ENDPOINT)
+        changed_url = self.get_api_base_url(provider).rstrip("/") != endpoint
+        if entered_key:
+            state[profile.secret_field] = self._protect_and_track(entered_key)
+        elif changed_url:
+            # A keyless local service replaced a credential-bound custom URL.
+            # Do not accidentally bind the old key to that service on restart.
+            state.pop(profile.secret_field, None)
+        if changed_url and not self.get_catalog_endpoint(provider):
+            # An older cache had no endpoint identity. Do not carry it across
+            # the first URL change after upgrading.
+            catalogs = dict(state.get("api_model_catalog_by_provider") or {})
+            catalogs.pop(provider, None)
+            state["api_model_catalog_by_provider"] = catalogs
+        self._save_state(state, raise_on_error=True)
+        self.state = state
 
     def get_openai_key(self):
         return graphlink_secrets.unprotect(self.state.get("openai_api_key", ""))
@@ -178,9 +226,28 @@ class CloudProviderSettingsOps(SettingsManagerParts):
             return dict(profiles.get(provider, {}) or {})
         return dict(self.state.get("api_models", {}) or {})
 
-    def get_api_model_catalog(self, provider: str | None = None):
-        """Return the last successful provider catalog refresh for the UI."""
+    def begin_api_catalog_refresh(self, provider: str) -> object:
+        # Shared across sessions. Identity prevents an old request writing over
+        # a new refresh or restoring a catalog after Reset has returned.
+        ticket = object()
+        self._api_catalog_requests[provider] = ticket
+        return ticket
+
+    def is_current_api_catalog_request(self, provider: str, ticket: object) -> bool:
+        return self._api_catalog_requests.get(provider) is ticket
+
+    def get_catalog_endpoint(self, provider: str) -> str:
+        endpoints = self.state.get("api_catalog_endpoints", {})
+        if isinstance(endpoints, dict) and provider in endpoints:
+            return str(endpoints[provider] or "")
+        return ""
+
+    def get_api_model_catalog(self, provider: str | None = None, *, include_draft: bool = False):
+        """Offer only models from the saved endpoint to the routing runtime."""
         provider = provider or self.get_api_provider()
+        bound = self.get_catalog_endpoint(provider)
+        if bound and not include_draft and bound.rstrip("/") != self.get_api_base_url(provider).rstrip("/"):
+            return []
         catalogs = self.state.get("api_model_catalog_by_provider", {})
         raw_models = catalogs.get(provider, []) if isinstance(catalogs, dict) else []
         if not isinstance(raw_models, list):
@@ -220,6 +287,11 @@ class CloudProviderSettingsOps(SettingsManagerParts):
         anthropic_key: str,
         gemini_key: str,
     ):
+        endpoints = dict(self.state.get("api_base_urls_by_provider") or {})
+        endpoints.setdefault(API_PROVIDER_OPENAI, self.get_api_base_url(API_PROVIDER_OPENAI))
+        if provider in CLOUD_PROVIDERS and CLOUD_PROVIDERS[provider].editable_endpoint:
+            endpoints[provider] = base_url
+        self.state["api_base_urls_by_provider"] = endpoints
         self.state["api_provider"] = provider
         self.state["api_base_url"] = base_url
         # KEEP_EXISTING_SECRET leaves the stored value untouched - no decrypt,
@@ -252,7 +324,9 @@ class CloudProviderSettingsOps(SettingsManagerParts):
         self.state["api_models"] = normalized
         self._save_state()
 
-    def set_api_model_catalog(self, models: list[dict] | list[str], provider: str | None = None):
+    def set_api_model_catalog(
+        self, models: list[dict] | list[str], provider: str | None = None, *, endpoint: str | None = None,
+    ):
         """Persist a normalized, non-secret snapshot of a provider model catalog."""
         provider = provider or self.get_api_provider()
         normalized = []
@@ -278,23 +352,27 @@ class CloudProviderSettingsOps(SettingsManagerParts):
                     ),
                 }
             )
-        catalogs = self.state.get("api_model_catalog_by_provider", {})
-        if not isinstance(catalogs, dict):
-            catalogs = {}
+        catalogs = dict(self.state.get("api_model_catalog_by_provider") or {})
         catalogs[provider] = normalized
-        self.state["api_model_catalog_by_provider"] = catalogs
-        self._save_state()
+        endpoints = dict(self.state.get("api_catalog_endpoints") or {})
+        endpoints[provider] = self.get_api_base_url(provider) if endpoint is None else endpoint
+        state = dict(self.state, api_model_catalog_by_provider=catalogs, api_catalog_endpoints=endpoints)
+        self._save_state(state, raise_on_error=True)
+        self.state = state
 
     def set_github_token(self, token: str):
         self.state["github_access_token"] = self._protect_and_track(token)
         self._save_state()
 
     def reset_api_settings(self):
-        self.state["api_provider"] = "OpenAI-Compatible"
-        self.state["api_base_url"] = "https://api.openai.com/v1"
-        self.state["openai_api_key"] = ""
-        self.state["anthropic_api_key"] = ""
-        self.state["gemini_api_key"] = ""
-        self.state["api_models"] = {}
-        self.state["api_models_by_provider"] = {}
-        self._save_state()
+        state = dict(self.state)
+        for profile in CLOUD_PROVIDERS.values():
+            state.pop(profile.secret_field, None)
+        if state.get("current_mode") == MODE_API_ENDPOINT:
+            state["current_mode"] = MODE_OLLAMA_LOCAL
+        state.update(api_provider=DEFAULT_CLOUD_PROVIDER, api_base_url=CLOUD_PROVIDERS[DEFAULT_CLOUD_PROVIDER].base_url,
+                     api_base_urls_by_provider={}, api_models={}, api_models_by_provider={}, api_model_catalog_by_provider={},
+                     api_catalog_endpoints={})
+        self._save_state(state, raise_on_error=True)
+        self.state = state
+        self._api_catalog_requests.clear()

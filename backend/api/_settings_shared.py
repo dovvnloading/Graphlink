@@ -58,7 +58,7 @@ import asyncio
 import os
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, TypeVar
 
 import api_provider
 import graphlink_task_config as config
@@ -78,15 +78,6 @@ API_TASK_KEYS = (
     config.TASK_IMAGE_GEN,
     config.TASK_WEB_VALIDATE,
     config.TASK_WEB_SUMMARIZE,
-)
-
-# The three providers the page can actually display. Used to bound the
-# per-provider catalog-state dict: without it, that dict is keyed by a
-# raw client-supplied string and grows without limit.
-KNOWN_API_PROVIDERS = (
-    config.API_PROVIDER_OPENAI,
-    config.API_PROVIDER_ANTHROPIC,
-    config.API_PROVIDER_GEMINI,
 )
 
 # Ollama's five per-task model-assignment slots - task_image_gen is
@@ -121,9 +112,12 @@ REASONING_LEVELS = api_provider.REASONING_LEVELS
 _manager_lock = threading.Lock()
 
 
-def run_locked(mutation: Callable[..., None], *args: Any) -> None:
+_Result = TypeVar("_Result")
+
+
+def run_locked(mutation: Callable[..., _Result], *args: Any) -> _Result:
     with _manager_lock:
-        mutation(*args)
+        return mutation(*args)
 
 
 def locked_llama_cpp_settings(manager: SettingsManager) -> dict[str, Any]:
@@ -153,7 +147,9 @@ async def republish_composer_reasoning(bus: SessionBus) -> None:
         await bus.publish("app-composer")
 
 
-async def apply_ollama_reasoning_level(manager: SettingsManager, level: str) -> None:
+async def apply_ollama_reasoning_level(
+    manager: SettingsManager, level: str, runtime: api_provider.ProviderRuntime | None = None,
+) -> None:
     """Persist `level` and, if Ollama is still the live provider, re-apply it to
     api_provider's module state so the very next chat()/chat_stream() call
     picks it up. `level` MUST already be one of api_provider.REASONING_LEVELS -
@@ -168,13 +164,16 @@ async def apply_ollama_reasoning_level(manager: SettingsManager, level: str) -> 
     await asyncio.to_thread(run_locked, manager.set_ollama_reasoning_level, level)
 
     def _reapply_if_ollama_is_still_the_live_provider() -> None:
-        if api_provider.is_local_ollama_mode():
-            api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_level": level})
+        target = runtime or api_provider
+        if target.is_local_ollama_mode():
+            target.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA, {"reasoning_level": level})
 
     await asyncio.to_thread(_reapply_if_ollama_is_still_the_live_provider)
 
 
-async def apply_ollama_chat_model(manager: SettingsManager, model_id: str) -> None:
+async def apply_ollama_chat_model(
+    manager: SettingsManager, model_id: str, runtime: api_provider.ProviderRuntime | None = None,
+) -> None:
     """Assign the Ollama chat-task model, race-safely (R8a).
 
     Extracted from register_settings' own set_ollama_model_assignment intent
@@ -198,13 +197,20 @@ async def apply_ollama_chat_model(manager: SettingsManager, model_id: str) -> No
         manager.set_ollama_model_assignments(assignments)
         # ADR-006 stage 6.5 (H6): locked writer wrappers - see
         # api_provider.sync_ollama_models.
-        api_provider.sync_ollama_models(manager)
-        api_provider.set_current_ollama_model(chosen)
+        if runtime is None:
+            api_provider.sync_ollama_models(manager)
+            api_provider.set_current_ollama_model(chosen)
+        else:
+            models = runtime.snapshot().ollama_models
+            models[config.TASK_CHAT] = chosen
+            runtime.set_ollama_models(models)
 
     await asyncio.to_thread(run_locked, _persist)
 
 
-async def apply_llama_cpp_reasoning_level(manager: SettingsManager, level: str) -> str | None:
+async def apply_llama_cpp_reasoning_level(
+    manager: SettingsManager, level: str, runtime: api_provider.ProviderRuntime | None = None,
+) -> str | None:
     """Same contract as apply_ollama_reasoning_level, for Llama.cpp. Returns a
     human-readable failure message if the live re-apply fails (the level is
     ALREADY persisted regardless - only the live effect is delayed to the
@@ -218,10 +224,11 @@ async def apply_llama_cpp_reasoning_level(manager: SettingsManager, level: str) 
     await asyncio.to_thread(run_locked, manager.set_llama_cpp_reasoning_level, level)
 
     def _reapply_if_llama_cpp_is_still_the_live_provider() -> None:
-        if api_provider.is_local_llama_cpp_mode():
+        target = runtime or api_provider
+        if target.is_local_llama_cpp_mode():
             settings = locked_llama_cpp_settings(manager)
             settings["reasoning_level"] = level
-            api_provider.initialize_local_provider(config.LOCAL_PROVIDER_LLAMACPP, settings)
+            target.initialize_local_provider(config.LOCAL_PROVIDER_LLAMACPP, settings)
 
     try:
         await asyncio.to_thread(_reapply_if_llama_cpp_is_still_the_live_provider)
@@ -239,19 +246,25 @@ async def apply_llama_cpp_reasoning_level(manager: SettingsManager, level: str) 
 # simpler than their local-provider counterparts, not an oversight.
 
 
-async def apply_anthropic_reasoning_level(manager: SettingsManager, level: str) -> None:
+async def apply_anthropic_reasoning_level(
+    manager: SettingsManager, level: str, runtime: api_provider.ProviderRuntime | None = None,
+) -> None:
     await asyncio.to_thread(run_locked, manager.set_anthropic_reasoning_level, level)
-    await asyncio.to_thread(api_provider.set_anthropic_reasoning_level, level)
+    await asyncio.to_thread((runtime or api_provider).set_anthropic_reasoning_level, level)
 
 
-async def apply_gemini_reasoning_level(manager: SettingsManager, level: str) -> None:
+async def apply_gemini_reasoning_level(
+    manager: SettingsManager, level: str, runtime: api_provider.ProviderRuntime | None = None,
+) -> None:
     await asyncio.to_thread(run_locked, manager.set_gemini_reasoning_level, level)
-    await asyncio.to_thread(api_provider.set_gemini_reasoning_level, level)
+    await asyncio.to_thread((runtime or api_provider).set_gemini_reasoning_level, level)
 
 
-async def apply_openai_reasoning_level(manager: SettingsManager, level: str) -> None:
+async def apply_openai_reasoning_level(
+    manager: SettingsManager, level: str, runtime: api_provider.ProviderRuntime | None = None,
+) -> None:
     await asyncio.to_thread(run_locked, manager.set_openai_reasoning_level, level)
-    await asyncio.to_thread(api_provider.set_openai_reasoning_level, level)
+    await asyncio.to_thread((runtime or api_provider).set_openai_reasoning_level, level)
 
 
 async def pick_scan_folder_and_run(

@@ -617,7 +617,7 @@ def test_set_viewing_api_provider_intent_updates_only_local_ui_state(manager):
     payload = recorder.messages[-1]["payload"]
     assert payload["viewingApiProvider"] == config.API_PROVIDER_ANTHROPIC
     # The persisted/active provider is untouched - only Save changes this.
-    assert payload["activeApiProvider"] == "OpenAI-Compatible"
+    assert payload["activeApiProvider"] == "OpenAI"
 
 
 def test_load_api_models_success_persists_catalog_and_publishes_status(manager, monkeypatch):
@@ -630,6 +630,7 @@ def test_load_api_models_success_persists_catalog_and_publishes_status(manager, 
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
+    asyncio.run(bus.dispatch_intent('app-settings', 'setViewingApiProvider', [config.API_PROVIDER_OPENAI]))
 
     asyncio.run(
         bus.dispatch_intent(
@@ -651,6 +652,7 @@ def test_load_api_models_failure_sets_error_status_and_does_not_persist(manager,
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
+    asyncio.run(bus.dispatch_intent('app-settings', 'setViewingApiProvider', [config.API_PROVIDER_OPENAI]))
 
     asyncio.run(
         bus.dispatch_intent("app-settings", "loadApiModels", [config.API_PROVIDER_OPENAI, "sk-test", "https://x/v1"])
@@ -662,25 +664,21 @@ def test_load_api_models_failure_sets_error_status_and_does_not_persist(manager,
     assert manager.get_api_model_catalog(config.API_PROVIDER_OPENAI) == []
 
 
-def test_load_api_models_rejects_gemini_since_it_has_no_live_catalog(manager, monkeypatch):
+def test_load_api_models_refreshes_native_gemini_catalog(manager, monkeypatch):
     calls = []
-    monkeypatch.setattr(api_provider, "list_models_for_config", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(api_provider, "list_models_for_config",
+                        lambda *args: calls.append(args) or ["gemini-from-endpoint"])
     bus = SessionBus("settings-load-models-gemini-test")
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
 
-    # apiCatalogStatus is scoped per-provider (post-review fix) - it's only
-    # visible in the payload for whichever provider is currently viewed, so
-    # switch there first to observe Gemini's own rejection outcome.
     asyncio.run(bus.dispatch_intent("app-settings", "setViewingApiProvider", [config.API_PROVIDER_GEMINI]))
-    asyncio.run(
-        bus.dispatch_intent("app-settings", "loadApiModels", [config.API_PROVIDER_GEMINI, "AIza-test", ""])
-    )
-
-    assert calls == []  # never even attempted a connection, matching legacy's hidden Load button
+    asyncio.run(bus.dispatch_intent("app-settings", "loadApiModels", [config.API_PROVIDER_GEMINI, "test-key", ""]))
+    assert calls == [(config.API_PROVIDER_GEMINI, "test-key", None)]
     payload = recorder.messages[-1]["payload"]
-    assert payload["apiCatalogStatus"] == "error"
+    assert payload["apiCatalogStatus"] == "success"
+    assert payload["apiModelCatalog"][0]["modelId"] == "gemini-from-endpoint"
 
 
 def test_save_api_configuration_rejects_missing_api_key(manager):
@@ -720,7 +718,7 @@ def test_save_api_configuration_rejects_missing_required_model(manager):
 
 
 def test_save_api_configuration_anthropic_does_not_require_image_gen_task(manager, monkeypatch):
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
+    monkeypatch.setattr(api_provider, "_build_api_client", lambda p, k, u: (object(), k, u))
     bus = SessionBus("settings-save-anthropic-test")
     register_settings(bus, manager)
 
@@ -742,7 +740,7 @@ def test_save_api_configuration_accepts_a_text_only_endpoint_without_an_image_mo
     # (vLLM, LM Studio, llama-server) has no image model to offer, and
     # image generation is capability-gated at call time instead
     # (generate_image's own "No image generation model configured" error).
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
+    monkeypatch.setattr(api_provider, "_build_api_client", lambda p, k, u: (object(), k, u))
     notifications = NotificationState()
     bus = SessionBus("settings-save-text-only-endpoint-test")
     bus.register_topic("notification", notifications.payload)
@@ -774,8 +772,8 @@ def test_save_api_configuration_does_not_persist_when_provider_init_fails(manage
     # No monkeypatch fixture at module scope here - patch directly and undo,
     # keeping this test symmetric with the others' monkeypatch(manager)-only
     # signature while still exercising the real failure path.
-    original = settings_module.api_provider.initialize_api
-    settings_module.api_provider.initialize_api = _boom
+    original = settings_module.api_provider._build_api_client
+    settings_module.api_provider._build_api_client = _boom
     try:
         register_settings(bus, manager, notifications)
         asyncio.run(
@@ -786,7 +784,7 @@ def test_save_api_configuration_does_not_persist_when_provider_init_fails(manage
             )
         )
     finally:
-        settings_module.api_provider.initialize_api = original
+        settings_module.api_provider._build_api_client = original
 
     assert manager.get_openai_key() == ""  # rejected key must not overwrite the last known-good profile
     assert notifications.msg_type == "error"
@@ -794,9 +792,7 @@ def test_save_api_configuration_does_not_persist_when_provider_init_fails(manage
 
 
 def test_save_api_configuration_persists_on_success_and_routes_task_models(manager, monkeypatch):
-    routed = {}
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
-    monkeypatch.setattr(api_provider, "set_task_model", lambda task, model: routed.__setitem__(task, model))
+    monkeypatch.setattr(api_provider, "_build_api_client", lambda p, k, u: (object(), k, u))
     notifications = NotificationState()
     bus = SessionBus("settings-save-success-test")
     bus.register_topic("notification", notifications.payload)
@@ -812,7 +808,7 @@ def test_save_api_configuration_persists_on_success_and_routes_task_models(manag
     assert manager.get_api_provider() == config.API_PROVIDER_OPENAI
     assert manager.get_openai_key() == "sk-test"
     assert manager.get_api_models(config.API_PROVIDER_OPENAI) == models
-    assert routed == models
+    assert api_provider.DEFAULT_RUNTIME.snapshot().api_models == models
     assert notifications.msg_type == "success"
     # ADR-006 stage 6.5: a successful save flips the LIVE provider to this
     # API endpoint, so the persisted mode must follow - previously a restart
@@ -834,8 +830,8 @@ def test_save_api_configuration_redacts_the_key_from_a_provider_error_message(ma
 
     import backend.settings as settings_module
 
-    original = settings_module.api_provider.initialize_api
-    settings_module.api_provider.initialize_api = _boom
+    original = settings_module.api_provider._build_api_client
+    settings_module.api_provider._build_api_client = _boom
     notifications = NotificationState()
     bus = SessionBus("settings-save-redaction-test")
     bus.register_topic("notification", notifications.payload)
@@ -849,7 +845,7 @@ def test_save_api_configuration_redacts_the_key_from_a_provider_error_message(ma
             )
         )
     finally:
-        settings_module.api_provider.initialize_api = original
+        settings_module.api_provider._build_api_client = original
 
     assert secret not in notifications.message
     assert "***" in notifications.message
@@ -866,6 +862,7 @@ def test_load_api_models_redacts_the_key_from_a_provider_error_message(manager, 
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
+    asyncio.run(bus.dispatch_intent('app-settings', 'setViewingApiProvider', [config.API_PROVIDER_OPENAI]))
 
     asyncio.run(
         bus.dispatch_intent("app-settings", "loadApiModels", [config.API_PROVIDER_OPENAI, secret, "https://x/v1"])
@@ -959,6 +956,7 @@ def test_load_api_models_reports_a_clean_error_when_no_key_is_available_anywhere
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
+    asyncio.run(bus.dispatch_intent('app-settings', 'setViewingApiProvider', [config.API_PROVIDER_OPENAI]))
 
     asyncio.run(bus.dispatch_intent("app-settings", "loadApiModels", [config.API_PROVIDER_OPENAI, "", "https://x/v1"]))
 
@@ -977,6 +975,7 @@ def test_load_api_models_requires_a_base_url_for_the_openai_compatible_provider(
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
+    asyncio.run(bus.dispatch_intent('app-settings', 'setViewingApiProvider', [config.API_PROVIDER_OPENAI]))
 
     asyncio.run(bus.dispatch_intent("app-settings", "loadApiModels", [config.API_PROVIDER_OPENAI, "sk-test", "   "]))
 
@@ -1066,7 +1065,7 @@ def test_reset_api_settings_also_clears_the_catalog_and_snaps_the_viewed_provide
     # follows the reset back to the default (as legacy's reset did).
     assert payload["apiCatalogStatus"] == "idle"
     assert payload["apiModelCatalog"] == []
-    assert payload["viewingApiProvider"] == config.API_PROVIDER_OPENAI
+    assert payload["viewingApiProvider"] == "OpenAI"
     assert manager.get_api_model_catalog(config.API_PROVIDER_ANTHROPIC) == []
 
 
@@ -1092,7 +1091,7 @@ def test_save_api_configuration_rejects_a_non_dict_models_argument_without_crash
 
 
 def test_save_api_configuration_preserves_other_providers_keys(manager, monkeypatch):
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
+    monkeypatch.setattr(api_provider, "_build_api_client", lambda p, k, u: (object(), k, u))
     bus = SessionBus("settings-save-preserves-other-keys-test")
     register_settings(bus, manager)
 
@@ -1141,7 +1140,7 @@ def test_save_api_configuration_reads_other_providers_keys_atomically_with_its_o
     # .run_locked) would not reach it, since a `from x import y` binds a
     # separate local name in the importing module. The patch target must
     # be the module that actually calls it.
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
+    monkeypatch.setattr(api_provider, "_build_api_client", lambda p, k, u: (object(), k, u))
 
     real_apply = intents_settings_api_provider_module.run_locked
     injected = {"done": False}
@@ -1204,7 +1203,8 @@ def test_load_api_models_never_mutates_the_live_provider_state(manager, monkeypa
 
     # The catalog DID refresh (the real list_models_for_config ran, through
     # the fake client)...
-    assert manager.get_api_model_catalog(config.API_PROVIDER_OPENAI)[0]["model_id"] == "gpt-4o"
+    assert manager.get_api_model_catalog(config.API_PROVIDER_OPENAI, include_draft=True)[0]["model_id"] == "gpt-4o"
+    assert manager.get_api_model_catalog(config.API_PROVIDER_OPENAI) == []
     # ...and the live provider globals are untouched, byte for byte.
     assert (
         api_provider.USE_API_MODE,
@@ -1222,7 +1222,7 @@ def test_catalog_state_is_isolated_per_provider(manager, monkeypatch):
     # user switched viewingApiProvider - and B's own Load button appeared
     # disabled ("loading") whenever A's load was still in flight. Fixed by
     # keying catalog state per-provider.
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
+    monkeypatch.setattr(api_provider, "_build_api_client", lambda p, k, u: (object(), k, u))
 
     def _boom(*a, **k):
         raise RuntimeError("openai endpoint unreachable")
@@ -1231,6 +1231,7 @@ def test_catalog_state_is_isolated_per_provider(manager, monkeypatch):
     register_settings(bus, manager)
     recorder = Recorder()
     bus.attach(recorder)
+    asyncio.run(bus.dispatch_intent('app-settings', 'setViewingApiProvider', [config.API_PROVIDER_OPENAI]))
 
     monkeypatch.setattr(api_provider, "list_models_for_config", _boom)
     asyncio.run(
@@ -1246,7 +1247,7 @@ def test_catalog_state_is_isolated_per_provider(manager, monkeypatch):
 
 
 def test_api_key_never_appears_in_the_settings_payload(manager, monkeypatch):
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
+    monkeypatch.setattr(api_provider, "_build_api_client", lambda p, k, u: (object(), k, u))
     bus = SessionBus("settings-save-key-write-only-test")
     register_settings(bus, manager)
     recorder = Recorder()
@@ -1261,7 +1262,7 @@ def test_api_key_never_appears_in_the_settings_payload(manager, monkeypatch):
     )
 
     payload = recorder.messages[-1]["payload"]
-    assert payload["apiKeyConfigured"] == {"openai": True, "anthropic": False, "gemini": False}
+    assert {key for key, value in payload["apiKeyConfigured"].items() if value} == {"openai"}
     assert "sk-super-secret-key" not in str(payload)
 
 
@@ -1296,7 +1297,7 @@ class TestApiKeySourceHelper:
 
 
 def test_api_key_source_on_the_wire_reports_environment_only_when_nothing_is_stored(manager, monkeypatch):
-    monkeypatch.setattr(api_provider, "initialize_api", lambda *a, **k: None)
+    monkeypatch.setattr(api_provider, "_build_api_client", lambda p, k, u: (object(), k, u))
     monkeypatch.setattr(
         api_provider,
         "env_api_key_configured",
@@ -1311,7 +1312,7 @@ def test_api_key_source_on_the_wire_reports_environment_only_when_nothing_is_sto
     payload = recorder.messages[0]["payload"]
     # OpenAI/Anthropic: env is set, nothing stored -> "environment". Gemini:
     # neither -> "none".
-    assert payload["apiKeySource"] == {"openai": "environment", "anthropic": "environment", "gemini": "none"}
+    assert {k: v for k, v in payload["apiKeySource"].items() if v != "none"} == {"openai": "environment", "anthropic": "environment"}
 
     # Now save an OpenAI key - a stored key must flip that provider (and
     # only that provider) to "stored", even though its env var is still set.
@@ -1323,7 +1324,7 @@ def test_api_key_source_on_the_wire_reports_environment_only_when_nothing_is_sto
         )
     )
     payload = recorder.messages[-1]["payload"]
-    assert payload["apiKeySource"] == {"openai": "stored", "anthropic": "environment", "gemini": "none"}
+    assert {k: v for k, v in payload["apiKeySource"].items() if v != "none"} == {"openai": "stored", "anthropic": "environment"}
 
 
 def test_reset_api_settings_intent_clears_everything(manager, monkeypatch):
@@ -1339,7 +1340,7 @@ def test_reset_api_settings_intent_clears_everything(manager, monkeypatch):
     asyncio.run(bus.dispatch_intent("app-settings", "resetApiSettings", []))
 
     assert manager.get_openai_key() == ""
-    assert manager.get_api_provider() == "OpenAI-Compatible"
+    assert manager.get_api_provider() == "OpenAI"
     assert manager.get_api_models("OpenAI-Compatible") == {}
 
 
@@ -2326,3 +2327,152 @@ def test_an_explicit_env_still_replaces_what_is_stored(tmp_path):
 
     manager.set_mcp_servers([{"name": "gh", "command": "npx", "env": {}}])
     assert manager.get_mcp_servers()[0]["env"] == {}
+
+
+def test_switching_cloud_profiles_preserves_scoped_routes_endpoints_and_credentials(manager, monkeypatch):
+    from graphlink_cloud_providers import CLOUD_PROVIDERS
+
+    monkeypatch.setattr(api_provider, "_build_api_client", lambda p, k, u: (object(), k, u))
+    runtime = api_provider.ProviderRuntime()
+    bus = SessionBus("cloud-profile-roundtrip")
+    register_settings(bus, manager, provider_runtime=runtime)
+    composer_refreshes = []
+    bus.register_topic("app-composer", lambda: composer_refreshes.append(runtime.snapshot().api_provider_type) or {})
+    custom = "https://private.example/v1"
+
+    def save(name, url, key, models):
+        asyncio.run(bus.dispatch_intent("app-settings", "saveApiConfiguration", [name, url, key, models]))
+
+    save(config.API_PROVIDER_OPENAI, custom, "proxy-key", {config.TASK_CHAT: "private-model",
+                                                          config.TASK_IMAGE_GEN: "private-image"})
+    save("DeepSeek", "https://untrusted.example/v1", "deepseek-key", {config.TASK_CHAT: "deepseek-model"})
+    save("OpenAI", "", "direct-key", {config.TASK_CHAT: "gpt-model"})
+    save(config.API_PROVIDER_OPENAI, custom, "", {config.TASK_CHAT: "private-model"})
+    assert runtime.snapshot().api_key == "proxy-key"
+    assert runtime.snapshot().api_models[config.TASK_TITLE] == "private-model"
+    assert runtime.snapshot().api_models[config.TASK_IMAGE_GEN] is None
+    assert composer_refreshes == [config.API_PROVIDER_OPENAI, "DeepSeek", "OpenAI", config.API_PROVIDER_OPENAI]
+    reloaded = SettingsManager(manager.state_file)
+    assert reloaded.get_api_base_url("DeepSeek") == CLOUD_PROVIDERS["DeepSeek"].base_url
+    assert reloaded.get_api_base_url(config.API_PROVIDER_OPENAI) == custom
+    assert reloaded.get_provider_key("DeepSeek") == "deepseek-key"
+    assert reloaded.get_provider_key("OpenAI") == "direct-key"
+    assert reloaded.get_api_models("DeepSeek") == {config.TASK_CHAT: "deepseek-model"}
+    asyncio.run(bus.dispatch_intent("app-settings", "resetApiSettings", []))
+    assert runtime.is_local_ollama_mode()
+    assert not runtime.snapshot().api_key
+    assert manager.get_current_mode() == config.MODE_OLLAMA_LOCAL
+    assert manager.get_api_provider() == "OpenAI"
+
+
+def test_environment_key_is_usable_only_on_its_bound_service_and_never_persisted(manager, monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "environment-secret")
+    calls = []
+    monkeypatch.setattr(api_provider, "_build_api_client",
+                        lambda p, k, u: calls.append((p, k, u)) or (object(), k, u))
+    runtime = api_provider.ProviderRuntime()
+    bus = SessionBus("cloud-environment-key")
+    register_settings(bus, manager, provider_runtime=runtime)
+    recorder = Recorder()
+    bus.attach(recorder)
+    asyncio.run(bus.dispatch_intent("app-settings", "saveApiConfiguration", [
+        "DeepSeek", "https://not-deepseek.example/v1", "", {config.TASK_CHAT: "my-model"},
+    ]))
+    assert calls == [("DeepSeek", "environment-secret", "https://api.deepseek.com")]
+    assert manager.get_provider_key("DeepSeek") == ""
+    assert "environment-secret" not in manager.state_file.read_text()
+    assert "environment-secret" not in str(recorder.messages)
+    assert recorder.messages[-1]["payload"]["apiKeySource"]["deepseek"] == "environment"
+
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-environment-secret")
+    asyncio.run(bus.dispatch_intent("app-settings", "saveApiConfiguration", [
+        config.API_PROVIDER_OPENAI, "https://private.example/v1", "", {config.TASK_CHAT: "my-model"},
+    ]))
+    assert len(calls) == 1
+
+
+def test_failed_cloud_settings_write_preserves_saved_and_live_profile(manager, monkeypatch):
+    monkeypatch.setattr(api_provider, "_build_api_client", lambda p, k, u: (object(), k, u))
+    runtime = api_provider.ProviderRuntime()
+    bus = SessionBus("disk-failure")
+    notices = NotificationState()
+    bus.register_topic("notification", notices.payload)
+    register_settings(bus, manager, notices, provider_runtime=runtime)
+
+    def save(name):
+        asyncio.run(bus.dispatch_intent("app-settings", "saveApiConfiguration", [
+            name, "", name + "-key", {config.TASK_CHAT: "my-model"},
+        ]))
+
+    save("DeepSeek")
+    before = manager.state_file.read_text()
+    def disk_full(*_args, **_kwargs):
+        raise OSError("disk full")
+    monkeypatch.setattr(manager, "_save_state", disk_full)
+    save("Moonshot AI")
+    assert notices.msg_type == "error" and "disk full" in notices.message
+    assert manager.state_file.read_text() == before
+    assert manager.get_api_provider() == "DeepSeek"
+    assert manager.get_provider_key("Moonshot AI") == ""
+    assert runtime.snapshot().api_provider_type == "DeepSeek"
+
+
+def test_reset_discards_inflight_catalog_even_when_another_session_requested_it(manager, monkeypatch):
+    import threading
+
+    started, resume = threading.Event(), threading.Event()
+    def list_models(*_args):
+        started.set()
+        assert resume.wait(5)
+        return ["stale-model"]
+
+    monkeypatch.setattr(api_provider, "list_models_for_config", list_models)
+    a, b = SessionBus("refresh"), SessionBus("reset")
+    register_settings(a, manager, provider_runtime=api_provider.ProviderRuntime())
+    register_settings(b, manager, provider_runtime=api_provider.ProviderRuntime())
+    async def interleave():
+        pending = asyncio.create_task(a.dispatch_intent("app-settings", "loadApiModels", ["DeepSeek", "key", ""]))
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            await b.dispatch_intent("app-settings", "resetApiSettings", [])
+        finally:
+            resume.set()
+        await pending
+    asyncio.run(interleave())
+    assert manager.get_api_model_catalog("DeepSeek", include_draft=True) == []
+    assert SettingsManager(manager.state_file).get_api_model_catalog("DeepSeek") == []
+
+
+@pytest.mark.parametrize(("provider", "valid", "invalid"), [
+    ("ByteDance ModelArk", "https://ark.cn-beijing.volces.com/api/v3", "https://volces.com.evil.example/api/v3"),
+    ("Amazon Bedrock", "https://bedrock-mantle.eu-west-1.api.aws/v1", "https://bedrock-mantle.eu-west-1.api.aws.evil/v1"),
+    ("Azure OpenAI", "https://resource.openai.azure.com/openai/v1", "https://resource.openai.azure.com@evil/openai/v1"),
+    ("Google Vertex AI", "https://aiplatform.googleapis.com/v1/projects/graphlink/locations/global/endpoints/openapi",
+     "https://other.example/v1/projects/graphlink/locations/global/endpoints/openapi"),
+    ("Alibaba Cloud Model Studio", "https://ws-demo.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+     "http://ws-demo.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1"),
+])
+def test_cloud_deployment_urls_bind_to_vendor_destinations(provider, valid, invalid):
+    from graphlink_cloud_providers import CLOUD_PROVIDERS
+
+    profile = CLOUD_PROVIDERS[provider]
+    assert profile.endpoint(valid + "/") == valid
+    with pytest.raises(ValueError):
+        profile.endpoint(invalid)
+
+
+def test_keyless_local_endpoint_drops_a_previous_remote_key(manager, monkeypatch):
+    # Both the live activation and a later cold start must see a keyless URL.
+    runtime = api_provider.ProviderRuntime()
+    bus = SessionBus("keyless-custom")
+    register_settings(bus, manager, provider_runtime=runtime)
+    calls = []
+    monkeypatch.setattr(api_provider, "_build_api_client", lambda p, k, u: calls.append((u, k)) or (object(), k, u))
+    for endpoint, key in (("https://remote.example/v1", "remote-secret"), ("http://127.0.0.1:8000/v1", "")):
+        asyncio.run(bus.dispatch_intent("app-settings", "saveApiConfiguration", [
+            config.API_PROVIDER_OPENAI, endpoint, key, {config.TASK_CHAT: "chat"},
+        ]))
+    assert calls == [("https://remote.example/v1", "remote-secret"), ("http://127.0.0.1:8000/v1", "")]
+    reloaded = SettingsManager(manager.state_file)
+    assert reloaded.get_openai_key() == ""
+    assert reloaded.get_api_base_url() == "http://127.0.0.1:8000/v1"

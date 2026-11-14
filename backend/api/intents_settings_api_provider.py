@@ -1,79 +1,57 @@
-"""ADR-002 stage 2.7: Settings dialog - API-provider page
-(OpenAI-Compatible/Anthropic/Gemini).
-
-Relocated VERBATIM from backend/settings.py's former register_settings
-(closures at its former lines 506-752) - pure code motion, no behavior
-change.
-
-The API-provider page deliberately does NOT replicate one piece of legacy
-behavior: the old QWidget pre-filled its API-key field with the saved
-plaintext key on every provider switch (safe there only because the
-widget lives in-process, with no serialization boundary). Serializing a
-plaintext key into this topic's WS payload would be a real regression
-from the write-only pattern already established for the GitHub token
-(backend/api/intents_settings_general.py) - so this page follows that
-same precedent instead: apiKeyConfigured is a per-provider bool, the key
-input always starts blank, and saving requires retyping the full key.
-This is a deliberate security improvement over legacy parity, not an
-oversight - called out explicitly per the "never redefine done"
-discipline.
-"""
-
+"""Provider settings, model discovery and activation for the current session."""
 from __future__ import annotations
 
 import asyncio
+import os
 
 import api_provider
 import graphlink_task_config as config
-from graphlink_model_catalog import ModelDescriptor, sort_descriptors
+from graphlink_cloud_providers import CLOUD_PROVIDERS, CloudProvider
+from graphlink_model_catalog import normalize_model_id
+from urllib.parse import urlsplit
+from graphlink_settings_store import SettingsManager
 
-from backend.api._settings_shared import (
-    KNOWN_API_PROVIDERS,
-    API_TASK_KEYS,
-    SettingsSessionState,
-    redact_secret,
-    run_locked,
-)
+from backend.api._settings_shared import API_TASK_KEYS, SettingsSessionState, redact_secret, run_locked
 from backend.events import SessionBus
-from backend.notifications import NotificationState
-from graphlink_settings_store import KEEP_EXISTING_SECRET, SettingsManager
+from backend.notifications import MessageType, NotificationState
 
 
-def _resolve_stored_key_for_catalog_load(
-    manager: SettingsManager, provider: str, base_url: str
-) -> tuple[str, str | None]:
-    """SECURITY-FIX: resolve the effective API key for a catalog load whose
-    own key field arrived blank, and refuse the STORED-key fallback unless
-    that key is actually bound to the base_url this call is about to send it
-    to. Without the base_url check, any caller of the loadApiModels intent -
-    the SPA itself (so an XSS/prompt-injection foothold in canvas-rendered
-    content), or a local process holding the per-launch token - could send
-    api_key='', base_url='http://attacker.example/v1' and turn Load into a
-    decrypt-and-exfiltrate oracle for the DPAPI-protected OpenAI-compatible
-    key, without ever reading the encrypted blob itself: the stored key was
-    never bound to the base_url it was saved with, only save_api_configuration's
-    own separate "retype the key on a URL change" discipline enforced that,
-    and this intent bypasses it entirely by falling back server-side. Gated
-    on stored_key being non-empty so the ordinary "no key configured
-    anywhere" case still reports its own, more useful error at the call site
-    rather than this one. Anthropic has no user-configurable base_url (see
-    _build_api_client - the branch ignores it outright), so the stored
-    Anthropic key always ships to the same fixed host and needs no check.
+class _InvalidConnection(ValueError):
+    """An actionable settings validation failure that can be shown to the user."""
 
-    Returns (key, error): a non-None `error` is a message to surface and
-    abort on; otherwise `key` is the resolved key (possibly "" when nothing
-    is stored, which the caller turns into its own "enter the API key"
-    error). Extracted to module level (not inlined in the load_api_models
-    closure) to keep register_settings_api_provider_intents under the
-    ADR-002 register-function line cap."""
-    stored_key = (
-        manager.get_openai_key()
-        if provider == config.API_PROVIDER_OPENAI
-        else manager.get_anthropic_key()
-    )
-    if stored_key and provider == config.API_PROVIDER_OPENAI and base_url != manager.get_api_base_url():
-        return "", "Enter the API Key to test a different Base URL."
-    return stored_key, None
+
+def _connection_key(manager: SettingsManager, profile: CloudProvider, endpoint: str, entered_key: str) -> str:
+    if entered_key:
+        return entered_key
+    same_endpoint = manager.get_api_base_url(profile.name).rstrip("/") == endpoint
+    local = profile.name == config.API_PROVIDER_OPENAI and urlsplit(endpoint).hostname in {"localhost", "127.0.0.1", "::1"}
+    # A proxy on loopback commonly accepts requests without authentication.
+    # A credential bound to an old endpoint must not follow it onto loopback.
+    if local and not same_endpoint:
+        return ""
+    stored = manager.get_provider_key(profile.name)
+    if stored:
+        if profile.editable_endpoint and not same_endpoint:
+            raise _InvalidConnection("Enter the API Key to use a different Base URL.")
+        return stored
+    if profile.environment_key_allowed(endpoint):
+        for name in profile.env_vars:
+            if key := os.environ.get(name):
+                return key
+    if local:
+        return ""
+    raise _InvalidConnection("Please enter the API Key.")
+
+
+def _assignments(profile: CloudProvider, raw: object) -> dict[str, str]:
+    inputs = raw if isinstance(raw, dict) else {}
+    models = {task: inputs[task].strip() for task in API_TASK_KEYS
+              if isinstance(inputs.get(task), str) and inputs[task].strip()}
+    if not models.get(config.TASK_CHAT):
+        raise _InvalidConnection(f"Please select a model for task: {config.TASK_CHAT}")
+    if not profile.supports_image_generation:
+        models.pop(config.TASK_IMAGE_GEN, None)
+    return models
 
 
 def register_settings_api_provider_intents(
@@ -81,288 +59,103 @@ def register_settings_api_provider_intents(
     manager: SettingsManager,
     notifications: NotificationState | None,
     state: SettingsSessionState,
+    provider_runtime: api_provider.ProviderRuntime | None = None,
 ) -> None:
-    async def set_viewing_api_provider(provider: str):
-        state.viewing_api_provider = str(provider)
+    live = provider_runtime or api_provider.DEFAULT_RUNTIME
+
+    async def notify(message: str, severity: MessageType):
+        if notifications is not None:
+            notifications.show(message, severity)
+            await bus.publish("notification")
+
+    async def publish_configuration():
+        if bus.has_topic("app-composer"):
+            await bus.publish("app-composer")
         await bus.publish("app-settings")
+
+    async def set_viewing_api_provider(provider: str):
+        if isinstance(provider, str) and provider in CLOUD_PROVIDERS:
+            state.viewing_api_provider = provider
+            await bus.publish("app-settings")
 
     async def load_api_models(provider: str, api_key: str, base_url: str = ""):
-        # Second-pass fix: coerce every wire argument BEFORE it is used for
-        # anything - `provider` in particular is used as a dict key below,
-        # and an unhashable JSON value (array/object) would raise TypeError
-        # straight out of the handler. Intent args reach here as raw JSON
-        # with no validation anywhere in the dispatch path.
-        provider = str(provider)
-        base_url = str(base_url).strip()
-
-        # Gemini has no live catalog endpoint wired (legacy never showed the
-        # Load button for it either) - a stale/misbehaving client asking
-        # anyway gets a clean error rather than a confusing initialize_api
-        # call with the wrong semantics.
-        if provider not in (config.API_PROVIDER_OPENAI, config.API_PROVIDER_ANTHROPIC):
-            # Only a provider the UI can actually VIEW gets a stored status
-            # slot: the wire-payload builder surfaces the slot for the
-            # viewed provider only, so a slot for an unknown string could
-            # never be read - it would just grow this dict without bound on
-            # a key the client controls.
-            if provider in KNOWN_API_PROVIDERS:
-                state.api_catalog_state[provider] = {
-                    "status": "error",
-                    "message": f"{provider} does not support catalog refresh.",
-                }
-                await bus.publish("app-settings")
+        profile = CLOUD_PROVIDERS.get(str(provider))
+        if profile is None:
             return
-
-        if provider == config.API_PROVIDER_OPENAI and not base_url:
-            # Restores a guard both legacy predecessors had. Without it an
-            # empty Base URL silently falls through to api_provider's own
-            # "https://api.openai.com/v1" default, sending a key meant for a
-            # self-hosted proxy to OpenAI's public API instead.
-            state.api_catalog_state[provider] = {
-                "status": "error",
-                "message": "Please enter the Base URL for the OpenAI-compatible provider.",
-            }
-            await bus.publish("app-settings")
-            return
-
-        # This page deliberately never sends the saved key to the client
-        # (see the module docstring), so a user who already has a key saved
-        # opens the dialog with a blank field. Legacy pre-filled the field
-        # and therefore always had a key to test with; the write-only port
-        # has to make up for that here instead, or Load is simply unusable
-        # for every already-configured user. Falling back server-side keeps
-        # the plaintext key off the wire entirely.
-        key = str(api_key).strip()
-        if not key:
-            # SECURITY-FIX: resolve the blank-key fallback through the helper,
-            # which refuses a stored key bound to a DIFFERENT base_url - see
-            # _resolve_stored_key_for_catalog_load's own docstring for the
-            # decrypt-and-exfiltrate oracle this closes.
-            key, base_url_error = _resolve_stored_key_for_catalog_load(manager, provider, base_url)
-            if base_url_error is not None:
-                state.api_catalog_state[provider] = {"status": "error", "message": base_url_error}
-                await bus.publish("app-settings")
-                return
-        if not key:
-            state.api_catalog_state[provider] = {"status": "error", "message": "Please enter the API Key."}
-            await bus.publish("app-settings")
-            return
-
-        state.api_catalog_state[provider] = {
-            "status": "loading",
-            "message": "Contacting the provider... you can keep editing other settings.",
-        }
-        await bus.publish("app-settings")
-
+        # A reset or a newer request invalidates this result, even if the older
+        # network request finishes last. Only the newest request owns the status.
+        loading = {"status": "loading", "message": "Contacting the provider…"}
+        state.api_catalog_state[provider] = loading
+        request = run_locked(manager.begin_api_catalog_refresh, provider)
+        key = ""
         try:
-            # ADR-006 stage 6.5: a read-only catalog fetch through a
-            # throwaway client (api_provider.list_models_for_config), never
-            # initialize_api - refreshing a Settings dropdown used to
-            # silently repoint the process's LIVE provider (and with
-            # per-session runtimes, would have repointed every session's
-            # default). Still exercises the same client-construction path
-            # Save uses, so a successful load doubles as a connection check,
-            # matching legacy's ApiModelLoadWorker. This also retires the
-            # post-hoc `API_PROVIDER_TYPE != provider` consistency check
-            # that used to live here: the listing no longer touches live
-            # state, so there is no half-swapped-globals race left to
-            # detect - the result is inherently about the (provider, key,
-            # base_url) triple THIS call was given.
-            model_ids = await asyncio.to_thread(
-                api_provider.list_models_for_config,
-                provider,
-                key,
-                base_url if provider == config.API_PROVIDER_OPENAI else None,
-            )
-            # Same descriptor shape get_available_model_descriptors builds
-            # for the live provider, keyed to the REQUESTED provider.
-            descriptors = sort_descriptors(
-                ModelDescriptor(
-                    model_id=str(model_id).strip(),
-                    provider=provider,
-                    ready=True,
-                    available=True,
-                    source="endpoint",
-                )
-                for model_id in model_ids
-                if str(model_id).strip()
-            )
-            normalized = [
-                {
-                    "model_id": descriptor.model_id,
-                    "provider": descriptor.provider,
-                    "capabilities": sorted(descriptor.capabilities),
-                    "ready": descriptor.ready,
-                    "available": descriptor.available,
-                }
-                for descriptor in descriptors
-            ]
-        except Exception as exc:  # noqa: BLE001 - redacted, then surfaced, matching legacy's error label
-            # Redact the EFFECTIVE key (which may be the stored one picked
-            # up by the fallback above), not the submitted argument - the
-            # effective key is what actually reached the provider SDK and
-            # so is what can come back embedded in its exception text.
-            message = redact_secret(str(exc), key)
-            state.api_catalog_state[provider] = {
-                "status": "error",
-                "message": f"Catalog refresh failed: {message}\nSaved/custom model IDs remain usable if the endpoint supports them.",
-            }
+            if not profile.supports_catalog:
+                raise _InvalidConnection(f"{profile.label or provider} uses manually entered model IDs.")
+            endpoint = profile.endpoint(base_url if isinstance(base_url, str) else "")
+            entered_key = api_key.strip() if isinstance(api_key, str) else ""
+            key = await asyncio.to_thread(run_locked, _connection_key, manager, profile, endpoint, entered_key)
             await bus.publish("app-settings")
-            return
+            model_ids = await asyncio.to_thread(api_provider.list_models_for_config, provider, key,
+                                                endpoint if profile.protocol == "openai" else None)
+            models = sorted({model for m in model_ids if (model := normalize_model_id(m))}, key=str.casefold)
 
-        await asyncio.to_thread(run_locked, manager.set_api_model_catalog, normalized, provider)
-        state.api_catalog_state[provider] = {
-            "status": "success",
-            "message": f"Catalog refreshed - {len(normalized)} model(s) available from {provider}.",
-        }
-        await bus.publish("app-settings")
+            def persist_if_current():
+                if manager.is_current_api_catalog_request(provider, request):
+                    manager.set_api_model_catalog(models, provider, endpoint=endpoint)
+            await asyncio.to_thread(run_locked, persist_if_current)
+            result = {"status": "success", "message": f"Catalog refreshed - {len(models)} model(s) available from {provider}."}
+        except Exception as exc:
+            result = {"status": "error", "message": redact_secret(str(exc), key)}
+            if not isinstance(exc, ValueError):
+                result["message"] = f"Catalog refresh failed: {result['message']}\nYou can still enter a model ID."
+        if state.api_catalog_state.get(provider) is loading:
+            if manager.is_current_api_catalog_request(provider, request):
+                state.api_catalog_state[provider] = result
+            else:
+                state.api_catalog_state.pop(provider, None)
+            await bus.publish("app-settings")
 
     async def save_api_configuration(provider: str, base_url: str, api_key: str, models_by_task: dict[str, str]):
-        provider = str(provider)
-        base_url = str(base_url).strip()
-        api_key = str(api_key).strip()
-        # Post-review fix: a non-dict 4th argument (e.g. a WS client sending
-        # null) used to raise AttributeError out of the required-task loop
-        # below, uncaught, bypassing this intent's own validation-notice
-        # path entirely in favor of a generic "intent failed" WS error.
-        # Coercing to {} here routes it back through the normal "please
-        # select a model" warning instead.
-        if not isinstance(models_by_task, dict):
-            models_by_task = {}
-
-        if provider == config.API_PROVIDER_OPENAI and not base_url:
-            # Same guard as load_api_models, and the more important of the
-            # two: an empty base_url persisted here is read straight back
-            # by SettingsManager.get_api_base_url (whose own default only
-            # applies to a MISSING key, not a stored ""), so every later
-            # provider bootstrap silently re-points the saved key at
-            # api.openai.com.
-            if notifications is not None:
-                notifications.show("Please enter the Base URL for the OpenAI-compatible provider.", "warning")
-                await bus.publish("notification")
+        profile = CLOUD_PROVIDERS.get(str(provider))
+        if profile is None:
+            await notify("Choose a provider from the directory.", "warning")
             return
-
-        if not api_key:
-            if notifications is not None:
-                notifications.show("Please enter your API Key.", "warning")
-                await bus.publish("notification")
-            return
-
-        # ADR-006 stage 6.5 (H6): TASK_IMAGE_GEN is optional for EVERY
-        # provider, not just Anthropic - image generation is capability-gated
-        # at call time (generate_image raises an actionable "No image
-        # generation model configured" error), so a text-only
-        # OpenAI-compatible endpoint (vLLM, LM Studio, llama-server) saves
-        # cleanly. Mirrors ProviderRuntime.is_configured's required set.
-        required_tasks = [task for task in API_TASK_KEYS if task != config.TASK_IMAGE_GEN]
-        for task in required_tasks:
-            if not str(models_by_task.get(task, "")).strip():
-                if notifications is not None:
-                    notifications.show(f"Please select a model for task: {task}", "warning")
-                    await bus.publish("notification")
-                return
-
+        key = ""
         try:
-            await asyncio.to_thread(
-                api_provider.initialize_api,
-                provider,
-                api_key,
-                base_url if provider == config.API_PROVIDER_OPENAI else None,
-            )
-        except Exception as exc:  # noqa: BLE001 - redacted, then surfaced, matching legacy's error dialog
-            if notifications is not None:
-                notifications.show(f"Failed to initialize the API provider: {redact_secret(str(exc), api_key)}", "error")
-                await bus.publish("notification")
+            endpoint = profile.endpoint(base_url if isinstance(base_url, str) else "")
+            models = _assignments(profile, models_by_task)
+            entered_key = api_key.strip() if isinstance(api_key, str) else ""
+
+            def persist_and_activate():
+                nonlocal key
+                key = _connection_key(manager, profile, endpoint, entered_key)
+                staged = api_provider.ProviderRuntime()
+                staged.initialize_api(provider, key, endpoint if profile.protocol == "openai" else None, task_models=models)
+                manager.save_cloud_profile(provider, endpoint, entered_key, models)
+                live.activate_api(staged.snapshot())
+            await asyncio.to_thread(run_locked, persist_and_activate)
+        except ValueError as exc:
+            await notify(redact_secret(str(exc), key), "warning")
             return
-
-        # Commit only after provider initialization succeeds - a rejected
-        # key or endpoint must not overwrite the last known-good profile
-        # (matching legacy save_settings's own ordering exactly).
-        normalized_models = {
-            str(task): str(model_id).strip()
-            for task, model_id in (models_by_task or {}).items()
-            if str(model_id).strip()
-        }
-
-        def _persist() -> None:
-            # Post-review fix: the other two providers' "keep as-is" keys
-            # are now read HERE, inside the manager lock (via run_locked),
-            # not on the event loop before this thread was dispatched. The
-            # old read-before-await-then-write-after ordering was a
-            # lost-update race: two saveApiConfiguration calls for
-            # different providers (e.g. two browser tabs on the same
-            # default session) could interleave so that the second call's
-            # stale pre-read of the first call's key got written back over
-            # the first call's own, freshly-persisted value. Reading and
-            # writing inside the same locked critical section makes this
-            # atomic with respect to every other run_locked-guarded
-            # mutation.
-            #
-            # Follow-up fix: the two providers NOT being saved are no longer
-            # read back and rewritten at all - they are handed
-            # KEEP_EXISTING_SECRET, which set_api_settings leaves untouched on
-            # disk. Reading them was itself the hazard: get_*_key() returns ""
-            # both for "no key set" AND for "stored blob failed to decrypt",
-            # so a transient DPAPI failure while saving one provider silently
-            # re-encrypted "" over the other two's still-recoverable blobs and
-            # destroyed them. Not reading them removes the failure mode rather
-            # than trying to detect it after the fact - and it keeps the
-            # atomicity the comment above describes, since there is now
-            # nothing about the siblings to race on.
-            openai_key = api_key if provider == config.API_PROVIDER_OPENAI else KEEP_EXISTING_SECRET
-            anthropic_key = api_key if provider == config.API_PROVIDER_ANTHROPIC else KEEP_EXISTING_SECRET
-            gemini_key = api_key if provider == config.API_PROVIDER_GEMINI else KEEP_EXISTING_SECRET
-            # set_api_settings annotates its three key parameters `str`, but
-            # KEEP_EXISTING_SECRET is part of its contract, not a violation of
-            # it: its body branches on `value is KEEP_EXISTING_SECRET` and
-            # skips that field entirely, which is the whole mechanism the
-            # comment above relies on. The annotation in
-            # settings_store/cloud_provider.py is the thing that is too
-            # narrow - widening it there retires this ignore.
-            manager.set_api_settings(provider, base_url, openai_key, anthropic_key, gemini_key)  # type: ignore[arg-type]
-            manager.set_api_models(normalized_models, provider)
-            for task, model_id in normalized_models.items():
-                api_provider.set_task_model(task, model_id)
-            # ADR-006 stage 6.5: a successful save just flipped the LIVE
-            # provider to this API endpoint (initialize_api above), but the
-            # persisted mode never followed - a restart silently booted back
-            # into whatever mode was last persisted. Persist the mode the
-            # save actually put the app in.
-            manager.set_current_mode(config.MODE_API_ENDPOINT)
-
-        await asyncio.to_thread(run_locked, _persist)
-        if notifications is not None:
-            notifications.show(f"API settings for {provider} have been saved.", "success")
-            await bus.publish("notification")
-        await bus.publish("app-settings")
+        except Exception as exc:
+            await notify(f"Failed to save the API provider: {redact_secret(str(exc), key)}", "error")
+            return
+        await notify(f"API settings for {provider} have been saved.", "success")
+        await publish_configuration()
 
     async def reset_api_settings():
-        def _reset() -> None:
+        def reset():
             manager.reset_api_settings()
-            # SettingsManager.reset_api_settings intentionally leaves
-            # api_model_catalog_by_provider alone (it is shared with the
-            # legacy Qt bridge), but "All API settings have been cleared"
-            # has to mean it - otherwise the page keeps offering the old
-            # provider's model catalog after the reset. Clearing through
-            # the existing public setter rather than editing the shared
-            # legacy module.
-            for known in KNOWN_API_PROVIDERS:
-                manager.set_api_model_catalog([], known)
-
-        await asyncio.to_thread(run_locked, _reset)
-        # Transient per-provider status/message is UI state, not manager
-        # state, so it has to be cleared here too - otherwise the previous
-        # "Catalog refreshed - N model(s)" success banner survives a reset
-        # that just deleted that very catalog.
+            live.clear_api_configuration()
+        try:
+            await asyncio.to_thread(run_locked, reset)
+        except OSError:
+            await notify("Could not save the reset. Check that the settings file is writable.", "error")
+            return
         state.api_catalog_state.clear()
-        # Legacy's reset_settings snapped the provider dropdown back to
-        # OpenAI-Compatible; reset_api_settings restores exactly that as
-        # the persisted provider, so the viewed provider follows it.
         state.viewing_api_provider = manager.get_api_provider()
-        if notifications is not None:
-            notifications.show("All API settings have been cleared.", "success")
-            await bus.publish("notification")
-        await bus.publish("app-settings")
+        await notify("All API settings have been cleared.", "success")
+        await publish_configuration()
 
     bus.register_intent("app-settings", "setViewingApiProvider", set_viewing_api_provider)
     bus.register_intent("app-settings", "loadApiModels", load_api_models)

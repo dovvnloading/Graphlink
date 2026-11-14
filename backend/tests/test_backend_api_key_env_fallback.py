@@ -40,9 +40,9 @@ class TestOpenAiApiKeyEnvFallback:
         fake_openai_cls = MagicMock()
 
         with patch("openai.OpenAI", fake_openai_cls):
-            api_provider.initialize_api(config.API_PROVIDER_OPENAI, "", "https://api.example.com/v1")
+            api_provider.initialize_api(config.API_PROVIDER_OPENAI, "", "https://api.openai.com/v1")
 
-        fake_openai_cls.assert_called_once_with(api_key="from-graphlink-env", base_url="https://api.example.com/v1", max_retries=0)
+        fake_openai_cls.assert_called_once_with(api_key="from-graphlink-env", base_url="https://api.openai.com/v1", max_retries=0)
 
     def test_falls_back_to_vendor_standard_env_var(self, monkeypatch):
         _reset_api_provider_state(monkeypatch)
@@ -51,9 +51,9 @@ class TestOpenAiApiKeyEnvFallback:
         fake_openai_cls = MagicMock()
 
         with patch("openai.OpenAI", fake_openai_cls):
-            api_provider.initialize_api(config.API_PROVIDER_OPENAI, "", "https://api.example.com/v1")
+            api_provider.initialize_api(config.API_PROVIDER_OPENAI, "", "https://api.openai.com/v1")
 
-        fake_openai_cls.assert_called_once_with(api_key="from-vendor-env", base_url="https://api.example.com/v1", max_retries=0)
+        fake_openai_cls.assert_called_once_with(api_key="from-vendor-env", base_url="https://api.openai.com/v1", max_retries=0)
 
     def test_explicitly_passed_key_wins_over_env_vars(self, monkeypatch):
         _reset_api_provider_state(monkeypatch)
@@ -64,7 +64,9 @@ class TestOpenAiApiKeyEnvFallback:
         with patch("openai.OpenAI", fake_openai_cls):
             api_provider.initialize_api(config.API_PROVIDER_OPENAI, "from-settings", "https://api.example.com/v1")
 
-        fake_openai_cls.assert_called_once_with(api_key="from-settings", base_url="https://api.example.com/v1", max_retries=0)
+        kwargs = fake_openai_cls.call_args.kwargs
+        assert kwargs["api_key"] == "from-settings"
+        assert kwargs["base_url"] == "https://api.example.com/v1"
 
     def test_still_raises_when_no_key_anywhere_and_base_url_is_remote(self, monkeypatch):
         import pytest
@@ -74,7 +76,7 @@ class TestOpenAiApiKeyEnvFallback:
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
         with pytest.raises(RuntimeError, match="API key not configured"):
-            api_provider.initialize_api(config.API_PROVIDER_OPENAI, "", "https://api.example.com/v1")
+            api_provider.initialize_api(config.API_PROVIDER_OPENAI, "", "https://api.openai.com/v1")
 
     def test_local_base_url_still_uses_dummy_key_when_nothing_configured(self, monkeypatch):
         _reset_api_provider_state(monkeypatch)
@@ -85,7 +87,9 @@ class TestOpenAiApiKeyEnvFallback:
         with patch("openai.OpenAI", fake_openai_cls):
             api_provider.initialize_api(config.API_PROVIDER_OPENAI, "", "http://localhost:11434/v1")
 
-        fake_openai_cls.assert_called_once_with(api_key="dummy-key-for-local", base_url="http://localhost:11434/v1", max_retries=0)
+        kwargs = fake_openai_cls.call_args.kwargs
+        assert kwargs["api_key"] == "dummy-key-for-local"
+        assert kwargs["base_url"] == "http://localhost:11434/v1"
 
 
 class TestEnvApiKeyConfigured:
@@ -205,9 +209,9 @@ class TestLegacyGraphiteEnvVarStillWorks:
         fake_openai_cls = MagicMock()
 
         with patch("openai.OpenAI", fake_openai_cls):
-            api_provider.initialize_api(config.API_PROVIDER_OPENAI, "", "https://api.example.com/v1")
+            api_provider.initialize_api(config.API_PROVIDER_OPENAI, "", "https://api.openai.com/v1")
 
-        fake_openai_cls.assert_called_once_with(api_key="from-legacy-graphite-env", base_url="https://api.example.com/v1", max_retries=0)
+        fake_openai_cls.assert_called_once_with(api_key="from-legacy-graphite-env", base_url="https://api.openai.com/v1", max_retries=0)
 
     def test_new_prefixed_env_var_wins_over_legacy_one(self, monkeypatch):
         _reset_api_provider_state(monkeypatch)
@@ -216,9 +220,9 @@ class TestLegacyGraphiteEnvVarStillWorks:
         fake_openai_cls = MagicMock()
 
         with patch("openai.OpenAI", fake_openai_cls):
-            api_provider.initialize_api(config.API_PROVIDER_OPENAI, "", "https://api.example.com/v1")
+            api_provider.initialize_api(config.API_PROVIDER_OPENAI, "", "https://api.openai.com/v1")
 
-        fake_openai_cls.assert_called_once_with(api_key="from-new-env", base_url="https://api.example.com/v1", max_retries=0)
+        fake_openai_cls.assert_called_once_with(api_key="from-new-env", base_url="https://api.openai.com/v1", max_retries=0)
 
     def test_anthropic_falls_back_to_legacy_graphite_prefixed_env_var(self, monkeypatch):
         monkeypatch.delenv("GRAPHLINK_ANTHROPIC_API_KEY", raising=False)

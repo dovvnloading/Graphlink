@@ -23,8 +23,10 @@ import io
 import json
 import os
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler
+
+from provider_runtime.cloud_catalog import catalog_pages
 
 
 _GEMINI_FILES_UPLOAD_HOST = "generativelanguage.googleapis.com"
@@ -86,6 +88,28 @@ def _gemini_headers(api_key: str, extra_headers: dict | None = None) -> dict:
     if extra_headers:
         headers.update(extra_headers)
     return headers
+
+
+def _gemini_list_models(api_key: str) -> list[str]:
+    """List generateContent models using Google's pagination and header credentials."""
+    import api_provider as _mod
+
+    opener = _mod.urllib.request.build_opener(_NoGeminiUploadRedirects())
+
+    def fetch(params):
+        request = _mod.urllib.request.Request(
+            f"{_mod.GEMINI_BASE_URL}/v1beta/models?{urlencode(params)}",
+            headers=_gemini_headers(api_key),
+        )
+        with opener.open(request, timeout=30) as response:
+            return json.load(response)
+
+    pages = catalog_pages(fetch, {"pageSize": "1000"}, cursor_param="pageToken",
+                          next_cursor=lambda page: page.get("nextPageToken"))
+    return sorted({
+        model["name"].removeprefix("models/") for page in pages for model in page.get("models", [])
+        if model.get("name", "").startswith("models/") and "generateContent" in model.get("supportedGenerationMethods", [])
+    }, key=str.casefold)
 
 
 def _gemini_post_json(endpoint: str, body: dict, timeout: int = 120, cancel_event=None, api_key: str | None = None) -> dict:

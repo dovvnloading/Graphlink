@@ -588,7 +588,7 @@ async def run_harness(
                 turn, assistant_text + "".join(json.dumps(c.arguments) for c in tool_calls),
             )
 
-            assistant_message: dict = {"role": "assistant", "content": assistant_text}
+            assistant_message = {**turn["message"], "role": "assistant", "content": assistant_text}
             if tool_calls:
                 assistant_message["tool_calls"] = [call.history_entry() for call in tool_calls]
             history.append(assistant_message)

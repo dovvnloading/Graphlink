@@ -1901,7 +1901,7 @@ _SCRIPTED_STREAM_EVENTS = [
     (
         config.API_PROVIDER_OPENAI,
         "backend.providers.openai_provider", "OpenAIProvider",
-        {"model": "some-model", "reasoning_level": "high"},
+        {"model": "some-model", "reasoning_level": "high", "provider_name": config.API_PROVIDER_OPENAI},
     ),
     (
         config.API_PROVIDER_ANTHROPIC,
@@ -2083,6 +2083,7 @@ def test_chat_constructs_each_api_provider_from_the_snapshot_credentials(monkeyp
 
     assert init_kwargs["OpenAIProvider"] == {
         "client": client, "model": "some-model", "reasoning_level": "high",
+        "provider_name": config.API_PROVIDER_OPENAI,
     }
     assert init_kwargs["AnthropicProvider"] == {
         "client": client, "api_key": "secret-key", "model": "some-model",

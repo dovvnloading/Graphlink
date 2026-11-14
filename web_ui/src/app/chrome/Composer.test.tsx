@@ -142,6 +142,35 @@ describe("Composer", () => {
     expect(screen.queryByText("nemotron-3-nano:4b")).toBeNull();
   });
 
+  it("filters a large gateway catalog and clears the search when reopened", async () => {
+    const user = userEvent.setup();
+    const modelOptions = Array.from({ length: 12 }, (_, i) => ({ id: `lab/model-${i}`, label: `Model ${i}` }));
+    const { store, selectModel } = makeStore({
+      composer: {
+        route: { ...initialComposerState.route, provider: "OpenRouter", modelOptions },
+        capabilities: { ...initialComposerState.capabilities, modelSelection: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error Test doubles implement only the composer surface. */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    const trigger = screen.getByRole("button", { name: /OpenRouter/ });
+    await user.click(trigger);
+    const search = screen.getByRole("searchbox", { name: "Search models" });
+    expect(search).toHaveFocus();
+    await user.type(search, "LAB/MODEL-11");
+    expect(screen.queryByRole("button", { name: "Model 0" })).toBeNull();
+    await user.tab();
+    await user.keyboard("{Enter}");
+    expect(selectModel).toHaveBeenCalledWith("lab/model-11");
+    await user.click(trigger);
+    expect(screen.getByRole("button", { name: "Model 0" })).toBeVisible();
+  });
+
   it("Send is enabled once there's text, calls sceneStore.sendMessage, and clears the draft", async () => {
     const user = userEvent.setup();
     const { store, updateDraft } = makeStore({
@@ -401,7 +430,7 @@ describe("Composer", () => {
     );
     expect(container.querySelector('[data-overlay-trigger="reasoning"]')).toHaveAttribute(
       "title",
-      "Reasoning mode is only available for local Ollama and Llama.cpp providers",
+      "This provider and model do not expose adjustable reasoning in Graphlink",
     );
   });
 

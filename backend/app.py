@@ -232,8 +232,12 @@ def _configure_session(
     # into/out of "generating" state, and a real AgentDispatcher to hand off
     # to - both must exist before register_canvas builds the sendMessage
     # intent that calls them.
+    # The composer, settings and inference must share the same live route.
+    provider_runtime = None if bus.session_id == DEFAULT_SESSION_ID else (
+        api_provider.ProviderRuntime.from_snapshot(api_provider.DEFAULT_RUNTIME.snapshot())
+    )
     token_counter = register_token_counter(bus, settings_manager)
-    composer_document = register_composer(bus, token_counter, settings_manager, notifications_state)
+    composer_document = register_composer(bus, token_counter, settings_manager, notifications_state, provider_runtime)
 
     # ADR-016 stage 16.3: in-app diagnostics - fresh per session, same
     # posture as token_counter/composer_document above (see backend/
@@ -253,20 +257,6 @@ def _configure_session(
     # this session's last connection drops - see AgentDispatcher.cancel_all's
     # own docstring for why that matters.
     #
-    # ADR-006 stage 6.5: each session gets its own ProviderRuntime. The
-    # default session keeps the module-backed DEFAULT_RUNTIME - expressed as
-    # None here because that is AgentDispatcher's "default session" contract:
-    # None keeps every provider call routing through api_provider's module-
-    # level functions (which ARE DEFAULT_RUNTIME's state, and which the
-    # existing test suite monkeypatches), byte-identical to pre-6.5. Any
-    # other session starts as a snapshot-copy of the default configuration
-    # and diverges from there.
-    if bus.session_id == DEFAULT_SESSION_ID:
-        provider_runtime = None
-    else:
-        provider_runtime = api_provider.ProviderRuntime.from_snapshot(
-            api_provider.DEFAULT_RUNTIME.snapshot()
-        )
     agent_dispatcher = register_agents(
         bus, composer_document, notifications_state, settings_manager, provider_runtime, diagnostics
     )
@@ -317,7 +307,7 @@ def _configure_session(
     # real banner (same load-bearing ordering precedent as register_plugins/
     # register_chat_library above - notifications_state already exists by
     # this point in every case).
-    register_settings(bus, settings_manager, notifications_state, agent_dispatcher)
+    register_settings(bus, settings_manager, notifications_state, agent_dispatcher, provider_runtime=provider_runtime)
     # R6.4: register_chat_library needs the same session's canvas_document
     # (built above) so loadChat can actually restore a session into it, and
     # notifications_state so a failed/empty load can surface a real banner -

@@ -11,7 +11,7 @@ import urllib.request
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, NamedTuple, NoReturn
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import ollama
 try:
@@ -27,6 +27,7 @@ except ImportError:
 # this module must be importable from backend/ without PySide6 loading.
 import graphlink_task_config as config
 from graphlink_audio import guess_audio_mime_type
+from graphlink_cloud_providers import CLOUD_PROVIDERS
 from graphlink_model_catalog import FALLBACK_ENABLED_TASKS, ModelDescriptor, ModelRef, ollama_descriptor, sort_descriptors
 
 # Phase 4d god-file decomposition (provider_runtime/): module-top re-exports
@@ -37,6 +38,7 @@ from graphlink_model_catalog import FALLBACK_ENABLED_TASKS, ModelDescriptor, Mod
 # `monkeypatch.setattr(api_provider, ...)` patch seam working unchanged.
 # F401 is per-file-ignored for this facade in pyproject.toml (the
 # backend/canvas.py precedent).
+from provider_runtime.cloud_catalog import catalog_pages, native_chat_models
 from provider_runtime.ollama_scan import (
     _normalize_ollama_models_root,
     _iter_existing_ollama_manifest_roots,
@@ -119,6 +121,7 @@ from provider_runtime.anthropic_transport import (
 )
 from provider_runtime.gemini_transport import (
     _gemini_headers,
+    _gemini_list_models,
     _gemini_post_json,
     _gemini_stream_sse,
     _gemini_upload_file,
@@ -204,14 +207,11 @@ ANTHROPIC_REASONING_LEVEL = "off"
 GEMINI_REASONING_LEVEL = "off"
 OPENAI_REASONING_LEVEL = "off"
 # Per-task model id, or None for a task with nothing configured yet.
-API_MODELS: dict[str, str | None] = {
-    config.TASK_TITLE: None,
-    config.TASK_CHAT: None,
-    config.TASK_CHART: None,
-    config.TASK_IMAGE_GEN: None,
-    config.TASK_WEB_VALIDATE: None,
-    config.TASK_WEB_SUMMARIZE: None,
-}
+_API_TASKS = (
+    config.TASK_TITLE, config.TASK_CHAT, config.TASK_CHART, config.TASK_IMAGE_GEN,
+    config.TASK_WEB_VALIDATE, config.TASK_WEB_SUMMARIZE,
+)
+API_MODELS: dict[str, str | None] = dict.fromkeys(_API_TASKS)
 # Mixed value types (paths, ints, a chat format string), so an inferred
 # dict[str, object] would make every .get() unusable at its use site.
 LLAMA_CPP_SETTINGS: dict[str, Any] = {
@@ -334,6 +334,14 @@ def set_current_ollama_model(model: str) -> None:
         config.set_current_model(model)
 
 
+def _resolve_api_task_models(assignments: dict) -> dict[str, str | None]:
+    chat_model = assignments.get(config.TASK_CHAT) or None
+    return {
+        task: assignments.get(task) or (None if task == config.TASK_IMAGE_GEN else chat_model)
+        for task in _API_TASKS
+    }
+
+
 class ProviderRuntime:
     """ADR-006 stage 6.5: one session's complete provider configuration.
 
@@ -387,11 +395,13 @@ class ProviderRuntime:
             state["ollama_models"] = dict(state["ollama_models"])
             return state
 
-    def _write(self, **updates) -> dict:
+    def _write(self, *, leave_api_mode: bool = False, **updates) -> dict:
         """Apply updates under the lock; returns the PREVIOUS values of the
         updated keys (initialize_local_provider's llama.cpp rollback needs
         the capture and the write to be one atomic step)."""
         with self._lock:
+            if leave_api_mode and self._state["use_api_mode"]:
+                updates.update(use_api_mode=False, local_provider_type=config.LOCAL_PROVIDER_OLLAMA)
             previous = {key: self._state[key] for key in updates}
             self._state.update(updates)
             return previous
@@ -412,9 +422,15 @@ class ProviderRuntime:
     def snapshot(self) -> _ProviderSnapshot:
         return _ProviderSnapshot(**self._read_all())
 
-    def initialize_api(self, provider: str, api_key: str, base_url: str | None = None):
+    def initialize_api(
+        self, provider: str, api_key: str, base_url: str | None = None, *, task_models: dict | None = None,
+    ):
         client, api_key, base_url = _build_api_client(provider, api_key, base_url)
+        updates: dict[str, Any] = {}
+        if task_models is not None:
+            updates["api_models"] = _resolve_api_task_models(task_models)
         self._write(
+            **updates,
             use_api_mode=True,
             api_provider_type=provider,
             api_client=client,
@@ -423,12 +439,33 @@ class ProviderRuntime:
         )
         return client
 
+    def set_api_task_models(self, task_models: dict) -> None:
+        """Replace all model assignments together; text tasks inherit Chat."""
+        self._write(api_models=_resolve_api_task_models(task_models))
+
+    def activate_api(self, snapshot: _ProviderSnapshot) -> None:
+        """Activate a staged API connection after its settings have been saved."""
+        if not snapshot.use_api_mode or not snapshot.api_client:
+            raise ValueError("The staged API connection is not initialized.")
+        self._write(
+            use_api_mode=True, api_provider_type=snapshot.api_provider_type,
+            api_key=snapshot.api_key, api_client=snapshot.api_client,
+            api_base_url=snapshot.api_base_url, api_models=dict(snapshot.api_models),
+        )
+
+    def clear_api_configuration(self) -> None:
+        self._write(
+            leave_api_mode=True,
+            api_provider_type=None, api_client=None, api_key=None, api_base_url=None,
+            api_models=dict.fromkeys(_API_TASKS),
+        )
+
     def initialize_local_provider(
         self, provider: str, settings: dict | None = None, *, preload_model: bool = False
     ):
         if provider == config.LOCAL_PROVIDER_OLLAMA:
             normalized_settings = _normalize_llama_cpp_settings()
-            updates = dict(
+            updates: dict[str, Any] = dict(
                 use_api_mode=False,
                 local_provider_type=provider,
                 api_provider_type=None,
@@ -588,9 +625,11 @@ class _ModuleBackedProviderRuntime(ProviderRuntime):
     def _read_all(self) -> dict:
         return _snapshot_provider_state()._asdict()
 
-    def _write(self, **updates) -> dict:
+    def _write(self, *, leave_api_mode: bool = False, **updates) -> dict:
         module_globals = globals()
         with _PROVIDER_STATE_LOCK:
+            if leave_api_mode and USE_API_MODE:
+                updates.update(use_api_mode=False, local_provider_type=config.LOCAL_PROVIDER_OLLAMA)
             previous: dict[str, Any] = {}
             for key, value in updates.items():
                 if key == "api_models":
@@ -632,7 +671,7 @@ GEMINI_IMAGE_MODELS_STATIC = sorted([
 ])
 
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
-ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models?limit=1000"
+ANTHROPIC_MODELS_URL = "https://api.anthropic.com/v1/models"
 ANTHROPIC_DEFAULT_MAX_TOKENS = {
     config.TASK_TITLE: 128,
     config.TASK_WEB_VALIDATE: 64,
@@ -1057,28 +1096,6 @@ _GEMINI_THINKING_LEVEL = {"off": "MINIMAL", "low": "LOW", "medium": "HIGH", "hig
 _OPENAI_REASONING_MODEL_PREFIXES = ("o1", "o3", "o4", "gpt-5", "gpt-oss")
 
 
-# ADR-004 stage 4.4: the canonical env var names per cloud provider - was
-# previously 5 independent inline copies of the same "GRAPHLINK_* or
-# GRAPHITE_* or <bare>" OR-chain (this file's own _get_gemini_api_key/
-# _get_anthropic_api_key and all three branches of initialize_api below),
-# a real drift risk (a future renamed/added var updated in one copy but
-# not the other four). Consolidated to one source each; every call site
-# below now reads through _first_env_api_key. env_api_key_configured (also
-# below) is the NEW piece stage 4.4 adds: a presence-only check ("is an
-# env var supplying this provider's key right now"), used solely so the
-# Settings UI can surface "key provided by environment" (ADR-004 §4) - it
-# never returns or logs the key's actual value.
-_OPENAI_API_KEY_ENV_VARS = ("GRAPHLINK_OPENAI_API_KEY", "GRAPHITE_OPENAI_API_KEY", "OPENAI_API_KEY")
-_ANTHROPIC_API_KEY_ENV_VARS = ("GRAPHLINK_ANTHROPIC_API_KEY", "GRAPHITE_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")
-_GEMINI_API_KEY_ENV_VARS = ("GRAPHLINK_GEMINI_API_KEY", "GRAPHITE_GEMINI_API_KEY", "GEMINI_API_KEY")
-
-_PROVIDER_API_KEY_ENV_VARS = {
-    config.API_PROVIDER_OPENAI: _OPENAI_API_KEY_ENV_VARS,
-    config.API_PROVIDER_ANTHROPIC: _ANTHROPIC_API_KEY_ENV_VARS,
-    config.API_PROVIDER_GEMINI: _GEMINI_API_KEY_ENV_VARS,
-}
-
-
 def _first_env_api_key(env_vars: tuple[str, ...]) -> str | None:
     """The first non-empty value among `env_vars`, checked in priority
     order (GRAPHLINK_* wins over GRAPHITE_* wins over the SDK's own bare
@@ -1091,7 +1108,7 @@ def _first_env_api_key(env_vars: tuple[str, ...]) -> str | None:
     return None
 
 
-def env_api_key_configured(provider: str) -> bool:
+def env_api_key_configured(provider: str, base_url: str | None = None) -> bool:
     """True if at least one recognized env var for `provider` is currently
     set in this process's environment - a presence check ONLY, never the
     key's value. Note this does NOT mean the env var is necessarily the
@@ -1101,20 +1118,21 @@ def env_api_key_configured(provider: str) -> bool:
     stored-key state to show "environment" only when no stored key
     exists to take precedence (see backend/settings.py's own
     _api_key_source)."""
-    return _first_env_api_key(_PROVIDER_API_KEY_ENV_VARS.get(provider, ())) is not None
+    profile = CLOUD_PROVIDERS.get(provider)
+    return bool(profile and profile.environment_key_allowed(profile.base_url if base_url is None else base_url) and _first_env_api_key(profile.env_vars))
 
 
 def _get_gemini_api_key(snapshot_key: str | None = None) -> str:
     # `snapshot_key` carries the per-request provider snapshot's key (#9) so a mode
     # switch mid-request can't pair this request with a different provider's key.
-    api_key = snapshot_key or API_KEY or _first_env_api_key(_GEMINI_API_KEY_ENV_VARS)
+    api_key = snapshot_key or API_KEY or _first_env_api_key(CLOUD_PROVIDERS[config.API_PROVIDER_GEMINI].env_vars)
     if not api_key:
         raise RuntimeError("Gemini API key not configured. Open Settings and save your Gemini API key.")
     return api_key
 
 
 def _get_anthropic_api_key(snapshot_key: str | None = None) -> str:
-    api_key = snapshot_key or API_KEY or _first_env_api_key(_ANTHROPIC_API_KEY_ENV_VARS)
+    api_key = snapshot_key or API_KEY or _first_env_api_key(CLOUD_PROVIDERS[config.API_PROVIDER_ANTHROPIC].env_vars)
     if not api_key:
         raise RuntimeError("Anthropic API key not configured. Open Settings and save your Anthropic API key.")
     return api_key
@@ -1145,9 +1163,10 @@ def generate_image(prompt: str, size: str = "1024x1024", *, runtime=None) -> byt
     if not state.api_client:
         raise RuntimeError("API client not initialized. Configure API settings first.")
 
-    if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
+    profile = CLOUD_PROVIDERS.get(state.api_provider_type or "")
+    if profile is None or not profile.supports_image_generation:
         raise RuntimeError(
-            "Image generation is not available for Anthropic Claude in Graphlink yet.\n\n"
+            f"Image generation is not available for {state.api_provider_type} in Graphlink yet.\n\n"
             "Switch to Google Gemini or an OpenAI-compatible image endpoint for image generation."
         )
 
@@ -1169,16 +1188,23 @@ def generate_image(prompt: str, size: str = "1024x1024", *, runtime=None) -> byt
     attempt = 0
     while True:
         try:
-            if state.api_provider_type == config.API_PROVIDER_OPENAI:
+            if profile.protocol == "openai":
                 client = state.api_client
                 if not hasattr(client, "images") or not hasattr(client.images, "generate"):
                     raise RuntimeError("The configured OpenAI-compatible client does not expose an images.generate API.")
 
-                response = client.images.generate(
-                    model=api_model,
-                    prompt=prompt,
-                    size=size,
-                )
+                image_options: dict[str, Any] = {"size": size}
+                if profile.key_slot == "xai":
+                    # Grok Imagine uses aspect_ratio instead of OpenAI's pixel sizes.
+                    # Graphlink's default canvas is square, and the standard landscape
+                    # and portrait OpenAI presets map to their closest supported ratio.
+                    ratios = {"1024x1024": "1:1", "512x512": "1:1", "256x256": "1:1",
+                              "1536x1024": "3:2", "1024x1536": "2:3", "1792x1024": "16:9",
+                              "1024x1792": "9:16", "auto": "auto"}
+                    if size not in ratios:
+                        raise ValueError(f"Unsupported image size for xAI: {size}")
+                    image_options = {"response_format": "b64_json", "extra_body": {"aspect_ratio": ratios[size]}}
+                response = client.images.generate(model=api_model, prompt=prompt, **image_options)
                 return _extract_openai_image_bytes(response)
 
             if state.api_provider_type == config.API_PROVIDER_GEMINI:
@@ -1263,6 +1289,34 @@ def _is_same_file(path_a: str, path_b: str) -> bool:
         return False
 
 
+def _cloud_provider(state: "_ProviderSnapshot", model: str):
+    """Build the adapter for the credential, endpoint and model in one snapshot."""
+    profile = CLOUD_PROVIDERS.get(state.api_provider_type or "")
+    if profile is None:
+        raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
+    if profile.protocol == "openai":
+        from backend.providers.openai_provider import OpenAIProvider
+
+        return OpenAIProvider(
+            client=state.api_client, model=model, reasoning_level=state.openai_reasoning_level,
+            provider_name=profile.name,
+        )
+    if profile.protocol == "anthropic":
+        from backend.providers.anthropic_provider import AnthropicProvider
+
+        return AnthropicProvider(
+            client=state.api_client, api_key=state.api_key or "", model=model,
+            reasoning_level=state.anthropic_reasoning_level,
+        )
+    if profile.protocol == "gemini":
+        from backend.providers.gemini_provider import GeminiProvider
+
+        return GeminiProvider(
+            api_key=state.api_key or "", model=model, reasoning_level=state.gemini_reasoning_level,
+        )
+    raise RuntimeError(f"Unsupported API protocol: {profile.protocol}")
+
+
 def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
     """ADR-018 stage 18.1: construct the provider a resolved ModelRef names,
     the alternative to chat()/chat_stream()'s own task-keyed branch-select
@@ -1309,33 +1363,14 @@ def _provider_for_model_ref(model_ref: ModelRef, state: "_ProviderSnapshot"):
 
         return LlamaCppProvider(settings=state.llama_cpp_settings, model_path=pinned_path)
 
-    if model_ref.provider in (config.API_PROVIDER_OPENAI, config.API_PROVIDER_ANTHROPIC, config.API_PROVIDER_GEMINI):
+    if model_ref.provider in CLOUD_PROVIDERS:
         if not (state.use_api_mode and state.api_provider_type == model_ref.provider and state.api_client):
             raise RuntimeError(
                 f"This model is pinned to {model_ref.provider}, but the session's active "
                 f"API provider is {state.api_provider_type or 'not configured'}. Switch "
                 "API Endpoint in Settings to use it, or change the pinned model."
             )
-        if model_ref.provider == config.API_PROVIDER_OPENAI:
-            from backend.providers.openai_provider import OpenAIProvider
-
-            return OpenAIProvider(
-                client=state.api_client, model=model_ref.model_id,
-                reasoning_level=state.openai_reasoning_level,
-            )
-        if model_ref.provider == config.API_PROVIDER_ANTHROPIC:
-            from backend.providers.anthropic_provider import AnthropicProvider
-
-            return AnthropicProvider(
-                client=state.api_client, api_key=state.api_key or "", model=model_ref.model_id,
-                reasoning_level=state.anthropic_reasoning_level,
-            )
-        from backend.providers.gemini_provider import GeminiProvider
-
-        return GeminiProvider(
-            api_key=state.api_key or "", model=model_ref.model_id,
-            reasoning_level=state.gemini_reasoning_level,
-        )
+        return _cloud_provider(state, model_ref.model_id)
 
     raise RuntimeError(f"Unknown model provider: {model_ref.provider!r}")
 
@@ -1650,43 +1685,9 @@ def _chat_dispatch(task: str, messages: list, **kwargs) -> dict:
         )
         token = CancelToken(cancel_event)
 
-        if state.api_provider_type == config.API_PROVIDER_OPENAI:
-            from backend.providers.openai_provider import OpenAIProvider
-
-            provider = OpenAIProvider(
-                client=state.api_client, model=api_model,
-                reasoning_level=state.openai_reasoning_level,
-            )
-            # ADR-006 stage 6.8: transient-transport retry (429/5xx/
-            # connection failures; never cancellations).
-            content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
-            return {"message": {"content": content, "role": "assistant"}}
-
-        if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
-            from backend.providers.anthropic_provider import AnthropicProvider
-
-            provider = AnthropicProvider(
-                client=state.api_client, api_key=state.api_key or "", model=api_model,
-                reasoning_level=state.anthropic_reasoning_level,
-            )
-            # ADR-006 stage 6.8: transient-transport retry (429/5xx/
-            # connection failures; never cancellations).
-            content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
-            return {"message": {"content": content, "role": "assistant"}}
-
-        if state.api_provider_type == config.API_PROVIDER_GEMINI:
-            from backend.providers.gemini_provider import GeminiProvider
-
-            provider = GeminiProvider(
-                api_key=state.api_key or "", model=api_model,
-                reasoning_level=state.gemini_reasoning_level,
-            )
-            # ADR-006 stage 6.8: transient-transport retry (429/5xx/
-            # connection failures; never cancellations).
-            content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
-            return {"message": {"content": content, "role": "assistant"}}
-
-        raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
+        provider = _cloud_provider(state, api_model)
+        content = _complete_with_transport_retry(provider, chat_request, token, cancel_event)
+        return {"message": {"content": content, "role": "assistant"}}
 
     except Exception as exc:
         _translate_chat_exception(exc, state, messages)
@@ -1822,10 +1823,11 @@ def _translate_chat_exception(exc: Exception, state, messages: list) -> NoReturn
             "Please try again or choose a faster model."
         ) from exc
 
+    profile = CLOUD_PROVIDERS.get(state.api_provider_type or "") if state.use_api_mode else None
     if "429" in error_str or "quota" in error_str or "resourceexhausted" in error_str:
-        if state.api_provider_type == config.API_PROVIDER_OPENAI:
+        if profile and profile.protocol == "openai":
             raise RuntimeError(
-                "OpenAI-compatible API quota exceeded or rate limited.\n\n"
+                f"{profile.name} API quota exceeded or rate limited.\n\n"
                 "Please verify billing, rate limits, and the selected model for your endpoint."
             ) from exc
         if state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
@@ -1838,6 +1840,11 @@ def _translate_chat_exception(exc: Exception, state, messages: list) -> NoReturn
             "Note: Google does not offer a free tier for their 'Pro' models. "
             "Please switch your default task models to a 'Flash' model in the API Settings, "
             "or link a billing account in Google AI Studio."
+        ) from exc
+
+    if profile and profile.protocol == "openai" and status_code in (401, 403, 498):
+        raise RuntimeError(
+            f"{profile.name} rejected access. Verify its API key and access to the selected model in Settings."
         ) from exc
 
     if state.use_api_mode and state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
@@ -2033,29 +2040,7 @@ def _chat_stream_dispatch(task: str, messages: list, on_chunk: Callable[[str, bo
                     f"No API model configured for task '{task}'.\n"
                     "Please configure models in API Settings."
                 )
-            if state.api_provider_type == config.API_PROVIDER_OPENAI:
-                from backend.providers.openai_provider import OpenAIProvider
-
-                provider = OpenAIProvider(
-                    client=state.api_client, model=api_model,
-                    reasoning_level=state.openai_reasoning_level,
-                )
-            elif state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
-                from backend.providers.anthropic_provider import AnthropicProvider
-
-                provider = AnthropicProvider(
-                    client=state.api_client, api_key=state.api_key or "", model=api_model,
-                    reasoning_level=state.anthropic_reasoning_level,
-                )
-            elif state.api_provider_type == config.API_PROVIDER_GEMINI:
-                from backend.providers.gemini_provider import GeminiProvider
-
-                provider = GeminiProvider(
-                    api_key=state.api_key or "", model=api_model,
-                    reasoning_level=state.gemini_reasoning_level,
-                )
-            else:
-                raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
+            provider = _cloud_provider(state, api_model)
 
         # The provider yields typed events; this adapter maps them onto the
         # on_chunk(delta, reset) contract: "text" deltas forward
@@ -2221,29 +2206,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                     f"No API model configured for task '{task}'.\n"
                     "Please configure models in API Settings."
                 )
-            if state.api_provider_type == config.API_PROVIDER_OPENAI:
-                from backend.providers.openai_provider import OpenAIProvider
-
-                provider = OpenAIProvider(
-                    client=state.api_client, model=api_model,
-                    reasoning_level=state.openai_reasoning_level,
-                )
-            elif state.api_provider_type == config.API_PROVIDER_ANTHROPIC:
-                from backend.providers.anthropic_provider import AnthropicProvider
-
-                provider = AnthropicProvider(
-                    client=state.api_client, api_key=state.api_key or "", model=api_model,
-                    reasoning_level=state.anthropic_reasoning_level,
-                )
-            elif state.api_provider_type == config.API_PROVIDER_GEMINI:
-                from backend.providers.gemini_provider import GeminiProvider
-
-                provider = GeminiProvider(
-                    api_key=state.api_key or "", model=api_model,
-                    reasoning_level=state.gemini_reasoning_level,
-                )
-            else:
-                raise RuntimeError(f"Unsupported API provider: {state.api_provider_type}")
+            provider = _cloud_provider(state, api_model)
 
         if tools and not provider.capabilities.tools:
             model_label = getattr(provider, "model_id", None) or type(provider).__name__
@@ -2259,12 +2222,25 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
             state.api_provider_type if state.use_api_mode else state.local_provider_type
         )
         wire_tools = tuple(tools)
-        wire_messages = messages
+        profile = CLOUD_PROVIDERS.get(provider_name or "")
+        # DeepSeek/Kimi/GLM can require the previous assistant reasoning on
+        # tool turns. Keep it scoped to its originating profile and model,
+        # and never pass Graphlink's private history metadata to another API.
+        replay = bool(tools and profile and profile.replay_reasoning)
+        wire_messages = []
+        for message in messages:
+            if "provider_reasoning" in message:
+                message = dict(message)
+                saved = message.pop("provider_reasoning")
+                if (replay and isinstance(saved, dict) and saved.get("provider") == provider_name
+                        and saved.get("model") == provider.model_id and isinstance(saved.get("text"), str)):
+                    message["reasoning_content"] = saved["text"]
+            wire_messages.append(message)
         canonical_names: dict[str, str] = {}
-        if provider_name in (config.API_PROVIDER_OPENAI, config.API_PROVIDER_ANTHROPIC, config.API_PROVIDER_GEMINI):
+        if profile:
             from backend.providers.tool_names import cloud_tool_names
 
-            wire_tools, wire_messages, canonical_names = cloud_tool_names(wire_tools, messages)
+            wire_tools, wire_messages, canonical_names = cloud_tool_names(wire_tools, wire_messages)
         if model_ref is not None:
             transport_retry_allowed = model_ref.provider != config.LOCAL_PROVIDER_LLAMACPP
         else:
@@ -2275,6 +2251,7 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
         attempt = 0
         while True:
             full_response_content = None
+            reasoning_parts: list[str] = []
             usage = None
             tool_calls = []
             try:
@@ -2290,7 +2267,10 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                         if call.name in canonical_names:
                             call = replace(call, name=canonical_names[call.name])
                         tool_calls.append(call)
+                    elif event.type == "reasoning" and replay:
+                        reasoning_parts.append(event.text)
                     elif event.type == "reset":
+                        reasoning_parts.clear()
                         # A reasoning-retry discarded the prior attempt
                         # wholesale - its collected tool calls go with it,
                         # exactly like the streaming path's partial text.
@@ -2309,11 +2289,13 @@ def chat_turn_with_tools(task: str, messages: list, tools: tuple = (), **kwargs)
                 _transport_retry_wait(retry_exc, attempt, cancel_event)
                 attempt += 1
 
+        assistant_message: dict[str, Any] = {"content": full_response_content or "", "role": "assistant"}
+        if reasoning_parts:
+            assistant_message["provider_reasoning"] = {
+                "provider": provider_name, "model": provider.model_id, "text": "".join(reasoning_parts),
+            }
         return {
-            "message": {
-                "content": full_response_content or "",
-                "role": "assistant",
-            },
+            "message": assistant_message,
             "tool_calls": tool_calls,
             "usage": usage,
         }
@@ -2369,7 +2351,11 @@ def _build_api_client(provider: str, api_key: str, base_url: str | None = None):
     resolved_base_url)."""
     # OpenAI/Anthropic SDK client, or the plain dict the REST fallbacks use.
     client: Any
-    if provider == config.API_PROVIDER_OPENAI:
+    profile = CLOUD_PROVIDERS.get(provider)
+    if profile is None:
+        raise ValueError(f"Unknown API provider: {provider}")
+    if profile.protocol == "openai":
+        base_url = profile.endpoint(profile.base_url if base_url is None else base_url)
         try:
             from openai import OpenAI
         except ImportError as exc:
@@ -2377,29 +2363,42 @@ def _build_api_client(provider: str, api_key: str, base_url: str | None = None):
                 "openai package required. Install dependencies with: pip install -r requirements.txt"
             ) from exc
 
-        if not base_url:
-            base_url = "https://api.openai.com/v1"
-
-        api_key = api_key or _first_env_api_key(_OPENAI_API_KEY_ENV_VARS) or ""
+        if not api_key and profile.environment_key_allowed(base_url):
+            api_key = _first_env_api_key(profile.env_vars) or ""
         if not api_key:
-            if _is_local_base_url(base_url):
+            if provider == config.API_PROVIDER_OPENAI and _is_local_base_url(base_url):
                 api_key = "dummy-key-for-local"
             else:
-                raise RuntimeError("OpenAI-compatible API key not configured. Open Settings and save your API key.")
+                raise RuntimeError(f"{provider} API key not configured. Open Settings and enter your API key.")
+
+        # The OpenAI SDK also reads OPENAI_CUSTOM_HEADERS (possibly Authorization),
+        # OPENAI_ORG_ID and OPENAI_PROJECT_ID. Keep those headers on OpenAI's origin.
+        client_options: dict[str, Any] = {}
+        if base_url.rstrip("/") != "https://api.openai.com/v1":
+            from openai import omit
+
+            env_headers = {
+                line.partition(":")[0].strip(): omit
+                for line in os.environ.get("OPENAI_CUSTOM_HEADERS", "").splitlines() if ":" in line
+            }
+            client_options["default_headers"] = {
+                **env_headers, "OpenAI-Organization": omit, "OpenAI-Project": omit,
+                "Authorization": f"Bearer {api_key}",
+            }
 
         # ADR-006 stage 6.8: max_retries=0 - api_provider owns transport
         # retries now (with Retry-After handling and cancel-aware backoff);
         # leaving the SDK's default 2 would multiply attempts (3 SDK tries
         # per each of our 3 tries).
         try:
-            client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+            client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0, **client_options)
         except TypeError as exc:
             if "max_retries" not in str(exc):
                 raise
-            client = OpenAI(api_key=api_key, base_url=base_url)
+            client = OpenAI(api_key=api_key, base_url=base_url, **client_options)
 
     elif provider == config.API_PROVIDER_ANTHROPIC:
-        api_key = api_key or _first_env_api_key(_ANTHROPIC_API_KEY_ENV_VARS) or ""
+        api_key = api_key or _first_env_api_key(CLOUD_PROVIDERS[config.API_PROVIDER_ANTHROPIC].env_vars) or ""
         if not api_key:
             raise RuntimeError("Anthropic API key not configured. Open Settings and save your Anthropic API key.")
 
@@ -2436,7 +2435,7 @@ def _build_api_client(provider: str, api_key: str, base_url: str | None = None):
         # snapshot's api_key OR-branch never fired, silently falling
         # through to a LIVE re-read of API_KEY and then os.environ at
         # actual-call time instead of the value frozen at request entry.
-        api_key = api_key or _first_env_api_key(_GEMINI_API_KEY_ENV_VARS) or ""
+        api_key = api_key or _first_env_api_key(CLOUD_PROVIDERS[config.API_PROVIDER_GEMINI].env_vars) or ""
         if not api_key:
             raise RuntimeError("Gemini API key not configured. Open Settings and save your Gemini API key.")
         client = {"provider": config.API_PROVIDER_GEMINI}
@@ -2446,12 +2445,14 @@ def _build_api_client(provider: str, api_key: str, base_url: str | None = None):
     return client, api_key, base_url
 
 
-def initialize_api(provider: str, api_key: str, base_url: str | None = None):
+def initialize_api(
+    provider: str, api_key: str, base_url: str | None = None, *, task_models: dict | None = None,
+):
     """Configure the DEFAULT session's runtime (the module globals) for an
     API endpoint - ADR-006 stage 6.5: the logic lives on ProviderRuntime,
     shared with per-session instances; this delegate keeps every existing
     caller and test working unchanged."""
-    return DEFAULT_RUNTIME.initialize_api(provider, api_key, base_url)
+    return DEFAULT_RUNTIME.initialize_api(provider, api_key, base_url, task_models=task_models)
 
 
 def initialize_local_provider(
@@ -2467,32 +2468,61 @@ def initialize_local_provider(
 
 
 def _list_models(provider_type, client, api_key=None):
-    if provider_type == config.API_PROVIDER_OPENAI:
+    profile = CLOUD_PROVIDERS.get(provider_type)
+    if not profile:
+        raise ValueError(f"Unknown API provider: {provider_type}")
+    if not profile.supports_catalog:
+        raise ValueError(f"Enter the model or deployment ID for {profile.name} manually.")
+    if profile.key_slot in ("cohere", "fireworks"):
+        return native_chat_models(profile.key_slot, client)
+    if profile.protocol == "openai":
+        if profile.key_slot == "together":
+            # Together's v1 endpoint returns an array. The SDK's typed models.list()
+            # expects a page object and can fail before it exposes the raw data.
+            payload = client.models.with_raw_response.list().http_response.json()
+            models = payload if isinstance(payload, list) else payload["data"]
+            return sorted({
+                model["id"] for model in models
+                if model.get("id") and model.get("type") in (None, "chat", "language", "code")
+            }, key=str.casefold)
         models = client.models.list()
-        return sorted([model.id for model in models.data])
+        return sorted({model.id for model in models.data if model.id}, key=str.casefold)
     if provider_type == config.API_PROVIDER_ANTHROPIC:
-        payload = _anthropic_get_json(ANTHROPIC_MODELS_URL, api_key=api_key)
-        return sorted(
-            {
-                str(model_info.get("id", "")).strip()
-                for model_info in payload.get("data", [])
-                if str(model_info.get("id", "")).strip()
-            },
-            key=str.lower,
+        def fetch(params):
+            return _anthropic_get_json(f"{ANTHROPIC_MODELS_URL}?{urlencode(params)}", api_key=api_key)
+
+        pages = catalog_pages(
+            fetch, {"limit": "1000"}, cursor_param="after_id",
+            next_cursor=lambda page: page.get("last_id") if page.get("has_more") else None,
         )
+        return sorted({model["id"] for page in pages for model in page.get("data", []) if model.get("id")},
+                      key=str.casefold)
     if provider_type == config.API_PROVIDER_GEMINI:
-        return GEMINI_MODELS_STATIC
-    return []
+        return _gemini_list_models(_get_gemini_api_key(api_key))
+    raise RuntimeError(f"Unsupported catalog protocol: {profile.protocol}")
+
+
+def _catalog_failure(provider: str, exc: Exception) -> RuntimeError:
+    # SDK auth errors can include a *partially* masked credential. A literal
+    # string replacement cannot redact that. Report only actionable guidance.
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if status in (401, 403, 498):
+        return RuntimeError(f"{provider} rejected access. Check the API key and its model-list permissions.")
+    return RuntimeError(f"Failed to fetch models from endpoint: {exc}")
 
 
 def get_available_models():
-    if not API_CLIENT:
+    return _catalog_for_snapshot(_snapshot_provider_state())
+
+
+def _catalog_for_snapshot(state: _ProviderSnapshot):
+    if not state.api_client:
         raise RuntimeError("API client not initialized")
 
     try:
-        return _list_models(API_PROVIDER_TYPE, API_CLIENT, API_KEY)
+        return _list_models(state.api_provider_type, state.api_client, state.api_key)
     except Exception as exc:
-        raise RuntimeError(f"Failed to fetch models from endpoint: {exc}") from exc
+        raise _catalog_failure(state.api_provider_type or "Provider", exc) from exc
 
 
 def list_models_for_config(provider: str, api_key: str, base_url: str | None = None):
@@ -2505,16 +2535,21 @@ def list_models_for_config(provider: str, api_key: str, base_url: str | None = N
     try:
         return _list_models(provider, client, resolved_key)
     except Exception as exc:
-        raise RuntimeError(f"Failed to fetch models from endpoint: {exc}") from exc
+        raise _catalog_failure(provider, exc) from exc
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
 
 
 def get_available_model_descriptors() -> list[ModelDescriptor]:
     """Fetch the active provider catalog with stable metadata for the UI."""
-    models = get_available_models()
+    state = _snapshot_provider_state()
+    models = _catalog_for_snapshot(state)
     return sort_descriptors(
         ModelDescriptor(
             model_id=str(model_id).strip(),
-            provider=str(API_PROVIDER_TYPE or ""),
+            provider=str(state.api_provider_type or ""),
             ready=True,
             available=True,
             source="endpoint",
@@ -2545,6 +2580,10 @@ def set_gemini_reasoning_level(level: str):
 
 def set_openai_reasoning_level(level: str):
     DEFAULT_RUNTIME.set_openai_reasoning_level(level)
+
+
+def set_api_task_models(task_models: dict) -> None:
+    DEFAULT_RUNTIME.set_api_task_models(task_models)
 
 
 def set_task_model(task: str, api_model: str):

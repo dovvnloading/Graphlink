@@ -28,10 +28,12 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from pathlib import Path
 from typing import Any, Iterator
 
 import graphlink_task_config as config
+from graphlink_cloud_providers import CLOUD_PROVIDERS
 from api_provider import (
     _raise_if_cancelled,
     _read_attachment_bytes,
@@ -71,11 +73,31 @@ def _sniff_image_mime(data: bytes) -> str:
     return "image/png"
 
 
-def prepare_openai_messages(messages: list) -> list:
+def _mistral_call_ids(messages: list) -> dict[str, str]:
+    """Older Mistral tokenizers require nine alphanumerics on both sides of a tool exchange."""
+    ids = {call["id"] for message in messages for call in message.get("tool_calls") or ()}
+    ids.update(message["tool_call_id"] for message in messages if message.get("tool_call_id"))
+    # Preserve every legal vendor-issued ID, including ones later in history.
+    used = {value for value in ids if re.fullmatch(r"[A-Za-z0-9]{9}", value)}
+    translated = {}
+    serial = 0
+    for value in sorted(ids - used):
+        wire_id = f"G{serial:08x}"
+        while wire_id in used:
+            serial += 1
+            wire_id = f"G{serial:08x}"
+        translated[value] = wire_id
+        used.add(wire_id)
+        serial += 1
+    return translated
+
+
+def prepare_openai_messages(messages: list, *, mistral_ids: bool = False) -> list:
     """C4: the app's wire shape -> OpenAI content parts. Plain-string
     content and already-flat messages pass through untouched, so text-only
     requests are byte-identical to the pre-port behavior."""
     prepared = []
+    call_ids = _mistral_call_ids(messages) if mistral_ids else {}
     for message in messages:
         # ADR-007 stage 7.1: the two tool-turn roles ChatRequest's docstring
         # adds, translated to OpenAI's native shape - checked before the
@@ -88,7 +110,7 @@ def prepare_openai_messages(messages: list) -> list:
         if role == "tool":
             prepared.append({
                 "role": "tool",
-                "tool_call_id": message.get("tool_call_id", ""),
+                "tool_call_id": call_ids.get(message.get("tool_call_id", ""), message.get("tool_call_id", "")),
                 "content": str(message.get("content") or ""),
             })
             continue
@@ -96,10 +118,11 @@ def prepare_openai_messages(messages: list) -> list:
         if tool_calls:
             prepared.append({
                 "role": "assistant",
-                "content": message.get("content") or None,
+                "content": message.get("content") or ("" if "reasoning_content" in message else None),
+                **({"reasoning_content": message["reasoning_content"]} if "reasoning_content" in message else {}),
                 "tool_calls": [
                     {
-                        "id": call["id"],
+                        "id": call_ids.get(call["id"], call["id"]),
                         "type": "function",
                         "function": {
                             "name": call["name"],
@@ -170,47 +193,43 @@ def prepare_openai_messages(messages: list) -> list:
     return prepared
 
 
+def _answer_text(content) -> str:
+    """OpenAI returns a string; Mistral can interleave text and thinking blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            part["text"] for part in content
+            if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
+        )
+    return ""
+
+
 class OpenAIProvider:
-    def __init__(self, *, client, model: str, reasoning_level: str = "off"):
+    def __init__(
+        self, *, client, model: str, reasoning_level: str = "off",
+        provider_name: str = config.API_PROVIDER_OPENAI,
+    ):
+        self.profile = CLOUD_PROVIDERS[provider_name]
         self.client = client
+        # Direct OpenAI and the legacy custom connection retain their existing
+        # feature set. Other services share the wire format, but have independent
+        # optional APIs and can reject OpenAI-specific parameters.
+        openai_features = self.profile.key_slot in {"openai", "openai_direct"}
         self.model_id = model
         self.reasoning_level = reasoning_level
         self.last_usage: dict | None = None  # ADR-006 stage 6.8 - see complete()
         self.capabilities = ProviderCapabilities(
             streaming=True,  # 6.5b: real SSE via chat.completions.create(stream=True)
-            reasoning=openai_supports_reasoning(model),
-            vision=True,   # C4: image_url parts now real
-            audio=True,    # C4: input_audio parts now real (wav/mp3)
-            # Derived from the CLIENT, not asserted: "OpenAI-compatible"
-            # covers llama-server/LM Studio/proxies with no images API at
-            # all. Probing the client keeps the capability honest instead of
-            # promising an affordance that would error at call time (6.3
-            # adversarial review - generate_image's own hasattr guard is a
-            # separate mechanism this flag was wrongly claiming to mirror).
-            image_generation=callable(
+            reasoning=openai_features and openai_supports_reasoning(model),
+            vision=openai_features,
+            audio=openai_features,
+            image_generation=self.profile.supports_image_generation and callable(
                 getattr(getattr(client, "images", None), "generate", None)
             ),
-            # ADR-007 stage 7.1: unlike Ollama's per-model probe, OpenAI's
-            # current model families all support native tool use
-            # unconditionally (base.py's own ProviderCapabilities.tools
-            # comment) - no capability call needed.
-            tools=True,
-            # ADR-007 stage 7.3: native response_format:{"type":"json_schema"}
-            # structured outputs - see backend/structured_output.py's own
-            # _native_kwargs_for_active_provider comment for the verified
-            # SDK shape.
-            structured_output=True,
-            # ADR-017 stage 17.3: derived from the CLIENT (same posture as
-            # `image_generation` above), NOT a per-model probe - the OpenAI
-            # SDK (and most OpenAI-compatible proxies) exposes an
-            # `embeddings.create` endpoint unconditionally. A model_id
-            # configured for CHAT is still not an embedding model even
-            # though this returns True for it - callers construct a
-            # DIFFERENT OpenAIProvider instance with an actual embedding
-            # model_id (e.g. "text-embedding-3-small") to embed, matching
-            # this class's existing one-instance-one-model_id shape rather
-            # than embed() taking a second, separate model parameter.
-            embedding=callable(getattr(getattr(client, "embeddings", None), "create", None)),
+            tools=self.profile.supports_tools,
+            structured_output=openai_features,
+            embedding=openai_features and callable(getattr(getattr(client, "embeddings", None), "create", None)),
         )
 
     # ADR-007 stage 7.1: deliberately NOT given tool-call support, matching
@@ -221,11 +240,11 @@ class OpenAIProvider:
 
     def complete(self, request: ChatRequest, cancel: CancelToken) -> str:
         kwargs = {k: v for k, v in request.extra_kwargs.items() if k != "cancellation_event"}
-        if request.task == config.TASK_CHAT:
+        if request.task == config.TASK_CHAT and self.capabilities.reasoning:
             kwargs.update(openai_reasoning_kwargs(self.model_id, self.reasoning_level))
         response = self.client.chat.completions.create(
             model=self.model_id,
-            messages=prepare_openai_messages(request.messages),
+            messages=prepare_openai_messages(request.messages, mistral_ids=self.profile.key_slot == "mistral"),
             **kwargs,
         )
         _raise_if_cancelled(cancel.event)
@@ -238,7 +257,7 @@ class OpenAIProvider:
             getattr(response_usage, "prompt_tokens", None),
             getattr(response_usage, "completion_tokens", None),
         )
-        return response.choices[0].message.content
+        return _answer_text(response.choices[0].message.content)
 
     def stream(self, request: ChatRequest, cancel: CancelToken) -> Iterator[ProviderEvent]:
         # ADR-006 stage 6.5b: real SSE streaming, same request prep as
@@ -249,7 +268,7 @@ class OpenAIProvider:
         _raise_if_cancelled(cancel.event)
         kwargs = {k: v for k, v in request.extra_kwargs.items() if k != "cancellation_event"}
         kwargs.pop("stream", None)  # ours to set - a passthrough kwarg can't turn it back off
-        if request.task == config.TASK_CHAT:
+        if request.task == config.TASK_CHAT and self.capabilities.reasoning:
             kwargs.update(openai_reasoning_kwargs(self.model_id, self.reasoning_level))
         if request.tools:
             kwargs["tools"] = [
@@ -271,7 +290,7 @@ class OpenAIProvider:
         # Ollama's whole-object delivery - buffered here and parsed once
         # complete, so ToolCall.arguments is always an already-parsed dict.
         tool_call_buffers: dict[int, dict] = {}
-        prepared_messages = prepare_openai_messages(request.messages)
+        prepared_messages = prepare_openai_messages(request.messages, mistral_ids=self.profile.key_slot == "mistral")
         # ADR-006 stage 6.8: ask for the final usage chunk. Some
         # OpenAI-compatible servers (older vLLM/LM Studio builds) reject
         # stream_options outright (TypeError from a narrower fake/wrapper, or
@@ -330,7 +349,7 @@ class OpenAIProvider:
                 delta = choices[0].delta
                 if delta is None:
                     continue
-                delta_content = getattr(delta, "content", None) or ""
+                delta_content = _answer_text(getattr(delta, "content", None))
                 if delta_content:
                     content_parts.append(delta_content)
                     yield ProviderEvent("text", delta_content)

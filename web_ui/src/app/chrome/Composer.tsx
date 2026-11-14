@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComposerStore } from "./composerStore";
@@ -232,7 +232,7 @@ export function Composer({
              provider limitation. */
           title={
             !composer.capabilities.reasoningSelection
-              ? "Reasoning mode is only available for local Ollama and Llama.cpp providers"
+              ? "This provider and model do not expose adjustable reasoning in Graphlink"
               : !composer.request.canSend
                 ? "Wait for the current response to finish"
                 : undefined
@@ -264,7 +264,7 @@ export function Composer({
           title={
             composer.capabilities.modelSelection
               ? `Choose the ${composer.route.provider} model for chat`
-              : "No models found - run a scan on the Settings page for this provider"
+              : "Choose a model in Settings for this provider"
           }
           onClick={() => overlays.toggle("model", "popover")}
         >
@@ -309,7 +309,7 @@ export function Composer({
       </div>
 
       <Reasoning store={store} />
-      <ModelPicker store={store} />
+      {overlays.isOpen("model") && <ModelPicker key={composer.route.provider} store={store} />}
     </div>
   );
 }
@@ -317,19 +317,31 @@ export function Composer({
 function ModelPicker({ store }: { store: ComposerStore }) {
   const composer = useSyncExternalStore(store.subscribe, store.getComposer);
   const overlays = useOverlays();
-  const options = useMemo(() => composer.route.modelOptions, [composer.route.modelOptions]);
+  const [query, setQuery] = useState("");
+  const search = query.trim().toLowerCase();
+  const options = composer.route.modelOptions;
+  const matches = options.filter(({ id, label }) =>
+    id.toLowerCase().includes(search) || label.toLowerCase().includes(search),
+  );
 
   return (
     <Popover anchored name="model" label="Choose a model" className="reasoning-popover model-picker-popover">
-      {options.length === 0 ? (
-        <p className="model-picker-empty">
-          No models found for {composer.route.provider}. Run a scan on its Settings page.
-        </p>
-      ) : (
-        options.map((option) => (
+      {options.length > 8 && (
+        <input
+          type="search"
+          className="model-picker-search"
+          aria-label="Search models"
+          placeholder={`Search ${options.length} models…`}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      )}
+      <div className="model-picker-results">
+        {matches.map((option) => (
           <button
             key={option.id}
             type="button"
+            aria-pressed={option.id === composer.route.modelId}
             className={"reasoning-option" + (option.id === composer.route.modelId ? " active" : "")}
             onClick={() => {
               store.selectModel(option.id);
@@ -337,9 +349,13 @@ function ModelPicker({ store }: { store: ComposerStore }) {
             }}
           >
             <span className="reasoning-option-label">{option.label}</span>
+            {option.id === composer.route.modelId && <span aria-hidden="true">✓</span>}
           </button>
-        ))
-      )}
+        ))}
+        {matches.length === 0 && <p className="model-picker-empty" role="status">
+          {search ? "No matching models." : "Choose a model in provider settings."}
+        </p>}
+      </div>
     </Popover>
   );
 }

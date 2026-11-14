@@ -146,7 +146,7 @@ Ollama (Local) is the default. All three modes are configurable *and* switchable
 
 - **Ollama (Local)** — the default. Best for local-first use with Ollama-managed models.
 - **Llama.cpp (Local)** — direct GGUF loading through `llama-cpp-python`, with runtime controls.
-- **API Endpoint** — OpenAI-compatible providers, Anthropic Claude, or Google Gemini.
+- **API Endpoint** — connect directly to a model lab, use a cloud deployment or gateway, or bring your own compatible endpoint.
 
 ## Configuration
 
@@ -169,7 +169,23 @@ Loads a GGUF file directly (not an Ollama model store). Configure the chat model
 
 ### API providers
 
-OpenAI-Compatible, Anthropic Claude, and Google Gemini are supported, with per-task model selection. Image generation works with OpenAI-Compatible and Google Gemini providers (not Anthropic Claude). Anthropic Claude accepts image attachments but not audio (use Gemini or Ollama for audio).
+Open **Settings > API Endpoint** and search for a provider or model family, such as Claude, Grok, Kimi, or Qwen. Browsing a connection leaves the current chat route active until you choose **Save and activate**.
+
+| Connection | Providers |
+| --- | --- |
+| Model labs | OpenAI, Anthropic Claude, Google Gemini, xAI, Meta, Mistral AI, DeepSeek, Cohere, Moonshot AI, Z.AI, MiniMax, Baidu Qianfan, ByteDance ModelArk, Tencent Hunyuan |
+| Cloud platforms | Alibaba Cloud Model Studio, Amazon Bedrock, Azure OpenAI, Google Vertex AI, NVIDIA, Groq, Cerebras, Together AI, Fireworks AI |
+| Model gateways | OpenRouter, Hugging Face Inference Providers, Perplexity Orchestrator |
+| Custom endpoint | An OpenAI Chat Completions-compatible service, including your existing OpenAI-Compatible configuration |
+
+1. Select a provider. Its setup guide identifies the endpoint and credential. For a cloud deployment, enter the resource or regional URL shown by your provider.
+2. Enter the key or use the environment variable shown in Settings. **Load available models** retrieves the provider’s catalog where supported. You can also enter an exact model ID. Azure OpenAI uses your deployment name. Vertex AI uses a Google Cloud OAuth access token, which you replace when it expires.
+3. Set the **Default text model**. Chat, naming, charts, and web tasks use it until you assign a different model under **Per-task models**. For image generation, assign an image model on a connection that offers that field.
+4. Choose **Save and activate**. The composer shows the active provider and model. Open its model picker to switch the default within that provider. Settings retains each provider’s credentials, catalog, and model choices across restarts.
+
+Model access, supported inputs, and tool calling depend on the selected model and account. Graphlink uses each connection’s own catalog or your explicit assignment. The [security section](#license-and-security) describes platform-specific storage for saved credentials.
+
+![Graphlink’s searchable cloud provider directory](assets/screenshots/cloud-providers.png)
 
 ### Fal Media Studio on the canvas
 

@@ -764,7 +764,7 @@ async def run_build(
                     turn, assistant_text + "".join(json.dumps(c.arguments) for c in tool_calls),
                 )
 
-                assistant_message: dict = {"role": "assistant", "content": assistant_text}
+                assistant_message = {**turn["message"], "role": "assistant", "content": assistant_text}
                 if tool_calls:
                     assistant_message["tool_calls"] = [call.history_entry() for call in tool_calls]
                 messages.append(assistant_message)

@@ -266,7 +266,7 @@ export class ComposerStore {
     // R8a: writes the chat-task model assignment. The backend routes this
     // through the same helper the Settings > Ollama page uses, so the two
     // surfaces cannot report different models.
-    this.transport.fireIntent("app-composer", "selectModel", [modelId], undefined, true);
+    this.transport.fireIntent("app-composer", "selectModel", [modelId, this.composer.route.provider], undefined, true);
   }
 
   setReasoningLevel(level: string): void {

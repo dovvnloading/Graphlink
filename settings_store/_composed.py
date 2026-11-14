@@ -46,10 +46,11 @@ class SettingsManagerParts:
         # Supplied by PersistenceOps (assigned in its __init__, or defined
         # as real methods on it - these annotations are overridden by those
         # real definitions, never the other way round).
+        _api_catalog_requests: dict[str, object]
         state: dict[str, Any]
         state_file: Any
 
-        def _save_state(self, state_data: dict[str, Any] | None = None) -> None: ...
+        def _save_state(self, state_data: dict[str, Any] | None = None, *, raise_on_error: bool = False) -> None: ...
 
         def _protect_and_track(self, value: str) -> str: ...
 

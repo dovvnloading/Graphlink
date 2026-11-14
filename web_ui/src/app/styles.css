@@ -2970,6 +2970,41 @@ body,
   overflow-y: auto;
 }
 
+.model-picker-popover {
+  width: min(340px, calc(100vw - 24px));
+  overflow: hidden;
+}
+
+.model-picker-search {
+  flex: none;
+  min-width: 0;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+  background: var(--gl-neutral-button-background);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 7px;
+}
+
+.model-picker-results {
+  display: grid;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.model-picker-results .reasoning-option {
+  flex-direction: row;
+  justify-content: space-between;
+  overflow-wrap: anywhere;
+}
+
+.model-picker-empty {
+  margin: 10px;
+  font-size: 12px;
+  color: var(--gl-surface-text-muted);
+}
+
 .reasoning-option {
   display: flex;
   flex-direction: column;

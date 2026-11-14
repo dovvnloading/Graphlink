@@ -11,6 +11,9 @@
     "apiBaseUrl": {
       "type": "string"
     },
+    "apiCatalogBaseUrl": {
+      "type": "string"
+    },
     "apiCatalogMessage": {
       "type": "string"
     },
@@ -68,6 +71,65 @@
         "type": "string"
       },
       "type": "object"
+    },
+    "apiProviders": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "defaultBaseUrl": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "docsUrl": {
+            "type": "string"
+          },
+          "editableEndpoint": {
+            "type": "boolean"
+          },
+          "endpointHint": {
+            "type": "string"
+          },
+          "envVar": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "keySlot": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "supportsCatalog": {
+            "type": "boolean"
+          },
+          "supportsImageGeneration": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "group",
+          "description",
+          "docsUrl",
+          "defaultBaseUrl",
+          "editableEndpoint",
+          "endpointHint",
+          "supportsCatalog",
+          "supportsImageGeneration",
+          "keySlot",
+          "envVar"
+        ],
+        "type": "object"
+      },
+      "type": "array"
     },
     "autoModelPolicy": {
       "type": "string"
@@ -300,11 +362,13 @@
     "providerMode",
     "activeApiProvider",
     "viewingApiProvider",
+    "apiProviders",
     "apiBaseUrl",
     "apiKeyConfigured",
     "apiKeySource",
     "apiModels",
     "apiModelCatalog",
+    "apiCatalogBaseUrl",
     "apiCatalogStatus",
     "apiCatalogMessage",
     "geminiStaticModels",

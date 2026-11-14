@@ -159,20 +159,18 @@ describe("queueable intent classification (ADR-003 stage 3.6)", () => {
     expect(sites[0].queueable).toBe(false);
   });
 
-  // REVIEW-FIX regression coverage: every fireIntent call in
-  // SettingsDialog.tsx is a JSX inline arrow-function body ending in `)}`,
-  // never `);` - a shape the old regex's required trailing `;` could never
-  // match at all, independent of the comment-latching issue above. That
-  // silently dropped 22 of the file's original 33 real call sites. The
-  // Fal.ai added seven inference actions plus four catalog/pricing intents (five call sites: search and pagination): 45 `fireIntent(` occurrences.
-  // occurrences, all real calls, no bare mentions in comments) so a future
-  // regression that drops any of them fails loudly instead of the guard's
-  // other assertions just quietly evaluating fewer sites.
-  it("collects every real fireIntent call site in SettingsDialog.tsx, including JSX arrow-body calls", () => {
+  // Settings uses both multi-line calls and JSX arrow bodies ending in `)}`.
+  // Keep the count across the whole settings surface when a page moves files.
+  it("collects the settings call sites, including the cloud profile form", () => {
     const sites = collectFireIntentCallSites().filter((s) =>
-      s.file.replace(/\\/g, "/").endsWith("chrome/SettingsDialog.tsx"),
+      /chrome\/(SettingsDialog|CloudProviderSettings)\.tsx$/.test(s.file.replace(/\\/g, "/")),
     );
-    expect(sites).toHaveLength(45);
+    expect(sites).toHaveLength(46);
+    const cloud = sites.filter((s) => s.file.endsWith("CloudProviderSettings.tsx"));
+    expect(cloud.map(({ intent, queueable }) => [intent, queueable]).sort()).toEqual([
+      ["loadApiModels", false], ["resetApiSettings", false], ["saveApiConfiguration", false],
+      ["setProviderMode", false], ["setViewingApiProvider", true],
+    ]);
     // Spot-check a few of the specific call sites that were among the 22
     // previously hidden by the `)}` JSX-arrow-body gap.
     for (const intent of ["setTheme", "setLlamaCppNCtx", "pullOllamaModel", "setActiveSection", "submitFalJob", "cancelFalJob", "uploadFalFile", "searchFalModels", "inspectFalModel", "getFalModelPricing", "estimateFalModelCost"]) {

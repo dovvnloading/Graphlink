@@ -1262,15 +1262,16 @@ def test_bootstrap_api_endpoint_mode_calls_initialize_api_with_provider_key_and_
 
     calls = []
 
-    def fake_initialize_api(provider, api_key, base_url=None):
-        calls.append((provider, api_key, base_url))
+    def fake_initialize_api(provider, api_key, base_url=None, *, task_models):
+        calls.append((provider, api_key, base_url, task_models))
         return {"provider": provider}
 
     monkeypatch.setattr(api_provider, "initialize_api", fake_initialize_api)
 
     agents_module.bootstrap_provider_state(settings_manager)
 
-    assert calls == [(config.API_PROVIDER_OPENAI, "sk-fake-openai-key", "https://example.test/v1")]
+    assert calls == [(config.API_PROVIDER_OPENAI, "sk-fake-openai-key", "https://example.test/v1",
+                      {config.TASK_CHAT: "gpt-test"})]
     assert settings_manager.get_current_mode() == config.MODE_API_ENDPOINT
 
 
@@ -1311,7 +1312,7 @@ def test_bootstrap_falls_back_to_ollama_when_apply_mode_raises(tmp_path, monkeyp
     settings_manager.set_api_settings(config.API_PROVIDER_OPENAI, "https://example.test/v1", "sk-fake", "", "")
     settings_manager.set_api_models({config.TASK_CHAT: "gpt-test"}, config.API_PROVIDER_OPENAI)
 
-    def raising_initialize_api(provider, api_key, base_url=None):
+    def raising_initialize_api(provider, api_key, base_url=None, *, task_models):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(api_provider, "initialize_api", raising_initialize_api)
