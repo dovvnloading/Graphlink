@@ -106,6 +106,27 @@ def test_preview_staleness_refuses_model_calls(tmp_path, monkeypatch, changed):
     asyncio.run(scenario())
 
 
+def test_endpoint_swap_during_admission_leaves_no_ghost_run(tmp_path, monkeypatch):
+    async def scenario():
+        import backend.api.intents_graph_model as model_module
+
+        path, bus, doc, source, target, send = session(tmp_path)
+        selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        preview = await send("previewGraphModel", *selected)
+        epoch = doc.graph_run_epoch
+        endpoints = iter(["http://127.0.0.1:11434", "http://localhost:11434"])
+        monkeypatch.setattr(model_module, "_require_loopback_ollama", lambda: next(endpoints))
+        with pytest.raises(IntentValidationError, match="endpoint changed"):
+            await send("executeGraphModel", *selected, preview["previewToken"], "endpoint-changed-run")
+        assert not path.exists()
+        assert doc.graph_runs == []
+        assert doc.command_log == []
+        assert doc.graph_run_epoch == epoch
+        assert getattr(bus, "graph_model_active_run_id", None) is None
+
+    asyncio.run(scenario())
+
+
 def test_cloud_model_and_unbound_destination_are_enforced_before_preview(tmp_path):
     async def scenario():
         _path, _bus, doc, source, target, send = session(tmp_path)
