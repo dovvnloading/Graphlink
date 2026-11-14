@@ -1043,7 +1043,7 @@ def _build_chat_data(
     note_model_inputs = {
         n.id: {
             "source": binding.source_id,
-            "provider": binding.provider,
+            "provider": binding.provider_name,
             "model": binding.model_id,
             "version": binding.version,
             "binding_id": binding.binding_id,
