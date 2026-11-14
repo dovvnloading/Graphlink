@@ -144,13 +144,15 @@ describe("Graph Runner", () => {
       sourceId: "source", label: "Reply note", detail: "Local Ollama model: qwen3:8b",
     };
     request.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce([]) // Opening the model panel reads saved bindings.
       .mockResolvedValueOnce({ previewToken: "model-preview", steps: [modelStep] })
       .mockResolvedValueOnce({
         ...run, steps: [{ ...modelStep, status: "completed", detail: "External output checkpointed." }],
       })
       .mockResolvedValueOnce({
         ...run, steps: [{ ...modelStep, status: "completed", detail: "External output checkpointed." }],
-      });
+      })
+      .mockResolvedValueOnce([]); // Refresh saved provenance after execution.
     await user.click(screen.getByRole("button", { name: "Open runner" }));
     await user.click(screen.getByRole("button", { name: "Run a local model into a note" }));
     await user.type(screen.getByRole("textbox", { name: "Installed Ollama model ID" }), "qwen3:8b");
@@ -167,6 +169,37 @@ describe("Graph Runner", () => {
       ],
     );
     expect(await screen.findByRole("region", { name: "Latest run" })).toHaveTextContent("External output checkpointed.");
+  });
+
+  it("saves, reselects and disconnects a typed model connection without an implicit request", async () => {
+    const { user, request } = setup([], [
+      { id: "source", kind: "chat", title: "Text source" },
+      { id: "destination", kind: "note", title: "Model output" },
+    ]);
+    const saved = [{
+      sourceId: "source", targetId: "destination", provider: "Ollama", modelId: "qwen3:8b",
+      inputType: "text", outputType: "text", version: 1, status: "unrun",
+    }];
+    request.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(saved)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(saved);
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    const toggle = screen.getByRole("button", { name: "Run a local model into a note" });
+    await user.click(toggle);
+    await user.type(screen.getByRole("textbox", { name: "Installed Ollama model ID" }), "qwen3:8b");
+    await user.click(screen.getByRole("button", { name: "Save model connection" }));
+    expect(request).toHaveBeenCalledWith("scene", "bindGraphModel", ["source", "destination", "Ollama", "qwen3:8b"]);
+    expect(await screen.findByText(/Saved text → text connection/)).toBeVisible();
+    expect(request.mock.calls.filter(([, intent]) => intent === "executeGraphModel")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Disconnect model connection" }));
+    expect(request).toHaveBeenCalledWith("scene", "unbindGraphModel", ["destination"]);
+    await user.click(toggle); // close
+    await user.click(toggle); // saved connections are loaded fresh when reopened
+    expect(request).toHaveBeenCalledWith("scene", "getGraphModelBindings", []);
+    expect(await screen.findByRole("combobox", { name: "Saved model connections" })).toHaveValue("destination");
+    expect(screen.getByRole("textbox", { name: "Installed Ollama model ID" })).toHaveValue("qwen3:8b");
   });
 
   it("leaves blocked and up-to-date outputs alone", async () => {
