@@ -14,6 +14,8 @@
 
 **Next development step.** Extend this local runtime to model and tool calls. Before issuing a remote call, record its provider, model, input and request identity. Recovery must distinguish a request that can be retried from one that may already have completed or incurred a charge.
 
+**[Explicit local model slice · PR #579](https://github.com/dovvnloading/Graphlink/pull/579) (in progress).** Graph Runner can now preview a specific local Ollama text call from an existing source into a separate plain note. Explicit execution uses the durable external-call journal, records the selected model and source fingerprint, and preserves uncertain requests rather than automatically replaying them. Loopback-only inference and a hard input/output limit keep this first adapter bounded. This is not yet a reusable executable Model node or a connected model/tool DAG; cloud-model profiles, budgets, approval flow, remote reconciliation and tool adapters remain follow-on work. [Implementation and test guide](docs/GRAPH_RUN_LOCAL_MODEL.md).
+
 **In progress — external-call dispatch journal.** The first C2 slice adds a pre-dispatch persistent request record, with provider/model-or-tool identity and an immutable input reference plus digest. An in-flight call is conservatively marked for reconciliation after restart; it is not automatically retried. Tests exercise the dispatch fence and corrupt or interrupted recovery. [Implementation contract](docs/GRAPH_RUN_EXTERNAL_ATTEMPTS.md). **Model and tool graph nodes, actual external dispatch adapters, approval flow, and provider-specific reconciliation are not implemented yet.**
 
 ## 1. The product we are building
