@@ -365,7 +365,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
       collapsed={collapsed}
       onMenuChange={setMenuPosition}
       header={
-        <NodeHeading glyph="plan" className="plan-node-title">
+        <NodeHeading className="plan-node-title">
           <span className="plan-node-badge">Build</span>
           <span className="plan-node-goal">{data.planGoal || "Untitled build"}</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />

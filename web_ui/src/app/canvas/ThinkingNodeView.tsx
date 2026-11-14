@@ -130,7 +130,7 @@ function ThinkingNodeViewImpl({ data, selected }: NodeProps<ThinkingFlowNode>) {
       collapsed={collapsed}
       onMenuChange={setMenuPosition}
       header={
-        <NodeHeading glyph="thinking" className="thinking-node-label">
+        <NodeHeading className="thinking-node-label">
           <span>Thinking</span>
         </NodeHeading>
       }

@@ -243,7 +243,7 @@ function HarnessNodeViewInner({ data, selected }: NodeProps<HarnessFlowNode>) {
       collapsed={collapsed}
       onMenuChange={setMenuPosition}
       header={
-        <NodeHeading glyph="harness" className="plan-node-title">
+        <NodeHeading className="plan-node-title">
           <span className="plan-node-badge">Agent</span>
           <span className="plan-node-goal">{data.harnessGoal || "Untitled task"}</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />

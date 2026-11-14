@@ -314,7 +314,7 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
       collapsed={collapsed}
       onMenuChange={setMenuPosition}
       header={
-        <NodeHeading glyph="artifact" className="chat-node-role">
+        <NodeHeading className="chat-node-role">
           <span>Artifact</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </NodeHeading>

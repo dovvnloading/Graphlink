@@ -1,13 +1,22 @@
-import { BaseEdge, type EdgeProps } from "@xyflow/react";
+import { BaseEdge, Position, useStore, type EdgeProps, type ReactFlowState } from "@xyflow/react";
 import { connectionDashes, type ConnectionRole } from "./connections/connectionAppearance";
 import { connectionPath, connectionSvgPath } from "./connections/connectionGeometry";
+import { ReturnRouteCache } from "./connections/returnRoute";
 
 /** SVG counterpart of the immediate-mode canvas; used during PNG capture. */
 function ExportEdge({ orthogonal, ...props }: EdgeProps & { orthogonal: boolean }) {
   const { sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, data, markerEnd } = props;
+  const nodes = useStore((state: ReactFlowState) => state.nodeLookup);
   const path = connectionPath(
     { x: sourceX, y: sourceY }, sourcePosition, { x: targetX, y: targetY }, targetPosition, orthogonal,
   );
+  const from = nodes.get(props.source);
+  const to = nodes.get(props.target);
+  if (from && to && sourcePosition === Position.Bottom && targetPosition === Position.Top && targetY < sourceY) {
+    const router = new ReturnRouteCache();
+    router.update(nodes);
+    path.waypoints = router.route(props.id, path.source, path.target, from, to);
+  }
   return (
     <BaseEdge
       path={connectionSvgPath(path)}

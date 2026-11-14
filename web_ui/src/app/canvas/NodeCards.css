@@ -1,34 +1,38 @@
-.scene-node-card {
-  --node-accent: var(--gl-graph-content);
-}
-
-/* Card geometry stays in the node views. Only the inner surface clips:
-   React Flow's ports and resize handles straddle the outside border. */
+/* The ports and resize handles straddle the perimeter. Only the content
+   surface clips, so the full target stays available at every zoom. */
 .scene-node.scene-node-card {
-  --node-surface: var(--gl-graph-surface);
-  --node-line: var(--gl-graph-border);
+  --node-edge: var(--gl-graph-border);
+  --node-paper: var(--gl-graph-surface);
   position: relative;
-  /* Saved desktop families (e.g. Segoe UI) may be absent on another OS. */
-  font-family: var(--gl-node-font-family, var(--gl-font-family)), system-ui, sans-serif;
   overflow: visible;
-  border-radius: 13px;
-  background-color: var(--node-surface);
-  border-color: var(--node-line);
-  box-shadow: var(--gl-shadow-1);
+  font-family: var(--gl-node-font-family, var(--gl-font-family)), system-ui, sans-serif;
+  border-radius: 6px;
+  border-color: var(--node-edge);
+  background: var(--node-paper);
+  box-shadow: none;
+  transition: border-color 100ms ease;
 }
 
-.scene-node-card:is(.chat-node, .conversation-node, .thinking-node, .code-node) {
-  --node-accent: var(--gl-graph-conversation);
+.scene-node.scene-node-card:hover {
+  box-shadow: none;
+  border-color: var(--gl-surface-text-muted);
 }
 
-.scene-node-card:is(.plan-node, .harness-node, .gitlink-node, .code-sandbox-node, .code-review-node, .web-research-node, .fal-studio-node) {
-  --node-accent: var(--gl-graph-tool);
+.scene-node.scene-node-card.selected,
+.react-flow__node.dragging .scene-node.scene-node-card.selected:hover {
+  border-color: var(--gl-graph-selection);
+  box-shadow: inset 0 0 0 1px var(--gl-graph-selection);
+}
+
+.react-flow__node:focus-visible:has(.scene-node-card) {
+  border-radius: 6px;
+  outline-offset: 3px;
 }
 
 .scene-node-surface {
   min-width: 0;
-  border-radius: inherit;
   overflow: hidden;
+  border-radius: inherit;
 }
 
 .chart-node > .scene-node-surface {
@@ -38,76 +42,57 @@
   flex-direction: column;
 }
 
-.scene-node.scene-node-card:hover {
-  border-color: color-mix(in srgb, var(--node-accent) 48%, var(--node-line));
-  box-shadow: var(--gl-shadow-2);
+.node-card-header {
+  position: relative;
+  flex-shrink: 0;
 }
 
-.scene-node-card.scene-node.selected,
-.react-flow__node.dragging .scene-node.selected:hover {
-  border-color: var(--gl-graph-selection);
-  box-shadow: 0 0 0 1px var(--gl-graph-selection),
-    0 0 0 5px color-mix(in srgb, var(--gl-graph-selection) 13%, transparent),
-    var(--gl-shadow-2);
-}
-
-.react-flow__node:focus-visible:has(.scene-node-surface) {
-  border-radius: 13px;
-  outline-offset: 6px;
-}
-
-.node-card-header > .node-heading {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-content: center;
-  align-items: center;
-  column-gap: 10px;
-  min-height: 49px;
-  padding: 9px 13px;
-  box-sizing: border-box;
-  background-color: color-mix(in srgb, var(--node-accent) 5%, var(--node-surface));
-  border-bottom: 0;
-  color: var(--gl-node-font-color, var(--gl-surface-text-strong));
-  font-size: calc(var(--gl-node-font-size, 12px) + 1px);
-  font-weight: 650;
-  line-height: 1.3;
-  letter-spacing: -.012em;
-}
-
-/* Specificity also overrides the legacy user-only header fill. */
+.node-card-header > .node-heading,
 .chat-node.user .node-card-header > .node-heading {
-  background-color: color-mix(in srgb, var(--node-accent) 3%, var(--node-surface));
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 38px;
+  padding: 7px 14px;
+  background: transparent;
+  border: 0;
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+  font-size: calc(var(--gl-node-font-size, 12px) + 1px);
+  font-weight: 600;
+  line-height: 1.3;
 }
 
-.node-heading-icon {
-  display: grid;
-  place-items: center;
-  box-sizing: border-box;
-  width: 30px;
-  height: 30px;
-  border-radius: 8px;
-  background-color: color-mix(in srgb, var(--node-accent) 11%, var(--node-surface));
-  border: 1px solid color-mix(in srgb, var(--node-accent) 26%, transparent);
-  color: var(--node-accent);
+/* An unboxed type mark identifies a file, figure, or code block whose own
+   title is freeform. Titles like "Web Research" already identify their kind. */
+.node-heading:has(> .node-glyph) {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 7px;
 }
 
 .node-glyph {
-  width: 18px;
-  height: 18px;
   display: block;
+  width: 15px;
+  height: 15px;
   flex: 0 0 auto;
+  color: inherit;
 }
 
-.node-heading-row {
+.node-heading > .node-glyph {
+  color: var(--gl-surface-text-muted);
+}
+
+.node-heading-row,
+.chat-node-role-group {
   display: flex;
   align-items: center;
+  gap: 6px;
   min-width: 0;
-  gap: 7px;
 }
 
 .node-heading-row > :is(.chat-node-title-actions, .chat-node-collapse-btn, .note-node-controls, .html-node-controls) {
-  margin-inline-start: auto;
   flex-shrink: 0;
+  margin-inline-start: auto;
 }
 
 .node-heading-row > span:only-child,
@@ -118,140 +103,197 @@
   white-space: nowrap;
 }
 
-.node-heading-detail {
-  grid-column: 2;
+.node-card-header .node-heading-detail {
+  grid-column: 1 / -1;
   min-width: 0;
 }
 
-.scene-node.collapsed .node-card-header > .node-heading {
-  min-height: 56px;
-  border-bottom: 0;
+.scene-node-surface > .scene-node-body:not(.fal-studio-body) {
+  padding: 8px 14px 13px;
+  font-size: var(--gl-node-font-size, 12px);
+  line-height: 1.55;
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
 }
 
-.node-heading-detail .node-overview-excerpt {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  font-weight: 500;
+/* A message reads like a paragraph with an attribution. The role and
+   metadata share a surface with its text; no title bar divides a turn. */
+.scene-node.chat-node {
+  min-height: 0;
+}
+
+.chat-node .node-card-header > .node-heading,
+.chat-node.user .node-card-header > .node-heading {
+  min-height: 0;
+  padding-block: 9px 1px;
+}
+
+.chat-node .chat-node-role-group {
   color: var(--gl-node-font-color, var(--gl-surface-text-secondary));
+  font-size: var(--gl-node-font-size, 12px);
+  font-weight: 600;
 }
 
-.chat-node-role-group {
-  min-width: 0;
+.chat-node .scene-node-surface > .chat-node-content-shell {
+  padding-block: 2px 15px;
 }
 
 .node-heading-row .chat-node-status-badge {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
+}
+
+.chat-node-status-badge[data-status="active"] {
+  opacity: 0;
+}
+
+.chat-node:is(:hover, :focus-within) .chat-node-status-badge[data-status="active"] {
+  opacity: 1;
 }
 
 .chat-node-metadata {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
-  gap: 5px 9px;
-  padding-bottom: 1px;
-  line-height: 1.35;
-  letter-spacing: normal;
-  font-weight: 500;
+  gap: 3px 9px;
+  padding-block: 1px 4px;
+  color: var(--gl-surface-text-muted);
+  font-weight: 400;
 }
 
 .chat-node-metadata > span {
-  line-height: 1.35;
   max-width: 100%;
+  line-height: 1.35;
 }
 
-.chat-node-metadata .chat-node-usage-badge {
-  font-variant-numeric: tabular-nums;
+.node-heading .plan-node-badge,
+.node-heading .chart-node-badge {
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--gl-surface-text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
 }
 
+.node-heading .plan-node-badge {
+  padding-inline-end: 6px;
+  border-inline-end: 1px solid var(--node-edge);
+  border-radius: 0;
+}
+
+.scene-node.scene-node-card.collapsed {
+  min-height: 0;
+}
+
+.scene-node-card.collapsed .node-card-header > .node-heading {
+  min-height: 36px;
+  padding-block: 6px;
+}
+
+.scene-node-card.collapsed .node-heading:has(.node-overview-excerpt) {
+  padding-block: 6px 10px;
+}
+
+.node-overview-excerpt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: calc(var(--gl-node-font-size, 12px) + 2px);
+  font-weight: 400;
+  line-height: 1.37;
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+}
+
+.node-card-menu-trigger,
 .scene-node .chat-node-collapse-btn,
 .scene-node .chat-node-quick-action {
   display: inline-grid;
   place-items: center;
   box-sizing: border-box;
-  width: 26px;
-  height: 26px;
+  width: 24px;
+  height: 24px;
   padding: 0;
-  border-radius: 6px;
-  color: var(--gl-surface-text-muted);
-}
-
-.scene-node .chat-node-collapse-btn {
-  border: 1px solid transparent;
+  border: 0;
+  border-radius: 4px;
   background: transparent;
+  color: var(--gl-surface-text-muted);
+  cursor: pointer;
 }
 
+.node-card-menu-trigger {
+  position: absolute;
+  inset-inline-end: 8px;
+  top: 7px;
+}
+
+.scene-node[aria-haspopup="menu"] .node-card-header > .node-heading {
+  padding-inline-end: 37px;
+}
+
+.node-card-menu-trigger svg,
 .chat-node-collapse-btn svg {
   width: 14px;
   height: 14px;
 }
 
+.node-card-menu-trigger:is(:hover, [aria-expanded="true"]),
 .scene-node .chat-node-collapse-btn:hover,
 .scene-node .chat-node-quick-action:hover {
-  color: var(--gl-surface-text-strong);
-  background: color-mix(in srgb, var(--node-accent) 12%, var(--node-surface));
+  background: var(--gl-neutral-button-hover);
+  color: var(--gl-surface-text-primary);
 }
 
-.node-heading :is(button, input):focus-visible,
-.node-card-menu-trigger:focus-visible,
+.node-card-header :is(button, input):focus-visible,
 .scene-node-body :is(button, summary):focus-visible {
   outline: 2px solid var(--gl-focus-ring);
   outline-offset: 1px;
 }
 
-.node-heading-row .plan-node-badge,
-.node-heading-row .chart-node-badge {
-  padding: 3px 6px;
-  border-radius: 4px;
-  border: 1px solid color-mix(in srgb, var(--node-accent) 24%, transparent);
-  color: var(--node-accent);
-  background: transparent;
-  font-size: 9px;
-  letter-spacing: .045em;
+/* Mouse users see actions at the point of use; keyboard focus reveals the
+   row as soon as RF or any child is focused. Touch keeps the controls. */
+@media (hover: hover) and (pointer: fine) {
+  .react-flow__node:not(:hover, :focus-within) .scene-node-card:not(.selected)
+  .node-card-header :is(.node-card-menu-trigger, .chat-node-collapse-btn[aria-expanded="true"], .note-node-controls) {
+    opacity: 0;
+    pointer-events: none;
+  }
 }
 
-.scene-node-surface > .scene-node-body:not(.fal-studio-body) {
-  padding: 12px 14px;
-  font-size: var(--gl-node-font-size, 12px);
-  line-height: 1.55;
-  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+@media (hover: none) {
+  .scene-node .chat-node-quick-actions {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+  }
 }
 
 .scene-node-surface .chat-node-content {
-  line-height: 1.62;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
 .scene-node-surface .chat-node-content :is(h1, h2, h3, h4) {
-  color: var(--gl-node-font-color, var(--gl-surface-text-strong));
-  line-height: 1.24;
-  letter-spacing: -.023em;
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+  line-height: 1.3;
 }
 
 .scene-node-surface .chat-node-content a {
-  color: var(--node-accent);
+  color: var(--gl-node-font-color, var(--gl-surface-text-primary));
+  text-decoration: underline;
   text-underline-offset: .16em;
 }
 
 .scene-node-surface .chat-node-content blockquote {
-  border-inline-start: 2px solid var(--node-accent);
+  border-inline-start: 2px solid var(--node-edge);
   color: var(--gl-node-font-color, var(--gl-surface-text-secondary));
-  padding-inline-start: 11px;
 }
 
 .scene-node-surface .node-md-code-block {
-  border-color: var(--node-line);
-  background-color: var(--gl-surface-inset-deep);
-  border-radius: 8px;
-}
-
-.scene-node-surface .node-md-code-block-header {
-  background-color: var(--gl-surface-inset);
-  border-color: var(--node-line);
+  border-color: var(--node-edge);
+  border-radius: 4px;
 }
 
 .chat-node-reading-area {
@@ -260,79 +302,70 @@
 }
 
 .scene-node .chat-node-content-fade {
-  height: 32px;
-  background: linear-gradient(transparent, var(--node-surface));
+  height: 20px;
+  background: linear-gradient(transparent, var(--node-paper));
 }
 
 .scene-node .chat-node-show-more {
-  margin-top: 6px;
-  padding: 7px;
-  color: var(--node-accent);
-  border-color: var(--node-line);
+  padding: 5px;
+  color: var(--gl-surface-text-secondary);
+  border-color: var(--node-edge);
 }
 
 .scene-node .conversation-node-bubble {
-  border-color: var(--node-line);
-  background: color-mix(in srgb, var(--node-surface), var(--gl-graph-canvas) 43%);
-  border-radius: 9px;
+  border: 0;
+  border-bottom: 1px solid var(--node-edge);
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 0 10px;
 }
 
-.scene-node .conversation-node-bubble.user {
-  background: color-mix(in srgb, var(--node-accent) 7%, var(--node-surface));
-}
+.scene-node .conversation-node-bubble.user { background: transparent; }
 
-.scene-node .conversation-node-bubble .chat-node-avatar {
-  border-radius: 4px;
-  color: var(--node-accent);
-  background-color: color-mix(in srgb, var(--node-accent) 15%, var(--node-surface));
-}
-
-.scene-node .scene-node-handle {
+.scene-node-card .scene-node-handle {
   box-sizing: border-box;
   width: 9px;
   height: 9px;
-  border: 1.5px solid color-mix(in srgb, var(--node-accent) 65%, var(--node-line));
+  border: 0;
+  background: transparent;
+}
+
+.scene-node-card .scene-node-handle::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
   border-radius: 50%;
-  background: var(--node-surface);
+  background: var(--node-edge);
 }
 
-.scene-node .scene-node-handle.source {
-  background: color-mix(in srgb, var(--node-accent) 56%, var(--node-surface));
-}
-
-.scene-node.selected .scene-node-handle,
-.scene-node .scene-node-handle:hover {
-  border-color: var(--gl-graph-selection);
-}
-
-.scene-node .fal-studio-header-icon {
-  color: var(--node-accent);
-  background: color-mix(in srgb, var(--node-accent) 12%, var(--node-surface));
+.scene-node-card:is(:hover, .selected) .scene-node-handle::after {
+  background: var(--gl-surface-text-muted);
 }
 
 .scene-node.scene-node-loading {
-  border-radius: 13px;
   border-color: var(--gl-graph-border);
+  border-radius: 6px;
   background: var(--gl-graph-surface);
+  box-shadow: none;
 }
 
 .scene-node-loading .scene-node-title {
   border: 0;
   background: transparent;
-  padding: 14px;
+  padding: 12px 14px;
   color: var(--gl-surface-text-secondary);
 }
 
 .group-node-header > .node-glyph {
-  width: 14px;
-  height: 14px;
-  margin-inline-end: 4px;
+  width: 12px;
+  height: 12px;
 }
 
 .scene-canvas .group-node:not(.collapsed, .has-body-color) {
-  border-style: dashed;
-  border-color: color-mix(in srgb, var(--gl-graph-border), var(--gl-surface-text-muted) 35%);
-  background-color: color-mix(in srgb, var(--gl-graph-surface) 22%, transparent);
+  background: transparent;
+  border-color: var(--gl-graph-border);
+  border-radius: 5px;
+  box-shadow: none;
 }
 
 .scene-canvas .group-node.selected:not(.collapsed) {
@@ -341,68 +374,23 @@
 
 .group-node .group-node-label-chip,
 .group-node .group-node-pill-header {
-  gap: 5px;
-  border-radius: 8px;
-  color: var(--gl-surface-text-primary);
+  gap: 6px;
+  border-radius: 4px;
   background-color: var(--gl-graph-surface);
+}
+
+.group-node:not(.has-header-color) .group-node-label-chip {
+  border-color: transparent;
+  background: var(--gl-graph-canvas);
+  padding-inline: 3px;
+  color: var(--gl-surface-text-secondary);
 }
 
 .group-node .group-node-pill-header > .group-node-controls {
   margin-inline-start: auto;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .scene-node.scene-node-card,
-  .scene-node .chat-node-quick-actions {
-    transition: none;
-  }
-}
-
-.node-card-header {
-  position: relative;
-  flex-shrink: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--node-line) 76%, transparent);
-}
-
-.scene-node.collapsed .node-card-header,
-.fal-studio-node .node-card-header {
-  border-bottom: 0;
-}
-
-.scene-node[aria-haspopup="menu"] .node-heading {
-  padding-inline-end: 43px;
-}
-
-.node-card-menu-trigger {
-  position: absolute;
-  inset-inline-end: 10px;
-  top: 12px;
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--gl-surface-text-muted);
-  cursor: pointer;
-}
-
-.node-card-menu-trigger svg {
-  width: 16px;
-  height: 16px;
-}
-
-.node-card-menu-trigger:is(:hover, [aria-expanded="true"]) {
-  background-color: color-mix(in srgb, var(--node-accent) 13%, var(--node-surface));
-  color: var(--gl-surface-text-strong);
-}
-
-
-/* Body and header swatches are independent. Inline styles carry only the
-   swatch and its contrast ink. Theme defaults still apply to an uncoloured
-   header, editor, inset code block, and menu. */
+/* User-selected body and header swatches remain independent. */
 .note-node .scene-node-surface > .note-node-content {
   color: var(--gl-node-font-color, var(--node-swatch-ink, var(--gl-surface-text-primary)));
 }
@@ -413,7 +401,7 @@
 
 .note-node .node-heading {
   --node-swatch-ink: initial;
-  color: var(--node-swatch-ink, var(--gl-node-font-color, var(--gl-surface-text-strong)));
+  color: var(--node-swatch-ink, var(--gl-node-font-color, var(--gl-surface-text-primary)));
 }
 
 .note-node .node-heading :is(.note-node-badge, .note-node-delete-btn) {
@@ -427,13 +415,31 @@
   color: var(--node-swatch-ink, var(--gl-surface-text-secondary));
 }
 
-.chart-node .chart-overview {
-  color: var(--gl-graph-content);
+.scene-node .fal-studio-header {
+  background: transparent;
 }
+
+.scene-node .fal-studio-header-icon {
+  width: auto;
+  height: auto;
+  flex-basis: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--gl-surface-text-muted);
+}
+
+.chart-node .chart-overview { color: var(--gl-surface-text-muted); }
+.chart-overview polyline { stroke: var(--gl-surface-text-primary); }
 
 .chart-overview > svg {
   width: 100%;
   height: 100%;
   position: absolute;
   inset: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene-node.scene-node-card,
+  .scene-node .chat-node-quick-actions { transition: none; }
 }

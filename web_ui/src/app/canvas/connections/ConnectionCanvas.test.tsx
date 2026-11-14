@@ -293,7 +293,7 @@ describe("ConnectionCanvas geometry resolution", () => {
 });
 
 describe("ConnectionCanvas hover/selection/fade styling", () => {
-  it("paints hovered and selected routes in front of faded links with full-contrast direction marks", () => {
+  it("paints active links above faded links and adds one direction mark to an explicitly selected link", () => {
     const { ctx, strokeCalls } = fakeCtx2D();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx);
 
@@ -318,8 +318,7 @@ describe("ConnectionCanvas hover/selection/fade styling", () => {
     expect(strokeCalls).toEqual([
       { strokeStyle: "#888888", lineWidth: 0.75, globalAlpha: 0.15 },
       { strokeStyle: "#0088ff", lineWidth: 1, globalAlpha: 1 },
-      { strokeStyle: "#0088ff", lineWidth: 0.9, globalAlpha: 1 },
-      { strokeStyle: "#0088ff", lineWidth: 1.5, globalAlpha: 1 },
+      { strokeStyle: "#0088ff", lineWidth: 1, globalAlpha: 1 },
       { strokeStyle: "#0088ff", lineWidth: 0.9, globalAlpha: 1 },
     ]);
     expect(ctx.globalAlpha).toBe(1); // reset after the loop, so it never leaks to the next consumer of ctx
@@ -338,7 +337,7 @@ describe("ConnectionCanvas hover/selection/fade styling", () => {
     tickFrame();
     expect(ctx.setLineDash).toHaveBeenNthCalledWith(1, [2, 2]);
     expect(strokeCalls[0]).toEqual({ strokeStyle: "#0088ff", lineWidth: 1, globalAlpha: 0.78 });
-    expect(ctx.setLineDash).toHaveBeenLastCalledWith([]);
+    expect(strokeCalls).toHaveLength(1);
   });
 
   it("draws every connection at full opacity, undimmed, when fading is disabled", () => {

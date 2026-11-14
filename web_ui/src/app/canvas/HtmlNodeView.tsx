@@ -368,7 +368,7 @@ function HtmlNodeViewImpl({ data, selected }: NodeProps<HtmlFlowNode>) {
       selected={!!selected}
       collapsed={collapsed}
       header={
-        <NodeHeading glyph="html" className="html-node-header">
+        <NodeHeading className="html-node-header">
           <span>HTML</span>
           <div className="html-node-controls">
             <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />

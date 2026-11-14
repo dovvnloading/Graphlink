@@ -14,8 +14,10 @@ interface MapEntry extends MinimapNodeMeta {
 }
 
 const MinimapMetaContext = createContext<ReadonlyMap<string, MapEntry>>(new Map());
-const WIDE_MAP = { width: 196, height: 112 };
-const COMPACT_MAP = { width: 148, height: 82 };
+const WIDE_MAP = { width: 172, height: 92 };
+const COMPACT_MAP = { width: 140, height: 74 };
+const STATE_LABEL = { idle: "", running: "running", failed: "failed", attention: "waiting for you" };
+
 const COLLAPSED_KEY = "graphlink.minimap.collapsed";
 
 /** Read the same live, measured rectangles as the built-in minimap, including during a drag. */
@@ -43,6 +45,7 @@ const MinimapNode = memo(function MinimapNode({
 }: MiniMapNodeProps) {
   const entry = useContext(MinimapMetaContext).get(id);
   if (!entry) return null;
+  const stateLabel = STATE_LABEL[entry.state];
   return (
     <>
       {entry.sources.length > 0 && (
@@ -50,11 +53,11 @@ const MinimapNode = memo(function MinimapNode({
       )}
       <rect
         className={`scene-minimap-node scene-minimap-node-${entry.category} scene-minimap-node-${entry.state}${selected ? " selected" : ""}`}
-        x={x} y={y} width={width} height={height} rx={10}
+        x={x} y={y} width={width} height={height} rx={4}
         style={entry.color ? { "--map-node-color": entry.color } as CSSProperties : undefined}
         onClick={(event) => onClick?.(event, id)}
       >
-        <title>{entry.label}</title>
+        <title>{stateLabel ? `${entry.label} · ${stateLabel}` : entry.label}</title>
       </rect>
     </>
   );
@@ -143,7 +146,22 @@ export function SceneMinimap({ store }: { store: SceneStore }) {
         aria-label={`Canvas overview, ${entries.size} ${entries.size === 1 ? "node" : "nodes"}`}
         style={{ "--map-width": `${size.width}px` } as CSSProperties}
       >
-        <div className="scene-minimap-header">
+        <div id={mapId} hidden={collapsed} className="scene-minimap-map"
+          title="Click a node to select it. Drag to pan or scroll to zoom.">
+          {!collapsed && (
+            <MiniMap
+              pannable zoomable
+              style={size}
+              className="scene-minimap"
+              ariaLabel="Canvas minimap"
+              nodeComponent={MinimapNode}
+              onClick={onMapClick}
+              onNodeClick={onMapNodeClick}
+              offsetScale={8}
+            />
+          )}
+        </div>
+        <div className="scene-minimap-footer">
           <button
             type="button"
             className="scene-minimap-toggle"
@@ -153,9 +171,6 @@ export function SceneMinimap({ store }: { store: SceneStore }) {
             title={collapsed ? "Expand minimap" : "Collapse minimap"}
             onClick={toggleCollapsed}
           >
-            <svg aria-hidden="true" viewBox="0 0 18 18" className="scene-minimap-icon">
-              <path d="m2 4 4.5-1.5 5 2L16 3v11l-4.5 1.5-5-2L2 15zM6.5 2.5v11m5-9v11" />
-            </svg>
             <span className="scene-minimap-count">{entries.size} {entries.size === 1 ? "node" : "nodes"}</span>
             <svg aria-hidden="true" viewBox="0 0 16 16" className="scene-minimap-chevron">
               <path d={collapsed ? "m4 10 4-4 4 4" : "m4 6 4 4 4-4"} />
@@ -170,21 +185,6 @@ export function SceneMinimap({ store }: { store: SceneStore }) {
             >
               {waiting.length} waiting
             </button>
-          )}
-        </div>
-        <div id={mapId} hidden={collapsed} className="scene-minimap-map"
-          title="Click a node to select it. Drag to pan or scroll to zoom.">
-          {!collapsed && (
-            <MiniMap
-              pannable zoomable
-              style={size}
-              className="scene-minimap"
-              ariaLabel="Canvas minimap"
-              nodeComponent={MinimapNode}
-              onClick={onMapClick}
-              onNodeClick={onMapNodeClick}
-              offsetScale={8}
-            />
           )}
         </div>
       </Panel>

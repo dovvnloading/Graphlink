@@ -716,17 +716,10 @@ describe("ChatNodeView Collapse Branch (ADR-002 Workstream 1)", () => {
 // hover-revealed quick-action row (Copy/Branch from Here/Open Document
 // View) - all 3 buttons deliberately call the SAME handlers the card menu
 // below already uses, just reached without a right-click first.
-describe("ChatNodeView Stage 3 card chrome: avatar + quick actions", () => {
-  it("distinguishes both role glyphs and keeps their accessible labels as text", () => {
-    const { container: userCard } = renderChatNode({ isUser: true });
-    const userIcon = userCard.querySelector(".node-heading-icon svg");
-    expect(userIcon).toHaveAttribute("aria-hidden", "true");
-    expect(userIcon).toHaveAttribute("data-kind", "user");
-
-    const { container: assistantCard } = renderChatNode({ isUser: false });
-    const assistantIcon = assistantCard.querySelector(".node-heading-icon svg");
-    expect(assistantIcon).toHaveAttribute("aria-hidden", "true");
-    expect(assistantIcon).toHaveAttribute("data-kind", "assistant");
+describe("ChatNodeView role labels and quick actions", () => {
+  it("labels chat roles without a redundant avatar", () => {
+    renderChatNode({ isUser: true });
+    renderChatNode({ isUser: false });
     expect(screen.getByText("You")).toBeVisible();
     expect(screen.getByText("Assistant")).toBeVisible();
   });
@@ -790,16 +783,16 @@ describe("ChatNodeView Stage 3 card chrome: avatar + quick actions", () => {
   });
 
   describe("collapsed title bar", () => {
-    it("keeps the role glyph and expand button while hiding the quick actions on a folded card", () => {
+    it("keeps the role label and expand button while hiding the quick actions on a folded card", () => {
       const { container } = renderChatNode({ isCollapsed: true, model: "claude-opus-4-1-20250805" });
-      expect(container.querySelector(".node-heading-icon svg")).not.toBeNull();
+      expect(screen.getByText("You")).toBeVisible();
       expect(container.querySelector(".chat-node-quick-actions")).toBeNull();
       expect(screen.getByRole("button", { name: "Expand" })).toBeInTheDocument();
     });
 
-    it("shows role glyph and quick actions when expanded", () => {
+    it("shows the role and quick actions when expanded", () => {
       const { container } = renderChatNode({ isCollapsed: false });
-      expect(container.querySelector(".node-heading-icon svg")).not.toBeNull();
+      expect(screen.getByText("You")).toBeVisible();
       expect(container.querySelector(".chat-node-quick-actions")).not.toBeNull();
     });
   });

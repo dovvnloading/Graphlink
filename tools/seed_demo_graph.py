@@ -230,7 +230,7 @@ def build_document() -> SceneDocument:
     doc.add_thinking_node(900, -330, THINKING, hyp_db.id)
 
     frame = doc.create_frame([question.id, hyp_db.id, hyp_ser.id, hyp_rb.id])
-    frame.title = "Triage: 8x p99 regression"
+    doc.set_group_label(frame.id, "Triage: 8x p99 regression")
 
     # -- The database branch does the real work. ---------------------------
     follow_up = doc.add_chat_node(-740, -60, FOLLOW_UP, True, hyp_db.id)

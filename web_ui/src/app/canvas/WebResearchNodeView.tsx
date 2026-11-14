@@ -210,7 +210,7 @@ function WebResearchNodeViewImpl({ data, selected }: NodeProps<WebResearchFlowNo
       collapsed={collapsed}
       onMenuChange={setMenuPosition}
       header={
-        <NodeHeading glyph="research" className="chat-node-role">
+        <NodeHeading className="chat-node-role">
           <span>Web Research</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </NodeHeading>

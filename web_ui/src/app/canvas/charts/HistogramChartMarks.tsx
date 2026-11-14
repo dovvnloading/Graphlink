@@ -66,7 +66,7 @@ export function HistogramChartMarks({ chartData, theme, width, height, onHover, 
             y={barY}
             width={Math.max(0.5, x1 - x0 - gap)}
             height={Math.max(0, innerHeight - barY)}
-            fill={theme.categorical[index % theme.categorical.length]}
+            fill={theme.textMuted}
             fillOpacity={0.82}
             stroke={theme.text}
             strokeOpacity={0.24}

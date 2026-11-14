@@ -54,7 +54,7 @@
  * WCAG relative-luminance contrast ratios (not raw RGB distance).
  *
  * The graph workspace has a separate canvas, card, and connector palette.
- * Conversation, content, and tool accents identify node families in both themes.
+ * Graph surfaces, boundaries, and selection use a neutral palette in both themes.
  *
  * The text-carrying tokens are NOT the mechanical inversion: each one is
  * solved so that BOTH themes clear the same WCAG 2.2 tier against the
@@ -138,15 +138,12 @@
   --gl-frame-purple: #7c7c7c;
   --gl-frame-red: #7c7c7c;
   --gl-frame-yellow: #8e8e8e;
-  --gl-graph-canvas: #161A21;
-  --gl-graph-surface: #242A34;
-  --gl-graph-border: #414B5A;
-  --gl-graph-conversation: #ADAEFA;
-  --gl-graph-content: #75CDBE;
-  --gl-graph-tool: #E9B578;
-  --gl-graph-selection: #87BAFF;
-  --gl-connection-line: #758393;
-  --gl-connection-active: #77B9FF;
+  --gl-graph-canvas: #1C1D1F;
+  --gl-graph-surface: #27282A;
+  --gl-graph-border: #47484A;
+  --gl-graph-selection: #A2B2C0;
+  --gl-connection-line: #747679;
+  --gl-connection-active: #A5B6C4;
   --gl-graph-node-badge-fill: #484848;
   --gl-graph-node-body-end: #292929;
   --gl-graph-node-body-start: #303030;
@@ -281,15 +278,12 @@
     --gl-frame-purple: #838383;
     --gl-frame-red: #838383;
     --gl-frame-yellow: #717171;
-    --gl-graph-canvas: #EFF2F6;
+    --gl-graph-canvas: #F3F3F1;
     --gl-graph-surface: #FFFFFF;
-    --gl-graph-border: #CCD3DC;
-    --gl-graph-conversation: #5345A3;
-    --gl-graph-content: #126A62;
-    --gl-graph-tool: #8A5218;
-    --gl-graph-selection: #285FA3;
-    --gl-connection-line: #687988;
-    --gl-connection-active: #2265A7;
+    --gl-graph-border: #C9C9C6;
+    --gl-graph-selection: #4D6276;
+    --gl-connection-line: #76787A;
+    --gl-connection-active: #50687B;
     --gl-graph-node-badge-fill: #B7B7B7;
     --gl-graph-node-body-end: #D6D6D6;
     --gl-graph-node-body-start: #CFCFCF;
@@ -420,15 +414,12 @@
   --gl-frame-purple: #838383;
   --gl-frame-red: #838383;
   --gl-frame-yellow: #717171;
-  --gl-graph-canvas: #EFF2F6;
+  --gl-graph-canvas: #F3F3F1;
   --gl-graph-surface: #FFFFFF;
-  --gl-graph-border: #CCD3DC;
-  --gl-graph-conversation: #5345A3;
-  --gl-graph-content: #126A62;
-  --gl-graph-tool: #8A5218;
-  --gl-graph-selection: #285FA3;
-  --gl-connection-line: #687988;
-  --gl-connection-active: #2265A7;
+  --gl-graph-border: #C9C9C6;
+  --gl-graph-selection: #4D6276;
+  --gl-connection-line: #76787A;
+  --gl-connection-active: #50687B;
   --gl-graph-node-badge-fill: #B7B7B7;
   --gl-graph-node-body-end: #D6D6D6;
   --gl-graph-node-body-start: #CFCFCF;

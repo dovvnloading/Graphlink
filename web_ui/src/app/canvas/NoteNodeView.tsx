@@ -137,7 +137,7 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
       // badge in the header. See styles.css for the token it borders in.
       style={swatchStyle(data.color)}
       header={
-        <NodeHeading glyph="note" className="note-node-header" style={swatchStyle(data.headerColor)}>
+        <NodeHeading className="note-node-header" style={swatchStyle(data.headerColor)}>
           <span className="note-node-badges">
             <span>Note</span>
             {data.isSystemPrompt && (

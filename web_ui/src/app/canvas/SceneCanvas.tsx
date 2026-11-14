@@ -1,6 +1,4 @@
 import {
-  Handle,
-  Position,
   ReactFlow,
   ViewportPortal,
   useReactFlow,
@@ -9,7 +7,6 @@ import {
   type Edge,
   type Node,
   type NodeChange,
-  type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -24,7 +21,7 @@ import {
   ArtifactNodeView, ChartNodeView, ChatNodeView, CodeNodeView, CodeReviewNodeView,
   CodeSandboxNodeView, ConversationNodeView, DocumentNodeView, GitlinkNodeView,
   GroupNodeView, HarnessNodeView, HtmlNodeView, ImageNodeView, FalMediaNodeView, NoteNodeView,
-  PlanNodeView, ThinkingNodeView, WebResearchNodeView,
+  PlaceholderNodeView, PlanNodeView, ThinkingNodeView, WebResearchNodeView,
 } from "./lazyNodeViews";
 import type { ArtifactFlowNode } from "./ArtifactNodeView";
 import type { ChartFlowNode } from "./ChartNodeView";
@@ -58,7 +55,6 @@ import { computeSmartGuideSnap, type GuideLine, type Rect } from "./smartGuides"
 import { ConnectionCanvas, type ConnectionSpec } from "./connections/ConnectionCanvas";
 import type { ConnectionPath } from "./connections/connectionGeometry";
 import { isPointOnConnection } from "./connections/connectionGeometry";
-import { useLodVisibility } from "./useLodVisibility";
 import { EmptyGraph } from "./EmptyGraph";
 import { CanvasGrid } from "./CanvasGrid";
 import { ViewportDock } from "./ViewportDock";
@@ -101,25 +97,6 @@ export type SceneFlowNode =
   | ChartFlowNode
   | PlanFlowNode
   | HarnessFlowNode;
-
-function PlaceholderNodeView({ data, selected }: NodeProps<PlaceholderNode>) {
-  // ADR-011 stage 11.6/11.1 dedup: was its own local
-  // `useStore((s) => s.transform[2]); zoom < LOD_ZOOM_THRESHOLD` pair (one of
-  // the 14 duplicated call sites) - now the shared extraction. Zero behavior
-  // change, see useLodVisibility.ts's own doc.
-  const collapsed = useLodVisibility();
-  return (
-    <div className={`scene-node${selected ? " selected" : ""}${collapsed ? " collapsed" : ""}`}>
-      {/* Connection endpoints mirror the Qt canvas's flow: children hang off
-          the bottom of a parent (vertical layout), so target on top, source
-          on bottom. */}
-      <Handle type="target" position={Position.Top} className="scene-node-handle" />
-      <div className="scene-node-title">{data.title}</div>
-      {!collapsed && <div className="scene-node-body">Placeholder node</div>}
-      <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
-    </div>
-  );
-}
 
 const NODE_TYPES = {
   placeholder: PlaceholderNodeView,
@@ -2551,8 +2528,8 @@ function useConnectionColors() {
     const style = getComputedStyle(document.documentElement);
     const light = theme === "light";
     return {
-      stroke: style.getPropertyValue("--gl-connection-line").trim() || (light ? "#687988" : "#758393"),
-      selectedStroke: style.getPropertyValue("--gl-connection-active").trim() || (light ? "#2265a7" : "#77b9ff"),
+      stroke: style.getPropertyValue("--gl-connection-line").trim() || (light ? "#76787A" : "#747679"),
+      selectedStroke: style.getPropertyValue("--gl-connection-active").trim() || (light ? "#50687B" : "#A5B6C4"),
     };
   }, [theme]);
 }

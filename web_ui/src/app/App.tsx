@@ -30,7 +30,6 @@ import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
 import { NotificationBanner } from "./chrome/NotificationBanner";
 import { OnboardingDialog } from "./chrome/OnboardingDialog";
-import { PinOverlay } from "./chrome/PinOverlay";
 import { PluginPicker } from "./chrome/PluginPicker";
 import { SearchOverlay } from "./chrome/SearchOverlay";
 import { OverlayProvider, useOverlays } from "./overlays/overlays";
@@ -76,6 +75,7 @@ const KnowledgeSearchDialog = lazy(() =>
 const QuickSwitcherDialog = lazy(() =>
   import("./chrome/QuickSwitcherDialog").then((m) => ({ default: m.QuickSwitcherDialog })),
 );
+const PinOverlay = lazy(() => import("./chrome/PinOverlay").then((m) => ({ default: m.PinOverlay })));
 const ViewPopover = lazy(() => import("./chrome/ViewPopover").then((m) => ({ default: m.ViewPopover })));
 
 /**
@@ -475,34 +475,38 @@ function App() {
                     so this costs nothing layout-wise, and every other child
                     here simply ignores a Context it doesn't consume. */}
                 <ExecutionLimitsProvider transport={transport}>
-                  {/* ADR-012 stage 12.5: wraps both the canvas (NodeMarkdown's
-                      own search-highlighting read) and SearchOverlay (the
-                      query's only writer) - see CanvasSearchContext.tsx. */}
-                  <CanvasSearchProvider>
-                    <SceneCanvas
-                      store={sceneStore}
-                      onOpenDocumentView={onOpenDocumentView}
-                      getComposerRoute={getComposerRoute}
-                    />
-                    <div className="app-search-layer">
-                      <SearchOverlay store={sceneStore} />
+                  <div className="graph-stage">
+                    {/* ADR-012 stage 12.5: wraps both the canvas (NodeMarkdown's
+                        own search-highlighting read) and SearchOverlay (the
+                        query's only writer) - see CanvasSearchContext.tsx. */}
+                    <CanvasSearchProvider>
+                      <SceneCanvas
+                        store={sceneStore}
+                        onOpenDocumentView={onOpenDocumentView}
+                        getComposerRoute={getComposerRoute}
+                      />
+                      <div className="app-search-layer">
+                        <SearchOverlay store={sceneStore} />
+                      </div>
+                    </CanvasSearchProvider>
+                    <LazySurface overlayName="pins" fallback={null}>
+                      <PinOverlay store={sceneStore} />
+                    </LazySurface>
+                    <LazySurface overlayName="view" fallback={null}>
+                      <ViewPopover store={sceneStore} />
+                    </LazySurface>
+                    <PluginPicker transport={transport} store={sceneStore} />
+                    <div className="app-notification-layer">
+                      <NotificationBanner store={composerStore} />
                     </div>
-                  </CanvasSearchProvider>
-                  <PinOverlay store={sceneStore} />
-                  <LazySurface overlayName="view" fallback={null}>
-                    <ViewPopover store={sceneStore} />
-                  </LazySurface>
-                  <PluginPicker transport={transport} store={sceneStore} />
-                  <div className="app-notification-layer">
-                    <NotificationBanner store={composerStore} />
                   </div>
-                  <div className="app-composer-layer">
+                  <footer className="app-composer-layer" aria-label="Message composer">
                     <Composer
                       store={composerStore}
                       sceneStore={sceneStore}
                       showTokenCounter={settingsVisibility.showTokenCounter !== false}
                     />
-                  </div>
+                  </footer>
                   <LazySurface overlayName="palette">
                     <CommandPalette store={sceneStore} />
                   </LazySurface>

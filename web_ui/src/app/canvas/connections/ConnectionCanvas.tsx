@@ -39,6 +39,7 @@ import {
   type HandleSide,
 } from "./connectionGeometry";
 
+import { ReturnRouteCache } from "./returnRoute";
 import { connectionDashes, type ConnectionRole } from "./connectionAppearance";
 
 /** One link to draw, in the terms this canvas needs. */
@@ -111,6 +112,7 @@ export function ConnectionCanvas({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const storeApi = useStoreApi();
   const frameRef = useRef<number | null>(null);
+  const routeCache = useRef(new ReturnRouteCache());
   // The draw inputs are read inside the frame loop rather than captured in
   // its closure, so the loop never has to be torn down and rebuilt when a
   // colour or a hover changes.
@@ -167,6 +169,7 @@ export function ConnectionCanvas({
       onGeometry: report,
     } = propsRef.current;
 
+    routeCache.current.update(nodeLookup, specs);
     const geometry = new Map<string, ConnectionPath>();
     type Highlight = "neighbor" | "hovered" | "selected";
     type HighlightedLink = { path: ConnectionPath; role: ConnectionRole };
@@ -181,10 +184,10 @@ export function ConnectionCanvas({
       context.setLineDash(dash);
       context.strokeStyle = highlight ? activeStroke : baseStroke;
       context.globalAlpha = highlight === "neighbor" ? 0.78 : fade && !highlight ? dimmed : 1;
-      const width = highlight === "selected" ? 3 : highlight ? 2 : 1.5;
+      const width = highlight ? 2 : 1.5;
       context.lineWidth = width / zoom;
       traceConnection(context, path);
-      if (highlight) {
+      if (highlight === "selected") {
         context.setLineDash([]);
         context.lineWidth = 1.8 / zoom;
         drawDirection(context, path, zoom);
@@ -211,6 +214,9 @@ export function ConnectionCanvas({
         targetHandle,
       );
       const path = connectionPath(from, sourceHandle.side, to, targetHandle.side, spec.orthogonal);
+      if (sourceHandle.side === "bottom" && targetHandle.side === "top" && to.y < from.y) {
+        path.waypoints = routeCache.current.route(spec.id, from, to, sourceNode, targetNode);
+      }
       geometry.set(spec.id, path);
 
       if (spec.id === selected) foreground.selected.push({ path, role: spec.role });

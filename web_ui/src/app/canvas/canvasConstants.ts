@@ -3,12 +3,10 @@
  * all collapse at the same zoom level. */
 export const LOD_ZOOM_THRESHOLD = 0.5;
 
-/** Leave room for the composer when framing the graph. The percentage cap
- * keeps the working area usable in shorter windows. All Fit All entry
- * points share the same framing and never magnify a small graph past 1x. */
+/** The flow surface ends above the composer, so the same margin applies on all sides. */
 export const GRAPH_FIT_OPTIONS = {
   maxZoom: 1,
-  padding: { x: "5%", top: "5%", bottom: "20%" },
+  padding: { x: "5%", y: "6%" },
 } as const;
 
 /** R6.1: Notes/Frames/Containers. The backend owns all real size/position

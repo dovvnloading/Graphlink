@@ -392,7 +392,7 @@ function CodeReviewNodeViewImpl({ data, selected }: NodeProps<CodeReviewFlowNode
       collapsed={collapsed}
       onMenuChange={setMenuPosition}
       header={
-        <NodeHeading glyph="review" className="chat-node-role">
+        <NodeHeading className="chat-node-role">
           <span>Review Lens</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </NodeHeading>

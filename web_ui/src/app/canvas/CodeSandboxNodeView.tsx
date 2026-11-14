@@ -323,7 +323,7 @@ export const CodeSandboxNodeView = memo(function CodeSandboxNodeView({
       collapsed={collapsed}
       onMenuChange={setMenuPosition}
       header={
-        <NodeHeading glyph="sandbox" className="chat-node-role">
+        <NodeHeading className="chat-node-role">
           <span>Virtual Environment Runner</span>
           <CollapseToggleButton isCollapsed={data.isCollapsed} onToggleCollapse={data.onToggleCollapse} />
         </NodeHeading>

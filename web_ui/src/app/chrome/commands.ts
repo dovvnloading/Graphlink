@@ -173,9 +173,7 @@ export function buildCommands(
       name: "Add Navigation Pin",
       aliases: ["create pin", "bookmark location", "pin current view"],
       run: () => {
-        const viewport = rf.getViewport();
-        const x = (window.innerWidth / 2 - viewport.x) / viewport.zoom;
-        const y = (window.innerHeight / 2 - viewport.y) / viewport.zoom;
+        const { x, y } = store.getSpawnPoint();
         store.addPin(`Pin ${store.getScene().pins.length + 1}`, x, y);
       },
       enabled: () => true,
@@ -265,7 +263,7 @@ export function buildCommands(
     },
     {
       // R6.1: plain, ungated - creates a blank note near the current
-      // viewport center. Same center-of-viewport formula "add-pin" above
+      // viewport center. Uses the same visible canvas center "add-pin" above
       // already uses; "Add System Prompt Note" is a DIFFERENT, existing
       // path (the plugin picker's generic executePlugin("System Prompt", ...)
       // - see backend/plugins.py) and is deliberately not duplicated here.
@@ -273,9 +271,7 @@ export function buildCommands(
       name: "Add Note",
       aliases: ["sticky note", "create note", "new note"],
       run: () => {
-        const viewport = rf.getViewport();
-        const x = (window.innerWidth / 2 - viewport.x) / viewport.zoom;
-        const y = (window.innerHeight / 2 - viewport.y) / viewport.zoom;
+        const { x, y } = store.getSpawnPoint();
         store.addNote(x, y);
       },
       enabled: () => true,

@@ -884,7 +884,6 @@ export const ChatNodeView = memo(function ChatNodeView({
       onMenuChange={setMenuPosition}
       header={
         <NodeHeading
-          glyph={data.isUser ? "user" : "assistant"}
           className="chat-node-role"
           detail={headerDetail}
         >
@@ -892,6 +891,7 @@ export const ChatNodeView = memo(function ChatNodeView({
             <span>{data.isUser ? "You" : "Assistant"}</span>
             <span
               className="chat-node-status-badge"
+              data-status={data.branchStatus}
               style={{ backgroundColor: BRANCH_STATUS_COLORS[data.branchStatus] ?? BRANCH_STATUS_COLORS.active }}
               title={`Branch status: ${data.branchStatus}`}
               aria-label={`Branch status: ${data.branchStatus}`}
