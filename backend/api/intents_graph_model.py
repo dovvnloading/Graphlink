@@ -172,6 +172,9 @@ def register_graph_model_runner(
         }
         document.graph_runs.append(run)
         document.graph_run_epoch = uuid.uuid4()
+        # Shared with getGraphRun so sibling readers never see a completed
+        # receipt before the model's terminal SQLite checkpoint commits.
+        setattr(bus, "graph_model_active_run_id", run_id)
 
         async def invoke(_request_id: str) -> Any:
             # A fixed ModelRef means no auto-selection or cross-provider
