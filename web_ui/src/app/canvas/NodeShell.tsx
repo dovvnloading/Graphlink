@@ -97,7 +97,7 @@ export function NodeShell({
       {tablePort && <RefreshPorts key={tablePort} />}
       {modelPort && <><RefreshPorts key="model" />
         <Handle id="model-input" type="target" position={Position.Left}
-          isConnectable={false} className="scene-text-handle"
+          className="scene-text-handle"
           title="Model text input" aria-label="Model text input" />
       </>}
       {(tablePort === "source" || tablePort === "both") && <Handle id="table-source" type="source"
