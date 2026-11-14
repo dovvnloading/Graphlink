@@ -234,6 +234,35 @@ function baseScene(overrides: Partial<SceneState> = {}): SceneState {
   };
 }
 
+describe("first-class Model canvas ports", () => {
+  it("renders a real Model card with a typed input and a distinct execution edge", () => {
+    const scene = baseScene({
+      nodes: [
+        baseNode({ id: "chat-1", kind: "chat", title: "Starting text", content: "Prompt" }),
+        baseNode({ id: "model-1", kind: "model", title: "Model · qwen3:8b", content: "Reply", itemIds: ["chat-1"] }),
+        baseNode({ id: "note-1", kind: "note", title: "Count", textInputSourceId: "model-1" }),
+      ],
+      edges: [],
+    });
+    const flow = toFlowNodes(scene, makeStore());
+    const model = flow.find((node) => node.id === "model-1");
+    expect(model?.type).toBe("model");
+    expect(model?.data).toMatchObject({
+      title: "Model · qwen3:8b", content: "Reply", sourceLabel: "Starting text",
+    });
+    expect(toFlowEdges(scene, null)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "model-input:model-1", source: "chat-1", target: "model-1",
+        sourceHandle: "text-output", targetHandle: "model-input",
+      }),
+      expect.objectContaining({
+        id: "text-input:note-1", source: "model-1", target: "note-1",
+        sourceHandle: "text-output", targetHandle: "text-input",
+      }),
+    ]));
+  });
+});
+
 describe("toFlowNodes (R4.3c parentChatNodeId derivation)", () => {
   it("a code node with a parent edge yields the correct parentChatNodeId, and its onRegenerate calls regenerateResponse with that id", () => {
     const scene = baseScene({
