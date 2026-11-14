@@ -1040,6 +1040,19 @@ def _build_chat_data(
         }
         for n in notes if isinstance(n.state, NoteState) and n.state.text_input_source_id
     }
+    note_model_inputs = {
+        n.id: {
+            "source": binding.source_id,
+            "provider": binding.provider,
+            "model": binding.model_id,
+            "version": binding.version,
+            "binding_id": binding.binding_id,
+            "last_input_hash": binding.last_input_hash,
+            "last_output_hash": binding.last_output_hash,
+        }
+        for n in notes if isinstance(n.state, NoteState)
+        if (binding := n.state.model_text_input) is not None
+    }
     kind_by_id = {n.id: n.kind for n in document.nodes.values()}
 
     node_slot_count = len(all_nodes)
@@ -1186,6 +1199,7 @@ def _build_chat_data(
         # notes_data goes into a fixed-column SQLite table. Keep cross-node
         # bindings alongside the graph's other saved-id references.
         **({"note_text_inputs": note_text_inputs} if note_text_inputs else {}),
+        **({"note_model_inputs": note_model_inputs} if note_model_inputs else {}),
         **({"comparison_notes": comparison_notes} if comparison_notes else {}),
         **({"table_sources": table_sources} if table_sources else {}),
         **({"table_outputs": table_outputs} if table_outputs else {}),
