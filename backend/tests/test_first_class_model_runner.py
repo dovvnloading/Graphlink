@@ -69,7 +69,8 @@ def test_model_run_fingerprint_survives_saved_node_id_remapping():
     from backend.session_save import build_chat_data
 
     original = SceneDocument()
-    original.remove_nodes([original.add_note(0, 0).id])  # New IDs after reopen.
+    for _ in range(3):
+        original.remove_nodes([original.add_note(0, 0).id])  # Force nonmatching restore IDs.
     source = original.add_note(0, 0)
     original.set_note_content(source.id, "Stable source prompt")
     model = original.add_model_node(source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
