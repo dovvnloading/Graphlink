@@ -252,6 +252,7 @@ def test_invalid_or_missing_external_identity_fails_closed_without_importing_sec
     mismatched = saved_run({**step, "externalAttempt": {**attempt, "inputHash": digest("other")}})
     restored, = restore_graph_runs([mismatched], {"n1": "n1", "n2": "n2"})
     assert restored["steps"][0]["status"] == "reconciliation-required"
+    assert restored["steps"][0]["externalAttempt"]["requestId"] == attempt["requestId"]
     missing = saved_run(step)
     restored, = restore_graph_runs([missing], {"n1": "n1", "n2": "n2"})
     assert restored["status"] == "reconciliation-required"
