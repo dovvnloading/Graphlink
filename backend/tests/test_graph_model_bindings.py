@@ -125,6 +125,29 @@ def test_model_port_marks_transitive_staleness_and_blocks_stale_downstream_reads
     assert downstream.content == "generated text"
 
 
+def test_promotion_to_comparison_detaches_model_input_and_undo_restores_it():
+    doc = SceneDocument()
+    prompt = doc.add_chat_node(0, 0, "compare these", True)
+    destination = doc.add_note(0, 0)
+    downstream = doc.add_note(0, 0)
+    doc.bind_note_model_input(prompt.id, destination.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+    binding_id = destination.state.model_text_input.binding_id
+    doc.bind_note_text_input(destination.id, downstream.id)
+    doc.record_command(
+        "compareBranches", "user",
+        lambda: doc.mark_branch_comparison_note(destination.id, [prompt.id]),
+        node_ids=[destination.id],
+    )
+    assert doc.nodes[destination.id].state.is_branch_comparison
+    assert doc.nodes[destination.id].state.model_text_input is None
+    assert not doc.nodes[downstream.id].state.text_input_source_id
+    assert not [n for n in doc.nodes.values() if n.kind == "note"
+                and n.state.model_text_input is not None]
+    doc.undo()
+    assert doc.nodes[destination.id].state.model_text_input.binding_id == binding_id
+    assert doc.nodes[downstream.id].state.text_input_source_id == destination.id
+
+
 def test_source_deletion_disconnects_model_port_and_undo_restores_it():
     doc = SceneDocument()
     source = doc.add_chat_node(0, 0, "source", True)
