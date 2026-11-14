@@ -104,7 +104,7 @@ def test_two_model_steps_then_transform_commit_in_dependency_order(tmp_path, mon
         path, bus, doc, source, target, send = session(tmp_path)
         first_id = await send("addModelNode", source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         second_id = await send("addModelNode", first_id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
-        await send("bindNoteTextInput", second_id, target.id, "word_count")
+        doc.bind_note_text_input(second_id, target.id, "word_count")
         first, second = doc.nodes[first_id], doc.nodes[second_id]
         assert first.kind == second.kind == "model"
         assert doc.nodes[target.id].content == "Add note..."
@@ -161,7 +161,7 @@ def test_an_ambiguous_model_call_blocks_dependents_but_other_branch_finishes(tmp
     async def scenario():
         _path, _bus, doc, source, target, send = session(tmp_path)
         model_id = await send("addModelNode", source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
-        await send("bindNoteTextInput", model_id, target.id, "word_count")
+        doc.bind_note_text_input(model_id, target.id, "word_count")
         independent = doc.add_note(0, 0)
         doc.bind_note_text_input(source.id, independent.id)
         preview = await send("previewGraphRun", [])
