@@ -116,6 +116,23 @@ describe("Graph Runner", () => {
     expect(latest).toHaveTextContent("Check the provider");
   });
 
+  it("can continue independent safe work without retrying a remote request", async () => {
+    const { user, request } = setup();
+    const pending = { ...step, nodeId: "local", sourceId: "source", status: "pending" };
+    const first: GraphRun = {
+      ...run, status: "reconciliation-required",
+      steps: [{ ...step, status: "reconciliation-required" }, pending],
+    };
+    const finished: GraphRun = { ...first, steps: [first.steps[0], { ...pending, status: "completed" }] };
+    request.mockResolvedValueOnce(first).mockResolvedValueOnce(finished).mockResolvedValueOnce(finished);
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    const button = await screen.findByRole("button", { name: "Continue safe steps" });
+    expect(screen.getByText(/will not be repeated/)).toBeInTheDocument();
+    await user.click(button);
+    expect(request).toHaveBeenCalledWith("scene", "resumeGraphRun", ["latest-run"]);
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Continue safe steps" })).toBeNull());
+  });
+
   it("leaves blocked and up-to-date outputs alone", async () => {
     const { user, request } = setup();
     request.mockResolvedValueOnce(null).mockResolvedValueOnce({ previewToken: "x", steps: [
