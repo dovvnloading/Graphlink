@@ -117,6 +117,13 @@ def _inspect(document: SceneDocument, step: dict[str, str]) -> None:
         step.update(status="current", detail="Input is up to date.")
     else:
         step.update(status="ready", detail="Input has changed." if last_digest else "Input has not run yet.")
+    if isinstance(node.state, ModelState):
+        # Preview exposes the actual selected provider/model, without ever
+        # revealing the prompt or guessing its result before dispatch.
+        step["detail"] = (
+            f"Local Ollama · {node.state.model_binding.model_id}. {step['detail']} "
+            "Verify custom model aliases are not cloud-routed."
+        )
 
 
 def _evaluate(document: SceneDocument, step: dict[str, str]) -> None:
