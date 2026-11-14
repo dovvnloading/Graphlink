@@ -164,8 +164,8 @@ class SceneNode:
     # It is NOT chat-only and has not been for a long time. This comment used
     # to end "Unused (default) for every other kind" while a later line in the
     # same block already contradicted it, and the list has kept growing since.
-    # TWELVE kinds populate it: artifact, chat, container, document, frame,
-    # harness, html, image, note, plan, thinking, web_research. Pinned by
+    # THIRTEEN kinds populate it: artifact, chat, container, document, frame,
+    # harness, html, image, model, note, plan, thinking, web_research. Pinned by
     # tests/test_shared_node_field_docs.py, which DISCOVERS the modules that
     # construct a SceneNode rather than naming them - an earlier revision of
     # this comment said TEN because the gate hard-coded graph.py and
