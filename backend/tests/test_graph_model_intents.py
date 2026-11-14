@@ -98,7 +98,7 @@ def test_preview_staleness_refuses_model_calls(tmp_path, monkeypatch, changed):
         elif changed == "model":
             args[3] = "other-model"
         else:
-            monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
+            monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11435")
         with pytest.raises(IntentValidationError):
             await send("executeGraphModel", *args, preview["previewToken"], "stale-model-run")
         assert not calls and not doc.graph_runs
@@ -266,6 +266,10 @@ def test_non_loopback_ollama_endpoint_is_rejected_before_preview(tmp_path, monke
         monkeypatch.setenv("OLLAMA_HOST", "http://[")
         with pytest.raises(IntentValidationError, match="loopback"):
             await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
+        assert graph_model._require_loopback_ollama() == "http://127.0.0.1:11434"
+        monkeypatch.setenv("OLLAMA_HOST", "http://[::1]:11434")
+        assert graph_model._require_loopback_ollama() == "http://[::1]:11434"
         monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
         preview = await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         assert preview["steps"][0]["status"] == "ready"
