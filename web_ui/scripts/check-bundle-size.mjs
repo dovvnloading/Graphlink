@@ -260,7 +260,20 @@ const LARGEST_CHUNK_CEILING_BYTES = 512_000;
 // 53 chunks (+12,972 bytes, 0.88%). The node glyphs, overview chart,
 // minimap links and viewport controls use existing dependencies. Restore
 // the customary ~3% total headroom. The initial-chunk budget stays 512 kB.
-const TOTAL_JS_CEILING_BYTES = 1_539_000;
+// Deliberate, measured amendment — 2026-11-14 (ADR-019 section 4).
+// The passing frontend CI for PR #579 (parent of this slice) recorded
+// 1,538,689 bytes total, just 311 bytes under the old 1,539,000 ratchet.
+// This PR's versioned Graph Runner model-connection controls add a measured
+// 1,903 bytes, to 1,540,592 bytes across the same 59 chunks. No new npm
+// dependency was added; the frontend's typecheck, lint, 2,508 unit tests and
+// build all passed before only this total-size gate failed. Re-anchor the
+// total-JS ratchet at 1,588,000 (~3% over the new actual build), consistent
+// with earlier reviewed ratchet amendments and explicit about the cost.
+// The 2026-11-13 baseline was 1,494,112; its intervening growth to PR #579
+// was not caused by this 1,903-byte change. The largest initial JS chunk
+// remains within its UNCHANGED 512,000-byte first-paint budget. Any further
+// growth must be measured and reviewed, not silently absorbed.
+const TOTAL_JS_CEILING_BYTES = 1_588_000;
 
 // Below this much headroom, say so. Both prior amendments record the same
 // story: the ceiling was set with ~3-5% room, ordinary week-to-week growth
