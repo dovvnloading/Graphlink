@@ -433,6 +433,7 @@ class ContentOps(SceneDocumentParts):
         target = self.nodes.get(target_id)
         if target is None:
             raise SceneError("The Model output no longer exists.")
+        binding: ModelTextBinding | None
         if target.kind == "model" and isinstance(target.state, ModelState):
             binding = target.state.model_binding
         else:
