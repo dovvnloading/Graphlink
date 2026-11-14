@@ -1,8 +1,9 @@
 """Explicit local-model graph run: preview, durable dispatch, and output receipt.
 
-This is intentionally narrower than a general model node. One source text
-node feeds one unbound plain note, and the user must explicitly run it from
-Graph Runner. Only local Ollama is permitted; cloud and tool adapters require
+This is intentionally narrower than a general Model node. One source text
+node feeds a plain note, optionally through a saved text-to-text model port,
+and the user must explicitly run it from Graph Runner. Only local Ollama is
+permitted; cloud and tool adapters require
 separate approval, spending and reconciliation protocols.
 """
 
