@@ -81,10 +81,11 @@ def restore_graph_runs(raw: Any, ids: dict[str, str]) -> list[dict[str, Any]]:
                 or not DIGEST.fullmatch(run["selectionHash"])
                 or not isinstance(record.get("steps"), list)):
             continue
-        steps = [_restore_step(step, ids) for step in record["steps"]]
-        if any(step is None for step in steps):
+        restored_steps = [_restore_step(step, ids) for step in record["steps"]]
+        if any(step is None for step in restored_steps):
             # Dropping a malformed prerequisite would change the approved plan.
             continue
+        steps = [step for step in restored_steps if step is not None]
         run["steps"] = steps
         if any(step["status"] == "reconciliation-required" for step in steps):
             run["status"] = "reconciliation-required"
