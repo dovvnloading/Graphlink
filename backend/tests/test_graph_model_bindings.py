@@ -98,6 +98,33 @@ def test_model_binding_roundtrips_with_saved_id_remapping_and_defensive_restore(
         assert notes["keep this draft"].content == "keep this draft"
 
 
+def test_model_port_marks_transitive_staleness_and_blocks_stale_downstream_reads():
+    from backend.domain.nodes_content import _text_digest
+
+    doc = SceneDocument()
+    source, relay, model_output, downstream = [doc.add_note(0, 0) for _ in range(4)]
+    doc.set_note_content(source.id, "first")
+    doc.bind_note_text_input(source.id, relay.id)
+    doc.run_note_text_input(relay.id)
+    doc.bind_note_model_input(relay.id, model_output.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+    doc.set_note_content(model_output.id, "generated text")
+    binding = model_output.state.model_text_input
+    binding.last_input_hash = _text_digest("first")
+    binding.last_output_hash = _text_digest("generated text")
+    doc.bind_note_text_input(model_output.id, downstream.id)
+    assert doc.model_input_status(model_output.id) == "current"
+    doc.run_note_text_input(downstream.id)
+    assert downstream.content == "generated text"
+
+    # The relay still contains the same cached output, but it is stale
+    # relative to its own source. This must invalidate its model descendant.
+    doc.set_note_content(source.id, "changed")
+    assert doc.model_input_status(model_output.id) == "stale"
+    with pytest.raises(SceneError, match="upstream text input"):
+        doc.run_note_text_input(downstream.id)
+    assert downstream.content == "generated text"
+
+
 def test_source_deletion_disconnects_model_port_and_undo_restores_it():
     doc = SceneDocument()
     source = doc.add_chat_node(0, 0, "source", True)
@@ -164,7 +191,7 @@ def test_bound_model_runs_only_after_preview_and_persists_provenance(tmp_path, m
 
         await send("unbindGraphModel", target.id)
         assert not doc.nodes[target.id].state.model_text_input
-        assert target.content == "my manual edits"
+        assert doc.nodes[target.id].content == "my manual edits"
 
     asyncio.run(scenario())
 
