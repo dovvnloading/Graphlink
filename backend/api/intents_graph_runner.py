@@ -15,7 +15,7 @@ from backend.domain.graph import SceneDocument
 from backend.domain.graph_run_external import RECONCILIATION_DETAIL, ExternalCall, dispatch_external_attempt
 from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID
 from backend.domain.graph_runner import (
-    _config_and_target, _inspect, _matching_node, execute_graph_step, plan_graph_run, validate_graph_run_ancestors,
+    _inspect, _matching_node, execute_graph_step, plan_graph_run, validate_graph_run_ancestors,
 )
 from backend.domain.model import SceneError
 from backend.domain.node_states import ModelState
