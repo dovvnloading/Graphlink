@@ -139,6 +139,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "unbindGraphModel", "A", "content: remove a model input binding"),
     Classified("scene", "addModelNode", "A", "content: create a first-class executable Model card"),
     Classified("scene", "configureModelNode", "A", "content: change a Model input and invalidate provenance"),
+    Classified("scene", "connectModelInput", "A", "content: bind a typed canvas source to a Model node"),
     Classified("scene", "previewGraphModel", "B", "read-only: previews a local model request and pinned input"),
     Classified("scene", "executeGraphModel", "A", "content: saves a local model reply with its durable request and run IDs"),
 
