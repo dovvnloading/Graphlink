@@ -186,6 +186,7 @@ import logging
 import math
 import re
 import uuid
+from collections import Counter
 from typing import Any, cast
 
 from backend.canvas import (
@@ -207,7 +208,7 @@ from backend.canvas import (
     _content_codec,
     _placeholder_chart_data,
 )
-from backend.domain.model import EDGE_ROLES, EdgeRole
+from backend.domain.model import EDGE_ROLES, EdgeRole, SceneError
 from backend.domain.node_access import with_state
 # Not re-exported by backend.canvas, unlike the kinds above - imported
 # from the domain package directly, as session_save.py does.
@@ -1741,6 +1742,40 @@ def _restore_flat_edges(
     return True
 
 
+def _restore_note_text_inputs(document: SceneDocument, bindings: Any, ids: dict[str, str]) -> None:
+    """Remap saved IDs and restore each binding once, without evaluating notes."""
+    if not isinstance(bindings, dict):
+        return
+    pending: dict[str, tuple[str, str, str]] = {}
+    for old_target, entry in bindings.items():
+        if old_target not in ids or not isinstance(entry, dict):
+            continue
+        old_source = entry.get("source")
+        operation = entry.get("operation", "copy")
+        if isinstance(old_source, str) and old_source in ids and isinstance(operation, str):
+            digest = entry.get("last_source_sha256", "")
+            if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                digest = ""
+            pending[ids[old_target]] = (ids[old_source], operation, digest)
+
+    # Start at the leaves. Each valid source is still unbound when its readers
+    # connect, so even a long chain loads in linear time. A ring has no leaf:
+    # its bindings are dropped, and its notes keep their saved content.
+    readers = Counter(source for source, _, _ in pending.values())
+    leaves = [target for target in pending if not readers[target]]
+    while leaves:
+        target = leaves.pop()
+        source, operation, digest = pending[target]
+        try:
+            document.bind_note_text_input(source, target, operation)
+            with_state(document.nodes[target], NoteState).state.text_input_last_source_sha256 = digest
+        except SceneError:
+            pass  # An unsupported port or operation must not abort the graph load.
+        readers[source] -= 1
+        if not readers[source] and source in pending:
+            leaves.append(source)
+
+
 def _restore_branch_provenance_item_ids(
     document: SceneDocument,
     node_payloads: list,
@@ -1942,6 +1977,18 @@ def _restore_chat_into_document(
                 if restored_id is not None and kind_by_new_id.get(restored_id) == "chat":
                     document.branch_index_sources[restored_id] = source_key
 
+    # SQL note rows preserve note IDs but omit comparison metadata. Rejoin
+    # it before restoring notes so the existing badge and member-ID restore
+    # paths also cover graphs reopened from SQLite and workspace archives.
+    comparisons = chat_data.get("comparison_notes")
+    if isinstance(comparisons, dict) and comparisons and isinstance(notes_data, list):
+        notes_data = list(notes_data)
+        for index, row in enumerate(notes_data):
+            if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+                continue
+            members = comparisons.get(row["id"])
+            if isinstance(members, list):
+                notes_data[index] = {**row, "is_branch_comparison": True, "item_ids": members}
     notes_map = _restore_notes(document, notes_data)
 
     # ADR-002 Workstream 1 ("Branch status and lifecycle") - confirmed,
@@ -1999,6 +2046,8 @@ def _restore_chat_into_document(
             if note_payload_id:
                 by_payload_id[str(note_payload_id)] = mapped_note_id
     by_payload_id.update(charts_by_id)
+
+    _restore_note_text_inputs(document, chat_data.get("note_text_inputs"), by_payload_id)
 
     if not _restore_flat_edges(document, chat_data, by_payload_id):
         _restore_basic_connections(document, chat_data, all_nodes_map, nodes_by_id)

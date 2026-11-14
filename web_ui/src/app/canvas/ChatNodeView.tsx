@@ -878,6 +878,7 @@ export const ChatNodeView = memo(function ChatNodeView({
 
   return (
     <NodeShell
+      textOutput
       kindClassName={`chat-node${data.isUser ? " user" : " assistant"}`}
       selected={!!selected}
       collapsed={collapsed}

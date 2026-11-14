@@ -112,6 +112,9 @@ export interface SceneNodeRow {
   isSystemPrompt: boolean;
   isSummaryNote: boolean;
   isBranchComparison: boolean;
+  textInputSourceId: string;
+  textInputOperation: "copy" | "word_count";
+  textInputStatus: "unbound" | "unrun" | "current" | "stale";
   itemIds: string[];
   isLocked: boolean;
   groupWidth?: number | null;
@@ -605,6 +608,9 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["isSystemPrompt", "b", 0, false],
   ["isSummaryNote", "b", 0, false],
   ["isBranchComparison", "b", 0, false],
+  ["textInputSourceId", "s", 0, ""],
+  ["textInputOperation", { e: ["copy", "word_count"] }, 0, "copy"],
+  ["textInputStatus", { e: ["unbound", "unrun", "current", "stale"] }, 0, "unbound"],
   ["itemIds", { a: "s" }, 0, []],
   ["isLocked", "b", 0, true],
   ["groupWidth", "n", 1, null],

@@ -8,9 +8,27 @@ code motion, no behavior change.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import ClassVar, Literal
+
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
-from backend.events import SessionBus
+from backend.domain.model import SceneError
+from backend.events import IntentValidationError, SessionBus
+
+
+@dataclass
+class BindNoteTextInputArgs:
+    WIRE_OMITS_DEFAULTS: ClassVar[bool] = True
+    sourceId: str
+    targetId: str
+    operation: Literal["copy", "word_count"] = "copy"
+
+
+@dataclass
+class NoteTextTargetArgs:
+    targetId: str
 
 
 def register_groups_intents(bus: SessionBus, document: SceneDocument) -> None:
@@ -44,6 +62,25 @@ def register_groups_intents(bus: SessionBus, document: SceneDocument) -> None:
             node_ids=[node_id],
         )
         await publish_scene()
+
+    async def record_text_input(command_type: str, target_id: str, mutate: Callable[[], None]):
+        try:
+            document.record_command(command_type, "user", mutate, node_ids=[target_id])
+        except SceneError as exc:
+            # Expected corrections (e.g. a cycle or a deleted source) must reach the editor.
+            raise IntentValidationError([str(exc).rstrip(".")]) from exc
+        await publish_scene()
+
+    async def bind_note_text_input(source_id: str, target_id: str, operation: str = "copy"):
+        await record_text_input(
+            "bindNoteTextInput", target_id, lambda: document.bind_note_text_input(source_id, target_id, operation),
+        )
+
+    async def run_note_text_input(target_id: str):
+        await record_text_input("runNoteTextInput", target_id, lambda: document.run_note_text_input(target_id))
+
+    async def unbind_note_text_input(target_id: str):
+        await record_text_input("unbindNoteTextInput", target_id, lambda: document.unbind_note_text_input(target_id))
 
     async def create_frame(item_ids):
         ids = list(item_ids)
@@ -142,6 +179,9 @@ def register_groups_intents(bus: SessionBus, document: SceneDocument) -> None:
     bus.register_intent("scene", "addNote", add_note)
     bus.register_intent("scene", "reportNodeSizes", report_node_sizes)
     bus.register_intent("scene", "setNoteContent", set_note_content)
+    bus.register_intent("scene", "bindNoteTextInput", bind_note_text_input, args_schema=BindNoteTextInputArgs)
+    bus.register_intent("scene", "runNoteTextInput", run_note_text_input, args_schema=NoteTextTargetArgs)
+    bus.register_intent("scene", "unbindNoteTextInput", unbind_note_text_input, args_schema=NoteTextTargetArgs)
     bus.register_intent("scene", "createFrame", create_frame)
     bus.register_intent("scene", "createContainer", create_container)
     bus.register_intent("scene", "setGroupLabel", set_group_label)

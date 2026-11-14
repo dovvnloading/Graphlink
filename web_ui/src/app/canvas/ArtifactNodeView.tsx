@@ -309,6 +309,7 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
 
   return (
     <NodeShell
+      textOutput
       kindClassName="artifact-node"
       selected={!!selected}
       collapsed={collapsed}

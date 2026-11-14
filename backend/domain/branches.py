@@ -36,6 +36,7 @@ from backend.domain.node_states import ChatState, NoteState
 from backend.domain.structure import preferred_parent_edge, primary_parent_edges
 
 from backend.domain._composed import SceneDocumentParts
+from backend.domain.nodes_content import clear_note_text_readers
 
 
 class BranchOps(SceneDocumentParts):
@@ -48,6 +49,8 @@ class BranchOps(SceneDocumentParts):
         right after creation" shape (see the WS intent wrapper in
         register_canvas)."""
         node = require_node(self.nodes, node_id, "note", NoteState)
+        node.state.clear_text_input()
+        clear_note_text_readers(self.nodes.values(), {node_id})
         node.state.is_branch_comparison = True
         node.item_ids = list(source_node_ids)
 
@@ -296,6 +299,7 @@ class BranchOps(SceneDocumentParts):
 
         del self.nodes[node_id]
         self._detach_node_from_membership(node_id)
+        clear_note_text_readers(self.nodes.values(), {node_id})
 
     def send_message(
         self,

@@ -1524,6 +1524,18 @@ export class SceneStore {
     this.transport.fireIntent("scene", "setNoteContent", [nodeId, content], undefined, true);
   }
 
+  bindNoteTextInput(sourceId: string, targetId: string, operation: SceneNodeRow["textInputOperation"] = "copy"): void {
+    this.transport.fireIntent("scene", "bindNoteTextInput", [sourceId, targetId, operation]);
+  }
+
+  runNoteTextInput(targetId: string, onSettled?: (success: boolean) => void): void {
+    this.transport.fireIntent("scene", "runNoteTextInput", [targetId], undefined, false, undefined, onSettled);
+  }
+
+  unbindNoteTextInput(targetId: string): void {
+    this.transport.fireIntent("scene", "unbindNoteTextInput", [targetId]);
+  }
+
   createFrame(itemIds: string[]): void {
     this.transport.fireIntent("scene", "createFrame", [itemIds]);
   }

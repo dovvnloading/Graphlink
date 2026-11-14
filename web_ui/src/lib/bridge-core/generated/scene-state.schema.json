@@ -1209,6 +1209,28 @@
             "default": "",
             "type": "string"
           },
+          "textInputOperation": {
+            "default": "copy",
+            "enum": [
+              "copy",
+              "word_count"
+            ],
+            "type": "string"
+          },
+          "textInputSourceId": {
+            "default": "",
+            "type": "string"
+          },
+          "textInputStatus": {
+            "default": "unbound",
+            "enum": [
+              "unbound",
+              "unrun",
+              "current",
+              "stale"
+            ],
+            "type": "string"
+          },
           "title": {
             "type": "string"
           },

@@ -47,6 +47,8 @@ export interface ConnectionSpec {
   id: string;
   source: string;
   target: string;
+  sourceHandle?: string | null;
+  targetHandle?: string | null;
   orthogonal: boolean;
   role?: ConnectionRole;
 }
@@ -197,8 +199,8 @@ export function ConnectionCanvas({
       const sourceNode = nodeLookup.get(spec.source);
       const targetNode = nodeLookup.get(spec.target);
       if (!sourceNode || !targetNode) continue;
-      const sourceBound = sourceNode.internals.handleBounds?.source?.[0];
-      const targetBound = targetNode.internals.handleBounds?.target?.[0];
+      const sourceBound = sourceNode.internals.handleBounds?.source?.find((handle) => (handle.id ?? null) === (spec.sourceHandle ?? null));
+      const targetBound = targetNode.internals.handleBounds?.target?.find((handle) => (handle.id ?? null) === (spec.targetHandle ?? null));
       if (!sourceBound || !targetBound) continue;
 
       const sourceHandle = toHandleGeometry(sourceBound as HandleBoundLike);
