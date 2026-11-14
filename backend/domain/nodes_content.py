@@ -14,10 +14,12 @@ per-kind method groups are being lifted out of SceneDocument at all.
 from __future__ import annotations
 
 import hashlib
+import uuid
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from backend.domain._composed import SceneDocumentParts
+from backend.domain.graph_model_binding import MODEL_INPUT_VERSION, validate_local_model_identity
 from backend.domain.model import (
     HTML_TITLE_PREVIEW_LENGTH,
     THINKING_TITLE_PREVIEW_LENGTH,
@@ -25,7 +27,7 @@ from backend.domain.model import (
     SceneNode,
 )
 from backend.domain.node_access import is_node_of, require_node
-from backend.domain.node_states import ArtifactState, ChartState, DocumentState, HtmlState, NoteState
+from backend.domain.node_states import ArtifactState, ChartState, DocumentState, HtmlState, ModelTextBinding, NoteState
 
 if TYPE_CHECKING:
     from backend.domain.node_access import _NodeWith
@@ -34,8 +36,11 @@ if TYPE_CHECKING:
 def clear_note_text_readers(nodes: Iterable[SceneNode], removed_sources: set[str]) -> None:
     """Disconnect readers when a source disappears or loses its text output."""
     for node in nodes:
-        if isinstance(node.state, NoteState) and node.state.text_input_source_id in removed_sources:
-            node.state.clear_text_input()
+        if isinstance(node.state, NoteState):
+            if node.state.text_input_source_id in removed_sources:
+                node.state.clear_text_input()
+            if node.state.model_text_input is not None and node.state.model_text_input.source_id in removed_sources:
+                node.state.model_text_input = None
         if isinstance(node.state, (ArtifactState, ChartState, NoteState)):
             binding = node.state.table_output
             if binding is not None and binding.source_id in removed_sources:
@@ -302,6 +307,8 @@ class ContentOps(SceneDocumentParts):
             raise SceneError("Choose Copy text or Word count for this input.")
         if target.state.text_input_source_id not in ("", source_id):
             raise SceneError("Disconnect the current text source before connecting another.")
+        if target.state.model_text_input is not None:
+            raise SceneError("Disconnect the model input before connecting a text transform.")
 
         # Only data dependencies count. A structural edge can run either way.
         current_id = source_id
@@ -311,7 +318,11 @@ class ContentOps(SceneDocumentParts):
                 raise SceneError("A text input cannot form a cycle.")
             seen.add(current_id)
             state = self.nodes[current_id].state
-            current_id = state.text_input_source_id if isinstance(state, NoteState) else ""
+            if isinstance(state, NoteState):
+                current_id = (state.model_text_input.source_id if state.model_text_input is not None
+                              else state.text_input_source_id)
+            else:
+                current_id = ""
 
         if target.state.text_input_source_id != source_id or target.state.text_input_operation != operation:
             target.state.text_input_last_source_sha256 = ""
@@ -321,11 +332,86 @@ class ContentOps(SceneDocumentParts):
     def unbind_note_text_input(self, target_id: str) -> None:
         self._plain_note(target_id).state.clear_text_input()
 
+    def bind_note_model_input(self, source_id: str, target_id: str, provider: str, model_id: str) -> None:
+        """Save a text-to-text model port without sending a model request."""
+        validate_local_model_identity(provider, model_id)
+        target = self._plain_note(target_id)
+        self._text_output(source_id)
+        if target.state.text_input_source_id or target.state.table_output is not None:
+            raise SceneError("Disconnect the existing input before connecting a model.")
+        if source_id == target_id:
+            raise SceneError("A model connection cannot form a cycle.")
+
+        # Follow all supported note-to-note dependencies; legacy visual edges
+        # are deliberately ignored because they are not execution inputs.
+        current_id = source_id
+        seen = {target_id}
+        while current_id:
+            if current_id in seen:
+                raise SceneError("A model connection cannot form a cycle.")
+            seen.add(current_id)
+            state = self.nodes[current_id].state
+            if isinstance(state, NoteState):
+                current_id = (state.model_text_input.source_id if state.model_text_input is not None
+                              else state.text_input_source_id)
+            else:
+                current_id = ""
+
+        old = target.state.model_text_input
+        if old is not None and (old.source_id, old.provider, old.model_id) == (source_id, provider, model_id):
+            return  # Idempotent rebind preserves committed provenance.
+        target.state.model_text_input = ModelTextBinding(
+            source_id=source_id, provider=provider, model_id=model_id,
+            binding_id=uuid.uuid4().hex, version=MODEL_INPUT_VERSION,
+        )
+
+    def unbind_note_model_input(self, target_id: str) -> None:
+        self._plain_note(target_id).state.model_text_input = None
+
+    def model_input_status(self, target_id: str) -> str:
+        """Report freshness without triggering, replaying or reading any provider."""
+        target = self._plain_note(target_id)
+        binding = target.state.model_text_input
+        if binding is None:
+            return "unbound"
+        if not binding.last_input_hash or not binding.last_output_hash:
+            return "unrun"
+        try:
+            digest = _text_digest(self._text_output(binding.source_id))
+        except SceneError:
+            return "invalid"
+        if digest != binding.last_input_hash:
+            return "stale"
+        if _text_digest(target.content) != binding.last_output_hash:
+            return "edited"
+        return "current"
+
+    def require_current_model_source(self, source_id: str) -> None:
+        """Do not consume old model text when its dependency is stale or unrun."""
+        seen: set[str] = set()
+        current_id = source_id
+        while current_id in self.nodes:
+            if current_id in seen:
+                raise SceneError("The source graph contains a dependency cycle.")
+            seen.add(current_id)
+            state = self.nodes[current_id].state
+            if not isinstance(state, NoteState):
+                return
+            if state.model_text_input is not None:
+                if self.model_input_status(current_id) != "current":
+                    raise SceneError("Run the upstream model input first; its output is not current.")
+                current_id = state.model_text_input.source_id
+            elif state.text_input_source_id:
+                current_id = state.text_input_source_id
+            else:
+                return
+
     def run_note_text_input(self, target_id: str) -> None:
         """Evaluate exactly this note from its source's current, committed text."""
         note = self._plain_note(target_id)
         if not note.state.text_input_source_id:
             raise SceneError("Connect a text source before running this input.")
+        self.require_current_model_source(note.state.text_input_source_id)
         text = self._text_output(note.state.text_input_source_id)
         digest = _text_digest(text)
         note.content = str(len(text.split())) if note.state.text_input_operation == "word_count" else text
