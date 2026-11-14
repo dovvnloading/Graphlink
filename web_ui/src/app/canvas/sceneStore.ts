@@ -1503,6 +1503,19 @@ export class SceneStore {
     return this.transport.request("scene", "previewGraphRun", [nodeIds]) as Promise<GraphRunPreview>;
   }
 
+  previewGraphModel(sourceId: string, targetId: string, provider: string, modelId: string): Promise<GraphRunPreview> {
+    return this.transport.request("scene", "previewGraphModel", [sourceId, targetId, provider, modelId]) as Promise<GraphRunPreview>;
+  }
+
+  executeGraphModel(
+    sourceId: string, targetId: string, provider: string, modelId: string,
+    previewToken: string, operationId: string,
+  ): Promise<GraphRun> {
+    return this.transport.request(
+      "scene", "executeGraphModel", [sourceId, targetId, provider, modelId, previewToken, operationId],
+    ) as Promise<GraphRun>;
+  }
+
   executeGraphRun(nodeIds: string[], previewToken: string, operationId: string): Promise<GraphRun> {
     return this.transport.request("scene", "executeGraphRun", [nodeIds, previewToken, operationId]) as Promise<GraphRun>;
   }

@@ -12,6 +12,7 @@ const statuses: Record<string, string> = {
 };
 const operations: Record<string, string> = {
   copy: "Copy text", word_count: "Word count", group_sum: "Group and sum",
+  model: "Local model reply",
 };
 
 function Disclosure({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
@@ -59,6 +60,27 @@ function Runner({ store }: { store: SceneStore }) {
   const [scope, setScope] = useState(selectedIds.length ? "selection" : "all");
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const names = new Map(scene.nodes.map((node) => [node.id, node.title]));
+  const plainNotes = scene.nodes.filter((node) =>
+    node.kind === "note" && !node.isTableSource && !node.isSystemPrompt &&
+    !node.isSummaryNote && !node.isBranchComparison && !node.tableOutputVersion
+  );
+  const sources = scene.nodes.filter((node) =>
+    node.kind === "chat" || node.kind === "artifact" ||
+    (node.kind === "note" && plainNotes.some((note) => note.id === node.id))
+  );
+  const [modelSourceSelection, setModelSourceSelection] = useState("");
+  const [modelTargetSelection, setModelTargetSelection] = useState("");
+  const [modelId, setModelId] = useState("");
+  const [modelPreview, setModelPreview] = useState<(GraphRunPreview & {
+    sourceId: string; targetId: string; provider: string; modelId: string; operationId: string;
+  }) | null>(null);
+  const modelSourceId = sources.some((node) => node.id === modelSourceSelection)
+    ? modelSourceSelection : (sources[0]?.id ?? "");
+  const eligibleTargets = plainNotes.filter((node) =>
+    node.id !== modelSourceId && !node.textInputSourceId
+  );
+  const modelTargetId = eligibleTargets.some((node) => node.id === modelTargetSelection)
+    ? modelTargetSelection : (eligibleTargets[0]?.id ?? "");
   const [preview, setPreview] = useState<(GraphRunPreview & { nodeIds: string[]; operationId: string }) | null>(null);
   const [latest, setLatest] = useState<LatestGraphRun | null>(null);
   const [busy, setBusy] = useState("Loading run history…");
@@ -133,6 +155,18 @@ function Runner({ store }: { store: SceneStore }) {
     });
   }
 
+  function previewLocalModel() {
+    void perform("Preparing model preview…", async () => {
+      setModelPreview(null);
+      const provider = "Ollama";
+      const prepared = await store.previewGraphModel(modelSourceId, modelTargetId, provider, modelId.trim());
+      setModelPreview({
+        ...prepared, sourceId: modelSourceId, targetId: modelTargetId,
+        provider, modelId: modelId.trim(), operationId: crypto.randomUUID(),
+      });
+    });
+  }
+
   const ready = preview?.steps.filter((step) => step.status === "ready").length ?? 0;
   return <>
     <p className="runner-intro">Refresh connected notes, grouped tables, charts and reports in dependency order.</p>
@@ -150,6 +184,48 @@ function Runner({ store }: { store: SceneStore }) {
       <button type="button" className="appbar-btn" disabled={!!busy} onClick={previewRun}>Preview run</button>
     </div>
     {scope === "selection" && <p className="runner-note">Includes downstream outputs and the inputs they depend on.</p>}
+    <Disclosure label="Run a local model into a note">
+      <div className="runner-controls">
+        <label>Model text source
+          <select aria-label="Model text source" value={modelSourceId} disabled={!!busy} onChange={(event) => {
+            setModelSourceSelection(event.target.value); setModelPreview(null);
+          }}>
+            {sources.map((node) => <option key={node.id} value={node.id}>{node.title || node.id}</option>)}
+          </select>
+        </label>
+        <label>Model output note
+          <select aria-label="Model output note" value={modelTargetId} disabled={!!busy} onChange={(event) => {
+            setModelTargetSelection(event.target.value); setModelPreview(null);
+          }}>
+            {eligibleTargets.map((node) => <option key={node.id} value={node.id}>{node.title || node.id}</option>)}
+          </select>
+        </label>
+        <label>Installed Ollama model ID
+          <input aria-label="Installed Ollama model ID" value={modelId} disabled={!!busy}
+            placeholder="e.g. llama3.2:3b" onChange={(event) => {
+              setModelId(event.target.value); setModelPreview(null);
+            }} />
+        </label>
+        <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelTargetId || !modelId.trim()}
+          onClick={previewLocalModel}>Preview model step</button>
+      </div>
+      <p className="runner-note">This sends text to your Ollama daemon over loopback. Verify custom model aliases are local: Ollama itself can route an alias to cloud. Graph Runner does not directly call cloud providers or external tools.</p>
+      {modelPreview && <section aria-label="Model preview">
+        <RunSteps steps={modelPreview.steps} names={names} />
+        <div className="runner-commit">
+          <p>The model request is made only after you select Run local model. Its request ID and outcome are saved.</p>
+          <button type="button" className="appbar-btn" disabled={!!busy || running} onClick={() =>
+            void perform("Running local model…", async () => {
+              await updateRun(store.executeGraphModel(
+                modelPreview.sourceId, modelPreview.targetId, modelPreview.provider, modelPreview.modelId,
+                modelPreview.previewToken, modelPreview.operationId,
+              ));
+              setModelPreview(null);
+            })
+          }>Run local model</button>
+        </div>
+      </section>}
+    </Disclosure>
     {busy && <p role="status">{busy}</p>}
     {error && <div className="runner-error">
       <p role="alert">{error}</p>

@@ -297,8 +297,9 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 217 -> 220 for binding, running and removing a note's text input.
     # 220 -> 227 for table editing, derived outputs, revision history, and contributing rows.
     # 227 -> 231 for graph run preview, execution, history and resume.
-    assert len(real) == 231, (
-        f"expected exactly 231 real registered intents, found {len(real)} - "
+    # 231 -> 233 for explicit local-model preview and execution.
+    assert len(real) == 233, (
+        f"expected exactly 233 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

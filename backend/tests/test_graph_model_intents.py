@@ -1,0 +1,435 @@
+"""End-to-end local model calls through Graph Runner's SQLite run journal."""
+
+from __future__ import annotations
+
+import asyncio
+import threading
+
+import pytest
+
+from backend.api import intents_graph_model as graph_model
+from backend import chat_library
+from backend.canvas import SceneDocument
+from backend.events import IntentValidationError, SessionBus
+from graphlink_task_config import LOCAL_PROVIDER_OLLAMA
+
+
+def session(tmp_path):
+    path = tmp_path / "model.db"
+    doc = SceneDocument()
+    bus = SessionBus("graph-model")
+    bus.register_topic("scene", doc.scene_payload)
+    chat_library.register_chat_library(bus, path, doc, autosave_interval_seconds=None)
+
+    async def send(name, *args):
+        return await bus.dispatch_intent("scene", name, list(args))
+
+    source = doc.add_note(0, 0)
+    target = doc.add_note(200, 0)
+    source.content = "Summarize this message in five words."
+    return path, bus, doc, source, target, send
+
+
+def test_model_preview_is_read_only_and_dispatch_checkpoints_before_request(tmp_path, monkeypatch):
+    async def scenario():
+        path, _bus, doc, source, target, send = session(tmp_path)
+        selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        preview = await send("previewGraphModel", *selected)
+        assert not path.exists()
+        assert not doc.graph_runs and not doc.command_log
+        assert preview["steps"][0]["kind"] == "model"
+        assert "Summarize this message" not in str(preview)
+        observed = []
+
+        def fake_chat(*, prompt, model_id, endpoint):
+            assert prompt == source.content
+            assert model_id == "qwen3:8b"
+            assert endpoint in {"http://127.0.0.1:11434", "http://localhost:11434"}
+            row = chat_library.load_chat_row(path, doc.current_chat_id)
+            saved_step = row["data"]["graph_runs"][-1]["steps"][0]
+            assert saved_step["externalAttempt"]["phase"] == "dispatched"
+            assert saved_step["externalAttempt"]["model"] == "qwen3:8b"
+            assert saved_step["status"] == "running"
+            observed.append(saved_step["externalAttempt"]["requestId"])
+            return {"message": {"role": "assistant", "content": "Ship safely with clear results."}}
+
+        monkeypatch.setattr(graph_model, "local_ollama_complete", fake_chat)
+        args = [*selected, preview["previewToken"], "local-model-run"]
+        result = await send("executeGraphModel", *args)
+        assert result["status"] == "completed"
+        assert target.content == "Ship safely with clear results."
+        assert len(observed) == 1
+        assert result["steps"][0]["externalAttempt"]["requestId"] == observed[0]
+        saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][0]
+        assert saved["status"] == "completed" and saved["steps"][0]["status"] == "completed"
+        assert saved["steps"][0]["externalAttempt"]["phase"] == "completed"
+        assert not any("Summarize" in str(k) for k in saved["steps"][0].values())
+        assert (await send("executeGraphModel", *args))["status"] == "completed"
+        assert len(observed) == 1
+
+        reopened = SceneDocument()
+        bus2 = SessionBus("graph-model-reopened")
+        bus2.register_topic("scene", reopened.scene_payload)
+        chat_library.register_chat_library(bus2, path, reopened, autosave_interval_seconds=None)
+        await bus2.dispatch_intent("app-chat-library", "loadChat", [doc.current_chat_id])
+        current = await bus2.dispatch_intent("scene", "getGraphRun", [])
+        assert current["status"] == "completed"
+        assert current["steps"][0]["externalAttempt"]["requestId"] == observed[0]
+        assert reopened.nodes[current["steps"][0]["nodeId"]].content == target.content
+        assert len(reopened.command_log) == 0
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("changed", ["source", "destination", "provider", "model", "endpoint"])
+def test_preview_staleness_refuses_model_calls(tmp_path, monkeypatch, changed):
+    async def scenario():
+        _path, _bus, doc, source, target, send = session(tmp_path)
+        args = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        preview = await send("previewGraphModel", *args)
+        calls = []
+        monkeypatch.setattr(graph_model, "local_ollama_complete", lambda **_kw: calls.append(1))
+        if changed == "source":
+            source.content = "edited prompt"
+        elif changed == "destination":
+            target.content = "hand-written content"
+        elif changed == "provider":
+            args[2] = "OpenAI"
+        elif changed == "model":
+            args[3] = "other-model"
+        else:
+            monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11435")
+        with pytest.raises(IntentValidationError):
+            await send("executeGraphModel", *args, preview["previewToken"], "stale-model-run")
+        assert not calls and not doc.graph_runs
+
+    asyncio.run(scenario())
+
+
+def test_endpoint_swap_during_admission_leaves_no_ghost_run(tmp_path, monkeypatch):
+    async def scenario():
+        import backend.api.intents_graph_model as model_module
+
+        path, bus, doc, source, target, send = session(tmp_path)
+        selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        preview = await send("previewGraphModel", *selected)
+        epoch = doc.graph_run_epoch
+        endpoints = iter(["http://127.0.0.1:11434", "http://localhost:11434"])
+        monkeypatch.setattr(model_module, "_require_loopback_ollama", lambda: next(endpoints))
+        with pytest.raises(IntentValidationError, match="endpoint changed"):
+            await send("executeGraphModel", *selected, preview["previewToken"], "endpoint-changed-run")
+        assert not path.exists()
+        assert doc.graph_runs == []
+        assert not doc.command_log
+        assert doc.graph_run_epoch == epoch
+        assert getattr(bus, "graph_model_active_run_id", None) is None
+
+    asyncio.run(scenario())
+
+
+def test_cloud_model_and_unbound_destination_are_enforced_before_preview(tmp_path):
+    async def scenario():
+        _path, _bus, doc, source, target, send = session(tmp_path)
+        with pytest.raises(IntentValidationError, match="local Ollama"):
+            await send("previewGraphModel", source.id, target.id, "OpenAI", "gpt-6")
+        with pytest.raises(IntentValidationError, match="different nodes"):
+            await send("previewGraphModel", source.id, source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        doc.bind_note_text_input(source.id, target.id)
+        with pytest.raises(IntentValidationError, match="unbound"):
+            await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        doc.unbind_note_text_input(target.id)
+        source.content = "a" * 70000
+        with pytest.raises(IntentValidationError, match="64 KiB"):
+            await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        assert not doc.graph_runs
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("edit", ["source", "output", "binding"])
+def test_live_edits_during_model_call_are_preserved(tmp_path, monkeypatch, edit):
+    async def scenario():
+        from backend.domain.model import SceneError
+
+        path, _bus, doc, source, target, send = session(tmp_path)
+        selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        token = (await send("previewGraphModel", *selected))["previewToken"]
+        started, released = threading.Event(), threading.Event()
+
+        def slow_answer(**_kwargs):
+            started.set()
+            assert released.wait(8)
+            return {"message": {"role": "assistant", "content": "Generated answer"}}
+
+        monkeypatch.setattr(graph_model, "local_ollama_complete", slow_answer)
+        pending = asyncio.create_task(send("executeGraphModel", *selected, token, "edited-model-run"))
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            if edit == "source":
+                doc.set_note_content(source.id, "Source changed while Ollama was running")
+            elif edit == "output":
+                doc.set_note_content(target.id, "My own edits must survive")
+            else:
+                doc.bind_note_text_input(source.id, target.id)
+        finally:
+            released.set()
+
+        with pytest.raises(SceneError, match="was not applied"):
+            await pending
+        expected = "My own edits must survive" if edit == "output" else "Add note..."
+        assert target.content == expected
+        assert len(doc.command_log) == 0
+        run = await send("getGraphRun")
+        assert run["status"] == "reconciliation-required"
+        assert run["steps"][0]["status"] == "reconciliation-required"
+        assert run["steps"][0]["externalAttempt"]["requestId"].startswith("graph-")
+        saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][0]
+        assert saved["steps"][0]["externalAttempt"]["phase"] == "reconciliation-required"
+        assert saved["steps"][0]["status"] == "reconciliation-required"
+
+    asyncio.run(scenario())
+
+
+def test_remote_timeout_records_uncertain_request_and_never_replays(tmp_path, monkeypatch):
+    async def scenario():
+        path, _bus, doc, source, target, send = session(tmp_path)
+        selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        token = (await send("previewGraphModel", *selected))["previewToken"]
+        calls = []
+
+        def timeout(*, prompt, model_id, endpoint):
+            assert prompt == source.content and endpoint.startswith("http")
+            calls.append(model_id)
+            raise TimeoutError("Ollama may have processed this prompt")
+
+        monkeypatch.setattr(graph_model, "local_ollama_complete", timeout)
+        with pytest.raises(TimeoutError):
+            await send("executeGraphModel", *selected, token, "uncertain-local-run")
+        assert calls == ["qwen3:8b"]
+        assert target.content == "Add note..."
+        status = await send("getGraphRun")
+        assert status["status"] == "reconciliation-required"
+        request_id = status["steps"][0]["externalAttempt"]["requestId"]
+        persisted = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][0]
+        assert persisted["steps"][0]["externalAttempt"]["requestId"] == request_id
+        assert persisted["steps"][0]["externalAttempt"]["phase"] == "reconciliation-required"
+        assert (await send("resumeGraphRun", "uncertain-local-run"))["status"] == "reconciliation-required"
+        assert not doc.command_log
+        # Retrying with a new preview and operation ID must not bypass
+        # this unresolved request by overwriting its destination.
+        again = await send("previewGraphModel", *selected)
+        with pytest.raises(IntentValidationError, match="unresolved external request"):
+            await send("executeGraphModel", *selected, again["previewToken"], "another-local-run")
+        assert calls == ["qwen3:8b"]
+
+    asyncio.run(scenario())
+
+
+def test_inflight_cancellation_keeps_durable_remote_fence(tmp_path, monkeypatch):
+    async def scenario():
+        path, _bus, doc, source, target, send = session(tmp_path)
+        selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        token = (await send("previewGraphModel", *selected))["previewToken"]
+        started, release = threading.Event(), threading.Event()
+
+        def blocked(**_kwargs):
+            started.set()
+            assert release.wait(10)
+            return {"message": {"role": "assistant", "content": "arrived too late"}}
+
+        monkeypatch.setattr(graph_model, "local_ollama_complete", blocked)
+        task = asyncio.create_task(send("executeGraphModel", *selected, token, "cancelled-local-run"))
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            release.set()
+        saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][0]
+        assert saved["steps"][0]["externalAttempt"]["phase"] == "reconciliation-required"
+        assert target.content == "Add note..."
+
+    asyncio.run(scenario())
+
+
+
+def test_non_loopback_ollama_endpoint_is_rejected_before_preview(tmp_path, monkeypatch):
+    async def scenario():
+        _path, _bus, _doc, source, target, send = session(tmp_path)
+        monkeypatch.setenv("OLLAMA_HOST", "http://llm.example.net:11434")
+        with pytest.raises(IntentValidationError, match="loopback"):
+            await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        monkeypatch.setenv("OLLAMA_HOST", "http://localhost.evil.test:11434")
+        with pytest.raises(IntentValidationError, match="loopback"):
+            await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        monkeypatch.setenv("OLLAMA_HOST", "http://[")
+        with pytest.raises(IntentValidationError, match="loopback"):
+            await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
+        assert graph_model._require_loopback_ollama() == "http://127.0.0.1:11434"
+        monkeypatch.setenv("OLLAMA_HOST", "http://[::1]:11434")
+        assert graph_model._require_loopback_ollama() == "http://[::1]:11434"
+        monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+        preview = await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        assert preview["steps"][0]["status"] == "ready"
+
+    asyncio.run(scenario())
+
+
+def test_final_run_status_write_failure_resumes_without_repeating_the_model(tmp_path, monkeypatch):
+    async def scenario():
+        path, _bus, doc, source, target, send = session(tmp_path)
+        original_write = chat_library.save_chat_atomically_row
+        count = 0
+        calls = []
+
+        def fail_final_write(*args, **kwargs):
+            nonlocal count
+            count += 1
+            if count == 3:
+                raise OSError("final-status disk failure")
+            return original_write(*args, **kwargs)
+
+        def reply(**_kwargs):
+            calls.append(1)
+            return {"message": {"role": "assistant", "content": "A complete response"}}
+
+        monkeypatch.setattr(chat_library, "save_chat_atomically_row", fail_final_write)
+        monkeypatch.setattr(graph_model, "local_ollama_complete", reply)
+        selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        token = (await send("previewGraphModel", *selected))["previewToken"]
+        with pytest.raises(IntentValidationError, match="Could not confirm the graph run checkpoint"):
+            await send("executeGraphModel", *selected, token, "final-status-model")
+        assert calls == [1] and target.content == "A complete response"
+        saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][0]
+        assert saved["status"] == "running"
+        assert saved["steps"][0]["externalAttempt"]["phase"] == "completed"
+        recovered = await send("resumeGraphRun", "final-status-model")
+        assert recovered["status"] == "completed"
+        assert calls == [1] and target.content == "A complete response"
+
+    asyncio.run(scenario())
+
+
+
+def test_model_completion_is_hidden_until_terminal_sqlite_commit(tmp_path, monkeypatch):
+    async def scenario():
+        path, _bus, doc, source, target, send = session(tmp_path)
+        selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        token = (await send("previewGraphModel", *selected))["previewToken"]
+        original_write = chat_library.save_chat_atomically_row
+        entered, released = threading.Event(), threading.Event()
+        writes = 0
+
+        def hold_terminal_save(*args, **kwargs):
+            nonlocal writes
+            writes += 1
+            if writes == 3:
+                entered.set()
+                assert released.wait(8)
+            return original_write(*args, **kwargs)
+
+        monkeypatch.setattr(chat_library, "save_chat_atomically_row", hold_terminal_save)
+        monkeypatch.setattr(graph_model, "local_ollama_complete", lambda **_kwargs: {
+            "message": {"role": "assistant", "content": "Committed reply"},
+        })
+        pending = asyncio.create_task(
+            send("executeGraphModel", *selected, token, "terminal-model-observe")
+        )
+        try:
+            assert await asyncio.to_thread(entered.wait, 6)
+            latest = await send("getGraphRun")
+            assert latest["status"] == "running"
+            replay = await send(
+                "executeGraphModel", *selected, token, "terminal-model-observe"
+            )
+            assert replay["status"] == "running"
+            assert target.content == "Committed reply"
+        finally:
+            released.set()
+        finished = await pending
+        assert finished["status"] == "completed"
+        assert (await send("getGraphRun"))["status"] == "completed"
+        row = chat_library.load_chat_row(path, doc.current_chat_id)
+        assert row["data"]["graph_runs"][0]["status"] == "completed"
+
+    asyncio.run(scenario())
+
+
+
+def test_ollama_adapter_never_inherits_credentials_proxies_or_redirects(monkeypatch):
+    import json
+
+    import httpx
+    from backend.providers import graph_local_ollama
+
+    monkeypatch.setenv("OLLAMA_API_KEY", "SECRET-MUST-NOT-LEAK")
+    monkeypatch.setenv("HTTP_PROXY", "http://untrusted-proxy.example:8899")
+    monkeypatch.setenv("HTTPS_PROXY", "http://untrusted-proxy.example:8899")
+    observed = {}
+    requests = []
+
+    def handle(request):
+        requests.append(request)
+        assert request.url.host == "127.0.0.1"
+        assert request.url.path == "/api/chat"
+        assert request.method == "POST"
+        assert "authorization" not in request.headers
+        assert json.loads(request.content) == {
+            "model": "qwen3:8b",
+            "messages": [{"role": "user", "content": "Local only"}],
+            "stream": False,
+        }
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "Local answer"}})
+
+    real_client = httpx.Client
+
+    def client(**kwargs):
+        observed.update(kwargs)
+        return real_client(transport=httpx.MockTransport(handle), **kwargs)
+
+    monkeypatch.setattr(graph_local_ollama.httpx, "Client", client)
+    payload = graph_local_ollama.local_ollama_complete(
+        prompt="Local only", model_id="qwen3:8b", endpoint="http://127.0.0.1:11434",
+    )
+    assert observed == {
+        "base_url": "http://127.0.0.1:11434",
+        "trust_env": False,
+        "follow_redirects": False,
+        "timeout": 120.0,
+        "headers": {"Accept": "application/json"},
+    }
+    assert len(requests) == 1
+    assert payload["message"] == {"role": "assistant", "content": "Local answer"}
+
+
+def test_local_model_transport_bounds_response_and_refuses_redirect(monkeypatch):
+    import httpx
+    from backend.providers import graph_local_ollama
+
+    real_client = httpx.Client
+    calls = []
+    response = httpx.Response(200, content=b"x" * (2 * 1024 * 1024 + 1))
+
+    def handle(request):
+        calls.append(request.url)
+        return response
+
+    def client(**kwargs):
+        return real_client(transport=httpx.MockTransport(handle), **kwargs)
+
+    monkeypatch.setattr(graph_local_ollama.httpx, "Client", client)
+    with pytest.raises(ValueError, match="2 MiB limit"):
+        graph_local_ollama.local_ollama_complete(
+            prompt="Local only", model_id="qwen3:8b", endpoint="http://127.0.0.1:11434",
+        )
+    assert len(calls) == 1
+
+    calls.clear()
+    response = httpx.Response(302, headers={"Location": "https://attacker.example/api/chat"})
+    with pytest.raises((httpx.HTTPStatusError, ValueError)):
+        graph_local_ollama.local_ollama_complete(
+            prompt="Local only", model_id="qwen3:8b", endpoint="http://127.0.0.1:11434",
+        )
+    assert len(calls) == 1
