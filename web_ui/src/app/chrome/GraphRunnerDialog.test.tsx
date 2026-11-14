@@ -90,6 +90,32 @@ describe("Graph Runner", () => {
     expect(screen.getByText(/ · Completed$/)).toBeInTheDocument();
   });
 
+  it("shows an uncertain provider request without offering automatic replay", async () => {
+    const { user, request } = setup();
+    const uncertain: GraphRun = {
+      ...run, status: "reconciliation-required", steps: [{
+        ...step, status: "reconciliation-required",
+        detail: "The external request may already have run.",
+        externalAttempt: {
+          requestId: "graph-1234567890abcdef1234567890abcdef",
+          kind: "model", provider: "profile/openai", model: "example-model",
+          tool: "", inputRef: "artifact/version-1", inputHash: "a".repeat(64),
+          phase: "dispatched",
+        },
+      }],
+    };
+    request.mockResolvedValueOnce(uncertain);
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    const latest = await screen.findByRole("region", { name: "Latest run" });
+    expect(within(latest).getAllByText("Reconciliation required")).toHaveLength(2);
+    expect(within(latest).getByRole("alert")).toHaveTextContent("will not retry");
+    expect(within(latest).queryByRole("button", { name: "Resume run" })).toBeNull();
+    await user.click(within(latest).getByRole("button", { name: "External request" }));
+    expect(latest).toHaveTextContent("graph-1234567890abcdef1234567890abcdef");
+    expect(latest).toHaveTextContent("profile/openai");
+    expect(latest).toHaveTextContent("Check the provider");
+  });
+
   it("leaves blocked and up-to-date outputs alone", async () => {
     const { user, request } = setup();
     request.mockResolvedValueOnce(null).mockResolvedValueOnce({ previewToken: "x", steps: [
