@@ -20,7 +20,7 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
     keys = ("nodeId", "sourceId", "operation", "kind", "status", "label", "detail", "inputHash", "configHash", "targetHash")
     if not all(isinstance(raw.get(key), str) for key in keys):
         return None
-    if raw["status"] not in _STEP_STATUSES or raw["kind"] not in {"note", "chart", "artifact", "table"}:
+    if raw["status"] not in _STEP_STATUSES or raw["kind"] not in {"note", "chart", "artifact", "table", "model", "tool"}:
         return None
     step = {key: raw[key] for key in keys}
     for key in ("inputHash", "configHash", "targetHash"):
