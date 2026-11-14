@@ -18,7 +18,6 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
-import api_provider
 from backend.providers.graph_local_ollama import local_ollama_complete
 from backend.api.intents_graph_runner import _digest, _public_run, _public_step
 from backend.domain.graph import SceneDocument
@@ -115,8 +114,6 @@ def register_graph_model_runner(
     document: SceneDocument,
     save_checkpoint: Callable[[], Awaitable[bool]],
     serialize_mutation: Callable,
-    *,
-    provider_runtime: api_provider.ProviderRuntime | None = None,
 ) -> None:
     """Install the two opt-in intents alongside the existing local Graph Runner."""
 
