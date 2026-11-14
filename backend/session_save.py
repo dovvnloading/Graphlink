@@ -106,6 +106,7 @@ from typing import Any
 
 from backend.canvas import SceneDocument, SceneNode, _content_codec
 from backend.domain.node_access import with_state
+from backend.domain.table_workflows import saved_table_output, table_output
 from backend.domain.node_states import (
     ArtifactState,
     ChartState,
@@ -404,6 +405,7 @@ def _serialize_artifact_node(raw_node: SceneNode) -> dict[str, Any]:
     node = with_state(raw_node, ArtifactState)
     return {
         "node_type": "artifact",
+        **({"table_generated": True} if node.state.table_output is not None else {}),
         "instruction": node.content,
         "content": node.state.artifact_content,
         # A proposal awaiting human review is user-visible work, not volatile
@@ -1022,6 +1024,10 @@ def _build_chat_data(
 
     nodes_index = {n.id: i for i, n in enumerate(all_nodes)}
     notes_index = {n.id: i for i, n in enumerate(notes)}
+    table_sources = [n.id for n in notes if isinstance(n.state, NoteState) and n.state.is_table_source]
+    table_outputs = {
+        n.id: saved_table_output(output) for n in document.nodes.values() if (output := table_output(n)) is not None
+    }
     comparison_notes = {
         n.id: list(n.item_ids) for n in notes if isinstance(n.state, NoteState) and n.state.is_branch_comparison
     }
@@ -1180,6 +1186,8 @@ def _build_chat_data(
         # bindings alongside the graph's other saved-id references.
         **({"note_text_inputs": note_text_inputs} if note_text_inputs else {}),
         **({"comparison_notes": comparison_notes} if comparison_notes else {}),
+        **({"table_sources": table_sources} if table_sources else {}),
+        **({"table_outputs": table_outputs} if table_outputs else {}),
         "pins_data": [_serialize_pin(r) for r in document.pins.records],
         # The 12 basic connection lists all draw from the SAME classified
         # "connections" bucket - this backend has no way to tell which of

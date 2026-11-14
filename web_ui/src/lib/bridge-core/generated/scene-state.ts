@@ -115,6 +115,15 @@ export interface SceneNodeRow {
   textInputSourceId: string;
   textInputOperation: "copy" | "word_count";
   textInputStatus: "unbound" | "unrun" | "current" | "stale";
+  isTableSource: boolean;
+  tableInputSourceId: string;
+  tableSourceHash: string;
+  tableLabelColumn: string;
+  tableValueColumn: string;
+  tableInputStatus: "unbound" | "current" | "stale";
+  tableOutputEdited: boolean;
+  tableOutputVersion: number;
+  tableHasPrevious: boolean;
   itemIds: string[];
   isLocked: boolean;
   groupWidth?: number | null;
@@ -611,6 +620,15 @@ const SCENE_NODE_ROW_FIELDS: WireFields = [
   ["textInputSourceId", "s", 0, ""],
   ["textInputOperation", { e: ["copy", "word_count"] }, 0, "copy"],
   ["textInputStatus", { e: ["unbound", "unrun", "current", "stale"] }, 0, "unbound"],
+  ["isTableSource", "b", 0, false],
+  ["tableInputSourceId", "s", 0, ""],
+  ["tableSourceHash", "s", 0, ""],
+  ["tableLabelColumn", "s", 0, ""],
+  ["tableValueColumn", "s", 0, ""],
+  ["tableInputStatus", { e: ["unbound", "current", "stale"] }, 0, "unbound"],
+  ["tableOutputEdited", "b", 0, false],
+  ["tableOutputVersion", "n", 0, 0],
+  ["tableHasPrevious", "b", 0, false],
   ["itemIds", { a: "s" }, 0, []],
   ["isLocked", "b", 0, true],
   ["groupWidth", "n", 1, null],
