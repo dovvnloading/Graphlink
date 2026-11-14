@@ -21,10 +21,11 @@ const run: GraphRun = {
   steps: [{ ...step, status: "completed", detail: "Output updated." }],
 };
 
-function setup(selectedIds: string[] = []) {
+function setup(selectedIds: string[] = [], sceneNodes: Array<Record<string, unknown>> = []) {
   const user = userEvent.setup();
   const { transport, request } = makeRequestOnlyTransport();
   const store = new SceneStore(transport);
+  if (sceneNodes.length) Object.assign(store.getScene(), { nodes: sceneNodes });
   const nodes = selectedIds.map((id) => ({ id, selected: true, position: { x: 0, y: 0 }, data: {} }));
   render(<OverlayProvider><ReactFlowProvider initialNodes={nodes}>
     <OpenRunner /><GraphRunnerDialog store={store} />
@@ -131,6 +132,41 @@ describe("Graph Runner", () => {
     await user.click(button);
     expect(request).toHaveBeenCalledWith("scene", "resumeGraphRun", ["latest-run"]);
     await waitFor(() => expect(screen.queryByRole("button", { name: "Continue safe steps" })).toBeNull());
+  });
+
+  it("previews and runs a specifically chosen local model into an unbound note", async () => {
+    const { user, request } = setup([], [
+      { id: "source", kind: "chat", title: "Source chat" },
+      { id: "destination", kind: "note", title: "Reply note" },
+    ]);
+    const modelStep = {
+      ...step, kind: "model", operation: "model", nodeId: "destination",
+      sourceId: "source", label: "Reply note", detail: "Local Ollama model: qwen3:8b",
+    };
+    request.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ previewToken: "model-preview", steps: [modelStep] })
+      .mockResolvedValueOnce({
+        ...run, steps: [{ ...modelStep, status: "completed", detail: "External output checkpointed." }],
+      })
+      .mockResolvedValueOnce({
+        ...run, steps: [{ ...modelStep, status: "completed", detail: "External output checkpointed." }],
+      });
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    await user.click(screen.getByRole("button", { name: "Run a local model into a note" }));
+    await user.type(screen.getByRole("textbox", { name: "Installed Ollama model ID" }), "qwen3:8b");
+    await user.click(screen.getByRole("button", { name: "Preview model step" }));
+    expect(request).toHaveBeenCalledWith(
+      "scene", "previewGraphModel", ["source", "destination", "Ollama", "qwen3:8b"],
+    );
+    const modelPreview = await screen.findByRole("region", { name: "Model preview" });
+    expect(modelPreview).toHaveTextContent("Local Ollama model: qwen3:8b");
+    await user.click(within(modelPreview).getByRole("button", { name: "Run local model" }));
+    expect(request).toHaveBeenCalledWith(
+      "scene", "executeGraphModel", [
+        "source", "destination", "Ollama", "qwen3:8b", "model-preview", expect.any(String),
+      ],
+    );
+    expect(await screen.findByRole("region", { name: "Latest run" })).toHaveTextContent("External output checkpointed.");
   });
 
   it("leaves blocked and up-to-date outputs alone", async () => {
