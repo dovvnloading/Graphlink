@@ -358,36 +358,78 @@ def test_model_completion_is_hidden_until_terminal_sqlite_commit(tmp_path, monke
 
 
 
-def test_ollama_adapter_never_uses_global_client_proxies_or_redirects(monkeypatch):
-    from types import SimpleNamespace
+def test_ollama_adapter_never_inherits_credentials_proxies_or_redirects(monkeypatch):
+    import json
 
+    import httpx
     from backend.providers import graph_local_ollama
 
+    monkeypatch.setenv("OLLAMA_API_KEY", "SECRET-MUST-NOT-LEAK")
+    monkeypatch.setenv("HTTP_PROXY", "http://untrusted-proxy.example:8899")
+    monkeypatch.setenv("HTTPS_PROXY", "http://untrusted-proxy.example:8899")
     observed = {}
+    requests = []
 
-    class FakeClient:
-        def __init__(self, **kwargs):
-            observed.update(kwargs)
+    def handle(request):
+        requests.append(request)
+        assert request.url.host == "127.0.0.1"
+        assert request.url.path == "/api/chat"
+        assert request.method == "POST"
+        assert "authorization" not in request.headers
+        assert json.loads(request.content) == {
+            "model": "qwen3:8b",
+            "messages": [{"role": "user", "content": "Local only"}],
+            "stream": False,
+        }
+        return httpx.Response(200, json={"message": {"role": "assistant", "content": "Local answer"}})
 
-        def __enter__(self):
-            return self
+    real_client = httpx.Client
 
-        def __exit__(self, *_args):
-            return False
+    def client(**kwargs):
+        observed.update(kwargs)
+        return real_client(transport=httpx.MockTransport(handle), **kwargs)
 
-        def chat(self, *, model, messages, stream):
-            assert model == "qwen3:8b" and stream is False
-            assert messages == [{"role": "user", "content": "Local only"}]
-            return SimpleNamespace(message=SimpleNamespace(content="Local answer"))
-
-    monkeypatch.setattr(graph_local_ollama.ollama, "Client", FakeClient)
+    monkeypatch.setattr(graph_local_ollama.httpx, "Client", client)
     payload = graph_local_ollama.local_ollama_complete(
         prompt="Local only", model_id="qwen3:8b", endpoint="http://127.0.0.1:11434",
     )
     assert observed == {
-        "host": "http://127.0.0.1:11434",
+        "base_url": "http://127.0.0.1:11434",
         "trust_env": False,
         "follow_redirects": False,
         "timeout": 120.0,
+        "headers": {"Accept": "application/json"},
     }
+    assert len(requests) == 1
     assert payload["message"] == {"role": "assistant", "content": "Local answer"}
+
+
+def test_local_model_transport_bounds_response_and_refuses_redirect(monkeypatch):
+    import httpx
+    from backend.providers import graph_local_ollama
+
+    real_client = httpx.Client
+    calls = []
+    response = httpx.Response(200, content=b"x" * (2 * 1024 * 1024 + 1))
+
+    def handle(request):
+        calls.append(request.url)
+        return response
+
+    def client(**kwargs):
+        return real_client(transport=httpx.MockTransport(handle), **kwargs)
+
+    monkeypatch.setattr(graph_local_ollama.httpx, "Client", client)
+    with pytest.raises(ValueError, match="2 MiB limit"):
+        graph_local_ollama.local_ollama_complete(
+            prompt="Local only", model_id="qwen3:8b", endpoint="http://127.0.0.1:11434",
+        )
+    assert len(calls) == 1
+
+    calls.clear()
+    response = httpx.Response(302, headers={"Location": "https://attacker.example/api/chat"})
+    with pytest.raises((httpx.HTTPStatusError, ValueError)):
+        graph_local_ollama.local_ollama_complete(
+            prompt="Local only", model_id="qwen3:8b", endpoint="http://127.0.0.1:11434",
+        )
+    assert len(calls) == 1
