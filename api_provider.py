@@ -2473,6 +2473,10 @@ def _list_models(provider_type, client, api_key=None):
         raise ValueError(f"Unknown API provider: {provider_type}")
     if not profile.supports_catalog:
         raise ValueError(f"Enter the model or deployment ID for {profile.name} manually.")
+    if profile.key_slot == "bedrock" and str(getattr(client, "base_url", "")).startswith("https://bedrock-runtime."):
+        # AWS does not expose GET /models on the recommended Runtime endpoint.
+        # Mantle does; users on Runtime supply the model/inference-profile ID.
+        raise ValueError("Bedrock Runtime does not offer a models list. Enter an AWS model ID manually.")
     if profile.key_slot in ("cohere", "fireworks"):
         return native_chat_models(profile.key_slot, client)
     if profile.protocol == "openai":

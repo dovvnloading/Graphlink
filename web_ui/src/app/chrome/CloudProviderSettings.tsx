@@ -166,6 +166,8 @@ function ProviderForm({ state, provider, transport }: {
   const canConnect = (!provider.editableEndpoint || !!endpoint.trim()) && (
     !!key.trim() || optionalKey || (existingKey && !endpointChanged)
   );
+  const bedrockRuntime = provider.id === "Amazon Bedrock" &&
+    /^https:\/\/bedrock-runtime\.[a-z0-9-]+\.amazonaws\.com\/openai\/v1$/.test(draftUrl);
   const catalogLoading = state.apiCatalogStatus === "loading";
   // A list fetched for a draft deployment must stay bound to that endpoint.
   const catalogUrl = normalizedEndpoint(state.apiCatalogBaseUrl || state.apiBaseUrl);
@@ -239,12 +241,13 @@ function ProviderForm({ state, provider, transport }: {
       <section className="cloud-settings-section" aria-label="Models">
         <div className="cloud-section-heading">
           <h3>Models</h3>
-          {provider.supportsCatalog && <button type="button" className="settings-button cloud-small-button"
+          {provider.supportsCatalog && !bedrockRuntime && <button type="button" className="settings-button cloud-small-button"
             disabled={!canConnect || catalogLoading} onClick={() => transport.fireIntent(
               "app-settings", "loadApiModels", [provider.id, key.trim(), endpoint.trim()],
             )}>{catalogLoading ? "Loading models…" : "Load available models"}</button>}
         </div>
-        {provider.supportsCatalog && state.apiCatalogStatus !== "idle" && (showCatalog || state.apiCatalogStatus !== "success") && (
+        {bedrockRuntime && <p className="cloud-catalog-status" role="status">Bedrock Runtime does not provide a models list. Enter the model or inference profile ID from AWS.</p>}
+        {provider.supportsCatalog && !bedrockRuntime && state.apiCatalogStatus !== "idle" && (showCatalog || state.apiCatalogStatus !== "success") && (
           <p className="cloud-catalog-status" role="status" data-level={state.apiCatalogStatus}>{state.apiCatalogMessage}</p>
         )}
         <label className="settings-field">

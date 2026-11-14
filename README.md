@@ -183,6 +183,8 @@ Open **Settings > API Endpoint** and search for a provider or model family, such
 3. Set the **Default text model**. Chat, naming, charts, and web tasks use it until you assign a different model under **Per-task models**. For image generation, assign an image model on a connection that offers that field.
 4. Choose **Save and activate**. The composer shows the active provider and model. Open its model picker to switch the default within that provider. Settings retains each provider’s credentials, catalog, and model choices across restarts.
 
+For **Amazon Bedrock**, you can use the recommended `bedrock-runtime.<region>.amazonaws.com/openai/v1` endpoint or the `bedrock-mantle.<region>.api.aws/v1` endpoint (some models need `/openai/v1` instead). Runtime requires a manually entered model or inference-profile ID; Mantle offers catalog discovery. Use a Bedrock API key with these OpenAI-compatible URLs.
+
 Model access, supported inputs, and tool calling depend on the selected model and account. Graphlink uses each connection’s own catalog or your explicit assignment. The [security section](#license-and-security) describes platform-specific storage for saved credentials.
 
 ![Graphlink’s searchable cloud provider directory](assets/screenshots/cloud-providers.png)

@@ -253,3 +253,28 @@ def test_xai_image_request_uses_aspect_ratio_and_base64(wire):
     assert str(requests[0].url) == "https://api.x.ai/v1/images/generations"
     assert json.loads(requests[0].content) == {"model": "my-image-model", "prompt": "draw a cat",
                                               "aspect_ratio": "3:2", "response_format": "b64_json"}
+
+@pytest.mark.parametrize("endpoint", [
+    "https://bedrock-mantle.us-east-1.api.aws/v1",
+    "https://bedrock-mantle.us-west-2.api.aws/openai/v1",
+    "https://bedrock-runtime.eu-west-1.amazonaws.com/openai/v1",
+])
+def test_bedrock_accepts_both_mantle_routes_and_recommended_runtime(endpoint, wire):
+    requests, responses = wire
+    assert CLOUD_PROVIDERS["Amazon Bedrock"].endpoint(endpoint) == endpoint
+    runtime = api_provider.ProviderRuntime()
+    runtime.initialize_api("Amazon Bedrock", "bedrock-key", endpoint, task_models={CHAT: "model/inference-profile"})
+    responses.append(completion("bedrock response"))
+    assert api_provider.chat(config.TASK_TITLE, MESSAGES, runtime=runtime)["message"]["content"] == "bedrock response"
+    assert str(requests[0].url) == f"{endpoint}/chat/completions"
+    assert requests[0].headers["authorization"] == "Bearer bedrock-key"
+
+
+def test_bedrock_runtime_catalog_requires_manual_model_id(wire):
+    requests, _ = wire
+    with pytest.raises(RuntimeError, match="does not offer a models list"):
+        api_provider.list_models_for_config(
+            "Amazon Bedrock", "bedrock-key",
+            "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1",
+        )
+    assert not requests
