@@ -214,7 +214,9 @@ from backend.domain.node_access import with_state
 # from the domain package directly, as session_save.py does.
 from backend.domain.table_workflows import restore_table_data
 from backend.domain.graph_run_history import restore_graph_runs
-from backend.domain.node_states import ARTIFACT_MAX_CHARS, ChartState, FrameState, NoteState, FalMediaState
+from backend.domain.node_states import (
+    ARTIFACT_MAX_CHARS, ChartState, FrameState, NoteState, FalMediaState, ModelState, ModelTextBinding,
+)
 from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 from graphlink_navigation_pins import NavigationPinRecord
@@ -1154,6 +1156,42 @@ def _restore_fal_media_payload(payload: dict[str, Any]) -> SceneNode:
     )
 
 
+def _restore_model_payload(payload: dict[str, Any]) -> SceneNode:
+    """Restore the Model card as data; source IDs are remapped in a second pass."""
+    x, y = _position(payload)
+    raw = payload.get("input")
+    raw = raw if isinstance(raw, dict) else {}
+    # Reject unknown versions/identifiers without losing the card's last
+    # committed output. An invalid import must never become executable.
+    source, provider, model, binding_id = (
+        raw.get("source"), raw.get("provider"), raw.get("model"), raw.get("binding_id"),
+    )
+    try:
+        from backend.domain.graph_model_binding import validate_local_model_identity
+        if (type(raw.get("version")) is not int or raw["version"] != 1 or
+                not isinstance(source, str) or not isinstance(binding_id, str) or
+                re.fullmatch(r"[a-f0-9]{32}", binding_id) is None):
+            raise SceneError("Invalid saved Model port.")
+        validate_local_model_identity(provider, model)
+    except SceneError:
+        source, provider, model, binding_id = "", "Ollama", "unconfigured", ""
+    last_input, last_output = raw.get("last_input_hash"), raw.get("last_output_hash")
+    hashes_valid = (isinstance(last_input, str) and isinstance(last_output, str)
+                    and re.fullmatch(r"[a-f0-9]{64}", last_input)
+                    and re.fullmatch(r"[a-f0-9]{64}", last_output))
+    return SceneNode(
+        id="", x=x, y=y,
+        title=str(payload.get("title") or f"Model · {model}")[:120],
+        kind="model", content=str(payload.get("content") or "")[:200000],
+        state=ModelState(ModelTextBinding(
+            source_id=source, provider_name=provider, model_id=model,
+            binding_id=binding_id, version=1,
+            last_input_hash=last_input if hashes_valid else "",
+            last_output_hash=last_output if hashes_valid else "",
+        )), is_collapsed=bool(payload.get("is_collapsed", False)),
+    )
+
+
 _NODE_RESTORERS = {
     "chat": lambda payload, document: _restore_chat_payload(payload),
     "code": lambda payload, document: _restore_code_payload(payload),
@@ -1171,6 +1209,7 @@ _NODE_RESTORERS = {
     "code_sandbox": lambda payload, document: _restore_code_sandbox_payload(payload),
     "plan": lambda payload, document: _restore_plan_payload(payload),
     "harness": lambda payload, document: _restore_harness_payload(payload),
+    "model": lambda payload, document: _restore_model_payload(payload),
 }
 
 # Verified directly against both serializers.py (which field each isinstance
@@ -1753,6 +1792,39 @@ def _restore_flat_edges(
     return True
 
 
+def _remap_model_sources(document: SceneDocument, ids: dict[str, str]) -> None:
+    """Remap Model port references after all node IDs have been minted."""
+    for node in document.nodes.values():
+        if not isinstance(node.state, ModelState):
+            continue
+        saved_id = node.state.model_binding.source_id
+        source_id = ids.get(saved_id, "")
+        try:
+            document._text_output(source_id)
+        except SceneError:
+            source_id = ""
+        node.state.model_binding.source_id = source_id
+        node.item_ids = [source_id] if source_id else []
+        if not source_id:
+            node.state.model_binding.last_input_hash = ""
+            node.state.model_binding.last_output_hash = ""
+
+
+def _validate_restored_model_graph(document: SceneDocument) -> None:
+    """Drop corrupt cyclic Model ports without discarding prior outputs."""
+    for node in document.nodes.values():
+        if not isinstance(node.state, ModelState) or not node.state.model_binding.source_id:
+            continue
+        binding = node.state.model_binding
+        try:
+            document.configure_model_node(node.id, binding.source_id, binding.provider_name, binding.model_id)
+        except SceneError:
+            binding.source_id = ""
+            binding.last_input_hash = ""
+            binding.last_output_hash = ""
+            node.item_ids = []
+
+
 def _restore_note_text_inputs(document: SceneDocument, bindings: Any, ids: dict[str, str]) -> None:
     """Remap saved IDs and restore each binding once, without evaluating notes."""
     if not isinstance(bindings, dict):
@@ -2094,8 +2166,10 @@ def _restore_chat_into_document(
     document.graph_runs = restore_graph_runs(chat_data.get("graph_runs"), by_payload_id)
 
     restore_table_data(document.nodes, by_payload_id, chat_data.get("table_sources"), chat_data.get("table_outputs"))
+    _remap_model_sources(document, by_payload_id)
     _restore_note_text_inputs(document, chat_data.get("note_text_inputs"), by_payload_id)
     _restore_note_model_inputs(document, chat_data.get("note_model_inputs"), by_payload_id)
+    _validate_restored_model_graph(document)
 
     if not _restore_flat_edges(document, chat_data, by_payload_id):
         _restore_basic_connections(document, chat_data, all_nodes_map, nodes_by_id)
