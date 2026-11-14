@@ -86,6 +86,22 @@ ARTIFACT_MAX_CHARS = 256_000
 
 
 @dataclass
+class TableVersion:
+    version: int
+    source_hash: str
+    result: str | dict[str, Any]
+
+
+@dataclass
+class TableOutput:
+    source_id: str
+    label_column: str
+    value_column: str
+    current: TableVersion
+    previous: TableVersion | None = None
+
+
+@dataclass
 class ArtifactState(NodeState):
     """Relocated verbatim from SceneNode.artifact_content (former
     backend/domain/model.py field, R5.2) - the Artifact/Drafter node's
@@ -98,6 +114,7 @@ class ArtifactState(NodeState):
     needed."""
 
     artifact_content: str = ""
+    table_output: TableOutput | None = None
     # Why a field at all: an artifact generation that fails used to report
     # only through a session-wide notification toast, so with two artifact
     # nodes on the canvas there was no way to tell WHICH one failed. Every
@@ -146,6 +163,7 @@ class NoteState(NodeState):
     is_system_prompt: bool = False
     is_summary_note: bool = False
     is_branch_comparison: bool = False
+    is_table_source: bool = False
 
     # A manually run text input. Its source is independent of canvas ancestry.
     text_input_source_id: str = ""
@@ -310,6 +328,7 @@ class ChartState(NodeState):
       is a known, accepted simplification, not replicated)."""
 
     chart_type: str = ""
+    table_output: TableOutput | None = None
     chart_data: dict = field(default_factory=dict)
     chart_error: str = ""
     chart_width: float = 480.0

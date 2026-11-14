@@ -464,6 +464,13 @@ def test_args_schema_is_scoped_to_the_known_intents():
             ("scene", "bindNoteTextInput"),
             ("scene", "runNoteTextInput"),
             ("scene", "unbindNoteTextInput"),
+            ("scene", "addTable"),
+            ("scene", "setTableCsv"),
+            ("scene", "addTableOutput"),
+            ("scene", "runTableOutput"),
+            ("scene", "restoreTableOutput"),
+            ("scene", "getTableOutputHistory"),
+            ("scene", "getTableContributors"),
         }
 
 

@@ -1,0 +1,41 @@
+.table-workflow {
+  display: grid;
+  gap: 7px;
+  align-content: start;
+  min-width: 0;
+  font-size: 0.88em;
+  cursor: default;
+}
+.note-node.table-source-node { width: 350px; max-width: none; }
+.table-workflow :is(input, textarea, select, button) {
+  box-sizing: border-box;
+  color: inherit;
+  font: inherit;
+  background: var(--gl-surface-window);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 4px;
+  padding: 3px 6px;
+}
+.table-workflow button { cursor: pointer; }
+.table-workflow button:disabled { opacity: 0.55; cursor: default; }
+.table-workflow label { display: grid; gap: 3px; min-width: 0; }
+.table-workflow :is(input, textarea, select) { min-width: 0; max-width: 100%; }
+.table-workflow textarea[aria-label="CSV data"] { width: 100%; min-height: 110px; font-family: monospace; resize: vertical; }
+.table-workflow-scroll { overflow: auto; max-height: 220px; }
+.table-workflow table { width: 100%; border-collapse: collapse; text-align: start; font-variant-numeric: tabular-nums; }
+.table-workflow :is(td, th) { white-space: pre-wrap; overflow-wrap: anywhere; padding: 3px 6px; border-bottom: 1px solid var(--gl-surface-border); }
+.table-workflow th { text-align: start; }
+.table-workflow td > textarea, .table-workflow th > input { min-width: 80px; width: 100%; }
+.table-workflow td > textarea { resize: vertical; vertical-align: middle; }
+.table-workflow fieldset { margin: 2px 0 0; padding: 5px 0 0; border: 0; border-top: 1px solid var(--gl-surface-border); }
+.table-workflow legend { padding-inline-end: 6px; }
+.table-workflow fieldset label { display: inline-grid; max-width: 47%; margin: 0 6px 5px 0; }
+.table-workflow-actions, .table-output-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.table-output { flex-shrink: 0; padding: 6px 10px; border-top: 1px solid var(--gl-surface-border); max-height: 45%; overflow: auto; }
+.table-workflow [role="alert"] { color: var(--gl-status-danger, currentColor); }
+.table-workflow p { margin: 0; }
+.table-output [data-state="stale"] { font-weight: 600; }
+.table-version-comparison { display: grid; gap: 5px; }
+.table-version-comparison > button { justify-self: start; }
+.table-version-report { display: grid; gap: 6px; max-height: 180px; overflow: auto; }
+.table-version-report pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 2px 0; }

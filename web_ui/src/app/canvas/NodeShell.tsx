@@ -1,9 +1,18 @@
-import { Handle, Position } from "@xyflow/react";
-import type { CSSProperties, MouseEvent, ReactNode } from "react";
+import { Handle, Position, useNodeId, useUpdateNodeInternals } from "@xyflow/react";
+import { useEffect, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 
 import type { MenuPosition } from "./menuPosition";
 import { TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE } from "./textInputs";
 import "./NodeCards.css";
+
+// Size-reporting alone misses a port when a lazy node view replaces an
+// equal-sized placeholder. Register the new handle after it enters the DOM.
+function RefreshPorts() {
+  const id = useNodeId();
+  const update = useUpdateNodeInternals();
+  useEffect(() => { if (id) update(id); }, [id, update]);
+  return null;
+}
 
 /** Shared frame. Clip the card contents independently of ports and resize handles. */
 interface NodeShellProps {
@@ -19,6 +28,7 @@ interface NodeShellProps {
   resizer?: ReactNode;
   textOutput?: boolean;
   textInput?: boolean;
+  tablePort?: "source" | "target";
   footer?: ReactNode;
   onBodyDoubleClick?: (event: MouseEvent<HTMLDivElement>) => void;
 }
@@ -36,6 +46,7 @@ export function NodeShell({
   resizer,
   textOutput,
   textInput,
+  tablePort,
   footer,
   onBodyDoubleClick,
 }: NodeShellProps) {
@@ -81,6 +92,11 @@ export function NodeShell({
         className="scene-text-handle" title="Text output · Drag to a note’s text input" aria-label="Text output" />}
       {textInput && <Handle id={TEXT_INPUT_HANDLE} type="target" position={Position.Left}
         className="scene-text-handle" title="Text input · Connect a text output" aria-label="Text input port" />}
+      {tablePort && <RefreshPorts />}
+      {tablePort && <Handle id={`table-${tablePort}`} type={tablePort}
+        position={tablePort === "source" ? Position.Right : Position.Left} isConnectable={false}
+        className="scene-text-handle scene-table-handle" title={tablePort === "source" ? "Table output" : "Table input"}
+        aria-label={tablePort === "source" ? "Table output" : "Table input"} />}
       {menu}
     </div>
   );

@@ -79,7 +79,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterable, TypeVar
 
-from backend.domain.node_states import HarnessState, NoteState, PlanState
+from backend.domain.node_states import ArtifactState, ChartState, HarnessState, NoteState, PlanState
 
 if TYPE_CHECKING:
     from backend.domain.model import SceneEdge, SceneNode
@@ -377,6 +377,11 @@ _COMMAND_LABELS = {
     "addImageNode": "Add Image",
     "addConversationNode": "Add Conversation",
     "addNote": "Add Note",
+    "addTable": "Add Table",
+    "setTableCsv": "Edit Table",
+    "addTableOutput": "Create Table Output",
+    "runTableOutput": "Run Table Output",
+    "restoreTableOutput": "Restore Table Version",
     "bindNoteTextInput": "Connect Text Input",
     "runNoteTextInput": "Run Text Input",
     "unbindNoteTextInput": "Disconnect Text Input",
@@ -603,6 +608,8 @@ class CommandOps(SceneDocumentParts):
             n.id for n in self.nodes.values()
             if n.kind in ("frame", "container")
             or (isinstance(n.state, NoteState) and n.state.text_input_source_id in named_node_ids)
+            or (isinstance(n.state, (ArtifactState, ChartState)) and n.state.table_output is not None
+                and n.state.table_output.source_id in named_node_ids)
         }
         watch_edge_ids = set(edge_ids) | {
             e.id for e in self.edges.values() if e.source in watch_node_ids or e.target in watch_node_ids

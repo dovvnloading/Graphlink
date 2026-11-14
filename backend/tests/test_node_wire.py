@@ -188,6 +188,7 @@ def _dense_row(doc: SceneDocument, node: SceneNode) -> dict:
     row["isFinalDeliverable"] = node.id == doc.final_deliverable_node_id
     row["pluginState"] = doc._plugin_state_wire(node)
     row["textInputStatus"] = doc._text_input_status(node)
+    row.update(doc._table_output_wire(node))
     return row
 
 

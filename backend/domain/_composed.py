@@ -82,6 +82,14 @@ class SceneDocumentParts:
         # inexact declaration here would be an incompatible-override error
         # rather than the useful fiction it was while the body lived in
         # SceneDocument itself.
+        def add_note(self, x: float, y: float, *, is_system_prompt: bool = False, is_summary_note: bool = False) -> SceneNode: ...
+
+        def add_chart_node(
+            self, x: float, y: float, parent_id: str | None, chart_type: str, chart_data: dict[str, Any], *, chart_error: str = "",
+        ) -> SceneNode: ...
+
+        def add_artifact_node(self, x: float, y: float, parent_id: str | None) -> SceneNode: ...
+
         def add_chat_node(
             self, x: float, y: float, content: str, is_user: bool,
             parent_id: str | None = None,

@@ -187,7 +187,7 @@ import math
 import re
 import uuid
 from collections import Counter
-from typing import Any, cast
+from typing import Any, TypedDict, cast
 
 from backend.canvas import (
     ArtifactState,
@@ -212,6 +212,7 @@ from backend.domain.model import EDGE_ROLES, EdgeRole, SceneError
 from backend.domain.node_access import with_state
 # Not re-exported by backend.canvas, unlike the kinds above - imported
 # from the domain package directly, as session_save.py does.
+from backend.domain.table_workflows import restore_table_data
 from backend.domain.node_states import ARTIFACT_MAX_CHARS, ChartState, FrameState, NoteState, FalMediaState
 from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
@@ -665,7 +666,14 @@ def _restore_web_payload(payload: dict[str, Any]) -> SceneNode:
     return node
 
 
-def _artifact_proposal_from_payload(payload: dict[str, Any]) -> dict[str, str]:
+class _ArtifactProposal(TypedDict, total=False):
+    artifact_proposal_id: str
+    artifact_proposal_content: str
+    artifact_proposal_base_sha256: str
+    artifact_proposal_summary: str
+
+
+def _artifact_proposal_from_payload(payload: dict[str, Any]) -> _ArtifactProposal:
     """Load only a bounded, structurally valid, pending review candidate."""
     proposal_id = payload.get("proposal_id")
     content = payload.get("proposal_content")
@@ -1251,7 +1259,9 @@ def _restore_node(
         parent_key = "parent_content_node_index" if node_type in _PARENT_CONTENT_INDEX_KINDS else "parent_node_index"
         parent_index = payload.get(parent_key)
         parent_new_id = all_nodes_map.get(parent_index) if isinstance(parent_index, int) else None
-        if parent_new_id is None:
+        # A directly generated table report has no conversation ancestor.
+        table_report = node_type == "artifact" and payload.get("table_generated") is True
+        if parent_new_id is None and not table_report:
             return None, None
 
     try:
@@ -2047,6 +2057,7 @@ def _restore_chat_into_document(
                 by_payload_id[str(note_payload_id)] = mapped_note_id
     by_payload_id.update(charts_by_id)
 
+    restore_table_data(document.nodes, by_payload_id, chat_data.get("table_sources"), chat_data.get("table_outputs"))
     _restore_note_text_inputs(document, chat_data.get("note_text_inputs"), by_payload_id)
 
     if not _restore_flat_edges(document, chat_data, by_payload_id):

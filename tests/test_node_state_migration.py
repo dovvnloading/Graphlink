@@ -376,6 +376,9 @@ _EXPECTED_SCENE_NODE_WIRE_KEYS = sorted([
     "researchResult", "researchRetainToKnowledge", "researchStage", "researchTotal",
     "responseIncomplete",
     "synthesisInstructions", "textInputOperation", "textInputSourceId", "textInputStatus", "title", "toolCalls", "x", "y",
+    "isTableSource", "tableInputSourceId", "tableLabelColumn", "tableValueColumn",
+    "tableInputStatus", "tableOutputEdited", "tableOutputVersion", "tableHasPrevious",
+    "tableSourceHash",
     # ADR-008 stage 8.3: the Builder plan node's 15 fields, +1 (builderActivity)
     # when stage 8.7 added the run's own activity log.
     "planGoal", "planSteps", "builderActivity", "builderStatus", "builderMode",

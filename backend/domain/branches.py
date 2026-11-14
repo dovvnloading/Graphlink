@@ -49,6 +49,8 @@ class BranchOps(SceneDocumentParts):
         right after creation" shape (see the WS intent wrapper in
         register_canvas)."""
         node = require_node(self.nodes, node_id, "note", NoteState)
+        if node.state.is_table_source:
+            raise SceneError("A table cannot be converted to a comparison note.")
         node.state.clear_text_input()
         clear_note_text_readers(self.nodes.values(), {node_id})
         node.state.is_branch_comparison = True

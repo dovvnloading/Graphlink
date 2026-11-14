@@ -25,7 +25,7 @@ from backend.domain.model import (
     SceneNode,
 )
 from backend.domain.node_access import is_node_of, require_node
-from backend.domain.node_states import ArtifactState, DocumentState, HtmlState, NoteState
+from backend.domain.node_states import ArtifactState, ChartState, DocumentState, HtmlState, NoteState
 
 if TYPE_CHECKING:
     from backend.domain.node_access import _NodeWith
@@ -36,6 +36,10 @@ def clear_note_text_readers(nodes: Iterable[SceneNode], removed_sources: set[str
     for node in nodes:
         if isinstance(node.state, NoteState) and node.state.text_input_source_id in removed_sources:
             node.state.clear_text_input()
+        if isinstance(node.state, (ArtifactState, ChartState)):
+            binding = node.state.table_output
+            if binding is not None and binding.source_id in removed_sources:
+                binding.source_id = ""
 
 
 def _text_digest(text: str) -> str:
@@ -266,13 +270,15 @@ class ContentOps(SceneDocumentParts):
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
+        if isinstance(node.state, NoteState) and node.state.is_table_source:
+            raise SceneError("Use the table editor to change CSV data.")
         node.content = str(content)
 
     def _plain_note(self, node_id: str) -> _NodeWith[NoteState]:
         note = self.nodes.get(node_id)
         if not is_node_of(note, "note", NoteState):
             raise SceneError("Choose a plain note for this text input.")
-        if note.state.is_system_prompt or note.state.is_summary_note or note.state.is_branch_comparison:
+        if note.state.is_table_source or note.state.is_system_prompt or note.state.is_summary_note or note.state.is_branch_comparison:
             raise SceneError("Text inputs require a plain note.")
         return note
 

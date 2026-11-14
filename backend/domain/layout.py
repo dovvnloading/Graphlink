@@ -41,7 +41,7 @@ from backend.domain.model import (
 )
 
 from backend.domain.node_access import is_node_of
-from backend.domain.node_states import ChartState, GroupSizedState
+from backend.domain.node_states import ChartState, GroupSizedState, NoteState
 from backend.domain.structure import primary_parent_edges
 
 from backend.domain._composed import SceneDocumentParts
@@ -140,6 +140,8 @@ class LayoutOps(SceneDocumentParts):
                 width, height = node.state.group_width, node.state.group_height
         if not (width and width > 0) or not (height and height > 0):
             fw, fh = KIND_FALLBACK_FOOTPRINTS.get(node.kind, DEFAULT_FALLBACK_FOOTPRINT)
+            if isinstance(node.state, NoteState) and node.state.is_table_source:
+                fw = 350.0  # Fixed card width in TableWorkflow.css, until measured.
             width = width if (width and width > 0) else fw
             height = height if (height and height > 0) else fh
         return float(width), float(height)

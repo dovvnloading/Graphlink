@@ -1672,6 +1672,7 @@ export function toFlowNodes(
         position: { x: n.x, y: n.y },
         style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
+          tableOutput: n.tableOutputVersion ? { node: n, store } : undefined,
           artifactContent: n.artifactContent,
           artifactError: n.artifactError,
           artifactProposalId: n.artifactProposalId,
@@ -1887,6 +1888,7 @@ export function toFlowNodes(
           isBranchComparison: n.isBranchComparison,
           compareSourceNodeIds: n.itemIds,
           targetId: n.id,
+          tableStore: n.isTableSource ? store : undefined,
           textInputSourceId: n.textInputSourceId,
           textInputSourceLabel: sourceLabel,
           textInputOperation: n.textInputOperation,
@@ -2008,6 +2010,7 @@ export function toFlowNodes(
         height: n.chartHeight,
         style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
         data: {
+          tableOutput: n.tableOutputVersion ? { node: n, store } : undefined,
           chartType: n.chartType,
           chartData: n.chartData,
           chartError: n.chartError,
@@ -2459,15 +2462,17 @@ export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Ed
         : {}),
     }));
   for (const target of scene.nodes) {
-    const source = target.textInputSourceId;
+    const table = !!target.tableInputSourceId;
+    const source = target.tableInputSourceId || target.textInputSourceId;
     if (!source || !nodesById.has(source) || dockedNodeIds.has(source) || dockedNodeIds.has(target.id)
       || collapsedHiddenIds.has(source) || collapsedHiddenIds.has(target.id)) continue;
-    const id = `text-input:${target.id}`;
+    const role = table ? "table-input" : "text-input";
+    const id = `${role}:${target.id}`;
     flowEdges.push({
       id, source, target: target.id,
-      sourceHandle: TEXT_OUTPUT_HANDLE, targetHandle: TEXT_INPUT_HANDLE,
-      data: { role: "text-input" },
-      ariaLabel: `Text input from ${source} to ${target.id}`,
+      sourceHandle: table ? "table-source" : TEXT_OUTPUT_HANDLE, targetHandle: table ? "table-target" : TEXT_INPUT_HANDLE,
+      data: { role },
+      ariaLabel: `${table ? "Table" : "Text"} input from ${source} to ${target.id}`,
       ...(scene.fadeConnectionsEnabled && id !== hoveredEdgeId ? { style: { opacity: FADED_CONNECTION_OPACITY } } : {}),
     });
   }
@@ -2879,7 +2884,7 @@ function CanvasInner({
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName))) return;
       const connection = edges.find((edge) => edge.id === selectedConnectionId);
       if (connection?.data?.role === "text-input") store.unbindNoteTextInput(connection.target);
-      else if (connection) store.removeEdges([connection.id]);
+      else if (connection && connection.data?.role !== "table-input") store.removeEdges([connection.id]);
       setSelectedConnectionId(null);
     };
     document.addEventListener("keydown", onKeyDown);

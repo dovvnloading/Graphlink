@@ -289,6 +289,7 @@ from backend.api.intents_builder import register_builder_intents  # noqa: E402
 from backend.api.intents_harness import register_harness_intents  # noqa: E402
 from backend.api.intents_view import register_view_intents  # noqa: E402
 from backend.api.intents_undo import register_undo_intents  # noqa: E402
+from backend.api.intents_tables import register_table_intents  # noqa: E402
 from backend.api.intents_web_research import register_web_research_intents  # noqa: E402
 
 
@@ -386,6 +387,7 @@ def register_canvas(
     register_harness_intents(bus, document, notifications, agent_dispatcher)
 
     register_groups_intents(bus, document)
+    register_table_intents(bus, document)
     # ADR-012 stage 12.6: the bundled sample workspace - see that module's
     # own docstring.
     register_onboarding_intents(bus, document)

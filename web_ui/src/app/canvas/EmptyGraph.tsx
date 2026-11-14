@@ -12,6 +12,7 @@ export function EmptyGraph({ store }: { store: SceneStore }) {
           const { x, y } = store.getSpawnPoint();
           store.addNote(x, y);
         }}>Add a note</button>
+        <button type="button" onClick={() => store.addTable()}>Add a table</button>
       </div>
     </section>
   );

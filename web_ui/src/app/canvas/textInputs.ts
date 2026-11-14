@@ -4,8 +4,8 @@ export const TEXT_INPUT_HANDLE = "text-input";
 export const TEXT_OUTPUT_HANDLE = "text-output";
 export type TextInputOperation = SceneNodeRow["textInputOperation"];
 
-export function isPlainNote(row: Pick<SceneNodeRow, "kind" | "isSystemPrompt" | "isSummaryNote" | "isBranchComparison">): boolean {
-  return row.kind === "note" && !row.isSystemPrompt && !row.isSummaryNote && !row.isBranchComparison;
+export function isPlainNote(row: Pick<SceneNodeRow, "kind" | "isSystemPrompt" | "isSummaryNote" | "isBranchComparison" | "isTableSource">): boolean {
+  return row.kind === "note" && !row.isSystemPrompt && !row.isSummaryNote && !row.isBranchComparison && !row.isTableSource;
 }
 
 export function textSourceLabel(row: SceneNodeRow): string {

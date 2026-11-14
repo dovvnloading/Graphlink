@@ -5,6 +5,8 @@ import { GroupColorPicker } from "./GroupColorPicker";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeHeading } from "./NodeHeading";
 import { swatchStyle } from "./nodeSwatch";
+import TableSource from "./TableSource";
+import type { SceneStore } from "./sceneStore";
 import { NodeShell } from "./NodeShell";
 import { NoteTextInput, type NoteTextInputProps } from "./NoteTextInput";
 
@@ -41,6 +43,7 @@ import { NoteTextInput, type NoteTextInputProps } from "./NoteTextInput";
  */
 
 export interface NoteNodeData extends Record<string, unknown>, NoteTextInputProps {
+  tableStore?: SceneStore;
   content: string;
   color: string | null;
   headerColor: string | null;
@@ -121,13 +124,14 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
     commit(draft);
   }
 
-  const plain = !data.isSystemPrompt && !data.isSummaryNote && !data.isBranchComparison;
+  const plain = !data.tableStore && !data.isSystemPrompt && !data.isSummaryNote && !data.isBranchComparison;
   return (
     <NodeShell
+      tablePort={data.tableStore ? "source" : undefined}
       textInput={plain}
       textOutput={plain}
       footer={plain && <NoteTextInput {...data} />}
-      kindClassName={"note-node" + (data.isSystemPrompt ? " system-prompt" : "")}
+      kindClassName={"note-node" + (data.tableStore ? " table-source-node" : "") + (data.isSystemPrompt ? " system-prompt" : "")}
       selected={!!selected}
       // Notes render NO Handle-driven collapse/LOD posture of their own -
       // see this file's own module doc - so this is always false, never
@@ -144,7 +148,7 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
       header={
         <NodeHeading className="note-node-header" style={swatchStyle(data.headerColor)}>
           <span className="note-node-badges">
-            <span>Note</span>
+            <span>{data.tableStore ? "Data table" : "Note"}</span>
             {data.isSystemPrompt && (
               <span className="note-node-badge" title="System Prompt" aria-label="System Prompt">
                 ⚙
@@ -174,9 +178,9 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
         </NodeHeading>
       }
       bodyClassName="note-node-content"
-      onBodyDoubleClick={beginEdit}
+      onBodyDoubleClick={data.tableStore ? undefined : beginEdit}
     >
-      {editing ? (
+      {data.tableStore ? <TableSource id={data.targetId} store={data.tableStore} content={data.content} /> : editing ? (
         <textarea
           ref={textareaRef}
           className="note-node-editor nodrag"
@@ -222,6 +226,7 @@ function stringArraysEqual(a: readonly string[], b: readonly string[]): boolean 
  * is a primitive or stable callback reference. */
 function noteNodeDataAreEqual(prev: NoteNodeData, next: NoteNodeData): boolean {
   return (
+    prev.tableStore === next.tableStore &&
     prev.content === next.content &&
     prev.color === next.color &&
     prev.headerColor === next.headerColor &&

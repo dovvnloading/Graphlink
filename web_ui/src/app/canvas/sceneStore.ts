@@ -1520,6 +1520,35 @@ export class SceneStore {
     this.transport.fireIntent("scene", "addNote", [x, y, isSystemPrompt, isSummaryNote]);
   }
 
+  addTable(): void {
+    const { x, y } = this.getSpawnPoint();
+    this.transport.fireIntent("scene", "addTable", [x, y, "Team,Hours\nDesign,2\nEngineering,4\nDesign,3"]);
+  }
+
+  setTableCsv(sourceId: string, csv: string, expectedContent: string) {
+    return this.transport.request("scene", "setTableCsv", [sourceId, csv, expectedContent]);
+  }
+
+  addTableOutput(sourceId: string, kind: "chart" | "artifact", groupColumn: string, valueColumn: string) {
+    return this.transport.request("scene", "addTableOutput", [sourceId, kind, groupColumn, valueColumn]);
+  }
+
+  runTableOutput(targetId: string) {
+    return this.transport.request("scene", "runTableOutput", [targetId]);
+  }
+
+  getTableOutputHistory(targetId: string) {
+    return this.transport.request("scene", "getTableOutputHistory", [targetId]);
+  }
+
+  getTableContributors(targetId: string, group: string, offset: number) {
+    return this.transport.request("scene", "getTableContributors", [targetId, group, offset]);
+  }
+
+  restoreTableOutput(targetId: string, revisionToken: string) {
+    return this.transport.request("scene", "restoreTableOutput", [targetId, revisionToken]);
+  }
+
   setNoteContent(nodeId: string, content: string): void {
     this.transport.fireIntent("scene", "setNoteContent", [nodeId, content], undefined, true);
   }

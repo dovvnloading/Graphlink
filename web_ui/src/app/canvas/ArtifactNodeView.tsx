@@ -7,6 +7,7 @@ import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
+import TableOutput, { type TableOutputBinding } from "./TableOutput";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -57,6 +58,7 @@ export interface ArtifactProposal {
 }
 
 export interface ArtifactNodeData extends Record<string, unknown> {
+  tableOutput?: TableOutputBinding;
   artifactContent: string;
   artifactError: string;
   artifactProposalId: string;
@@ -163,6 +165,7 @@ export function artifactNodePropsAreEqual(
   const a = prev.data;
   const b = next.data;
   return (
+    a.tableOutput === b.tableOutput &&
     a.artifactContent === b.artifactContent &&
     a.artifactError === b.artifactError &&
     a.artifactProposalId === b.artifactProposalId &&
@@ -310,6 +313,8 @@ export const ArtifactNodeView = memo(function ArtifactNodeView({
   return (
     <NodeShell
       textOutput
+      tablePort={data.tableOutput?.node.tableInputSourceId ? "target" : undefined}
+      footer={!collapsed && data.tableOutput && <TableOutput {...data.tableOutput} editing={editing} />}
       kindClassName="artifact-node"
       selected={!!selected}
       collapsed={collapsed}
