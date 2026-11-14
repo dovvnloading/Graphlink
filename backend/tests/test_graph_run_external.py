@@ -307,3 +307,56 @@ def test_dispatched_external_request_survives_real_graph_database_roundtrip(tmp_
         assert not reopened.command_log
 
     asyncio.run(scenario())
+
+
+
+def test_uncertain_remote_step_does_not_block_an_independent_local_step(tmp_path):
+    async def scenario():
+        path = tmp_path / "graphs.db"
+        doc = SceneDocument()
+        bus = SessionBus("unrelated")
+        bus.register_topic("scene", doc.scene_payload)
+        chat_library.register_chat_library(bus, path, doc, autosave_interval_seconds=None)
+        src1, dst1, src2, dst2 = [doc.add_note(i * 100, 0) for i in range(4)]
+        src1.content = "Sent to provider"
+        src2.content = "Independent local output"
+        doc.bind_note_text_input(src1.id, dst1.id)
+        doc.bind_note_text_input(src2.id, dst2.id)
+        steps = plan_graph_run(doc, [])
+        remote, local = (next(step for step in steps if step["nodeId"] == target)
+                         for target in (dst1.id, dst2.id))
+        remote["status"] = "reconciliation-required"
+        remote["externalAttempt"] = ExternalCall(
+            kind="model", provider="profile/openai", model="example-model",
+            input_ref="artifact/version-1", input_hash=remote["inputHash"],
+        ).journal_record()
+        local["status"] = "pending"
+        doc.graph_runs.append({
+            **saved_run(remote), "steps": [remote, local],
+            "status": "reconciliation-required",
+        })
+        await bus.dispatch_intent("app-chat-library", "saveChat", [])
+        graph_id = doc.current_chat_id
+        assert graph_id is not None
+
+        fresh = SceneDocument()
+        bus2 = SessionBus("unrelated-reopen")
+        bus2.register_topic("scene", fresh.scene_payload)
+        chat_library.register_chat_library(bus2, path, fresh, autosave_interval_seconds=None)
+        await bus2.dispatch_intent("app-chat-library", "loadChat", [graph_id])
+        before = await bus2.dispatch_intent("scene", "getGraphRun", [])
+        assert before["status"] == "reconciliation-required"
+        assert [step["status"] for step in before["steps"]] == ["reconciliation-required", "pending"]
+        finished = await bus2.dispatch_intent("scene", "resumeGraphRun", ["remote-run-01"])
+        assert finished["status"] == "reconciliation-required"
+        assert [step["status"] for step in finished["steps"]] == ["reconciliation-required", "completed"]
+        assert fresh.nodes[finished["steps"][1]["nodeId"]].content == src2.content
+        assert fresh.nodes[finished["steps"][0]["nodeId"]].content == "Add note..."
+        assert len(fresh.command_log) == 1
+        # A second retry makes no more writes or remote calls.
+        assert (await bus2.dispatch_intent("scene", "resumeGraphRun", ["remote-run-01"]))["status"] == (
+            "reconciliation-required"
+        )
+        assert len(fresh.command_log) == 1
+
+    asyncio.run(scenario())
