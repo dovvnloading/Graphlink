@@ -384,6 +384,13 @@ class ContentOps(SceneDocumentParts):
             return "stale"
         if _text_digest(target.content) != binding.last_output_hash:
             return "edited"
+        try:
+            # A source note can itself be stale even if its cached text is
+            # byte-identical to the model's last input. Propagate dependency
+            # freshness without running anything or reading private prompts.
+            self.require_current_model_source(binding.source_id)
+        except SceneError:
+            return "stale"
         return "current"
 
     def require_current_model_source(self, source_id: str) -> None:
@@ -398,10 +405,15 @@ class ContentOps(SceneDocumentParts):
             if not isinstance(state, NoteState):
                 return
             if state.model_text_input is not None:
-                if self.model_input_status(current_id) != "current":
+                model_input = state.model_text_input
+                if (not model_input.last_input_hash or not model_input.last_output_hash or
+                        _text_digest(self._text_output(model_input.source_id)) != model_input.last_input_hash or
+                        _text_digest(self.nodes[current_id].content) != model_input.last_output_hash):
                     raise SceneError("Run the upstream model input first; its output is not current.")
-                current_id = state.model_text_input.source_id
+                current_id = model_input.source_id
             elif state.text_input_source_id:
+                if self._text_input_status(self.nodes[current_id]) != "current":
+                    raise SceneError("Run the upstream text input first; its output is not current.")
                 current_id = state.text_input_source_id
             else:
                 return
