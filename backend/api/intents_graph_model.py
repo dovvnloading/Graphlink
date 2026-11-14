@@ -222,6 +222,7 @@ def register_graph_model_runner(
             )
             raise
         finally:
+            setattr(bus, "graph_model_active_run_id", None)
             await bus.publish("scene")
 
     async def execute_graph_model(
