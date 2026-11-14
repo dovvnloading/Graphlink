@@ -154,6 +154,12 @@ def register_graph_model_runner(
             for run in document.graph_runs for prior in run.get("steps", [])
         ):
             raise IntentValidationError(["This output has an unresolved external request. Inspect its request ID first."])
+        # Repeat endpoint validation before changing the graph journal. If
+        # OLLAMA_HOST changes between planning and admission, do not append a
+        # run, rotate its epoch, or leave an active-run marker behind.
+        endpoint = _require_loopback_ollama()
+        if _digest(["local_model_v1", selection.providerName, selection.modelId, endpoint]) != step["configHash"]:
+            raise IntentValidationError(["The Ollama endpoint changed. Preview the model step again."])
         step.update(status="pending", detail="Waiting for the durable request checkpoint.")
         if len(document.graph_runs) >= RUN_HISTORY_LIMIT:
             finished = next((item for item in document.graph_runs if item["status"] in {"completed", "partial"}), None)
@@ -173,12 +179,8 @@ def register_graph_model_runner(
         # receipt before the model's terminal SQLite checkpoint commits.
         setattr(bus, "graph_model_active_run_id", run_id)
 
-        # Capture the validated endpoint used for the exact preview. The
-        # dedicated client will NOT read OLLAMA_HOST or proxy settings itself.
-        endpoint = _require_loopback_ollama()
-        if _digest(["local_model_v1", selection.providerName, selection.modelId, endpoint]) != step["configHash"]:
-            raise IntentValidationError(["The Ollama endpoint changed. Preview the model step again."])
-
+        # The endpoint is pinned before journal admission. The dedicated
+        # client will NOT read OLLAMA_HOST or proxy settings itself.
         async def invoke(_request_id: str) -> Any:
             # The model SDK's module-level chat() binds a process-global
             # client at import time and can retain a stale/cloud host.
