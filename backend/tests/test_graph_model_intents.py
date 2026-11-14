@@ -146,6 +146,50 @@ def test_cloud_model_and_unbound_destination_are_enforced_before_preview(tmp_pat
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("edit", ["source", "output", "binding"])
+def test_live_edits_during_model_call_are_preserved(tmp_path, monkeypatch, edit):
+    async def scenario():
+        from backend.domain.model import SceneError
+
+        path, _bus, doc, source, target, send = session(tmp_path)
+        selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        token = (await send("previewGraphModel", *selected))["previewToken"]
+        started, released = threading.Event(), threading.Event()
+
+        def slow_answer(**_kwargs):
+            started.set()
+            assert released.wait(8)
+            return {"message": {"role": "assistant", "content": "Generated answer"}}
+
+        monkeypatch.setattr(graph_model, "local_ollama_complete", slow_answer)
+        pending = asyncio.create_task(send("executeGraphModel", *selected, token, "edited-model-run"))
+        try:
+            assert await asyncio.to_thread(started.wait, 5)
+            if edit == "source":
+                doc.set_note_content(source.id, "Source changed while Ollama was running")
+            elif edit == "output":
+                doc.set_note_content(target.id, "My own edits must survive")
+            else:
+                doc.bind_note_text_input(source.id, target.id)
+        finally:
+            released.set()
+
+        with pytest.raises(SceneError, match="was not applied"):
+            await pending
+        expected = "My own edits must survive" if edit == "output" else "Add note..."
+        assert target.content == expected
+        assert len(doc.command_log) == 0
+        run = await send("getGraphRun")
+        assert run["status"] == "reconciliation-required"
+        assert run["steps"][0]["status"] == "reconciliation-required"
+        assert run["steps"][0]["externalAttempt"]["requestId"].startswith("graph-")
+        saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][0]
+        assert saved["steps"][0]["externalAttempt"]["phase"] == "reconciliation-required"
+        assert saved["steps"][0]["status"] == "reconciliation-required"
+
+    asyncio.run(scenario())
+
+
 def test_remote_timeout_records_uncertain_request_and_never_replays(tmp_path, monkeypatch):
     async def scenario():
         path, _bus, doc, source, target, send = session(tmp_path)
