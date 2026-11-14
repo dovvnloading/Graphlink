@@ -82,6 +82,8 @@ To add a shared intermediate step, choose **Create grouped table** on the source
 
 Open Graph Runner again to inspect the saved result. If the app closed during execution, reopen the graph from the **Chat Library** and choose **Resume run**. Each completed step and its output were saved together. All transforms run locally. Existing chat replies can supply text to a workflow. [See the completed three-step run](assets/screenshots/graph-runner.png).
 
+To run a local AI model explicitly, start **Ollama** on your own machine and install a chat model. In **Plugins → Graph Runner**, expand **Run a local model into a note**, select an existing chat or note as input and a separate unbound plain note as the output, and enter the installed model's exact ID (for example `qwen3:8b`). Choose **Preview model step**, review the source and destination, then choose **Run local model**. This one-shot call records its model and request identity before execution and saves the reply into the note. If execution is interrupted, Graph Runner preserves an uncertain request for inspection rather than automatically replaying it. Only loopback Ollama is permitted for this operation: paid cloud models, connected model graph nodes, and external tools are not yet available here. [Local-model guide](docs/GRAPH_RUN_LOCAL_MODEL.md).
+
 ## API providers
 
 The directory includes **26 named providers** and a **Custom endpoint** for OpenAI Chat Completions-compatible servers. Search by service or model family, such as Claude, Grok, Kimi, or Qwen. You can browse another provider’s settings while your current connection stays active.
