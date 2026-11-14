@@ -34,14 +34,24 @@ _MAX_OUTPUT_CHARS = 200000
 _MODEL_ID = re.compile(r"[A-Za-z0-9._:/@+-]{1,192}")
 
 
-def _require_loopback_ollama() -> None:
+def _require_loopback_ollama() -> str:
     """Ollama's SDK obeys OLLAMA_HOST; local-only must mean loopback."""
     configured = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
     url = configured if "://" in configured else f"http://{configured}"
-    parsed = urlsplit(url)
-    if (parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
-            or parsed.username or parsed.password or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+    try:
+        parsed = urlsplit(url)
+        allowed = (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname in {"127.0.0.1", "::1", "localhost"}
+            and not (parsed.username or parsed.password or parsed.query or parsed.fragment)
+            and parsed.path in {"", "/"}
+            and parsed.port != 0
+        )
+    except ValueError:
+        allowed = False
+    if not allowed:
         raise SceneError("This graph model step requires a loopback Ollama endpoint; check OLLAMA_HOST.")
+    return f"{parsed.scheme}://{parsed.netloc.lower()}"
 
 
 @dataclass
@@ -66,7 +76,7 @@ def model_step_preview(
         raise SceneError("Graph Runner currently permits only explicitly selected local Ollama models.")
     if not isinstance(model_id, str) or not _MODEL_ID.fullmatch(model_id):
         raise SceneError("Choose a valid installed Ollama model ID (1–192 safe characters).")
-    _require_loopback_ollama()
+    endpoint = _require_loopback_ollama()
     if source_id == target_id:
         raise SceneError("A model's source and output must be different nodes.")
     source_text = document._text_output(source_id)
@@ -83,7 +93,7 @@ def model_step_preview(
         "status": "ready",
         "detail": f"Local Ollama model: {model_id}. One explicit run; no cloud request.",
         "inputHash": fingerprint,
-        "configHash": _digest(["local_model_v1", provider, model_id]),
+        "configHash": _digest(["local_model_v1", provider, model_id, endpoint]),
         "targetHash": _text_digest(target.content),
     }
     token = _digest([str(document.graph_run_epoch), step])
