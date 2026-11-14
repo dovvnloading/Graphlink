@@ -30,7 +30,7 @@ def sample_step():
 
 def sample_call(step):
     return ExternalCall(
-        kind="model", provider="profile/openai", model="example-model",
+        kind="model", provider_name="profile/openai", model_id="example-model",
         input_ref="artifact/version-1", input_hash=step["inputHash"],
     )
 
@@ -257,10 +257,10 @@ def test_invalid_or_missing_external_identity_fails_closed_without_importing_sec
     restored, = restore_graph_runs([missing], {"n1": "n1", "n2": "n2"})
     assert restored["status"] == "reconciliation-required"
     with pytest.raises(SceneError, match="explicit model"):
-        ExternalCall(kind="model", provider="profile/openai", model="", input_ref="artifact/v1", input_hash=digest("x"))
+        ExternalCall(kind="model", provider_name="profile/openai", model_id="", input_ref="artifact/v1", input_hash=digest("x"))
     with pytest.raises(SceneError, match="non-secret"):
         ExternalCall(
-            kind="tool", provider="key with spaces", tool="file.write",
+            kind="tool", provider_name="key with spaces", tool="file.write",
             input_ref="artifact/v1", input_hash=digest("x"),
         )
 
@@ -279,7 +279,7 @@ def test_dispatched_external_request_survives_real_graph_database_roundtrip(tmp_
         step, = plan_graph_run(doc, [target.id])
         step["status"] = "running"
         call = ExternalCall(
-            kind="model", provider="profile/openai", model="example-model",
+            kind="model", provider_name="profile/openai", model_id="example-model",
             input_ref="artifact/immutable-version", input_hash=step["inputHash"],
         )
         step["externalAttempt"] = call.journal_record()
@@ -327,7 +327,7 @@ def test_uncertain_remote_step_does_not_block_an_independent_local_step(tmp_path
                          for target in (dst1.id, dst2.id))
         remote["status"] = "reconciliation-required"
         remote["externalAttempt"] = ExternalCall(
-            kind="model", provider="profile/openai", model="example-model",
+            kind="model", provider_name="profile/openai", model_id="example-model",
             input_ref="artifact/version-1", input_hash=remote["inputHash"],
         ).journal_record()
         local["status"] = "pending"
