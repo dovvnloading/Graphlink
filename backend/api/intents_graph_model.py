@@ -101,7 +101,7 @@ def model_step_preview(
         "kind": "model", "operation": "model",
         "label": target.title or "Model output",
         "status": "ready",
-        "detail": f"Local Ollama model: {model_id}. One explicit run; no cloud request.",
+        "detail": f"Local Ollama model: {model_id}. Loopback request; verify custom aliases do not route to cloud.",
         "inputHash": fingerprint,
         "configHash": _digest(["local_model_v1", provider, model_id, endpoint]),
         "targetHash": _text_digest(target.content),
