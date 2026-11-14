@@ -48,7 +48,7 @@ def _require_loopback_ollama() -> None:
 class GraphModelSelection:
     sourceId: str
     targetId: str
-    provider: str
+    providerName: str
     modelId: str
 
 
@@ -113,7 +113,7 @@ def register_graph_model_runner(
     def plan(selection: GraphModelSelection) -> tuple[str, dict[str, str], str]:
         try:
             return model_step_preview(
-                document, selection.sourceId, selection.targetId, selection.provider, selection.modelId,
+                document, selection.sourceId, selection.targetId, selection.providerName, selection.modelId,
             )
         except SceneError as exc:
             raise IntentValidationError([str(exc)]) from exc
@@ -155,7 +155,7 @@ def register_graph_model_runner(
             document.graph_runs.remove(finished)
         run = {
             "runId": run_id, "previewHash": token, "selectionHash": _digest([
-                selection.sourceId, selection.targetId, selection.provider, selection.modelId,
+                selection.sourceId, selection.targetId, selection.providerName, selection.modelId,
             ]),
             "startedAt": datetime.now(timezone.utc).isoformat(),
             "status": "running", "steps": [step],
@@ -168,7 +168,7 @@ def register_graph_model_runner(
             # fallback. Only local Ollama is allowed until approval and cost
             # policy are implemented for paid cloud models.
             _require_loopback_ollama()
-            kwargs: dict[str, Any] = {"model_ref": ModelRef(selection.provider, selection.modelId)}
+            kwargs: dict[str, Any] = {"model_ref": ModelRef(selection.providerName, selection.modelId)}
             if provider_runtime is not None:
                 kwargs["runtime"] = provider_runtime
             return await asyncio.to_thread(
@@ -190,7 +190,7 @@ def register_graph_model_runner(
             await dispatch_external_attempt(
                 step,
                 ExternalCall(
-                    kind="model", provider_name=selection.provider, model_id=selection.modelId,
+                    kind="model", provider_name=selection.providerName, model_id=selection.modelId,
                     input_ref=f"graph-text:{selection.sourceId}:{step['inputHash']}",
                     input_hash=step["inputHash"],
                 ),
