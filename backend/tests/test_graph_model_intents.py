@@ -286,3 +286,39 @@ def test_model_completion_is_hidden_until_terminal_sqlite_commit(tmp_path, monke
         assert row["data"]["graph_runs"][0]["status"] == "completed"
 
     asyncio.run(scenario())
+
+
+
+def test_ollama_adapter_never_uses_global_client_proxies_or_redirects(monkeypatch):
+    from types import SimpleNamespace
+
+    from backend.providers import graph_local_ollama
+
+    observed = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            observed.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def chat(self, *, model, messages, stream):
+            assert model == "qwen3:8b" and stream is False
+            assert messages == [{"role": "user", "content": "Local only"}]
+            return SimpleNamespace(message=SimpleNamespace(content="Local answer"))
+
+    monkeypatch.setattr(graph_local_ollama.ollama, "Client", FakeClient)
+    payload = graph_local_ollama.local_ollama_complete(
+        prompt="Local only", model_id="qwen3:8b", endpoint="http://127.0.0.1:11434",
+    )
+    assert observed == {
+        "host": "http://127.0.0.1:11434",
+        "trust_env": False,
+        "follow_redirects": False,
+        "timeout": 120.0,
+    }
+    assert payload["message"] == {"role": "assistant", "content": "Local answer"}
