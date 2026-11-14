@@ -63,9 +63,10 @@ def register_graph_runner(
 
     def visible_run(run: dict[str, Any]) -> dict[str, Any]:
         result = _public_run(run)
-        if run["runId"] == active_run_id:
+        if run["runId"] in {active_run_id, getattr(bus, "graph_model_active_run_id", None)}:
             # The terminal SQLite write may still be in flight. A concurrent
-            # reader must not receive a success receipt before it commits.
+            # reader must not receive a success receipt before it commits,
+            # including an opt-in model step handled by the sibling intents.
             result["status"] = "running"
         return result
 
