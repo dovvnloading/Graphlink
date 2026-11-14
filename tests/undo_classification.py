@@ -134,6 +134,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "getGraphRun", "B", "read-only: inspects saved run history"),
     Classified("scene", "executeGraphRun", "A", "content: records each completed output with its run id"),
     Classified("scene", "resumeGraphRun", "A", "content: records remaining output changes under the original run id"),
+    Classified("scene", "previewGraphModel", "B", "read-only: previews a local model request and pinned input"),
+    Classified("scene", "executeGraphModel", "A", "content: saves a local model reply with its durable request and run IDs"),
 
     # -- backend/api/intents_undo.py (scene) - the machinery itself ---------
     Classified("scene", "undo", "B", "undo-machinery: pops command_log itself, self-referential"),
