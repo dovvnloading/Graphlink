@@ -80,12 +80,14 @@ def register_graph_runner(
             model_steps = [s for s in steps if s["kind"] == "model" and s["status"] in {"ready", "waiting"}]
             if len(model_steps) > 8:
                 raise SceneError("A graph run can issue at most eight local model calls.")
-            if any(s["kind"] == "model" for s in steps):
+            # Existing current Model receipts are local data. They must
+            # remain usable in deterministic branches even when Ollama is
+            # offline; a new outbound call alone requires endpoint approval.
+            if model_steps:
                 from backend.api.intents_graph_model import _require_loopback_ollama
                 endpoint = _require_loopback_ollama()
-                for step in steps:
-                    if step["kind"] == "model":
-                        step["endpointHash"] = _digest(["local_model_endpoint", endpoint])
+                for step in model_steps:
+                    step["endpointHash"] = _digest(["local_model_endpoint", endpoint])
         except SceneError as exc:
             raise IntentValidationError([str(exc)]) from exc
         token = _digest([str(document.graph_run_epoch), sorted(set(node_ids)), steps])
