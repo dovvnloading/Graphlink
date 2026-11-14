@@ -94,28 +94,30 @@ def restore_external_attempt(raw: Any) -> dict[str, str] | None:
     return {key: raw[key] for key in _ATTEMPT_FIELDS}
 
 
-async def _drain_checkpoint(checkpoint: Callable[[], Awaitable[None]]) -> None:
-    """Never abandon an in-flight persistence write on caller cancellation."""
+async def _drain_checkpoint(checkpoint: Callable[[], Awaitable[bool]]) -> None:
+    """Require a confirmed durable write and drain it on cancellation."""
     task = asyncio.ensure_future(checkpoint())
     try:
-        await asyncio.shield(task)
+        saved = await asyncio.shield(task)
     except asyncio.CancelledError:
         await task
         raise
+    if saved is not True:
+        raise SceneError("The external request checkpoint was not confirmed.")
 
 
 async def dispatch_external_attempt(
     step: dict[str, Any],
     call: ExternalCall,
     *,
-    checkpoint: Callable[[], Awaitable[None]],
+    checkpoint: Callable[[], Awaitable[bool]],
     invoke: Callable[[str], Awaitable[Any]],
     apply_result: Callable[[Any], Awaitable[str]],
 ) -> str:
     """Persist the request fence, invoke once, then checkpoint output + receipt.
 
-    `checkpoint` must durably save the *same* graph and step journal in one
-    transaction. `apply_result` must write the output in memory and return
+    `checkpoint` must return True after durably saving the *same* graph and
+    step journal in one transaction. `apply_result` must write the output in memory and return
     its SHA-256 digest; it must not separately persist an output. The caller
     must hold the graph mutation guard throughout this function. A timeout,
     cancellation, or failed result checkpoint is **never** an automatic retry.
