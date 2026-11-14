@@ -190,7 +190,7 @@ def register_graph_model_runner(
             await dispatch_external_attempt(
                 step,
                 ExternalCall(
-                    kind="model", provider=selection.provider, model=selection.modelId,
+                    kind="model", provider_name=selection.provider, model_id=selection.modelId,
                     input_ref=f"graph-text:{selection.sourceId}:{step['inputHash']}",
                     input_hash=step["inputHash"],
                 ),
