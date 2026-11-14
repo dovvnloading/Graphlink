@@ -36,7 +36,7 @@ def test_model_preview_is_read_only_and_dispatch_checkpoints_before_request(tmp_
         selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
         preview = await send("previewGraphModel", *selected)
         assert not path.exists()
-        assert doc.graph_runs == [] and doc.command_log == []
+        assert not doc.graph_runs and not doc.command_log
         assert preview["steps"][0]["kind"] == "model"
         assert "Summarize this message" not in str(preview)
         observed = []
@@ -101,7 +101,7 @@ def test_preview_staleness_refuses_model_calls(tmp_path, monkeypatch, changed):
             monkeypatch.setenv("OLLAMA_HOST", "http://localhost:11434")
         with pytest.raises(IntentValidationError):
             await send("executeGraphModel", *args, preview["previewToken"], "stale-model-run")
-        assert not calls and doc.graph_runs == []
+        assert not calls and not doc.graph_runs
 
     asyncio.run(scenario())
 
@@ -120,7 +120,7 @@ def test_cloud_model_and_unbound_destination_are_enforced_before_preview(tmp_pat
         source.content = "a" * 70000
         with pytest.raises(IntentValidationError, match="64 KiB"):
             await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
-        assert doc.graph_runs == []
+        assert not doc.graph_runs
 
     asyncio.run(scenario())
 
@@ -230,7 +230,7 @@ def test_final_run_status_write_failure_resumes_without_repeating_the_model(tmp_
         monkeypatch.setattr(graph_model, "local_ollama_complete", reply)
         selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
         token = (await send("previewGraphModel", *selected))["previewToken"]
-        with pytest.raises(OSError, match="final-status"):
+        with pytest.raises(IntentValidationError, match="Could not save the model request checkpoint"):
             await send("executeGraphModel", *selected, token, "final-status-model")
         assert calls == [1] and target.content == "A complete response"
         saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][0]
