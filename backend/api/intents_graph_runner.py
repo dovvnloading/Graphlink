@@ -123,6 +123,13 @@ def register_graph_runner(
                     await checkpoint()
                     await bus.publish("scene")
                     continue
+                if step["kind"] in {"model", "tool"}:
+                    # Adapters do not exist yet. Never fall through to local
+                    # note/table evaluation or accidentally dispatch a call.
+                    step.update(status="blocked", detail="No external Graph Runner adapter is configured.")
+                    await checkpoint()
+                    await bus.publish("scene")
+                    continue
                 try:
                     validate_graph_run_ancestors(document, step, by_node_id)
                     digest, _ = document.record_command(
