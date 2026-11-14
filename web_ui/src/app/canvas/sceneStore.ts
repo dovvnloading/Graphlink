@@ -1515,6 +1515,10 @@ export class SceneStore {
     return this.transport.request("scene", "previewGraphRun", [nodeIds]) as Promise<GraphRunPreview>;
   }
 
+  connectModelInput(sourceId: string, targetId: string): Promise<GraphModelBinding[]> {
+    return this.transport.request("scene", "connectModelInput", [sourceId, targetId]) as Promise<GraphModelBinding[]>;
+  }
+
   addModelNode(sourceId: string, provider: string, modelId: string): Promise<string> {
     return this.transport.request("scene", "addModelNode", [sourceId, provider, modelId]) as Promise<string>;
   }
