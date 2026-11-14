@@ -5,14 +5,16 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from backend.domain.graph_run_external import RECONCILIATION_DETAIL, restore_external_attempt
+
 RUN_HISTORY_LIMIT = 12
 RUN_ID = re.compile(r"[a-zA-Z0-9_-]{8,100}")
 DIGEST = re.compile(r"[a-f0-9]{64}")
-_RUN_STATUSES = {"completed", "partial", "running", "interrupted"}
-_STEP_STATUSES = {"pending", "current", "completed", "blocked", "failed"}
+_RUN_STATUSES = {"completed", "partial", "running", "interrupted", "reconciliation-required"}
+_STEP_STATUSES = {"pending", "current", "completed", "blocked", "failed", "running", "reconciliation-required"}
 
 
-def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, str] | None:
+def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     keys = ("nodeId", "sourceId", "operation", "kind", "status", "label", "detail", "inputHash", "configHash", "targetHash")
@@ -31,6 +33,23 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, str] | None:
     for key in ("nodeId", "sourceId"):
         # Never leave an unmapped saved id pointing at an unrelated new n0/n1.
         step[key] = ids.get(step[key], "")
+    if "externalAttempt" in raw:
+        attempt = restore_external_attempt(raw["externalAttempt"])
+        if (attempt is None or attempt["inputHash"] != step["inputHash"]
+                or (attempt["phase"] == "completed" and
+                    (step["status"] != "completed" or not step.get("outputHash")))):
+            # Do not discard the run: that could make an already-issued remote
+            # request look as though it never existed after a corrupt import.
+            step.update(status="reconciliation-required", detail="External request history is invalid; do not retry.")
+        else:
+            step["externalAttempt"] = attempt
+            if attempt["phase"] != "completed":
+                # A persisted 'dispatched' fence does not prove the remote call
+                # finished, failed, or even left the host. Never auto-replay it.
+                step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
+    elif step["status"] in {"running", "reconciliation-required"}:
+        # An in-flight remote step with no durable identity is unsafe to replay.
+        step.update(status="reconciliation-required", detail="External request identity is missing; do not retry.")
     if step["status"] == "pending" and not (step["sourceId"] and step["nodeId"]):
         step.update(status="blocked", detail="The saved input or output no longer exists.")
     return step
@@ -63,7 +82,9 @@ def restore_graph_runs(raw: Any, ids: dict[str, str]) -> list[dict[str, Any]]:
             # Dropping a malformed prerequisite would change the approved plan.
             continue
         run["steps"] = steps
-        if run["status"] == "running":
+        if any(step["status"] == "reconciliation-required" for step in steps):
+            run["status"] = "reconciliation-required"
+        elif run["status"] == "running":
             run["status"] = "interrupted"
         seen.add(run["runId"])
         runs.append(run)
