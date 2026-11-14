@@ -45,6 +45,11 @@ def _inspect(document: SceneDocument, step: dict[str, str]) -> None:
     node = document.nodes[node_id]
     if step["kind"] == "note":
         state = document._plain_note(node_id).state
+        # Model outputs are durable text, but old cached replies cannot be
+        # treated as fresh downstream inputs after their upstream source
+        # changes. Keep the deterministic runner local-only: block instead
+        # of attempting or implying an unapproved model rerun.
+        document.require_current_model_source(source_id)
         if step["operation"] not in ("copy", "word_count"):
             raise SceneError("Choose Copy text or Word count for this input.")
         digest = _text_digest(document._text_output(source_id))

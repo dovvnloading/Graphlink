@@ -187,6 +187,17 @@ export interface GraphRunPreview {
   steps: GraphRunStep[];
 }
 
+export interface GraphModelBinding {
+  sourceId: string;
+  targetId: string;
+  provider: "Ollama";
+  modelId: string;
+  version: number;
+  inputType: "text";
+  outputType: "text";
+  status: "unrun" | "current" | "stale" | "edited" | "invalid";
+}
+
 export type TableOutputKind = "table" | "chart" | "artifact";
 
 export interface GraphRun {
@@ -1501,6 +1512,18 @@ export class SceneStore {
 
   previewGraphRun(nodeIds: string[]): Promise<GraphRunPreview> {
     return this.transport.request("scene", "previewGraphRun", [nodeIds]) as Promise<GraphRunPreview>;
+  }
+
+  getGraphModelBindings(): Promise<GraphModelBinding[]> {
+    return this.transport.request("scene", "getGraphModelBindings", []) as Promise<GraphModelBinding[]>;
+  }
+
+  bindGraphModel(sourceId: string, targetId: string, provider: string, modelId: string): Promise<GraphModelBinding[]> {
+    return this.transport.request("scene", "bindGraphModel", [sourceId, targetId, provider, modelId]) as Promise<GraphModelBinding[]>;
+  }
+
+  unbindGraphModel(targetId: string): Promise<GraphModelBinding[]> {
+    return this.transport.request("scene", "unbindGraphModel", [targetId]) as Promise<GraphModelBinding[]>;
   }
 
   previewGraphModel(sourceId: string, targetId: string, provider: string, modelId: string): Promise<GraphRunPreview> {

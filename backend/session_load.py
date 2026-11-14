@@ -1787,6 +1787,40 @@ def _restore_note_text_inputs(document: SceneDocument, bindings: Any, ids: dict[
             leaves.append(source)
 
 
+def _restore_note_model_inputs(document: SceneDocument, bindings: Any, ids: dict[str, str]) -> None:
+    """Restore saved text-model port references without running any provider.
+
+    The loader must fail closed for corrupted/unknown versions and must never
+    allow malformed saved configuration to turn into an executable binding.
+    """
+    if not isinstance(bindings, dict):
+        return
+    for old_target, row in bindings.items():
+        if old_target not in ids or not isinstance(row, dict):
+            continue
+        source = row.get("source")
+        provider, model = row.get("provider"), row.get("model")
+        binding_id = row.get("binding_id")
+        if (not isinstance(source, str) or source not in ids or
+                not isinstance(provider, str) or not isinstance(model, str) or
+                type(row.get("version")) is not int or row["version"] != 1 or
+                not isinstance(binding_id, str) or not re.fullmatch(r"[a-f0-9]{32}", binding_id)):
+            continue
+        try:
+            document.bind_note_model_input(ids[source], ids[old_target], provider, model)
+        except SceneError:
+            continue  # Invalid, non-text, overlapping or cyclic bindings are discarded.
+        binding = with_state(document.nodes[ids[old_target]], NoteState).state.model_text_input
+        if binding is None:
+            continue
+        binding.binding_id = binding_id
+        last_input, last_output = row.get("last_input_hash"), row.get("last_output_hash")
+        if (isinstance(last_input, str) and isinstance(last_output, str) and
+                re.fullmatch(r"[a-f0-9]{64}", last_input) and re.fullmatch(r"[a-f0-9]{64}", last_output)):
+            binding.last_input_hash = last_input
+            binding.last_output_hash = last_output
+
+
 def _restore_branch_provenance_item_ids(
     document: SceneDocument,
     node_payloads: list,
@@ -2061,6 +2095,7 @@ def _restore_chat_into_document(
 
     restore_table_data(document.nodes, by_payload_id, chat_data.get("table_sources"), chat_data.get("table_outputs"))
     _restore_note_text_inputs(document, chat_data.get("note_text_inputs"), by_payload_id)
+    _restore_note_model_inputs(document, chat_data.get("note_model_inputs"), by_payload_id)
 
     if not _restore_flat_edges(document, chat_data, by_payload_id):
         _restore_basic_connections(document, chat_data, all_nodes_map, nodes_by_id)

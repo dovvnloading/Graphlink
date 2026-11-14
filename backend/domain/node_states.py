@@ -26,6 +26,24 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+@dataclass
+class ModelTextBinding:
+    """Versioned text-to-text configuration; never grants permission to call a model.
+
+    The UUID changes on reconfiguration, so an in-flight answer cannot be
+    applied to a newly bound output even if the node's text did not change.
+    Provenance is recorded only after the answer and receipt commit together.
+    """
+
+    source_id: str
+    provider_name: str
+    model_id: str
+    binding_id: str
+    version: int = 1
+    last_input_hash: str = ""
+    last_output_hash: str = ""
+
+
 class NodeState:
     """Marker base for all per-kind node state payloads."""
 
@@ -170,6 +188,7 @@ class NoteState(NodeState):
     text_input_source_id: str = ""
     text_input_operation: str = "copy"
     text_input_last_source_sha256: str = ""
+    model_text_input: ModelTextBinding | None = None
 
     def clear_text_input(self) -> None:
         self.text_input_source_id = ""

@@ -134,6 +134,9 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "getGraphRun", "B", "read-only: inspects saved run history"),
     Classified("scene", "executeGraphRun", "A", "content: records each completed output with its run id"),
     Classified("scene", "resumeGraphRun", "A", "content: records remaining output changes under the original run id"),
+    Classified("scene", "getGraphModelBindings", "B", "read-only: inspect saved typed model ports and freshness"),
+    Classified("scene", "bindGraphModel", "A", "content: save a local model input binding, without execution"),
+    Classified("scene", "unbindGraphModel", "A", "content: remove a model input binding"),
     Classified("scene", "previewGraphModel", "B", "read-only: previews a local model request and pinned input"),
     Classified("scene", "executeGraphModel", "A", "content: saves a local model reply with its durable request and run IDs"),
 

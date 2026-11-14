@@ -385,6 +385,8 @@ _COMMAND_LABELS = {
     "bindNoteTextInput": "Connect Text Input",
     "runNoteTextInput": "Run Text Input",
     "unbindNoteTextInput": "Disconnect Text Input",
+    "bindGraphModel": "Connect Model Input",
+    "unbindGraphModel": "Disconnect Model Input",
     "removeNodes": "Delete",
     "deleteChatNode": "Delete Message",
     "deleteConversationMessage": "Delete Message",
@@ -608,6 +610,8 @@ class CommandOps(SceneDocumentParts):
             n.id for n in self.nodes.values()
             if n.kind in ("frame", "container")
             or (isinstance(n.state, NoteState) and n.state.text_input_source_id in named_node_ids)
+            or (isinstance(n.state, NoteState) and n.state.model_text_input is not None
+                and n.state.model_text_input.source_id in named_node_ids)
             or (isinstance(n.state, (ArtifactState, ChartState, NoteState)) and n.state.table_output is not None
                 and n.state.table_output.source_id in named_node_ids)
         }
