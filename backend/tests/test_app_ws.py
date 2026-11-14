@@ -471,6 +471,11 @@ def test_args_schema_is_scoped_to_the_known_intents():
             ("scene", "restoreTableOutput"),
             ("scene", "getTableOutputHistory"),
             ("scene", "getTableContributors"),
+            # Graph Runner pins preview, execute, inspect and resume request shapes.
+            ("scene", "previewGraphRun"),
+            ("scene", "getGraphRun"),
+            ("scene", "executeGraphRun"),
+            ("scene", "resumeGraphRun"),
         }
 
 

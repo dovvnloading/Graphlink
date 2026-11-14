@@ -97,6 +97,13 @@ export function buildCommands(
       enabled: hasNodes,
     },
     {
+      id: "graph-runner",
+      name: "Graph Runner",
+      aliases: ["run graph", "run selection", "preview run", "resume run", "workflow"],
+      run: () => overlays.open("graph-runner", "dialog"),
+      enabled: () => true,
+    },
+    {
       id: "select-all",
       name: "Select All Nodes",
       aliases: ["select all"],

@@ -1,0 +1,10 @@
+[plugin]
+id = "graph_runner"
+name = "Graph Runner"
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+description = "Preview and run connected text and table operations on the canvas."
+
+[frontend]
+view = "generic"

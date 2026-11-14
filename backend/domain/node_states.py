@@ -164,6 +164,7 @@ class NoteState(NodeState):
     is_summary_note: bool = False
     is_branch_comparison: bool = False
     is_table_source: bool = False
+    table_output: TableOutput | None = None
 
     # A manually run text input. Its source is independent of canvas ancestry.
     text_input_source_id: str = ""

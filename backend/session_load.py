@@ -213,6 +213,7 @@ from backend.domain.node_access import with_state
 # Not re-exported by backend.canvas, unlike the kinds above - imported
 # from the domain package directly, as session_save.py does.
 from backend.domain.table_workflows import restore_table_data
+from backend.domain.graph_run_history import restore_graph_runs
 from backend.domain.node_states import ARTIFACT_MAX_CHARS, ChartState, FrameState, NoteState, FalMediaState
 from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
@@ -2056,6 +2057,7 @@ def _restore_chat_into_document(
             if note_payload_id:
                 by_payload_id[str(note_payload_id)] = mapped_note_id
     by_payload_id.update(charts_by_id)
+    document.graph_runs = restore_graph_runs(chat_data.get("graph_runs"), by_payload_id)
 
     restore_table_data(document.nodes, by_payload_id, chat_data.get("table_sources"), chat_data.get("table_outputs"))
     _restore_note_text_inputs(document, chat_data.get("note_text_inputs"), by_payload_id)

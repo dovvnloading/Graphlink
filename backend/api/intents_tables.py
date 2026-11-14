@@ -1,4 +1,4 @@
-"""Canvas commands for editable tables and their versioned chart and Drafter outputs."""
+"""Canvas commands for editable tables and their versioned grouped table, chart and Drafter outputs."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ class SetTableCsvArgs:
 @dataclass
 class AddTableOutputArgs:
     sourceId: str
-    kind: Literal["chart", "artifact"]
+    kind: Literal["chart", "artifact", "table"]
     groupColumn: str
     valueColumn: str
 

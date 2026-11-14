@@ -55,6 +55,7 @@ from backend import knowledge_store
 from backend import native_dialogs
 from backend import workspace_archive
 from backend.canvas import SceneDocument
+from backend.api.intents_graph_runner import register_graph_runner
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.session_load import restore_chat_into_document
@@ -2510,7 +2511,7 @@ def make_save_chat(
     make_load_chat's own docstring (immediately above) for why this is a
     top-level factory rather than a closure defined inline."""
 
-    async def save_chat() -> bool:
+    async def save_chat(*, checkpoint: bool = False) -> bool:
         # R6.5: replicates ChatSessionManager.save_current_chat's own
         # orchestration (manager.py:83-133) - serialize -> resolve title/
         # chat_id -> one atomic DB write -> adopt the resolved chat_id.
@@ -2572,6 +2573,10 @@ def make_save_chat(
                 chat_id_for_save = int(current_id)
                 if last_saved.get("chat_id") == int(current_id):
                     expected_updated_at = last_saved.get("updated_at")
+            elif checkpoint:
+                # An approved run belongs to the original graph. A concurrent
+                # deletion must not move its remaining work into a new graph.
+                return False
             else:
                 # The row was deleted elsewhere between load and this save -
                 # falls back to a fresh INSERT, matching legacy's own
@@ -2623,7 +2628,7 @@ def make_save_chat(
         # rewriting a byte-identical row 30 seconds later.
         record_saved(chat_data, notes_data, pins_data, new_chat_id, new_updated_at)
         await bus.publish("app-chat-library")
-        if notifications is not None:
+        if notifications is not None and not checkpoint:
             notifications.show(f'Saved "{title}".', "success")
             await bus.publish("notification")
         # The exportWorkspace intent needs a real outcome, not a fire-and-
@@ -3391,6 +3396,9 @@ def register_chat_library(
     save_chat = make_save_chat(
         bus, resolved_path, canvas_document, notifications, _record_saved, _last_saved, settings_manager,
     )
+
+    if canvas_document is not None:
+        register_graph_runner(bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent)
 
     _protect_current_canvas = make_protect_current_canvas(
         bus, resolved_path, canvas_document, notifications,

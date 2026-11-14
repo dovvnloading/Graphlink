@@ -41,6 +41,7 @@ from backend.domain.geometry_safety import finite_float
 from collections import deque
 import itertools
 import logging
+import uuid
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, cast
 
@@ -254,6 +255,8 @@ class SceneDocument(
     # reuse n1/n2/etc; saving these keys alongside the graph prevents
     # one branch's indexed passages from being mistaken for another's.
     branch_index_sources: dict[str, str] = field(default_factory=dict)
+    graph_runs: list[dict[str, Any]] = field(default_factory=list)
+    graph_run_epoch: uuid.UUID = field(default_factory=uuid.uuid4, repr=False, compare=False)
     # ADR-014 stage 14.2: the live-wire half of the Plugin SDK's generic
     # persistence seam - keyed by a plugin's ALREADY-namespaced node kind
     # (f"{plugin_id}.{kind}", HostContext.register_node_kind's own
@@ -504,6 +507,8 @@ class SceneDocument(
         self.current_workspace_id = None
         self.unrestored_node_count = 0
         self.branch_index_sources.clear()
+        self.graph_runs.clear()
+        self.graph_run_epoch = uuid.uuid4()
         # ADR-010 stage 10.1: undo history does NOT survive a session load.
         # Every command in it references node/edge ids from the document
         # being replaced, so inverting one afterward would resurrect a node

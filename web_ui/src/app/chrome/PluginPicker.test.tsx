@@ -35,8 +35,10 @@ const snapshot = {
 
 function makeTransport() {
   const intents: unknown[][] = [];
+  const request = vi.fn<WsTransport["request"]>();
   let listener: ((payload: Record<string, unknown>) => void) | null = null;
   const transport = {
+    request,
     subscribe: (_topic: string, l: (payload: Record<string, unknown>) => void) => {
       listener = l;
       return () => {
@@ -54,6 +56,7 @@ function makeTransport() {
   } as unknown as WsTransport;
   return {
     transport,
+    request,
     intents,
     push: (payload: Record<string, unknown>) => listener?.(payload),
   };
@@ -62,9 +65,12 @@ function makeTransport() {
 function OpenPluginsButton() {
   const overlays = useOverlays();
   return (
-    <button type="button" onClick={() => overlays.toggle("plugins", "popover")}>
-      open plugins
-    </button>
+    <>
+      <button type="button" onClick={() => overlays.toggle("plugins", "popover")}>
+        open plugins
+      </button>
+      {overlays.isOpen("graph-runner") && <p>Runner opened</p>}
+    </>
   );
 }
 
@@ -82,6 +88,22 @@ function setup(store: SceneStore = new SceneStore({ subscribe: vi.fn(), intent: 
 }
 
 describe("PluginPicker", () => {
+  it("opens Graph Runner only after the registered action returns its panel", async () => {
+    const { user, request, push } = setup();
+    act(() => push({ ...snapshot, categories: [{
+      name: "Workflows", description: "Graph tools",
+      plugins: [{ name: "Graph Runner", description: "Run connected outputs." }],
+    }] }));
+    request.mockResolvedValueOnce(null).mockResolvedValueOnce({ open_panel: "graph-runner" });
+    await user.click(screen.getByRole("button", { name: "open plugins" }));
+    const entry = screen.getByRole("button", { name: /Graph Runner/ });
+    await user.click(entry);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Graph Runner could not open");
+    await user.click(entry);
+    expect(request).toHaveBeenLastCalledWith("app-plugins", "executePlugin", ["Graph Runner", null, 0, 0]);
+    expect(await screen.findByText("Runner opened")).toBeVisible();
+  });
+
   it("renders backend categories and plugins once the popover opens", async () => {
     const { user } = setup();
     expect(screen.queryByText("Categories")).toBeNull();

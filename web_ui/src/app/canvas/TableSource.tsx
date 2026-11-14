@@ -1,16 +1,19 @@
 import { useReactFlow } from "@xyflow/react";
 import { motionDuration } from "../reducedMotion";
 import { useMemo, useRef, useState } from "react";
-import type { SceneStore } from "./sceneStore";
+import type { SceneStore, TableOutputKind } from "./sceneStore";
+import TableOutput, { type TableOutputBinding } from "./TableOutput";
 import { readTableCsv, writeTableCsv } from "./tableCsv";
 import "./TableWorkflow.css";
 
 const PAGE_SIZE = 12;
+const outputLabels = { chart: "Chart", artifact: "Report", table: "Grouped table" };
 
 export interface TableSourceProps {
   id: string;
   content: string;
   store: SceneStore;
+  derived?: TableOutputBinding;
 }
 
 interface TableDraft {
@@ -20,14 +23,14 @@ interface TableDraft {
   grid: string[][];
 }
 
-export default function TableSource({ id, content, store }: TableSourceProps) {
+export default function TableSource({ id, content, store, derived }: TableSourceProps) {
   const rows = useMemo(() => readTableCsv(content), [content]);
   const headers = rows[0] ?? [];
   const [draft, setDraft] = useState<TableDraft | null>(null);
   const [page, setPage] = useState(0);
   const [group, setGroup] = useState("");
   const [value, setValue] = useState("");
-  const [result, setResult] = useState<{ id: string; kind: "chart" | "artifact" } | null>(null);
+  const [result, setResult] = useState<{ id: string; kind: TableOutputKind } | null>(null);
   const { setCenter } = useReactFlow();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
@@ -72,7 +75,7 @@ export default function TableSource({ id, content, store }: TableSourceProps) {
     }
   }
 
-  function createOutput(kind: "chart" | "artifact") {
+  function createOutput(kind: TableOutputKind) {
     void request(async () => {
       const resultId = await store.addTableOutput(id, kind, groupColumn, valueColumn);
       if (typeof resultId === "string") setResult({ id: resultId, kind });
@@ -159,6 +162,7 @@ export default function TableSource({ id, content, store }: TableSourceProps) {
         </>}
       </div>
       {changedElsewhere && <p role="alert">The saved table changed during this edit. Cancel to reopen the latest data.</p>}
+      {derived && <TableOutput {...derived} editing={!!draft} />}
       {!draft && <fieldset disabled={pending}>
         <legend>Summarize by group</legend>
         <label>Group by<select value={groupColumn} onChange={(e) => setGroup(e.target.value)}>
@@ -168,13 +172,14 @@ export default function TableSource({ id, content, store }: TableSourceProps) {
           {headers.filter((h) => h !== groupColumn).map((h) => <option key={h}>{h}</option>)}
         </select></label>
         <div className="table-workflow-actions">
+          <button type="button" disabled={!valueColumn} onClick={() => createOutput("table")}>Create grouped table</button>
           <button type="button" disabled={!valueColumn} onClick={() => createOutput("chart")}>Create chart</button>
           <button type="button" disabled={!valueColumn} onClick={() => createOutput("artifact")}>Create report</button>
         </div>
       </fieldset>}
       {result && !draft && <div className="table-workflow-actions">
-        <span role="status">{result.kind === "chart" ? "Chart created" : "Report created"}</span>
-        <button type="button" onClick={showResult}>Show {result.kind === "chart" ? "chart" : "report"}</button>
+        <span role="status">{outputLabels[result.kind]} created</span>
+        <button type="button" onClick={showResult}>Show {outputLabels[result.kind].toLowerCase()}</button>
       </div>}
       {error && <p role="alert">{error}</p>}
     </section>

@@ -14,6 +14,7 @@ interface Snapshot {
   version: number;
   sourceHash: string;
   markdown?: string;
+  csv?: string;
   chartData?: { labels: string[]; values: number[] };
 }
 
@@ -21,6 +22,7 @@ function isSnapshot(value: unknown): value is Snapshot {
   if (!value || typeof value !== "object" || !("version" in value) || !Number.isSafeInteger(value.version) ||
       !("sourceHash" in value) || typeof value.sourceHash !== "string") return false;
   if ("markdown" in value) return typeof value.markdown === "string";
+  if ("csv" in value) return typeof value.csv === "string";
   if (!("chartData" in value) || !value.chartData || typeof value.chartData !== "object") return false;
   const chart = value.chartData;
   return "labels" in chart && "values" in chart && Array.isArray(chart.labels) && Array.isArray(chart.values)
@@ -39,9 +41,11 @@ function validateHistory(value: unknown): Comparison {
 }
 
 function ComparisonView({ previous, current }: Comparison) {
-  if (previous.markdown !== undefined && current.markdown !== undefined) {
-    const diff = artifactDiffPreview(previous.markdown, current.markdown);
-    if (!diff.changed) return <p>Both versions contain the same report.</p>;
+  const beforeText = previous.csv ?? previous.markdown;
+  const afterText = current.csv ?? current.markdown;
+  if (beforeText !== undefined && afterText !== undefined) {
+    const diff = artifactDiffPreview(beforeText, afterText);
+    if (!diff.changed) return <p>Both versions contain the same {current.csv !== undefined ? "table" : "report"}.</p>;
     return <div className="table-version-report">
       <div><b>Version {previous.version}</b><pre>{diff.before || "(empty)"}</pre>
         {(diff.omittedBeforeLines > 0 || diff.clippedBeforeChars) && <small>Preview truncated</small>}</div>
@@ -97,7 +101,7 @@ export default function TableOutput({ node, store, editing = false }: TableOutpu
     <span role="status" data-state={node.tableInputStatus}>{statusText}</span>
     {(node.tableOutputEdited || editing || node.pendingRequestId || node.artifactProposalId) && <p>
       {node.tableOutputEdited ? "This result has manual edits. Create a new output from the table to keep both."
-        : editing ? "Finish editing the document to update from the table." : "Finish the Drafter request or proposal before updating."}
+        : editing ? "Finish editing to update from the table." : "Finish the Drafter request or proposal before updating."}
     </p>}
     <div className="table-workflow-actions">
       <button type="button" disabled={busy || !node.tableInputSourceId || protectedOutput}

@@ -1,4 +1,4 @@
-"""Manually run, versioned chart and document outputs from a canvas CSV table."""
+"""Versioned grouped tables, charts and documents generated from canvas CSV tables."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import json
 import math
 import re
 from dataclasses import dataclass, field
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import Decimal, DecimalException, Inexact, InvalidOperation, localcontext
 from typing import Any
 
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
@@ -127,34 +127,50 @@ def _group_label(cell: str) -> str:
     return " ".join(cell.split())
 
 
-def _group_totals(table: _Table, label: str, value: str) -> dict[str, Decimal]:
+def _group_totals(table: _Table, label: str, value: str, *, exact_csv: bool) -> dict[str, Decimal]:
     label_index, value_index = table.columns(label, value)
     totals: dict[str, Decimal] = {}
-    # Every input must round-trip through Graphlink's JSON number renderer.
-    # This bounds the exponents to [-324, 308]; 660 digits of accumulation
-    # precision cover their full span plus the carry from 10,000 rows.
+    # Chart values round-trip through JSON numbers in the exponent range
+    # [-324, 308]. 660 digits covers this range plus carry from 10,000 rows.
+    # A derived CSV keeps decimal operands directly and rejects inexact sums.
     with localcontext() as context:
         context.prec = 660
+        context.traps[Inexact] = True
         for index, row in enumerate(table.rows, start=1):
             group = _group_label(row[label_index])
             if not group:
                 raise SceneError(f"Data row {index} has an empty group in {label!r}.")
-            token = row[value_index].strip()
             try:
-                number = Decimal(token)
-                rendered = float(number)
-            except (ValueError, OverflowError, InvalidOperation):
-                rendered = math.nan
-            if not math.isfinite(rendered):
+                number = Decimal(row[value_index].strip())
+            except InvalidOperation:
+                number = Decimal("NaN")
+            if not number.is_finite():
                 raise SceneError(f"Data row {index} in {value!r} must be a finite number.")
-            if number != Decimal(str(rendered)):
-                raise SceneError(f"Data row {index} in {value!r} exceeds the precision of a chart number.")
-            totals[group] = totals.get(group, Decimal(0)) + Decimal(str(rendered))
-    return totals
+            if not exact_csv:
+                rendered = float(number)
+                if not math.isfinite(rendered):
+                    raise SceneError(f"Data row {index} in {value!r} must be a finite number.")
+                if number != Decimal(str(rendered)):
+                    raise SceneError(f"Data row {index} in {value!r} exceeds the precision of a chart number.")
+                number = Decimal(str(rendered))
+            try:
+                totals[group] = totals.get(group, Decimal(0)) + number
+            except DecimalException as exc:
+                raise SceneError(f"The total for {group!r} exceeds the supported decimal precision or range.") from exc
+        if exact_csv:
+            return {group: total.normalize() for group, total in totals.items()}
+        return totals
 
 
 def _generate(table: _Table, kind: str, label: str, value: str, version: int) -> TableVersion:
-    totals = _group_totals(table, label, value)
+    totals = _group_totals(table, label, value, exact_csv=kind == "table")
+    if kind == "table":
+        rows = [
+            [group, format(total, "f") if -6 <= total.adjusted() <= 20 else str(total)]
+            for group, total in totals.items()
+        ]
+        return TableVersion(version, table.fingerprint(label, value), _canonical_csv(_Table([label, value], rows)))
+
     numbers = []
     for group, total in totals.items():
         rendered = float(total)
@@ -184,27 +200,31 @@ def _generate(table: _Table, kind: str, label: str, value: str, version: int) ->
     return TableVersion(version, table.fingerprint(label, value), result)
 
 
-def _version_wire(version: TableVersion) -> dict[str, Any]:
-    key = "markdown" if isinstance(version.result, str) else "chartData"
+def _version_wire(version: TableVersion, kind: str) -> dict[str, Any]:
+    key = {"artifact": "markdown", "chart": "chartData", "note": "csv"}[kind]
     return {"version": version.version, "sourceHash": version.source_hash, key: copy.deepcopy(version.result)}
 
 
 def table_output(node: SceneNode) -> TableOutput | None:
     if (node.kind == "chart" and isinstance(node.state, ChartState)) or (
         node.kind == "artifact" and isinstance(node.state, ArtifactState)
-    ):
+    ) or (node.kind == "note" and isinstance(node.state, NoteState) and node.state.is_table_source):
         return node.state.table_output if isinstance(node.state.table_output, TableOutput) else None
     return None
 
 
 def _current_result(node: SceneNode) -> str | dict[str, Any]:
+    if isinstance(node.state, NoteState):
+        return node.content
     if isinstance(node.state, ArtifactState):
         return node.state.artifact_content
     return with_state(node, ChartState).state.chart_data
 
 
 def _write_result(node: SceneNode, version: TableVersion) -> None:
-    if isinstance(node.state, ArtifactState) and isinstance(version.result, str):
+    if isinstance(node.state, NoteState) and node.state.is_table_source and isinstance(version.result, str):
+        node.content = version.result
+    elif isinstance(node.state, ArtifactState) and isinstance(version.result, str):
         node.state.artifact_content = version.result
         node.state.artifact_error = ""
     elif isinstance(node.state, ChartState) and isinstance(version.result, dict):
@@ -240,14 +260,18 @@ class TableOps(SceneDocumentParts):
         return parse_table(node.content)
 
     def create_table_output(self, source_id: str, kind: str, label_column: str, value_column: str) -> SceneNode:
-        if kind not in ("chart", "artifact"):
-            raise SceneError("Choose a chart or a Drafter report.")
+        if kind not in ("chart", "artifact", "table"):
+            raise SceneError("Choose a grouped table, chart, or Drafter report.")
         version = _generate(self._read_table(source_id), kind, label_column, value_column, 1)
-        x, y = self.place_child(source_id, kind, prefer="right")
+        x, y = self.place_child(source_id, "note" if kind == "table" else kind, prefer="right")
         binding = TableOutput(source_id, label_column, value_column, version)
         if isinstance(version.result, dict):
             node = self.add_chart_node(x, y, None, "bar", copy.deepcopy(version.result))
             with_state(node, ChartState).state.table_output = binding
+        elif kind == "table":
+            node = self.add_table(x, y, version.result)
+            node.title = "Grouped table"
+            with_state(node, NoteState).state.table_output = binding
         else:
             node = self.add_artifact_node(x, y, None)
             artifact = with_state(node, ArtifactState)
@@ -273,7 +297,10 @@ class TableOps(SceneDocumentParts):
 
     def run_table_output(self, target_id: str) -> None:
         node, output = self._editable_table_output(target_id)
-        version = _generate(self._read_table(output.source_id), node.kind, output.label_column, output.value_column, output.current.version + 1)
+        kind = "table" if node.kind == "note" else node.kind
+        version = _generate(
+            self._read_table(output.source_id), kind, output.label_column, output.value_column, output.current.version + 1,
+        )
         if version.source_hash == output.current.source_hash:
             return
         _write_result(node, version)
@@ -310,8 +337,11 @@ class TableOps(SceneDocumentParts):
         }
 
     def get_table_output_history(self, target_id: str) -> dict[str, Any]:
-        _, output = self._require_table_output(target_id)
-        pair = {"current": _version_wire(output.current), "previous": _version_wire(output.previous) if output.previous else None}
+        node, output = self._require_table_output(target_id)
+        pair = {
+            "current": _version_wire(output.current, node.kind),
+            "previous": _version_wire(output.previous, node.kind) if output.previous else None,
+        }
         return {**pair, "revisionToken": _fingerprint(pair)}
 
     def restore_table_output(self, target_id: str, expected_revision_token: str) -> None:
@@ -344,10 +374,10 @@ class TableOps(SceneDocumentParts):
         return wire
 
 
-def saved_table_output(output: TableOutput) -> dict[str, Any]:
+def saved_table_output(output: TableOutput, kind: str) -> dict[str, Any]:
     return {
         "source": output.source_id, "label_column": output.label_column, "value_column": output.value_column,
-        "current": _version_wire(output.current), "previous": _version_wire(output.previous) if output.previous else None,
+        "current": _version_wire(output.current, kind), "previous": _version_wire(output.previous, kind) if output.previous else None,
     }
 
 
@@ -361,6 +391,14 @@ def _load_version(raw: Any, kind: str) -> TableVersion | None:
         try:
             result: str | dict[str, Any] = canonicalize_chart_data(raw.get("chartData"), "bar")
         except ChartDataError:
+            return None
+    elif kind == "note":
+        body = raw.get("csv")
+        if not isinstance(body, str):
+            return None
+        try:
+            result = _canonical_csv(parse_table(body))
+        except SceneError:
             return None
     else:
         body = raw.get("markdown")
@@ -390,7 +428,9 @@ def restore_table_data(nodes: dict[str, SceneNode], ids: dict[str, str], sources
         return
     for saved, raw in outputs.items():
         node = nodes.get(ids.get(saved, ""))
-        if node is None or not isinstance(node.state, (ArtifactState, ChartState)) or not isinstance(raw, dict):
+        if node is None or not isinstance(node.state, (ArtifactState, ChartState, NoteState)) or not isinstance(raw, dict):
+            continue
+        if isinstance(node.state, NoteState) and not node.state.is_table_source:
             continue
         label, value, source_id = raw.get("label_column"), raw.get("value_column"), raw.get("source")
         if not isinstance(label, str) or not isinstance(value, str):
@@ -405,4 +445,6 @@ def restore_table_data(nodes: dict[str, SceneNode], ids: dict[str, str], sources
             previous = None
         source = nodes.get(ids.get(source_id, "")) if isinstance(source_id, str) else None
         live_source = source.id if source is not None and isinstance(source.state, NoteState) and source.state.is_table_source else ""
+        if isinstance(node.state, NoteState):
+            node.title = "Grouped table"
         node.state.table_output = TableOutput(live_source, label, value, current, previous)

@@ -76,6 +76,12 @@ Choose **Add a table** on an empty canvas or **Add Table** in the command palett
 
 In **Edit table**, change the first Design entry from 2 to 7 and choose **Save table**. Each output marks its input as changed and keeps its previous result. Choose **Rerun from table** on the chart to update Design to 10 while the report still shows 5. Rerun the report when ready. **Compare versions** lets you inspect the previous result and restore it. On a current result, **Inspect source rows** shows the original data row numbers and cell values behind each group. For Design, rows 1 and 3 contribute 7 and 3. Saving and reopening the graph preserves these versions and their source connections. [View the chart and report after a table edit](assets/screenshots/table-workflow.png).
 
+### Run connected outputs together
+
+To add a shared intermediate step, choose **Create grouped table** on the source, then create the chart and report from the grouped table. After editing the original table, open **Plugins → Graph Runner**, choose **Whole graph**, and select **Preview run**. The preview shows the order of the steps and which outputs need updating. The chart and report still show their old totals until you choose **Run graph**. If a report feeds a word-count note, the runner uses the updated report to calculate the count. Choose **Selected nodes** to limit the run to a branch and the inputs it needs.
+
+Open Graph Runner again to inspect the saved result. If the app closed during execution, reopen the graph from the **Chat Library** and choose **Resume run**. Each completed step and its output were saved together. All transforms run locally. Existing chat replies can supply text to a workflow. [See the completed three-step run](assets/screenshots/graph-runner.png).
+
 ## API providers
 
 The directory includes **26 named providers** and a **Custom endpoint** for OpenAI Chat Completions-compatible servers. Search by service or model family, such as Claude, Grok, Kimi, or Qwen. You can browse another provider’s settings while your current connection stays active.

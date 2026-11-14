@@ -608,7 +608,7 @@ class CommandOps(SceneDocumentParts):
             n.id for n in self.nodes.values()
             if n.kind in ("frame", "container")
             or (isinstance(n.state, NoteState) and n.state.text_input_source_id in named_node_ids)
-            or (isinstance(n.state, (ArtifactState, ChartState)) and n.state.table_output is not None
+            or (isinstance(n.state, (ArtifactState, ChartState, NoteState)) and n.state.table_output is not None
                 and n.state.table_output.source_id in named_node_ids)
         }
         watch_edge_ids = set(edge_ids) | {

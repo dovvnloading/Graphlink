@@ -35,6 +35,7 @@
 .table-workflow [role="alert"] { color: var(--gl-status-danger, currentColor); }
 .table-workflow p { margin: 0; }
 .table-output [data-state="stale"] { font-weight: 600; }
+.table-source-node .table-output { max-height: none; padding-inline: 0; }
 .table-version-comparison { display: grid; gap: 5px; }
 .table-version-comparison > button { justify-self: start; }
 .table-version-report { display: grid; gap: 6px; max-height: 180px; overflow: auto; }

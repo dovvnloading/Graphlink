@@ -26,6 +26,8 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
   const [state, setState] = useState<AppPluginsState>(initialState);
   const [activeCategoryName, setActiveCategoryName] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [launchError, setLaunchError] = useState("");
+  const launchAttempt = useRef(0);
   const searchRef = useRef<HTMLInputElement>(null);
   const rowRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const hintId = useId();
@@ -38,12 +40,17 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
     });
   }, [transport]);
 
+  useEffect(() => () => { launchAttempt.current++; }, [isOpen]);
+
   // The picker stays mounted when its Popover is closed. Reset only on a
   // fresh open, so a partially typed search is not erased during browsing.
   const [wasOpen, setWasOpen] = useState(isOpen);
   if (wasOpen !== isOpen) {
     setWasOpen(isOpen);
-    if (isOpen) setQuery("");
+    if (isOpen) {
+      setQuery("");
+      setLaunchError("");
+    }
   }
 
   if (state.categories.length > 0 && !state.categories.some((c) => c.name === activeCategoryName)) {
@@ -59,12 +66,23 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
 
   function executePlugin(name: string) {
     const spawn = store.getSpawnPoint();
-    transport.fireIntent("app-plugins", "executePlugin", [
-      name,
-      store.getSelectedNodeId(),
-      spawn.x,
-      spawn.y,
-    ]);
+    const args = [name, store.getSelectedNodeId(), spawn.x, spawn.y];
+    if (name === "Graph Runner") {
+      const attempt = ++launchAttempt.current;
+      setLaunchError("");
+      void transport.request("app-plugins", "executePlugin", args).then((result) => {
+        if (attempt !== launchAttempt.current) return;
+        if (typeof result === "object" && result !== null && "open_panel" in result && result.open_panel === "graph-runner") {
+          overlays.open("graph-runner", "dialog");
+        } else {
+          setLaunchError("Graph Runner could not open. Try again.");
+        }
+      }).catch((reason) => {
+        if (attempt === launchAttempt.current) setLaunchError(reason instanceof Error ? reason.message : String(reason));
+      });
+      return;
+    }
+    transport.fireIntent("app-plugins", "executePlugin", args);
     overlays.close();
   }
 
@@ -130,8 +148,9 @@ export function PluginPicker({ transport, store }: { transport: WsTransport; sto
         )}
       </div>
       <p id={hintId} className="plugin-picker-hint">
-        Search all categories. Arrow keys move through results; Enter adds a plugin.
+        Search all categories. Use the arrow keys to move through results and Enter to open a plugin.
       </p>
+      {launchError && <p role="alert" className="plugin-picker-hint">{launchError}</p>}
       <div className="plugin-picker-main">
         {!isSearching && (
           <div className="plugin-picker-rail">
