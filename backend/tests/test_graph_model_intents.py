@@ -241,3 +241,48 @@ def test_final_run_status_write_failure_resumes_without_repeating_the_model(tmp_
         assert calls == [1] and target.content == "A complete response"
 
     asyncio.run(scenario())
+
+
+
+def test_model_completion_is_hidden_until_terminal_sqlite_commit(tmp_path, monkeypatch):
+    async def scenario():
+        path, _bus, doc, source, target, send = session(tmp_path)
+        selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        token = (await send("previewGraphModel", *selected))["previewToken"]
+        original_write = chat_library.save_chat_atomically_row
+        entered, released = threading.Event(), threading.Event()
+        writes = 0
+
+        def hold_terminal_save(*args, **kwargs):
+            nonlocal writes
+            writes += 1
+            if writes == 3:
+                entered.set()
+                assert released.wait(8)
+            return original_write(*args, **kwargs)
+
+        monkeypatch.setattr(chat_library, "save_chat_atomically_row", hold_terminal_save)
+        monkeypatch.setattr(api_provider, "chat", lambda *_args, **_kwargs: {
+            "message": {"role": "assistant", "content": "Committed reply"},
+        })
+        pending = asyncio.create_task(
+            send("executeGraphModel", *selected, token, "terminal-model-observe")
+        )
+        try:
+            assert await asyncio.to_thread(entered.wait, 6)
+            latest = await send("getGraphRun")
+            assert latest["status"] == "running"
+            replay = await send(
+                "executeGraphModel", *selected, token, "terminal-model-observe"
+            )
+            assert replay["status"] == "running"
+            assert target.content == "Committed reply"
+        finally:
+            released.set()
+        finished = await pending
+        assert finished["status"] == "completed"
+        assert (await send("getGraphRun"))["status"] == "completed"
+        row = chat_library.load_chat_row(path, doc.current_chat_id)
+        assert row["data"]["graph_runs"][0]["status"] == "completed"
+
+    asyncio.run(scenario())
