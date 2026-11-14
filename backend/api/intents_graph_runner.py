@@ -207,10 +207,13 @@ def register_graph_runner(
         run = find_run(run_id)
         if run is None:
             raise IntentValidationError(["This run does not belong to the open graph."])
-        if run["status"] in {"interrupted", "reconciliation-required"}:
+        if run["status"] == "interrupted":
+            # Retry the terminal status checkpoint even when all individual
+            # outputs were already committed; no step will be rerun.
+            return await drive(run)
+        if run["status"] == "reconciliation-required":
             # An uncertain remote step remains excluded (only 'pending'
-            # steps run). Independent local pending steps may still finish;
-            # dependents of the remote step fail the ancestor check.
+            # steps run). Independent local pending steps may still finish.
             if any(step["status"] == "pending" for step in run["steps"]):
                 return await drive(run)
         return _public_run(run)
