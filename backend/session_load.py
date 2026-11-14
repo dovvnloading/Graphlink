@@ -1163,22 +1163,29 @@ def _restore_model_payload(payload: dict[str, Any]) -> SceneNode:
     raw = raw if isinstance(raw, dict) else {}
     # Reject unknown versions/identifiers without losing the card's last
     # committed output. An invalid import must never become executable.
-    source, provider, model, binding_id = (
+    raw_source, raw_provider, raw_model, raw_id = (
         raw.get("source"), raw.get("provider"), raw.get("model"), raw.get("binding_id"),
     )
+    source = raw_source if isinstance(raw_source, str) else ""
+    provider = raw_provider if isinstance(raw_provider, str) else ""
+    model = raw_model if isinstance(raw_model, str) else ""
+    binding_id = raw_id if isinstance(raw_id, str) else ""
     try:
         from backend.domain.graph_model_binding import validate_local_model_identity
         if (type(raw.get("version")) is not int or raw["version"] != 1 or
-                not isinstance(source, str) or not isinstance(binding_id, str) or
+                not source or not binding_id or
                 re.fullmatch(r"[a-f0-9]{32}", binding_id) is None):
             raise SceneError("Invalid saved Model port.")
         validate_local_model_identity(provider, model)
     except SceneError:
         source, provider, model, binding_id = "", "Ollama", "unconfigured", ""
     last_input, last_output = raw.get("last_input_hash"), raw.get("last_output_hash")
-    hashes_valid = (isinstance(last_input, str) and isinstance(last_output, str)
-                    and re.fullmatch(r"[a-f0-9]{64}", last_input)
-                    and re.fullmatch(r"[a-f0-9]{64}", last_output))
+    valid_input = (last_input if isinstance(last_input, str)
+                   and re.fullmatch(r"[a-f0-9]{64}", last_input) else "")
+    valid_output = (last_output if isinstance(last_output, str)
+                    and re.fullmatch(r"[a-f0-9]{64}", last_output) else "")
+    if not valid_input or not valid_output:
+        valid_input = valid_output = ""
     return SceneNode(
         id="", x=x, y=y,
         title=str(payload.get("title") or f"Model · {model}")[:120],
@@ -1186,8 +1193,8 @@ def _restore_model_payload(payload: dict[str, Any]) -> SceneNode:
         state=ModelState(ModelTextBinding(
             source_id=source, provider_name=provider, model_id=model,
             binding_id=binding_id, version=1,
-            last_input_hash=last_input if hashes_valid else "",
-            last_output_hash=last_output if hashes_valid else "",
+            last_input_hash=valid_input,
+            last_output_hash=valid_output,
         )), is_collapsed=bool(payload.get("is_collapsed", False)),
     )
 
