@@ -50,7 +50,13 @@ def _require_loopback_ollama() -> str:
         allowed = False
     if not allowed:
         raise SceneError("This graph model step requires a loopback Ollama endpoint; check OLLAMA_HOST.")
-    return f"{parsed.scheme}://{parsed.netloc.lower()}"
+    # Never resolve an editable hostname through DNS or a modified hosts
+    # file, even when its spelling is 'localhost'. Pin the actual transport
+    # to a numeric loopback address instead of trusting name resolution.
+    host = "127.0.0.1" if parsed.hostname == "localhost" else parsed.hostname
+    host_text = f"[{host}]" if host == "::1" else host
+    port = parsed.port if parsed.port is not None else 11434
+    return f"{parsed.scheme}://{host_text}:{port}"
 
 
 @dataclass
