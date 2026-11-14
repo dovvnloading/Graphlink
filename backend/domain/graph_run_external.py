@@ -134,9 +134,21 @@ async def dispatch_external_attempt(
     try:
         # No invoke call of any kind is allowed before this durable fence.
         await _drain_checkpoint(checkpoint)
-    except BaseException:
-        # Dispatch has not happened. The caller can preview again after
-        # resolving the persistence error, but not on this failed request.
+    except asyncio.CancelledError:
+        # A shielded SQLite save can COMMIT even when the caller is cancelled.
+        # The remote call was not sent, but the durable journal now contains
+        # this ID. Preserve it in memory too; a subsequent save must not erase
+        # a fence simply because the cancelled coroutine did not invoke.
+        attempt["phase"] = "reconciliation-required"
+        step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
+        try:
+            await _drain_checkpoint(checkpoint)
+        except BaseException:
+            # The original pre-dispatch fence already exists if it committed.
+            pass
+        raise
+    except Exception:
+        # A failed pre-dispatch checkpoint cannot authorize a network send.
         step.pop("externalAttempt")
         step.update(status="pending", detail=prior_detail)
         raise
