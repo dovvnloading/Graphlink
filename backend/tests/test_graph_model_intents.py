@@ -230,7 +230,7 @@ def test_final_run_status_write_failure_resumes_without_repeating_the_model(tmp_
         monkeypatch.setattr(graph_model, "local_ollama_complete", reply)
         selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
         token = (await send("previewGraphModel", *selected))["previewToken"]
-        with pytest.raises(IntentValidationError, match="Could not save the model request checkpoint"):
+        with pytest.raises(IntentValidationError, match="Could not confirm the graph run checkpoint"):
             await send("executeGraphModel", *selected, token, "final-status-model")
         assert calls == [1] and target.content == "A complete response"
         saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][0]
