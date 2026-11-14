@@ -207,8 +207,12 @@ def register_graph_runner(
         run = find_run(run_id)
         if run is None:
             raise IntentValidationError(["This run does not belong to the open graph."])
-        if run["status"] == "interrupted":
-            return await drive(run)
+        if run["status"] in {"interrupted", "reconciliation-required"}:
+            # An uncertain remote step remains excluded (only 'pending'
+            # steps run). Independent local pending steps may still finish;
+            # dependents of the remote step fail the ancestor check.
+            if any(step["status"] == "pending" for step in run["steps"]):
+                return await drive(run)
         return _public_run(run)
 
     async def resume_graph_run(run_id: str):
