@@ -480,6 +480,8 @@ def test_args_schema_is_scoped_to_the_known_intents():
             ("scene", "executeGraphModel"),
             ("scene", "bindGraphModel"),
             ("scene", "unbindGraphModel"),
+            ("scene", "addModelNode"),
+            ("scene", "configureModelNode"),
         }
 
 
