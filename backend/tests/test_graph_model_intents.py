@@ -7,7 +7,7 @@ import threading
 
 import pytest
 
-import api_provider
+from backend.api import intents_graph_model as graph_model
 from backend import chat_library
 from backend.canvas import SceneDocument
 from backend.events import IntentValidationError, SessionBus
@@ -41,11 +41,10 @@ def test_model_preview_is_read_only_and_dispatch_checkpoints_before_request(tmp_
         assert "Summarize this message" not in str(preview)
         observed = []
 
-        def fake_chat(task, messages, **kwargs):
-            assert task == "task_chat"
-            assert messages == [{"role": "user", "content": source.content}]
-            assert kwargs["model_ref"].provider == LOCAL_PROVIDER_OLLAMA
-            assert kwargs["model_ref"].model_id == "qwen3:8b"
+        def fake_chat(*, prompt, model_id, endpoint):
+            assert prompt == source.content
+            assert model_id == "qwen3:8b"
+            assert endpoint in {"http://127.0.0.1:11434", "http://localhost:11434"}
             row = chat_library.load_chat_row(path, doc.current_chat_id)
             saved_step = row["data"]["graph_runs"][-1]["steps"][0]
             assert saved_step["externalAttempt"]["phase"] == "dispatched"
@@ -54,7 +53,7 @@ def test_model_preview_is_read_only_and_dispatch_checkpoints_before_request(tmp_
             observed.append(saved_step["externalAttempt"]["requestId"])
             return {"message": {"role": "assistant", "content": "Ship safely with clear results."}}
 
-        monkeypatch.setattr(api_provider, "chat", fake_chat)
+        monkeypatch.setattr(graph_model, "local_ollama_complete", fake_chat)
         args = [*selected, preview["previewToken"], "local-model-run"]
         result = await send("executeGraphModel", *args)
         assert result["status"] == "completed"
@@ -89,7 +88,7 @@ def test_preview_staleness_refuses_model_calls(tmp_path, monkeypatch, changed):
         args = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
         preview = await send("previewGraphModel", *args)
         calls = []
-        monkeypatch.setattr(api_provider, "chat", lambda *_a, **_kw: calls.append(1))
+        monkeypatch.setattr(graph_model, "local_ollama_complete", lambda **_kw: calls.append(1))
         if changed == "source":
             source.content = "edited prompt"
         elif changed == "destination":
@@ -133,11 +132,12 @@ def test_remote_timeout_records_uncertain_request_and_never_replays(tmp_path, mo
         token = (await send("previewGraphModel", *selected))["previewToken"]
         calls = []
 
-        def timeout(_task, _messages, **kwargs):
-            calls.append(kwargs["model_ref"].model_id)
+        def timeout(*, prompt, model_id, endpoint):
+            assert prompt == source.content and endpoint.startswith("http")
+            calls.append(model_id)
             raise TimeoutError("Ollama may have processed this prompt")
 
-        monkeypatch.setattr(api_provider, "chat", timeout)
+        monkeypatch.setattr(graph_model, "local_ollama_complete", timeout)
         with pytest.raises(TimeoutError):
             await send("executeGraphModel", *selected, token, "uncertain-local-run")
         assert calls == ["qwen3:8b"]
@@ -167,12 +167,12 @@ def test_inflight_cancellation_keeps_durable_remote_fence(tmp_path, monkeypatch)
         token = (await send("previewGraphModel", *selected))["previewToken"]
         started, release = threading.Event(), threading.Event()
 
-        def blocked(_task, _messages, **_kwargs):
+        def blocked(**_kwargs):
             started.set()
             assert release.wait(10)
             return {"message": {"role": "assistant", "content": "arrived too late"}}
 
-        monkeypatch.setattr(api_provider, "chat", blocked)
+        monkeypatch.setattr(graph_model, "local_ollama_complete", blocked)
         task = asyncio.create_task(send("executeGraphModel", *selected, token, "cancelled-local-run"))
         try:
             assert await asyncio.to_thread(started.wait, 5)
@@ -222,12 +222,12 @@ def test_final_run_status_write_failure_resumes_without_repeating_the_model(tmp_
                 raise OSError("final-status disk failure")
             return original_write(*args, **kwargs)
 
-        def reply(_task, _messages, **_kwargs):
+        def reply(**_kwargs):
             calls.append(1)
             return {"message": {"role": "assistant", "content": "A complete response"}}
 
         monkeypatch.setattr(chat_library, "save_chat_atomically_row", fail_final_write)
-        monkeypatch.setattr(api_provider, "chat", reply)
+        monkeypatch.setattr(graph_model, "local_ollama_complete", reply)
         selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
         token = (await send("previewGraphModel", *selected))["previewToken"]
         with pytest.raises(OSError, match="final-status"):
@@ -262,7 +262,7 @@ def test_model_completion_is_hidden_until_terminal_sqlite_commit(tmp_path, monke
             return original_write(*args, **kwargs)
 
         monkeypatch.setattr(chat_library, "save_chat_atomically_row", hold_terminal_save)
-        monkeypatch.setattr(api_provider, "chat", lambda *_args, **_kwargs: {
+        monkeypatch.setattr(graph_model, "local_ollama_complete", lambda **_kwargs: {
             "message": {"role": "assistant", "content": "Committed reply"},
         })
         pending = asyncio.create_task(
