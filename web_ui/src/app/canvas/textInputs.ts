@@ -9,7 +9,7 @@ export function isPlainNote(row: Pick<SceneNodeRow, "kind" | "isSystemPrompt" | 
 }
 
 export function textSourceLabel(row: SceneNodeRow): string {
-  const kind = row.kind === "artifact" ? "Drafter" : row.kind === "chat" ? "Chat" : "Note";
+  const kind = row.kind === "artifact" ? "Drafter" : row.kind === "chat" ? "Chat" : row.kind === "model" ? "Model" : "Note";
   const text = row.kind === "artifact" ? row.artifactContent : row.content;
   const preview = text.trimStart().slice(0, 64).split(/\r?\n/, 1)[0]?.trimEnd();
   return preview ? `${kind} · ${preview} (${row.id})` : `${kind} (${row.id})`;
@@ -20,14 +20,15 @@ export function textSourceLabel(row: SceneNodeRow): string {
 export function availableTextSources(nodes: readonly SceneNodeRow[], targetId: string): SceneNodeRow[] {
   const downstream = new Map<string, string[]>();
   for (const node of nodes) {
-    if (!node.textInputSourceId) continue;
-    const targets = downstream.get(node.textInputSourceId);
+    const source = node.kind === "model" ? (node.itemIds[0] ?? "") : node.textInputSourceId;
+    if (!source) continue;
+    const targets = downstream.get(source);
     if (targets) targets.push(node.id);
-    else downstream.set(node.textInputSourceId, [node.id]);
+    else downstream.set(source, [node.id]);
   }
   const excluded = new Set([targetId]);
   for (const id of excluded) {
     for (const target of downstream.get(id) ?? []) excluded.add(target);
   }
-  return nodes.filter((node) => !excluded.has(node.id) && (isPlainNote(node) || node.kind === "chat" || node.kind === "artifact"));
+  return nodes.filter((node) => !excluded.has(node.id) && (isPlainNote(node) || node.kind === "chat" || node.kind === "artifact" || node.kind === "model"));
 }
