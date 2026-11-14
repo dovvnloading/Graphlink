@@ -36,33 +36,33 @@ class ExternalCall:
     """Immutable, non-secret identity of one *already authorized* external call."""
 
     kind: Literal["model", "tool"]
-    provider: str
+    provider_name: str
     input_ref: str
     input_hash: str
-    model: str = ""
+    model_id: str = ""
     tool: str = ""
 
     def __post_init__(self) -> None:
         if self.kind not in ("model", "tool"):
             raise SceneError("External calls must be model or tool operations.")
-        for name, value in (("provider", self.provider), ("input reference", self.input_ref)):
+        for name, value in (("provider", self.provider_name), ("input reference", self.input_ref)):
             pattern = _INPUT_REF if name == "input reference" else _IDENTIFIER
             if not isinstance(value, str) or not pattern.fullmatch(value):
                 raise SceneError(f"Use a non-secret, bounded {name} identifier.")
         if not isinstance(self.input_hash, str) or not _SHA256.fullmatch(self.input_hash):
             raise SceneError("The external input must have a pinned SHA-256 fingerprint.")
         if self.kind == "model":
-            if not isinstance(self.model, str) or not _IDENTIFIER.fullmatch(self.model) or self.tool:
+            if not isinstance(self.model_id, str) or not _IDENTIFIER.fullmatch(self.model_id) or self.tool:
                 raise SceneError("A model call needs one explicit model and no tool.")
-        elif not isinstance(self.tool, str) or not _IDENTIFIER.fullmatch(self.tool) or self.model:
+        elif not isinstance(self.tool, str) or not _IDENTIFIER.fullmatch(self.tool) or self.model_id:
             raise SceneError("A tool call needs one explicit tool and no model.")
 
     def journal_record(self) -> dict[str, str]:
         return {
             "requestId": f"graph-{uuid.uuid4().hex}",
             "kind": self.kind,
-            "provider": self.provider,
-            "model": self.model,
+            "provider": self.provider_name,
+            "model": self.model_id,
             "tool": self.tool,
             "inputRef": self.input_ref,
             "inputHash": self.input_hash,
@@ -83,8 +83,8 @@ def restore_external_attempt(raw: Any) -> dict[str, str] | None:
     try:
         ExternalCall(
             kind=raw["kind"],  # type: ignore[arg-type]
-            provider=raw["provider"],
-            model=raw["model"],
+            provider_name=raw["provider"],
+            model_id=raw["model"],
             tool=raw["tool"],
             input_ref=raw["inputRef"],
             input_hash=raw["inputHash"],
