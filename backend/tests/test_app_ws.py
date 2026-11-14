@@ -476,6 +476,8 @@ def test_args_schema_is_scoped_to_the_known_intents():
             ("scene", "getGraphRun"),
             ("scene", "executeGraphRun"),
             ("scene", "resumeGraphRun"),
+            ("scene", "previewGraphModel"),
+            ("scene", "executeGraphModel"),
         }
 
 
