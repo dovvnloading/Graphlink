@@ -17,7 +17,7 @@ from backend.chat_library import load_chat_row
 from backend.domain.model import SceneError
 from backend.domain.node_states import ModelState
 from backend.domain.graph_runner import plan_graph_run
-from backend.events import IntentValidationError, SessionBus
+from backend.events import SessionBus
 from backend.tests.test_graph_model_intents import session
 from backend import chat_library
 from graphlink_task_config import LOCAL_PROVIDER_OLLAMA
