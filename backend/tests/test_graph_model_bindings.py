@@ -120,6 +120,9 @@ def test_model_port_marks_transitive_staleness_and_blocks_stale_downstream_reads
     # relative to its own source. This must invalidate its model descendant.
     doc.set_note_content(source.id, "changed")
     assert doc.model_input_status(model_output.id) == "stale"
+    step = next(row for row in plan_graph_run(doc, []) if row["nodeId"] == downstream.id)
+    assert step["status"] == "blocked"
+    assert "upstream model input" in step["detail"]
     with pytest.raises(SceneError, match="upstream text input"):
         doc.run_note_text_input(downstream.id)
     assert downstream.content == "generated text"
