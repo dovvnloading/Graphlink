@@ -63,6 +63,41 @@ def test_preview_defers_downstream_steps_without_speculative_inference():
     assert not doc.graph_runs
 
 
+def test_model_run_fingerprint_survives_saved_node_id_remapping():
+    from backend.domain.graph_runner import _inspect
+    from backend.session_load import restore_chat_into_document
+    from backend.session_save import build_chat_data
+
+    original = SceneDocument()
+    original.remove_nodes([original.add_note(0, 0).id])  # New IDs after reopen.
+    source = original.add_note(0, 0)
+    original.set_note_content(source.id, "Stable source prompt")
+    model = original.add_model_node(source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+    step, = plan_graph_run(original, [])
+    assert step["status"] == "ready"
+    original.graph_runs.append({
+        "runId": "resume-safe-model-01", "previewHash": "a" * 64,
+        "selectionHash": "b" * 64, "startedAt": "2026-11-14T00:00:00Z",
+        "status": "interrupted", "steps": [{**step, "status": "pending"}],
+    })
+    saved = build_chat_data(original)
+    reopened = SceneDocument()
+    restore_chat_into_document(reopened, {"data": saved}, saved["notes_data"], [])
+    restored_model = next(n for n in reopened.nodes.values() if n.kind == "model")
+    assert restored_model.id != model.id
+    assert restored_model.state.model_binding.binding_id == model.state.model_binding.binding_id
+    assert restored_model.state.model_binding.source_id != source.id
+    pending, = reopened.graph_runs[0]["steps"]
+    assert pending["nodeId"] == restored_model.id
+    assert pending["sourceId"] == restored_model.state.model_binding.source_id
+    live = pending.copy()
+    _inspect(reopened, live)
+    assert live["status"] == "ready"
+    assert live["inputHash"] == pending["inputHash"]
+    assert live["configHash"] == pending["configHash"]
+    assert live["targetHash"] == pending["targetHash"]
+
+
 def test_two_model_steps_then_transform_commit_in_dependency_order(tmp_path, monkeypatch):
     async def scenario():
         path, bus, doc, source, target, send = session(tmp_path)
