@@ -235,7 +235,10 @@ def register_graph_model_runner(
         if existing is not None:
             if existing["previewHash"] != preview_token or existing["selectionHash"] != fingerprint:
                 raise IntentValidationError(["This operation ID already belongs to another model preview."])
-            return _public_run(existing)
+            receipt = _public_run(existing)
+            if getattr(bus, "graph_model_active_run_id", None) == operation_id:
+                receipt["status"] = "running"
+            return receipt
         result = await start_model(
             GraphModelSelection(source_id, target_id, provider, model_id), preview_token, operation_id,
         )
