@@ -110,12 +110,16 @@ function Runner({ store }: { store: SceneStore }) {
   }
 
   function resumeButton(run: GraphRun) {
-    if (run.status !== "interrupted") return null;
+    const uncertain = run.status === "reconciliation-required";
+    if (run.status !== "interrupted" && !uncertain) return null;
+    if (uncertain && !run.steps.some((step) => step.status === "pending")) return null;
     return <div className="runner-commit">
-      <p>Continue from the last saved step.</p>
+      <p>{uncertain
+        ? "Continue only unaffected pending steps. The uncertain external request will not be repeated."
+        : "Continue from the last saved step."}</p>
       <button type="button" className="appbar-btn" disabled={!!busy || running} onClick={() =>
         void perform("Resuming run…", () => updateRun(store.resumeGraphRun(run.runId)))
-      }>Resume run</button>
+      }>{uncertain ? "Continue safe steps" : "Resume run"}</button>
     </div>;
   }
 
