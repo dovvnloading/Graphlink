@@ -11,9 +11,11 @@ model binding and from legacy structural/reference edges.
 1. In **Plugins → Graph Runner**, choose a chat, plain note, Drafter
    document or an existing Model output as source. Enter an installed Ollama
    model ID and choose **Create Model node**. This saves a typed, versioned
-   port without sending a request. Repeat from the first Model output to build
-   a sequence. A note's existing word-count/copy transform may consume the
-   final Model output.
+   port without sending a request. Drag the text-output port on another card
+   onto the Model's named text-input port to rebind it with cycle/type
+   validation. Repeat from the first Model output to build a sequence. A
+   note's existing word-count/copy transform may consume the final Model
+   output.
 2. Choose **Preview run** for the graph or a selected branch. A
    `Source → Model A → Model B → word-count note` plan shows the first
    Model as ready and its dependents as waiting. It cannot predict the
