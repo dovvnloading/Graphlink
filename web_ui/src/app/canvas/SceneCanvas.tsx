@@ -21,7 +21,7 @@ import {
   ArtifactNodeView, ChartNodeView, ChatNodeView, CodeNodeView, CodeReviewNodeView,
   CodeSandboxNodeView, ConversationNodeView, DocumentNodeView, GitlinkNodeView,
   GroupNodeView, HarnessNodeView, HtmlNodeView, ImageNodeView, FalMediaNodeView, NoteNodeView,
-  PlaceholderNodeView, PlanNodeView, ThinkingNodeView, WebResearchNodeView,
+  PlaceholderNodeView, PlanNodeView, ThinkingNodeView, WebResearchNodeView, ModelNodeView,
 } from "./lazyNodeViews";
 import type { ArtifactFlowNode } from "./ArtifactNodeView";
 import type { ChartFlowNode } from "./ChartNodeView";
@@ -38,6 +38,7 @@ import type { ImageFlowNode } from "./ImageNodeView";
 import type { MediaMode } from "./falMediaStudioModel";
 import type { FalMediaFlowNode } from "./FalMediaNodeView";
 import type { NoteFlowNode } from "./NoteNodeView";
+import type { ModelFlowNode } from "./ModelNodeView";
 import { availableTextSources, isPlainNote, textSourceLabel, TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE, type TextInputOperation } from "./textInputs";
 import type { ConnectionRole } from "./connections/connectionAppearance";
 import { CurvedEdge, OrthogonalEdge } from "./OrthogonalEdge";
@@ -95,6 +96,7 @@ export type SceneFlowNode =
   | CodeReviewFlowNode
   | CodeSandboxFlowNode
   | NoteFlowNode
+  | ModelFlowNode
   | GroupFlowNode
   | ChartFlowNode
   | PlanFlowNode
@@ -116,6 +118,7 @@ const NODE_TYPES = {
   code_review: CodeReviewNodeView,
   code_sandbox: CodeSandboxNodeView,
   note: NoteNodeView,
+  model: ModelNodeView,
   // R6.1: one shared component backs both "frame" and "container" NODE_TYPES
   // entries - see GroupNodeView.tsx's own module doc for why a single
   // data.groupKind-parameterized component was chosen over two near-
@@ -2026,6 +2029,27 @@ export function toFlowNodes(
       flowNodes.push(flowNode);
       continue;
     }
+    if (n.kind === "model") {
+      const dimmedVal = isDimmed(n.id);
+      const extraSig = dimmedVal ? "1" : "0";
+      const cached = cache.flowNodes.get(n);
+      if (cached && cached.extraSig === extraSig) {
+        flowNodes.push(cached.flowNode);
+        continue;
+      }
+      const flowNode: SceneFlowNode = {
+        id: n.id, type: "model" as const, position: { x: n.x, y: n.y },
+        style: dimmedVal ? { opacity: BRANCH_DIM_OPACITY } : undefined,
+        data: {
+          title: n.title,
+          sourceLabel: nodesById.get(n.itemIds[0] ?? "")?.title ?? "Disconnected",
+          content: n.content,
+        },
+      };
+      cache.flowNodes.set(n, { extraSig, flowNode });
+      flowNodes.push(flowNode);
+      continue;
+    }
     // Fallback placeholder - unreachable in practice given the exhaustive
     // kind list above, kept for forward-compat with a future kind this
     // switch hasn't been taught yet. No callbacks at all, so no dispatcher
@@ -2463,17 +2487,19 @@ export function toFlowEdges(scene: SceneState, hoveredEdgeId: string | null): Ed
         : {}),
     }));
   for (const target of scene.nodes) {
+    const model = target.kind === "model";
     const table = !!target.tableInputSourceId;
-    const source = target.tableInputSourceId || target.textInputSourceId;
+    const source = model ? (target.itemIds[0] ?? "") : (target.tableInputSourceId || target.textInputSourceId);
     if (!source || !nodesById.has(source) || dockedNodeIds.has(source) || dockedNodeIds.has(target.id)
       || collapsedHiddenIds.has(source) || collapsedHiddenIds.has(target.id)) continue;
     const role = table ? "table-input" : "text-input";
-    const id = `${role}:${target.id}`;
+    const id = `${model ? "model-input" : role}:${target.id}`;
     flowEdges.push({
       id, source, target: target.id,
-      sourceHandle: table ? "table-source" : TEXT_OUTPUT_HANDLE, targetHandle: table ? "table-target" : TEXT_INPUT_HANDLE,
+      sourceHandle: table ? "table-source" : TEXT_OUTPUT_HANDLE,
+      targetHandle: model ? "model-input" : (table ? "table-target" : TEXT_INPUT_HANDLE),
       data: { role },
-      ariaLabel: `${table ? "Table" : "Text"} input from ${source} to ${target.id}`,
+      ariaLabel: `${model ? "Model text" : table ? "Table" : "Text"} input from ${source} to ${target.id}`,
       ...(scene.fadeConnectionsEnabled && id !== hoveredEdgeId ? { style: { opacity: FADED_CONNECTION_OPACITY } } : {}),
     });
   }
@@ -2811,7 +2837,9 @@ function CanvasInner({
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      if (connection.sourceHandle === TEXT_OUTPUT_HANDLE && connection.targetHandle === TEXT_INPUT_HANDLE) {
+      if (connection.sourceHandle === TEXT_OUTPUT_HANDLE && connection.targetHandle === "model-input") {
+        void store.connectModelInput(connection.source, connection.target);
+      } else if (connection.sourceHandle === TEXT_OUTPUT_HANDLE && connection.targetHandle === TEXT_INPUT_HANDLE) {
         store.bindNoteTextInput(connection.source, connection.target);
       } else if (!connection.sourceHandle && !connection.targetHandle) {
         store.connectNodes(connection.source, connection.target);
@@ -2822,11 +2850,14 @@ function CanvasInner({
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
     if (!connection.sourceHandle && !connection.targetHandle) return true;
-    if (connection.sourceHandle !== TEXT_OUTPUT_HANDLE || connection.targetHandle !== TEXT_INPUT_HANDLE) return false;
+    if (connection.sourceHandle !== TEXT_OUTPUT_HANDLE ||
+        (connection.targetHandle !== TEXT_INPUT_HANDLE && connection.targetHandle !== "model-input")) return false;
     const { nodes } = store.getScene();
     const target = nodes.find((node) => node.id === connection.target);
-    return !!target && isPlainNote(target) && !target.textInputSourceId &&
-      availableTextSources(nodes, target.id).some((node) => node.id === connection.source);
+    if (!target) return false;
+    const compatible = availableTextSources(nodes, target.id).some((node) => node.id === connection.source);
+    if (connection.targetHandle === "model-input") return target.kind === "model" && compatible;
+    return isPlainNote(target) && !target.textInputSourceId && compatible;
   }, [store]);
 
   const onSelectionChange = useCallback(

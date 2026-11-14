@@ -123,6 +123,7 @@ from backend.domain.node_states import (
     HtmlState,
     ImageState,
     FalMediaState,
+    ModelState,
     NoteState,
     PlanState,
     WebResearchState,
@@ -164,6 +165,7 @@ _ACTIVE_SAVE_ASSET_STORE: contextvars.ContextVar = contextvars.ContextVar(
 _REGULAR_KINDS = (
     "chat", "code", "document", "image", "thinking", "conversation", "html",
     "web_research", "artifact", "gitlink", "code_review", "code_sandbox", "plan", "harness", "fal_media",
+    "model",
 )
 
 
@@ -677,6 +679,23 @@ def _serialize_fal_media_node(raw_node: SceneNode) -> dict[str, Any]:
     }
 
 
+def _serialize_model_node(raw_node: SceneNode) -> dict[str, Any]:
+    """Save a Model card and last committed reply, without prompts or credentials."""
+    node = with_state(raw_node, ModelState)
+    binding = node.state.model_binding
+    return {
+        "node_type": "model", "title": node.title,
+        "content": node.content, "is_collapsed": bool(node.is_collapsed),
+        "input": {
+            "source": binding.source_id, "provider": binding.provider_name,
+            "model": binding.model_id, "version": binding.version,
+            "binding_id": binding.binding_id,
+            "last_input_hash": binding.last_input_hash,
+            "last_output_hash": binding.last_output_hash,
+        },
+    }
+
+
 _NODE_SERIALIZERS = {
     "chat": lambda node, document: _serialize_chat_node(node),
     "code": lambda node, document: _serialize_code_node(node),
@@ -693,6 +712,7 @@ _NODE_SERIALIZERS = {
     "code_sandbox": lambda node, document: _serialize_code_sandbox_node(node),
     "plan": lambda node, document: _serialize_plan_node(node),
     "harness": lambda node, document: _serialize_harness_node(node),
+    "model": lambda node, document: _serialize_model_node(node),
 }
 
 

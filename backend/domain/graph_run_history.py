@@ -26,6 +26,10 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
     for key in ("inputHash", "configHash", "targetHash"):
         if step[key] and not DIGEST.fullmatch(step[key]):
             return None
+    if raw["kind"] == "model" and "endpointHash" in raw:
+        if not isinstance(raw["endpointHash"], str) or not DIGEST.fullmatch(raw["endpointHash"]):
+            return None
+        step["endpointHash"] = raw["endpointHash"]
     if raw.get("outputHash"):
         if not isinstance(raw["outputHash"], str) or not DIGEST.fullmatch(raw["outputHash"]):
             return None

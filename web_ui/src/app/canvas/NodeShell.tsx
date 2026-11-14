@@ -29,6 +29,7 @@ interface NodeShellProps {
   textOutput?: boolean;
   textInput?: boolean;
   tablePort?: "source" | "target" | "both";
+  modelPort?: boolean;
   footer?: ReactNode;
   onBodyDoubleClick?: (event: MouseEvent<HTMLDivElement>) => void;
 }
@@ -47,6 +48,7 @@ export function NodeShell({
   textOutput,
   textInput,
   tablePort,
+  modelPort,
   footer,
   onBodyDoubleClick,
 }: NodeShellProps) {
@@ -93,6 +95,11 @@ export function NodeShell({
       {textInput && <Handle id={TEXT_INPUT_HANDLE} type="target" position={Position.Left}
         className="scene-text-handle" title="Text input · Connect a text output" aria-label="Text input port" />}
       {tablePort && <RefreshPorts key={tablePort} />}
+      {modelPort && <><RefreshPorts key="model" />
+        <Handle id="model-input" type="target" position={Position.Left}
+          className="scene-text-handle"
+          title="Model text input" aria-label="Model text input" />
+      </>}
       {(tablePort === "source" || tablePort === "both") && <Handle id="table-source" type="source"
         position={Position.Right} isConnectable={false} className="scene-text-handle scene-table-handle"
         title="Table output" aria-label="Table output" />}

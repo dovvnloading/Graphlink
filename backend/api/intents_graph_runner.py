@@ -12,10 +12,14 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.domain.graph import SceneDocument
-from backend.domain.graph_run_external import RECONCILIATION_DETAIL
+from backend.domain.graph_run_external import RECONCILIATION_DETAIL, ExternalCall, dispatch_external_attempt
 from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID
-from backend.domain.graph_runner import execute_graph_step, plan_graph_run, validate_graph_run_ancestors
+from backend.domain.graph_runner import (
+    _inspect, _matching_node, execute_graph_step, plan_graph_run, validate_graph_run_ancestors,
+)
 from backend.domain.model import SceneError
+from backend.domain.node_states import ModelState
+from backend.domain.nodes_content import _text_digest
 from backend.events import IntentValidationError, SessionBus
 
 
@@ -46,7 +50,7 @@ def _digest(payload: Any) -> str:
 
 
 def _public_step(step: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in step.items() if key not in {"targetHash", "configHash"}}
+    return {key: value for key, value in step.items() if key not in {"targetHash", "configHash", "endpointHash"}}
 
 
 def _public_run(run: dict[str, Any]) -> dict[str, Any]:
@@ -73,6 +77,17 @@ def register_graph_runner(
     def plan(node_ids: list[str]) -> tuple[str, list[dict[str, str]]]:
         try:
             steps = plan_graph_run(document, node_ids)
+            model_steps = [s for s in steps if s["kind"] == "model" and s["status"] in {"ready", "waiting"}]
+            if len(model_steps) > 8:
+                raise SceneError("A graph run can issue at most eight local model calls.")
+            # Existing current Model receipts are local data. They must
+            # remain usable in deterministic branches even when Ollama is
+            # offline; a new outbound call alone requires endpoint approval.
+            if model_steps:
+                from backend.api.intents_graph_model import _require_loopback_ollama
+                endpoint = _require_loopback_ollama()
+                for step in model_steps:
+                    step["endpointHash"] = _digest(["local_model_endpoint", endpoint])
         except SceneError as exc:
             raise IntentValidationError([str(exc)]) from exc
         token = _digest([str(document.graph_run_epoch), sorted(set(node_ids)), steps])
@@ -104,6 +119,81 @@ def register_graph_runner(
         if not ok:
             raise IntentValidationError(["Could not save the run checkpoint. Reopen Graph Runner to inspect or resume."])
 
+    async def confirmed_checkpoint() -> bool:
+        await checkpoint()
+        return True
+
+    async def run_model_step(run: dict[str, Any], step: dict[str, Any], by_node_id: dict[str, Any]) -> None:
+        """One reviewed local Model step with a durable fence, never auto-retried."""
+        # Imported at execution time to keep the existing GraphModel one-shot
+        # API's dependency on _digest out of module import cycles.
+        from backend.api import intents_graph_model as local
+
+        validate_graph_run_ancestors(document, step, by_node_id)
+        node = _matching_node(document, step)
+        if not isinstance(node.state, ModelState):
+            raise SceneError("This is not an executable Model node.")
+        if any(
+            prior is not step and prior.get("nodeId") == node.id
+            and prior.get("status") == "reconciliation-required"
+            for record in document.graph_runs for prior in record.get("steps", [])
+        ):
+            raise SceneError("This Model output has an unresolved request; reconcile it before another call.")
+        endpoint = local._require_loopback_ollama()
+        if step.get("endpointHash") != _digest(["local_model_endpoint", endpoint]):
+            raise SceneError("The Ollama endpoint changed since preview. Preview the graph again.")
+        live = step.copy()
+        _inspect(document, live)
+        if live["status"] not in {"ready", "current"}:
+            raise SceneError("Model input cannot be executed in its current state.")
+        for key in ("configHash", "targetHash"):
+            if live[key] != step[key]:
+                raise SceneError("A Model configuration or output changed since preview.")
+        if step["inputHash"] and step["inputHash"] != live["inputHash"]:
+            raise SceneError("The Model input changed since preview.")
+        # Deferred hashes become concrete only after the upstream Model
+        # completion is committed. Save it with the same request fence.
+        step["inputHash"] = live["inputHash"]
+        binding = node.state.model_binding
+        identity = binding.binding_id
+        model_id, provider = binding.model_id, binding.provider_name
+        prompt = document._text_output(step["sourceId"])
+
+        async def invoke(_request_id: str) -> Any:
+            return await asyncio.to_thread(
+                local.local_ollama_complete, prompt=prompt, model_id=model_id, endpoint=endpoint,
+            )
+
+        async def apply_result(payload: Any) -> str:
+            text = local._response_text(payload)
+            current = _matching_node(document, step)
+            if not isinstance(current.state, ModelState):
+                raise SceneError("The Model node changed during inference.")
+            new_live = step.copy()
+            _inspect(document, new_live)
+            if any(new_live[key] != step[key] for key in ("inputHash", "configHash", "targetHash")):
+                raise SceneError("The Model input, configuration or output changed during inference.")
+            current_model_state = current.state
+            if current_model_state.model_binding.binding_id != identity:
+                raise SceneError("The Model port was rebound during inference.")
+            output_hash = _text_digest(text)
+
+            def apply() -> None:
+                current.content = text
+                current_model_state.model_binding.last_input_hash = step["inputHash"]
+                current_model_state.model_binding.last_output_hash = output_hash
+
+            document.record_command("runGraphStep", "user", apply, node_ids=(current.id,), run_id=run["runId"])
+            return output_hash
+
+        await dispatch_external_attempt(
+            step, ExternalCall(
+                kind="model", provider_name=provider, model_id=model_id,
+                input_ref=f"graph-text:{step['sourceId']}:{step['inputHash']}",
+                input_hash=step["inputHash"],
+            ), checkpoint=confirmed_checkpoint, invoke=invoke, apply_result=apply_result,
+        )
+
     async def drive(run: dict[str, Any]):
         nonlocal active_run_id
         active_run_id = run["runId"]
@@ -124,15 +214,37 @@ def register_graph_runner(
                     await checkpoint()
                     await bus.publish("scene")
                     continue
-                if step["kind"] in {"model", "tool"}:
-                    # Adapters do not exist yet. Never fall through to local
-                    # note/table evaluation or accidentally dispatch a call.
-                    step.update(status="blocked", detail="No external Graph Runner adapter is configured.")
+                if step["kind"] == "model":
+                    try:
+                        await run_model_step(run, step, by_node_id)
+                    except asyncio.CancelledError:
+                        raise
+                    except SceneError as exc:
+                        if step["status"] != "reconciliation-required":
+                            step.update(status="blocked", detail=str(exc))
+                    except Exception:
+                        # An admitted request's remote outcome is uncertain;
+                        # dispatch_external_attempt already left its fence.
+                        if "externalAttempt" not in step:
+                            step.update(status="blocked", detail="Model dispatch could not start.")
+                    try:
+                        await checkpoint()
+                    finally:
+                        await bus.publish("scene")
+                    continue
+                if step["kind"] == "tool":
+                    step.update(status="blocked", detail="No Graph Runner tool adapter is authorized.")
                     await checkpoint()
                     await bus.publish("scene")
                     continue
                 try:
                     validate_graph_run_ancestors(document, step, by_node_id)
+                    if not step["inputHash"]:
+                        live = step.copy()
+                        _inspect(document, live)
+                        if live["configHash"] != step["configHash"] or live["targetHash"] != step["targetHash"]:
+                            raise SceneError("The deferred output or configuration changed since preview.")
+                        step["inputHash"] = live["inputHash"]
                     digest, _ = document.record_command(
                         "runGraphStep", "user", lambda: execute_graph_step(document, step),
                         node_ids=(step["nodeId"],), run_id=run["runId"],
@@ -173,7 +285,7 @@ def register_graph_runner(
         if not any(step["status"] == "ready" for step in steps):
             raise IntentValidationError(["The preview contains no steps ready to run."])
         for step in steps:
-            if step["status"] == "ready":
+            if step["status"] in {"ready", "waiting"}:
                 step.update(status="pending", detail="Waiting to run.")
         run = {
             "runId": run_id, "previewHash": token, "selectionHash": _digest(sorted(set(node_ids))),

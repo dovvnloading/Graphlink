@@ -49,6 +49,18 @@ class NodeState:
 
 
 @dataclass
+class ModelState(NodeState):
+    """Executable text Model card; one named text input and one text output.
+
+    The binding's UUID and version pin the configuration independently of the
+    canvas's legacy structural edges. SceneNode.content holds the last actual
+    result; editing an input never launches inference or erases the result.
+    """
+
+    model_binding: ModelTextBinding
+
+
+@dataclass
 class ImageState(NodeState):
     """Relocated verbatim from SceneNode.image_asset_id (former
     backend/domain/model.py field, R3.21) - the opaque reference key into

@@ -1,3 +1,8 @@
+.model-node { width: 360px; min-height: 150px; }
+.model-node-body { padding: 12px 14px; display: grid; gap: 8px; }
+.model-node-port-summary, .model-node-output-label { font-size: 11px; color: var(--gl-surface-text-secondary); }
+.model-node-output { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 210px; overflow: auto; }
+
 /* The ports and resize handles straddle the perimeter. Only the content
    surface clips, so the full target stays available at every zoom. */
 .scene-node.scene-node-card {

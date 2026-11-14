@@ -44,11 +44,13 @@ uncertain remote request remains in the durable journal and is not replayed.
 Undo/redo restores the result and its provenance together.
 
 Current deterministic note transforms refuse to consume an unrun/stale/edited
-upstream model output. The deterministic Graph Runner continues to schedule
-only local transforms. It does **not** invent preview text for a model step
-or automatically run downstream steps; model steps must still be run
-individually and explicitly. Saved bindings do not bypass per-call approval
-and budget policies that future cloud/provider/tool adapters will require.
+upstream model output. These **model-to-note** bindings remain one-shot and
+require explicit Preview/Run. Distinct first-class Model cards can instead
+participate in a dependency-ordered local Graph Runner workflow; the planner
+waits for real Model replies rather than inventing preview text. See
+[the first-class Model-node guide](GRAPH_RUN_MODEL_NODES.md). Neither path
+bypasses per-call approval and budget policies future paid-provider/tool
+adapters will require.
 
 ## Validation
 
@@ -64,8 +66,7 @@ in-flight attempt. The frontend test exercises connection save, selection,
 disconnection and explicit execution. Live Ollama still requires an installed
 local model and daemon.
 
-**Follow-on milestone:** Add a versioned first-class Model node/port to the
-shared graph contract and a multi-step execution planner that suspends
-dependent steps until an actual model receipt exists. Then add separate
-provider profiles, budgets, paid-call approvals and provider-specific remote
-reconciliation before any remote or write-capable execution.
+**Follow-on milestone:** Extend the bounded local Model-node graph slice to
+additional typed ports, reusable subgraphs, independent provider profiles,
+budgets, paid-call approvals and provider-specific remote reconciliation
+before any remote or write-capable execution.

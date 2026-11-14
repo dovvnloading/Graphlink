@@ -27,7 +27,7 @@ from backend.domain.model import (
     SceneNode,
 )
 from backend.domain.node_access import is_node_of, require_node
-from backend.domain.node_states import ArtifactState, ChartState, DocumentState, HtmlState, ModelTextBinding, NoteState
+from backend.domain.node_states import ArtifactState, ChartState, DocumentState, HtmlState, ModelState, ModelTextBinding, NoteState
 
 if TYPE_CHECKING:
     from backend.domain.node_access import _NodeWith
@@ -41,6 +41,9 @@ def clear_note_text_readers(nodes: Iterable[SceneNode], removed_sources: set[str
                 node.state.clear_text_input()
             if node.state.model_text_input is not None and node.state.model_text_input.source_id in removed_sources:
                 node.state.model_text_input = None
+        elif isinstance(node.state, ModelState) and node.state.model_binding.source_id in removed_sources:
+            node.state.model_binding.source_id = ""
+            node.item_ids = []
         if isinstance(node.state, (ArtifactState, ChartState, NoteState)):
             binding = node.state.table_output
             if binding is not None and binding.source_id in removed_sources:
@@ -293,11 +296,13 @@ class ContentOps(SceneDocumentParts):
             raise SceneError("The text source no longer exists.")
         if source.kind == "note":
             return self._plain_note(source_id).content
+        if source.kind == "model" and isinstance(source.state, ModelState):
+            return source.content
         if source.kind == "chat":
             return source.content
         if source.kind == "artifact" and isinstance(source.state, ArtifactState):
             return source.state.artifact_content
-        raise SceneError("Choose a plain note, chat message, or Drafter document as the text source.")
+        raise SceneError("Choose a plain note, chat message, Model node, or Drafter document as the text source.")
 
     def bind_note_text_input(self, source_id: str, target_id: str, operation: str = "copy") -> None:
         """Connect one text output to a note without evaluating it."""
@@ -321,6 +326,8 @@ class ContentOps(SceneDocumentParts):
             if isinstance(state, NoteState):
                 current_id = (state.model_text_input.source_id if state.model_text_input is not None
                               else state.text_input_source_id)
+            elif isinstance(state, ModelState):
+                current_id = state.model_binding.source_id
             else:
                 current_id = ""
 
@@ -354,6 +361,8 @@ class ContentOps(SceneDocumentParts):
             if isinstance(state, NoteState):
                 current_id = (state.model_text_input.source_id if state.model_text_input is not None
                               else state.text_input_source_id)
+            elif isinstance(state, ModelState):
+                current_id = state.model_binding.source_id
             else:
                 current_id = ""
 
@@ -365,14 +374,71 @@ class ContentOps(SceneDocumentParts):
             binding_id=uuid.uuid4().hex, version=MODEL_INPUT_VERSION,
         )
 
+    def add_model_node(self, source_id: str, provider: str, model_id: str) -> SceneNode:
+        """Create a typed Model card without dispatching any request."""
+        validate_local_model_identity(provider, model_id)
+        self._text_output(source_id)
+        x, y = self.place_child(source_id, "model", prefer="right")
+        node = SceneNode(
+            id=f"n{next(self._counter)}", x=float(x), y=float(y),
+            title=f"Model · {model_id}", kind="model", content="",
+            state=ModelState(ModelTextBinding(
+                source_id=source_id, provider_name=provider, model_id=model_id,
+                binding_id=uuid.uuid4().hex, version=MODEL_INPUT_VERSION,
+            )),
+            item_ids=[source_id],  # The visually-derived text port, never a structural parent.
+        )
+        self.nodes[node.id] = node
+        return node
+
+    def configure_model_node(self, target_id: str, source_id: str, provider: str, model_id: str) -> None:
+        """Reconfigure a Model's named input; invalidate its prior provenance."""
+        target = self.nodes.get(target_id)
+        if target is None or not isinstance(target.state, ModelState) or target.kind != "model":
+            raise SceneError("Choose a Model node to configure.")
+        validate_local_model_identity(provider, model_id)
+        self._text_output(source_id)
+        current = source_id
+        seen = {target_id}
+        while current:
+            if current in seen:
+                raise SceneError("A Model input cannot form a dependency cycle.")
+            seen.add(current)
+            upstream = self.nodes.get(current)
+            if upstream is None:
+                raise SceneError("The Model input source no longer exists.")
+            state = upstream.state
+            if isinstance(state, ModelState):
+                current = state.model_binding.source_id
+            elif isinstance(state, NoteState):
+                current = (state.model_text_input.source_id if state.model_text_input is not None
+                           else state.text_input_source_id)
+            else:
+                current = ""
+        original = target.state.model_binding
+        if (original.source_id, original.provider_name, original.model_id) == (source_id, provider, model_id):
+            return
+        target.state.model_binding = ModelTextBinding(
+            source_id=source_id, provider_name=provider, model_id=model_id,
+            binding_id=uuid.uuid4().hex, version=MODEL_INPUT_VERSION,
+        )
+        target.title = f"Model · {model_id}"
+        target.item_ids = [source_id]
+
     def unbind_note_model_input(self, target_id: str) -> None:
         self._plain_note(target_id).state.model_text_input = None
 
     def model_input_status(self, target_id: str) -> str:
         """Report freshness without triggering, replaying or reading any provider."""
-        target = self._plain_note(target_id)
-        binding = target.state.model_text_input
-        if binding is None:
+        target = self.nodes.get(target_id)
+        if target is None:
+            raise SceneError("The Model output no longer exists.")
+        binding: ModelTextBinding | None
+        if target.kind == "model" and isinstance(target.state, ModelState):
+            binding = target.state.model_binding
+        else:
+            binding = self._plain_note(target_id).state.model_text_input
+        if binding is None or not binding.source_id:
             return "unbound"
         if not binding.last_input_hash or not binding.last_output_hash:
             return "unrun"
@@ -408,6 +474,16 @@ class ContentOps(SceneDocumentParts):
                 raise SceneError("The source graph contains a dependency cycle.")
             seen.add(current_id)
             state = self.nodes[current_id].state
+            if isinstance(state, ModelState):
+                traversed_model = True
+                model_input = state.model_binding
+                if (not model_input.source_id or not model_input.last_input_hash or
+                        not model_input.last_output_hash or
+                        _text_digest(self._text_output(model_input.source_id)) != model_input.last_input_hash or
+                        _text_digest(self.nodes[current_id].content) != model_input.last_output_hash):
+                    raise SceneError("Run the upstream Model node first; its output is not current.")
+                current_id = model_input.source_id
+                continue
             if not isinstance(state, NoteState):
                 return
             if state.model_text_input is not None:

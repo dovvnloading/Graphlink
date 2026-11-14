@@ -5,7 +5,7 @@ import { Dialog } from "../overlays/overlays";
 import "./GraphRunnerDialog.css";
 
 const statuses: Record<string, string> = {
-  ready: "Ready", current: "Up to date", blocked: "Blocked", failed: "Failed",
+  ready: "Ready", waiting: "Waiting on Model", current: "Up to date", blocked: "Blocked", failed: "Failed",
   pending: "Pending", completed: "Completed", partial: "Completed with issues",
   interrupted: "Interrupted", running: "Running",
   "reconciliation-required": "Reconciliation required",
@@ -70,7 +70,7 @@ function Runner({ store }: { store: SceneStore }) {
     !node.isSummaryNote && !node.isBranchComparison && !node.tableOutputVersion
   );
   const sources = scene.nodes.filter((node) =>
-    node.kind === "chat" || node.kind === "artifact" ||
+    node.kind === "chat" || node.kind === "artifact" || node.kind === "model" ||
     (node.kind === "note" && plainNotes.some((note) => note.id === node.id))
   );
   const [modelSourceSelection, setModelSourceSelection] = useState("");
@@ -87,7 +87,9 @@ function Runner({ store }: { store: SceneStore }) {
   );
   const modelTargetId = eligibleTargets.some((node) => node.id === modelTargetSelection)
     ? modelTargetSelection : (eligibleTargets[0]?.id ?? "");
-  const savedModelBinding = modelBindings.find((binding) => binding.targetId === modelTargetId);
+  const noteModelBindings = modelBindings.filter((binding) => binding.nodeKind !== "model");
+  const modelNodes = modelBindings.filter((binding) => binding.nodeKind === "model");
+  const savedModelBinding = noteModelBindings.find((binding) => binding.targetId === modelTargetId);
   const [preview, setPreview] = useState<(GraphRunPreview & { nodeIds: string[]; operationId: string }) | null>(null);
   const [latest, setLatest] = useState<LatestGraphRun | null>(null);
   const [busy, setBusy] = useState("Loading run history…");
@@ -165,10 +167,11 @@ function Runner({ store }: { store: SceneStore }) {
   function loadModelBindings() {
     void store.getGraphModelBindings().then((rows) => {
       setModelBindings(rows);
-      if (!modelTargetSelection && rows.length) {
+      const noteRows = rows.filter((row) => row.nodeKind !== "model");
+      if (!modelTargetSelection && noteRows.length) {
         // Reopening the dialog should make a saved connection reusable, not
         // require the user to re-enter the original source/model identity.
-        const first = rows[0];
+        const first = noteRows[0];
         setModelSourceSelection(first.sourceId);
         setModelTargetSelection(first.targetId);
         setModelId(first.modelId);
@@ -177,7 +180,7 @@ function Runner({ store }: { store: SceneStore }) {
   }
 
   function selectSavedModel(targetId: string) {
-    const binding = modelBindings.find((row) => row.targetId === targetId);
+    const binding = noteModelBindings.find((row) => row.targetId === targetId);
     if (!binding) return;
     setModelSourceSelection(binding.sourceId);
     setModelTargetSelection(binding.targetId);
@@ -199,7 +202,7 @@ function Runner({ store }: { store: SceneStore }) {
 
   const ready = preview?.steps.filter((step) => step.status === "ready").length ?? 0;
   return <>
-    <p className="runner-intro">Refresh connected notes, grouped tables, charts and reports in dependency order. Saved local-model connections run separately and only on explicit confirmation.</p>
+    <p className="runner-intro">Preview a dependency-ordered graph. Model nodes execute explicitly through local Ollama; downstream transforms wait for committed replies. A preview never sends a model request.</p>
     <div className="runner-controls">
       <label>Run scope
         <select value={scope} disabled={!!busy} onChange={(event) => {
@@ -215,12 +218,12 @@ function Runner({ store }: { store: SceneStore }) {
     </div>
     {scope === "selection" && <p className="runner-note">Includes downstream outputs and the inputs they depend on.</p>}
     <Disclosure label="Run a local model into a note" onOpen={loadModelBindings}>
-      {modelBindings.length > 0 && <div className="runner-controls">
+      {noteModelBindings.length > 0 && <div className="runner-controls">
         <label>Saved model connections
           <select aria-label="Saved model connections" value={savedModelBinding?.targetId ?? ""} disabled={!!busy}
             onChange={(event) => selectSavedModel(event.target.value)}>
             <option value="">Choose a saved connection</option>
-            {modelBindings.map((binding) => <option key={binding.targetId} value={binding.targetId}>
+            {noteModelBindings.map((binding) => <option key={binding.targetId} value={binding.targetId}>
               {names.get(binding.targetId) || binding.targetId} · {binding.modelId} · {binding.status}
             </option>)}
           </select>
@@ -236,7 +239,7 @@ function Runner({ store }: { store: SceneStore }) {
         </label>
         <label>Model output note
           <select aria-label="Model output note" value={modelTargetId} disabled={!!busy} onChange={(event) => {
-            const binding = modelBindings.find((row) => row.targetId === event.target.value);
+            const binding = noteModelBindings.find((row) => row.targetId === event.target.value);
             if (binding) selectSavedModel(event.target.value);
             else { setModelTargetSelection(event.target.value); setModelPreview(null); }
           }}>
@@ -249,6 +252,12 @@ function Runner({ store }: { store: SceneStore }) {
               setModelId(event.target.value); setModelPreview(null);
             }} />
         </label>
+        <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelId.trim()}
+          onClick={() => void perform("Creating Model node…", async () => {
+            await store.addModelNode(modelSourceId, "Ollama", modelId.trim());
+            setModelBindings(await store.getGraphModelBindings());
+            setModelPreview(null);
+          })}>Create Model node</button>
         <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelTargetId || !modelId.trim()}
           onClick={() => void perform("Saving model connection…", async () => {
             setModelBindings(await store.bindGraphModel(modelSourceId, modelTargetId, "Ollama", modelId.trim()));
@@ -285,6 +294,16 @@ function Runner({ store }: { store: SceneStore }) {
         </div>
       </section>}
     </Disclosure>
+    {modelNodes.length > 0 && <section aria-label="Model nodes in graph">
+      <header className="runner-section-header"><h2>Model nodes</h2><span>{modelNodes.length} connected</span></header>
+      <ol className="runner-steps">
+        {modelNodes.map((binding) => <li key={binding.targetId}>
+          <strong>{names.get(binding.targetId) || binding.targetId}</strong>
+          <div>Text input from {names.get(binding.sourceId) || binding.sourceId}</div>
+          <div>Ollama · {binding.modelId} · {binding.status}</div>
+        </li>)}
+      </ol>
+    </section>}
     {busy && <p role="status">{busy}</p>}
     {error && <div className="runner-error">
       <p role="alert">{error}</p>

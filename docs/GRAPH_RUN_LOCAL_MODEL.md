@@ -2,11 +2,12 @@
 
 This slice builds on the crash-safe external dispatch journal. It adds an
 **opt-in Ollama model call** from a saved text node into an existing plain note.
-Graph Runner can now also save that text-to-text model connection across
-workspaces, track freshness and rerun it explicitly. It does not yet introduce
-a standalone Model node, an automatically scheduled model/dataflow DAG,
-independent cloud credential profiles, paid-provider approvals, or tool
-execution. See [the persisted binding contract](GRAPH_RUN_MODEL_BINDINGS.md).
+Graph Runner can also save that model-to-note connection across workspaces,
+track freshness and rerun it explicitly. This guide covers that independent
+one-shot path. First-class, dependency-ordered local-Ollama Model nodes are
+explained in [the Model workflow guide](GRAPH_RUN_MODEL_NODES.md). Independent
+cloud credential profiles, paid-provider approvals and tool execution remain
+follow-on work. See [the note binding contract](GRAPH_RUN_MODEL_BINDINGS.md).
 
 ## Try it
 
@@ -64,9 +65,9 @@ reconciliation.
 
 ## Next steps
 
-The first typed, versioned model-to-note binding is now saved and reloadable;
-next add multi-step planning for model outputs without speculative preview text;
-enforce separate per-call provider profiles and budgets; add explicit
+The first typed, versioned model-to-note binding is saved and reloadable.
+First-class local Model nodes now support bounded dependency-aware execution;
+next enforce separate per-call provider profiles and budgets, add explicit
 approval and remote-side idempotency/reconciliation for paid services; add
 write-capable tools with their own consent and isolation rules.
 

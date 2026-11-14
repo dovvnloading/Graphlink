@@ -79,7 +79,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, Iterable, TypeVar
 
-from backend.domain.node_states import ArtifactState, ChartState, HarnessState, NoteState, PlanState
+from backend.domain.node_states import ArtifactState, ChartState, HarnessState, ModelState, NoteState, PlanState
 
 if TYPE_CHECKING:
     from backend.domain.model import SceneEdge, SceneNode
@@ -387,6 +387,9 @@ _COMMAND_LABELS = {
     "unbindNoteTextInput": "Disconnect Text Input",
     "bindGraphModel": "Connect Model Input",
     "unbindGraphModel": "Disconnect Model Input",
+    "addModelNode": "Add Model Node",
+    "configureModelNode": "Configure Model Node",
+    "connectModelInput": "Connect Model Input",
     "removeNodes": "Delete",
     "deleteChatNode": "Delete Message",
     "deleteConversationMessage": "Delete Message",
@@ -612,6 +615,7 @@ class CommandOps(SceneDocumentParts):
             or (isinstance(n.state, NoteState) and n.state.text_input_source_id in named_node_ids)
             or (isinstance(n.state, NoteState) and n.state.model_text_input is not None
                 and n.state.model_text_input.source_id in named_node_ids)
+            or (isinstance(n.state, ModelState) and n.state.model_binding.source_id in named_node_ids)
             or (isinstance(n.state, (ArtifactState, ChartState, NoteState)) and n.state.table_output is not None
                 and n.state.table_output.source_id in named_node_ids)
         }

@@ -202,6 +202,41 @@ describe("Graph Runner", () => {
     expect(screen.getByRole("textbox", { name: "Installed Ollama model ID" })).toHaveValue("qwen3:8b");
   });
 
+  it("creates an executable Model node and previews downstream steps as waiting", async () => {
+    const { user, request } = setup([], [
+      { id: "source", kind: "chat", title: "Initial input" },
+      { id: "destination", kind: "note", title: "Output note" },
+    ]);
+    const modelRows = [{
+      nodeKind: "model", sourceId: "source", targetId: "model-1",
+      provider: "Ollama", modelId: "qwen3:8b", version: 1,
+      inputType: "text", outputType: "text", status: "unrun",
+    }];
+    request.mockResolvedValueOnce(null)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce("model-1")
+      .mockResolvedValueOnce(modelRows)
+      .mockResolvedValueOnce({
+        previewToken: "multi-model-plan", steps: [
+          { ...step, kind: "model", operation: "model", nodeId: "model-1", sourceId: "source" },
+          { ...step, kind: "note", nodeId: "destination", sourceId: "model-1",
+            status: "waiting", detail: "Awaiting an upstream Model result." },
+        ],
+      });
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    await user.click(screen.getByRole("button", { name: "Run a local model into a note" }));
+    await user.type(screen.getByRole("textbox", { name: "Installed Ollama model ID" }), "qwen3:8b");
+    await user.click(screen.getByRole("button", { name: "Create Model node" }));
+    expect(request).toHaveBeenCalledWith("scene", "addModelNode", ["source", "Ollama", "qwen3:8b"]);
+    expect(await screen.findByRole("region", { name: "Model nodes in graph" })).toHaveTextContent("qwen3:8b");
+    expect(request.mock.calls.some(([, action]) => action === "executeGraphRun")).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Preview run" }));
+    const preview = await screen.findByRole("region", { name: "Run preview" });
+    expect(preview).toHaveTextContent("Waiting on Model");
+    expect(within(preview).getByRole("button", { name: "Run graph" })).toBeEnabled();
+    expect(request).toHaveBeenCalledWith("scene", "previewGraphRun", [[]]);
+  });
+
   it("leaves blocked and up-to-date outputs alone", async () => {
     const { user, request } = setup();
     request.mockResolvedValueOnce(null).mockResolvedValueOnce({ previewToken: "x", steps: [

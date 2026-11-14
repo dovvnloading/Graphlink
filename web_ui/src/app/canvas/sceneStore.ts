@@ -192,6 +192,7 @@ export interface GraphModelBinding {
   targetId: string;
   provider: "Ollama";
   modelId: string;
+  nodeKind?: "model" | "note";
   version: number;
   inputType: "text";
   outputType: "text";
@@ -1512,6 +1513,22 @@ export class SceneStore {
 
   previewGraphRun(nodeIds: string[]): Promise<GraphRunPreview> {
     return this.transport.request("scene", "previewGraphRun", [nodeIds]) as Promise<GraphRunPreview>;
+  }
+
+  connectModelInput(sourceId: string, targetId: string): void {
+    // Same fireIntent error surface as note text ports. Rejected drags must
+    // show the server's cycle/type validation rather than an unhandled promise.
+    this.transport.fireIntent("scene", "connectModelInput", [sourceId, targetId]);
+  }
+
+  addModelNode(sourceId: string, provider: string, modelId: string): Promise<string> {
+    return this.transport.request("scene", "addModelNode", [sourceId, provider, modelId]) as Promise<string>;
+  }
+
+  configureModelNode(sourceId: string, provider: string, modelId: string, targetId: string): Promise<GraphModelBinding[]> {
+    return this.transport.request(
+      "scene", "configureModelNode", [sourceId, provider, modelId, targetId],
+    ) as Promise<GraphModelBinding[]>;
   }
 
   getGraphModelBindings(): Promise<GraphModelBinding[]> {
