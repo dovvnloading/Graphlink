@@ -56,6 +56,7 @@ from backend import native_dialogs
 from backend import workspace_archive
 from backend.canvas import SceneDocument
 from backend.api.intents_graph_runner import register_graph_runner
+from backend.api.intents_graph_model import register_graph_model_runner
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.session_load import restore_chat_into_document
@@ -3295,6 +3296,7 @@ def register_chat_library(
     *,
     autosave_interval_seconds: float | None = 30.0,
     settings_manager: "SettingsManager | None" = None,
+    provider_runtime: "Any | None" = None,
 ) -> None:
     # ADR-014 review-fix: threaded through to build_chat_data/
     # restore_chat_into_document (via make_load_chat/make_save_chat/
@@ -3399,6 +3401,10 @@ def register_chat_library(
 
     if canvas_document is not None:
         register_graph_runner(bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent)
+        register_graph_model_runner(
+            bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
+            provider_runtime=provider_runtime,
+        )
 
     _protect_current_canvas = make_protect_current_canvas(
         bus, resolved_path, canvas_document, notifications,
