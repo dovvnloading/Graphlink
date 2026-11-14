@@ -36,7 +36,7 @@ class ModelTextBinding:
     """
 
     source_id: str
-    provider: str
+    provider_name: str
     model_id: str
     binding_id: str
     version: int = 1
