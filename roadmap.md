@@ -4,6 +4,12 @@
 > **Baseline:** [`main` at `bf0fa154`](https://github.com/dovvnloading/Graphlink/commit/bf0fa15414190912b62a8efe909df08613c4d96d), reviewed 2026-11-14  
 > **Goal:** Build an exceptionally capable, graph-native, local-first AI workspace. Prioritize new abilities, intelligence, autonomy, control, and extensibility **while the application is in development**. Installer work, launch readiness, marketing, adoption experiments, and cosmetic polish are **not** milestones here.
 
+## Implementation progress
+
+**[Executable text connections · PR #575](https://github.com/dovvnloading/Graphlink/pull/575)** implements the first part of C1. A chat message, plain note, or accepted Drafter document can supply text to another note. The destination runs an exact copy or a word count on demand. It retains its result when the source changes and shows that its input is stale. The connection and its freshness survive a workspace round trip. The PR includes a [working canvas example](https://github.com/dovvnloading/Graphlink/blob/ec00779a44b13105c032dfe4391e427d2dc8771f/assets/screenshots/note-text-input.png).
+
+**Next development step.** Generalize this binding into a typed port and versioned value that a second consumer can use. The first target is a table transform that feeds both a chart and a Drafter report. Editing a source row should identify which results depend on it, let the user rerun those steps, and preserve the previous chart and report for comparison. C2 supplies the run record shared by those steps.
+
 ## 1. The product we are building
 
 Graphlink should not become another chat interface with nodes drawn around the messages. Its graph should be the **actual substrate on which intelligence and work happen**:
