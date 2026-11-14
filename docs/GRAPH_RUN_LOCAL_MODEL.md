@@ -22,10 +22,14 @@ tool execution.
    of the destination note. The output and completed receipt save together.
 
 The preview does not send a request. Nothing runs automatically when a source
-is edited. Only Ollama endpoints that resolve to the loopback hostname
-configured by `OLLAMA_HOST` are allowed in this slice. The backend enforces
-this restriction; merely calling a provider "local" would be insufficient
-if `OLLAMA_HOST` were pointed at a cloud or LAN endpoint.
+is edited. Only local Ollama endpoints are accepted, and `localhost` is
+canonicalized to a numeric loopback address (never resolved through DNS).
+The dedicated HTTP transport refuses redirects, ignores environment proxy
+settings, sends **no credentials or inherited Ollama API key**, and bounds the
+expanded response body to 2 MiB. Graph Runner rejects recognizable `-cloud`
+and `:cloud` model IDs, but **cannot verify whether a custom Ollama alias
+is cloud-backed**. For fully local inference, run a downloaded local model
+with cloud routing disabled in the Ollama daemon.
 
 ## Durability and failure behavior
 
@@ -41,12 +45,16 @@ in the graph's existing SQLite transaction. An output can be inspected,
 saved, reopened and explicitly undone. Repeating a transport message using
 the original operation ID returns the saved result rather than creating
 another Ollama request. An unresolved request blocks new attempts to
-overwrite the same destination.
+overwrite the same destination. If the source or output note changes while
+the model is responding, the generated response is not applied over the
+newer text; the attempt remains available for inspection.
 
-This local-only feature does **not** promise exactly-once inference inside
-the Ollama SDK: some model implementations or transport retries can retry a
-read-only completion internally. It deliberately does not extend that
-behavior to paid providers or mutating tools.
+This local-only transport sends one HTTP request per admitted attempt and
+does **not** auto-retry a failed call. An interrupted client cannot prove
+whether the daemon completed the work, so the journal conservatively marks
+the outcome uncertain. That behavior must not be generalized to paid
+providers or mutating tools without additional authorization and remote
+reconciliation.
 
 ## Next steps
 
@@ -57,6 +65,8 @@ approval and remote-side idempotency/reconciliation for paid services; add
 write-capable tools with their own consent and isolation rules.
 
 Offline backend tests use a substituted model transport to prove checkpoint
-order, exact ModelRef selection, preview invalidation, failed requests,
-replay, real SQLite load/save and cancellation. The frontend unit test
+order, pinned model identity, preview invalidation, failed requests,
+replay, real SQLite load/save and cancellation. HTTP transport tests verify
+no inherited credentials, no proxy/redirects, response limits and JSON
+shape. The frontend unit test
 exercises explicit preview and execution controls without contacting Ollama.
