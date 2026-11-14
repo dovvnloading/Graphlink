@@ -35,15 +35,19 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
         step[key] = ids.get(step[key], "")
     if "externalAttempt" in raw:
         attempt = restore_external_attempt(raw["externalAttempt"])
-        if (attempt is None or attempt["inputHash"] != step["inputHash"]
-                or (attempt["phase"] == "completed" and
-                    (step["status"] != "completed" or not step.get("outputHash")))):
+        if attempt is None:
             # Do not discard the run: that could make an already-issued remote
             # request look as though it never existed after a corrupt import.
             step.update(status="reconciliation-required", detail="External request history is invalid; do not retry.")
         else:
+            # Preserve the *validated* request identity for reconciliation even
+            # when the surrounding input or completion receipt is inconsistent.
             step["externalAttempt"] = attempt
-            if attempt["phase"] != "completed":
+            if (attempt["inputHash"] != step["inputHash"]
+                    or (attempt["phase"] == "completed" and
+                        (step["status"] != "completed" or not step.get("outputHash")))):
+                step.update(status="reconciliation-required", detail="External request receipt is inconsistent; do not retry.")
+            elif attempt["phase"] != "completed":
                 # A persisted 'dispatched' fence does not prove the remote call
                 # finished, failed, or even left the host. Never auto-replay it.
                 step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
