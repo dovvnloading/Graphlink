@@ -11,6 +11,7 @@ import {
 } from "./canvasConstants";
 import { downloadBlob } from "./downloadTextFile";
 import { NodeHeading } from "./NodeHeading";
+import TableOutput, { type TableOutputBinding } from "./TableOutput";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 
@@ -81,6 +82,7 @@ const LazyChartRenderer = lazy(() => import("./charts/ChartRenderer"));
 
 export interface ChartNodeData extends Record<string, unknown> {
   chartType: string;
+  tableOutput?: TableOutputBinding;
   chartData: ChartDataRow;
   chartError: string;
   chartWidth: number;
@@ -200,6 +202,7 @@ export function chartNodePropsAreEqual(prev: NodeProps<ChartFlowNode>, next: Nod
   const a = prev.data;
   const b = next.data;
   return (
+    a.tableOutput === b.tableOutput &&
     a.chartType === b.chartType &&
     a.chartError === b.chartError &&
     a.chartAspectLocked === b.chartAspectLocked &&
@@ -229,6 +232,8 @@ export const ChartNodeView = memo(function ChartNodeView({
 
   return (
     <NodeShell
+      tablePort={data.tableOutput?.node.tableInputSourceId ? "target" : undefined}
+      footer={!overview && data.tableOutput && <TableOutput {...data.tableOutput} />}
       kindClassName="chart-node"
       selected={!!selected}
       collapsed={false}

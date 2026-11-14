@@ -154,6 +154,15 @@ function baseNode(overrides: Partial<SceneNodeRow> = {}): SceneNodeRow {
     textInputSourceId: "",
     textInputOperation: "copy",
     textInputStatus: "unbound",
+    isTableSource: false,
+    tableInputSourceId: "",
+    tableSourceHash: "",
+    tableLabelColumn: "",
+    tableValueColumn: "",
+    tableInputStatus: "unbound",
+    tableOutputEdited: false,
+    tableOutputVersion: 0,
+    tableHasPrevious: false,
     itemIds: [],
     isLocked: true,
     groupWidth: null,
@@ -3483,5 +3492,23 @@ describe("note text inputs", () => {
     expect(toFlowEdges({ ...scene, nodes: [source, { ...target, isDocked: true }] }, null)).toEqual([]);
     const frame = baseNode({ id: "frame", kind: "frame", isCollapsed: true, itemIds: [source.id] });
     expect(toFlowEdges({ ...scene, nodes: [source, target, frame] }, null)).toEqual([]);
+  });
+});
+
+describe("table value connections", () => {
+  it("connects each output, excludes table notes from text ports, and respects hidden groups", () => {
+    const source = baseNode({ id: "source", kind: "note", isTableSource: true });
+    const target = baseNode({ id: "note", kind: "note" });
+    const chart = baseNode({ id: "bar", kind: "chart", tableInputSourceId: source.id, tableOutputVersion: 2 });
+    const report = baseNode({ ...chart, id: "doc", kind: "artifact" });
+    const scene = baseScene({ nodes: [source, target, chart, report] });
+    expect(availableTextSources(scene.nodes, target.id).map((row) => row.id)).toEqual([report.id]);
+    const edges = toFlowEdges(scene, null);
+    expect(edges.map((e) => [e.source, e.target, e.sourceHandle, e.targetHandle, e.data?.role])).toEqual([
+      ["source", "bar", "table-source", "table-target", "table-input"],
+      ["source", "doc", "table-source", "table-target", "table-input"],
+    ]);
+    const frame = baseNode({ id: "group", kind: "frame", itemIds: [source.id], isCollapsed: true });
+    expect(toFlowEdges({ ...scene, nodes: [...scene.nodes, frame] }, null)).toEqual([]);
   });
 });

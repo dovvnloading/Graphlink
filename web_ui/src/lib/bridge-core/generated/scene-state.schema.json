@@ -957,6 +957,10 @@
             "default": false,
             "type": "boolean"
           },
+          "isTableSource": {
+            "default": false,
+            "type": "boolean"
+          },
           "isUser": {
             "default": false,
             "type": "boolean"
@@ -1206,6 +1210,43 @@
             "type": "boolean"
           },
           "synthesisInstructions": {
+            "default": "",
+            "type": "string"
+          },
+          "tableHasPrevious": {
+            "default": false,
+            "type": "boolean"
+          },
+          "tableInputSourceId": {
+            "default": "",
+            "type": "string"
+          },
+          "tableInputStatus": {
+            "default": "unbound",
+            "enum": [
+              "unbound",
+              "current",
+              "stale"
+            ],
+            "type": "string"
+          },
+          "tableLabelColumn": {
+            "default": "",
+            "type": "string"
+          },
+          "tableOutputEdited": {
+            "default": false,
+            "type": "boolean"
+          },
+          "tableOutputVersion": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tableSourceHash": {
+            "default": "",
+            "type": "string"
+          },
+          "tableValueColumn": {
             "default": "",
             "type": "string"
           },

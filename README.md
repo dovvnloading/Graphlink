@@ -70,6 +70,12 @@ To count the words in a draft, add a plain note using **Add Note** in the comman
 
 You can also use a chat message or another plain note as the source. To copy its text exactly, drag its right-hand text port to the note’s left-hand port and choose **Run text input**. You can connect one source to several notes. Each destination runs separately. Disconnecting keeps its last result, and saving the graph keeps the connections for the next session. [View a connected word-count note](assets/screenshots/note-text-input.png).
 
+### Build a chart and report from the same table
+
+Choose **Add a table** on an empty canvas or **Add Table** in the command palette. To use an existing CSV, open **Edit CSV**, choose **Import CSV file**, then **Save table**. The starter table records 2 hours for Design, 4 for Engineering, and another 3 for Design. Choose **Team** under **Group by** and **Hours** under **Sum column**. **Create chart** and **Create report** produce a bar chart and an editable Drafter document from the same grouped totals. Choose **Fit All** to see all three cards.
+
+In **Edit table**, change the first Design entry from 2 to 7 and choose **Save table**. Each output marks its input as changed and keeps its previous result. Choose **Rerun from table** on the chart to update Design to 10 while the report still shows 5. Rerun the report when ready. **Compare versions** lets you inspect the previous result and restore it. On a current result, **Inspect source rows** shows the original data row numbers and cell values behind each group. For Design, rows 1 and 3 contribute 7 and 3. Saving and reopening the graph preserves these versions and their source connections. [View the chart and report after a table edit](assets/screenshots/table-workflow.png).
+
 ## API providers
 
 The directory includes **26 named providers** and a **Custom endpoint** for OpenAI Chat Completions-compatible servers. Search by service or model family, such as Claude, Grok, Kimi, or Qwen. You can browse another provider’s settings while your current connection stays active.

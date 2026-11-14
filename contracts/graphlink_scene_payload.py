@@ -698,6 +698,17 @@ class SceneNodeRow:
     textInputSourceId: str = ""
     textInputOperation: Literal["copy", "word_count"] = "copy"
     textInputStatus: Literal["unbound", "unrun", "current", "stale"] = "unbound"
+    # Table source content is CSV. Charts and Drafters expose only summary
+    # metadata here and return their versioned results on explicit request.
+    isTableSource: bool = False
+    tableInputSourceId: str = ""
+    tableSourceHash: str = ""
+    tableLabelColumn: str = ""
+    tableValueColumn: str = ""
+    tableInputStatus: Literal["unbound", "current", "stale"] = "unbound"
+    tableOutputEdited: bool = False
+    tableOutputVersion: int = 0
+    tableHasPrevious: bool = False
     itemIds: list[str] = field(default_factory=list)
     isLocked: bool = True
     groupWidth: float | None = None

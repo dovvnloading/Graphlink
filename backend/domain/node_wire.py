@@ -171,6 +171,15 @@ WIRE_DEFAULTS: dict[str, Any] = {
     "textInputSourceId": "",
     "textInputOperation": "copy",
     "textInputStatus": "unbound",
+    "isTableSource": False,
+    "tableInputSourceId": "",
+    "tableLabelColumn": "",
+    "tableValueColumn": "",
+    "tableInputStatus": "unbound",
+    "tableOutputVersion": 0,
+    "tableSourceHash": "",
+    "tableOutputEdited": False,
+    "tableHasPrevious": False,
     "itemIds": [],
     "isLocked": True,
     "groupWidth": None,
@@ -610,6 +619,7 @@ _STATE_FIELDS: dict[type, tuple[_Entry, ...]] = {
         ("isBranchComparison", "is_branch_comparison"),
         ("textInputSourceId", "text_input_source_id"),
         ("textInputOperation", "text_input_operation"),
+        ("isTableSource", "is_table_source"),
     ),
     # groupManualWidth/Height are DELIBERATELY absent - server-side
     # bookkeeping only (R6.1).
@@ -736,5 +746,6 @@ def wire_keys() -> frozenset[str]:
     keys.update(entry[0] for entry in _NODE_FIELDS)
     for entries in _STATE_FIELDS.values():
         keys.update(entry[0] for entry in entries)
-    keys.update(("isFinalDeliverable", "pluginState", "textInputStatus"))
+    keys.update(("isFinalDeliverable", "pluginState", "textInputStatus", "tableInputSourceId", "tableLabelColumn",
+                 "tableValueColumn", "tableInputStatus", "tableOutputVersion", "tableSourceHash", "tableOutputEdited", "tableHasPrevious"))
     return frozenset(keys)

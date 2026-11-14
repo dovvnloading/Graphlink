@@ -73,6 +73,7 @@ from backend.domain.model import (
 from backend.domain.node_access import is_node_of, require_node
 from backend.domain.node_states import CodeState, FrameState, NodeState
 from backend.domain.node_wire import node_wire
+from backend.domain.table_workflows import TableOps, TableReadCache
 from backend.domain.nodes_agent_runs import AgentRunOps
 from backend.domain.nodes_code_review import CodeReviewOps
 from backend.domain.nodes_content import ContentOps, clear_note_text_readers
@@ -97,7 +98,7 @@ def _estimate_tokens(text: str) -> int:
 class SceneDocument(
     BranchOps, GroupOps, LayoutOps, CommandOps,
     AgentRunOps, CodeReviewOps, ContentOps, ConversationalOps, GitlinkOps,
-    PlanningOps, VisualOps,
+    PlanningOps, VisualOps, TableOps,
 ):
     """The canvas document for one session. Plain data + invariants; the
     R6 serializer will read/write exactly this shape."""
@@ -402,8 +403,9 @@ class SceneDocument(
         whenever the pins list changed - pins have no op in the ADR's own
         op set, so a pin mutation is honestly outside what a patch can
         express and falls back rather than being silently dropped."""
+        table_reads = TableReadCache()
         source_digests: dict[str, str] = {}
-        nodes = {node_id: self._node_wire(n, source_digests) for node_id, n in self.nodes.items()}
+        nodes = {node_id: self._node_wire(n, source_digests, table_reads) for node_id, n in self.nodes.items()}
         edges = {edge_id: self._edge_wire(e) for edge_id, e in self.edges.items()}
         pins = self._pins_wire()
         view = self._view_wire()
@@ -1005,18 +1007,22 @@ class SceneDocument(
 
     # -- snapshots ---------------------------------------------------------
 
-    def _node_wire(self, n: SceneNode, source_digests: dict[str, str] | None = None) -> dict[str, Any]:
+    def _node_wire(
+        self, n: SceneNode, source_digests: dict[str, str] | None = None, table_reads: TableReadCache | None = None,
+    ) -> dict[str, Any]:
         """The per-node wire row - the ONE place both the full snapshot and
         take_dirty_patch_ops's upsertNode ops build a node's payload from
         (ADR-003 stage 3.4), so the two can never drift field by field.
         Sparse: see backend/domain/node_wire.py for the encoding and the
         client-side restore that keeps every reader seeing the full row."""
-        return node_wire(
+        row = node_wire(
             n,
             is_final_deliverable=n.id == self.final_deliverable_node_id,
             text_input_status=self._text_input_status(n, source_digests),
             plugin_state=self._plugin_state_wire(n),
         )
+        row.update(self._table_output_wire(n, table_reads))
+        return row
 
     def _plugin_state_wire(self, n: SceneNode) -> dict[str, str]:
         """ADR-014 stage 14.2: the live-WS-wire analog of session_save.py's
@@ -1103,9 +1109,10 @@ class SceneDocument(
         }
 
     def scene_payload(self) -> dict[str, Any]:
+        table_reads = TableReadCache()
         source_digests: dict[str, str] = {}
         return {
-            "nodes": [self._node_wire(n, source_digests) for n in self.nodes.values()],
+            "nodes": [self._node_wire(n, source_digests, table_reads) for n in self.nodes.values()],
             "edges": [self._edge_wire(e) for e in self.edges.values()],
             "pins": self._pins_wire(),
             **self._meta_wire(),

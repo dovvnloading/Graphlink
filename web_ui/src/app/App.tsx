@@ -22,7 +22,7 @@ import { ExecutionLimitsProvider } from "./canvas/ExecutionLimitsContext";
 import { SceneCanvas, measuredNodeSize } from "./canvas/SceneCanvas";
 import { SceneStore } from "./canvas/sceneStore";
 import { resolveTreeNavigationTarget, type TreeNavigationDirection } from "./canvas/treeNavigation";
-import { requestNewChat } from "./chrome/commands";
+import { requestNewChat } from "./chrome/requestNewChat";
 import { isGatedWhileTyping, resolveShortcut, type ShortcutId } from "./chrome/shortcuts";
 import { DocumentViewPanel } from "./canvas/DocumentViewPanel";
 import { AppBar } from "./chrome/AppBar";
