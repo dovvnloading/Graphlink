@@ -24,7 +24,7 @@ from backend.domain.graph_run_external import ExternalCall, dispatch_external_at
 from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID
 from backend.domain.graph_model_binding import validate_local_model_identity
 from backend.domain.model import SceneError
-from backend.domain.node_states import NoteState
+from backend.domain.node_states import ModelState, NoteState
 from backend.domain.nodes_content import _text_digest
 from backend.providers.graph_local_ollama import local_ollama_complete
 from backend.events import IntentValidationError, SessionBus
@@ -74,6 +74,18 @@ class ExecuteGraphModelArgs(GraphModelSelection):
 
 @dataclass
 class GraphModelTargetArgs:
+    targetId: str
+
+
+@dataclass
+class CreateModelNodeArgs:
+    sourceId: str
+    providerName: str
+    modelId: str
+
+
+@dataclass
+class ConfigureModelNodeArgs(CreateModelNodeArgs):
     targetId: str
 
 
@@ -292,12 +304,18 @@ def register_graph_model_runner(
         """Return port metadata, never saved prompts, credentials or response bodies."""
         rows: list[dict[str, Any]] = []
         for node in sorted(document.nodes.values(), key=lambda item: item.id):
-            if not isinstance(node.state, NoteState) or node.state.model_text_input is None:
+            if isinstance(node.state, ModelState) and node.kind == "model":
+                binding = node.state.model_binding
+                kind = "model"
+            elif isinstance(node.state, NoteState) and node.state.model_text_input is not None:
+                binding = node.state.model_text_input
+                kind = "note"
+            else:
                 continue
-            binding = node.state.model_text_input
             rows.append({
                 "targetId": node.id, "sourceId": binding.source_id,
                 "provider": binding.provider_name, "modelId": binding.model_id,
+                "nodeKind": kind,
                 "version": binding.version, "inputType": "text", "outputType": "text",
                 "status": document.model_input_status(node.id),
             })
@@ -326,6 +344,30 @@ def register_graph_model_runner(
         await bus.publish("scene")
         return await get_graph_model_bindings()
 
+    async def add_model_node(source_id: str, provider: str, model_id: str):
+        try:
+            node, _command = document.record_command(
+                "addModelNode", "user", lambda: document.add_model_node(source_id, provider, model_id),
+            )
+        except SceneError as exc:
+            raise IntentValidationError([str(exc)]) from exc
+        await bus.publish("scene")
+        return node.id
+
+    async def configure_model_node(source_id: str, provider: str, model_id: str, target_id: str):
+        try:
+            document.record_command(
+                "configureModelNode", "user",
+                lambda: document.configure_model_node(target_id, source_id, provider, model_id),
+                node_ids=(target_id,),
+            )
+        except SceneError as exc:
+            raise IntentValidationError([str(exc)]) from exc
+        await bus.publish("scene")
+        return await get_graph_model_bindings()
+
+    bus.register_intent("scene", "addModelNode", add_model_node, args_schema=CreateModelNodeArgs)
+    bus.register_intent("scene", "configureModelNode", configure_model_node, args_schema=ConfigureModelNodeArgs)
     bus.register_intent("scene", "getGraphModelBindings", get_graph_model_bindings)
     bus.register_intent("scene", "bindGraphModel", bind_graph_model, args_schema=GraphModelSelection)
     bus.register_intent("scene", "unbindGraphModel", unbind_graph_model, args_schema=GraphModelTargetArgs)
