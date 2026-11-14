@@ -40,7 +40,7 @@ BACKEND = REPO_ROOT / "backend"
 # field comments. The gate exists to keep the two copies honest.
 CONTENT_KINDS = {
     "artifact", "chat", "container", "document", "frame", "harness",
-    "html", "image", "note", "plan", "thinking", "web_research",
+    "html", "image", "model", "note", "plan", "thinking", "web_research",
 }
 HISTORY_KINDS = {"artifact", "chat", "code_sandbox", "conversation", "gitlink", "html", "web_research"}
 
