@@ -18,15 +18,15 @@ from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
 
-from backend.providers.graph_local_ollama import local_ollama_complete
 from backend.api.intents_graph_runner import _digest, _public_run, _public_step
 from backend.domain.graph import SceneDocument
 from backend.domain.graph_run_external import ExternalCall, dispatch_external_attempt
 from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID
 from backend.domain.model import SceneError
 from backend.domain.nodes_content import _text_digest
+from backend.providers.graph_local_ollama import local_ollama_complete
 from backend.events import IntentValidationError, SessionBus
- from graphlink_task_config import LOCAL_PROVIDER_OLLAMA
+from graphlink_task_config import LOCAL_PROVIDER_OLLAMA
 
 _MAX_INPUT_BYTES = 65536
 _MAX_OUTPUT_CHARS = 200000
