@@ -1,6 +1,6 @@
 import { useReactFlow } from "@xyflow/react";
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
-import type { GraphRun, GraphRunPreview, GraphRunStep, LatestGraphRun, SceneStore } from "../canvas/sceneStore";
+import type { GraphModelBinding, GraphRun, GraphRunPreview, GraphRunStep, LatestGraphRun, SceneStore } from "../canvas/sceneStore";
 import { Dialog } from "../overlays/overlays";
 import "./GraphRunnerDialog.css";
 
@@ -15,10 +15,15 @@ const operations: Record<string, string> = {
   model: "Local model reply",
 };
 
-function Disclosure({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+function Disclosure({ label, children, className, onOpen }: {
+  label: string; children: ReactNode; className?: string; onOpen?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   return <div className={className}>
-    <button type="button" className="runner-disclosure" aria-expanded={open} onClick={() => setOpen(!open)}>
+    <button type="button" className="runner-disclosure" aria-expanded={open} onClick={() => {
+      setOpen(!open);
+      if (!open) onOpen?.();
+    }}>
       <span aria-hidden="true">{open ? "▾" : "▸"}</span> {label}
     </button>
     {open && children}
@@ -71,6 +76,7 @@ function Runner({ store }: { store: SceneStore }) {
   const [modelSourceSelection, setModelSourceSelection] = useState("");
   const [modelTargetSelection, setModelTargetSelection] = useState("");
   const [modelId, setModelId] = useState("");
+  const [modelBindings, setModelBindings] = useState<GraphModelBinding[]>([]);
   const [modelPreview, setModelPreview] = useState<(GraphRunPreview & {
     sourceId: string; targetId: string; provider: string; modelId: string; operationId: string;
   }) | null>(null);
@@ -81,6 +87,7 @@ function Runner({ store }: { store: SceneStore }) {
   );
   const modelTargetId = eligibleTargets.some((node) => node.id === modelTargetSelection)
     ? modelTargetSelection : (eligibleTargets[0]?.id ?? "");
+  const savedModelBinding = modelBindings.find((binding) => binding.targetId === modelTargetId);
   const [preview, setPreview] = useState<(GraphRunPreview & { nodeIds: string[]; operationId: string }) | null>(null);
   const [latest, setLatest] = useState<LatestGraphRun | null>(null);
   const [busy, setBusy] = useState("Loading run history…");
@@ -155,6 +162,29 @@ function Runner({ store }: { store: SceneStore }) {
     });
   }
 
+  function loadModelBindings() {
+    void store.getGraphModelBindings().then((rows) => {
+      setModelBindings(rows);
+      if (!modelTargetSelection && rows.length) {
+        // Reopening the dialog should make a saved connection reusable, not
+        // require the user to re-enter the original source/model identity.
+        const first = rows[0];
+        setModelSourceSelection(first.sourceId);
+        setModelTargetSelection(first.targetId);
+        setModelId(first.modelId);
+      }
+    }).catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+  }
+
+  function selectSavedModel(targetId: string) {
+    const binding = modelBindings.find((row) => row.targetId === targetId);
+    if (!binding) return;
+    setModelSourceSelection(binding.sourceId);
+    setModelTargetSelection(binding.targetId);
+    setModelId(binding.modelId);
+    setModelPreview(null);
+  }
+
   function previewLocalModel() {
     void perform("Preparing model preview…", async () => {
       setModelPreview(null);
@@ -169,7 +199,7 @@ function Runner({ store }: { store: SceneStore }) {
 
   const ready = preview?.steps.filter((step) => step.status === "ready").length ?? 0;
   return <>
-    <p className="runner-intro">Refresh connected notes, grouped tables, charts and reports in dependency order.</p>
+    <p className="runner-intro">Refresh connected notes, grouped tables, charts and reports in dependency order. Saved local-model connections run separately and only on explicit confirmation.</p>
     <div className="runner-controls">
       <label>Run scope
         <select value={scope} disabled={!!busy} onChange={(event) => {
@@ -184,7 +214,18 @@ function Runner({ store }: { store: SceneStore }) {
       <button type="button" className="appbar-btn" disabled={!!busy} onClick={previewRun}>Preview run</button>
     </div>
     {scope === "selection" && <p className="runner-note">Includes downstream outputs and the inputs they depend on.</p>}
-    <Disclosure label="Run a local model into a note">
+    <Disclosure label="Run a local model into a note" onOpen={loadModelBindings}>
+      {modelBindings.length > 0 && <div className="runner-controls">
+        <label>Saved model connections
+          <select aria-label="Saved model connections" value={savedModelBinding?.targetId ?? ""} disabled={!!busy}
+            onChange={(event) => selectSavedModel(event.target.value)}>
+            <option value="">Choose a saved connection</option>
+            {modelBindings.map((binding) => <option key={binding.targetId} value={binding.targetId}>
+              {names.get(binding.targetId) || binding.targetId} · {binding.modelId} · {binding.status}
+            </option>)}
+          </select>
+        </label>
+      </div>}
       <div className="runner-controls">
         <label>Model text source
           <select aria-label="Model text source" value={modelSourceId} disabled={!!busy} onChange={(event) => {
@@ -195,7 +236,9 @@ function Runner({ store }: { store: SceneStore }) {
         </label>
         <label>Model output note
           <select aria-label="Model output note" value={modelTargetId} disabled={!!busy} onChange={(event) => {
-            setModelTargetSelection(event.target.value); setModelPreview(null);
+            const binding = modelBindings.find((row) => row.targetId === event.target.value);
+            if (binding) selectSavedModel(event.target.value);
+            else { setModelTargetSelection(event.target.value); setModelPreview(null); }
           }}>
             {eligibleTargets.map((node) => <option key={node.id} value={node.id}>{node.title || node.id}</option>)}
           </select>
@@ -207,8 +250,23 @@ function Runner({ store }: { store: SceneStore }) {
             }} />
         </label>
         <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelTargetId || !modelId.trim()}
+          onClick={() => void perform("Saving model connection…", async () => {
+            setModelBindings(await store.bindGraphModel(modelSourceId, modelTargetId, "Ollama", modelId.trim()));
+            setModelPreview(null);
+          })}>Save model connection</button>
+        {savedModelBinding && <button type="button" className="appbar-btn" disabled={!!busy} onClick={() =>
+          void perform("Disconnecting model…", async () => {
+            setModelBindings(await store.unbindGraphModel(modelTargetId));
+            setModelPreview(null);
+          })
+        }>Disconnect model connection</button>}
+        <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelTargetId || !modelId.trim()}
           onClick={previewLocalModel}>Preview model step</button>
       </div>
+      {savedModelBinding && <p className="runner-note" role="status">
+        Saved text → text connection (version {savedModelBinding.version}). Status: {savedModelBinding.status}.
+        Changes upstream do not trigger execution.
+      </p>}
       <p className="runner-note">This sends text to your Ollama daemon over loopback. Verify custom model aliases are local: Ollama itself can route an alias to cloud. Graph Runner does not directly call cloud providers or external tools.</p>
       {modelPreview && <section aria-label="Model preview">
         <RunSteps steps={modelPreview.steps} names={names} />
@@ -221,6 +279,7 @@ function Runner({ store }: { store: SceneStore }) {
                 modelPreview.previewToken, modelPreview.operationId,
               ));
               setModelPreview(null);
+              setModelBindings(await store.getGraphModelBindings());
             })
           }>Run local model</button>
         </div>
