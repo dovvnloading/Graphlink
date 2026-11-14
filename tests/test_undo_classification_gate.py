@@ -299,7 +299,8 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 227 -> 231 for graph run preview, execution, history and resume.
     # 231 -> 233 for explicit local-model preview and execution.
     # 233 -> 236 for saved model-port lookup, bind and unbind.
-    assert len(real) == 236, (
+    # 236 -> 238 for first-class Model creation and configuration.
+    assert len(real) == 238, (
         f"expected exactly 233 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
