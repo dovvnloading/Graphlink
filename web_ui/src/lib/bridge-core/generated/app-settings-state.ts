@@ -6,6 +6,21 @@ import { type ValidationResult, type WireFields, compileFields } from "../wireCh
 
 export type { ValidationResult };
 
+export interface ApiProvider {
+  id: string;
+  label: string;
+  group: string;
+  description: string;
+  docsUrl: string;
+  defaultBaseUrl: string;
+  editableEndpoint: boolean;
+  endpointHint: string;
+  supportsCatalog: boolean;
+  supportsImageGeneration: boolean;
+  keySlot: string;
+  envVar: string;
+}
+
 export interface ApiModelDescriptor {
   modelId: string;
   provider: string;
@@ -50,11 +65,13 @@ export interface AppSettingsState {
   providerMode: string;
   activeApiProvider: string;
   viewingApiProvider: string;
+  apiProviders: ApiProvider[];
   apiBaseUrl: string;
   apiKeyConfigured: Record<string, boolean>;
   apiKeySource: Record<string, string>;
   apiModels: Record<string, string>;
   apiModelCatalog: ApiModelDescriptor[];
+  apiCatalogBaseUrl: string;
   apiCatalogStatus: string;
   apiCatalogMessage: string;
   geminiStaticModels: string[];
@@ -81,6 +98,21 @@ export interface AppSettingsState {
   mcpServers: McpServerConfig[];
   minCompatibleSchemaVersion?: number | null;
 }
+
+const API_PROVIDER_FIELDS: WireFields = [
+  ["id", "s", 0],
+  ["label", "s", 0],
+  ["group", "s", 0],
+  ["description", "s", 0],
+  ["docsUrl", "s", 0],
+  ["defaultBaseUrl", "s", 0],
+  ["editableEndpoint", "b", 0],
+  ["endpointHint", "s", 0],
+  ["supportsCatalog", "b", 0],
+  ["supportsImageGeneration", "b", 0],
+  ["keySlot", "s", 0],
+  ["envVar", "s", 0],
+];
 
 const API_MODEL_DESCRIPTOR_FIELDS: WireFields = [
   ["modelId", "s", 0],
@@ -126,11 +158,13 @@ const APP_SETTINGS_STATE_FIELDS: WireFields = [
   ["providerMode", "s", 0],
   ["activeApiProvider", "s", 0],
   ["viewingApiProvider", "s", 0],
+  ["apiProviders", { a: { o: API_PROVIDER_FIELDS } }, 0],
   ["apiBaseUrl", "s", 0],
   ["apiKeyConfigured", { d: "b" }, 0],
   ["apiKeySource", { d: "s" }, 0],
   ["apiModels", { d: "s" }, 0],
   ["apiModelCatalog", { a: { o: API_MODEL_DESCRIPTOR_FIELDS } }, 0],
+  ["apiCatalogBaseUrl", "s", 0],
   ["apiCatalogStatus", "s", 0],
   ["apiCatalogMessage", "s", 0],
   ["geminiStaticModels", { a: "s" }, 0],

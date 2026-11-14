@@ -142,6 +142,35 @@ def test_reasoning_selection_capability_is_real_for_cloud_providers_too(monkeypa
     assert document.payload()["capabilities"]["reasoningSelection"] is False
 
 
+def test_cloud_model_selection_updates_live_chat_and_preserves_provider_scope(tmp_path, monkeypatch):
+    manager = SettingsManager(tmp_path / "session.dat")
+    provider = "OpenRouter"
+    manager.state["api_provider"] = provider
+    manager.set_api_models({config.TASK_CHAT: "manual/model", config.TASK_TITLE: "lab/title"}, provider)
+    manager.set_api_model_catalog(["lab/chat", "lab/other"], provider)
+    monkeypatch.setattr(api_provider, "is_api_mode", lambda: True)
+    monkeypatch.setattr(api_provider, "is_local_llama_cpp_mode", lambda: False)
+    monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: False)
+    monkeypatch.setattr(api_provider, "API_MODELS", {config.TASK_CHAT: "manual/model"})
+
+    async def run():
+        bus, composer, _, _ = _make_bus_with_settings(manager)
+        assert [item["id"] for item in composer.route()["modelOptions"]] == [
+            "lab/chat", "lab/other", "manual/model",
+        ]
+        await bus.dispatch_intent("app-composer", "selectModel", ["lab/chat", provider])
+        assert composer.route()["modelId"] == api_provider.API_MODELS[config.TASK_CHAT] == "lab/chat"
+        assert api_provider.API_MODELS[config.TASK_CHART] == "lab/chat"
+        assert api_provider.API_MODELS[config.TASK_TITLE] == "lab/title"
+        await bus.dispatch_intent("app-composer", "selectModel", ["stale/model", "DeepSeek"])
+        assert api_provider.API_MODELS[config.TASK_CHAT] == "lab/chat"
+
+    asyncio.run(run())
+    assert SettingsManager(manager.state_file).get_api_models(provider) == {
+        config.TASK_CHAT: "lab/chat", config.TASK_TITLE: "lab/title",
+    }
+
+
 def test_set_reasoning_level_reapplies_live_when_ollama_is_active(tmp_path, monkeypatch):
     manager = SettingsManager(tmp_path / "session.dat")
     monkeypatch.setattr(api_provider, "is_local_ollama_mode", lambda: True)

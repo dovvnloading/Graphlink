@@ -1,3 +1,4 @@
+from graphlink_cloud_providers import CLOUD_PROVIDERS
 from settings_store.cloud_provider import CloudProviderSettingsOps
 from settings_store.general import GeneralSettingsOps
 from settings_store.harness import HarnessSettingsOps
@@ -94,4 +95,4 @@ class SettingsManager(
     """
     # Settings fields that hold secrets - encrypted at rest via graphlink_secrets
     # (Windows DPAPI, "dpapi:"-prefixed values; see that module for the tradeoffs).
-    SECRET_KEYS = ("openai_api_key", "anthropic_api_key", "gemini_api_key", "github_access_token", "fal_api_key")
+    SECRET_KEYS = tuple(p.secret_field for p in CLOUD_PROVIDERS.values()) + ("github_access_token", "fal_api_key")

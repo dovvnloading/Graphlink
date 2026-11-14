@@ -284,7 +284,8 @@ def _route_supports_reasoning(route: dict[str, Any]) -> bool:
             return api_provider.anthropic_supports_reasoning(model_id)
         if provider == config.API_PROVIDER_GEMINI:
             return api_provider.gemini_supports_reasoning(model_id)
-        return api_provider.openai_supports_reasoning(model_id)
+        if provider in (config.API_PROVIDER_OPENAI, "OpenAI"):
+            return api_provider.openai_supports_reasoning(model_id)
     return False
 
 
@@ -293,6 +294,7 @@ def register_composer(
     token_counter: TokenCounterState,
     settings_manager: SettingsManager | None = None,
     notifications: NotificationState | None = None,
+    provider_runtime: api_provider.ProviderRuntime | None = None,
 ) -> ComposerDocument:
     # settings_manager/notifications are optional only so the 2-positional-
     # arg call in backend/tests/test_backend_composer.py's make_bus()
@@ -301,30 +303,31 @@ def register_composer(
     # always passes both (mirroring register_settings's own `notifications`
     # optional-param precedent exactly).
     document = ComposerDocument()
+    target = provider_runtime or api_provider
+    session_runtime = provider_runtime or api_provider.DEFAULT_RUNTIME
     if settings_manager is not None:
-        # Derive the displayed level from the SAME persisted setting the
-        # Settings dialog edits and api_provider actually obeys, exactly as
-        # legacy's _reasoning() did (graphlink_composer_bridge.py:464-474),
-        # branching on the live provider for the same reason it did.
-        #
-        # R8a: extended from Ollama/Llama.cpp only to all 5 providers - a
-        # cloud reasoning level only matters once reasoningSelection (see
-        # _route_supports_reasoning above) has already gated the control on,
-        # so an unrecognized/future API provider string here just falls
-        # through to the OpenAI-compatible getter, the same conservative
-        # "off by default" family as the other two cloud providers.
         def _persisted_reasoning_level() -> str:
-            if api_provider.is_local_llama_cpp_mode():
+            if provider_runtime is not None and provider_runtime.is_api_mode():
+                state = provider_runtime.snapshot()
+                levels = {
+                    config.API_PROVIDER_GEMINI: state.gemini_reasoning_level,
+                    config.API_PROVIDER_ANTHROPIC: state.anthropic_reasoning_level,
+                    config.API_PROVIDER_OPENAI: state.openai_reasoning_level,
+                    "OpenAI": state.openai_reasoning_level,
+                }
+                return levels.get(state.api_provider_type or "", DEFAULT_REASONING_LEVEL)
+            if target.is_local_llama_cpp_mode():
                 return settings_manager.get_llama_cpp_reasoning_level()
-            if api_provider.is_local_ollama_mode():
+            if target.is_local_ollama_mode():
                 return settings_manager.get_ollama_reasoning_level()
-            if api_provider.is_api_mode():
-                provider = settings_manager.get_api_provider()
+            if target.is_api_mode():
+                provider = session_runtime.snapshot().api_provider_type or settings_manager.get_api_provider()
                 if provider == config.API_PROVIDER_ANTHROPIC:
                     return settings_manager.get_anthropic_reasoning_level()
                 if provider == config.API_PROVIDER_GEMINI:
                     return settings_manager.get_gemini_reasoning_level()
-                return settings_manager.get_openai_reasoning_level()
+                if provider in (config.API_PROVIDER_OPENAI, "OpenAI"):
+                    return settings_manager.get_openai_reasoning_level()
             return DEFAULT_REASONING_LEVEL
 
         document.reasoning_level_reader = _persisted_reasoning_level
@@ -343,15 +346,16 @@ def register_composer(
             """
             import graphlink_task_config as task_config
 
-            if api_provider.is_api_mode():
-                provider = settings_manager.get_api_provider() or "API Endpoint"
-                assigned = settings_manager.get_api_models() or {}
+            if target.is_api_mode():
+                state = session_runtime.snapshot()
+                provider = state.api_provider_type or settings_manager.get_api_provider()
+                assigned = state.api_models if state.use_api_mode else settings_manager.get_api_models(provider)
                 model_id = assigned.get(task_config.TASK_CHAT, "") or ""
                 catalog = settings_manager.get_api_model_catalog(provider) or []
-                options = [
-                    {"id": str(m.get("id") or m), "label": str(m.get("label") or m.get("id") or m)}
-                    for m in catalog
-                ]
+                model_ids = dict.fromkeys(m["model_id"] for m in catalog if m.get("model_id"))
+                if model_id:
+                    model_ids.setdefault(model_id)
+                options = [{"id": mid, "label": mid} for mid in model_ids]
                 return {
                     "mode": "api",
                     "provider": provider,
@@ -363,8 +367,9 @@ def register_composer(
                     "canChange": bool(options),
                 }
 
-            if api_provider.is_local_llama_cpp_mode():
-                path = settings_manager.get_llama_cpp_chat_model_path() or ""
+            if target.is_local_llama_cpp_mode():
+                path = (provider_runtime.snapshot().llama_cpp_settings.get("chat_model_path")
+                        if provider_runtime else settings_manager.get_llama_cpp_chat_model_path()) or ""
                 name = path.replace("\\", "/").rsplit("/", 1)[-1]
                 return {
                     "mode": "llama_cpp",
@@ -382,8 +387,9 @@ def register_composer(
 
             # ADR-006 stage 6.5 (H6): locked writer wrapper - see
             # api_provider.sync_ollama_models.
-            api_provider.sync_ollama_models(settings_manager)
-            model_id = task_config.OLLAMA_MODELS.get(task_config.TASK_CHAT, "") or ""
+            if provider_runtime is None:
+                api_provider.sync_ollama_models(settings_manager)
+            model_id = session_runtime.snapshot().ollama_models.get(task_config.TASK_CHAT) or ""
             scanned = settings_manager.get_ollama_scanned_models() or []
             return {
                 "mode": "ollama",
@@ -432,25 +438,25 @@ def register_composer(
         if settings_manager is not None:
             # Mutually exclusive by construction (api_provider.py) - order
             # matches backend/settings.py's own file ordering.
-            if api_provider.is_local_ollama_mode():
-                await apply_ollama_reasoning_level(settings_manager, level)
-            elif api_provider.is_local_llama_cpp_mode():
-                failure = await apply_llama_cpp_reasoning_level(settings_manager, level)
+            if target.is_local_ollama_mode():
+                await apply_ollama_reasoning_level(settings_manager, level, provider_runtime)
+            elif target.is_local_llama_cpp_mode():
+                failure = await apply_llama_cpp_reasoning_level(settings_manager, level, provider_runtime)
                 if failure is not None and notifications is not None:
                     notifications.show(failure, "error")
                     await bus.publish("notification")
-            elif api_provider.is_api_mode():
+            elif target.is_api_mode():
                 # R8a: reasoningSelection now gates on the RESOLVED MODEL's
                 # real capability (_route_supports_reasoning), not just "is
                 # this a local provider" - cloud providers reach this branch
                 # whenever their active model actually supports reasoning.
-                provider = settings_manager.get_api_provider()
+                provider = session_runtime.snapshot().api_provider_type or settings_manager.get_api_provider()
                 if provider == config.API_PROVIDER_ANTHROPIC:
-                    await apply_anthropic_reasoning_level(settings_manager, level)
+                    await apply_anthropic_reasoning_level(settings_manager, level, provider_runtime)
                 elif provider == config.API_PROVIDER_GEMINI:
-                    await apply_gemini_reasoning_level(settings_manager, level)
-                else:
-                    await apply_openai_reasoning_level(settings_manager, level)
+                    await apply_gemini_reasoning_level(settings_manager, level, provider_runtime)
+                elif provider in (config.API_PROVIDER_OPENAI, "OpenAI"):
+                    await apply_openai_reasoning_level(settings_manager, level, provider_runtime)
 
             # The Settings dialog renders the same persisted value on its
             # Ollama/Llama.cpp page. Without this it keeps showing the old
@@ -461,7 +467,7 @@ def register_composer(
 
         await publish()
 
-    async def select_model(model_id):
+    async def select_model(model_id, expected_provider=None):
         """Assign the chat-task model from the composer (R8a).
 
         Writes through the SAME per-task assignment the Settings > Ollama page
@@ -474,14 +480,21 @@ def register_composer(
             return
         import graphlink_task_config as task_config
 
-        if api_provider.is_api_mode():
-            models = dict(settings_manager.get_api_models() or {})
-            models[task_config.TASK_CHAT] = chosen
-            run_locked(settings_manager.set_api_models, models)
-        elif api_provider.is_local_ollama_mode():
+        if target.is_api_mode():
+            def persist_cloud_selection() -> None:
+                provider = session_runtime.snapshot().api_provider_type or settings_manager.get_api_provider()
+                if not target.is_api_mode() or (expected_provider and expected_provider != provider):
+                    return
+                models = settings_manager.get_api_models(provider)
+                models[task_config.TASK_CHAT] = chosen
+                settings_manager.set_api_models(models, provider)
+                target.set_api_task_models(models)
+
+            await asyncio.to_thread(run_locked, persist_cloud_selection)
+        elif target.is_local_ollama_mode() and expected_provider in (None, config.MODE_OLLAMA_LOCAL):
             # Shared with the Settings > Ollama page - one implementation,
             # so the two surfaces cannot disagree about what is assigned.
-            await apply_ollama_chat_model(settings_manager, chosen)
+            await apply_ollama_chat_model(settings_manager, chosen, provider_runtime)
         else:
             return
 

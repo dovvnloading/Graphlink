@@ -263,42 +263,30 @@ def bootstrap_provider_state(settings_manager: SettingsManager) -> None:
         api_provider.initialize_local_provider(config.LOCAL_PROVIDER_OLLAMA)
 
 
-def apply_provider_mode(mode_text: str, settings_manager: SettingsManager) -> None:
-    """Three-way dispatch mirroring the legacy mode-switch handlers. Raises
-    ValueError for any mode_text it does not recognize - see
-    bootstrap_provider_state's single fallback branch above.
-
-    ADR-006 stage 6.5: public (formerly _apply_mode) so the Settings
-    dialog's setProviderMode intent (backend/api/intents_settings_general.py)
-    can switch the live provider at runtime through the exact same logic
-    bootstrap uses - previously there was no path back to Ollama/Llama.cpp
-    from API mode without a restart. Acts on api_provider's module-level
-    functions, i.e. the DEFAULT session's runtime - correct while the
-    shipped app has exactly one session; per-session settings routing is
-    deferred to 6.5b/ADR-012."""
+def apply_provider_mode(
+    mode_text: str, settings_manager: SettingsManager, runtime: api_provider.ProviderRuntime | None = None,
+) -> None:
+    """Activate a saved connection in the runtime used by this session's dispatcher."""
+    target = runtime or api_provider
     if mode_text == config.MODE_OLLAMA_LOCAL:
-        api_provider.initialize_local_provider(
+        target.initialize_local_provider(
             config.LOCAL_PROVIDER_OLLAMA,
             {"reasoning_level": settings_manager.get_ollama_reasoning_level()},
         )
     elif mode_text == config.MODE_LLAMACPP_LOCAL:
-        api_provider.initialize_local_provider(
+        target.initialize_local_provider(
             config.LOCAL_PROVIDER_LLAMACPP,
             settings_manager.get_llama_cpp_settings(),
             preload_model=False,
         )
     elif mode_text == config.MODE_API_ENDPOINT:
         provider = settings_manager.get_api_provider()
-        base_url = settings_manager.get_api_base_url()
-        for task, model in settings_manager.get_api_models(provider).items():
-            api_provider.set_task_model(task, model)
-        if provider == config.API_PROVIDER_OPENAI:
-            key = settings_manager.get_openai_key()
-        elif provider == config.API_PROVIDER_ANTHROPIC:
-            key = settings_manager.get_anthropic_key()
-        else:
-            key = settings_manager.get_gemini_key()
-        api_provider.initialize_api(provider, key, base_url)
+        target.initialize_api(
+            provider,
+            settings_manager.get_provider_key(provider),
+            settings_manager.get_api_base_url(provider),
+            task_models=settings_manager.get_api_models(provider),
+        )
     else:
         raise ValueError(f"unrecognized provider mode: {mode_text!r}")
 

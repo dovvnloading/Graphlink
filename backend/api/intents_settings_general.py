@@ -35,6 +35,7 @@ from backend.observability import apply_log_level
 from graphlink_settings_store import SettingsManager
 
 if TYPE_CHECKING:
+    from api_provider import ProviderRuntime
     from backend.agents import AgentDispatcher
 
 # ADR-006 stage 6.5: the three persisted provider-mode strings
@@ -110,15 +111,8 @@ def register_settings_general_intents(
     state: SettingsSessionState,
     notifications: NotificationState | None = None,
     agent_dispatcher: "AgentDispatcher | None" = None,
+    provider_runtime: "ProviderRuntime | None" = None,
 ) -> None:
-    # ADR-006 stage 6.5: notifications is optional (trailing, defaulted) so
-    # the pre-6.5 tests that call register_settings_general_intents(bus,
-    # manager, state) keep working unchanged - backend/settings.py's real
-    # call site always passes one. This registrar receives no per-session
-    # ProviderRuntime on purpose: apply_provider_mode acts on api_provider's
-    # module-level functions, i.e. the DEFAULT session's runtime - correct
-    # while the shipped app has exactly one session; per-session settings
-    # routing is deferred to 6.5b/ADR-012.
     async def set_active_section(section: str):
         state.active_section = str(section)
         await bus.publish("app-settings")
@@ -201,25 +195,28 @@ def register_settings_general_intents(
         # this intent is the only thing in the settings split that needs it.
         from backend.agents import apply_provider_mode
 
+        def switch_mode() -> None:
+            apply_provider_mode(mode, manager, provider_runtime)
+            manager.set_current_mode(mode)
+
         try:
             # apply_provider_mode reads the manager and writes api_provider's
             # provider state - run under the same manager lock every other
             # settings mutation uses, off the event loop (initialize_* can
             # block on client construction).
-            await asyncio.to_thread(run_locked, apply_provider_mode, mode, manager)
+            await asyncio.to_thread(run_locked, switch_mode)
         except Exception as exc:  # noqa: BLE001 - surfaced, matching the neighboring intents' error posture
             if notifications is not None:
                 notifications.show(f"Failed to switch provider mode: {exc}", "error")
                 await bus.publish("notification")
             return
 
-        # Persist only after the live switch succeeded - a failed switch must
-        # not change what the next restart boots into.
-        await asyncio.to_thread(run_locked, manager.set_current_mode, mode)
         if notifications is not None:
             notifications.show(f"Provider mode switched to {mode}.", "success")
             await bus.publish("notification")
         await bus.publish("app-settings")
+        if bus.has_topic("app-composer"):
+            await bus.publish("app-composer")
 
     async def set_mcp_servers(servers: object):
         # ADR-012 stage 12.6: bulk-replace, matching SettingsManager.

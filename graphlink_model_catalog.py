@@ -13,6 +13,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, NamedTuple
 
+from graphlink_cloud_providers import CLOUD_PROVIDERS
+from graphlink_task_config import LOCAL_PROVIDER_LLAMACPP, LOCAL_PROVIDER_OLLAMA
+
 
 AUTO_MODEL = "auto"
 INHERIT_MODEL = "inherit"
@@ -279,15 +282,7 @@ def resolve_task_model(
 
 @dataclass(frozen=True)
 class ModelRef:
-    """A resolved (provider, model) pair - the unit of dispatch ADR-018
-    replaces task-keyed globals with. `provider` uses this codebase's own
-    provider constant VALUES (graphlink_task_config.LOCAL_PROVIDER_OLLAMA
-    == "Ollama", API_PROVIDER_ANTHROPIC == "Anthropic Claude", etc.) as
-    plain strings rather than importing that module's names - this module
-    stays dependency-free (task_config imports FROM here, never the
-    reverse; see that module's own docstring), and every provider-select
-    branch this ADR touches (api_provider.py) already switches on those
-    exact string values, so no translation layer is needed anywhere."""
+    """A resolved (provider, model) pair using the persisted provider name."""
 
     provider: str
     model_id: str
@@ -423,15 +418,6 @@ def resolve_model_ref(
     return ResolvedModel(auto_ref, f"auto: {auto_policy}")
 
 
-# Literal provider-constant values duplicated from graphlink_task_config.py
-# (see ModelRef's own docstring for why this module cannot import that one).
-# Kept as a tuple, not individual names, so unified_catalog stays a single
-# short loop rather than five near-identical blocks.
-_OLLAMA = "Ollama"
-_LLAMACPP = "Llama.cpp"
-_API_PROVIDERS = ("OpenAI-Compatible", "Anthropic Claude", "Google Gemini")
-
-
 def unified_catalog(
     settings_manager,
     *,
@@ -457,7 +443,7 @@ def unified_catalog(
     for model_id in ollama_models:
         model_id = normalize_model_id(model_id)
         if model_id:
-            descriptors.append(ModelDescriptor(model_id=model_id, provider=_OLLAMA, source="installed"))
+            descriptors.append(ModelDescriptor(model_id=model_id, provider=LOCAL_PROVIDER_OLLAMA, source="installed"))
 
     llama_cpp_models = settings_manager.get_llama_cpp_scanned_models() or ()
     for model_path in llama_cpp_models:
@@ -471,9 +457,9 @@ def unified_catalog(
         # never match and every auto/fallback pick would be rejected.
         model_id = normalize_model_id(Path(model_path).name if model_path else "")
         if model_id:
-            descriptors.append(ModelDescriptor(model_id=model_id, provider=_LLAMACPP, source="installed"))
+            descriptors.append(ModelDescriptor(model_id=model_id, provider=LOCAL_PROVIDER_LLAMACPP, source="installed"))
 
-    for provider in _API_PROVIDERS:
+    for provider in CLOUD_PROVIDERS:
         catalog_entries = settings_manager.get_api_model_catalog(provider) or ()
         for entry in catalog_entries:
             model_id = normalize_model_id(entry.get("model_id") if isinstance(entry, Mapping) else "")

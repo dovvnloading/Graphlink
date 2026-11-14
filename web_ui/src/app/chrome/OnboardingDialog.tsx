@@ -102,13 +102,13 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
     transport.fireIntent("app-settings", "setHasCompletedOnboarding", [true], undefined, true);
   }, [isOpen, transport]);
 
-  const openSettingsForProvider = () => {
+  const openProviderSettings = (mode: string) => {
     // providerMode is one of "Ollama (Local)" / "Llama.cpp (Local)" /
     // "API Endpoint" - lowercasing it matches SettingsDialog.tsx's own
     // sectionKey() output for exactly those 3 pages, so this lands on
     // whichever page the ACTIVE mode already needs, without duplicating
     // that mapping here.
-    transport.fireIntent("app-settings", "setActiveSection", [providerMode.toLowerCase()], undefined, true);
+    transport.fireIntent("app-settings", "setActiveSection", [mode.toLowerCase()], undefined, true);
     overlays.open("settings", "dialog"); // single-open: this also closes onboarding
   };
 
@@ -136,9 +136,16 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
             {providerCheckMessage(route)}
           </p>
           {route && !route.available && (
-            <button type="button" className="settings-button" onClick={openSettingsForProvider}>
-              Open Settings
-            </button>
+            <div className="settings-button-row">
+              <button type="button" className="settings-button" onClick={() => openProviderSettings(providerMode)}>
+                Open Settings
+              </button>
+              {providerMode !== "API Endpoint" && (
+                <button type="button" className="settings-button" onClick={() => openProviderSettings("API Endpoint")}>
+                  Connect a cloud provider
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

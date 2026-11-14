@@ -41,8 +41,10 @@ const settingsSnapshot: AppSettingsState = {
   apiBaseUrl: "https://api.openai.com/v1",
   apiKeyConfigured: { openai: false, anthropic: false, gemini: false },
   apiKeySource: { openai: "none", anthropic: "none", gemini: "none" },
+  apiProviders: [],
   apiModels: {},
   apiModelCatalog: [],
+  apiCatalogBaseUrl: "",
   apiCatalogStatus: "idle",
   apiCatalogMessage: "Model catalog has not been refreshed yet.",
   geminiStaticModels: [],
@@ -169,6 +171,17 @@ describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
     // real <SettingsDialog> is mounted in this test, so the observable proof
     // is that onboarding's OWN dialog is gone, not that Settings' is up.
     expect(screen.queryByRole("dialog", { name: "Welcome to Graphlink" })).toBeNull();
+  });
+
+  it("opens the cloud directory directly from first-run local setup", async () => {
+    const user = userEvent.setup();
+    const fixture = makeFixture();
+    renderDialog(fixture);
+    act(() => fixture.pushSettings({ hasCompletedOnboarding: false, providerMode: "Ollama (Local)" }));
+    act(() => fixture.pushComposer({ available: false }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Connect a cloud provider" }));
+    expect(fixture.intents).toContainEqual({ topic: "app-settings", intent: "setActiveSection", args: ["api endpoint"] });
   });
 
   it("the provider-check step reports ready with no Open Settings button when route.available is true", async () => {

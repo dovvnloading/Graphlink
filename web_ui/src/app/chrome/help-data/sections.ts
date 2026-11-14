@@ -579,7 +579,7 @@ export const HELP_SECTIONS: HelpSection[] = [
           {
             action: "API Endpoint",
             description:
-              "OpenAI-compatible providers and Gemini. This is also the path that image generation runs on - local providers have none.",
+              "Search for a lab, model family, or cloud platform. Choose a provider, connect its API key, and load its models or enter a model ID. Endpoints that support image generation have a separate image model field.",
           },
           {
             action: "Per-task routing",

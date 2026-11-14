@@ -33,17 +33,8 @@ retroactively un-defers the Ollama page's own "Scan Folder..." button,
 which was deliberately left disabled pending exactly this capability - see
 backend/api/intents_settings_ollama.py's pick_ollama_scan_folder.
 
-The API-provider page deliberately does NOT replicate one piece of legacy
-behavior: the old QWidget pre-filled its API-key field with the saved
-plaintext key on every provider switch (safe there only because the
-widget lives in-process, with no serialization boundary). Serializing a
-plaintext key into this topic's WS payload would be a real regression
-from the write-only pattern already established for the GitHub token
-below (githubTokenConfigured: bool) - so this page follows that same
-precedent instead: apiKeyConfigured is a per-provider bool, the key input
-always starts blank, and saving requires retyping the full key. This is a
-deliberate security improvement over legacy parity, not an oversight -
-called out explicitly per the "never redefine done" discipline.
+Provider settings expose credential status only. The backend resolves stored
+or environment credentials for their respective endpoints.
 
 SettingsManager owns ONE shared ~/.graphlink/session.dat file for the whole
 app (the same file the legacy Qt app read/wrote). register_settings takes
@@ -71,6 +62,7 @@ from typing import TYPE_CHECKING, Any
 
 import api_provider
 import graphlink_task_config as config
+from graphlink_cloud_providers import CLOUD_PROVIDERS
 from graphlink_settings_store import SettingsManager
 from graphlink_model_catalog import AUTO_MODEL
 
@@ -133,7 +125,7 @@ def _api_model_catalog_for_wire(manager: SettingsManager, provider: str) -> list
             "ready": bool(entry.get("ready", True)),
             "available": bool(entry.get("available", True)),
         }
-        for entry in manager.get_api_model_catalog(provider)
+        for entry in manager.get_api_model_catalog(provider, include_draft=True)
     ]
 
 
@@ -293,7 +285,10 @@ def _api_key_source(stored: bool, provider: str) -> str:
     return "none"
 
 
-def _build_settings_payload(manager: SettingsManager, state: SettingsSessionState) -> dict[str, Any]:
+def _build_settings_payload(
+    manager: SettingsManager, state: SettingsSessionState,
+    provider_runtime: api_provider.ProviderRuntime | None = None,
+) -> dict[str, Any]:
     payload = settings_payload(manager)
     payload["activeSection"] = state.active_section
     # ADR-012 stage 12.6: the provider-mode switcher's read side - which of
@@ -315,39 +310,39 @@ def _build_settings_payload(manager: SettingsManager, state: SettingsSessionStat
     viewing_provider = state.viewing_api_provider
     payload["activeApiProvider"] = manager.get_api_provider()
     payload["viewingApiProvider"] = viewing_provider
-    payload["apiBaseUrl"] = manager.get_api_base_url()
-    openai_key = manager.get_openai_key()
-    anthropic_key = manager.get_anthropic_key()
-    gemini_key = manager.get_gemini_key()
-    payload["apiKeyConfigured"] = {
-        "openai": bool(openai_key),
-        "anthropic": bool(anthropic_key),
-        "gemini": bool(gemini_key),
-    }
-    # ADR-004 stage 4.4: "key provided by environment" surfacing - the env
-    # var fallback itself (api_provider.py) stays load-bearing (it's what
-    # the subprocess allowlist story depends on), this only makes it
-    # observable. "stored" whenever apiKeyConfigured is already true for
-    # that provider (a saved key always wins over the environment - see
-    # api_provider.env_api_key_configured's own docstring on why this
-    # checks stored-first, not "env is set" alone, which would be
-    # misleading for a provider that also has a stored key silently
-    # overriding it).
+    if provider_runtime is not None:
+        live = provider_runtime.snapshot()
+        if live.use_api_mode:
+            payload["providerMode"] = config.MODE_API_ENDPOINT
+            payload["activeApiProvider"] = live.api_provider_type or ""
+        else:
+            payload["providerMode"] = (config.MODE_LLAMACPP_LOCAL if live.local_provider_type == config.LOCAL_PROVIDER_LLAMACPP
+                                       else config.MODE_OLLAMA_LOCAL)
+    payload["apiBaseUrl"] = manager.get_api_base_url(viewing_provider)
+    payload["apiProviders"] = [
+        {
+            "id": p.name, "label": p.label or p.name, "group": p.group, "description": p.description,
+            "docsUrl": p.docs_url, "defaultBaseUrl": p.base_url, "editableEndpoint": p.editable_endpoint,
+            "endpointHint": p.endpoint_hint, "supportsCatalog": p.supports_catalog,
+            "supportsImageGeneration": p.supports_image_generation, "keySlot": p.key_slot,
+            "envVar": p.env_vars[-1] if p.env_vars else "",
+        }
+        for p in CLOUD_PROVIDERS.values()
+    ]
+    configured = {p.key_slot: bool(manager.state.get(p.secret_field)) for p in CLOUD_PROVIDERS.values()}
+    payload["apiKeyConfigured"] = configured
     payload["apiKeySource"] = {
-        "openai": _api_key_source(bool(openai_key), config.API_PROVIDER_OPENAI),
-        "anthropic": _api_key_source(bool(anthropic_key), config.API_PROVIDER_ANTHROPIC),
-        "gemini": _api_key_source(bool(gemini_key), config.API_PROVIDER_GEMINI),
+        p.key_slot: (_api_key_source(configured[p.key_slot], p.name)
+                     if p.environment_key_allowed(manager.get_api_base_url(p.name)) or configured[p.key_slot] else "none")
+        for p in CLOUD_PROVIDERS.values()
     }
+    payload["apiCatalogBaseUrl"] = manager.get_catalog_endpoint(viewing_provider)
     payload["apiModels"] = manager.get_api_models(viewing_provider)
     payload["apiModelCatalog"] = _api_model_catalog_for_wire(manager, viewing_provider)
     catalog_state = _catalog_state_for(state, viewing_provider)
     payload["apiCatalogStatus"] = catalog_state["status"]
     payload["apiCatalogMessage"] = catalog_state["message"]
-    # Gemini has no live catalog-refresh endpoint wired here (matching
-    # legacy: load_btn was never shown for Gemini) - its model choices
-    # are this fixed, hand-maintained list. Sourced from api_provider.py
-    # rather than duplicated in TypeScript so there is one place to
-    # update when the list changes.
+    # Offline suggestions remain available before Gemini discovery succeeds.
     payload["geminiStaticModels"] = list(api_provider.GEMINI_MODELS_STATIC)
     payload["geminiStaticImageModels"] = list(api_provider.GEMINI_IMAGE_MODELS_STATIC)
 
@@ -391,6 +386,7 @@ def register_settings(
     manager: SettingsManager,
     notifications: NotificationState | None = None,
     agent_dispatcher: "AgentDispatcher | None" = None,
+    *, provider_runtime: api_provider.ProviderRuntime | None = None,
 ) -> None:
     # notifications is optional only so the ~11 pre-R7.4a tests in
     # backend/tests/test_settings.py that call register_settings(bus,
@@ -411,17 +407,22 @@ def register_settings(
     # matching legacy's own __init__ (a fresh session opens showing whatever
     # was last saved).
     state = SettingsSessionState(
-        viewing_api_provider=manager.get_api_provider(),
+        viewing_api_provider=(manager.get_api_provider() if manager.get_api_provider() in CLOUD_PROVIDERS
+                              else config.API_PROVIDER_OPENAI),
         llama_staged_chat_path=manager.get_llama_cpp_chat_model_path(),
         llama_staged_title_path=manager.get_llama_cpp_title_model_override_path(),
     )
 
-    bus.register_topic("app-settings", lambda: _build_settings_payload(manager, state))
+    if provider_runtime is not None:
+        active = provider_runtime.snapshot().api_provider_type
+        if active in CLOUD_PROVIDERS and active is not None:
+            state.viewing_api_provider = active
+    bus.register_topic("app-settings", lambda: _build_settings_payload(manager, state, provider_runtime))
 
     # ADR-006 stage 6.5: the general page now takes notifications too - its
     # new setProviderMode intent surfaces switch failures/success banners.
-    register_settings_general_intents(bus, manager, state, notifications, agent_dispatcher)
+    register_settings_general_intents(bus, manager, state, notifications, agent_dispatcher, provider_runtime=provider_runtime)
     register_settings_fal_intents(bus, manager, state)
-    register_settings_api_provider_intents(bus, manager, notifications, state)
+    register_settings_api_provider_intents(bus, manager, notifications, state, provider_runtime)
     register_settings_ollama_intents(bus, manager, state)
     register_settings_llama_cpp_intents(bus, manager, state)

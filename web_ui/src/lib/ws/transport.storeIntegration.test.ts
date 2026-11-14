@@ -84,7 +84,7 @@ describe("real WsTransport wired to a real store (end-to-end fireIntent -> showE
 
     store.selectModel("llama3");
     const sent = socket.lastSent();
-    expect(sent).toMatchObject({ kind: "intent", topic: "app-composer", intent: "selectModel", args: ["llama3"] });
+    expect(sent).toMatchObject({ kind: "intent", topic: "app-composer", intent: "selectModel", args: ["llama3", store.getComposer().route.provider] });
 
     socket.receive({ kind: "error", id: sent.id, error: "unknown model" });
     await Promise.resolve();

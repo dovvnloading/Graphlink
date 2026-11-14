@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import graphlink_secrets
+from graphlink_cloud_providers import DEFAULT_CLOUD_PROVIDER
 from graphlink_migrations import run_dict_migrations
 from graphlink_model_catalog import (
     AUTO_MODEL,
@@ -43,6 +44,7 @@ class PersistenceOps(SettingsManagerParts):
         self.state_file = Path(state_file) if state_file is not None else Path.home() / '.graphlink' / 'session.dat'
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self._state_needs_save = False
+        self._api_catalog_requests: dict[str, object] = {}
         self.state = self._load_state()
         if self._state_needs_save:
             self._save_state()
@@ -254,7 +256,7 @@ class PersistenceOps(SettingsManagerParts):
         if 'api_provider' not in state:
             state['api_provider'] = 'OpenAI-Compatible'
         if 'api_base_url' not in state:
-            state['api_base_url'] = 'https://api.openai.com/v1'
+            state['api_base_url'] = '' if state.get('openai_api_key') else 'https://api.openai.com/v1'
         if 'openai_api_key' not in state:
             state['openai_api_key'] = ''
         if 'anthropic_api_key' not in state:
@@ -561,7 +563,7 @@ class PersistenceOps(SettingsManagerParts):
             "llama_cpp_model_scan_path": "",
             "llama_cpp_model_scan_locations": [],
             "current_mode": "Ollama (Local)",
-            "api_provider": "OpenAI-Compatible",
+            "api_provider": DEFAULT_CLOUD_PROVIDER,
             "api_base_url": "https://api.openai.com/v1",
             "openai_api_key": "",
             "anthropic_api_key": "",
@@ -650,7 +652,7 @@ class PersistenceOps(SettingsManagerParts):
                 changed = True
         return changed
 
-    def _save_state(self, state_data=None):
+    def _save_state(self, state_data=None, *, raise_on_error=False):
         # Write to a temp file and atomically rename it into place (os.replace is
         # atomic on both Windows and POSIX when source/dest are on the same volume,
         # guaranteed here since the temp file lives next to state_file). Previously
@@ -696,6 +698,8 @@ class PersistenceOps(SettingsManagerParts):
                 tmp_path.unlink(missing_ok=True)
             except OSError:
                 pass
+            if raise_on_error:
+                raise
 
     def get_schema_version(self):
         return self.state.get("schema_version", self.CURRENT_SCHEMA_VERSION)

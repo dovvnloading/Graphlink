@@ -84,6 +84,9 @@ def message_tokens(message: dict) -> int:
     arguments, which are real prompt tokens the content string alone
     would not account for."""
     text = str(message.get("content") or "")
+    reasoning = message.get("provider_reasoning")
+    if isinstance(reasoning, dict):
+        text += str(reasoning.get("text") or "")
     tool_calls = message.get("tool_calls")
     if tool_calls:
         text += json.dumps(tool_calls, ensure_ascii=False)

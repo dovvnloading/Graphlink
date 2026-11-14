@@ -16,6 +16,22 @@ from dataclasses import dataclass
 
 
 @dataclass
+class ApiProviderPayload:
+    id: str
+    label: str
+    group: str
+    description: str
+    docsUrl: str
+    defaultBaseUrl: str
+    editableEndpoint: bool
+    endpointHint: str
+    supportsCatalog: bool
+    supportsImageGeneration: bool
+    keySlot: str
+    envVar: str
+
+
+@dataclass
 class ApiModelDescriptorPayload:
     """One entry of apiModelCatalog - graphlink_wire_schema.py has no bare
     `dict` support by design (a future-drift guard), so this mirrors the
@@ -127,6 +143,7 @@ class AppSettingsStatePayload:
     # R7.4a: API-provider page.
     activeApiProvider: str
     viewingApiProvider: str
+    apiProviders: list[ApiProviderPayload]
     apiBaseUrl: str
     apiKeyConfigured: dict[str, bool]
     # ADR-004 stage 4.4: "stored" | "environment" | "none" per provider -
@@ -135,6 +152,7 @@ class AppSettingsStatePayload:
     apiKeySource: dict[str, str]
     apiModels: dict[str, str]
     apiModelCatalog: list[ApiModelDescriptorPayload]
+    apiCatalogBaseUrl: str
     apiCatalogStatus: str
     apiCatalogMessage: str
     geminiStaticModels: list[str]

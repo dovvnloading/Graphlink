@@ -51,7 +51,9 @@ def _anthropic_get_json(endpoint: str, timeout: int = 30, cancel_event=None, api
             return json.loads(response.read().decode("utf-8"))
     except _mod.urllib.error.HTTPError as exc:
         details = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Anthropic API request failed ({exc.code}): {details or exc.reason}") from exc
+        raise _mod._attach_http_error_metadata(
+            RuntimeError(f"Anthropic API request failed ({exc.code}): {details or exc.reason}"), exc
+        ) from exc
     except _mod.urllib.error.URLError as exc:
         raise ConnectionError(f"Failed to reach Anthropic API: {exc.reason}") from exc
 
