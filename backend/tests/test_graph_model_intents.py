@@ -120,7 +120,7 @@ def test_endpoint_swap_during_admission_leaves_no_ghost_run(tmp_path, monkeypatc
             await send("executeGraphModel", *selected, preview["previewToken"], "endpoint-changed-run")
         assert not path.exists()
         assert doc.graph_runs == []
-        assert doc.command_log == []
+        assert not doc.command_log
         assert doc.graph_run_epoch == epoch
         assert getattr(bus, "graph_model_active_run_id", None) is None
 
