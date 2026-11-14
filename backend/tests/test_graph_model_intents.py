@@ -184,3 +184,55 @@ def test_inflight_cancellation_keeps_durable_remote_fence(tmp_path, monkeypatch)
         assert target.content == "Add note..."
 
     asyncio.run(scenario())
+
+
+
+def test_non_loopback_ollama_endpoint_is_rejected_before_preview(tmp_path, monkeypatch):
+    async def scenario():
+        _path, _bus, _doc, source, target, send = session(tmp_path)
+        monkeypatch.setenv("OLLAMA_HOST", "http://llm.example.net:11434")
+        with pytest.raises(IntentValidationError, match="loopback"):
+            await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        monkeypatch.setenv("OLLAMA_HOST", "http://localhost.evil.test:11434")
+        with pytest.raises(IntentValidationError, match="loopback"):
+            await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
+        preview = await send("previewGraphModel", source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        assert preview["steps"][0]["status"] == "ready"
+
+    asyncio.run(scenario())
+
+
+def test_final_run_status_write_failure_resumes_without_repeating_the_model(tmp_path, monkeypatch):
+    async def scenario():
+        path, _bus, doc, source, target, send = session(tmp_path)
+        original_write = chat_library.save_chat_atomically_row
+        count = 0
+        calls = []
+
+        def fail_final_write(*args, **kwargs):
+            nonlocal count
+            count += 1
+            if count == 3:
+                raise OSError("final-status disk failure")
+            return original_write(*args, **kwargs)
+
+        def reply(_task, _messages, **_kwargs):
+            calls.append(1)
+            return {"message": {"role": "assistant", "content": "A complete response"}}
+
+        monkeypatch.setattr(chat_library, "save_chat_atomically_row", fail_final_write)
+        monkeypatch.setattr(api_provider, "chat", reply)
+        selected = [source.id, target.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b"]
+        token = (await send("previewGraphModel", *selected))["previewToken"]
+        with pytest.raises(OSError, match="final-status"):
+            await send("executeGraphModel", *selected, token, "final-status-model")
+        assert calls == [1] and target.content == "A complete response"
+        saved = chat_library.load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][0]
+        assert saved["status"] == "running"
+        assert saved["steps"][0]["externalAttempt"]["phase"] == "completed"
+        recovered = await send("resumeGraphRun", "final-status-model")
+        assert recovered["status"] == "completed"
+        assert calls == [1] and target.content == "A complete response"
+
+    asyncio.run(scenario())
