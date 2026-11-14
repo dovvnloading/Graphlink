@@ -3296,7 +3296,6 @@ def register_chat_library(
     *,
     autosave_interval_seconds: float | None = 30.0,
     settings_manager: "SettingsManager | None" = None,
-    provider_runtime: "Any | None" = None,
 ) -> None:
     # ADR-014 review-fix: threaded through to build_chat_data/
     # restore_chat_into_document (via make_load_chat/make_save_chat/
@@ -3403,7 +3402,6 @@ def register_chat_library(
         register_graph_runner(bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent)
         register_graph_model_runner(
             bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
-            provider_runtime=provider_runtime,
         )
 
     _protect_current_canvas = make_protect_current_canvas(
