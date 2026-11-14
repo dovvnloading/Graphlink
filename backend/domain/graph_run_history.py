@@ -44,12 +44,18 @@ def restore_graph_runs(raw: Any, ids: dict[str, str]) -> list[dict[str, Any]]:
     for record in raw[-RUN_HISTORY_LIMIT:]:
         if not isinstance(record, dict):
             continue
-        keys = ("runId", "previewToken", "selectionHash", "startedAt", "status")
+        # Archives scrub credential-like "*Token" keys. The preview is a
+        # content digest. Normalize records from older local databases too.
+        preview_hash = record.get("previewHash", record.get("previewToken"))
+        if not isinstance(preview_hash, str) or not DIGEST.fullmatch(preview_hash):
+            continue
+        keys = ("runId", "selectionHash", "startedAt", "status")
         if not all(isinstance(record.get(key), str) for key in keys):
             continue
         run = {key: record[key] for key in keys}
+        run["previewHash"] = preview_hash
         if (not RUN_ID.fullmatch(run["runId"]) or run["runId"] in seen or run["status"] not in _RUN_STATUSES
-                or not DIGEST.fullmatch(run["previewToken"]) or not DIGEST.fullmatch(run["selectionHash"])
+                or not DIGEST.fullmatch(run["selectionHash"])
                 or not isinstance(record.get("steps"), list)):
             continue
         steps = [_restore_step(step, ids) for step in record["steps"]]

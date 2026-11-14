@@ -154,7 +154,7 @@ def register_graph_runner(
             if step["status"] == "ready":
                 step.update(status="pending", detail="Waiting to run.")
         run = {
-            "runId": run_id, "previewToken": token, "selectionHash": _digest(sorted(set(node_ids))),
+            "runId": run_id, "previewHash": token, "selectionHash": _digest(sorted(set(node_ids))),
             "startedAt": datetime.now(timezone.utc).isoformat(), "steps": steps, "status": "running",
         }
         if len(document.graph_runs) >= RUN_HISTORY_LIMIT:
@@ -173,7 +173,7 @@ def register_graph_runner(
             raise IntentValidationError(["Use an operation ID of 8–100 letters, digits, hyphens or underscores."])
         existing = find_run(run_id)
         if existing is not None:
-            if existing["previewToken"] != preview_token or existing["selectionHash"] != _digest(sorted(set(node_ids))):
+            if existing["previewHash"] != preview_token or existing["selectionHash"] != _digest(sorted(set(node_ids))):
                 raise IntentValidationError(["This operation ID already belongs to another preview."])
             return visible_run(existing)
         result = await start_run(node_ids, preview_token, run_id)

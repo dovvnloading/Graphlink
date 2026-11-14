@@ -239,6 +239,11 @@ def test_malformed_import_cannot_restore_half_a_plan_and_unmapped_ids_never_alia
         token = (await send("previewGraphRun", []))["previewToken"]
         await send("executeGraphRun", [], token, "import-record")
         record, = doc.graph_runs
+        legacy = dict(record)
+        legacy["previewToken"] = legacy.pop("previewHash")
+        restored, = restore_graph_runs([legacy], {node_id: node_id for node_id in doc.nodes})
+        assert restored == record and "previewToken" not in restored
+
         first, second = record["steps"]
         raw = [{**record, "status": "running", "steps": [first, {**second, "status": "pending"}]}]
         # The second destination id is present as a new value in the map but
@@ -300,5 +305,45 @@ def test_checkpoint_never_recreates_a_deleted_graph(tmp_path):
             await send("executeGraphRun", [], token, "deleted-graph")
         assert not doc.command_log and not chat_library.get_all_chats(path)
         assert doc.current_chat_id == run_id
+
+    asyncio.run(scenario())
+
+
+def test_workspace_archive_preserves_completed_history_and_resumes_interrupted_run(tmp_path, monkeypatch):
+    async def scenario():
+        source_db = tmp_path / "original.db"
+        _, doc, send = open_session(source_db)
+        raw, report, note = setup_chain(doc)
+        first = (await send("previewGraphRun", []))["previewToken"]
+        await send("executeGraphRun", [], first, "finished-before-export")
+
+        doc.set_table_source(raw.id, "Region,Qty\nWest,12", raw.content)
+        token = (await send("previewGraphRun", []))["previewToken"]
+        fail_write(monkeypatch, 3)
+        with pytest.raises(IntentValidationError, match="checkpoint"):
+            await send("executeGraphRun", [], token, "interrupted-export")
+        row, notes, pins = chat_library.load_chat_snapshot(source_db, doc.current_chat_id)
+        archive = tmp_path / "workflows.graphlink"
+        chat_library.workspace_archive.export_archive(archive, [{**row, "notes": notes, "pins": pins}])
+
+        imported_db = tmp_path / "imported.db"
+        workspace_id = chat_library.get_all_workspaces(imported_db)[0]["id"]
+        imported_id, = chat_library.import_workspace_rows_atomically(imported_db, archive, workspace_id)
+        bus, imported, send_again = open_session(imported_db)
+        await bus.dispatch_intent("app-chat-library", "loadChat", [imported_id])
+        run = await send_again("getGraphRun")
+        assert run and run["status"] == "interrupted"
+        assert [s["status"] for s in run["steps"]] == ["completed", "pending"]
+        historical, = run["history"]
+        assert (historical["runId"], historical["status"]) == ("finished-before-export", "completed")
+        assert (await send_again("executeGraphRun", [], first, historical["runId"]))["status"] == "completed"
+
+        result = await send_again("resumeGraphRun", run["runId"])
+        assert result["status"] == "completed"
+        restored_report, restored_note = (imported.nodes[step["nodeId"]] for step in result["steps"])
+        assert restored_report.id != report.id and restored_note.id != note.id
+        assert restored_report.state.table_output.current.version == 3
+        assert "12" in restored_note.content and restored_note.content == restored_report.state.artifact_content
+        assert len(imported.command_log) == 1
 
     asyncio.run(scenario())
