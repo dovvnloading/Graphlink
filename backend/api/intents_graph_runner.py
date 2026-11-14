@@ -171,14 +171,15 @@ def register_graph_runner(
             _inspect(document, new_live)
             if any(new_live[key] != step[key] for key in ("inputHash", "configHash", "targetHash")):
                 raise SceneError("The Model input, configuration or output changed during inference.")
-            if current.state.model_binding.binding_id != identity:
+            current_model_state = current.state
+            if current_model_state.model_binding.binding_id != identity:
                 raise SceneError("The Model port was rebound during inference.")
             output_hash = _text_digest(text)
 
             def apply() -> None:
                 current.content = text
-                current.state.model_binding.last_input_hash = step["inputHash"]
-                current.state.model_binding.last_output_hash = output_hash
+                current_model_state.model_binding.last_input_hash = step["inputHash"]
+                current_model_state.model_binding.last_output_hash = output_hash
 
             document.record_command("runGraphStep", "user", apply, node_ids=(current.id,), run_id=run["runId"])
             return output_hash
