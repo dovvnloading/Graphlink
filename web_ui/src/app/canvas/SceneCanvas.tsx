@@ -1889,6 +1889,7 @@ export function toFlowNodes(
           compareSourceNodeIds: n.itemIds,
           targetId: n.id,
           tableStore: n.isTableSource ? store : undefined,
+          tableOutput: n.tableOutputVersion ? { node: n, store } : undefined,
           textInputSourceId: n.textInputSourceId,
           textInputSourceLabel: sourceLabel,
           textInputOperation: n.textInputOperation,

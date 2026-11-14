@@ -50,6 +50,7 @@ from backend.plugin_sdk import (
     PluginRegistry,
     PluginRunContext,
     PluginNodeSeed,
+    OpenPluginPanel,
     GenericPluginState,
     _worker_parent_snapshot,
     _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS,
@@ -346,6 +347,8 @@ async def _execute_discovered_plugin(
             spawn_x=spawn_x, spawn_y=spawn_y,
         )
         result = builtin_spec.handler(canvas_document, run_ctx, parent_node_id)
+        if isinstance(result, OpenPluginPanel):
+            return {"open_panel": result.panel}
         await bus.publish("scene" if result is not None else "notification")
         return result
 

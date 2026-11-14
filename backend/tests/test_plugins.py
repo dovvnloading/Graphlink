@@ -85,7 +85,7 @@ def test_get_plugin_categories_pins_the_original_curated_within_category_order_f
     assert by_category["Build & Execution"] == [
         "Gitlink", "Virtual Environment Runner", "HTML Renderer", "Fal Media Studio",
     ]
-    assert by_category["Workflow & Drafting"] == ["Artifact / Drafter"]
+    assert by_category["Workflow & Drafting"] == ["Artifact / Drafter", "Graph Runner"]
 
 
 def test_get_plugin_categories_appends_more_plugins_only_if_uncategorized():
@@ -665,8 +665,18 @@ def test_every_builtin_now_has_a_real_builtin_action_registration():
     # path reserved for third-party plugins and the demo plugins).
     handled = {
         "Web Research", "Artifact / Drafter", "Gitlink", "Virtual Environment Runner",
-        "System Prompt", "Conversation Node", "HTML Renderer", "Review Lens", "Fal Media Studio",
+        "System Prompt", "Conversation Node", "HTML Renderer", "Review Lens", "Fal Media Studio", "Graph Runner",
     }
     registry = discover_plugins()
     assert handled == set(registry.builtin_actions)
     assert handled.isdisjoint(registry.picker_entries)
+
+
+def test_graph_runner_picker_opens_the_panel_without_changing_the_scene():
+    bus, notifications, document = _make_plugins_bus()
+    before = document.scene_payload()
+    result = asyncio.run(bus.dispatch_intent("app-plugins", "executePlugin", ["Graph Runner"]))
+
+    assert result == {"open_panel": "graph-runner"}
+    assert document.scene_payload() == before
+    assert not notifications.visible

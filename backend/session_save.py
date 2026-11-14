@@ -99,6 +99,7 @@ dedicated recon/design/test cycle, not bolted onto a serializer):
 from __future__ import annotations
 
 import contextvars
+import copy
 import json
 import logging
 import re
@@ -1026,7 +1027,7 @@ def _build_chat_data(
     notes_index = {n.id: i for i, n in enumerate(notes)}
     table_sources = [n.id for n in notes if isinstance(n.state, NoteState) and n.state.is_table_source]
     table_outputs = {
-        n.id: saved_table_output(output) for n in document.nodes.values() if (output := table_output(n)) is not None
+        n.id: saved_table_output(output, n.kind) for n in document.nodes.values() if (output := table_output(n)) is not None
     }
     comparison_notes = {
         n.id: list(n.item_ids) for n in notes if isinstance(n.state, NoteState) and n.state.is_branch_comparison
@@ -1188,6 +1189,7 @@ def _build_chat_data(
         **({"comparison_notes": comparison_notes} if comparison_notes else {}),
         **({"table_sources": table_sources} if table_sources else {}),
         **({"table_outputs": table_outputs} if table_outputs else {}),
+        **({"graph_runs": copy.deepcopy(document.graph_runs)} if document.graph_runs else {}),
         "pins_data": [_serialize_pin(r) for r in document.pins.records],
         # The 12 basic connection lists all draw from the SAME classified
         # "connections" bucket - this backend has no way to tell which of

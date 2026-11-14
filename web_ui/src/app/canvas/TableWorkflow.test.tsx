@@ -67,9 +67,12 @@ describe("table source editing", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create chart" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "Create report" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Create report" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Create grouped table" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Create grouped table" }));
     expect(request.mock.calls).toEqual([
       ["scene", "addTableOutput", ["a", "chart", "Team", "Cost"]],
       ["scene", "addTableOutput", ["a", "artifact", "Team", "Cost"]],
+      ["scene", "addTableOutput", ["a", "table", "Team", "Cost"]],
     ]);
     await waitFor(() => expect(screen.getByRole("button", { name: "Create report" })).toBeEnabled());
   });
@@ -141,5 +144,20 @@ describe("table output controls", () => {
     expect(rerun).toBeDisabled();
     view.rerender(<TableOutput node={output} store={store} />);
     expect(rerun).toBeEnabled();
+  });
+
+  it("compares saved CSV versions on a derived table and protects the open editor", async () => {
+    const { request, store } = makeStore();
+    request.mockResolvedValueOnce({
+      revisionToken: history.revisionToken,
+      previous: { version: 1, sourceHash: "a".repeat(64), csv },
+      current: { version: 2, sourceHash: "b".repeat(64), csv: csv.replace("Design,2", "Design,6") },
+    });
+    render(<TableSource id="result" content={csv} store={store} derived={{ node: output, store }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit table" }));
+    expect(screen.getByRole("button", { name: "Rerun from table" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Compare versions" }));
+    expect(await screen.findByText("Design,6")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Restore previous version" })).toBeDisabled();
   });
 });

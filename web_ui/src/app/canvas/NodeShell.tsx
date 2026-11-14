@@ -28,7 +28,7 @@ interface NodeShellProps {
   resizer?: ReactNode;
   textOutput?: boolean;
   textInput?: boolean;
-  tablePort?: "source" | "target";
+  tablePort?: "source" | "target" | "both";
   footer?: ReactNode;
   onBodyDoubleClick?: (event: MouseEvent<HTMLDivElement>) => void;
 }
@@ -92,11 +92,13 @@ export function NodeShell({
         className="scene-text-handle" title="Text output · Drag to a note’s text input" aria-label="Text output" />}
       {textInput && <Handle id={TEXT_INPUT_HANDLE} type="target" position={Position.Left}
         className="scene-text-handle" title="Text input · Connect a text output" aria-label="Text input port" />}
-      {tablePort && <RefreshPorts />}
-      {tablePort && <Handle id={`table-${tablePort}`} type={tablePort}
-        position={tablePort === "source" ? Position.Right : Position.Left} isConnectable={false}
-        className="scene-text-handle scene-table-handle" title={tablePort === "source" ? "Table output" : "Table input"}
-        aria-label={tablePort === "source" ? "Table output" : "Table input"} />}
+      {tablePort && <RefreshPorts key={tablePort} />}
+      {(tablePort === "source" || tablePort === "both") && <Handle id="table-source" type="source"
+        position={Position.Right} isConnectable={false} className="scene-text-handle scene-table-handle"
+        title="Table output" aria-label="Table output" />}
+      {(tablePort === "target" || tablePort === "both") && <Handle id="table-target" type="target"
+        position={Position.Left} isConnectable={false} className="scene-text-handle scene-table-handle"
+        title="Table input" aria-label="Table input" />}
       {menu}
     </div>
   );

@@ -130,6 +130,11 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "setFontSize", "B", "preference: canvas-appearance font"),
     Classified("scene", "setFontColor", "B", "preference: canvas-appearance font"),
 
+    Classified("scene", "previewGraphRun", "B", "read-only: previews bound transforms on a projected graph"),
+    Classified("scene", "getGraphRun", "B", "read-only: inspects saved run history"),
+    Classified("scene", "executeGraphRun", "A", "content: records each completed output with its run id"),
+    Classified("scene", "resumeGraphRun", "A", "content: records remaining output changes under the original run id"),
+
     # -- backend/api/intents_undo.py (scene) - the machinery itself ---------
     Classified("scene", "undo", "B", "undo-machinery: pops command_log itself, self-referential"),
     Classified("scene", "redo", "B", "undo-machinery: pops redo_stack itself, self-referential"),

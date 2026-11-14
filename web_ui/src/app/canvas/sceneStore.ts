@@ -158,6 +158,36 @@ export interface OrganizationPreview {
 
 export type EdgeRole = "legacy" | "primary" | "secondary" | "reference" | "association";
 
+export interface GraphRunStep {
+  nodeId: string;
+  sourceId: string;
+  label: string;
+  kind: string;
+  operation: string;
+  status: string;
+  detail: string;
+  inputHash?: string;
+  outputHash?: string;
+}
+
+export interface GraphRunPreview {
+  previewToken: string;
+  steps: GraphRunStep[];
+}
+
+export type TableOutputKind = "table" | "chart" | "artifact";
+
+export interface GraphRun {
+  runId: string;
+  startedAt: string;
+  status: string;
+  steps: GraphRunStep[];
+}
+
+export interface LatestGraphRun extends GraphRun {
+  history?: GraphRun[];
+}
+
 export interface OrganizationOptions {
   scope: OrganizationPreview["scope"];
   rootId: string | null;
@@ -1457,6 +1487,22 @@ export class SceneStore {
     await this.transport.request("scene", "setEdgeRole", [edgeId, role]);
   }
 
+  previewGraphRun(nodeIds: string[]): Promise<GraphRunPreview> {
+    return this.transport.request("scene", "previewGraphRun", [nodeIds]) as Promise<GraphRunPreview>;
+  }
+
+  executeGraphRun(nodeIds: string[], previewToken: string, operationId: string): Promise<GraphRun> {
+    return this.transport.request("scene", "executeGraphRun", [nodeIds, previewToken, operationId]) as Promise<GraphRun>;
+  }
+
+  getGraphRun(): Promise<LatestGraphRun | null> {
+    return this.transport.request("scene", "getGraphRun", []) as Promise<LatestGraphRun | null>;
+  }
+
+  resumeGraphRun(runId: string): Promise<GraphRun> {
+    return this.transport.request("scene", "resumeGraphRun", [runId]) as Promise<GraphRun>;
+  }
+
   /** Request the current server-side layout without changing the canvas. */
   async previewOrganize(options: OrganizationOptions): Promise<OrganizationPreview> {
     return this.transport.request("scene", "previewOrganize", [
@@ -1529,7 +1575,7 @@ export class SceneStore {
     return this.transport.request("scene", "setTableCsv", [sourceId, csv, expectedContent]);
   }
 
-  addTableOutput(sourceId: string, kind: "chart" | "artifact", groupColumn: string, valueColumn: string) {
+  addTableOutput(sourceId: string, kind: TableOutputKind, groupColumn: string, valueColumn: string) {
     return this.transport.request("scene", "addTableOutput", [sourceId, kind, groupColumn, valueColumn]);
   }
 

@@ -1,0 +1,38 @@
+.graph-runner-dialog { width: min(540px, calc(100vw - 32px)); min-width: 0; max-width: calc(100vw - 32px); }
+.graph-runner-dialog .overlay-dialog-body { color: var(--gl-surface-text-secondary); font-size: 12px; line-height: 1.5; }
+.graph-runner-dialog p { margin: 0; }
+.graph-runner-dialog .runner-intro { margin-bottom: 14px; }
+.runner-controls, .runner-commit, .runner-section-header, .runner-step-heading {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+}
+.runner-controls { align-items: end; }
+.runner-controls label { display: grid; gap: 3px; flex: 1; color: var(--gl-surface-text-primary); }
+.runner-controls select {
+  height: 32px; padding: 0 8px; border: 1px solid var(--gl-surface-border);
+  border-radius: 4px; color: inherit; background: var(--gl-surface-window); font: inherit;
+}
+.graph-runner-dialog select:focus-visible, .runner-disclosure:focus-visible {
+  outline: 2px solid var(--gl-focus-ring); outline-offset: 2px;
+}
+.graph-runner-dialog section { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--gl-surface-border); }
+.runner-section-header h2 { margin: 0; font-size: 14px; color: var(--gl-surface-text-primary); }
+.runner-steps { margin: 8px 0; padding-inline-start: 26px; }
+.runner-steps li { padding: 7px 0 7px 2px; overflow-wrap: anywhere; }
+.runner-steps li + li { border-top: 1px solid var(--gl-surface-border); }
+.runner-steps strong { color: var(--gl-surface-text-primary); }
+.runner-steps [data-status], .runner-section-header [data-status] { font-weight: 600; }
+.graph-runner-dialog [data-status="completed"] { color: var(--gl-semantic-status-success); }
+.graph-runner-dialog :is([data-status="blocked"], [data-status="partial"], [data-status="interrupted"]) { color: var(--gl-semantic-status-warning); }
+.graph-runner-dialog [data-status="failed"], .runner-error [role="alert"] { color: var(--gl-semantic-status-error); }
+.graph-runner-dialog .runner-note, .runner-steps p { margin: 4px 0 0; }
+.runner-commit { margin-top: 10px; }
+.runner-commit p { flex: 1; }
+.runner-history, .runner-error { margin-top: 12px; }
+.runner-history > div, .runner-fingerprints div { padding-inline-start: 12px; }
+.runner-disclosure {
+  cursor: pointer; background: transparent; border: 0; color: inherit; font: inherit;
+  padding: 2px 0; text-align: start;
+}
+.runner-disclosure:hover { color: var(--gl-surface-text-primary); }
+.runner-fingerprints { margin-top: 4px; font-size: 11px; }
+.runner-fingerprints code { overflow-wrap: anywhere; }

@@ -36,7 +36,7 @@ def clear_note_text_readers(nodes: Iterable[SceneNode], removed_sources: set[str
     for node in nodes:
         if isinstance(node.state, NoteState) and node.state.text_input_source_id in removed_sources:
             node.state.clear_text_input()
-        if isinstance(node.state, (ArtifactState, ChartState)):
+        if isinstance(node.state, (ArtifactState, ChartState, NoteState)):
             binding = node.state.table_output
             if binding is not None and binding.source_id in removed_sources:
                 binding.source_id = ""

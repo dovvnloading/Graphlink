@@ -116,7 +116,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 # Python 3.12+ is the documented and package-declared floor; tomllib is
 # available from the standard library on every supported interpreter.
@@ -392,15 +392,17 @@ class PluginIntentSpec:
     args_json_schema: "dict | None" = None
 
 
-# ADR-014 stage 14.3: the first-party migration escape hatch. 'document' is
-# the live SceneDocument, 'run_ctx' the same per-invocation context a
-# NodeFactory receives, 'parent_node_id' whatever executePlugin's wire call
-# carried (may be None/unknown - the handler validates it itself, exactly
-# like every pre-migration hardcoded branch did). Returns the created/
-# resolved node's id on success, or None if it already showed its own
-# notification - see HostContext.register_builtin_plugin's own docstring for
-# the full contract this signature encodes.
-BuiltinActionHandler = Callable[[SceneDocument, PluginRunContext, "str | None"], "str | None"]
+@dataclass(frozen=True)
+class OpenPluginPanel:
+    """A built-in picker action can open an existing panel without editing the graph."""
+
+    panel: Literal["graph-runner"]
+
+
+# A picker handler returns a node ID, a panel to open, or None after a notification.
+BuiltinActionHandler = Callable[
+    [SceneDocument, PluginRunContext, "str | None"], "str | OpenPluginPanel | None"
+]
 
 
 def make_simple_child_node_handler(
@@ -504,7 +506,7 @@ class BuiltinActionSpec:
 # as the original 7.
 _BUILTIN_HATCH_ALLOWED_PLUGIN_IDS = frozenset({
     "artifact", "code_sandbox", "conversation_node", "gitlink",
-    "html_renderer", "system_prompt", "web_research", "review_lens", "fal_media",
+    "html_renderer", "system_prompt", "web_research", "review_lens", "fal_media", "graph_runner",
 })
 
 
@@ -641,8 +643,9 @@ class HostContext:
         exactly what it needs, including its own record_command call
         (with whatever command_type string it chooses), its own
         parent-validation notification text, and its own
-        return-None-on-failure/return-created-or-resolved-id-on-success
-        contract.
+        choice of result. Node actions return a node ID on success. Panel
+        actions return OpenPluginPanel. A handler can also return None
+        after showing a notification.
 
         'handler' is SYNC, not async - every one of the 7 branches this
         method replaces has a fully synchronous body (record_command's

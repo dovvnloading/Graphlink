@@ -6,6 +6,7 @@ import { NodeMarkdown } from "./NodeMarkdown";
 import { NodeHeading } from "./NodeHeading";
 import { swatchStyle } from "./nodeSwatch";
 import TableSource from "./TableSource";
+import type { TableOutputBinding } from "./TableOutput";
 import type { SceneStore } from "./sceneStore";
 import { NodeShell } from "./NodeShell";
 import { NoteTextInput, type NoteTextInputProps } from "./NoteTextInput";
@@ -44,6 +45,7 @@ import { NoteTextInput, type NoteTextInputProps } from "./NoteTextInput";
 
 export interface NoteNodeData extends Record<string, unknown>, NoteTextInputProps {
   tableStore?: SceneStore;
+  tableOutput?: TableOutputBinding;
   content: string;
   color: string | null;
   headerColor: string | null;
@@ -127,7 +129,7 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
   const plain = !data.tableStore && !data.isSystemPrompt && !data.isSummaryNote && !data.isBranchComparison;
   return (
     <NodeShell
-      tablePort={data.tableStore ? "source" : undefined}
+      tablePort={data.tableOutput?.node.tableInputSourceId ? "both" : data.tableStore ? "source" : undefined}
       textInput={plain}
       textOutput={plain}
       footer={plain && <NoteTextInput {...data} />}
@@ -148,7 +150,7 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
       header={
         <NodeHeading className="note-node-header" style={swatchStyle(data.headerColor)}>
           <span className="note-node-badges">
-            <span>{data.tableStore ? "Data table" : "Note"}</span>
+            <span>{data.tableOutput ? "Grouped table" : data.tableStore ? "Data table" : "Note"}</span>
             {data.isSystemPrompt && (
               <span className="note-node-badge" title="System Prompt" aria-label="System Prompt">
                 ⚙
@@ -180,7 +182,7 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
       bodyClassName="note-node-content"
       onBodyDoubleClick={data.tableStore ? undefined : beginEdit}
     >
-      {data.tableStore ? <TableSource id={data.targetId} store={data.tableStore} content={data.content} /> : editing ? (
+      {data.tableStore ? <TableSource id={data.targetId} store={data.tableStore} content={data.content} derived={data.tableOutput} /> : editing ? (
         <textarea
           ref={textareaRef}
           className="note-node-editor nodrag"
@@ -227,6 +229,7 @@ function stringArraysEqual(a: readonly string[], b: readonly string[]): boolean 
 function noteNodeDataAreEqual(prev: NoteNodeData, next: NoteNodeData): boolean {
   return (
     prev.tableStore === next.tableStore &&
+    prev.tableOutput === next.tableOutput &&
     prev.content === next.content &&
     prev.color === next.color &&
     prev.headerColor === next.headerColor &&

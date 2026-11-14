@@ -10,7 +10,9 @@
 
 **Versioned tables, charts and reports.** The second C1 implementation accepts a local CSV or an edited grid as input. Each chart or Drafter report groups and sums its chosen columns. A change to Hours makes the Hours chart stale while a Cost report stays current. A current group total opens to its source row numbers and original values. Rerun, compare, and restore operate independently per output. SQLite saves and workspace archives keep the relationships and the two most recent generated versions. [Implementation PR #576](https://github.com/dovvnloading/Graphlink/pull/576) · [Canvas example](https://github.com/dovvnloading/Graphlink/blob/77a3f7c5cd88a805ffffd08f373e3562fd8a6e2d/assets/screenshots/table-workflow.png)
 
-**Next development step — run several dependent nodes as one operation.** Introduce a shared run record that pins the input version and transform for each step. Connect a filtered or grouped table to two consumers, change one source row, and let the user preview and run the affected steps together. An unavailable column should block only the steps that require it. After the graph closes mid-run, reopening should show which results were committed and which steps can resume. This takes C1 into the durable execution work in C2.
+**Graph Runner.** Preview one branch or the whole graph, then run the affected steps in dependency order. A saved run pins the source, operation and destination of each step. A blocked step identifies its cause, and independent branches can still finish. Each completed output is checkpointed with its step in the workspace. Reopening the graph exposes the last run and lets the user resume unfinished work. [User guide](README.md#run-connected-outputs-together)
+
+**Next development step.** Extend this local runtime to model and tool calls. Before issuing a remote call, record its provider, model, input and request identity. Recovery must distinguish a request that can be retried from one that may already have completed or incurred a charge.
 
 ## 1. The product we are building
 
