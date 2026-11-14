@@ -138,7 +138,7 @@ def register_graph_model_runner(
             await write
             raise
         if saved is not True:
-            raise IntentValidationError(["Could not save the model request checkpoint; no call was started."])
+            raise IntentValidationError(["Could not confirm the graph run checkpoint. Inspect the run before retrying."])
         return True
 
     @serialize_mutation
