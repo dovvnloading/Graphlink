@@ -8,6 +8,7 @@ const statuses: Record<string, string> = {
   ready: "Ready", current: "Up to date", blocked: "Blocked", failed: "Failed",
   pending: "Pending", completed: "Completed", partial: "Completed with issues",
   interrupted: "Interrupted", running: "Running",
+  "reconciliation-required": "Reconciliation required",
 };
 const operations: Record<string, string> = {
   copy: "Copy text", word_count: "Word count", group_sum: "Group and sum",
@@ -32,6 +33,13 @@ function RunSteps({ steps, names }: { steps: GraphRunStep[]; names: Map<string, 
       </div>
       <div>{operations[step.operation] ?? step.operation}{step.sourceId && <> from {names.get(step.sourceId) || step.sourceId}</>}</div>
       {step.detail && <p>{step.detail}</p>}
+      {step.externalAttempt && <Disclosure label="External request" className="runner-fingerprints">
+        <div>Provider <code>{step.externalAttempt.provider}</code></div>
+        <div>{step.externalAttempt.kind === "model" ? "Model" : "Tool"} <code>{step.externalAttempt.model || step.externalAttempt.tool}</code></div>
+        <div>Input reference <code>{step.externalAttempt.inputRef}</code></div>
+        <div>Request ID <code>{step.externalAttempt.requestId}</code></div>
+        {step.status === "reconciliation-required" && <p>Check the provider for this request before starting another attempt. It may already have run or incurred a charge.</p>}
+      </Disclosure>}
       {(step.outputHash || step.inputHash) && <Disclosure label="Fingerprints" className="runner-fingerprints">
         {step.inputHash && <div>Input <code>{step.inputHash}</code></div>}
         {step.outputHash && <div>Output <code>{step.outputHash}</code></div>}
@@ -168,6 +176,7 @@ function Runner({ store }: { store: SceneStore }) {
       </header>
       <div className="runner-note">{runDate(latest)}</div>
       <RunSteps steps={latest.steps} names={names} />
+      {latest.status === "reconciliation-required" && <p className="runner-note" role="alert">One or more external requests have an uncertain outcome. Graph Runner will not retry them automatically.</p>}
       {resumeButton(latest)}
       {!!latest.history?.length && <Disclosure label={`Earlier runs (${latest.history.length})`} className="runner-history">
         {latest.history.map((run) => <Disclosure key={run.runId} label={`${runDate(run)} · ${statuses[run.status] ?? run.status}`}>
