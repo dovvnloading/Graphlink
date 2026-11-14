@@ -19,6 +19,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import api_provider
+from backend.providers.graph_local_ollama import local_ollama_complete
 from backend.api.intents_graph_runner import _digest, _public_run, _public_step
 from backend.domain.graph import SceneDocument
 from backend.domain.graph_run_external import ExternalCall, dispatch_external_attempt
@@ -26,8 +27,7 @@ from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID
 from backend.domain.model import SceneError
 from backend.domain.nodes_content import _text_digest
 from backend.events import IntentValidationError, SessionBus
-from graphlink_model_catalog import ModelRef
-from graphlink_task_config import LOCAL_PROVIDER_OLLAMA, TASK_CHAT
+ from graphlink_task_config import LOCAL_PROVIDER_OLLAMA
 
 _MAX_INPUT_BYTES = 65536
 _MAX_OUTPUT_CHARS = 200000
@@ -176,16 +176,19 @@ def register_graph_model_runner(
         # receipt before the model's terminal SQLite checkpoint commits.
         setattr(bus, "graph_model_active_run_id", run_id)
 
+        # Capture the validated endpoint used for the exact preview. The
+        # dedicated client will NOT read OLLAMA_HOST or proxy settings itself.
+        endpoint = _require_loopback_ollama()
+        if _digest(["local_model_v1", selection.providerName, selection.modelId, endpoint]) != step["configHash"]:
+            raise IntentValidationError(["The Ollama endpoint changed. Preview the model step again."])
+
         async def invoke(_request_id: str) -> Any:
-            # A fixed ModelRef means no auto-selection or cross-provider
-            # fallback. Only local Ollama is allowed until approval and cost
-            # policy are implemented for paid cloud models.
-            _require_loopback_ollama()
-            kwargs: dict[str, Any] = {"model_ref": ModelRef(selection.providerName, selection.modelId)}
-            if provider_runtime is not None:
-                kwargs["runtime"] = provider_runtime
+            # The model SDK's module-level chat() binds a process-global
+            # client at import time and can retain a stale/cloud host.
+            # Our dedicated Client pins this loopback URL, disables proxies
+            # and redirects, and never inherits active provider credentials.
             return await asyncio.to_thread(
-                api_provider.chat, TASK_CHAT, [{"role": "user", "content": prompt}], **kwargs,
+                local_ollama_complete, prompt=prompt, model_id=selection.modelId, endpoint=endpoint,
             )
 
         async def apply_result(payload: Any) -> str:
