@@ -52,6 +52,10 @@ class BranchOps(SceneDocumentParts):
         if node.state.is_table_source:
             raise SceneError("A table cannot be converted to a comparison note.")
         node.state.clear_text_input()
+        # Comparison notes cannot be model destinations either. Keep their
+        # content intact, but discard that input contract before switching
+        # roles so getGraphModelBindings and preview cannot see an invalid port.
+        node.state.model_text_input = None
         clear_note_text_readers(self.nodes.values(), {node_id})
         node.state.is_branch_comparison = True
         node.item_ids = list(source_node_ids)
