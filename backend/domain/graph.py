@@ -75,7 +75,7 @@ from backend.domain.node_states import CodeState, FrameState, NodeState
 from backend.domain.node_wire import node_wire
 from backend.domain.nodes_agent_runs import AgentRunOps
 from backend.domain.nodes_code_review import CodeReviewOps
-from backend.domain.nodes_content import ContentOps
+from backend.domain.nodes_content import ContentOps, clear_note_text_readers
 from backend.domain.nodes_conversational import ConversationalOps
 from backend.domain.nodes_gitlink import GitlinkOps
 from backend.domain.nodes_planning import PlanningOps
@@ -402,7 +402,8 @@ class SceneDocument(
         whenever the pins list changed - pins have no op in the ADR's own
         op set, so a pin mutation is honestly outside what a patch can
         express and falls back rather than being silently dropped."""
-        nodes = {node_id: self._node_wire(n) for node_id, n in self.nodes.items()}
+        source_digests: dict[str, str] = {}
+        nodes = {node_id: self._node_wire(n, source_digests) for node_id, n in self.nodes.items()}
         edges = {edge_id: self._edge_wire(e) for edge_id, e in self.edges.items()}
         pins = self._pins_wire()
         view = self._view_wire()
@@ -781,6 +782,8 @@ class SceneDocument(
                 # clean up here.
                 self._detach_node_from_membership(node_id)
 
+        clear_note_text_readers(self.nodes.values(), removing)
+
         self.last_chat_node_id = retargeted_tip
         if self.final_deliverable_node_id is not None and self.final_deliverable_node_id in removing:
             self.final_deliverable_node_id = None
@@ -1002,7 +1005,7 @@ class SceneDocument(
 
     # -- snapshots ---------------------------------------------------------
 
-    def _node_wire(self, n: SceneNode) -> dict[str, Any]:
+    def _node_wire(self, n: SceneNode, source_digests: dict[str, str] | None = None) -> dict[str, Any]:
         """The per-node wire row - the ONE place both the full snapshot and
         take_dirty_patch_ops's upsertNode ops build a node's payload from
         (ADR-003 stage 3.4), so the two can never drift field by field.
@@ -1011,6 +1014,7 @@ class SceneDocument(
         return node_wire(
             n,
             is_final_deliverable=n.id == self.final_deliverable_node_id,
+            text_input_status=self._text_input_status(n, source_digests),
             plugin_state=self._plugin_state_wire(n),
         )
 
@@ -1099,8 +1103,9 @@ class SceneDocument(
         }
 
     def scene_payload(self) -> dict[str, Any]:
+        source_digests: dict[str, str] = {}
         return {
-            "nodes": [self._node_wire(n) for n in self.nodes.values()],
+            "nodes": [self._node_wire(n, source_digests) for n in self.nodes.values()],
             "edges": [self._edge_wire(e) for e in self.edges.values()],
             "pins": self._pins_wire(),
             **self._meta_wire(),

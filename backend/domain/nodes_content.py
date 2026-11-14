@@ -13,6 +13,10 @@ per-kind method groups are being lifted out of SceneDocument at all.
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Iterable
+from typing import TYPE_CHECKING
+
 from backend.domain._composed import SceneDocumentParts
 from backend.domain.model import (
     HTML_TITLE_PREVIEW_LENGTH,
@@ -20,15 +24,29 @@ from backend.domain.model import (
     SceneError,
     SceneNode,
 )
-from backend.domain.node_access import require_node
-from backend.domain.node_states import DocumentState, HtmlState, NoteState
+from backend.domain.node_access import is_node_of, require_node
+from backend.domain.node_states import ArtifactState, DocumentState, HtmlState, NoteState
+
+if TYPE_CHECKING:
+    from backend.domain.node_access import _NodeWith
+
+
+def clear_note_text_readers(nodes: Iterable[SceneNode], removed_sources: set[str]) -> None:
+    """Disconnect readers when a source disappears or loses its text output."""
+    for node in nodes:
+        if isinstance(node.state, NoteState) and node.state.text_input_source_id in removed_sources:
+            node.state.clear_text_input()
+
+
+def _text_digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8", errors="surrogatepass")).hexdigest()
 
 
 class ContentOps(SceneDocumentParts):
     """The plain content kinds: document, thinking, html and note.
 
-    Each stores text the user or an agent wrote and does nothing else with
-    it - no run, no thread, no render. Note is the one that may float free;
+    Each stores text the user or an agent wrote. Plain notes also accept
+    a manually run text input. Note is the one that may float free;
     the other three require a parent, like every R3+ content kind.
     """
 
@@ -249,3 +267,74 @@ class ContentOps(SceneDocumentParts):
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
         node.content = str(content)
+
+    def _plain_note(self, node_id: str) -> _NodeWith[NoteState]:
+        note = self.nodes.get(node_id)
+        if not is_node_of(note, "note", NoteState):
+            raise SceneError("Choose a plain note for this text input.")
+        if note.state.is_system_prompt or note.state.is_summary_note or note.state.is_branch_comparison:
+            raise SceneError("Text inputs require a plain note.")
+        return note
+
+    def _text_output(self, source_id: str) -> str:
+        source = self.nodes.get(source_id)
+        if source is None:
+            raise SceneError("The text source no longer exists.")
+        if source.kind == "note":
+            return self._plain_note(source_id).content
+        if source.kind == "chat":
+            return source.content
+        if source.kind == "artifact" and isinstance(source.state, ArtifactState):
+            return source.state.artifact_content
+        raise SceneError("Choose a plain note, chat message, or Drafter document as the text source.")
+
+    def bind_note_text_input(self, source_id: str, target_id: str, operation: str = "copy") -> None:
+        """Connect one text output to a note without evaluating it."""
+        target = self._plain_note(target_id)
+        self._text_output(source_id)
+        if operation not in ("copy", "word_count"):
+            raise SceneError("Choose Copy text or Word count for this input.")
+        if target.state.text_input_source_id not in ("", source_id):
+            raise SceneError("Disconnect the current text source before connecting another.")
+
+        # Only data dependencies count. A structural edge can run either way.
+        current_id = source_id
+        seen = {target_id}
+        while current_id:
+            if current_id in seen:
+                raise SceneError("A text input cannot form a cycle.")
+            seen.add(current_id)
+            state = self.nodes[current_id].state
+            current_id = state.text_input_source_id if isinstance(state, NoteState) else ""
+
+        if target.state.text_input_source_id != source_id or target.state.text_input_operation != operation:
+            target.state.text_input_last_source_sha256 = ""
+            target.state.text_input_source_id = source_id
+            target.state.text_input_operation = operation
+
+    def unbind_note_text_input(self, target_id: str) -> None:
+        self._plain_note(target_id).state.clear_text_input()
+
+    def run_note_text_input(self, target_id: str) -> None:
+        """Evaluate exactly this note from its source's current, committed text."""
+        note = self._plain_note(target_id)
+        if not note.state.text_input_source_id:
+            raise SceneError("Connect a text source before running this input.")
+        text = self._text_output(note.state.text_input_source_id)
+        digest = _text_digest(text)
+        note.content = str(len(text.split())) if note.state.text_input_operation == "word_count" else text
+        note.state.text_input_last_source_sha256 = digest
+
+    def _text_input_status(self, node: SceneNode, source_digests: dict[str, str] | None = None) -> str:
+        state = node.state
+        if node.kind != "note" or not isinstance(state, NoteState) or not state.text_input_source_id:
+            return "unbound"
+        if not state.text_input_last_source_sha256:
+            return "unrun"
+        source_id = state.text_input_source_id
+        digest = source_digests.get(source_id) if source_digests is not None else None
+        if digest is None:
+            digest = _text_digest(self._text_output(source_id))
+            if source_digests is not None:
+                source_digests[source_id] = digest
+        return "current" if digest == state.text_input_last_source_sha256 else "stale"

@@ -2,6 +2,7 @@ import { Handle, Position } from "@xyflow/react";
 import type { CSSProperties, MouseEvent, ReactNode } from "react";
 
 import type { MenuPosition } from "./menuPosition";
+import { TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE } from "./textInputs";
 import "./NodeCards.css";
 
 /** Shared frame. Clip the card contents independently of ports and resize handles. */
@@ -16,6 +17,9 @@ interface NodeShellProps {
   menu?: ReactNode;
   style?: CSSProperties;
   resizer?: ReactNode;
+  textOutput?: boolean;
+  textInput?: boolean;
+  footer?: ReactNode;
   onBodyDoubleClick?: (event: MouseEvent<HTMLDivElement>) => void;
 }
 
@@ -30,6 +34,9 @@ export function NodeShell({
   menu,
   style,
   resizer,
+  textOutput,
+  textInput,
+  footer,
   onBodyDoubleClick,
 }: NodeShellProps) {
   return (
@@ -67,8 +74,13 @@ export function NodeShell({
             {children}
           </div>
         )}
+        {footer}
       </div>
       <Handle type="source" position={Position.Bottom} className="scene-node-handle" />
+      {textOutput && <Handle id={TEXT_OUTPUT_HANDLE} type="source" position={Position.Right}
+        className="scene-text-handle" title="Text output · Drag to a note’s text input" aria-label="Text output" />}
+      {textInput && <Handle id={TEXT_INPUT_HANDLE} type="target" position={Position.Left}
+        className="scene-text-handle" title="Text input · Connect a text output" aria-label="Text input port" />}
       {menu}
     </div>
   );

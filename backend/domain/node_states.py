@@ -147,6 +147,16 @@ class NoteState(NodeState):
     is_summary_note: bool = False
     is_branch_comparison: bool = False
 
+    # A manually run text input. Its source is independent of canvas ancestry.
+    text_input_source_id: str = ""
+    text_input_operation: str = "copy"
+    text_input_last_source_sha256: str = ""
+
+    def clear_text_input(self) -> None:
+        self.text_input_source_id = ""
+        self.text_input_operation = "copy"
+        self.text_input_last_source_sha256 = ""
+
 
 @dataclass
 class DocumentState(NodeState):

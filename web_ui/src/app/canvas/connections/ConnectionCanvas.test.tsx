@@ -24,8 +24,8 @@ interface FakeInternalNode {
   internals: {
     positionAbsolute: { x: number; y: number };
     handleBounds?: {
-      source?: Array<{ x: number; y: number; width: number; height: number; position: Position }> | null;
-      target?: Array<{ x: number; y: number; width: number; height: number; position: Position }> | null;
+      source?: Array<{ id?: string; x: number; y: number; width: number; height: number; position: Position }> | null;
+      target?: Array<{ id?: string; x: number; y: number; width: number; height: number; position: Position }> | null;
     };
   };
 }
@@ -198,6 +198,23 @@ describe("ConnectionCanvas backing-store sizing", () => {
 });
 
 describe("ConnectionCanvas geometry resolution", () => {
+  it("anchors a text binding on the named side sockets when structural sockets exist", () => {
+    const { ctx } = fakeCtx2D();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx);
+    const onGeometry = vi.fn();
+    const out = { id: "text-output", x: 90, y: 10, width: 8, height: 8, position: Position.Right };
+    const input = { id: "text-input", x: -4, y: 20, width: 8, height: 8, position: Position.Left };
+    const a = { internals: { ...NODE_A.internals, handleBounds: { source: [...NODE_A.internals.handleBounds!.source!, out] } } };
+    const b = { internals: { ...NODE_B.internals, handleBounds: { target: [...NODE_B.internals.handleBounds!.target!, input] } } };
+    renderConnectionCanvas({
+      connections: [{ id: "value", source: "a", target: "b", sourceHandle: out.id, targetHandle: input.id, orthogonal: false }],
+      onGeometry,
+    }, { nodes: { a, b } });
+    tickFrame();
+    const geometry: Map<string, ConnectionPath> = onGeometry.mock.calls[0]![0];
+    expect(geometry.get("value")).toEqual(connectionPath({ x: 198, y: 114 }, "right", { x: 296, y: 324 }, "left", false));
+  });
+
   it("resolves each connection's geometry from the store's live node positions and handle bounds, and reports it via onGeometry", () => {
     const { ctx } = fakeCtx2D();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(ctx);
