@@ -133,6 +133,49 @@ def test_false_checkpoint_does_not_send_a_request():
     asyncio.run(scenario())
 
 
+def test_cancelled_pre_dispatch_save_retains_the_fence_and_never_calls_provider():
+    async def scenario():
+        step = sample_step()
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        snapshots = []
+        dispatched = []
+
+        async def checkpoint():
+            entered.set()
+            await release.wait()
+            snapshots.append(copy.deepcopy(step))
+            return True
+
+        async def invoke(request_id):
+            dispatched.append(request_id)
+
+        async def apply(_response):
+            return digest("unused")
+
+        task = asyncio.create_task(
+            dispatch_external_attempt(
+                step, sample_call(step), checkpoint=checkpoint,
+                invoke=invoke, apply_result=apply,
+            )
+        )
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert dispatched == []
+        assert len(snapshots) >= 1
+        assert snapshots[0]["externalAttempt"]["phase"] == "dispatched"
+        assert step["status"] == "reconciliation-required"
+        assert step["externalAttempt"]["phase"] == "reconciliation-required"
+        restored, = restore_graph_runs([saved_run(snapshots[0])], {"n1": "n1", "n2": "n2"})
+        assert restored["status"] == "reconciliation-required"
+        assert restored["steps"][0]["externalAttempt"]["requestId"] == step["externalAttempt"]["requestId"]
+
+    asyncio.run(scenario())
+
+
 def test_timeout_is_not_a_retryable_failure_and_keeps_the_request_identity():
     async def scenario():
         step = sample_step()
