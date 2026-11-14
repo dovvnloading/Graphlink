@@ -161,6 +161,9 @@ export const ImageNodeView = withNodeSuspense(
 export const FalMediaNodeView = withNodeSuspense(
   lazy(() => import("./FalMediaNodeView").then((m) => ({ default: m.FalMediaNodeView }))),
 );
+export const ModelNodeView = withNodeSuspense(
+  lazy(() => import("./ModelNodeView").then((m) => ({ default: m.ModelNodeView }))),
+);
 export const NoteNodeView = withNodeSuspense(
   lazy(() => import("./NoteNodeView").then((m) => ({ default: m.NoteNodeView }))),
 );
