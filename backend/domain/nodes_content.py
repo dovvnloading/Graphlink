@@ -358,10 +358,10 @@ class ContentOps(SceneDocumentParts):
                 current_id = ""
 
         old = target.state.model_text_input
-        if old is not None and (old.source_id, old.provider, old.model_id) == (source_id, provider, model_id):
+        if old is not None and (old.source_id, old.provider_name, old.model_id) == (source_id, provider, model_id):
             return  # Idempotent rebind preserves committed provenance.
         target.state.model_text_input = ModelTextBinding(
-            source_id=source_id, provider=provider, model_id=model_id,
+            source_id=source_id, provider_name=provider, model_id=model_id,
             binding_id=uuid.uuid4().hex, version=MODEL_INPUT_VERSION,
         )
 
@@ -388,15 +388,21 @@ class ContentOps(SceneDocumentParts):
             # A source note can itself be stale even if its cached text is
             # byte-identical to the model's last input. Propagate dependency
             # freshness without running anything or reading private prompts.
-            self.require_current_model_source(binding.source_id)
+            self.require_current_model_source(binding.source_id, check_text_inputs=True)
         except SceneError:
             return "stale"
         return "current"
 
-    def require_current_model_source(self, source_id: str) -> None:
-        """Do not consume old model text when its dependency is stale or unrun."""
+    def require_current_model_source(self, source_id: str, *, check_text_inputs: bool = False) -> None:
+        """Reject stale model provenance without changing manual text transform semantics.
+
+        A model call (or freshness query) additionally requires upstream text
+        transforms to be current. A direct deterministic run can still copy a
+        cached text source explicitly as it could before model ports existed.
+        """
         seen: set[str] = set()
         current_id = source_id
+        traversed_model = False
         while current_id in self.nodes:
             if current_id in seen:
                 raise SceneError("The source graph contains a dependency cycle.")
@@ -405,6 +411,7 @@ class ContentOps(SceneDocumentParts):
             if not isinstance(state, NoteState):
                 return
             if state.model_text_input is not None:
+                traversed_model = True
                 model_input = state.model_text_input
                 if (not model_input.last_input_hash or not model_input.last_output_hash or
                         _text_digest(self._text_output(model_input.source_id)) != model_input.last_input_hash or
@@ -412,7 +419,7 @@ class ContentOps(SceneDocumentParts):
                     raise SceneError("Run the upstream model input first; its output is not current.")
                 current_id = model_input.source_id
             elif state.text_input_source_id:
-                if self._text_input_status(self.nodes[current_id]) != "current":
+                if (check_text_inputs or traversed_model) and self._text_input_status(self.nodes[current_id]) != "current":
                     raise SceneError("Run the upstream text input first; its output is not current.")
                 current_id = state.text_input_source_id
             else:
