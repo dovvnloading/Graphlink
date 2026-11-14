@@ -52,9 +52,13 @@ def _config_and_target(document: SceneDocument, step: dict[str, str]) -> None:
         validate_local_model_identity(binding.provider_name, binding.model_id)
         if binding.version != 1 or not binding.binding_id:
             raise SceneError("The Model input version is unsupported.")
+        # Runtime node IDs are reminted after restoring a workspace. Pin the
+        # durable binding identity and provider/model instead; _matching_node
+        # separately verifies the remapped sourceId before every execution.
+        # Including source_id here would reject a safe post-restart resume.
         step["configHash"] = _fingerprint([
-            "model_text_v1", binding.source_id, binding.provider_name,
-            binding.model_id, binding.version, binding.binding_id,
+            "model_text_v1", binding.provider_name, binding.model_id,
+            binding.version, binding.binding_id,
         ])
         step["targetHash"] = _text_digest(node.content)
     elif step["kind"] == "note":
