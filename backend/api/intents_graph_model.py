@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -22,15 +21,14 @@ from backend.api.intents_graph_runner import _digest, _public_run, _public_step
 from backend.domain.graph import SceneDocument
 from backend.domain.graph_run_external import ExternalCall, dispatch_external_attempt
 from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID
+from backend.domain.graph_model_binding import validate_local_model_identity
 from backend.domain.model import SceneError
+from backend.domain.node_states import NoteState
 from backend.domain.nodes_content import _text_digest
 from backend.providers.graph_local_ollama import local_ollama_complete
 from backend.events import IntentValidationError, SessionBus
-from graphlink_task_config import LOCAL_PROVIDER_OLLAMA
-
 _MAX_INPUT_BYTES = 65536
 _MAX_OUTPUT_CHARS = 200000
-_MODEL_ID = re.compile(r"[A-Za-z0-9._:/@+-]{1,192}")
 
 
 def _require_loopback_ollama() -> str:
@@ -73,19 +71,16 @@ class ExecuteGraphModelArgs(GraphModelSelection):
     operationId: str
 
 
+@dataclass
+class GraphModelTargetArgs:
+    targetId: str
+
+
 def model_step_preview(
     document: SceneDocument, source_id: str, target_id: str, provider: str, model_id: str,
 ) -> tuple[str, dict[str, str], str]:
     """Validate and freeze what a one-shot model call would consume and replace."""
-    if provider != LOCAL_PROVIDER_OLLAMA:
-        raise SceneError("Graph Runner currently permits only explicitly selected local Ollama models.")
-    if not isinstance(model_id, str) or not _MODEL_ID.fullmatch(model_id):
-        raise SceneError("Choose a valid installed Ollama model ID (1–192 safe characters).")
-    # Ollama's local daemon can itself proxy explicit cloud model variants.
-    # Reject their recognizable IDs even though this client only speaks to
-    # loopback; a custom alias may still require user-side verification.
-    if model_id.lower().endswith(("-cloud", ":cloud")):
-        raise SceneError("Cloud-backed Ollama models are not allowed in this local Graph Runner step.")
+    validate_local_model_identity(provider, model_id)
     endpoint = _require_loopback_ollama()
     if source_id == target_id:
         raise SceneError("A model's source and output must be different nodes.")
@@ -93,6 +88,12 @@ def model_step_preview(
     target = document._plain_note(target_id)
     if target.state.text_input_source_id or target.state.table_output is not None:
         raise SceneError("Choose an unbound plain note for the model output.")
+    binding = target.state.model_text_input
+    if binding is not None and (binding.source_id, binding.provider, binding.model_id) != (source_id, provider, model_id):
+        raise SceneError("This note has a different saved model connection. Save the new connection first.")
+    # A reusable binding is not permission to consume obsolete upstream model
+    # replies; explicit re-execution of that upstream model is required.
+    document.require_current_model_source(source_id)
     if not source_text.strip() or len(source_text.encode("utf-8", errors="surrogatepass")) > _MAX_INPUT_BYTES:
         raise SceneError("Model input must contain text and be at most 64 KiB.")
     fingerprint = _text_digest(source_text)
@@ -103,7 +104,7 @@ def model_step_preview(
         "status": "ready",
         "detail": f"Local Ollama model: {model_id}. Loopback request; verify custom aliases do not route to cloud.",
         "inputHash": fingerprint,
-        "configHash": _digest(["local_model_v1", provider, model_id, endpoint]),
+        "configHash": _digest(["local_model_v1", provider, model_id, endpoint, binding.binding_id if binding else ""]),
         "targetHash": _text_digest(target.content),
     }
     token = _digest([str(document.graph_run_epoch), step])
@@ -169,8 +170,11 @@ def register_graph_model_runner(
         # OLLAMA_HOST changes between planning and admission, do not append a
         # run, rotate its epoch, or leave an active-run marker behind.
         endpoint = _require_loopback_ollama()
-        if _digest(["local_model_v1", selection.providerName, selection.modelId, endpoint]) != step["configHash"]:
-            raise IntentValidationError(["The Ollama endpoint changed. Preview the model step again."])
+        current_binding = document._plain_note(selection.targetId).state.model_text_input
+        binding_id = current_binding.binding_id if current_binding is not None else ""
+        if _digest(["local_model_v1", selection.providerName, selection.modelId, endpoint, binding_id]) != step["configHash"]:
+            raise IntentValidationError(["The model connection or Ollama endpoint changed. Preview the model step again."])
+        pinned_binding_id = binding_id
         step.update(status="pending", detail="Waiting for the durable request checkpoint.")
         if len(document.graph_runs) >= RUN_HISTORY_LIMIT:
             finished = next((item for item in document.graph_runs if item["status"] in {"completed", "partial"}), None)
@@ -212,16 +216,29 @@ def register_graph_model_runner(
             target = document._plain_note(selection.targetId)
             if target.state.text_input_source_id or target.state.table_output is not None:
                 raise SceneError("The output note acquired another input; the model reply was not applied.")
+            current_binding = target.state.model_text_input
+            if ((current_binding.binding_id if current_binding is not None else "") != pinned_binding_id or
+                    (current_binding is not None and
+                     (current_binding.source_id, current_binding.provider, current_binding.model_id) !=
+                     (selection.sourceId, selection.providerName, selection.modelId))):
+                raise SceneError("The saved model connection changed during inference; the reply was not applied.")
             if _text_digest(target.content) != step["targetHash"]:
                 raise SceneError("The output note was edited during inference; the model reply was not applied.")
             # We are still inside the session mutation guard. The output,
             # undo record and completion receipt persist in one graph save.
+            output_hash = _text_digest(text)
+
+            def write_answer_and_provenance() -> None:
+                document.set_note_content(selection.targetId, text)
+                if current_binding is not None:
+                    current_binding.last_input_hash = step["inputHash"]
+                    current_binding.last_output_hash = output_hash
+
             document.record_command(
-                "runGraphModel", "user",
-                lambda: document.set_note_content(selection.targetId, text),
+                "runGraphModel", "user", write_answer_and_provenance,
                 node_ids=(selection.targetId,), run_id=run_id,
             )
-            return _text_digest(text)
+            return output_hash
 
         try:
             await dispatch_external_attempt(
@@ -270,6 +287,47 @@ def register_graph_model_runner(
             raise IntentValidationError(["Another graph operation is in progress. Try again."])
         return result
 
+    async def get_graph_model_bindings() -> list[dict[str, Any]]:
+        """Return port metadata, never saved prompts, credentials or response bodies."""
+        rows: list[dict[str, Any]] = []
+        for node in sorted(document.nodes.values(), key=lambda item: item.id):
+            if not isinstance(node.state, NoteState) or node.state.model_text_input is None:
+                continue
+            binding = node.state.model_text_input
+            rows.append({
+                "targetId": node.id, "sourceId": binding.source_id,
+                "provider": binding.provider, "modelId": binding.model_id,
+                "version": binding.version, "inputType": "text", "outputType": "text",
+                "status": document.model_input_status(node.id),
+            })
+        return rows
+
+    async def bind_graph_model(source_id: str, target_id: str, provider: str, model_id: str):
+        try:
+            document.record_command(
+                "bindGraphModel", "user",
+                lambda: document.bind_note_model_input(source_id, target_id, provider, model_id),
+                node_ids=(target_id,),
+            )
+        except SceneError as exc:
+            raise IntentValidationError([str(exc)]) from exc
+        await bus.publish("scene")
+        return await get_graph_model_bindings()
+
+    async def unbind_graph_model(target_id: str):
+        try:
+            document.record_command(
+                "unbindGraphModel", "user", lambda: document.unbind_note_model_input(target_id),
+                node_ids=(target_id,),
+            )
+        except SceneError as exc:
+            raise IntentValidationError([str(exc)]) from exc
+        await bus.publish("scene")
+        return await get_graph_model_bindings()
+
+    bus.register_intent("scene", "getGraphModelBindings", get_graph_model_bindings)
+    bus.register_intent("scene", "bindGraphModel", bind_graph_model, args_schema=GraphModelSelection)
+    bus.register_intent("scene", "unbindGraphModel", unbind_graph_model, args_schema=GraphModelTargetArgs)
     bus.register_intent(
         "scene", "previewGraphModel", preview_graph_model, args_schema=GraphModelSelection,
     )
