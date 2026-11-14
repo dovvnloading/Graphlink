@@ -300,7 +300,8 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 231 -> 233 for explicit local-model preview and execution.
     # 233 -> 236 for saved model-port lookup, bind and unbind.
     # 236 -> 238 for first-class Model creation and configuration.
-    assert len(real) == 238, (
+    # 238 -> 239 for connecting the Model's named text port from the canvas.
+    assert len(real) == 239, (
         f"expected exactly 233 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
