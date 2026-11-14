@@ -2837,7 +2837,9 @@ function CanvasInner({
 
   const onConnect = useCallback(
     (connection: Connection) => {
-      if (connection.sourceHandle === TEXT_OUTPUT_HANDLE && connection.targetHandle === TEXT_INPUT_HANDLE) {
+      if (connection.sourceHandle === TEXT_OUTPUT_HANDLE && connection.targetHandle === "model-input") {
+        void store.connectModelInput(connection.source, connection.target);
+      } else if (connection.sourceHandle === TEXT_OUTPUT_HANDLE && connection.targetHandle === TEXT_INPUT_HANDLE) {
         store.bindNoteTextInput(connection.source, connection.target);
       } else if (!connection.sourceHandle && !connection.targetHandle) {
         store.connectNodes(connection.source, connection.target);
@@ -2848,11 +2850,14 @@ function CanvasInner({
 
   const isValidConnection = useCallback((connection: Connection | Edge) => {
     if (!connection.sourceHandle && !connection.targetHandle) return true;
-    if (connection.sourceHandle !== TEXT_OUTPUT_HANDLE || connection.targetHandle !== TEXT_INPUT_HANDLE) return false;
+    if (connection.sourceHandle !== TEXT_OUTPUT_HANDLE ||
+        (connection.targetHandle !== TEXT_INPUT_HANDLE && connection.targetHandle !== "model-input")) return false;
     const { nodes } = store.getScene();
     const target = nodes.find((node) => node.id === connection.target);
-    return !!target && isPlainNote(target) && !target.textInputSourceId &&
-      availableTextSources(nodes, target.id).some((node) => node.id === connection.source);
+    if (!target) return false;
+    const compatible = availableTextSources(nodes, target.id).some((node) => node.id === connection.source);
+    if (connection.targetHandle === "model-input") return target.kind === "model" && compatible;
+    return isPlainNote(target) && !target.textInputSourceId && compatible;
   }, [store]);
 
   const onSelectionChange = useCallback(
