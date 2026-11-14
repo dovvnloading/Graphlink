@@ -38,10 +38,11 @@ def test_selected_columns_drive_independent_consumers_and_handle_reordering_and_
     assert chart.state.chart_data["values"] == [0.3, 4]
 
 
+# Give the 256k-character case a short ID: PYTEST_CURRENT_TEST has a 32,767-character limit on Windows.
 @pytest.mark.parametrize("text", [
     "A,A\n1,2", "A,\n1,2", "A,B\n1", "A,B", 'A,B\n1,"unclosed', "one column\n1",
     "A,B\n1,2\n\n", "A,B\x00\n1,2", "A,B\n" + "x" * tables.MAX_TABLE_CHARS,
-])
+], ids=lambda text: "oversized-csv" if len(text) > 1_000 else None)
 def test_invalid_csv_never_creates_or_modifies_a_table(text):
     doc = SceneDocument()
     with pytest.raises(SceneError):
