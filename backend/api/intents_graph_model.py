@@ -9,11 +9,14 @@ separate approval, spending and reconciliation protocols.
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlsplit
 
 import api_provider
 from backend.api.intents_graph_runner import _digest, _public_run, _public_step
@@ -28,6 +31,17 @@ from graphlink_task_config import LOCAL_PROVIDER_OLLAMA, TASK_CHAT
 
 _MAX_INPUT_BYTES = 65536
 _MAX_OUTPUT_CHARS = 200000
+_MODEL_ID = re.compile(r"[A-Za-z0-9._:/@+-]{1,192}")
+
+
+def _require_loopback_ollama() -> None:
+    """Ollama's SDK obeys OLLAMA_HOST; local-only must mean loopback."""
+    configured = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+    url = configured if "://" in configured else f"http://{configured}"
+    parsed = urlsplit(url)
+    if (parsed.scheme not in {"http", "https"} or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+            or parsed.username or parsed.password or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+        raise SceneError("This graph model step requires a loopback Ollama endpoint; check OLLAMA_HOST.")
 
 
 @dataclass
@@ -50,8 +64,9 @@ def model_step_preview(
     """Validate and freeze what a one-shot model call would consume and replace."""
     if provider != LOCAL_PROVIDER_OLLAMA:
         raise SceneError("Graph Runner currently permits only explicitly selected local Ollama models.")
-    if not isinstance(model_id, str) or not model_id or len(model_id) > 192:
-        raise SceneError("Choose an installed Ollama model ID (1–192 characters).")
+    if not isinstance(model_id, str) or not _MODEL_ID.fullmatch(model_id):
+        raise SceneError("Choose a valid installed Ollama model ID (1–192 safe characters).")
+    _require_loopback_ollama()
     if source_id == target_id:
         raise SceneError("A model's source and output must be different nodes.")
     source_text = document._text_output(source_id)
@@ -152,7 +167,8 @@ def register_graph_model_runner(
             # A fixed ModelRef means no auto-selection or cross-provider
             # fallback. Only local Ollama is allowed until approval and cost
             # policy are implemented for paid cloud models.
-            kwargs = {"model_ref": ModelRef(selection.provider, selection.modelId)}
+            _require_loopback_ollama()
+            kwargs: dict[str, Any] = {"model_ref": ModelRef(selection.provider, selection.modelId)}
             if provider_runtime is not None:
                 kwargs["runtime"] = provider_runtime
             return await asyncio.to_thread(
