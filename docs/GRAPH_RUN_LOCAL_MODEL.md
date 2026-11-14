@@ -1,10 +1,12 @@
 # Graph Runner: explicit local model step (first model execution slice)
 
 This slice builds on the crash-safe external dispatch journal. It adds an
-**opt-in one-shot Ollama model call** from a saved text node into an existing
-plain note. It does not yet introduce a reusable Model node, a model/dataflow
-edge, independent cloud credential profiles, paid-provider approvals, or
-tool execution.
+**opt-in Ollama model call** from a saved text node into an existing plain note.
+Graph Runner can now also save that text-to-text model connection across
+workspaces, track freshness and rerun it explicitly. It does not yet introduce
+a standalone Model node, an automatically scheduled model/dataflow DAG,
+independent cloud credential profiles, paid-provider approvals, or tool
+execution. See [the persisted binding contract](GRAPH_RUN_MODEL_BINDINGS.md).
 
 ## Try it
 
@@ -15,11 +17,15 @@ tool execution.
    and a second **unbound plain note** to receive the answer.
 3. Open **Plugins → Graph Runner**, expand **Run a local model into a note**,
    choose the source and output note, and type the exact installed model ID.
-4. Choose **Preview model step**. Review the selected source, destination,
+4. Optionally choose **Save model connection**. This only saves the typed,
+   versioned text-to-text connection; it does **not** run Ollama. After saving
+   and reopening the workspace, select it from **Saved model connections**.
+   You can disconnect it without deleting the existing output text.
+5. Choose **Preview model step**. Review the selected source, destination,
    model and non-secret input fingerprint.
-5. Choose **Run local model**. A request fence is checkpointed in SQLite
-   before Ollama is called. The model's response becomes an undoable edit
-   of the destination note. The output and completed receipt save together.
+6. Choose **Run local model**. A request fence is checkpointed in SQLite
+   before Ollama is called. The model's response and the source/output
+   provenance become one undoable edit, saved with the completed receipt.
 
 The preview does not send a request. Nothing runs automatically when a source
 is edited. Only local Ollama endpoints are accepted, and `localhost` is
@@ -58,8 +64,8 @@ reconciliation.
 
 ## Next steps
 
-Turn the one-shot model step into an explicit typed, versioned graph binding;
-add multi-step planning for model outputs without speculative preview text;
+The first typed, versioned model-to-note binding is now saved and reloadable;
+next add multi-step planning for model outputs without speculative preview text;
 enforce separate per-call provider profiles and budgets; add explicit
 approval and remote-side idempotency/reconciliation for paid services; add
 write-capable tools with their own consent and isolation rules.
