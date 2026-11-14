@@ -17,7 +17,7 @@ from backend.chat_library import load_chat_row
 from backend.domain.model import SceneError
 from backend.domain.node_states import ModelState
 from backend.domain.graph_runner import plan_graph_run
-from backend.events import SessionBus
+from backend.events import IntentValidationError, SessionBus
 from backend.tests.test_graph_model_intents import session
 from backend import chat_library
 from graphlink_task_config import LOCAL_PROVIDER_OLLAMA
@@ -143,6 +143,29 @@ def test_an_ambiguous_model_call_blocks_dependents_but_other_branch_finishes(tmp
         assert len([s for s in resume["steps"] if s.get("externalAttempt")]) == 1
         assert old
         assert doc.nodes[target.id].content == "Add note..."
+
+    asyncio.run(scenario())
+
+
+def test_canvas_port_rebinding_is_undoable_and_rejects_cycles(tmp_path):
+    async def scenario():
+        _path, _bus, doc, source, _target, send = session(tmp_path)
+        first = await send("addModelNode", source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        second = await send("addModelNode", first, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        configured = await send("connectModelInput", source.id, second)
+        assert doc.nodes[second].state.model_binding.source_id == source.id
+        assert next(row for row in configured if row["targetId"] == second)["sourceId"] == source.id
+        assert doc.nodes[second].item_ids == [source.id]
+        doc.undo()
+        assert doc.nodes[second].state.model_binding.source_id == first
+        doc.redo()
+        assert doc.nodes[second].state.model_binding.source_id == source.id
+        await send("connectModelInput", first, second)
+        with pytest.raises(IntentValidationError, match="cycle"):
+            await send("connectModelInput", second, first)
+        assert doc.nodes[first].state.model_binding.source_id == source.id
+        assert doc.nodes[second].state.model_binding.source_id == first
+        assert not doc.edges
 
     asyncio.run(scenario())
 
