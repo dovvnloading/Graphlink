@@ -158,6 +158,17 @@ export interface OrganizationPreview {
 
 export type EdgeRole = "legacy" | "primary" | "secondary" | "reference" | "association";
 
+export interface GraphRunExternalAttempt {
+  requestId: string;
+  kind: "model" | "tool";
+  provider: string;
+  model: string;
+  tool: string;
+  inputRef: string;
+  inputHash: string;
+  phase: "dispatched" | "completed" | "reconciliation-required";
+}
+
 export interface GraphRunStep {
   nodeId: string;
   sourceId: string;
@@ -168,6 +179,7 @@ export interface GraphRunStep {
   detail: string;
   inputHash?: string;
   outputHash?: string;
+  externalAttempt?: GraphRunExternalAttempt;
 }
 
 export interface GraphRunPreview {
