@@ -51,6 +51,7 @@ def test_external_attempt_checkpoint_precedes_any_dispatch_and_receipt_is_atomic
 
         async def checkpoint():
             snapshots.append(copy.deepcopy(step))
+            return True
 
         async def invoke(request_id):
             assert len(snapshots) == 1
@@ -107,6 +108,31 @@ def test_persistence_failure_prevents_dispatch_and_does_not_leave_a_false_receip
     asyncio.run(scenario())
 
 
+def test_false_checkpoint_does_not_send_a_request():
+    async def scenario():
+        step = sample_step()
+        called = []
+
+        async def checkpoint():
+            return False
+
+        async def invoke(request_id):
+            called.append(request_id)
+
+        async def apply(_response):
+            return digest("unused")
+
+        with pytest.raises(SceneError, match="not confirmed"):
+            await dispatch_external_attempt(
+                step, sample_call(step), checkpoint=checkpoint,
+                invoke=invoke, apply_result=apply,
+            )
+        assert called == [] and step["status"] == "pending"
+        assert "externalAttempt" not in step
+
+    asyncio.run(scenario())
+
+
 def test_timeout_is_not_a_retryable_failure_and_keeps_the_request_identity():
     async def scenario():
         step = sample_step()
@@ -115,6 +141,7 @@ def test_timeout_is_not_a_retryable_failure_and_keeps_the_request_identity():
 
         async def checkpoint():
             snapshots.append(copy.deepcopy(step))
+            return True
 
         async def invoke(request_id):
             sent.append(request_id)
@@ -154,6 +181,7 @@ def test_cancellation_during_remote_call_marks_request_uncertain():
 
         async def checkpoint():
             snapshots.append(copy.deepcopy(step))
+            return True
 
         async def invoke(_request_id):
             in_call.set()
@@ -190,6 +218,7 @@ def test_failed_final_receipt_checkpoint_never_replays_the_remote_side_effect():
             if checkpoint_count == 2:
                 raise OSError("output + receipt did not commit")
             durable.append(copy.deepcopy(step))
+            return True
 
         async def invoke(_request_id):
             return "remote result"
