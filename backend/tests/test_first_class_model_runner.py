@@ -206,6 +206,31 @@ def test_canvas_port_rebinding_is_undoable_and_rejects_cycles(tmp_path):
     asyncio.run(scenario())
 
 
+def test_committed_model_text_can_feed_local_steps_while_ollama_is_offline(tmp_path, monkeypatch):
+    from backend.domain.nodes_content import _text_digest
+
+    async def scenario():
+        _path, _bus, doc, source, target, send = session(tmp_path)
+        model_id = await send("addModelNode", source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
+        node = doc.nodes[model_id]
+        node.content = "Saved model answer"
+        node.state.model_binding.last_input_hash = _text_digest(source.content)
+        node.state.model_binding.last_output_hash = _text_digest(node.content)
+        doc.bind_note_text_input(model_id, target.id, "word_count")
+        # A remote/unusable OLLAMA_HOST must not block purely deterministic
+        # work that consumes a *committed*, current model output.
+        monkeypatch.setenv("OLLAMA_HOST", "http://provider.example:11434")
+        preview = await send("previewGraphRun", [])
+        assert [step["status"] for step in preview["steps"]] == ["current", "ready"]
+        run = await send("executeGraphRun", [], preview["previewToken"], "offline-local-transform")
+        assert run["status"] == "completed"
+        assert [step["status"] for step in run["steps"]] == ["current", "completed"]
+        assert doc.nodes[target.id].content == "3"
+        assert not any("externalAttempt" in step for step in run["steps"])
+
+    asyncio.run(scenario())
+
+
 def test_model_output_edited_mid_inference_is_not_overwritten(tmp_path, monkeypatch):
     async def scenario():
         _path, _bus, doc, source, _target, send = session(tmp_path)
