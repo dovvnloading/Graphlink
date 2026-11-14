@@ -192,6 +192,17 @@ def register_graph_model_runner(
 
         async def apply_result(payload: Any) -> str:
             text = _response_text(payload)
+            # Other canvas intents can edit notes while an Ollama request
+            # awaits its answer. Never silently replace work the user wrote
+            # since the preview, or publish a response for a now-changed
+            # source as though it reflected the current text.
+            if _text_digest(document._text_output(selection.sourceId)) != step["inputHash"]:
+                raise SceneError("The source changed during inference; the model reply was not applied.")
+            target = document._plain_note(selection.targetId)
+            if target.state.text_input_source_id or target.state.table_output is not None:
+                raise SceneError("The output note acquired another input; the model reply was not applied.")
+            if _text_digest(target.content) != step["targetHash"]:
+                raise SceneError("The output note was edited during inference; the model reply was not applied.")
             # We are still inside the session mutation guard. The output,
             # undo record and completion receipt persist in one graph save.
             document.record_command(
