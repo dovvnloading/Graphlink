@@ -89,6 +89,12 @@ class ConfigureModelNodeArgs(CreateModelNodeArgs):
     targetId: str
 
 
+@dataclass
+class ConnectModelInputArgs:
+    sourceId: str
+    targetId: str
+
+
 def model_step_preview(
     document: SceneDocument, source_id: str, target_id: str, provider: str, model_id: str,
 ) -> tuple[str, dict[str, str], str]:
@@ -366,6 +372,24 @@ def register_graph_model_runner(
         await bus.publish("scene")
         return await get_graph_model_bindings()
 
+    async def connect_model_input(source_id: str, target_id: str):
+        """A typed canvas-port connection reuses the target's pinned model."""
+        node = document.nodes.get(target_id)
+        if node is None or node.kind != "model" or not isinstance(node.state, ModelState):
+            raise IntentValidationError(["Connect a text output to a Model input port."])
+        binding = node.state.model_binding
+        try:
+            document.record_command(
+                "connectModelInput", "user",
+                lambda: document.configure_model_node(target_id, source_id, binding.provider_name, binding.model_id),
+                node_ids=(target_id,),
+            )
+        except SceneError as exc:
+            raise IntentValidationError([str(exc)]) from exc
+        await bus.publish("scene")
+        return await get_graph_model_bindings()
+
+    bus.register_intent("scene", "connectModelInput", connect_model_input, args_schema=ConnectModelInputArgs)
     bus.register_intent("scene", "addModelNode", add_model_node, args_schema=CreateModelNodeArgs)
     bus.register_intent("scene", "configureModelNode", configure_model_node, args_schema=ConfigureModelNodeArgs)
     bus.register_intent("scene", "getGraphModelBindings", get_graph_model_bindings)
