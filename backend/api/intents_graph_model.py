@@ -90,11 +90,11 @@ def model_step_preview(
     if target.state.text_input_source_id or target.state.table_output is not None:
         raise SceneError("Choose an unbound plain note for the model output.")
     binding = target.state.model_text_input
-    if binding is not None and (binding.source_id, binding.provider, binding.model_id) != (source_id, provider, model_id):
+    if binding is not None and (binding.source_id, binding.provider_name, binding.model_id) != (source_id, provider, model_id):
         raise SceneError("This note has a different saved model connection. Save the new connection first.")
     # A reusable binding is not permission to consume obsolete upstream model
     # replies; explicit re-execution of that upstream model is required.
-    document.require_current_model_source(source_id)
+    document.require_current_model_source(source_id, check_text_inputs=True)
     if not source_text.strip() or len(source_text.encode("utf-8", errors="surrogatepass")) > _MAX_INPUT_BYTES:
         raise SceneError("Model input must contain text and be at most 64 KiB.")
     fingerprint = _text_digest(source_text)
@@ -220,7 +220,7 @@ def register_graph_model_runner(
             current_binding = target.state.model_text_input
             if ((current_binding.binding_id if current_binding is not None else "") != pinned_binding_id or
                     (current_binding is not None and
-                     (current_binding.source_id, current_binding.provider, current_binding.model_id) !=
+                     (current_binding.source_id, current_binding.provider_name, current_binding.model_id) !=
                      (selection.sourceId, selection.providerName, selection.modelId))):
                 raise SceneError("The saved model connection changed during inference; the reply was not applied.")
             if _text_digest(target.content) != step["targetHash"]:
@@ -297,7 +297,7 @@ def register_graph_model_runner(
             binding = node.state.model_text_input
             rows.append({
                 "targetId": node.id, "sourceId": binding.source_id,
-                "provider": binding.provider, "modelId": binding.model_id,
+                "provider": binding.provider_name, "modelId": binding.model_id,
                 "version": binding.version, "inputType": "text", "outputType": "text",
                 "status": document.model_input_status(node.id),
             })
