@@ -17,6 +17,8 @@ The caller must:
    entering the helper. The helper does not authorize or execute by itself.
 3. Hold the graph mutation guard and supply a checkpoint callback that saves
    the graph and run journal in the **same durable SQLite transaction**.
+   The callback must return `True` only after a confirmed commit; `False`
+   or an exception forbids dispatch.
 4. Invoke the selected adapter exactly once using the recorded request ID.
    An adapter may pass that ID as an idempotency key **only if its provider
    explicitly supports the appropriate semantics**. Recording the ID does not
