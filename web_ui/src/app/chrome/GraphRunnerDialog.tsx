@@ -209,7 +209,7 @@ function Runner({ store }: { store: SceneStore }) {
         <button type="button" className="appbar-btn" disabled={!!busy || !modelSourceId || !modelTargetId || !modelId.trim()}
           onClick={previewLocalModel}>Preview model step</button>
       </div>
-      <p className="runner-note">This sends the selected text to an Ollama model you run locally. Cloud models and tools are not enabled in Graph Runner.</p>
+      <p className="runner-note">This sends text to your Ollama daemon over loopback. Verify custom model aliases are local: Ollama itself can route an alias to cloud. Graph Runner does not directly call cloud providers or external tools.</p>
       {modelPreview && <section aria-label="Model preview">
         <RunSteps steps={modelPreview.steps} names={names} />
         <div className="runner-commit">
