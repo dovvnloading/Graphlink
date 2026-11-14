@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from backend.domain.graph import SceneDocument
+from backend.domain.graph_run_external import RECONCILIATION_DETAIL
 from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID
 from backend.domain.graph_runner import execute_graph_step, plan_graph_run, validate_graph_run_ancestors
 from backend.domain.model import SceneError
@@ -44,7 +45,7 @@ def _digest(payload: Any) -> str:
     return hashlib.sha256(encoded.encode("ascii")).hexdigest()
 
 
-def _public_step(step: dict[str, str]) -> dict[str, str]:
+def _public_step(step: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in step.items() if key not in {"targetHash", "configHash"}}
 
 
@@ -115,6 +116,20 @@ def register_graph_runner(
             for step in run["steps"]:
                 if step["status"] != "pending":
                     continue
+                if "externalAttempt" in step:
+                    # A recovered outbound request cannot pass through the
+                    # deterministic transform runner or be sent a second time.
+                    step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
+                    await checkpoint()
+                    await bus.publish("scene")
+                    continue
+                if step["kind"] in {"model", "tool"}:
+                    # Adapters do not exist yet. Never fall through to local
+                    # note/table evaluation or accidentally dispatch a call.
+                    step.update(status="blocked", detail="No external Graph Runner adapter is configured.")
+                    await checkpoint()
+                    await bus.publish("scene")
+                    continue
                 try:
                     validate_graph_run_ancestors(document, step, by_node_id)
                     digest, _ = document.record_command(
@@ -133,7 +148,13 @@ def register_graph_runner(
                     # The live graph retains both output and receipt on a failed
                     # disk write; keep other attached canvases in sync with it.
                     await bus.publish("scene")
-            run["status"] = "partial" if any(s["status"] in {"blocked", "failed"} for s in run["steps"]) else "completed"
+            if any(s["status"] == "reconciliation-required" for s in run["steps"]):
+                run["status"] = "reconciliation-required"
+            else:
+                run["status"] = (
+                    "partial" if any(s["status"] in {"blocked", "failed"} for s in run["steps"])
+                    else "completed"
+                )
             await checkpoint()
             terminal_saved = True
             return _public_run(run)
@@ -187,7 +208,14 @@ def register_graph_runner(
         if run is None:
             raise IntentValidationError(["This run does not belong to the open graph."])
         if run["status"] == "interrupted":
+            # Retry the terminal status checkpoint even when all individual
+            # outputs were already committed; no step will be rerun.
             return await drive(run)
+        if run["status"] == "reconciliation-required":
+            # An uncertain remote step remains excluded (only 'pending'
+            # steps run). Independent local pending steps may still finish.
+            if any(step["status"] == "pending" for step in run["steps"]):
+                return await drive(run)
         return _public_run(run)
 
     async def resume_graph_run(run_id: str):
