@@ -81,6 +81,11 @@ def model_step_preview(
         raise SceneError("Graph Runner currently permits only explicitly selected local Ollama models.")
     if not isinstance(model_id, str) or not _MODEL_ID.fullmatch(model_id):
         raise SceneError("Choose a valid installed Ollama model ID (1–192 safe characters).")
+    # Ollama's local daemon can itself proxy explicit cloud model variants.
+    # Reject their recognizable IDs even though this client only speaks to
+    # loopback; a custom alias may still require user-side verification.
+    if model_id.lower().endswith(("-cloud", ":cloud")):
+        raise SceneError("Cloud-backed Ollama models are not allowed in this local Graph Runner step.")
     endpoint = _require_loopback_ollama()
     if source_id == target_id:
         raise SceneError("A model's source and output must be different nodes.")
