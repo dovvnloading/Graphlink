@@ -148,6 +148,8 @@ def _intents_payload(host: HostContext) -> list:
     payload = []
     for spec in host._intents:
         entry: dict[str, Any] = {"name": spec.name}
+        if not spec.expose_to_builder:
+            entry["expose_to_builder"] = False
         if spec.args_schema is not None:
             entry["args_schema"] = json_schema_for(spec.args_schema)
         payload.append(entry)

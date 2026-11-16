@@ -133,6 +133,10 @@ def _schema_for_annotation(annotation: Any, *, path: str) -> dict[str, Any]:
     # bool must be checked before int: bool is a subclass of int in Python, and
     # dict lookup by identity happens to work here, but being explicit stops a
     # future refactor to isinstance-based dispatch from silently mistyping it.
+    # An opaque JSON object is used by the plugin dispatcher. Its selected
+    # operation validates the keys and values in a second, typed stage.
+    if inner is dict:
+        return {"type": "object"}
     if inner in _PRIMITIVES:
         return {"type": _PRIMITIVES[inner]}
 
@@ -257,6 +261,8 @@ def validate_payload(payload: Any, dataclass_type: type, *, _path: str = "$") ->
 def _validate_value(value: Any, annotation: Any, *, path: str) -> list[str]:
     inner, _ = _unwrap_optional(annotation)
 
+    if inner is dict:
+        return [] if isinstance(value, dict) else [f"{path}: expected object, got {type(value).__name__}"]
     if inner is bool:
         return [] if isinstance(value, bool) else [f"{path}: expected boolean, got {type(value).__name__}"]
     if inner is str:

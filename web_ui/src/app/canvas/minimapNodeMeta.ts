@@ -1,3 +1,4 @@
+import { isScienceKind } from "./scientificScene";
 import type { SceneNodeRow } from "../../lib/bridge-core/generated/scene-state";
 
 /** How a node is drawn on the map. */
@@ -38,7 +39,7 @@ const CATEGORY_BY_KIND: Record<string, MinimapCategory> = {
 /** Unknown kinds fall back rather than vanishing: a node the map cannot
  *  classify is still a node whose position matters. */
 export function minimapCategory(kind: string): MinimapCategory {
-  return CATEGORY_BY_KIND[kind] ?? "conversation";
+  return isScienceKind(kind) ? "tool" : CATEGORY_BY_KIND[kind] ?? "conversation";
 }
 
 /**

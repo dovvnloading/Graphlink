@@ -20,7 +20,7 @@ import { BridgeErrorState } from "../../lib/ui/BridgeErrorState";
 import {
   ArtifactNodeView, ChartNodeView, ChatNodeView, CodeNodeView, CodeReviewNodeView,
   CodeSandboxNodeView, ConversationNodeView, DocumentNodeView, GitlinkNodeView,
-  GroupNodeView, HarnessNodeView, HtmlNodeView, ImageNodeView, FalMediaNodeView, NoteNodeView,
+  GroupNodeView, HarnessNodeView, HtmlNodeView, ImageNodeView, FalMediaNodeView, NoteNodeView, ScientificNodeView,
   PlaceholderNodeView, PlanNodeView, ThinkingNodeView, WebResearchNodeView, ModelNodeView,
 } from "./lazyNodeViews";
 import type { ArtifactFlowNode } from "./ArtifactNodeView";
@@ -38,6 +38,8 @@ import type { ImageFlowNode } from "./ImageNodeView";
 import type { MediaMode } from "./falMediaStudioModel";
 import type { FalMediaFlowNode } from "./FalMediaNodeView";
 import type { NoteFlowNode } from "./NoteNodeView";
+import type { ScientificFlowNode } from "./ScientificNodeView";
+import { scientificFlowNode, isScienceKind } from "./scientificScene";
 import type { ModelFlowNode } from "./ModelNodeView";
 import { availableTextSources, isPlainNote, textSourceLabel, TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE, type TextInputOperation } from "./textInputs";
 import type { ConnectionRole } from "./connections/connectionAppearance";
@@ -97,6 +99,7 @@ export type SceneFlowNode =
   | CodeSandboxFlowNode
   | NoteFlowNode
   | ModelFlowNode
+  | ScientificFlowNode
   | GroupFlowNode
   | ChartFlowNode
   | PlanFlowNode
@@ -119,6 +122,7 @@ const NODE_TYPES = {
   code_sandbox: CodeSandboxNodeView,
   note: NoteNodeView,
   model: ModelNodeView,
+  scientific: ScientificNodeView,
   // R6.1: one shared component backs both "frame" and "container" NODE_TYPES
   // entries - see GroupNodeView.tsx's own module doc for why a single
   // data.groupKind-parameterized component was chosen over two near-
@@ -450,6 +454,7 @@ export const FILTERABLE_NODE_KINDS = [
   "note",
   "chart",
   "harness",
+  "scientific",
 ] as const;
 
 /**
@@ -479,7 +484,7 @@ export function computeFilteredOutNodeIds(
   if (filterKinds.size === 0 && filterStatuses.size === 0) return excluded;
   for (const node of scene.nodes) {
     if (node.kind === "frame" || node.kind === "container") continue;
-    const kindExcluded = filterKinds.size > 0 && !filterKinds.has(node.kind);
+    const kindExcluded = filterKinds.size > 0 && !filterKinds.has(isScienceKind(node.kind) ? "scientific" : node.kind);
     const statusExcluded = filterStatuses.size > 0 && !filterStatuses.has(node.branchStatus);
     if (kindExcluded || statusExcluded) excluded.add(node.id);
   }
@@ -1109,7 +1114,7 @@ export function toFlowNodes(
   // scans that used to live below (dockedChildren's full scene.edges scan
   // per chat node; the code branch's scene.edges.find per code node) - see
   // buildSceneIndexes' own doc above for the full reasoning.
-  const { nodesById, edgesBySource } = buildSceneIndexes(scene);
+  const { nodesById, edgesBySource, edgesByTarget } = buildSceneIndexes(scene);
   const canonicalParents = canonicalParentEdges(scene);
   // Collapsed frames/containers are proxies for their transitive members;
   // never mount the hidden cards independently behind their collapsed pill.
@@ -2048,6 +2053,10 @@ export function toFlowNodes(
       };
       cache.flowNodes.set(n, { extraSig, flowNode });
       flowNodes.push(flowNode);
+      continue;
+    }
+    if (isScienceKind(n.kind)) {
+      flowNodes.push(scientificFlowNode(n, edgesByTarget.get(n.id) ?? [], nodesById, store, cache, isDimmed(n.id) ? BRANCH_DIM_OPACITY : 1));
       continue;
     }
     // Fallback placeholder - unreachable in practice given the exhaustive

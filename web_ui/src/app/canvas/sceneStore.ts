@@ -29,6 +29,7 @@ import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
 import type { ScenePatch, StreamListener, WsTransport } from "../../lib/ws/transport";
 import type { BridgeRejection } from "../../lib/bridge-core/islandState";
+import type { Sources } from "./scientificWorkbench";
 import { announce } from "../announcer";
 import { describeNodeRunTransition } from "./nodeRunAnnouncements";
 
@@ -1629,6 +1630,18 @@ export class SceneStore {
   addNote(x: number, y: number, options: { isSystemPrompt?: boolean; isSummaryNote?: boolean } = {}): void {
     const { isSystemPrompt = false, isSummaryNote = false } = options;
     this.transport.fireIntent("scene", "addNote", [x, y, isSystemPrompt, isSummaryNote]);
+  }
+
+  async runScientificOperation(pluginId: string, nodeId: string, operationId: string,
+    inputs: Record<string, unknown>, sources: Sources): Promise<void> {
+    const answer = await this.transport.request("app-plugins", "invokePluginIntent", [
+      pluginId, "run", { node_id: nodeId, operation_id: operationId, inputs, sources },
+    ]);
+    if (answer && typeof answer === "object" && "ok" in answer && answer.ok === true) return;
+    if (answer && typeof answer === "object" && "error" in answer && typeof answer.error === "string") {
+      throw new Error(answer.error);
+    }
+    throw new Error("The calculation did not run. Check the plugin grant in Settings and the notification banner.");
   }
 
   addTable(): void {

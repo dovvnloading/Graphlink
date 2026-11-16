@@ -179,3 +179,6 @@ export const ThinkingNodeView = withNodeSuspense(
 export const WebResearchNodeView = withNodeSuspense(
   lazy(() => import("./WebResearchNodeView").then((m) => ({ default: m.WebResearchNodeView }))),
 );
+export const ScientificNodeView = withNodeSuspense(
+  lazy(() => import("./ScientificNodeView").then((m) => ({ default: m.ScientificNodeView }))),
+);

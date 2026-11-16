@@ -1,0 +1,13 @@
+[plugin]
+id = "science_earth"
+name = "Earth Science"
+description = "Analyze spherical distances, geothermal gradients and seismic arrival times."
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+
+[scopes]
+grants = ["graph.read", "graph.mutate"]
+
+[frontend]
+view = "generic"

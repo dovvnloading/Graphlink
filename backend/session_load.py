@@ -182,6 +182,7 @@ literal values for the same concept):
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import math
 import re
@@ -216,6 +217,7 @@ from backend.domain.table_workflows import restore_table_data
 from backend.domain.graph_run_history import restore_graph_runs
 from backend.domain.node_states import (
     ARTIFACT_MAX_CHARS, ChartState, FrameState, NoteState, FalMediaState, ModelState, ModelTextBinding,
+    NodeState, PersistedPluginState,
 )
 from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
@@ -1091,32 +1093,48 @@ def _restore_plugin_payload(
     node_type (skipped, not resurrected from a bare payload string with no
     validation).
 
-    ADR-014 review-fix: `settings_manager`, when given, gates the
-    kind_spec.deserialize(plugin_state) call on settings_manager.
-    get_plugin_grants() - the load-side mirror of session_save.py's
-    _serialize_plugin_node's own new grant check, see that function's
-    docstring for the full contract. `None` (this parameter's own default)
-    preserves the exact prior ungated behavior. A denied/ungranted node
-    still restores with its universal title/content fields; it just comes
-    back without its custom state for this one load, the same degrade this
-    function already applies when deserialize itself raises or the kind
-    dropped its opt-in entirely."""
+    A grant is required to invoke the extension deserializer. Externalizable
+    state survives an unavailable plugin hook or asset as passive host data
+    so that a later save and reload can recover it. Other plugins retain the
+    original title/content-only fallback.
+    """
     x, y = _position(payload)
     kind = str(payload.get("node_type", "") or "")
     title = str(payload.get("title", "") or kind)
     content = str(payload.get("content", "") or "")
-    state = None
+    state: NodeState | None = None
     granted = (
         settings_manager is None
         or settings_manager.get_plugin_grants().get(kind_spec.plugin_id, False)
     )
-    if granted and kind_spec.deserialize is not None:
-        plugin_state = payload.get("plugin_state")
-        if isinstance(plugin_state, dict):
+    plugin_state = payload.get("plugin_state")
+    descriptor = payload.get("plugin_state_asset")
+    if isinstance(descriptor, dict):
+        ref = descriptor.get("asset_ref")
+        if isinstance(ref, str) and re.fullmatch(r"[0-9a-f]{64}", ref):
+            asset_store = _ACTIVE_ASSET_STORE.get()
+            raw = asset_store.get(ref) if asset_store is not None else None
             try:
-                state = kind_spec.deserialize(plugin_state)
+                decoded = json.loads(raw) if raw is not None else None
+            except (ValueError, RecursionError):
+                decoded = None
+            if isinstance(decoded, dict):
+                plugin_state = decoded
+            else:
+                # Preserve even a temporarily unreadable or corrupt ref. A
+                # later load from a repaired store recovers the original state.
+                state = PersistedPluginState(unresolved_asset_ref=ref)
+                plugin_state = None
+    if isinstance(plugin_state, dict):
+        if kind_spec.externalize_state or isinstance(descriptor, dict):
+            state = PersistedPluginState(data=plugin_state)
+        if granted and kind_spec.deserialize is not None:
+            try:
+                restored = kind_spec.deserialize(plugin_state)
+                if restored is not None:
+                    state = restored
             except Exception:
-                state = None
+                logger.warning("plugin node %s: deserialize hook raised", kind, exc_info=True)
     return SceneNode(
         id="", x=x, y=y, title=title, kind=kind, content=content, state=state,
         is_collapsed=bool(payload.get("is_collapsed", False)),

@@ -49,6 +49,18 @@ class NodeState:
 
 
 @dataclass
+class PersistedPluginState(NodeState):
+    """Host-owned compact JSON state that remains saveable after grant revocation.
+
+    Keep the saved representation current when committing a plugin operation.
+    The host carries an unreadable reference intact for recovery on a later load.
+    """
+
+    data: dict = field(default_factory=dict)
+    unresolved_asset_ref: str = ""
+
+
+@dataclass
 class ModelState(NodeState):
     """Executable text Model card; one named text input and one text output.
 

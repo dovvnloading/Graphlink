@@ -1435,15 +1435,13 @@ function PluginsPage({ grants, transport }: { grants: AppPluginGrant[]; transpor
   return (
     <div className="settings-general-page">
       <p className="settings-integrations-intro">
-        Discovered third-party plugins are not granted by default. A plugin listed here cannot create nodes or run
-        its intents until you check "Granted" for it - built-in plugins ship with the app and are never listed or
-        gated here.
+        Grant a plugin to create its nodes and run its actions. Each scientific workbench pack has its own grant.
       </p>
 
       <fieldset className="settings-fieldset">
         <legend>Discovered Plugins</legend>
         {grants.length === 0 && (
-          <p className="settings-update-status">No third-party plugins need a grant right now.</p>
+          <p className="settings-update-status">No discovered plugins need a grant right now.</p>
         )}
         {grants.map((grant) => (
           <div className="settings-mcp-server-row" key={grant.pluginId}>

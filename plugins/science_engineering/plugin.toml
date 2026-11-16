@@ -1,0 +1,13 @@
+[plugin]
+id = "science_engineering"
+name = "Engineering"
+description = "Evaluate resistor networks, RC step response and thermal expansion."
+version = "1.0.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+
+[scopes]
+grants = ["graph.read", "graph.mutate"]
+
+[frontend]
+view = "generic"

@@ -362,6 +362,9 @@ class NodeKindSpec:
     # OWN NodeState subclass fields, beyond that baseline.
     serialize: NodeSerializeHook | None = None
     deserialize: NodeDeserializeHook | None = None
+    # In-process plugins may present a richer wire schema than they persist.
+    serialize_saved: NodeSerializeHook | None = None
+    externalize_state: bool = False
 
 
 @dataclass(frozen=True)
@@ -390,6 +393,14 @@ class PluginIntentSpec:
     # the real type does live. In-process specs leave this None and derive
     # the schema from args_schema directly (see intent_input_schema).
     args_json_schema: "dict | None" = None
+    expose_to_builder: bool = True
+
+
+@dataclass(frozen=True)
+class PluginSceneUpdate:
+    """A successful synchronous scene edit that needs publishing to subscribers."""
+
+    result: dict
 
 
 @dataclass(frozen=True)
@@ -531,6 +542,8 @@ class HostContext:
         requires_parent: bool = True,
         serialize: NodeSerializeHook | None = None,
         deserialize: NodeDeserializeHook | None = None,
+        serialize_saved: NodeSerializeHook | None = None,
+        externalize_state: bool = False,
     ) -> None:
         """Registers 'factory' as this plugin's creation primitive for
         'kind'. The kind actually stored (and later stamped onto
@@ -576,7 +589,14 @@ class HostContext:
             plugin's own NodeState subclass instance. A raised exception
             here is caught by the caller - the node still restores with
             its title/content, just without its extra state - never a
-            failed load."""
+            failed load.
+
+        In-process plugins can supply serialize_saved(node) for compact disk
+        state and externalize_state=True for content-addressed JSON above the
+        inline threshold. PersistedPluginState carries this compact data
+        through grant revocation without invoking either serializer. If the
+        asset is unavailable at load, its reference is retained on this state.
+        """
         if not kind or not all(c.isalnum() or c == "_" for c in kind):
             raise PluginRegistrationError(
                 f'plugin "{self.plugin_id}": invalid node kind "{kind}" '
@@ -591,6 +611,7 @@ class HostContext:
             plugin_id=self.plugin_id, kind=namespaced, factory=factory,
             requires_parent=requires_parent,
             serialize=serialize, deserialize=deserialize,
+            serialize_saved=serialize_saved, externalize_state=externalize_state,
         )
 
     def register_picker_entry(
@@ -692,6 +713,7 @@ class HostContext:
         self, name: str, handler: PluginIntentHandler, *,
         args_schema: "type | None" = None,
         args_json_schema: "dict | None" = None,
+        expose_to_builder: bool = True,
     ) -> None:
         """Declares one custom action beyond node creation. NOT used by the
         trivial demo plugin (node creation alone proves the loop) - included
@@ -732,7 +754,7 @@ class HostContext:
             )
         self._intents.append(PluginIntentSpec(
             plugin_id=self.plugin_id, name=name, handler=handler,
-            args_schema=args_schema, args_json_schema=args_json_schema,
+            args_schema=args_schema, args_json_schema=args_json_schema, expose_to_builder=expose_to_builder,
         ))
 
 
@@ -1484,6 +1506,7 @@ def _discover_out_of_process_plugin(
                 # stage 21.4: the worker generated this from its own
                 # dataclass; the host stores it purely to describe the tool.
                 args_json_schema=entry.get("args_schema"),
+                expose_to_builder=entry.get("expose_to_builder", True) is True,
             )
     except Exception:
         worker_client.close()
