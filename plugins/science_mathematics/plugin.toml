@@ -1,0 +1,16 @@
+[plugin]
+id = "science_mathematics"
+name = "Mathematics"
+description = "Evaluate polynomials, integrate samples and solve linear systems."
+version = "1.1.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+
+[scopes]
+grants = ["graph.read", "graph.mutate"]
+
+[frontend]
+view = "generic"
+
+[persistence]
+passive_node_kinds = ["workbench"]

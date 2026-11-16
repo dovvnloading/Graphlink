@@ -30,7 +30,6 @@ import { Composer } from "./chrome/Composer";
 import { ComposerStore } from "./chrome/composerStore";
 import { NotificationBanner } from "./chrome/NotificationBanner";
 import { OnboardingDialog } from "./chrome/OnboardingDialog";
-import { PluginPicker } from "./chrome/PluginPicker";
 import { OverlayProvider, useOverlays } from "./overlays/overlays";
 
 // ADR-011 stage 11.6: ChatLibraryDialog, HelpDialog (+ its 76-item static
@@ -77,6 +76,7 @@ const QuickSwitcherDialog = lazy(() =>
 );
 const SearchOverlay = lazy(() => import("./chrome/SearchOverlay").then((m) => ({ default: m.SearchOverlay })));
 const PinOverlay = lazy(() => import("./chrome/PinOverlay").then((m) => ({ default: m.PinOverlay })));
+const PluginPicker = lazy(() => import("./chrome/PluginPicker").then((m) => ({ default: m.PluginPicker })));
 const ViewPopover = lazy(() => import("./chrome/ViewPopover").then((m) => ({ default: m.ViewPopover })));
 
 /**
@@ -498,7 +498,9 @@ function App() {
                     <LazySurface overlayName="view" fallback={null}>
                       <ViewPopover store={sceneStore} />
                     </LazySurface>
-                    <PluginPicker transport={transport} store={sceneStore} />
+                    <LazySurface overlayName="plugins" fallback={null}>
+                      <PluginPicker transport={transport} store={sceneStore} />
+                    </LazySurface>
                     <div className="app-notification-layer">
                       <NotificationBanner store={composerStore} />
                     </div>

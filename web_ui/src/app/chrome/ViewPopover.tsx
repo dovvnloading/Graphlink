@@ -27,6 +27,7 @@ const FILTER_KIND_LABELS: Record<string, string> = {
   note: "Note",
   chart: "Chart",
   harness: "Agent",
+  scientific: "Scientific workbench",
 };
 
 // ADR-012 stage 12.5: mirrors backend/domain/branches.py's own

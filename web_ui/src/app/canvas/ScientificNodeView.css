@@ -1,0 +1,51 @@
+.scientific-node { width: 390px; max-width: none; }
+.scientific-node .science-body {
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px;
+  max-height: 550px;
+  overflow: auto;
+  cursor: default;
+  white-space: normal;
+}
+.science-body form, .science-body fieldset, .science-field, .science-body label, .science-results {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+.science-body form, .science-body fieldset, .science-results { gap: 10px; }
+.science-body fieldset, .science-body p, .science-body figure, .science-body dl, .science-body dd, .science-body h4 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.science-body :is(select, input, textarea, button) {
+  min-width: 0;
+  max-width: 100%;
+  color: inherit;
+  font: inherit;
+  background: var(--gl-surface-window);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: 4px;
+  padding: 4px 7px;
+}
+.science-body :is(input, textarea) { font-family: monospace; }
+.science-body textarea { resize: vertical; }
+.science-body button, .science-body summary { cursor: pointer; }
+.science-body button:disabled { opacity: .6; cursor: wait; }
+.science-body small, .science-body figcaption + span, .science-plot span { color: var(--gl-surface-text-secondary); }
+.science-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.science-actions .science-run { font-weight: 600; }
+.science-body [role="alert"] { color: var(--gl-status-danger, currentColor); }
+.science-results { padding-top: 10px; border-top: 1px solid var(--gl-surface-border); }
+.science-results dl > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, auto); gap: 10px; }
+.science-results dd, .science-table { font-variant-numeric: tabular-nums; }
+.science-results dd { text-align: end; }
+.science-results :is(dd, dt, pre, td, th) { overflow-wrap: anywhere; }
+.science-results pre { white-space: pre-wrap; font-size: .9em; }
+.science-plot { display: grid; gap: 3px; }
+.science-plot svg { width: 100%; }
+.science-plot span { font-size: .9em; }
+.science-table { max-height: 160px; overflow: auto; }
+.science-table table { border-collapse: collapse; width: 100%; text-align: start; }
+.science-table :is(td, th) { padding: 3px 5px; text-align: start; border-bottom: 1px solid var(--gl-surface-border); }

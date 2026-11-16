@@ -47,6 +47,7 @@ from backend.canvas import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.plugin_sdk import (
+    PluginSceneUpdate,
     PluginRegistry,
     PluginRunContext,
     PluginNodeSeed,
@@ -138,6 +139,10 @@ _CATEGORY_META = [
     {
         "name": "Validation & Delivery",
         "description": "Review and verification tools for understanding changes before they ship.",
+    },
+    {
+        "name": "Scientific Workbench",
+        "description": "Interactive measurement, analysis and visualization with reproducible local results.",
     },
 ]
 
@@ -527,18 +532,25 @@ async def _invoke_discovered_plugin_intent(
         await bus.publish("notification")
         return None
 
-    run_ctx = PluginRunContext(plugin_id=plugin_id, notifications=notifications)
+    run_ctx = PluginRunContext(
+        plugin_id=plugin_id, notifications=notifications,
+        is_plugin_granted=lambda target: _is_plugin_granted(settings_manager, target),
+    )
     if inspect.iscoroutinefunction(spec.handler):
-        return await spec.handler(canvas_document, run_ctx, *extra_args)
-    if plugin_id in plugin_registry.worker_clients:
+        result = await spec.handler(canvas_document, run_ctx, *extra_args)
+    elif plugin_id in plugin_registry.worker_clients:
         # The out-of-process wrapper only forwards JSON args, never uses
         # the live document or context. Move the blocking worker RPC off the
         # event loop while preserving synchronous in-process handlers.
         result = await asyncio.to_thread(spec.handler, canvas_document, run_ctx, *extra_args)
         if not _is_plugin_granted(settings_manager, plugin_id):
             return None  # grant revoked while the worker was responding
-        return result
-    return spec.handler(canvas_document, run_ctx, *extra_args)
+    else:
+        result = spec.handler(canvas_document, run_ctx, *extra_args)
+    if isinstance(result, PluginSceneUpdate):
+        await bus.publish("scene")
+        return result.result
+    return result
 
 
 def register_plugin_tools(
@@ -593,6 +605,8 @@ def register_plugin_tools(
     silently swallowed, so a real registration failure is still visible."""
     registered: list[str] = []
     for spec in plugin_registry.intents:
+        if not spec.expose_to_builder:
+            continue
         manifest = plugin_registry.manifests.get(spec.plugin_id)
         namespaced_name = f"plugin:{spec.plugin_id}:{spec.name}"
         try:
@@ -658,7 +672,7 @@ def _make_plugin_tool_handler(
         spec = next(
             (s for s in plugin_registry.intents if s.plugin_id == plugin_id and s.name == name), None,
         )
-        if spec is None:
+        if spec is None or not spec.expose_to_builder:
             return ToolResult(content=f'Unknown plugin intent: "{plugin_id}:{name}".', is_error=True)
         # ADR-021 stage 21.4: the model's arguments, validated against the
         # plugin's own declared schema. A validation failure comes back as
@@ -867,13 +881,15 @@ def register_plugins(
     # The SDK reservation handles cross-session/worker-thread coordination.
     grant_activation_lock = asyncio.Lock()
 
-    async def _publish_grant_change() -> None:
+    async def _publish_grant_change(plugin_id: str) -> None:
         try:
             from backend.session_context import get_session_context
             get_session_context(bus).agent_dispatcher.invalidate_builder_registry()
         except (LookupError, RuntimeError, AttributeError):
             pass  # isolated SessionBus tests have no SessionContext
         await bus.publish("app-plugins")
+        if any(node.kind.startswith(plugin_id + ".") for node in canvas_document.nodes.values()):
+            await bus.publish("scene")
 
     async def set_plugin_grant(plugin_id: str, granted: bool):
         plugin_id = str(plugin_id).strip()
@@ -888,7 +904,7 @@ def register_plugins(
                 )
                 for kind in retired_kinds:
                     canvas_document.plugin_node_serializers.pop(kind, None)
-                await _publish_grant_change()
+                await _publish_grant_change(plugin_id)
                 return
 
         # Approval's startup wait is OUTSIDE the grant lock. Otherwise the
@@ -941,6 +957,6 @@ def register_plugins(
                     canvas_document.plugin_node_serializers[kind] = _grant_gated_serialize(
                         kind_spec.plugin_id, kind_spec.serialize, settings_manager,
                     )
-            await _publish_grant_change()
+            await _publish_grant_change(plugin_id)
 
     bus.register_intent("app-plugins", "setPluginGrant", set_plugin_grant, args_schema=SetPluginGrantArgs)

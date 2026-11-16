@@ -126,9 +126,11 @@ from backend.domain.node_states import (
     ModelState,
     NoteState,
     PlanState,
+    PersistedPluginState,
+    PluginStateSnapshot,
     WebResearchState,
 )
-from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
+from backend.plugin_sdk import MAX_PLUGIN_STATE_BYTES, NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_settings_store import SettingsManager
 
 logger = logging.getLogger(__name__)
@@ -580,6 +582,31 @@ def _serialize_harness_node(raw_node: SceneNode) -> dict[str, Any]:
     }
 
 
+# Small states cost less inline than a separate fsync and filesystem entry.
+PLUGIN_STATE_INLINE_BYTES = 8 * 1024
+
+
+def _persist_plugin_state(payload, data, externalize):
+    """Emit either compact inline JSON or an archive/GC-compatible nested ref."""
+    if not externalize:
+        json.dumps(data)  # Legacy plugin save hooks keep their original JSON validation.
+        payload["plugin_state"] = data
+        return
+    encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    _persist_json_snapshot(payload, encoded)
+
+
+def _persist_json_snapshot(payload, text):
+    encoded = text.encode()
+    if len(encoded) > MAX_PLUGIN_STATE_BYTES:
+        raise ValueError("Plugin state exceeds the supported size.")
+    asset_store = _ACTIVE_SAVE_ASSET_STORE.get()
+    if asset_store is not None and len(encoded) >= PLUGIN_STATE_INLINE_BYTES:
+        payload["plugin_state_asset"] = {"asset_ref": asset_store.put(encoded), "mime_type": "application/json"}
+    else:
+        payload["plugin_state"] = json.loads(text)
+
+
 def _serialize_plugin_node(
     node: SceneNode,
     kind_spec: "NodeKindSpec | None",
@@ -603,62 +630,54 @@ def _serialize_plugin_node(
     restore the node at all; see session_load.py's own _restore_node), this
     function itself never drops a node outright.
 
-    When the plugin DID opt into HostContext.register_node_kind(...,
-    serialize=...), that hook's own dict is nested under 'plugin_state' -
-    deliberately isolated from the universal fields above so a raising or
-    non-JSON-serializable plugin serializer can never corrupt title/content/
-    is_collapsed sitting right next to it, and never abort the WHOLE save
-    (every other node on the canvas) either - it just drops its own extra
-    state for this one node, the same "one bad item never sinks everything"
-    posture every other per-kind serializer/restorer in this file and
-    session_load.py already keeps.
-
-    ADR-014 review-fix: `settings_manager`, when given, gates the actual
-    kind_spec.serialize(node) call on settings_manager.get_plugin_grants()
-    - the SAME install-time consent check node creation/invokePluginIntent/
-    register_plugin_tools already enforce before running a plugin's own
-    code, extended to this save-path call site (this was the one place a
-    revoked plugin's serializer kept running unconditionally, since a save
-    happens outside any one session's live SceneDocument and previously had
-    no access to Settings > Plugins' grant state at all). `None` (every
-    call site this project's own test suite that predates this fix uses)
-    preserves the exact prior ungated behavior - see build_chat_data's own
-    docstring for why that default is safe. A denied/ungranted node still
-    round-trips its universal title/content/is_collapsed fields; it just
-    loses its custom plugin_state for this one save, matching the
-    already-raising-serializer degrade path immediately below rather than
-    inventing a new failure mode."""
+    A grant is required to call extension code. An optional disk serializer
+    can omit display-only fields such as a catalog. A host PersistedPluginState
+    also carries current compact data while a grant is revoked or a file is
+    temporarily unreadable. Asset-store write errors propagate so a failed
+    save cannot replace the previous graph with a dangling reference.
+    """
     payload: dict[str, Any] = {
         "node_type": node.kind,
         "title": node.title,
         "content": node.content,
         "is_collapsed": bool(node.is_collapsed),
     }
-    if kind_spec is not None and kind_spec.serialize is not None:
-        granted = (
-            settings_manager is None
-            or settings_manager.get_plugin_grants().get(kind_spec.plugin_id, False)
-        )
-        if granted:
-            try:
-                extra = kind_spec.serialize(node)
-            except Exception:
-                # ADR-014 review-fix: logged, matching the wire-path
-                # equivalent's own exact message shape (backend/domain/
-                # graph.py's _plugin_state_wire) - previously this dropped a
-                # raising plugin serializer with zero signal anywhere,
-                # unlike every other place a plugin's own code runs.
-                logger.warning(
-                    "plugin node %s (%s): serialize hook raised", node.id, node.kind, exc_info=True,
-                )
-                extra = None
-            if isinstance(extra, dict):
-                try:
-                    json.dumps(extra)  # validate JSON-safety NOW, isolated to this one node
-                except (TypeError, ValueError):
-                    extra = None
-            if isinstance(extra, dict):
-                payload["plugin_state"] = extra
+    compact = node.state if type(node.state) is PersistedPluginState else None
+    if compact is not None and compact.invalid_asset_descriptor:
+        payload["plugin_state_asset"] = compact.data["plugin_state_asset"]
+        return payload
+    if compact is not None and compact.unresolved_asset_ref:
+        payload["plugin_state_asset"] = {"asset_ref": compact.unresolved_asset_ref, "mime_type": "application/json"}
+        return payload
+    if type(node.state) is PluginStateSnapshot:
+        _persist_json_snapshot(payload, node.state.json_text)
+        return payload
+    granted = kind_spec is not None and (
+        settings_manager is None or settings_manager.get_plugin_grants().get(kind_spec.plugin_id, False)
+    )
+    serializer = None
+    if kind_spec is not None and granted:
+        serializer = kind_spec.serialize_saved
+        if serializer is None and compact is None:
+            serializer = kind_spec.serialize
+    extra: dict | None
+    if serializer is not None:
+        try:
+            extra = serializer(node)
+        except Exception:
+            logger.warning("plugin node %s (%s): serialize hook raised", node.id, node.kind, exc_info=True)
+            extra = compact.data if compact is not None else None
+    else:
+        extra = compact.data if compact is not None else None
+    if isinstance(extra, dict):
+        try:
+            externalize = kind_spec.externalize_state if kind_spec is not None else compact is not None
+            _persist_plugin_state(payload, extra, externalize)
+        except (TypeError, ValueError, RecursionError):
+            logger.warning("plugin node %s (%s): invalid JSON state", node.id, node.kind, exc_info=True)
+            if compact is not None:
+                # Keep the last saved graph intact when durable data cannot be serialized.
+                raise
     return payload
 
 

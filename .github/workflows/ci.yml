@@ -140,8 +140,11 @@ jobs:
       # pip-compile, precisely so CI never depends on pip-tools-vs-pip
       # version skew - see that test's own module docstring for the CI
       # failure that proved the shell-out approach unusable.
+      # The packaging regression tests import setuptools.command.build_py at
+      # collection time. Explicitly install the project's pinned build backend
+      # in the test job; it is not part of production requirements.txt.
       - name: Install dev tooling (pytest, ruff, mypy - CI-only, not in the prod lockfile)
-        run: pip install --quiet pytest==9.1.1 pytest-cov==7.1.0 pytest-xdist==3.8.0 ruff==0.16.4 mypy==2.3.1 hypothesis==6.165.10
+        run: pip install --quiet pytest==9.1.1 pytest-cov==7.1.0 pytest-xdist==3.8.0 ruff==0.16.4 mypy==2.3.1 hypothesis==6.165.10 setuptools==82.0.1
 
       - name: Compile check
         run: python -m compileall -q .

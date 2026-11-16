@@ -148,6 +148,7 @@ from graphlink_process_env import safe_subprocess_env
 logger = logging.getLogger(__name__)
 
 SDK_API_VERSION = 1
+MAX_PLUGIN_STATE_BYTES = 1024 * 1024
 MIN_COMPATIBLE_SDK_API_VERSION = 1
 MANIFEST_FILENAME = "plugin.toml"
 DEFAULT_PLUGINS_ROOT = resolve_plugins_dir()
@@ -230,6 +231,7 @@ class PluginManifest:
     # comment and _discover_out_of_process_plugin's docstring for the full
     # mechanism this opts into.
     runtime_isolation: str = "in-process"
+    passive_node_kinds: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -312,25 +314,11 @@ NodeDeserializeHook = Callable[["dict[str, Any]"], "NodeState | None"]
 
 @dataclass(frozen=True)
 class PluginRunContext:
-    """Handed to a NodeFactory/intent handler at CALL time, per invocation -
-    the SDK's analog of backend/tools.py's RunContext. Deliberately minimal
-    in v1: no granted_scopes/approval fields here.
+    """Per-invocation services. The dispatcher checks consent before entry.
 
-    ADR-014 stage 14.4 (plugin scope/consent) resolved the gap this
-    docstring used to flag ("a later stage adds those as NEW FIELDS here")
-    WITHOUT adding fields here after all: the grant check
-    (SettingsManager.get_plugin_grants, deny-by-default) runs entirely in
-    backend/plugins.py's _execute_discovered_plugin/
-    _invoke_discovered_plugin_intent, BEFORE a PluginRunContext is even
-    constructed for a given call - a plugin whose factory/intent handler
-    actually runs has, by construction, already passed the gate, so there is
-    nothing for the handler itself to inspect or re-check via its own
-    context object. This is deliberately COARSER than backend/tools.py's own
-    RunContext.granted_scopes (a per-tool-call scope SET a handler can
-    consult mid-call) - 14.4's gate is a single install-time yes/no per
-    plugin, not a scope-by-scope capability boundary; see PluginManifest.
-    scopes_grants' own field comment for the honest limit of what a
-    manifest's declared scopes actually verify."""
+    Async handlers can check it again immediately before committing a result
+    or using data from another plugin.
+    """
 
     plugin_id: str
     notifications: NotificationState
@@ -344,6 +332,7 @@ class PluginRunContext:
     # parentless creation falls back to the origin in that case.
     spawn_x: float | None = None
     spawn_y: float | None = None
+    is_plugin_granted: Callable[[str], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -362,6 +351,9 @@ class NodeKindSpec:
     # OWN NodeState subclass fields, beyond that baseline.
     serialize: NodeSerializeHook | None = None
     deserialize: NodeDeserializeHook | None = None
+    # In-process plugins may present a richer wire schema than they persist.
+    serialize_saved: NodeSerializeHook | None = None
+    externalize_state: bool = False
 
 
 @dataclass(frozen=True)
@@ -390,6 +382,14 @@ class PluginIntentSpec:
     # the real type does live. In-process specs leave this None and derive
     # the schema from args_schema directly (see intent_input_schema).
     args_json_schema: "dict | None" = None
+    expose_to_builder: bool = True
+
+
+@dataclass(frozen=True)
+class PluginSceneUpdate:
+    """A successful synchronous scene edit that needs publishing to subscribers."""
+
+    result: dict
 
 
 @dataclass(frozen=True)
@@ -531,6 +531,8 @@ class HostContext:
         requires_parent: bool = True,
         serialize: NodeSerializeHook | None = None,
         deserialize: NodeDeserializeHook | None = None,
+        serialize_saved: NodeSerializeHook | None = None,
+        externalize_state: bool = False,
     ) -> None:
         """Registers 'factory' as this plugin's creation primitive for
         'kind'. The kind actually stored (and later stamped onto
@@ -576,7 +578,14 @@ class HostContext:
             plugin's own NodeState subclass instance. A raised exception
             here is caught by the caller - the node still restores with
             its title/content, just without its extra state - never a
-            failed load."""
+            failed load.
+
+        In-process plugins can supply serialize_saved(node) for compact disk
+        state and externalize_state=True for content-addressed JSON above the
+        inline threshold. PersistedPluginState carries this compact data
+        through grant revocation without invoking either serializer. If the
+        asset is unavailable at load, its reference is retained on this state.
+        """
         if not kind or not all(c.isalnum() or c == "_" for c in kind):
             raise PluginRegistrationError(
                 f'plugin "{self.plugin_id}": invalid node kind "{kind}" '
@@ -591,6 +600,7 @@ class HostContext:
             plugin_id=self.plugin_id, kind=namespaced, factory=factory,
             requires_parent=requires_parent,
             serialize=serialize, deserialize=deserialize,
+            serialize_saved=serialize_saved, externalize_state=externalize_state,
         )
 
     def register_picker_entry(
@@ -692,6 +702,7 @@ class HostContext:
         self, name: str, handler: PluginIntentHandler, *,
         args_schema: "type | None" = None,
         args_json_schema: "dict | None" = None,
+        expose_to_builder: bool = True,
     ) -> None:
         """Declares one custom action beyond node creation. NOT used by the
         trivial demo plugin (node creation alone proves the loop) - included
@@ -732,7 +743,7 @@ class HostContext:
             )
         self._intents.append(PluginIntentSpec(
             plugin_id=self.plugin_id, name=name, handler=handler,
-            args_schema=args_schema, args_json_schema=args_json_schema,
+            args_schema=args_schema, args_json_schema=args_json_schema, expose_to_builder=expose_to_builder,
         ))
 
 
@@ -1484,6 +1495,7 @@ def _discover_out_of_process_plugin(
                 # stage 21.4: the worker generated this from its own
                 # dataclass; the host stores it purely to describe the tool.
                 args_json_schema=entry.get("args_schema"),
+                expose_to_builder=entry.get("expose_to_builder", True) is True,
             )
     except Exception:
         worker_client.close()
@@ -1619,6 +1631,13 @@ def _load_manifest(manifest_path: Path, plugin_dir: Path) -> PluginManifest:
                 f"{sorted(unknown_scopes)} - must be a subset of {sorted(KNOWN_SCOPES)}"
             )
 
+    # These local kinds can be restored as inert, host-owned JSON when the
+    # pack is disabled. Discovery only reads TOML, even on a cold restart.
+    persistence = raw.get("persistence", {})
+    passive = persistence.get("passive_node_kinds", []) if isinstance(persistence, dict) else None
+    if not isinstance(passive, list) or any(not isinstance(k, str) or not _ID_PATTERN.fullmatch(k) for k in passive):
+        raise PluginRegistrationError(f"{manifest_path}: passive_node_kinds requires a list of local kind names.")
+
     return PluginManifest(
         id=plugin_id,
         name=str(plugin_table["name"]),
@@ -1630,6 +1649,7 @@ def _load_manifest(manifest_path: Path, plugin_dir: Path) -> PluginManifest:
         source_dir=plugin_dir,
         scopes_grants=scopes_grants,
         runtime_isolation=runtime_isolation,
+        passive_node_kinds=frozenset(passive),
     )
 
 

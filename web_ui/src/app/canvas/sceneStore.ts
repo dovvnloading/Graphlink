@@ -29,6 +29,7 @@ import type { DragSpeedState } from "../../lib/bridge-core/generated/drag-speed-
 import type { FontControlState } from "../../lib/bridge-core/generated/font-control-state";
 import type { ScenePatch, StreamListener, WsTransport } from "../../lib/ws/transport";
 import type { BridgeRejection } from "../../lib/bridge-core/islandState";
+import type { EditorDraft, Sources } from "./scientificWorkbench";
 import { announce } from "../announcer";
 import { describeNodeRunTransition } from "./nodeRunAnnouncements";
 
@@ -220,8 +221,35 @@ export interface OrganizationOptions {
   preserveFrameSizes: boolean;
 }
 
+export class ScienceEditorSession {
+  selected?: string;
+  readonly drafts = new Map<string, EditorDraft>();
+  constructor(readonly nodeKey?: string) {}
+  selectOperation(id: string) { this.selected = id; }
+}
+
 export class SceneStore {
   private scene: SceneState = initialSceneState;
+  // React Flow unmounts cards outside the viewport. Keep unsubmitted science inputs
+  // in this session across virtualization, zoom changes and operation switches.
+  private readonly scientificEditors = new Map<string, ScienceEditorSession>();
+
+  scientificEditor(nodeId: string, nodeKey?: string): ScienceEditorSession {
+    let session = this.scientificEditors.get(nodeId);
+    if (!session || session.nodeKey !== nodeKey) {
+      session = new ScienceEditorSession(nodeKey);
+      this.scientificEditors.set(nodeId, session);
+    }
+    return session;
+  }
+
+  private pruneScientificEditors() {
+    if (!this.scientificEditors.size) return;
+    const active = new Set(this.scene.nodes.filter((n) => n.pluginState.science).map((n) => n.id));
+    for (const id of this.scientificEditors.keys()) {
+      if (!active.has(id)) this.scientificEditors.delete(id);
+    }
+  }
   private grid: GridControlState = initialGridState;
   private dragConfig: DragSpeedState = initialDragSpeedState;
   private fontConfig: FontControlState = initialFontControlState;
@@ -463,6 +491,7 @@ export class SceneStore {
       return false;
     }
     this.scene = candidate;
+    this.pruneScientificEditors();
     // Review-fix: a successfully-applied patch is proof this client is
     // caught up, same as a fresh snapshot landing - see
     // sceneVersionRecovering's own doc for the recovery-edge race this
@@ -480,6 +509,7 @@ export class SceneStore {
     this.unsubscribers.push(
       this.bind<SceneState>("scene", (v) => {
         this.scene = v;
+        this.pruneScientificEditors();
         // ADR-003 stage 3.4 review-fix: the snapshot that closes an
         // outstanding resync request - see requestSceneResync below.
         this.sceneResyncPending = false;
@@ -605,6 +635,7 @@ export class SceneStore {
   }
 
   dispose(): void {
+    this.scientificEditors.clear();
     for (const unsubscribe of this.unsubscribers) unsubscribe();
     this.unsubscribers.length = 0;
   }
@@ -1629,6 +1660,30 @@ export class SceneStore {
   addNote(x: number, y: number, options: { isSystemPrompt?: boolean; isSummaryNote?: boolean } = {}): void {
     const { isSystemPrompt = false, isSummaryNote = false } = options;
     this.transport.fireIntent("scene", "addNote", [x, y, isSystemPrompt, isSummaryNote]);
+  }
+
+  private async scientificIntent(pluginId: string, name: string, args: Record<string, unknown>) {
+    const answer = await this.transport.request("app-plugins", "invokePluginIntent", [pluginId, name, args]);
+    if (answer && typeof answer === "object" && "ok" in answer && answer.ok === true) return answer;
+    if (answer && typeof answer === "object" && "error" in answer && typeof answer.error === "string") {
+      throw new Error(answer.error);
+    }
+    throw new Error("Check this pack’s grant in Settings and the notification banner.");
+  }
+
+  async runScientificOperation(pluginId: string, nodeId: string, operationId: string,
+    inputs: Record<string, unknown>, sources: Sources, expectedRun?: string): Promise<void> {
+    await this.scientificIntent(pluginId, "run", {
+      node_id: nodeId, operation_id: operationId, inputs, sources, ...(expectedRun && { expected_run: expectedRun }),
+    });
+  }
+
+  async exportScientificResult(pluginId: string, nodeId: string, expectedRun?: string): Promise<string> {
+    const answer = await this.scientificIntent(pluginId, "export_result", {
+      node_id: nodeId, ...(expectedRun && { expected_run: expectedRun }),
+    });
+    if (!("json" in answer) || typeof answer.json !== "string") throw new Error("The result export could not be read.");
+    return answer.json;
   }
 
   addTable(): void {

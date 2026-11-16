@@ -1140,7 +1140,7 @@ describe("SettingsDialog", () => {
       const { user, push } = setup();
       await goToPlugins(user, push);
 
-      expect(screen.getByText("No third-party plugins need a grant right now.")).toBeInTheDocument();
+      expect(screen.getByText("No discovered plugins need a grant right now.")).toBeInTheDocument();
       expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
     });
 
@@ -1149,7 +1149,7 @@ describe("SettingsDialog", () => {
       await goToPlugins(user, push);
       pushGrants(pushPlugins, []);
 
-      expect(screen.getByText("No third-party plugins need a grant right now.")).toBeInTheDocument();
+      expect(screen.getByText("No discovered plugins need a grant right now.")).toBeInTheDocument();
       expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
     });
 

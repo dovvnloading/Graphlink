@@ -1,0 +1,16 @@
+[plugin]
+id = "science_core"
+name = "Scientific Core"
+description = "Import numeric CSV, convert measurement units and plot paired observations."
+version = "1.1.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+
+[scopes]
+grants = ["graph.read", "graph.mutate"]
+
+[frontend]
+view = "generic"
+
+[persistence]
+passive_node_kinds = ["workbench"]

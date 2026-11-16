@@ -84,6 +84,10 @@ Open Graph Runner again to inspect the saved result. If the app closed during ex
 
 To run a local AI model explicitly, start **Ollama** and install a chat model. In **Plugins → Graph Runner**, expand **Run a local model into a note**. The existing one-shot and saved model-to-note options remain available. For a multi-step workflow, choose a source and model ID, then **Create Model node**. You can connect an upstream card's named text-output handle to a Model node's text-input handle, or create a second Model from the first one's output. Connect a downstream plain note to the final Model output to copy or count its words. **Preview run** shows which nodes will run and which are waiting on a real model reply—preview does not call Ollama. **Run graph** explicitly executes and checkpoints each step in dependency order, without automatically retrying uncertain remote requests. Changed sources mark model outputs stale but preserve earlier replies. This first-class Model slice is local Ollama only; remote/cloud provider profiles, paid approvals, write-capable tools and generalized parallel execution remain follow-on work. [Model-node workflow guide](docs/GRAPH_RUN_MODEL_NODES.md) · [One-shot model guide](docs/GRAPH_RUN_LOCAL_MODEL.md).
 
+## Scientific Workbench
+
+Enable **Scientific Core** and a domain pack in **Settings → Plugins**. Open **Plugins → Scientific Workbench** to create a calculation node. For example, import a numeric CSV, branch a **Statistics** node from it, and select a measured column to compute its mean and sample standard deviation. Each result retains its inputs, method version, and source fingerprint and can be exported as JSON or CSV. [Pack specifications and worked example](docs/SCIENTIFIC_WORKBENCH.md).
+
 ## API providers
 
 The directory includes **26 named providers** and a **Custom endpoint** for OpenAI Chat Completions-compatible servers. Search by service or model family, such as Claude, Grok, Kimi, or Qwen. You can browse another provider’s settings while your current connection stays active.
