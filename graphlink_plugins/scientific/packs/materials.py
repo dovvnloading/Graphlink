@@ -1,5 +1,7 @@
 """Specimen-level density, tensile measurements, and liquid-accessible porosity."""
 
+from fractions import Fraction
+
 from graphlink_plugins.scientific.core import Field, Operation
 
 
@@ -7,10 +9,11 @@ def bulk_density(data):
     mass, volume = data["dry_mass_g"], data["bulk_volume_cm3"]
     if mass <= 0 or volume <= 0:
         raise ValueError("Dry mass and external specimen volume must be positive.")
-    density = mass / volume
+    ratio = Fraction(mass) / Fraction(volume)
+    density = float(ratio)
     return {
         "summary": f"Dry bulk density is {density:.6g} g/cm³.",
-        "values": {"bulk_density_g_cm3": density, "bulk_density_kg_m3": density * 1000},
+        "values": {"bulk_density_g_cm3": density, "bulk_density_kg_m3": float(ratio * 1000)},
     }
 
 
@@ -50,7 +53,9 @@ def apparent_porosity(data):
     submerged = data["suspended_mass_g"]
     if dry <= 0 or saturated < dry or submerged >= dry:
         raise ValueError("Require a positive dry mass, saturated mass ≥ dry mass, and suspended mass < dry mass.")
-    percent = (saturated - dry) / (saturated - submerged) * 100
+    absorbed = Fraction(saturated) - Fraction(dry)
+    displaced = Fraction(saturated) - Fraction(submerged)
+    percent = float(100 * absorbed / displaced)
     return {
         "summary": f"Liquid-accessible open pores occupy {percent:.6g}% of the specimen bulk volume.",
         "values": {"apparent_open_porosity_percent": percent, "absorbed_liquid_g": saturated - dry},

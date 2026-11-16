@@ -148,6 +148,7 @@ from graphlink_process_env import safe_subprocess_env
 logger = logging.getLogger(__name__)
 
 SDK_API_VERSION = 1
+MAX_PLUGIN_STATE_BYTES = 1024 * 1024
 MIN_COMPATIBLE_SDK_API_VERSION = 1
 MANIFEST_FILENAME = "plugin.toml"
 DEFAULT_PLUGINS_ROOT = resolve_plugins_dir()
@@ -230,6 +231,7 @@ class PluginManifest:
     # comment and _discover_out_of_process_plugin's docstring for the full
     # mechanism this opts into.
     runtime_isolation: str = "in-process"
+    passive_node_kinds: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -312,25 +314,11 @@ NodeDeserializeHook = Callable[["dict[str, Any]"], "NodeState | None"]
 
 @dataclass(frozen=True)
 class PluginRunContext:
-    """Handed to a NodeFactory/intent handler at CALL time, per invocation -
-    the SDK's analog of backend/tools.py's RunContext. Deliberately minimal
-    in v1: no granted_scopes/approval fields here.
+    """Per-invocation services. The dispatcher checks consent before entry.
 
-    ADR-014 stage 14.4 (plugin scope/consent) resolved the gap this
-    docstring used to flag ("a later stage adds those as NEW FIELDS here")
-    WITHOUT adding fields here after all: the grant check
-    (SettingsManager.get_plugin_grants, deny-by-default) runs entirely in
-    backend/plugins.py's _execute_discovered_plugin/
-    _invoke_discovered_plugin_intent, BEFORE a PluginRunContext is even
-    constructed for a given call - a plugin whose factory/intent handler
-    actually runs has, by construction, already passed the gate, so there is
-    nothing for the handler itself to inspect or re-check via its own
-    context object. This is deliberately COARSER than backend/tools.py's own
-    RunContext.granted_scopes (a per-tool-call scope SET a handler can
-    consult mid-call) - 14.4's gate is a single install-time yes/no per
-    plugin, not a scope-by-scope capability boundary; see PluginManifest.
-    scopes_grants' own field comment for the honest limit of what a
-    manifest's declared scopes actually verify."""
+    Async handlers can check it again immediately before committing a result
+    or using data from another plugin.
+    """
 
     plugin_id: str
     notifications: NotificationState
@@ -344,6 +332,7 @@ class PluginRunContext:
     # parentless creation falls back to the origin in that case.
     spawn_x: float | None = None
     spawn_y: float | None = None
+    is_plugin_granted: Callable[[str], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -1642,6 +1631,13 @@ def _load_manifest(manifest_path: Path, plugin_dir: Path) -> PluginManifest:
                 f"{sorted(unknown_scopes)} - must be a subset of {sorted(KNOWN_SCOPES)}"
             )
 
+    # These local kinds can be restored as inert, host-owned JSON when the
+    # pack is disabled. Discovery only reads TOML, even on a cold restart.
+    persistence = raw.get("persistence", {})
+    passive = persistence.get("passive_node_kinds", []) if isinstance(persistence, dict) else None
+    if not isinstance(passive, list) or any(not isinstance(k, str) or not _ID_PATTERN.fullmatch(k) for k in passive):
+        raise PluginRegistrationError(f"{manifest_path}: passive_node_kinds requires a list of local kind names.")
+
     return PluginManifest(
         id=plugin_id,
         name=str(plugin_table["name"]),
@@ -1653,6 +1649,7 @@ def _load_manifest(manifest_path: Path, plugin_dir: Path) -> PluginManifest:
         source_dir=plugin_dir,
         scopes_grants=scopes_grants,
         runtime_isolation=runtime_isolation,
+        passive_node_kinds=frozenset(passive),
     )
 
 

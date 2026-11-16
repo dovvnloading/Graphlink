@@ -1,6 +1,7 @@
 """Quantitative interpretation of optical and isotope measurements."""
 
 import math
+from fractions import Fraction
 
 from graphlink_plugins.scientific.core import Field, Operation
 
@@ -11,7 +12,7 @@ def beer_lambert(data):
     path = data["path_length_cm"]
     if absorbance < 0 or coefficient <= 0 or path <= 0:
         raise ValueError("Enter nonnegative absorbance and positive absorptivity and path length.")
-    concentration = absorbance / coefficient / path
+    concentration = float(Fraction(absorbance) / (Fraction(coefficient) * Fraction(path)))
     return {
         "summary": f"The absorbing species has a concentration of {concentration:.6g} mol/L.",
         "values": {"concentration_mol_l": concentration},
@@ -27,10 +28,11 @@ def transmission_spectrum(data):
         raise ValueError("Wavelengths must be positive and strictly increasing.")
     if any(t <= 0 or t > 100 for t in transmission):
         raise ValueError("Percent transmission must be greater than zero and at most 100.")
-    # log10(100/T) written as a difference also handles subnormal positive T.
-    absorbances = [2 - math.log10(t) for t in transmission]
+    # Near the blank, subtracting two nearly equal logarithms erases the absorption.
+    # At low transmission, taking the logs separately avoids underflow of T/100.
+    absorbances = [-math.log1p((t - 100) / 100) / math.log(10) if t >= 50 else 2 - math.log10(t) for t in transmission]
     peak = max(absorbances)
-    peak_nm = wavelengths[absorbances.index(peak)]
+    peak_nm = wavelengths[transmission.index(min(transmission))]
     return {
         "summary": f"Maximum measured absorbance {peak:.6g} at {peak_nm:g} nm (first peak if tied).",
         "values": {"peak_absorbance": peak, "peak_wavelength_nm": peak_nm},
@@ -58,7 +60,8 @@ def isotope_average(data):
     total = math.fsum(abundance)
     if not math.isclose(total, 100, rel_tol=0, abs_tol=0.01 + 1e-12):
         raise ValueError("Isotopic abundances must total 100% within 0.01 percentage point.")
-    average = math.fsum(mass * (percent / total) for mass, percent in zip(masses, abundance))
+    weights = [Fraction(percent) for percent in abundance]
+    average = float(sum(Fraction(mass) * weight for mass, weight in zip(masses, weights)) / sum(weights))
     return {
         "summary": f"Mean mass per atom in this sample is {average:.8g} u.",
         "values": {"mean_atomic_mass_u": average, "abundance_total_percent": total},

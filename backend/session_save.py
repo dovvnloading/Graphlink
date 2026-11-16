@@ -127,9 +127,10 @@ from backend.domain.node_states import (
     NoteState,
     PlanState,
     PersistedPluginState,
+    PluginStateSnapshot,
     WebResearchState,
 )
-from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
+from backend.plugin_sdk import MAX_PLUGIN_STATE_BYTES, NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_settings_store import SettingsManager
 
 logger = logging.getLogger(__name__)
@@ -591,12 +592,19 @@ def _persist_plugin_state(payload, data, externalize):
         json.dumps(data)  # Legacy plugin save hooks keep their original JSON validation.
         payload["plugin_state"] = data
         return
-    encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    encoded = json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    _persist_json_snapshot(payload, encoded)
+
+
+def _persist_json_snapshot(payload, text):
+    encoded = text.encode()
+    if len(encoded) > MAX_PLUGIN_STATE_BYTES:
+        raise ValueError("Plugin state exceeds the supported size.")
     asset_store = _ACTIVE_SAVE_ASSET_STORE.get()
     if asset_store is not None and len(encoded) >= PLUGIN_STATE_INLINE_BYTES:
         payload["plugin_state_asset"] = {"asset_ref": asset_store.put(encoded), "mime_type": "application/json"}
     else:
-        payload["plugin_state"] = data
+        payload["plugin_state"] = json.loads(text)
 
 
 def _serialize_plugin_node(
@@ -635,8 +643,14 @@ def _serialize_plugin_node(
         "is_collapsed": bool(node.is_collapsed),
     }
     compact = node.state if type(node.state) is PersistedPluginState else None
+    if compact is not None and compact.invalid_asset_descriptor:
+        payload["plugin_state_asset"] = compact.data["plugin_state_asset"]
+        return payload
     if compact is not None and compact.unresolved_asset_ref:
         payload["plugin_state_asset"] = {"asset_ref": compact.unresolved_asset_ref, "mime_type": "application/json"}
+        return payload
+    if type(node.state) is PluginStateSnapshot:
+        _persist_json_snapshot(payload, node.state.json_text)
         return payload
     granted = kind_spec is not None and (
         settings_manager is None or settings_manager.get_plugin_grants().get(kind_spec.plugin_id, False)
@@ -657,7 +671,8 @@ def _serialize_plugin_node(
         extra = compact.data if compact is not None else None
     if isinstance(extra, dict):
         try:
-            _persist_plugin_state(payload, extra, bool(kind_spec and kind_spec.externalize_state))
+            externalize = kind_spec.externalize_state if kind_spec is not None else compact is not None
+            _persist_plugin_state(payload, extra, externalize)
         except (TypeError, ValueError, RecursionError):
             logger.warning("plugin node %s (%s): invalid JSON state", node.id, node.kind, exc_info=True)
             if compact is not None:

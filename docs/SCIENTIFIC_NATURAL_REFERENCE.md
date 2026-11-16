@@ -1,6 +1,6 @@
 # Measurement, field science, and signal processing reference
 
-Each entry gives the measurement model and a small reference calculation. Open a pack in the Scientific Workbench to see its field names, units, and an editable example. For paired vectors, enter measurements in the same order in each field.
+Each entry gives the measurement model and a small reference calculation. Open a pack in the Scientific Workbench to see its field names, units, and an editable example. For paired vectors, enter measurements in the same order in each field. Measurements and reported results use finite binary64 numbers. For count totals, the exact integer limit is 9,007,199,254,740,991.
 
 ## Chemistry
 
@@ -55,7 +55,7 @@ Apparent porosity assumes full liquid penetration of accessible pores and a nonr
 | Operation | Inputs and method | Reference calculation |
 | --- | --- | --- |
 | Centered moving average | Supply uniformly spaced samples and a positive odd width no greater than the series length. The mean uses each complete window with equal weights. Positions are zero-based center indices. | [0, 0, 9, 0, 0] and width 3 → means [3, 3, 3] at indices [1, 2, 3]. |
-| One-sided amplitude spectrum | Enter 2–256 uniformly spaced real samples and positive sampling frequency in Hz. The rectangular-window DFT returns frequencies k·Fs/N, from k = 0 through floor(N/2). Divide magnitudes by N and double the positive-frequency bins with a negative-frequency partner. DC and the even-length Nyquist bin each use a factor of one. | [1, 0, −1, 0, 1, 0, −1, 0] at 8 Hz → unit peak at 2 Hz. |
+| One-sided amplitude spectrum | Enter 2–256 uniformly spaced real samples and positive sampling frequency in Hz. The rectangular-window DFT returns frequencies k·Fs/N, from k = 0 through floor(N/2). Divide magnitudes by N and double the positive-frequency bins with a negative-frequency partner. DC and the even-length Nyquist bin each use a factor of one. The non-DC transform uses centered samples so a constant offset contributes only to DC. | [1, 0, −1, 0, 1, 0, −1, 0] at 8 Hz → unit peak at 2 Hz. |
 | Piecewise linear resampling | Pair at least two strictly increasing observed coordinates with amplitudes. Enter target coordinates within the observed interval in the same units. Tables preserve target order, including repeated coordinates. Plots sort by coordinate. | Between (1, 10) and (4, 4), the value at 2.5 is 7. |
 
 The amplitude spectrum reports peak amplitude in the units of the samples. A tone between bin centers contributes to multiple bins. [MathWorks single-sided amplitude convention](https://www.mathworks.com/help/matlab/ref/fft.html)

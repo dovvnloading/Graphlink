@@ -29,12 +29,12 @@ const parent = { title: "Samples", nodeId: "parent", raw: JSON.stringify({ ...st
 function mount(raw = JSON.stringify(state), parents = [parent]) {
   const request = vi.fn<WsTransport["request"]>().mockResolvedValue({ ok: true });
   const store = new SceneStore({ request } as unknown as WsTransport);
-  function draw(value: string) {
-    const props = { id: "target", data: { title: "Mathematics", raw: value, pluginId: "science_mathematics", parents, store } } as NodeProps<ScientificFlowNode>;
+  function draw(value: string, currentParents = parents) {
+    const props = { id: "target", data: { title: "Mathematics", raw: value, pluginId: "science_mathematics", parents: currentParents, store } } as NodeProps<ScientificFlowNode>;
     return <ScientificNodeView {...props} />;
   }
   const view = render(draw(raw), { wrapper: ReactFlowProvider });
-  return { request, refresh: (value: string) => view.rerender(draw(value)) };
+  return { request, remount: (value: string) => { view.unmount(); render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents) => view.rerender(draw(value, currentParents)) };
 }
 
 describe("scientific workbench card", () => {
@@ -84,7 +84,9 @@ describe("scientific workbench card", () => {
   it("renders persisted runs, plots irregular x coordinates, and exports the committed artifacts", async () => {
     const save = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
     try {
-      const { request } = mount(JSON.stringify({ ...state, latest: result }));
+      const { request } = mount(JSON.stringify({ ...state, latest: result, runToken: "current" }));
+      const canonical = JSON.stringify(result).replace('"distance":0.125', '"distance":0.1250');
+      request.mockResolvedValueOnce({ ok: true, json: canonical });
       expect(screen.getByLabelText("Samples (m)")).toHaveValue("[10,20,30]");
       expect(screen.getByRole("status")).toHaveTextContent("Computed 3 samples.");
       expect(screen.getByRole("img").querySelectorAll("circle")[1].getAttribute("cx")).toBe("70");
@@ -92,11 +94,14 @@ describe("scientific workbench card", () => {
       fireEvent.click(screen.getByText("Inputs and provenance"));
       expect(screen.getByText(/"resultHash": "abc"/)).toBeVisible();
       fireEvent.click(screen.getByText("Export JSON"));
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
       fireEvent.click(screen.getByText("Export CSV"));
       expect(save.mock.calls.map(([, name]) => name)).toEqual(["mathematics-integral.json", "mathematics-integral.csv"]);
-      expect(JSON.parse(await save.mock.calls[0][0].text())).toEqual(result);
+      expect(await save.mock.calls[0][0].text()).toBe(canonical);
       expect(await save.mock.calls[1][0].text()).toBe("x,y\r\n0,1\r\n2,8\r\n10,3");
-      expect(request).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
+        "science_mathematics", "export_result", { node_id: "target", expected_run: "current" },
+      ]);
     } finally { save.mockRestore(); }
   });
 
@@ -112,6 +117,122 @@ describe("scientific workbench card", () => {
     mount(JSON.stringify({ ...state, operations: [], error: "Restore the missing result asset." }));
     expect(screen.getByRole("alert")).toHaveTextContent("Restore the missing result asset.");
     expect(screen.queryByText("Run calculation")).toBeNull();
+  });
+
+  it("focuses the invalid field and links its description, unit, and inline error", async () => {
+    const { request } = mount();
+    const field = screen.getByRole("textbox", { name: "Samples (m)" });
+    fireEvent.change(field, { target: { value: "[null]" } });
+    fireEvent.click(screen.getByText("Run calculation"));
+    expect(field).toHaveFocus();
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(field).toHaveAccessibleDescription(/Ordered observations.*array of numbers/);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps typed inputs when a remote run arrives and sends its new token after review", async () => {
+    const { request, refresh } = mount(JSON.stringify({ ...state, runToken: "a" }));
+    const field = screen.getByRole("textbox", { name: "Samples (m)" });
+    fireEvent.change(field, { target: { value: "[4,5]" } });
+    refresh(JSON.stringify({ ...state, latest: result, runToken: "b" }));
+    expect(field).toHaveValue("[4,5]");
+    expect(screen.getByText("Run calculation")).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Keep my inputs" }));
+    fireEvent.click(screen.getByText("Run calculation"));
+    expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({ expected_run: "b", inputs: { samples: [4, 5] } });
+    await waitFor(() => expect(screen.getByText("Run calculation")).toBeEnabled());
+    fireEvent.change(field, { target: { value: "[7]" } });
+    refresh(JSON.stringify({ ...state, latest: result, runToken: "c" }));
+    fireEvent.click(screen.getByRole("button", { name: "Load saved inputs" }));
+    expect(field).toHaveValue("[10,20,30]");
+  });
+
+  it("rebases a clean editor on undo when equal numerical results had different sources", async () => {
+    const sources = { samples: { nodeId: "parent", resultHash: "abc", receiptHash: "receipt-1", selector: ["column", 1] } };
+    const parentWithReceipt = { ...parent, raw: JSON.stringify({ ...state, latest: {
+      ...result, provenance: { ...result.provenance, receiptHash: "receipt-1" },
+    } }) };
+    const { request, refresh } = mount(JSON.stringify({ ...state, latest: {
+      ...result, inputs: { samples: [1, 8, 3] }, provenance: { ...result.provenance, sources },
+    }, runToken: "sourced" }), [parentWithReceipt]);
+    expect(screen.getByText("Source · Samples · y")).toBeVisible();
+    refresh(JSON.stringify({ ...state, latest: {
+      ...result, inputs: { samples: [1, 8, 3] },
+    }, runToken: "manual" }), [parentWithReceipt]);
+    expect(screen.queryByText("Source · Samples · y")).toBeNull();
+    fireEvent.click(screen.getByText("Run calculation"));
+    expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({ expected_run: "manual", sources: {} });
+    await waitFor(() => expect(screen.getByText("Run calculation")).toBeEnabled());
+  });
+
+  it("recognizes stale receipt hashes even for identical numerical output and allows a manual input", () => {
+    const sources = { samples: { nodeId: "parent", resultHash: "abc", receiptHash: "older", selector: ["column", 1] } };
+    const { request, refresh } = mount(JSON.stringify({ ...state, latest: {
+      ...result, provenance: { ...result.provenance, sources },
+    } }), [parent]);
+    expect(screen.getByText("Run calculation")).toBeDisabled();
+    const field = screen.getByRole("textbox", { name: "Samples (m)" });
+    expect(field).toHaveAccessibleDescription(/Result changed or disconnected/);
+    fireEvent.change(field, { target: { value: "[4,5]" } });
+    expect(screen.getByText("Run calculation")).toBeEnabled();
+    refresh("");
+    expect(screen.queryByText("Run calculation")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("Enable Mathematics");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("downloads no bytes when the export receipt changed before the server answered", async () => {
+    const save = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
+    try {
+      const { request } = mount(JSON.stringify({ ...state, latest: result, runToken: "before" }));
+      request.mockResolvedValueOnce({ ok: false, error: "The run changed." });
+      fireEvent.click(screen.getByText("Export JSON"));
+      expect(await screen.findByRole("alert")).toHaveTextContent("The run changed.");
+      expect(save).not.toHaveBeenCalled();
+    } finally { save.mockRestore(); }
+  });
+
+  it("renders finite true endpoints near binary64 extremes and distinguishes adjacent coordinates", () => {
+    const latest = { ...result, plot: { ...result.plot!, x: [-Number.MAX_VALUE, 0, Number.MAX_VALUE],
+      y: [1, 1.0000000000000002, 1] } };
+    mount(JSON.stringify({ ...state, latest }));
+    expect(screen.getByRole("img").querySelector("polyline")).toHaveAttribute("points", "10,98 160,8 310,98");
+    expect(screen.getByText("Length (m) · 1 to 1.0000000000000002")).toBeVisible();
+    expect(screen.getByText(/Time \(s\) · -1.7976931348623157e\+308 to 1.7976931348623157e\+308/)).toBeVisible();
+  });
+
+  it("exports every result row, escapes CSV cells and retains small signed values beyond the preview", async () => {
+    const save = vi.spyOn(download, "downloadBlob").mockImplementation(() => {});
+    try {
+      const rows = Array.from({ length: 42 }, (_, i) => [i === 41 ? -Number.MIN_VALUE : i, i === 41 ? 'a,"b"' : "=formula"]);
+      mount(JSON.stringify({ ...state, latest: { ...result, table: { columns: ["Measurement", "Label"], rows } } }));
+      expect(screen.getAllByRole("row")).toHaveLength(31);
+      fireEvent.click(screen.getByText("Export CSV"));
+      const csv = await save.mock.calls[0][0].text();
+      expect(csv.split("\r\n")).toHaveLength(43);
+      expect(csv).toContain("0,'=formula");
+      expect(csv).toContain('-5e-324,"a,""b"""');
+    } finally { save.mockRestore(); }
+  });
+
+  it("keeps each operation’s draft and restores it after the canvas unmounts the card", () => {
+    const current = JSON.stringify({ ...state, runToken: "a", nodeKey: "saved-node" });
+    const { remount } = mount(current);
+    fireEvent.change(screen.getByLabelText("Samples (m)"), { target: { value: "[4,5]" } });
+    fireEvent.change(screen.getByLabelText("Operation"), { target: { value: "scale" } });
+    fireEvent.change(screen.getByLabelText("Length (m)"), { target: { value: "7" } });
+    remount(current);
+    expect(screen.getByLabelText("Operation")).toHaveValue("scale");
+    expect(screen.getByLabelText("Length (m)")).toHaveValue("7");
+    fireEvent.change(screen.getByLabelText("Operation"), { target: { value: "integral" } });
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[4,5]");
+  });
+
+  it("never applies draft text to another node reusing the same session id", () => {
+    const { refresh } = mount(JSON.stringify({ ...state, nodeKey: "first" }));
+    fireEvent.change(screen.getByLabelText("Samples (m)"), { target: { value: "[4,5]" } });
+    refresh(JSON.stringify({ ...state, nodeKey: "second" }));
+    expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,2,3]");
   });
 
   it("rejects damaged or unsupported state without rendering a run button", () => {

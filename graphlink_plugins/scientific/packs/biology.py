@@ -11,14 +11,22 @@ def _counts(values):
     return [int(v) for v in values]
 
 
+def _total_count(counts):
+    total = sum(counts)
+    if total > 2**53 - 1:
+        raise ValueError("Total individuals must be below 2^53 for exact export and graph reuse.")
+    return total
+
+
 def community_diversity(data):
     counts = _counts(data["counts"])
-    total = sum(counts)
+    total = _total_count(counts)
     if total == 0:
         raise ValueError("At least one individual must have been observed.")
-    proportions = [n / total for n in counts if n]
-    richness = len(proportions)
-    shannon = math.fsum(-p * math.log(p) for p in proportions)
+    observed = [n for n in counts if n]
+    richness = len(observed)
+    # log1p also resolves the entropy contribution of a nearly dominant taxon.
+    shannon = math.fsum((n / total) * math.log1p((total - n) / n) for n in observed)
     # One minus sum(p_i^2), using exact integer counts to avoid cancellation.
     simpson = sum(n * (total - n) for n in counts) / (total * total)
     return {
@@ -33,7 +41,7 @@ def quadrat_density(data):
     if len(counts) != len(areas) or any(area <= 0 for area in areas):
         raise ValueError("Provide one positive surveyed area per quadrat count.")
     total_area = math.fsum(areas)
-    total_count = sum(counts)
+    total_count = _total_count(counts)
     density = total_count / total_area
     return {
         "summary": f"Pooled density is {density:.6g} individuals/m² over {total_area:.6g} m².",

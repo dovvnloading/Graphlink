@@ -1,6 +1,6 @@
 """Water monitoring, catchment observations, and temperature accounting."""
 
-import math
+from fractions import Fraction
 from itertools import accumulate
 
 from graphlink_plugins.scientific.core import Field, Operation
@@ -13,23 +13,25 @@ def flow_weighted_concentration(data):
         raise ValueError("Provide flow, duration, and concentration for every interval.")
     if any(x < 0 for x in flows + concentrations) or any(t <= 0 for t in times):
         raise ValueError("Flows and concentrations must be nonnegative; durations must be positive.")
-    volumes = [q * t for q, t in zip(flows, times)]
-    total_volume = math.fsum(volumes)
+    volumes = [Fraction(q) * Fraction(t) for q, t in zip(flows, times)]
+    total_volume = sum(volumes)
     if total_volume == 0:
         raise ValueError("At least one interval must contribute nonzero water volume.")
     # mg/L × m³ = g; convert grams to kg for the reported integrated mass.
-    masses = [v * (c / 1000) for v, c in zip(volumes, concentrations)]
-    mean = math.fsum(c * (v / total_volume) for c, v in zip(concentrations, volumes))
+    masses = [v * Fraction(c) / 1000 for v, c in zip(volumes, concentrations)]
+    total_mass = sum(masses)
+    mean = float(1000 * total_mass / total_volume)
+    total_volume = float(total_volume)
     return {
         "summary": f"Flow-weighted mean concentration is {mean:.6g} mg/L over {total_volume:.6g} m³.",
         "values": {
             "mean_concentration_mg_l": mean,
             "total_water_m3": total_volume,
-            "total_constituent_kg": math.fsum(masses),
+            "total_constituent_kg": float(total_mass),
         },
         "table": {
             "columns": ["Interval", "Water volume (m³)", "Constituent mass (kg)"],
-            "rows": [[i, v, mass] for i, (v, mass) in enumerate(zip(volumes, masses), 1)],
+            "rows": [[i, float(v), float(mass)] for i, (v, mass) in enumerate(zip(volumes, masses), 1)],
         },
     }
 
@@ -38,16 +40,16 @@ def rainfall_runoff(data):
     rain, area, runoff = data["rainfall_mm"], data["area_km2"], data["runoff_volume_m3"]
     if rain <= 0 or area <= 0 or runoff < 0:
         raise ValueError("Rainfall and catchment area must be positive, and runoff volume must be nonnegative.")
-    rainfall_volume = rain * area * 1000
-    coefficient = runoff / rainfall_volume
-    summary = f"Observed direct runoff accounts for {coefficient * 100:.6g}% of event rainfall."
+    rainfall_volume = Fraction(rain) * Fraction(area) * 1000
+    coefficient = float(Fraction(runoff) / rainfall_volume)
+    summary = f"Observed runoff coefficient is {coefficient:.6g} for the supplied event."
     if coefficient > 1:
         summary += " Runoff exceeds rainfall for this event boundary; check inflows, storage, and measurements."
     return {
         "summary": summary,
         "values": {
-            "rainfall_volume_m3": rainfall_volume,
-            "runoff_depth_mm": runoff / area / 1000,
+            "rainfall_volume_m3": float(rainfall_volume),
+            "runoff_depth_mm": float(Fraction(runoff) / Fraction(area) / 1000),
             "runoff_coefficient": coefficient,
         },
     }
@@ -59,17 +61,20 @@ def degree_days(data):
         raise ValueError("Enter paired daily minimum and maximum temperatures.")
     if base < -273.15 or any(lo < -273.15 or lo > hi for lo, hi in zip(lows, highs)):
         raise ValueError("Each minimum must be at or above absolute zero and at most its daily maximum.")
-    means = [lo / 2 + hi / 2 for lo, hi in zip(lows, highs)]
-    gains = [max(0, mean - base) for mean in means]
-    cumulative = list(accumulate(gains))
+    means = [(Fraction(lo) + Fraction(hi)) / 2 for lo, hi in zip(lows, highs)]
+    gains = [max(0, mean - Fraction(base)) for mean in means]
+    cumulative = [float(subtotal) for subtotal in accumulate(gains)]
     days = list(range(1, len(lows) + 1))
-    total = math.fsum(gains)
+    total = cumulative[-1]
     return {
         "summary": f"The series accumulates {total:.6g} °C·days above {base:g} °C.",
         "values": {"growing_degree_days_c": total, "days_observed": len(lows)},
         "table": {
             "columns": ["Day", "Daily mean (°C)", "Degree-days (°C·day)", "Cumulative (°C·day)"],
-            "rows": [list(row) for row in zip(days, means, gains, cumulative)],
+            "rows": [
+                [day, float(mean), float(gain), subtotal]
+                for day, mean, gain, subtotal in zip(days, means, gains, cumulative)
+            ],
         },
         "plot": {
             "title": "Cumulative growing degree-days",

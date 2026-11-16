@@ -22,6 +22,7 @@ conversation.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -58,6 +59,35 @@ class PersistedPluginState(NodeState):
 
     data: dict = field(default_factory=dict)
     unresolved_asset_ref: str = ""
+    invalid_asset_descriptor: bool = False
+
+
+@dataclass(frozen=True, eq=False)
+class PluginStateSnapshot(NodeState):
+    """Immutable compact JSON shared by undo snapshots and repeated scene renders."""
+
+    json_text: str
+
+    @classmethod
+    def from_data(cls, data: dict) -> PluginStateSnapshot:
+        return cls(json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False))
+
+    @property
+    def data(self) -> dict:
+        # Consumers may freely edit their copy; only replacing the node's
+        # snapshot commits a change to the graph.
+        return json.loads(self.json_text)
+
+    def __deepcopy__(self, memo):
+        return self
+
+    def __eq__(self, other):
+        if type(other) is not PluginStateSnapshot:
+            return NotImplemented
+        return self.json_text == other.json_text
+
+    def __hash__(self):
+        return hash(self.json_text)
 
 
 @dataclass

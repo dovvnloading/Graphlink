@@ -26,7 +26,7 @@ def _modulus(data):
     apparent, absolute, extinction = data["apparent_mag"], data["absolute_mag"], data["extinction_mag"]
     if extinction < 0:
         raise ValueError("Passband extinction must be nonnegative.")
-    modulus = apparent - absolute - extinction
+    modulus = math.fsum([apparent, -absolute, -extinction])
     distance_pc = 10 ** (1 + modulus / 5)
     if distance_pc == 0:
         raise ValueError("The implied distance is below the supported numerical range.")

@@ -2,14 +2,17 @@
 
 import csv
 import io
+from decimal import Decimal, InvalidOperation
+from fractions import Fraction
 
 from graphlink_plugins.scientific.core import MAX_CELLS, MAX_COLUMNS, MAX_POINTS, Field, Operation, finite
 
 
 def _numeric_csv(data):
-    reader = csv.reader(io.StringIO(data["csv"], newline=""), strict=True)
+    reader = csv.reader(io.StringIO(data["csv"].removeprefix("\ufeff"), newline=""), strict=True)
     try:
-        columns = [v.strip() for v in next(reader, [])]
+        header = next((row for row in reader if row), [])
+        columns = [v.strip() for v in header]
         if not 1 <= len(columns) <= MAX_COLUMNS or not all(columns) or len(set(columns)) != len(columns):
             raise ValueError("Supply a header with 1–32 distinct, nonempty column names.")
         rows = []
@@ -21,9 +24,18 @@ def _numeric_csv(data):
             if len(rows) >= MAX_POINTS or (len(rows) + 1) * len(columns) > MAX_CELLS:
                 raise ValueError("CSV exceeds 1024 rows or 4096 cells.")
             try:
-                rows.append([finite(float(cell), "CSV cell") for cell in row])
-            except ValueError:
-                raise ValueError(f"CSV line {reader.line_num} requires finite numeric cells.") from None
+                parsed = []
+                for cell in row:
+                    number = finite(float(cell), "CSV cell")
+                    exact = Decimal(cell)
+                    if number == 0 and exact != 0:
+                        raise ValueError
+                    if exact == exact.to_integral_value() and Decimal.from_float(number) != exact:
+                        raise ValueError
+                    parsed.append(number)
+                rows.append(parsed)
+            except (ValueError, InvalidOperation):
+                raise ValueError(f"CSV line {reader.line_num} requires finite numeric cells in range and exactly representable integer counts.") from None
     except csv.Error as exc:
         raise ValueError(f"Invalid CSV at line {reader.line_num}: {exc}") from None
     if not rows:
@@ -55,10 +67,20 @@ def _convert(data):
     target_dimension, target_scale, target_offset = _UNITS[target]
     if dimension != target_dimension:
         raise ValueError("Source and destination units must measure the same dimension.")
-    base = source_scale * data["value"] + source_offset
-    if dimension == "temperature" and base < 0:
+    value = data["value"]
+    if dimension == "temperature" and value < -source_offset:
         raise ValueError("Absolute temperature must be at least 0 K.")
-    converted = (base - target_offset) / target_scale if source != target else data["value"]
+    if source == target:
+        converted = value
+    elif dimension == "temperature":
+        # Unit input is displayed as decimal. Use the exact defined 273.15 K offset.
+        converted = float(Decimal(str(value)) + Decimal(str(source_offset)) - Decimal(str(target_offset)))
+    else:
+        ratio = Fraction(str(source_scale)) / Fraction(str(target_scale))
+        converted = float(Fraction(value) * ratio)
+    if dimension != "temperature" and value and converted == 0:
+        raise ValueError("The converted measurement is below the numerical range.")
+
     return {"summary": f"Converted {dimension} from {source} to {target}.",
             "values": {f"value ({target})": converted}}
 
@@ -77,7 +99,7 @@ def _plot(data):
 _SYMBOLS = "Supported symbols: " + ", ".join(_UNITS) + "."
 OPERATIONS = (
     Operation("numeric_csv", "Import numeric CSV", "Read comma-separated measurements with a header row.",
-              (Field("csv", "CSV measurements", "text", description="Header first. Quoted headers and blank lines are accepted."),),
+              (Field("csv", "CSV measurements", "text", description="Quoted headers and blank lines are accepted. Integer counts must be exactly representable."),),
               {"csv": "Time (s),Distance (m)\n0,0\n1,2\n2,4"}, _numeric_csv),
     Operation("convert_unit", "Convert a measurement", "Convert length, mass, time, volume or absolute temperature.",
               (Field("value", "Measured value", "number"), Field("from_unit", "Source unit", "text", description=_SYMBOLS),

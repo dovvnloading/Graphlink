@@ -1,6 +1,8 @@
 """Lumped circuit models and uniform thermal expansion."""
 
 import math
+import sys
+from fractions import Fraction
 
 from graphlink_plugins.scientific.core import Field, Operation
 
@@ -12,6 +14,8 @@ def _resistance(data):
     minimum = min(resistances)
     # Scaling by the smallest resistance avoids overflow in 1/R.
     parallel = minimum / math.fsum(minimum / r for r in resistances) if minimum else 0.0
+    if minimum > 0 and parallel == 0:
+        raise ValueError("The positive parallel resistance is below the supported numerical range.")
     return {
         "summary": "Equivalent resistance for all elements in series and all elements in parallel.",
         "values": {"series_ohm": math.fsum(resistances), "parallel_ohm": parallel},
@@ -28,7 +32,23 @@ def _rc_response(data):
     tau = resistance * capacitance
     if not math.isfinite(tau) or tau == 0:
         raise ValueError("The RC time constant is outside the supported numerical range.")
-    voltages = [-voltage * math.expm1(-t / tau) for t in times]
+    # A subnormal time constant may have only one significant bit. The
+    # displayed value rounds to binary64; use the unrounded product to model it.
+    exact_tau = Fraction(resistance) * Fraction(capacitance) if tau < sys.float_info.min else None
+    voltages = []
+    for time in times:
+        if exact_tau is not None:
+            scaled = Fraction(time) / exact_tau
+            ratio = float(scaled) if scaled < 750 else math.inf
+        else:
+            ratio = time / tau
+        if time and ratio < sys.float_info.min:
+            # In this regime the quadratic term is below binary64 precision.
+            # Compute the linear term before rounding the extremely small ratio.
+            volts = float(Fraction(voltage) * Fraction(time) / Fraction(resistance) / Fraction(capacitance))
+        else:
+            volts = -voltage * math.expm1(-ratio)
+        voltages.append(volts)
     return {
         "summary": "Capacitor voltage following an ideal DC step from an initially uncharged state.",
         "values": {"time_constant_s": tau, "final_sample_v": voltages[-1]},
@@ -47,12 +67,18 @@ def _expansion(data):
     length, alpha, delta = data["length_m"], data["coefficient_per_k"], data["temperature_change_k"]
     if length <= 0:
         raise ValueError("Initial length must be positive.")
-    strain = alpha * delta
+    strain = Fraction(alpha) * Fraction(delta)
+    if strain and float(strain) == 0:
+        raise ValueError("The nonzero thermal strain is below the supported numerical range.")
     if strain <= -1:
         raise ValueError("The predicted length must remain positive. Check the linear-model inputs.")
     return {
         "summary": "Free, uniform one-dimensional expansion with a constant linear expansion coefficient.",
-        "values": {"strain": strain, "length_change_m": length * strain, "final_length_m": length * (1 + strain)},
+        "values": {
+            "strain": float(strain),
+            "length_change_m": float(Fraction(length) * strain),
+            "final_length_m": float(Fraction(length) * (1 + strain)),
+        },
     }
 
 

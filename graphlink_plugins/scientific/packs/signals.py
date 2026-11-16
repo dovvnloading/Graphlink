@@ -2,6 +2,8 @@
 
 import math
 from bisect import bisect_left
+from fractions import Fraction
+from itertools import accumulate
 
 from graphlink_plugins.scientific.core import Field, Operation
 
@@ -12,9 +14,9 @@ def moving_average(data):
         raise ValueError("Choose a positive odd window no longer than the input series.")
     half = width // 2
     centers = list(range(half, len(samples) - half))
-    # Scale before summing to avoid overflowing the sum of large finite samples.
-    scaled = [value / width for value in samples]
-    means = [math.fsum(scaled[i - half : i + half + 1]) for i in centers]
+    # Exact prefix sums preserve subnormals and cancellation in sliding differences.
+    prefix = list(accumulate(map(Fraction, samples), initial=Fraction(0)))
+    means = [float((right - left) / width) for left, right in zip(prefix, prefix[width:])]
     return {
         "summary": f"{len(means)} complete centered window(s) of {width} sample(s).",
         "values": {"window_samples": width, "windows": len(means)},
@@ -39,7 +41,15 @@ def amplitude_spectrum(data):
         raise ValueError("Provide 2–256 real samples for the direct Fourier transform.")
     if rate <= 0:
         raise ValueError("Sample rate must be positive.")
-    scaled = [value / n for value in samples]
+    if rate / n == 0:
+        raise ValueError("Frequency-bin spacing is below the supported numerical range.")
+    exact = [Fraction(value) for value in samples]
+    mean = sum(exact) / n
+    # Subtract the DC component before projecting onto a sinusoid. A constant
+    # input then has exactly zero non-DC amplitude, even at large DC offsets.
+    deviations = [value - mean for value in exact]
+    scale = max(map(abs, deviations))
+    normalized = [float(value / scale) for value in deviations] if scale else [0.0] * n
     # Periodic table prevents large phase arguments in the direct O(N²) sum.
     cosines = [math.cos(math.tau * j / n) for j in range(n)]
     sines = [math.sin(math.tau * j / n) for j in range(n)]
@@ -48,14 +58,14 @@ def amplitude_spectrum(data):
     amplitudes = []
     for k in bins:
         if k == 0:
-            amplitude = abs(math.fsum(scaled))
+            amplitude = float(abs(mean))
         elif 2 * k == n:
             # Nyquist is a single real coefficient for even N.
-            amplitude = abs(math.fsum(s if i % 2 == 0 else -s for i, s in enumerate(scaled)))
+            amplitude = float(abs(sum(exact[::2]) - sum(exact[1::2])) / n)
         else:
-            real = math.fsum(value * cosines[(k * i) % n] for i, value in enumerate(scaled))
-            imag = math.fsum(value * sines[(k * i) % n] for i, value in enumerate(scaled))
-            amplitude = 2 * math.hypot(real, imag)
+            real = math.fsum(value * cosines[(k * i) % n] for i, value in enumerate(normalized))
+            imag = math.fsum(value * sines[(k * i) % n] for i, value in enumerate(normalized))
+            amplitude = float(Fraction(math.hypot(real, imag)) * scale * 2 / n)
         amplitudes.append(amplitude)
     peak_bin = max(bins, key=amplitudes.__getitem__)
     return {
@@ -94,13 +104,11 @@ def linear_resample(data):
         if coordinates[i] == target:
             interpolated = values[i]
         else:
-            left, right = coordinates[i - 1], coordinates[i]
-            width = right - left
-            if math.isfinite(width):
-                weight = (target - left) / width
-            else:
-                weight = (target / 2 - left / 2) / (right / 2 - left / 2)
-            interpolated = (1 - weight) * values[i - 1] + weight * values[i]
+            left, right = Fraction(coordinates[i - 1]), Fraction(coordinates[i])
+            point = Fraction(target)
+            # Calculate both weights explicitly to resolve a target close to either endpoint.
+            weighted = (right - point) * Fraction(values[i - 1]) + (point - left) * Fraction(values[i])
+            interpolated = float(weighted / (right - left))
         rows.append([target, interpolated])
     ordered = sorted(rows, key=lambda row: row[0])
     return {

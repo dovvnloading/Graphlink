@@ -2,7 +2,7 @@
 id = "science_signals"
 name = "Signal Processing"
 description = "Smooth, transform and resample measured signals."
-version = "1.0.0"
+version = "1.1.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
 
@@ -11,3 +11,6 @@ grants = ["graph.read", "graph.mutate"]
 
 [frontend]
 view = "generic"
+
+[persistence]
+passive_node_kinds = ["workbench"]

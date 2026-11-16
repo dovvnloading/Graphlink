@@ -217,9 +217,9 @@ from backend.domain.table_workflows import restore_table_data
 from backend.domain.graph_run_history import restore_graph_runs
 from backend.domain.node_states import (
     ARTIFACT_MAX_CHARS, ChartState, FrameState, NoteState, FalMediaState, ModelState, ModelTextBinding,
-    NodeState, PersistedPluginState,
+    NodeState, PersistedPluginState, PluginStateSnapshot,
 )
-from backend.plugin_sdk import NodeKindSpec, PluginRegistry, discover_plugins
+from backend.plugin_sdk import MAX_PLUGIN_STATE_BYTES, NodeKindSpec, PluginRegistry, discover_plugins
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data
 from graphlink_navigation_pins import NavigationPinRecord
 from graphlink_settings_store import SettingsManager
@@ -1069,51 +1069,26 @@ def _restore_harness_payload(payload: dict[str, Any]) -> SceneNode:
 
 def _restore_plugin_payload(
     payload: dict[str, Any],
-    kind_spec: "NodeKindSpec",
+    kind_spec: "NodeKindSpec | None",
     settings_manager: "SettingsManager | None" = None,
 ) -> SceneNode:
-    """ADR-014 stage 14.2: the load-side mirror of session_save.py's
-    _serialize_plugin_node - restores the universal title/content/
-    is_collapsed fields that generic fallback always wrote, unconditionally
-    (every plugin-kind payload this project's own save path ever produced
-    carries them, with no opt-in required), then - only when THIS SAME
-    kind is still registered with a `deserialize` hook today - reconstructs
-    the plugin's own NodeState subclass from the isolated 'plugin_state'
-    dict serialize(node) most recently produced.
-
-    A plugin that dropped its serialize/deserialize opt-in since this node
-    was saved (or never had one) degrades to a plain title/content node
-    rather than losing it outright - matches every other per-kind
-    restorer's own "a missing/unusable piece of state is not fatal" posture
-    (e.g. _restore_gitlink_payload's repo_state/proposal_data isinstance
-    guards). The caller (_restore_node) is the one that decides whether to
-    call this at all - it requires `kind_spec` (i.e. the kind is currently
-    registered in the discovered PluginRegistry) BEFORE reaching here; an
-    unregistered plugin kind is treated exactly like any other unrecognized
-    node_type (skipped, not resurrected from a bare payload string with no
-    validation).
-
-    A grant is required to invoke the extension deserializer. Externalizable
-    state survives an unavailable plugin hook or asset as passive host data
-    so that a later save and reload can recover it. Other plugins retain the
-    original title/content-only fallback.
-    """
+    """Restore live state, or inert JSON for a manifest-declared passive kind."""
     x, y = _position(payload)
     kind = str(payload.get("node_type", "") or "")
     title = str(payload.get("title", "") or kind)
     content = str(payload.get("content", "") or "")
     state: NodeState | None = None
-    granted = (
-        settings_manager is None
-        or settings_manager.get_plugin_grants().get(kind_spec.plugin_id, False)
-    )
     plugin_state = payload.get("plugin_state")
+    externalize = kind_spec is None or kind_spec.externalize_state
     descriptor = payload.get("plugin_state_asset")
-    if isinstance(descriptor, dict):
-        ref = descriptor.get("asset_ref")
-        if isinstance(ref, str) and re.fullmatch(r"[0-9a-f]{64}", ref):
+    if externalize and "plugin_state_asset" in payload:
+        ref = descriptor.get("asset_ref") if isinstance(descriptor, dict) else None
+        if not isinstance(ref, str) or not re.fullmatch(r"[0-9a-f]{64}", ref):
+            state = PersistedPluginState(data={"plugin_state_asset": descriptor}, invalid_asset_descriptor=True)
+            plugin_state = None
+        else:
             asset_store = _ACTIVE_ASSET_STORE.get()
-            raw = asset_store.get(ref) if asset_store is not None else None
+            raw = asset_store.get(ref, max_bytes=MAX_PLUGIN_STATE_BYTES) if asset_store is not None else None
             try:
                 decoded = json.loads(raw) if raw is not None else None
             except (ValueError, RecursionError):
@@ -1126,9 +1101,12 @@ def _restore_plugin_payload(
                 state = PersistedPluginState(unresolved_asset_ref=ref)
                 plugin_state = None
     if isinstance(plugin_state, dict):
-        if kind_spec.externalize_state or isinstance(descriptor, dict):
+        if kind_spec is None:
+            state = PluginStateSnapshot.from_data(plugin_state)
+        elif externalize:
             state = PersistedPluginState(data=plugin_state)
-        if granted and kind_spec.deserialize is not None:
+        if (kind_spec is not None and kind_spec.deserialize is not None
+                and (settings_manager is None or settings_manager.get_plugin_grants().get(kind_spec.plugin_id, False))):
             try:
                 restored = kind_spec.deserialize(plugin_state)
                 if restored is not None:
@@ -1293,7 +1271,9 @@ def _restore_node(
     if restorer is None:
         if plugin_registry is not None:
             kind_spec = plugin_registry.node_kinds.get(node_type)
-            if kind_spec is not None:
+            plugin_id, _, local_kind = node_type.partition(".")
+            manifest = plugin_registry.manifests.get(plugin_id)
+            if kind_spec is not None or (manifest is not None and local_kind in manifest.passive_node_kinds):
                 try:
                     plugin_node = _restore_plugin_payload(payload, kind_spec, settings_manager)
                 except Exception:

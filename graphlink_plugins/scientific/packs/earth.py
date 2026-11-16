@@ -1,6 +1,7 @@
 """Spherical geometry and simple observational geoscience models."""
 
 import math
+from fractions import Fraction
 
 from graphlink_plugins.scientific.core import Field, Operation
 
@@ -11,14 +12,23 @@ def great_circle_distance(data):
     if max(abs(lat1), abs(lat2)) > 90 or max(abs(lon1), abs(lon2)) > 180:
         raise ValueError("Latitudes must be within ±90° and longitudes within ±180°.")
     # The atan2 form of the spherical inverse stays usable near antipodes.
-    delta = math.radians(math.remainder(lon2 - lon1, 360))
+    delta_deg = lon2 - lon1
+    if abs(delta_deg) > 180:
+        delta_deg = math.fsum([lon2, -lon1, -math.copysign(360, delta_deg)])
+    delta = math.radians(delta_deg)
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    c1 = 0.0 if abs(lat1) == 90 else math.cos(phi1)
-    c2 = 0.0 if abs(lat2) == 90 else math.cos(phi2)
+    c1 = math.sin(math.radians(90 - abs(lat1))) if abs(lat1) > 45 else math.cos(phi1)
+    c2 = math.sin(math.radians(90 - abs(lat2))) if abs(lat2) > 45 else math.cos(phi2)
     s1, s2 = math.sin(phi1), math.sin(phi2)
     cross = math.hypot(c2 * math.sin(delta), c1 * s2 - s1 * c2 * math.cos(delta))
     dot = s1 * s2 + c1 * c2 * math.cos(delta)
-    angle = math.atan2(cross, dot)
+    if dot > 0:
+        # Taking the latitude difference before converting to radians preserves small arcs.
+        half_lat = math.sin(math.radians(lat2 - lat1) / 2)
+        half_lon = math.sqrt(c1 * c2) * math.sin(delta / 2)
+        angle = 2 * math.asin(min(1.0, math.hypot(half_lat, half_lon)))
+    else:
+        angle = math.atan2(cross, dot)
     radius = 6371.0088
     distance = radius * angle
     return {
@@ -34,7 +44,7 @@ def geothermal_gradient(data):
         raise ValueError("Depth increases downwards; provide a nonnegative shallow depth and a greater deep depth.")
     if min(t1, t2) < -273.15:
         raise ValueError("Temperatures cannot be below absolute zero.")
-    gradient = (t2 - t1) / (deep - shallow) * 1000
+    gradient = float((Fraction(t2) - Fraction(t1)) * 1000 / (Fraction(deep) - Fraction(shallow)))
     return {
         "summary": f"Temperature changes by {gradient:.6g} °C per kilometre of increasing depth.",
         "values": {"gradient_c_per_km": gradient, "depth_interval_m": deep - shallow, "temperature_change_c": t2 - t1},
@@ -45,11 +55,13 @@ def seismic_distance(data):
     lag, vp, vs = data["s_minus_p_s"], data["p_speed_km_s"], data["s_speed_km_s"]
     if lag < 0 or not vp > vs > 0:
         raise ValueError("Use a nonnegative S-minus-P lag and wave speeds satisfying Vp > Vs > 0.")
-    # ts - tp = d(1/vs - 1/vp). The speed ratio avoids reciprocal subtraction.
-    distance = lag * (vs / ((vp - vs) / vp))
+    # Compute each reported quantity from the unrounded path length.
+    p, s = Fraction(vp), Fraction(vs)
+    path = Fraction(lag) * s * p / (p - s)
+    distance = float(path)
     return {
         "summary": f"Estimated source-to-station path length is {distance:.6g} km.",
-        "values": {"path_length_km": distance, "p_travel_s": distance / vp, "s_travel_s": distance / vs},
+        "values": {"path_length_km": distance, "p_travel_s": float(path / p), "s_travel_s": float(path / s)},
     }
 
 

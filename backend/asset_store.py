@@ -199,7 +199,7 @@ class AssetStore:
             logger.warning("could not chmod asset %s to 0600 - continuing", target)
         return ref
 
-    def get(self, ref: str) -> bytes | None:
+    def get(self, ref: str, *, max_bytes: int | None = None) -> bytes | None:
         """Return only bytes whose SHA-256 matches `ref`.
 
         A file can exist at the right path yet contain corrupt or replaced
@@ -213,7 +213,13 @@ class AssetStore:
         if target is None or not target.is_file():
             return None
         try:
-            data = target.read_bytes()
+            with target.open("rb") as handle:
+                if max_bytes is None:
+                    data = handle.read()
+                else:
+                    data = handle.read(max_bytes + 1)
+                    if len(data) > max_bytes:
+                        return None
         except OSError:
             logger.warning("could not read asset %s - treating as missing", target)
             return None

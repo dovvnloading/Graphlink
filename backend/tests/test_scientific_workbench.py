@@ -166,8 +166,220 @@ def test_damaged_receipt_is_visible_and_preserved(session):
     grant(bus, "core")
     node = dispatch(bus, "executePlugin", "Scientific Core")
     assert run(bus, "core", node, "convert_unit", operations("core")[1].example)["ok"]
-    result = document.nodes[node].state.data["latest"]
-    result["values"]["value (K)"] = 9001
+    saved = build_chat_data(document, plugin_registry=session[2], settings_manager=session[3])
+    saved["nodes"][0]["plugin_state"]["latest"]["values"]["value (K)"] = 9001
+    restore_chat_into_document(document, {"data": saved}, [], [], plugin_registry=session[2], settings_manager=session[3])
+    node = next(iter(document.nodes))
     assert "damaged" in envelope(document, node)["error"]
     assert not run(bus, "core", node, "convert_unit", operations("core")[1].example)["ok"]
-    assert document.nodes[node].state.data["latest"] is result
+    again = build_chat_data(document, plugin_registry=session[2], settings_manager=session[3])
+    assert again["nodes"][0]["plugin_state"] == saved["nodes"][0]["plugin_state"]
+
+
+def test_export_and_optimistic_edits_are_bound_to_the_visible_run(session):
+    document, bus, _, _ = session
+    grant(bus, "core")
+    node = dispatch(bus, "executePlugin", "Scientific Core")
+    other = dispatch(bus, "executePlugin", "Scientific Core")
+    initial = envelope(document, node)["runToken"]
+    assert initial != envelope(document, other)["runToken"]
+    example = operations("core")[1].example
+    assert run(bus, "core", node, "convert_unit", example, expected_run=initial)["ok"]
+    latest = envelope(document, node)
+    assert latest["runToken"] != initial
+    assert run(bus, "core", node, "convert_unit", {**example, "value": 77}, expected_run=initial)["conflict"]
+    assert envelope(document, node) == latest
+    def export(token):
+        return dispatch(bus, "invokePluginIntent", "science_core", "export_result",
+                        {"node_id": node, "expected_run": token})
+    assert export(initial)["conflict"]
+    encoded = export(latest["runToken"])["json"]
+    assert '"value":25.0' in encoded
+    assert json.loads(encoded) == latest["latest"]
+    assert envelope(document, node) == latest
+
+
+def test_receipt_integrity_legacy_data_and_structure():
+    import copy
+    from graphlink_plugins.scientific.core import fingerprint, readable_result
+    op = operations("core")[1]
+    latest = run_operation("core", op, op.example)
+    def valid(result):
+        return readable_result({"version": 1, "latest": result}, "core")
+    for key, value in {"createdAt": "2024-02-03T04:05:06+00:00", "sources": {"value": "broken"},
+                       "packVersion": "9.8.7", "receiptHash": "0" * 64}.items():
+        changed = copy.deepcopy(latest)
+        changed["provenance"][key] = value
+        assert not valid(changed)
+    damaged = copy.deepcopy(latest)
+    del damaged["provenance"]["receiptHash"]
+    assert not valid(damaged)
+    legacy = copy.deepcopy(damaged)
+    receipt = legacy["provenance"]
+    receipt["packVersion"] = "1.0.0"
+    outputs = {k: legacy[k] for k in ("values", "summary")}
+    receipt["resultHash"] = fingerprint(["core", "1.0.0", op.id, receipt["inputHash"], outputs])
+    assert valid(legacy)
+    for bad_time in ("yesterday", "", "2024-02-03T04:05:06"):
+        receipt["createdAt"] = bad_time
+        assert not valid(legacy)
+
+
+def test_equal_numbers_from_a_new_lineage_do_not_reuse_an_old_citation(session):
+    document, bus, _, _ = session
+    grant(bus, "core")
+    grant(bus, "statistics")
+    parents = [dispatch(bus, "executePlugin", "Scientific Core") for _ in range(2)]
+    middle = dispatch(bus, "executePlugin", "Statistics", parents[0])
+    document.connect(parents[1], middle)
+    leaf = dispatch(bus, "executePlugin", "Scientific Core", middle)
+    def source(node, selector):
+        state = envelope(document, node)
+        receipt = state["latest"]["provenance"]
+        return {"nodeId": node, "sourceKey": state["nodeKey"], "resultHash": receipt["resultHash"],
+                "receiptHash": receipt["receiptHash"], "selector": selector}
+    def analyze(parent):
+        return run(bus, "statistics", middle, "describe", {"observations": [8, 12]},
+                   sources={"observations": source(parent, ["column", 0])})
+    for parent in parents:
+        assert run(bus, "core", parent, "numeric_csv", {"csv": "T\n8\n12"})["ok"]
+    assert analyze(parents[0])["ok"]
+    citation = source(middle, ["values", "mean"])
+    inputs = {"value": 10, "from_unit": "m", "to_unit": "cm"}
+    assert run(bus, "core", leaf, "convert_unit", inputs, sources={"value": citation})["ok"]
+    assert analyze(parents[1])["ok"]
+    replacement = source(middle, ["values", "mean"])
+    assert replacement["resultHash"] == citation["resultHash"]
+    assert replacement["receiptHash"] != citation["receiptHash"]
+    assert not run(bus, "core", leaf, "convert_unit", inputs, sources={"value": citation})["ok"]
+    assert run(bus, "core", leaf, "convert_unit", inputs, sources={"value": replacement})["ok"]
+    assert envelope(document, leaf)["latest"]["provenance"]["sources"]["value"]["receiptHash"] == replacement["receiptHash"]
+
+
+def test_cold_disabled_pack_preserves_nodes_edges_and_data_then_regrants(session, tmp_path):
+    from backend.asset_store import AssetStore
+    document, bus, registry, settings = session
+    grant(bus, "core")
+    grant(bus, "statistics")
+    source = dispatch(bus, "executePlugin", "Scientific Core")
+    target = dispatch(bus, "executePlugin", "Statistics", source)
+    assert run(bus, "core", source, "numeric_csv", {"csv": "a\n" + "\n".join(map(str, range(1024)))})["ok"]
+    latest = envelope(document, source)
+    store = AssetStore(tmp_path / "assets")
+    saved = build_chat_data(document, asset_store=store, plugin_registry=registry, settings_manager=settings)
+    descriptor = saved["nodes"][0]["plugin_state_asset"]
+    dispatch(bus, "setPluginGrant", "science_core", False)
+    fresh_root = tmp_path / "cold-plugins"
+    shutil.copytree(tmp_path / "plugins", fresh_root)
+    cold = discover_plugins(fresh_root)
+    assert "science_core.workbench" not in cold.node_kinds
+    restored = SceneDocument()
+    notice = NotificationState()
+    new_bus = SessionBus("cold")
+    new_bus.register_topic("notification", notice.payload)
+    new_bus.register_topic("scene", restored.scene_payload)
+    register_plugins(new_bus, notice, restored, settings, plugin_registry=cold)
+    restore_chat_into_document(restored, {"data": saved}, [], [], store, plugin_registry=cold, settings_manager=settings)
+    assert restored.unrestored_node_count == 0
+    by_kind = {node.kind: node for node in restored.nodes.values()}
+    assert {edge.target for edge in restored.edges.values()} == {by_kind["science_statistics.workbench"].id}
+    restored_source = by_kind["science_core.workbench"]
+    assert restored._plugin_state_wire(restored_source) == {}
+    assert "science_core" not in cold.loaded_plugin_ids
+    assert build_chat_data(restored, asset_store=store, plugin_registry=cold, settings_manager=settings)["nodes"][0]["plugin_state_asset"] == descriptor
+    grant(new_bus, "core")
+    assert envelope(restored, restored_source.id) == latest
+    assert target in document.nodes
+
+
+@pytest.mark.parametrize("broken", [None, "missing", {"asset_ref": "mistyped-checksum"}])
+def test_invalid_asset_descriptor_survives_repeated_saves(session, broken):
+    document, bus, registry, settings = session
+    grant(bus, "core")
+    node = dispatch(bus, "executePlugin", "Scientific Core")
+    saved = build_chat_data(document, plugin_registry=registry, settings_manager=settings)
+    record = saved["nodes"][0]
+    record.pop("plugin_state")
+    record["plugin_state_asset"] = broken
+    restore_chat_into_document(document, {"data": saved}, [], [], plugin_registry=registry, settings_manager=settings)
+    node = next(iter(document.nodes))
+    assert envelope(document, node)["error"]
+    assert not run(bus, "core", node, "convert_unit", operations("core")[1].example)["ok"]
+    again = build_chat_data(document, plugin_registry=registry, settings_manager=settings)
+    assert again["nodes"][0]["plugin_state_asset"] == broken
+
+
+@pytest.mark.parametrize("change", ["revoke", "overwrite", "disconnect", "revoke_source", "delete"])
+def test_work_in_flight_cannot_commit_over_a_changed_graph(session, monkeypatch, change):
+    import threading
+    from graphlink_plugins.scientific import workbench
+
+    document, bus, _, _ = session
+    grant(bus, "core")
+    grant(bus, "statistics")
+    source = dispatch(bus, "executePlugin", "Scientific Core")
+    target = dispatch(bus, "executePlugin", "Statistics", source)
+    run(bus, "core", source, "numeric_csv", {"csv": "x\n1\n2"})
+    state = envelope(document, source)
+    ref = {"nodeId": source, "sourceKey": state["nodeKey"], "selector": ["column", 0],
+           "resultHash": state["latest"]["provenance"]["resultHash"]}
+    entered, finish = threading.Event(), threading.Event()
+    calculate = workbench.calculate_result
+
+    def paused(*args):
+        if args[2]["observations"] == [1, 2]:
+            entered.set()
+            assert finish.wait(4), "Calculation blocked the event loop."
+        return calculate(*args)
+
+    monkeypatch.setattr(workbench, "calculate_result", paused)
+    async def scenario():
+        async def submit(values, sources):
+            return await bus.dispatch_intent("app-plugins", "invokePluginIntent", [
+                "science_statistics", "run", {"node_id": target, "operation_id": "describe",
+                "inputs": {"observations": values}, "sources": sources}])
+        task = asyncio.create_task(submit([1, 2], {"observations": ref}))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            if change in ("revoke", "revoke_source"):
+                pack = "science_core" if change == "revoke_source" else "science_statistics"
+                await bus.dispatch_intent("app-plugins", "setPluginGrant", [pack, False])
+            elif change == "overwrite":
+                assert (await submit([10, 20], {}))["ok"]
+            elif change == "delete":
+                document.remove_nodes([target])
+            else:
+                document.remove_edges(list(document.edges))
+        finally:
+            finish.set()
+        assert not (await task)["ok"]
+    asyncio.run(scenario())
+    if target in document.nodes:
+        latest = document.nodes[target].state.data["latest"]
+        if change == "overwrite":
+            assert latest["values"]["mean"] == 15
+        else:
+            assert latest is None
+
+
+def test_repeated_renders_validate_immutable_state_once_and_hide_it_on_revoke(session, monkeypatch):
+    from graphlink_plugins.scientific import workbench
+
+    document, bus, _, _ = session
+    grant(bus, "core")
+    node = dispatch(bus, "executePlugin", "Scientific Core")
+    assert run(bus, "core", node, "convert_unit", operations("core")[1].example)["ok"]
+    state = document.nodes[node].state
+    altered_copy = state.data
+    altered_copy["latest"]["values"].clear()
+    real_check = workbench.readable_result
+    calls = []
+    def checked(*args):
+        calls.append(1)
+        return real_check(*args)
+    monkeypatch.setattr(workbench, "readable_result", checked)
+    for _ in range(4):
+        assert envelope(document, node)["latest"]["values"]["value (K)"] == 298.15
+    assert len(calls) <= 1
+    dispatch(bus, "setPluginGrant", "science_core", False)
+    assert document._plugin_state_wire(document.nodes[node]) == {}

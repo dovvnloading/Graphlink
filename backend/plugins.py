@@ -532,7 +532,10 @@ async def _invoke_discovered_plugin_intent(
         await bus.publish("notification")
         return None
 
-    run_ctx = PluginRunContext(plugin_id=plugin_id, notifications=notifications)
+    run_ctx = PluginRunContext(
+        plugin_id=plugin_id, notifications=notifications,
+        is_plugin_granted=lambda target: _is_plugin_granted(settings_manager, target),
+    )
     if inspect.iscoroutinefunction(spec.handler):
         result = await spec.handler(canvas_document, run_ctx, *extra_args)
     elif plugin_id in plugin_registry.worker_clients:

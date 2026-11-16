@@ -51,7 +51,12 @@ class BuildDesktopPackage(build_py):
 
         super().run()
         output = Path(self.build_lib) / "backend" / "_bundled"
-        shutil.copytree(spa, output / "spa", dirs_exist_ok=True)
+        # build_py reuses build/lib on repeated builds. Replace this generated
+        # resource tree so removed plugins and obsolete hashed SPA chunks cannot
+        # survive into the next wheel or be discovered by an installed app.
+        if output.exists():
+            shutil.rmtree(output)
+        shutil.copytree(spa, output / "spa")
         for manifest in manifests:
             plugin_dir = output / "plugins" / manifest.parent.name
             plugin_dir.mkdir(parents=True, exist_ok=True)

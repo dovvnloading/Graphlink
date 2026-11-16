@@ -1,6 +1,7 @@
 """Idealized oscillator and thermal models in SI units."""
 
 import math
+from fractions import Fraction
 
 from graphlink_plugins.scientific.core import Field, Operation
 
@@ -33,14 +34,20 @@ def _conduction(data):
         raise ValueError("Thicknesses, conductivities and cross-sectional area must be positive.")
     if min(t1, t2) < 0:
         raise ValueError("Boundary temperatures must be at or above zero kelvin.")
-    resistances = [length / k / area for length, k in zip(thickness, conductivities)]
-    total = math.fsum(resistances)
-    if total == 0:
-        raise ValueError("Thermal resistance is below the supported numerical range.")
-    heat_rate = (t1 - t2) / total
+    # Divide length by both conductivity and area before rounding. The
+    # intermediate L/k alone can vanish even with a representable resistance.
+    exact = [Fraction(length) / Fraction(k) / Fraction(area) for length, k in zip(thickness, conductivities)]
+    resistances = [float(r) for r in exact]
+    if min(resistances) == 0:
+        raise ValueError("A layer resistance is below the supported numerical range.")
+    total = sum(exact)
+    heat_rate = (Fraction(t1) - Fraction(t2)) / total
+    heat_flux = heat_rate / Fraction(area)
+    if heat_rate and (float(heat_rate) == 0 or float(heat_flux) == 0):
+        raise ValueError("The nonzero heat rate or heat flux is below the supported numerical range.")
     return {
         "summary": "Steady one-dimensional conduction through layers in perfect contact. Positive flow is left to right.",
-        "values": {"resistance_k_w": total, "heat_rate_w": heat_rate, "heat_flux_w_m2": heat_rate / area},
+        "values": {"resistance_k_w": float(total), "heat_rate_w": float(heat_rate), "heat_flux_w_m2": float(heat_flux)},
         "table": {
             "columns": ["Layer", "Thermal resistance (K/W)"],
             "rows": [[i + 1, r] for i, r in enumerate(resistances)],
@@ -56,12 +63,15 @@ def _calorimetry(data):
     if min(initial, final) < 0:
         raise ValueError("Temperatures must be at or above zero kelvin.")
     delta = final - initial
+    heat_capacity = Fraction(mass) * Fraction(capacity)
+    if float(heat_capacity) == 0:
+        raise ValueError("Heat capacity is below the supported numerical range.")
     return {
         "summary": "Sensible heat at constant specific heat, with no phase change. Positive heat enters the sample.",
         "values": {
             "temperature_change_k": delta,
-            "heat_capacity_j_k": mass * capacity,
-            "heat_j": mass * capacity * delta,
+            "heat_capacity_j_k": float(heat_capacity),
+            "heat_j": float(heat_capacity * (Fraction(final) - Fraction(initial))),
         },
     }
 

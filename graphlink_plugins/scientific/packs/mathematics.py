@@ -2,19 +2,50 @@
 
 import math
 import sys
+from fractions import Fraction
 
 from graphlink_plugins.scientific.core import Field, Operation
+
+
+def _exact_polynomial(coefficients, point):
+    """Horner on integer numerators over powers of two, rounding only the result."""
+    x_num, x_den = point.as_integer_ratio()
+    x_exponent = 1 - x_den.bit_length()
+    numerator, exponent = coefficients[-1]
+    for coefficient, coefficient_exponent in reversed(coefficients[:-1]):
+        numerator *= x_num
+        exponent += x_exponent
+        if exponent < coefficient_exponent:
+            numerator += coefficient << (coefficient_exponent - exponent)
+        else:
+            numerator = (numerator << (exponent - coefficient_exponent)) + coefficient
+            exponent = coefficient_exponent
+    if exponent >= 0:
+        return float(numerator << exponent)
+    # Integer true division correctly rounds the ratio even when numerator
+    # and denominator are far too large to convert to floats individually.
+    return numerator / (1 << -exponent)
 
 
 def _polynomial(data):
     coefficients, points = data["coefficients"], data["points"]
     if not 1 <= len(coefficients) <= 128 or not 1 <= len(points) <= 256:
         raise ValueError("Supply 1–128 coefficients and 1–256 sample coordinates.")
+    # Account for coefficient cancellation near multiple roots. Only repeat
+    # Horner in exact binary rational arithmetic if cancellation could
+    # cost half of the significant bits; ordinary well-scaled polynomials stay fast.
+    conditioning_threshold = math.sqrt(sys.float_info.epsilon)
+    ratios = [v.as_integer_ratio() for v in coefficients]
+    dyadic = [(n, 1 - d.bit_length()) for n, d in ratios]
     values = []
     for x in points:
         value = coefficients[-1]
+        magnitude = abs(value)
         for coefficient in reversed(coefficients[:-1]):
             value = value * x + coefficient
+            magnitude = magnitude * abs(x) + abs(coefficient)
+        if not math.isfinite(value) or abs(value) < magnitude * conditioning_threshold:
+            value = _exact_polynomial(dyadic, x)
         values.append(value)
     points_and_values = sorted(zip(points, values), key=lambda pair: pair[0])
     return {
@@ -37,17 +68,15 @@ def _integrate(data):
         raise ValueError("Supply at least two paired x and y observations.")
     if any(left >= right for left, right in zip(x, x[1:])):
         raise ValueError("Sample coordinates must increase strictly.")
-    areas = []
-    for i in range(1, len(x)):
-        left, right = y[i - 1], y[i]
-        total = left + right
-        # Half the sum keeps subnormal ordinates; halve each term only if
-        # their sum overflowed. A true zero-height interval always cancels.
-        height = 0.5 * total if math.isfinite(total) else 0.5 * left + 0.5 * right
-        areas.append((x[i] - x[i - 1]) * height if height else 0.0)
+    # Binary inputs are exact rationals. Accumulate signed areas before
+    # rounding, even if a difference, half-height, or area alone overflows
+    # or underflows the finite range of the final result.
+    coordinates = list(map(Fraction, x))
+    heights = list(map(Fraction, y))
+    integral = sum((coordinates[i] - coordinates[i - 1]) * (heights[i] + heights[i - 1]) for i in range(1, len(x))) / 2
     return {
         "summary": "Signed integral of the piecewise-linear interpolant on the supplied interval.",
-        "values": {"integral": math.fsum(areas), "intervals": len(areas)},
+        "values": {"integral": float(integral), "intervals": len(x) - 1},
         "plot": {"title": "Integrated samples", "xLabel": "x", "yLabel": "y", "x": x, "y": y},
     }
 
@@ -79,7 +108,12 @@ def _solve(data):
     for j in reversed(range(n)):
         products = (rows[j][k] * solution[k] for k in range(j + 1, n))
         solution[j] = (rows[j][-1] - math.fsum(products)) / rows[j][j]
-    residual = max(abs(math.fsum(a * x for a, x in zip(row, solution)) - value) for row, value in zip(matrix, rhs))
+    residual = float(
+        max(
+            abs(sum(Fraction(a) * Fraction(x) for a, x in zip(row, solution)) - Fraction(value))
+            for row, value in zip(matrix, rhs)
+        )
+    )
     return {
         "summary": f"Solved {n} equations with row scaling and partial pivoting.",
         "values": {"order": n, "max_absolute_residual": residual},

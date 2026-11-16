@@ -2,12 +2,20 @@
 
 Each operation accepts finite numbers in the units shown in its form. Vector inputs represent ordered observations. Calculations use the supplied measurements directly. The examples below give reference values for checking a result by hand.
 
+## Scientific Core
+
+| Operation | Input contract and method | Reference result |
+| --- | --- | --- |
+| Import numeric CSV (`numeric_csv`) | Supply a UTF-8 CSV text with distinct nonempty headings and up to 1,024 rows, 32 columns and 4,096 numeric cells. Quoted fields, blank lines, CRLF and a leading Unicode byte-order mark are supported. A cell that overflows, rounds a nonzero value to zero, or changes an integer count in binary64 produces a line-specific error. | A column containing `9007199254740993` produces an error on that row. The same column accepts the exactly representable count `9007199254740992`. |
+| Convert a measurement (`convert_unit`) | Select case-sensitive symbols in a common dimension. Scales for length, mass, volume and time are exact decimal ratios. Temperature uses the absolute Celsius–Kelvin offset of 273.15 and rejects values below absolute zero. | 1 mL = 0.001 L. −273.15 °C = 0 K. |
+| Plot paired samples (`plot_xy`) | Supply finite, equal-length x and y vectors plus two nonempty axis labels with at most 96 characters each. The plot and table retain duplicate coordinates and preserve observation order. | x = `[2, 1, 2]` and y = `[5, 3, 7]` produce three connected points in that order. |
+
 ## Mathematics
 
 | Operation | Input contract and method | Reference result |
 | --- | --- | --- |
-| Evaluate a polynomial (`polynomial`) | Supply 1–128 real coefficients in ascending power order and 1–256 sample coordinates. Horner’s method evaluates each point. The table preserves input order and the plot sorts by coordinate. | Coefficients `[2, -1, 3]` at `[2, -1, 0]` produce `[12, 6, 2]`. |
-| Integrate sampled data (`trapezoid`) | Supply equally long x and y vectors, with at least two strictly increasing x values. Sum the signed trapezoid areas on each interval. The result has units of x times units of y. | x = `[0, 1, 3]` and y = `[-2, 0, 4]` give an integral of 3. |
+| Evaluate a polynomial (`polynomial`) | Supply 1–128 real coefficients in ascending power order and 1–256 sample coordinates. Horner’s method evaluates each point and switches to exact rational arithmetic near severe cancellation. The table preserves input order and the plot sorts by coordinate. | Coefficients `[2, -1, 3]` at `[2, -1, 0]` produce `[12, 6, 2]`. |
+| Integrate sampled data (`trapezoid`) | Supply equally long x and y vectors, with at least two strictly increasing x values. Sum the signed trapezoid areas with exact binary rational intermediates before rounding the final integral. The result has units of x times units of y. | x = `[0, 1, 3]` and y = `[-2, 0, 4]` give an integral of 3. |
 | Solve a linear system (`linear_system`) | Supply a square real matrix A of order 1–32 and a matching right-hand side b. Each equation is scaled by its largest coefficient before Gaussian elimination with partial pivoting. A pivot at or below n times machine epsilon in this scaled system causes a validation error. | `[[2, 1], [1, -1]]` with b = `[5, 1]` gives x = `[2, 1]` and a maximum absolute residual of zero. |
 
 ## Statistics
