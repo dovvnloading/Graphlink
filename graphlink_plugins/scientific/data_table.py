@@ -8,6 +8,7 @@ rehydrates this cache. The graph and scene wire carry only bounded metadata.
 from __future__ import annotations
 
 import base64
+import binascii
 import csv
 import hashlib
 import io
@@ -189,7 +190,8 @@ def parse_table(source: bytes, *, fmt: str = "csv", missing: list[str] | None = 
         present = [row[index] for row in raw_rows if not missing_cell(row[index])]
         kind = options["columnTypes"].get(label, options["columnTypes"].get(name, _kind(present)))
         missing_count = 0
-        for row_index, raw in enumerate(raw_rows):
+        for row_index, row in enumerate(raw_rows):
+            raw = row[index]
             if missing_cell(raw):
                 missing_count += 1
                 continue
@@ -252,7 +254,7 @@ def stage_from_saved(data: dict) -> None:
     from backend.session_load import _ACTIVE_ASSET_STORE
     store = _ACTIVE_ASSET_STORE.get()
     table = data.get("table")
-    if store is not None and table_metadata_valid(table):
+    if store is not None and isinstance(table, dict) and table_metadata_valid(table):
         raw = store.get(table["asset_ref"], max_bytes=TABLE_MAX_ASSET_BYTES)
         if raw is not None:
             _STAGING.put(raw)
@@ -331,7 +333,7 @@ def decode_input(*, text: str | None, encoded_file: str | None) -> bytes:
             raise ValueError("The uploaded file is too large.")
         try:
             encoded = base64.b64decode(encoded_file, validate=True)
-        except (ValueError, base64.binascii.Error):
+        except (ValueError, binascii.Error):
             raise ValueError("The uploaded file encoding is invalid.") from None
     if not 0 < len(encoded) <= TABLE_MAX_SOURCE_BYTES:
         raise ValueError("Scientific table source must be between 1 byte and 64 MiB.")

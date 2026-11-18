@@ -67,7 +67,7 @@ def _run_token(data: dict) -> str:
     # Preserve all legacy run tokens for nodes without an imported table.
     original = [data.get("nodeKey"), receipt.get("receiptHash") or fingerprint(receipt)]
     table = data.get("table")
-    return fingerprint([*original, table["provenance"]["receiptHash"]]) if table_metadata_valid(table) else fingerprint(original)
+    return fingerprint([*original, table["provenance"]["receiptHash"]]) if isinstance(table, dict) and table_metadata_valid(table) else fingerprint(original)
 
 
 def _current_state(document, node_id: str, kind: str, expected_run: str | None):
