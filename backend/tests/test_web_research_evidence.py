@@ -235,3 +235,13 @@ def test_two_verified_quotes_with_different_numbers_flag_a_conflict():
     assert claims[0].status == "conflicted"
     assert "numeric_value_not_quoted" in claims[0].flags
     assert len(citations) == 2
+
+
+def test_jsonld_null_graph_uses_article_metadata():
+    html = ('<html><head><script type="application/ld+json">'
+            + json.dumps({'@graph': None, 'publisher': {'name': 'Journal of Water'},
+                          'datePublished': '2025-08-17'})
+            + '</script></head></html>')
+    publisher, published_at = html_provenance(BeautifulSoup(html, 'html.parser'), 'https://fixture.example/story')
+    assert publisher == 'Journal of Water'
+    assert published_at == '2025-08-17'

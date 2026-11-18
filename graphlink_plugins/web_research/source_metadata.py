@@ -42,7 +42,8 @@ def html_provenance(soup, url: str) -> tuple[str, str]:
         for node in nodes:
             if not isinstance(node, dict):
                 continue
-            nodes_to_visit = node.get("@graph") if isinstance(node.get("@graph"), list) else [node]
+            graph = node.get("@graph")
+            nodes_to_visit = graph if isinstance(graph, list) else [node]
             for item in nodes_to_visit:
                 if not isinstance(item, dict):
                     continue

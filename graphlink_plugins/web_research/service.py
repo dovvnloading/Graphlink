@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from .evidence_report import find_duplicate, validate_report
 from .domain import (
     CancellationToken,
+    FetchedDocument,
     EvidenceChunk,
     ProgressCallback,
     ProgressEvent,
@@ -195,7 +196,7 @@ class WebResearchService:
             raise ResearchFailure("No search results were found for this query.", code="no_search_results", retryable=False)
 
         source_records: list[ResearchSource] = []
-        accepted_documents = []
+        accepted_documents: list[FetchedDocument] = []
         warnings: list[str] = []
         candidates = search_results[: request.limits.max_sources]
         for index, result in enumerate(candidates, start=1):
