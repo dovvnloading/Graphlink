@@ -147,7 +147,7 @@ def _checked_components(item: dict) -> dict[str, float]:
     if any(not isinstance(k, str) or len(k) != 64 or not _numeric(v) for k, v in components.items()):
         raise ValueError("The connected uncertainty lineage is invalid.")
     u = item.get("standardUncertainty")
-    if not _numeric(u) or u < 0:
+    if u is None or not _numeric(u) or u < 0:
         raise ValueError("The connected standard uncertainty must be finite and nonnegative.")
     if not math.isclose(math.hypot(*components.values()), u, rel_tol=1e-9,
                         abs_tol=1e-300):
@@ -185,7 +185,8 @@ def _output_values(operation: Operation, inputs: dict, names: set[str]) -> dict:
         raise ValueError("The operation is undefined for the uncertainty perturbations.") from exc
 
 
-def _derivatives(operation: Operation, inputs: dict, base: dict, attached: dict):
+def _derivatives(operation: Operation, inputs: dict, base: dict[str, float],
+                 attached: dict) -> tuple[dict[str, dict[str, float]], set[str]]:
     """Central difference sensitivities with scale/ULP-aware perturbations.
 
     This is an operation-agnostic fallback: the GUM expression pack retains its
@@ -193,8 +194,8 @@ def _derivatives(operation: Operation, inputs: dict, base: dict, attached: dict)
     explicit unsupported outputs, never zeros invented from a failed model.
     """
     names = set(base)
-    derivatives = {key: {} for key in base}
-    curved = set()
+    derivatives: dict[str, dict[str, float]] = {key: {} for key in base}
+    curved: set[str] = set()
     for field, measurement in attached.items():
         value = inputs[field]
         if not _numeric(value):
@@ -240,8 +241,9 @@ def _derivatives(operation: Operation, inputs: dict, base: dict, attached: dict)
     return derivatives, curved
 
 
-def _budget(derivatives: dict, attached: dict) -> tuple[list, dict[str, float]]:
-    rows, vectors = [], {}
+def _budget(derivatives: dict[str, float], attached: dict) -> tuple[list[dict[str, str | float]], dict[str, float]]:
+    rows: list[dict[str, str | float]] = []
+    vectors: dict[str, float] = {}
     signed_by_field: dict[str, dict[str, float]] = {}
     for field, slope in derivatives.items():
         item = attached[field]

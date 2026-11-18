@@ -188,6 +188,7 @@ function isResult(value: unknown): value is ScienceResult {
       !record(value.inputs) || !record(value.values) || !record(value.provenance) ||
       typeof value.provenance.resultHash !== "string" ||
       (value.provenance.receiptHash !== undefined && typeof value.provenance.receiptHash !== "string")) return false;
+  const resultValues = value.values;
   const sources = value.provenance.sources;
   if (sources !== undefined && (!record(sources) || !Object.values(sources).every((source) =>
     record(source) && typeof source.nodeId === "string" && typeof source.resultHash === "string" &&
@@ -199,8 +200,10 @@ function isResult(value: unknown): value is ScienceResult {
     if (!record(data) || !["gum", "monte_carlo"].includes(String(data.method))
         || !record(data.inputs) || !record(data.outputs)
         || !Object.values(data.inputs).every(isMeasurement) || !Object.values(data.outputs).every(isMeasurement)
-        || Object.entries(data.outputs).some(([key, item]) =>
-          !record(item) || !finite(value.values[key]) || item.value !== value.values[key])) return false;
+        || Object.entries(data.outputs).some(([key, item]) => {
+          const outputValue = resultValues[key];
+          return !isMeasurement(item) || !finite(outputValue) || item.value !== outputValue;
+        })) return false;
   }
   const { table, plot } = value;
   if (table !== undefined && !(record(table) && strings(table.columns) && Array.isArray(table.rows)
