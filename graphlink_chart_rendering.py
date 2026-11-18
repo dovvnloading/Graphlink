@@ -43,7 +43,7 @@ import matplotlib
 matplotlib.use("Agg")
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
-from matplotlib.colors import LinearSegmentedColormap, Normalize, TwoSlopeNorm
+from matplotlib.colors import Colormap, LinearSegmentedColormap, Normalize, TwoSlopeNorm
 from matplotlib.patches import FancyBboxPatch, PathPatch
 from matplotlib.path import Path as MplPath
 
@@ -494,6 +494,7 @@ def _render_heatmap(figure, ax, chart_data: dict[str, Any],
     smallest = min(min(row) for row in matrix)
     largest = max(max(row) for row in matrix)
     norm: Normalize
+    cmap: Colormap
     if smallest < 0 < largest:
         colors = (["#0072B2", "#F7F7F7", "#D55E00"]
                   if theme.get("colorblind") else ["#2166AC", "#F7F7F7", "#B2182B"])

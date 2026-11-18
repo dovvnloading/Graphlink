@@ -34,7 +34,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function svgText(node: SVGSVGElement): string {
+function svgText(node: Element): string {
   return [...node.querySelectorAll("text")].map((text) => text.textContent ?? "").join(" ");
 }
 

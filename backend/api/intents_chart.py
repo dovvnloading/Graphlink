@@ -25,7 +25,6 @@ import re
 
 from graphlink_chart_data import ChartDataError, canonicalize_chart_data, scientific_result_chart, SUPPORTED_CHART_TYPES, validate_publication_export
 from graphlink_chart_rendering import render_chart_publication
-from backend.assets import _sanitize_chart_filename
 
 from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene
@@ -67,6 +66,10 @@ def _make_publication_export_handler(document: SceneDocument):
         # even if a new renderer or pathological chart becomes less compact.
         if len(content) > 24_000_000:
             raise ChartDataError("Publication export exceeds the 24 MB response limit")
+        # Delayed import: backend.assets -> session_context -> canvas ->
+        # intents_chart is a real application startup cycle.
+        from backend.assets import _sanitize_chart_filename
+
         title = state.chart_data.get("title", "")
         name = _sanitize_chart_filename(str(title or ""))
         return {
