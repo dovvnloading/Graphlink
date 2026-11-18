@@ -258,6 +258,8 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_chat.py (scene) ---------------------------------
     Classified("scene", "sendMessage", "A", "content: user message (hidden create - internally adds a chat node)"),
+    Classified("scene", "compareModels", "A", "content: one user message plus sibling model replies, each recorded via record_command"),
+    Classified("scene", "listComparisonModels", "B", "read-only: configured comparison catalog; does not mutate graph or settings"),
     Classified("scene", "regenerateResponse", "A", "content: delete-then-recreate of a node's content, one composite undo"),
     Classified("scene", "inspectChatContext", "B", "read-only: previews the next chat send's sources and budget without a graph mutation"),
     Classified("scene", "cancelChatRequest", "B", "run-lifecycle: cancel"),
