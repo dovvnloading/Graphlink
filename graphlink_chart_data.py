@@ -86,14 +86,21 @@ CHART_JSON_SCHEMAS: dict[str, dict] = {
     },
     "line": {
         "type": "object",
-        "properties": {"type": {"type": "string", "enum": ["line"]}, **_SERIES_PROPERTIES, **_SCIENTIFIC_PROPERTIES},
-        "required": ["type", "labels", "values"],
+        "properties": {"type": {"type": "string", "enum": ["line"]},
+                       **_SERIES_PROPERTIES, **_SCIENTIFIC_PROPERTIES},
+        "required": ["type"],
+        # Legacy top-level data OR additive named series; otherwise a
+        # provider enforcing this schema makes multiseries lines impossible
+        # (the canonicalizer correctly rejects simultaneous top-level
+        # values and named series).
+        "anyOf": [{"required": ["labels", "values"]}, {"required": ["series"]}],
     },
     "scatter": {
         "type": "object",
         "properties": {"type": {"type": "string", "enum": ["scatter"]},
                        **_SERIES_PROPERTIES, **_SCIENTIFIC_PROPERTIES},
         "required": ["type", "xValues"],
+        "anyOf": [{"required": ["values"]}, {"required": ["series"]}],
     },
     "pie": {
         "type": "object",
