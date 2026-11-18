@@ -761,6 +761,14 @@ def register_chat_intents(
         )
         return node_to_regenerate.id
 
+    # C3 preview is read-only: no graph command, provider call or publication.
+    async def inspect_chat_context(node_id, draft_text=""):
+        from backend.context_engine.inspector import inspect_next_chat_send
+        return inspect_next_chat_send(
+            document, node_id, agent_dispatcher, bus=bus, draft_text=draft_text,
+        )
+
+    bus.register_intent("scene", "inspectChatContext", inspect_chat_context)
     bus.register_intent("scene", "sendMessage", send_message)
     bus.register_intent("scene", "regenerateResponse", regenerate_response)
     # R4.3: per-node cancel for a ConversationNode's in-flight reply. Reuses
