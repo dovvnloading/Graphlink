@@ -18,7 +18,7 @@ name: Nightly mutation testing
 #   per-commit than wall-clock perf does - daily cadence would spend
 #   Actions minutes on a signal that doesn't meaningfully change day to
 #   day. workflow_dispatch covers "run it now" (e.g. right after touching
-#   one of the 9 scoped files).
+#   one of the 8 scoped files).
 #
 # First landing reports score only, no hard floor - same "measure a real
 # baseline before setting a threshold" precedent as ADR-019 stage 19.1.
@@ -71,7 +71,10 @@ jobs:
           fi
 
       - name: Run mutmut (Python, scoped to 4 files - see pyproject.toml's own [tool.mutmut])
-        run: python -m mutmut run
+        run: |
+          # No report from a previous attempt may count as a new score.
+          rm -f mutants/mutmut-cicd-stats.json
+          python -m mutmut run
 
       - name: mutmut results (verified nonempty mutation score)
         run: |
@@ -121,7 +124,8 @@ jobs:
       - name: Run Stryker (TS, scoped to 4 files - see web_ui/stryker.conf.mjs)
         working-directory: web_ui
         run: |
-          # Invoke the installed executable, never let npx fetch a substitute.
+          # Require a fresh report, and never let npx fetch a substitute.
+          rm -f reports/mutation/mutation.json
           ./node_modules/.bin/stryker run --reporters clear-text,progress,html,json
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
