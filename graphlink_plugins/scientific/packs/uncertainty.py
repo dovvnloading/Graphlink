@@ -176,6 +176,82 @@ def _evaluate(node, variables):
         raise ValueError("Model evaluation is undefined or outside the finite real domain.") from exc
 
 
+
+def _differentiate(node, variables, name):
+    """Propagate one input derivative through the bounded expression AST.
+
+    Apply the ordinary chain rule at the supplied estimates instead of
+    subtracting rounded, potentially much larger output values.
+    """
+    kind = node[0]
+    try:
+        if kind == "literal":
+            return node[1], 0.0
+        if kind == "input":
+            return variables[node[1]], float(node[1] == name)
+        if kind in ("positive", "negative"):
+            value, derivative = _differentiate(node[1], variables, name)
+            return (value, derivative) if kind == "positive" else (-value, -derivative)
+        if kind == "function":
+            argument, delta = _differentiate(node[2], variables, name)
+            function = node[1]
+            value = _FUNCTIONS[function](argument)
+            if function == "sqrt":
+                if value == 0 and delta:
+                    raise ValueError("Square root sensitivity is undefined at zero.")
+                derivative = delta / (2 * value) if delta else 0.0
+            elif function == "exp":
+                derivative = value * delta
+            elif function == "ln":
+                derivative = delta / argument
+            elif function == "log10":
+                derivative = delta / (argument * math.log(10))
+            elif function == "sin":
+                derivative = math.cos(argument) * delta
+            else:
+                derivative = -math.sin(argument) * delta
+        else:
+            left, dl = _differentiate(node[1], variables, name)
+            right, dr = _differentiate(node[2], variables, name)
+            if kind == "+":
+                value, derivative = left + right, dl + dr
+            elif kind == "-":
+                value, derivative = left - right, dl - dr
+            elif kind == "*":
+                value, derivative = left * right, dl * right + left * dr
+            elif kind == "/":
+                value = left / right
+                derivative = dl / right - value * (dr / right)
+            else:
+                value = left ** right
+                if left > 0:
+                    if dr:
+                        derivative = value * (dr * math.log(left) + right * dl / left)
+                    else:
+                        derivative = right * left ** (right - 1) * dl if dl else 0.0
+                elif dr:
+                    # The real-valued power is not differentiable with
+                    # respect to its exponent at a nonpositive base.
+                    raise ValueError("Power sensitivity is undefined for a nonpositive base and variable exponent.")
+                elif left < 0:
+                    if not right.is_integer():
+                        raise ValueError("A negative base requires an integer exponent.")
+                    derivative = right * left ** (right - 1) * dl if dl else 0.0
+                elif not dl or right == 0:
+                    derivative = 0.0
+                elif right == 1:
+                    derivative = dl
+                elif right > 1 and right.is_integer():
+                    derivative = 0.0
+                else:
+                    raise ValueError("Power sensitivity is undefined at zero.")
+        if isinstance(value, complex) or not math.isfinite(value) or not math.isfinite(derivative):
+            raise ValueError("The model or sensitivity exceeds the finite real range.")
+        return value, derivative
+    except (ArithmeticError, ValueError, TypeError, OverflowError) as exc:
+        raise ValueError("Model sensitivity is undefined or outside the finite real domain.") from exc
+
+
 def _measurements(text):
     data = _json(text, "Measurements")
     if not isinstance(data, dict) or not 1 <= len(data) <= _MAX_INPUTS:
@@ -256,18 +332,9 @@ def _calculate(data):
     estimate = _evaluate(tree, values)
     sensitivities, signed = [], []
     for name in names:
-        x, u, _ = measurements[name]
-        # Central difference, with a scale tied to each input's value and u.
-        h = 1e-4 * max(abs(x), u, 1e-12)
-        high, low = values.copy(), values.copy()
-        high[name], low[name] = x + h, x - h
-        if high[name] == x or low[name] == x:
-            raise ValueError("The numerical derivative step is not representable.")
-        sensitivity = (_evaluate(tree, high) - _evaluate(tree, low)) / (high[name] - low[name])
-        if not math.isfinite(sensitivity):
-            raise ValueError("Sensitivity coefficient exceeds the supported numeric range.")
+        _, sensitivity = _differentiate(tree, values, name)
         sensitivities.append(sensitivity)
-        signed.append(_number(sensitivity * u, "Signed uncertainty contribution"))
+        signed.append(_number(sensitivity * measurements[name][1], "Signed uncertainty contribution"))
     scale = max(map(abs, signed))
     q = [v / scale for v in signed] if scale else [0.0] * len(names)
 
@@ -339,7 +406,7 @@ def _calculate(data):
         cross = _number(2 * signed[indexes[a]] * signed[indexes[b]] * rho, "Covariance term")
         rows.append([f"{a} × {b} (r={rho:g})", "", "", "", "", "", cross])
     return {
-        "summary": "First-order GUM law of propagation with central-difference sensitivities, "
+        "summary": "First-order GUM law of propagation with analytic chain-rule sensitivities, "
                    "correlated covariance terms and Student t coverage (normal limit for infinite df).",
         "values": output,
         "table": {"columns": ["input or covariance pair", "value", "standard uncertainty", "degrees of freedom",
@@ -351,7 +418,7 @@ OPERATIONS = (
     Operation(
         "propagate_uncertainty", "GUM measurement uncertainty propagation",
         "Combine input standard uncertainties by the first-order GUM law, including pairwise correlations; "
-        "use a safe arithmetic expression, finite-difference sensitivities and Student t coverage.",
+        "use a safe arithmetic expression, analytic chain-rule sensitivities and Student t coverage.",
         (Field("expression", "Measurement model (safe expression)", "text"),
          Field("measurements", "Named inputs (JSON: value, uncertainty, optional degrees_of_freedom)", "text"),
          Field("correlations", "Pairwise correlations (JSON array, [] for none)", "text"),
