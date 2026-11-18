@@ -69,7 +69,7 @@ def _normal_solve(gram, rhs, *, inverse=False):
     return solution, covariance_base
 
 
-def _linear(data):
+def _original_linear(data):
     matrix, y, weights = data["predictors"], data["response"], data["weights"]
     n = len(y)
     if len(matrix) != n or len(weights) != n:
@@ -222,7 +222,7 @@ def _objective(model, x, y, w, b, *, jacobian=False):
     return sse, gram, grad, residuals
 
 
-def _nonlinear(data):
+def _original_nonlinear(data):
     initial = data["initial_parameters"]
     p = len(initial)
     model, parameter_names, bounds = _fit_model_spec(data["model"], p)
@@ -801,9 +801,6 @@ def _enrich_fit(result, weights, parameters, covariance, bounds=None):
 
 
 # Wrap the original, certified numerical paths; existing coefficients do not change.
-_original_linear = _linear
-_original_nonlinear = _nonlinear
-
 
 def _linear(data):
     result = _original_linear(data)
