@@ -8,14 +8,14 @@ import { downloadBlob } from "./downloadTextFile";
 import { writeTableCsv } from "./tableCsv";
 import { createLinearScale } from "./charts/chartScales";
 import {
-  compatibleOptions, draftInputs, FieldError, fieldText, matchesSource, parseInputs, readScienceState, sourceOptions,
+  chartableScienceTypes, compatibleOptions, draftInputs, FieldError, fieldText, matchesSource, parseInputs, readScienceState, sourceOptions,
   type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
-  type ScienceState, type Sources, type SourceOption,
+  type ScienceChartLink, type ScienceChartType, type ScienceState, type Sources, type SourceOption,
 } from "./scientificWorkbench";
 import "./ScientificNodeView.css";
 
 export type ScientificFlowNode = Node<{
-  title: string; raw: string; pluginId: string; store: SceneStore; parents: ScienceParent[];
+  title: string; raw: string; pluginId: string; store: SceneStore; parents: ScienceParent[]; charts?: ScienceChartLink[];
 }, "scientific">;
 
 function display(value: unknown): string {
@@ -60,10 +60,16 @@ function csvCell(value: unknown): string {
 
 const PREVIEW_ROWS = 30;
 
-function Results({ result, title, exportJson }: { result: ScienceResult; title: string; exportJson: () => Promise<string> }) {
+function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
+  result: ScienceResult; title: string; exportJson: () => Promise<string>;
+  onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
+  charts: ScienceChartLink[];
+}) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const { table, plot, provenance } = result;
+  const chartTypes = chartableScienceTypes(result);
+  const [chartType, setChartType] = useState<ScienceChartType>(chartTypes[0] ?? "scatter");
   const baseName = `${provenance.packId}-${result.operationId}`;
   const csv = table ?? (plot ? { columns: [plot.xLabel, plot.yLabel], rows: plot.x.map((v, i) => [v, plot.y[i]]) } : { columns: ["Metric", "Value"], rows: Object.entries(result.values) });
   return <section className="science-results" aria-label="Latest result">
@@ -91,7 +97,25 @@ function Results({ result, title, exportJson }: { result: ScienceResult; title: 
       }}>Export JSON</button>
       <button type="button" onClick={() => saveText(writeTableCsv([csv.columns.map(csvCell), ...csv.rows.map((row) => row.map(csvCell))]),
         `${baseName}.csv`, "text/csv;charset=utf-8")}>Export CSV</button>
+      {chartTypes.length > 0 && <>
+        <label>Chart type
+          <select aria-label="Chart type" value={chartTypes.includes(chartType) ? chartType : chartTypes[0]}
+            onChange={(e) => setChartType(e.target.value as ScienceChartType)}>
+            {chartTypes.map((type) =>
+              <option key={type} value={type}>{type === "boxplot" ? "Box plot" : type === "line" ? "Fitted line with 95% confidence envelope" : type === "heatmap" ? "Heatmap" : "Scatter"}</option>)}
+          </select>
+        </label>
+        <button type="button" onClick={() => onChart(chartTypes.includes(chartType) ? chartType : chartTypes[0])}>Chart this</button>
+      </>}
     </div>
+    {charts.length > 0 && <section aria-label="Linked charts">
+      <strong>Linked charts</strong>
+      {charts.map((chart) => <div key={chart.id} className="science-actions">
+        <span>{chart.title} · {chart.chartType} · <span role="status">{chart.stale ? "Source changed · refresh to update" : "Input up to date"}</span></span>
+        <small title={chart.receiptHash}>Receipt {chart.receiptHash.slice(0, 12)}…</small>
+        <button type="button" disabled={!chart.stale} onClick={() => onRefresh(chart)}>Refresh chart</button>
+      </div>)}
+    </section>}
     {error && <p role="alert">{error}</p>}
   </section>;
 }
@@ -213,8 +237,9 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
   </form>;
 }
 
-function Workbench({ session, state, options, run, exportJson }: {
+function Workbench({ session, state, options, run, exportJson, charts, onChart, onRefresh }: {
   session: ScienceEditorSession; state: ScienceState; options: SourceOption[]; run: Run; exportJson: () => Promise<string>;
+  charts: ScienceChartLink[]; onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
 }) {
   const [selected, setSelected] = useState(session.selected ?? state.latest?.operationId ?? state.operations[0].id);
   const [busy, setBusy] = useState(false);
@@ -227,7 +252,8 @@ function Workbench({ session, state, options, run, exportJson }: {
     </select></label>
     <OperationEditor key={op.id} session={session} op={op} result={result} revision={revision} runToken={state.runToken} limits={state.limits}
       options={options} run={run} busy={busy} setBusy={setBusy} />
-    {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} title={
+    {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson}
+      charts={charts} onChart={onChart} onRefresh={onRefresh} title={
       state.operations.find((candidate) => candidate.id === state.latest?.operationId)?.title ?? state.latest.operationId
     } />}
   </>;
@@ -243,6 +269,9 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
       : state?.error ? <p role="alert">{state.error}</p> : state && data.pluginId === "science_" + state.packId
       ? <Workbench key={state.nodeKey ?? id} session={data.store.scientificEditor(id, state.nodeKey)} state={state} options={options}
         exportJson={() => data.store.exportScientificResult(data.pluginId, id, state.runToken)}
+        charts={data.charts ?? []}
+        onChart={(chartType) => data.store.generateChart(id, chartType)}
+        onRefresh={(chart) => data.store.generateChart(chart.id, chart.chartType)}
         run={(operationId, inputs, sources, token) => data.store.runScientificOperation(data.pluginId, id, operationId, inputs, sources, token)} />
       : <p role="alert">This workbench version could not be loaded. Check the plugin in Settings.</p>}
   </NodeShell>;

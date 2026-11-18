@@ -18,13 +18,17 @@ state anchored on the SOURCE node, not a pre-created placeholder chart node
 
 from __future__ import annotations
 
-from graphlink_chart_data import ChartDataError, canonicalize_chart_data, SUPPORTED_CHART_TYPES
+import json
+import re
+
+from graphlink_chart_data import ChartDataError, canonicalize_chart_data, scientific_result_chart, SUPPORTED_CHART_TYPES
 
 from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene
 from backend.domain.graph import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
+from backend.domain.node_states import ChartState
 
 
 def register_chart_intents(
@@ -75,6 +79,94 @@ def register_chart_intents(
                 lines.append(f"Use {key}={value.strip()!r} exactly.")
         return "\n".join(lines)
 
+    def scientific_chart_source(node):
+        """Read a pack-granted, receipt-verified result, not untrusted content.
+
+        The workbench's serializer verifies the persisted receipt before
+        emitting its latest result. A revoked/damaged pack emits no usable
+        science payload, so a chart cannot bypass the source grant.
+        """
+        wire = document._plugin_state_wire(node).get("science")
+        if not isinstance(wire, str):
+            raise ChartDataError("Enable the scientific pack before charting its result")
+        try:
+            state = json.loads(wire)
+            result = state["latest"]
+            node_key = state["nodeKey"]
+            if (state.get("error") or not isinstance(result, dict)
+                    or not re.fullmatch(r"[0-9a-f]{32}", node_key)):
+                raise ChartDataError("Run or restore a valid scientific result before charting")
+            provenance = result["provenance"]
+            receipt = {"sourceKey": node_key, "resultHash": provenance["resultHash"],
+                       "receiptHash": provenance.get("receiptHash") or provenance["resultHash"]}
+            return result, receipt
+        except (KeyError, TypeError, ValueError) as exc:
+            if isinstance(exc, ChartDataError):
+                raise
+            raise ChartDataError("The scientific result is unavailable or damaged") from exc
+
+    async def generate_scientific_chart(parent_id, normalized_chart_type, chart_options):
+        chart = document.nodes[parent_id]
+        refreshing = chart.kind == "chart" and isinstance(chart.state, ChartState) and (
+            isinstance(chart.state.chart_data, dict)
+            and isinstance(chart.state.chart_data.get("scienceReceipt"), dict)
+        )
+        if refreshing:
+            source_id = chart.state.chart_source_node_id
+            source = document.nodes.get(source_id)
+            expected = chart.state.chart_data["scienceReceipt"]
+            # A saved source id can be reminted on reload, but the stable
+            # workbench node key must still match the receipt pinned here.
+            if (source is None or not re.fullmatch(r"science_[a-z0-9_]+\.workbench", source.kind)
+                    or not any(edge.source == source_id and edge.target == chart.id
+                               for edge in document.edges.values())):
+                raise ChartDataError("Reconnect the original scientific source before refreshing")
+            if normalized_chart_type != chart.state.chart_type:
+                raise ChartDataError("Refresh using this chart's original type")
+        else:
+            source = chart
+            if not re.fullmatch(r"science_[a-z0-9_]+\.workbench", source.kind):
+                return None
+
+        if chart_options not in (None, {}):
+            raise ChartDataError("Scientific result charts use the saved data, not extraction options")
+        if normalized_chart_type not in ("scatter", "line", "boxplot", "heatmap"):
+            raise ChartDataError("Choose scatter, fitted line, box plot or heatmap for a scientific result")
+        result, receipt = scientific_chart_source(source)
+        if refreshing and expected.get("sourceKey") != receipt["sourceKey"]:
+            raise ChartDataError("This chart belongs to a different scientific result")
+        try:
+            data = scientific_result_chart(result, normalized_chart_type)
+        except ChartDataError:
+            raise
+        except (ArithmeticError, ValueError, TypeError, IndexError, KeyError) as exc:
+            raise ChartDataError(f"The scientific result cannot be charted: {exc}") from exc
+        # Re-canonicalize after inserting the strict receipt, so validation
+        # is exactly the same for create, refresh, save and reload.
+        data["scienceReceipt"] = receipt
+        data = canonicalize_chart_data(data, normalized_chart_type)
+        if refreshing:
+            def update():
+                chart.state.chart_data = data
+                chart.state.chart_error = ""
+                chart.title = data["title"]
+
+            document.record_command("refreshScientificChart", "user", update,
+                                    node_ids=[chart.id, source.id])
+            node_id = chart.id
+        else:
+            node, _ = document.record_command(
+                "chartScientificResult", "user",
+                lambda: document.add_chart_node(
+                    *document.place_child(source.id, "chart", prefer="right"),
+                    source.id, normalized_chart_type, data,
+                ),
+                node_ids=[source.id],
+            )
+            node_id = node.id
+        await publish_scene()
+        return node_id
+
     async def generate_chart(parent_node_id, chart_type, chartOptions=None):
         if not parent_node_id or parent_node_id not in document.nodes:
             notifications.show(
@@ -92,6 +184,22 @@ def register_chart_intents(
             )
             await bus.publish("notification")
             return None
+
+        # A scientific result charts deterministically, without sending its
+        # verified numerical measurements through model extraction. The same
+        # existing generateChart action refreshes one of those charts by id.
+        parent = document.nodes[parent_node_id]
+        is_science = bool(re.fullmatch(r"science_[a-z0-9_]+\.workbench", parent.kind))
+        is_science_chart = (parent.kind == "chart" and isinstance(parent.state, ChartState)
+                            and isinstance(parent.state.chart_data, dict)
+                            and isinstance(parent.state.chart_data.get("scienceReceipt"), dict))
+        if is_science or is_science_chart:
+            try:
+                return await generate_scientific_chart(parent_node_id, normalized_chart_type, chartOptions)
+            except ChartDataError as exc:
+                notifications.show(str(exc), "warning")
+                await bus.publish("notification")
+                return None
 
         try:
             option_prompt = chart_source_options(normalized_chart_type, chartOptions)

@@ -203,3 +203,79 @@ def test_pr586_saved_scatter_without_nested_type_recovers_the_same_scientific_da
     saved_by_pr586 = {key: value for key, value in canonical.items() if key != "type"}
     assert canonicalize_chart_data(saved_by_pr586, "scatter") == canonical
     assert saved_by_pr586["series"][0]["yError"] == canonical["series"][0]["yError"]
+
+
+
+# Scientific Workbench conversion uses ordinary ChartSpec, not a new renderer.
+def test_workbench_xy_preserves_units_error_bars_and_receipt():
+    from graphlink_chart_data import scientific_result_chart
+
+    result = {"plot": {"title": "Sensor response", "x": [0, 1, 2], "y": [2, 3, 5],
+                       "xLabel": "Time (s)", "yLabel": "Voltage (mV)"},
+              "table": {"columns": ["Time (s)", "Voltage (mV)", "standard uncertainty"],
+                        "rows": [[0, 2, 0.1], [1, 3, 0.2], [2, 5, 0.3]]}}
+    spec = scientific_result_chart(result, "scatter")
+    assert spec["xValues"] == [0, 1, 2]
+    assert spec["values"] == [2, 3, 5]
+    assert (spec["xAxis"], spec["xUnit"], spec["yAxis"], spec["yUnit"]) == ("Time", "s", "Voltage", "mV")
+    assert spec["yError"] == [[0.1, 0.1], [0.2, 0.2], [0.3, 0.3]]
+    receipt = {"sourceKey": "a" * 32, "resultHash": "b" * 64, "receiptHash": "c" * 64}
+    stored = canonicalize_chart_data({**spec, "scienceReceipt": receipt}, "scatter")
+    assert stored["scienceReceipt"] == receipt
+    assert canonicalize_chart_data(stored, "scatter") == stored
+    for broken in [{**receipt, "receiptHash": "0"}, {"sourceKey": "a" * 32},
+                   {**receipt, "surprise": "not checksummed"}]:
+        with pytest.raises(ChartDataError, match="scientific chart receipt"):
+            canonicalize_chart_data({**spec, "scienceReceipt": broken}, "scatter")
+
+
+def test_workbench_uncertainties_and_tables_use_existing_shapes():
+    from graphlink_chart_data import scientific_result_chart
+    point = scientific_result_chart({"values": {"estimate": 20, "combined_standard_uncertainty": 2,
+                                               "coverage_lower": 17, "coverage_upper": 25}}, "scatter")
+    assert point["xValues"] == [0]
+    assert point["yError"] == [[3, 5]]
+    grouped = {"table": {"columns": ["Treatment", "Signal (V)"],
+                         "rows": [["Control", 1], ["Treatment", 3], ["Control", 2], ["Treatment", 5]]}}
+    boxes = scientific_result_chart(grouped, "boxplot")
+    assert boxes["groups"] == [{"label": "Control", "values": [1, 2]},
+                               {"label": "Treatment", "values": [3, 5]}]
+    heat = scientific_result_chart({"table": {"columns": ["Specimen", "T1", "T2"],
+                               "rows": [["B", 3, 5], ["A", 4, 6]]}}, "heatmap")
+    assert heat["rowLabels"] == ["B", "A"]
+    assert heat["matrix"] == [[3, 5], [4, 6]]
+    with pytest.raises(ChartDataError, match="at most 300 cells"):
+        scientific_result_chart({"table": {"columns": [f"v{i}" for i in range(32)],
+                                 "rows": [[1] * 32 for _ in range(10)]}}, "heatmap")
+    with pytest.raises(ChartDataError, match="at least two observations"):
+        scientific_result_chart({"table": {"columns": ["only"], "rows": [[1]]}}, "boxplot")
+
+
+@pytest.mark.parametrize("pack,operation_id", [
+    ("statistics", "linear_regression"),
+    ("fitting", "weighted_linear_least_squares"),
+    ("fitting", "nonlinear_least_squares"),
+])
+def test_workbench_fitted_model_overlays_measured_values_and_95_percent_envelope(pack, operation_id):
+    from graphlink_chart_data import scientific_result_chart
+    from graphlink_plugins.scientific.catalog import operations
+    from graphlink_plugins.scientific.core import run_operation
+
+    op = next(item for item in operations(pack) if item.id == operation_id)
+    result = run_operation(pack, op, op.example)
+    chart = scientific_result_chart(result, "line")
+    assert chart["type"] == "line"
+    assert [series["name"] for series in chart["series"]] == [
+        "Observed", "Fit", "95% CI lower", "95% CI upper",
+    ]
+    original = result["inputs"].get("y", result["inputs"].get("response"))
+    assert sorted(original) == sorted(chart["series"][0]["values"])
+    assert len(chart["xValues"]) == len(original)
+    for fit, err, lo, hi in zip(
+        chart["series"][1]["values"], chart["series"][1]["yError"],
+        chart["series"][2]["values"], chart["series"][3]["values"],
+    ):
+        assert lo <= fit <= hi
+        assert err[0] >= 0 and err[1] >= 0
+        assert lo == pytest.approx(fit - err[0], abs=1e-10)
+        assert hi == pytest.approx(fit + err[1], abs=1e-10)

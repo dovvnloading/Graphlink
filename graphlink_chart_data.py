@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import re
+from decimal import Decimal, localcontext
 
 
 SUPPORTED_CHART_TYPES = frozenset({"bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"})
@@ -604,6 +606,20 @@ def canonicalize_chart_data(data, chart_type=None):
         ),
     }
 
+    # An optional receipt travels with a science-sourced chart through ordinary
+    # chart storage, session reload and wire forwarding. It is provenance, not
+    # rendering data; existing chart marks ignore it.
+    receipt = data.get("scienceReceipt")
+    if receipt is not None:
+        if (not isinstance(receipt, dict) or set(receipt) != {"sourceKey", "resultHash", "receiptHash"}
+                or not isinstance(receipt["sourceKey"], str)
+                or not re.fullmatch(r"[0-9a-f]{32}", receipt["sourceKey"])
+                or any(not isinstance(receipt[field], str)
+                       or not re.fullmatch(r"[0-9a-f]{64}", receipt[field])
+                       for field in ("resultHash", "receiptHash"))):
+            raise ChartDataError("Invalid scientific chart receipt")
+        result["scienceReceipt"] = dict(receipt)
+
     if expected_type in {"boxplot", "heatmap"}:
         return (_boxplot_chart(data, result) if expected_type == "boxplot"
                 else _heatmap_chart(data, result))
@@ -698,3 +714,260 @@ def canonicalize_chart_data(data, chart_type=None):
     _assert_acyclic(result["flows"])
     return result
 
+
+
+# -- Deterministic Scientific Workbench -> existing ChartSpec adapter --------
+#
+# The workbench persists only numeric results, input measurements and their
+# checksummed receipts. Never send those numbers to the chart-generating LLM:
+# transform the *current* verified receipt into a normal ChartSpec instead.
+# Limits, error endpoints and finite ranges remain canonicalize_chart_data's
+# responsibility, exactly as for every other producer of these chart types.
+
+def _science_axis(label):
+    """Split 'Distance (m)' into a display label and a physical unit."""
+    if not isinstance(label, str):
+        raise ChartDataError("Scientific plot axes must be labeled")
+    match = re.fullmatch(r"\s*(.*?)\s+\(([^()]+)\)\s*", label)
+    if match and match.group(1).strip():
+        return match.group(1).strip(), match.group(2).strip()
+    return label.strip(), ""
+
+
+def _science_numbers(value):
+    return (isinstance(value, list) and bool(value)
+            and all(type(item) in (int, float) and math.isfinite(item) for item in value))
+
+
+def _science_table(result):
+    table = result.get("table")
+    if not isinstance(table, dict):
+        raise ChartDataError("This scientific result has no table to chart")
+    columns, rows = table.get("columns"), table.get("rows")
+    if (not isinstance(columns, list) or not all(isinstance(c, str) for c in columns)
+            or not isinstance(rows, list) or not rows
+            or any(not isinstance(row, list) or len(row) != len(columns) for row in rows)):
+        raise ChartDataError("The scientific result table is not rectangular")
+    return columns, rows
+
+
+def _science_xy(result):
+    plot = result.get("plot")
+    if isinstance(plot, dict):
+        xs, ys = plot.get("x"), plot.get("y")
+        if not _science_numbers(xs) or not _science_numbers(ys) or len(xs) != len(ys):
+            raise ChartDataError("The scientific XY trace is not chartable")
+        x_label, x_unit = _science_axis(plot.get("xLabel", "X"))
+        y_label, y_unit = _science_axis(plot.get("yLabel", "Y"))
+        payload = {"title": plot.get("title", "Scientific measurements"),
+                   "xValues": xs, "values": ys, "xAxis": x_label or "X",
+                   "yAxis": y_label or "Y"}
+        if x_unit:
+            payload["xUnit"] = x_unit
+        if y_unit:
+            payload["yUnit"] = y_unit
+        # A coincident table can carry measured per-row uncertainty. Only
+        # reuse it when BOTH plotted coordinates exactly match the table.
+        table = result.get("table")
+        if isinstance(table, dict):
+            cols, rows = table.get("columns"), table.get("rows")
+            if (isinstance(cols, list) and isinstance(rows, list)
+                    and len(rows) == len(xs) and len(cols) >= 3
+                    and all(isinstance(row, list) and len(row) == len(cols) for row in rows)):
+                x_at = next((i for i, col in enumerate(cols) if col == plot.get("xLabel")), None)
+                y_at = next((i for i, col in enumerate(cols) if col == plot.get("yLabel")), None)
+                if (x_at is not None and y_at is not None
+                        and [row[x_at] for row in rows] == xs
+                        and [row[y_at] for row in rows] == ys):
+                    for i, col in enumerate(cols):
+                        if i in (x_at, y_at):
+                            continue
+                        if not re.search(r"\b(standard\s+)?(uncertainty|error)\b", col, re.I):
+                            continue
+                        errors = [row[i] for row in rows]
+                        if _science_numbers(errors) and all(v >= 0 for v in errors):
+                            payload["yError"] = errors
+                            break
+        return payload
+    values = result.get("values", {})
+    if (type(values.get("estimate")) in (int, float)
+            and type(values.get("combined_standard_uncertainty")) in (int, float)):
+        estimate = values["estimate"]
+        error = values["combined_standard_uncertainty"]
+        if not math.isfinite(estimate) or not math.isfinite(error) or error < 0:
+            raise ChartDataError("The scientific uncertainty cannot be plotted")
+        # A coverage interval, when available, is asymmetric in general.
+        lower, upper = values.get("coverage_lower"), values.get("coverage_upper")
+        uncertainty = ([estimate - lower, upper - estimate]
+                       if type(lower) in (int, float) and type(upper) in (int, float)
+                       else [error, error])
+        return {"title": "Measurement with uncertainty", "xValues": [0],
+                "values": [estimate], "xAxis": "Measurement", "yAxis": "Estimate",
+                "yError": [uncertainty]}
+    columns, rows = _science_table(result)
+    numbers = [i for i in range(len(columns)) if _science_numbers([row[i] for row in rows])]
+    if len(numbers) < 2:
+        raise ChartDataError("A scatter chart needs two numeric columns")
+    x_at, y_at = numbers[:2]
+    x_label, x_unit = _science_axis(columns[x_at])
+    y_label, y_unit = _science_axis(columns[y_at])
+    payload = {"title": "Scientific measurements", "xValues": [row[x_at] for row in rows],
+               "values": [row[y_at] for row in rows], "xAxis": x_label or "X", "yAxis": y_label or "Y"}
+    if x_unit:
+        payload["xUnit"] = x_unit
+    if y_unit:
+        payload["yUnit"] = y_unit
+    for i, col in enumerate(columns):
+        if i in (x_at, y_at) or not re.search(r"\b(standard\s+)?(uncertainty|error)\b", col, re.I):
+            continue
+        errs = [row[i] for row in rows]
+        if _science_numbers(errs) and all(v >= 0 for v in errs):
+            payload["yError"] = errs
+            break
+    return payload
+
+
+def _science_boxplot(result):
+    columns, rows = _science_table(result)
+    if len(columns) == 2 and all(isinstance(row[0], str) for row in rows):
+        groups = {}
+        for label, value in rows:
+            if not isinstance(label, str) or type(value) not in (int, float) or not math.isfinite(value):
+                raise ChartDataError("A grouped box plot needs text labels and numeric observations")
+            groups.setdefault(label, []).append(value)
+        if groups and all(len(values) >= 2 for values in groups.values()):
+            return {"title": "Scientific distributions", "xAxis": columns[0], "yAxis": columns[1],
+                    "groups": [{"label": label, "values": values} for label, values in groups.items()]}
+    groups = [{"label": name, "values": [row[i] for row in rows]}
+              for i, name in enumerate(columns)
+              if len(rows) >= 2 and _science_numbers([row[i] for row in rows])]
+    if not groups:
+        raise ChartDataError("A box plot needs at least two observations per numeric column")
+    return {"title": "Scientific distributions", "groups": groups, "xAxis": "Column", "yAxis": "Value"}
+
+
+def _science_heatmap(result):
+    columns, rows = _science_table(result)
+    has_labels = (len(columns) >= 2 and all(isinstance(row[0], str) for row in rows)
+                  and all(row[0] for row in rows) and len({row[0] for row in rows}) == len(rows))
+    numeric = columns[1:] if has_labels else columns
+    matrix = [row[1:] if has_labels else row for row in rows]
+    if not numeric or not all(_science_numbers(row) for row in matrix):
+        raise ChartDataError("A heatmap needs a dense numeric result table")
+    return {"title": "Scientific result heatmap", "xAxis": "Columns", "yAxis": "Rows",
+            "columnLabels": numeric, "rowLabels": [str(row[0]) for row in rows] if has_labels
+            else [str(i + 1) for i in range(len(rows))], "matrix": matrix}
+
+
+def _science_fit(result):
+    """Observed response, fitted prediction and pointwise 95% mean-response CI.
+
+    The existing line renderer draws the fitted model over the measurements,
+    with upper/lower confidence envelope curves and asymmetric y error bars
+    on its fitted series. Do not treat residuals as measured responses or
+    coefficient intervals as prediction intervals.
+    """
+    pack, op = result.get("provenance", {}).get("packId"), result.get("operationId")
+    inputs, values = result.get("inputs", {}), result.get("values", {})
+    if pack == "statistics" and op == "linear_regression":
+        xs, ys = inputs.get("x"), inputs.get("y")
+        if not _science_numbers(xs) or not _science_numbers(ys) or len(xs) != len(ys) or len(xs) < 3:
+            raise ChartDataError("A fitted confidence band requires at least three paired observations")
+        a, b = values["intercept"], values["slope"]
+        from graphlink_plugins.scientific.packs.fitting import _student_t_ppf
+        average = math.fsum(xs) / len(xs)
+        sxx = math.fsum((x - average) ** 2 for x in xs)
+        if sxx <= 0:
+            raise ChartDataError("A fitted confidence band requires varying x coordinates")
+        residuals = [y - (a + b * x) for x, y in zip(xs, ys)]
+        variance = math.fsum(r * r for r in residuals) / (len(xs) - 2)
+        multiplier = _student_t_ppf(0.975, len(xs) - 2)
+        fitted = [a + b * x for x in xs]
+        uncertainty = [multiplier * math.sqrt(variance * (1 / len(xs) + (x - average) ** 2 / sxx))
+                       for x in xs]
+        title = "Linear regression with 95% confidence envelope"
+    elif pack == "fitting" and op == "weighted_linear_least_squares":
+        predictors, ys = inputs.get("predictors"), inputs.get("response")
+        if (not isinstance(predictors, list) or not predictors
+                or not all(isinstance(row, list) and len(row) == 1 for row in predictors)
+                or not _science_numbers(ys) or len(predictors) != len(ys)):
+            raise ChartDataError("Only single-predictor weighted fits can be plotted in XY")
+        xs = [row[0] for row in predictors]
+        if not _science_numbers(xs):
+            raise ChartDataError("The fitted predictor is not numeric")
+        a, b = values["coefficient_0"], values["coefficient_1"]
+        table = result.get("table", {})
+        covariance = table.get("rows", []) if isinstance(table, dict) else []
+        if len(covariance) != 2 or any(not isinstance(row, list) or len(row) != 3 for row in covariance):
+            raise ChartDataError("A weighted fit needs its stored covariance table")
+        c00, c01, c11 = covariance[0][1], covariance[0][2], covariance[1][2]
+        from graphlink_plugins.scientific.packs.fitting import _student_t_ppf
+        multiplier = _student_t_ppf(0.975, values["degrees_of_freedom"])
+        fitted = [a + b * x for x in xs]
+        uncertainty = [multiplier * math.sqrt(max(0, c00 + 2 * x * c01 + x * x * c11))
+                       for x in xs]
+        title = "Weighted linear fit with 95% confidence envelope"
+    elif pack == "fitting" and op == "nonlinear_least_squares":
+        xs, ys = inputs.get("x"), inputs.get("y")
+        if not _science_numbers(xs) or not _science_numbers(ys) or len(xs) != len(ys):
+            raise ChartDataError("The nonlinear fit requires paired measurements")
+        from graphlink_plugins.scientific.packs.fitting import _d, _model, _normal_solve, _student_t_ppf
+        parameters = [values[f"parameter_{i}"] for i in range(values["parameters"])]
+        weights = inputs["weights"]
+        with localcontext() as context:
+            context.prec = 76
+            beta = list(map(_d, parameters))
+            evaluations = [_model(inputs["model"].strip().lower(), _d(x), beta) for x in xs]
+            derivative = [jac for _, jac in evaluations]
+            size = len(beta)
+            gram = [[sum((_d(w) * row[i] * row[j] for w, row in zip(weights, derivative)), Decimal(0))
+                     for j in range(size)] for i in range(size)]
+            _, inverse = _normal_solve(gram, [Decimal(0)] * size, inverse=True)
+            scale = _d(values["reduced_chi_square"])
+            multiplier = _d(_student_t_ppf(0.975, values["degrees_of_freedom"]))
+            fitted = [float(predicted) for predicted, _ in evaluations]
+            uncertainty = [float(multiplier * max(Decimal(0),
+                           sum((jac[i] * inverse[i][j] * jac[j]
+                                for i in range(size) for j in range(size)), Decimal(0)) * scale).sqrt())
+                           for jac in derivative]
+        title = "Nonlinear fit with 95% confidence envelope"
+    else:
+        raise ChartDataError("This result has no fitted model with a supported confidence band")
+
+    if len(xs) > MAX_SERIES_POINTS // 4:
+        raise ChartDataError("Fitted charts support at most 75 observations and 4 series")
+    points = sorted(zip(xs, ys, fitted, uncertainty), key=lambda row: row[0])
+    xs, ys, fitted, uncertainty = map(list, zip(*points))
+    if not (all(math.isfinite(v) and v >= 0 for v in uncertainty)
+            and all(math.isfinite(v) for v in fitted)):
+        raise ChartDataError("The fitted confidence band exceeds the chart numeric range")
+    if not all(math.isfinite(y - delta) and math.isfinite(y + delta)
+               for y, delta in zip(fitted, uncertainty)):
+        raise ChartDataError("The fitted confidence band has unrepresentable endpoints")
+    return {"title": title, "xAxis": "Predictor", "yAxis": "Response", "xValues": xs,
+            "series": [{"name": "Observed", "values": ys},
+                       {"name": "Fit", "values": fitted, "yError": uncertainty},
+                       {"name": "95% CI lower", "values": [y - d for y, d in zip(fitted, uncertainty)]},
+                       {"name": "95% CI upper", "values": [y + d for y, d in zip(fitted, uncertainty)]}]}
+
+
+def scientific_result_chart(result: dict, chart_type: str) -> dict:
+    """Convert one *verified* Scientific Workbench result to existing ChartSpec.
+
+    This does not validate a receipt or authorize access to a scientific
+    result: the chart intent must do both before calling this adapter.
+    """
+    if not isinstance(result, dict):
+        raise ChartDataError("Run a scientific calculation before charting it")
+    if chart_type == "scatter":
+        payload = _science_xy(result)
+    elif chart_type == "line":
+        payload = _science_fit(result)
+    elif chart_type == "boxplot":
+        payload = _science_boxplot(result)
+    elif chart_type == "heatmap":
+        payload = _science_heatmap(result)
+    else:
+        raise ChartDataError("Scientific results support scatter, fitted line, box plot or heatmap")
+    payload["type"] = chart_type
+    return canonicalize_chart_data(payload, chart_type)

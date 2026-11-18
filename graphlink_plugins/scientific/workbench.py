@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 from weakref import WeakKeyDictionary
 
-from backend.domain.node_states import PersistedPluginState, PluginStateSnapshot
+from backend.domain.node_states import ChartState, PersistedPluginState, PluginStateSnapshot
 from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate
 
 from .catalog import PACKS, operations
@@ -197,12 +197,35 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             if previous["resultHash"] == result["provenance"]["resultHash"] and _same_sources(previous.get("sources", {}), sources):
                 return {"ok": True}
 
+        # Chart children pin the full receipt, not just the numerical result
+        # hash: identical numbers from a different source/run still invalidate
+        # a plot. Include the children in the SAME undoable calculation edit.
+        node_key = state.data.get("nodeKey")
+        chart_children = {}
+        for edge in document.edges.values():
+            if edge.source != node.id:
+                continue
+            child = document.nodes.get(edge.target)
+            if (child is None or child.kind != "chart" or not isinstance(child.state, ChartState)
+                    or child.state.chart_source_node_id != node.id):
+                continue
+            receipt = child.state.chart_data.get("scienceReceipt") if isinstance(child.state.chart_data, dict) else None
+            if isinstance(receipt, dict) and receipt.get("sourceKey") == node_key:
+                chart_children[child.id] = child
+
         def save_result():
+            for child in chart_children.values():
+                receipt = child.state.chart_data["scienceReceipt"]
+                if (receipt.get("receiptHash") != result["provenance"].get("receiptHash",
+                                                                          result["provenance"]["resultHash"])
+                        or receipt.get("resultHash") != result["provenance"]["resultHash"]):
+                    child.state.chart_error = "Scientific result changed · refresh this chart from its source."
             node_key = state.data.get("nodeKey")
             node.state = PluginStateSnapshot.from_data({"version": 1, "nodeKey": node_key or uuid4().hex, "latest": result})
             node.content = result["summary"]
 
-        document.record_command(f"science:{pack_id}:{op.id}", "user", save_result, node_ids=[node.id])
+        document.record_command(f"science:{pack_id}:{op.id}", "user", save_result,
+                                node_ids=[node.id, *chart_children])
         return PluginSceneUpdate({"ok": True})
 
     def export_result(document, ctx, request):

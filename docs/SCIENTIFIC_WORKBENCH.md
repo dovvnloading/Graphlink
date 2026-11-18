@@ -56,6 +56,60 @@ The **Convert a measurement** operation resolves units to exponent vectors in th
 
 **References:** [BIPM SI Brochure, 9th edition (updated 2026)](https://www.bipm.org/en/publications/si-brochure/); [NIST SP 811, chapter 4 (derived units and prefixes)](https://www.nist.gov/pml/special-publication-811/nist-guide-si-chapter-4-two-classes-si-units-and-si-prefixes); [NIST SP 811, appendix B (conversion factors)](https://www.nist.gov/pml/special-publication-811/nist-guide-si-appendix-b-conversion-factors/nist-guide-si-appendix-b9); [NIST SP 330, section 4](https://www.nist.gov/pml/special-publication-330/sp-330-section-4). NIST SP 811 predates the 2019 SI redefinition; the value of the electronvolt is now **exactly** 1.602176634 × 10⁻¹⁹ J because the elementary charge has an exact defining value.
 
+
+## Chart a result directly
+
+Run a Scientific Workbench operation, then use **Chart type → Chart this** in
+the result card. This creates a connected, ordinary Graphlink **Chart** node.
+It does not ask an AI to extract measurements: the chart adapter reads only the
+current, grant-checked and checksum-verified scientific result. The chart is an
+undoable graph change and uses the existing scatter, line, box-plot and heatmap
+renderers (including existing SVG zoom, export and resize controls).
+
+- **XY trace:** Scatter preserves numerical x/y coordinates, sample ordering
+  and axis labels. A trailing unit in parentheses (e.g. Time (s)) is shown
+  as the axis's physical unit. If the result table contains the exact plotted
+  x/y measurements plus a nonnegative uncertainty column, the scatter chart
+  uses its values as vertical error bars. A standalone GUM measurement
+  uncertainty result plots the estimate with its reported asymmetric coverage
+  limits (or standard uncertainty if there is no coverage interval).
+- **Fit:** The *Fitted line with 95% confidence envelope* option uses measured
+  x/y pairs and the saved parameters of a statistical linear regression, a
+  single-predictor weighted linear fit, or a nonlinear least-squares model.
+  It overlays the fitted values, pointwise 95% mean-response confidence
+  limits and error bars around the fitted curve. The existing multi-series
+  **line** chart draws the upper and lower limits as boundary traces, rather
+  than adding a new filled-band renderer. This is **not** a prediction or
+  simultaneous confidence interval. Weighted fits use their stored
+  covariance; nonlinear fits reconstruct the local linearized covariance
+  from the stored optimum and weights, consistent with the fitting pack's
+  first-order approximation. Other model shapes are not mislabeled as fits.
+- **Tables:** A table with repeated text group labels and numeric observations,
+  or columns containing enough raw numeric observations, can produce a
+  **box plot**. A rectangular numeric matrix, with optional unique text row
+  names, can produce a **heatmap**. Neither fabricates missing cells or
+  converts aggregated summary statistics into fake raw observations.
+
+The available chart types respect the same underlying limits as ordinary
+charts: 300 total plotted points/observations/cells, 12 box-plot groups and,
+for a four-series fitted line, 75 paired measurements. The server checks
+these bounds again before adding a node and reports invalid/unsupported
+shapes without creating an invented placeholder.
+
+**Freshness and reproducibility:** The chart's canonical data stores a
+scienceReceipt containing the source's durable sourceKey, its
+resultHash and the exact receiptHash from which the chart was drawn. The
+source-to-chart connection and node ids follow normal scene save/reopen.
+On a new successful source run, dependent charts retain their last rendered
+values and gain the existing chart warning badge. The result card lists
+**Linked charts**, marks each as **Source changed · refresh to update**, and
+offers **Refresh chart** to recalculate the *same* chart node from the
+current source receipt. Refresh is undoable. Comparing receipt hashes instead
+of numerical result hashes alone also catches changes to input lineage where
+the displayed numbers happen to match. Revoked/damaged scientific packs
+cannot be used as chart-generation sources. Regular model-generated charts
+and CSV-table-driven charts keep their existing flows.
+
 ## Runtime and storage contract
 
 - A manifest grants access to read and mutate the graph. Pack activation, node creation, execution and reading linked outputs follow the existing plugin grant checks. Run intents are available through the user interface. Builder tool discovery and automatic graph execution exclude them.
