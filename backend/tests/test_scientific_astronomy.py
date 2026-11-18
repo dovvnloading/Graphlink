@@ -239,9 +239,10 @@ def test_exoplanet_transit_geometry_and_radius():
     assert got["total_duration_hours"] == pytest.approx(t14)
     assert got["full_duration_hours"] == pytest.approx(t23)
     assert got["ingress_duration_hours"] == pytest.approx((t14 - t23) / 2)
-    grazing = _run("exoplanet_transit", impact_parameter_stellar_radii=0.95)
-    assert grazing["full_duration_hours"] == 0
-    assert grazing["total_duration_hours"] > 0
+    # The uniform-disk inversion k=sqrt(depth) is invalid for grazing events:
+    # a partially obscured planet does not produce its full area-ratio depth.
+    with pytest.raises(ValueError, match="[Gg]razing"):
+        _run("exoplanet_transit", impact_parameter_stellar_radii=0.95)
 
 
 @pytest.mark.parametrize("name,overrides", [

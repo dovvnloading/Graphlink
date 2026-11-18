@@ -407,14 +407,16 @@ def _exoplanet_transit(data: dict) -> dict:
     rstar_over_a = rs * _R_SUN_M / (a * _AU_M)
     if rstar_over_a * (1 + k) >= 1 or b >= 1 + k:
         raise ValueError("Require a>Rstar+Rplanet and impact parameter <1+Rp/Rstar (a transit).")
+    # The inferred radius k=sqrt(depth) assumes an unocculted, fully
+    # superimposed planetary disk at mid-transit. Grazing events violate it:
+    # the observed depth is then smaller than the area ratio.
+    if b >= 1 - k:
+        raise ValueError("A grazing transit cannot infer Rp/Rstar from depth; require b < 1-Rp/Rstar.")
     sin_i = math.sqrt(1 - (b * rstar_over_a)**2)
     chord_outer = math.sqrt((1 + k)**2 - b**2)
+    chord_inner = math.sqrt((1 - k)**2 - b**2)
     t14 = period / math.pi * math.asin(rstar_over_a * chord_outer / sin_i)
-    if b < 1 - k:
-        chord_inner = math.sqrt((1 - k)**2 - b**2)
-        t23 = period / math.pi * math.asin(rstar_over_a * chord_inner / sin_i)
-    else:
-        t23 = 0.0  # Grazing transits have no fully in-transit portion.
+    t23 = period / math.pi * math.asin(rstar_over_a * chord_inner / sin_i)
     return {
         "summary": "Circular, uniformly bright, undiluted star; small dark planet; no limb darkening. Duration T14 is first-to-fourth contact.",
         "values": {
