@@ -91,6 +91,10 @@ describe("log10 scientific scales", () => {
     const log = createLog10Scale([logMin, logMax], [0, 100]);
     expect(log(tiny)).toBeGreaterThanOrEqual(0);
     expect(log(huge)).toBeLessThanOrEqual(100);
+    const [tinyMin, tinyMax] = scientificDomain(1e-200, 2e-200, "linear");
+    expect(tinyMin).toBeGreaterThan(0);
+    expect(tinyMax).toBeLessThan(3e-200);
+    expect(createLog10Scale([1e-200, 2e-200], [0, 100])(2e-200)).toBeCloseTo(100);
     const [linMin, linMax] = scientificDomain(-9e307, 8e307, "linear");
     expect(Number.isFinite(linMax - linMin)).toBe(true);
     expect(linMin).toBeLessThanOrEqual(-9e307);
