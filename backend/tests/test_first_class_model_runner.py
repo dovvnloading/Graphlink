@@ -24,6 +24,11 @@ from backend import chat_library
 from graphlink_task_config import LOCAL_PROVIDER_OLLAMA
 
 
+# A deadlock safeguard, not a speed or scheduling assertion. Overlap is
+# proved by holding the fake transport workers until the test releases them.
+_MODEL_SYNC_WATCHDOG_S = 120
+
+
 def test_model_node_is_distinct_and_validates_cross_kind_cycles():
     doc = SceneDocument()
     source = doc.add_note(0, 0)
@@ -268,7 +273,9 @@ def test_independent_model_steps_respect_default_and_configured_parallel_limit(t
             doc.add_model_node(source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         token = (await send("previewGraphRun", []))["previewToken"]
         lock = threading.Lock()
-        entered, release = threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        first_wave_started = asyncio.Event()
+        release = threading.Event()
         in_flight = peak = calls = 0
 
         def answer(**_kwargs):
@@ -279,9 +286,11 @@ def test_independent_model_steps_respect_default_and_configured_parallel_limit(t
                 in_flight += 1
                 peak = max(peak, in_flight)
                 if in_flight == expected:
-                    entered.set()
+                    loop.call_soon_threadsafe(first_wave_started.set)
             try:
-                assert release.wait(10), "model gate timed out"
+                # The test decides when the wave may finish; no worker
+                # times out just because Windows scheduling is slow.
+                release.wait()
                 return {"message": {"content": f"answer {invocation}"}}
             finally:
                 with lock:
@@ -293,7 +302,7 @@ def test_independent_model_steps_respect_default_and_configured_parallel_limit(t
             args.append(limit)
         running = asyncio.create_task(send("executeGraphRun", *args))
         try:
-            assert await asyncio.to_thread(entered.wait, 6)
+            await asyncio.wait_for(first_wave_started.wait(), timeout=_MODEL_SYNC_WATCHDOG_S)
             # Every running model has already durably reserved a request ID.
             saved = load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
             outbound = [s for s in saved["steps"] if s["status"] == "running"]
@@ -301,17 +310,22 @@ def test_independent_model_steps_respect_default_and_configured_parallel_limit(t
             assert all(s["externalAttempt"]["phase"] == "dispatched" for s in outbound)
             assert (await send("getGraphRun"))["status"] == "running"
             with lock:
-                assert calls == expected
+                # All slots are occupied simultaneously and remain held:
+                # this is a direct concurrency assertion, not a timestamp race.
+                assert (calls, in_flight, peak) == (expected, expected, expected)
         finally:
             release.set()
-        result = await asyncio.wait_for(running, timeout=10)
-        assert peak == expected and calls == 5
+        result = await asyncio.wait_for(running, timeout=_MODEL_SYNC_WATCHDOG_S)
+        with lock:
+            assert (calls, in_flight, peak) == (5, 0, expected)
         assert result["maxConcurrency"] == expected
         assert result["status"] == "completed"
         assert all(s["status"] == "completed" for s in result["steps"])
-        times = sorted(result["trace"]["steps"], key=lambda x: x["startedAt"])
-        assert times[0]["startedAt"] <= times[1]["startedAt"] < times[0]["finishedAt"]
-        assert all(s["startedAt"] <= s["finishedAt"] and s["durationMs"] is not None for s in times)
+        # The overlap assertion above replaces strict wall-clock ordering;
+        # trace metadata still has to be complete for every dispatched step.
+        trace_steps = result["trace"]["steps"]
+        assert len(trace_steps) == 5
+        assert all(s["startedAt"] and s["finishedAt"] and s["durationMs"] is not None for s in trace_steps)
         assert (await send("executeGraphRun", *args)) == result
         if limit is not None:
             with pytest.raises(IntentValidationError, match="concurrency limit"):
@@ -360,7 +374,7 @@ def test_model_fan_out_starts_children_together_after_parent_receipt(tmp_path, m
                 if active_children == len(children):
                     loop.call_soon_threadsafe(children_started.set)
             try:
-                assert release_children.wait(30), "child calls were never released"
+                release_children.wait()
                 return {"message": {"content": "child answer"}}
             finally:
                 with lock:
@@ -371,7 +385,7 @@ def test_model_fan_out_starts_children_together_after_parent_receipt(tmp_path, m
         try:
             # Both child calls must enter before either can finish. This proves
             # actual overlap without depending on trace timestamp precision.
-            await asyncio.wait_for(children_started.wait(), timeout=30)
+            await asyncio.wait_for(children_started.wait(), timeout=_MODEL_SYNC_WATCHDOG_S)
             with lock:
                 assert observed_starts == ["parent", "child", "child"]
                 assert active_children == peak_children == len(children)
@@ -397,7 +411,7 @@ def test_model_fan_out_starts_children_together_after_parent_receipt(tmp_path, m
         finally:
             release_children.set()
 
-        finished = await asyncio.wait_for(pending, timeout=30)
+        finished = await asyncio.wait_for(pending, timeout=_MODEL_SYNC_WATCHDOG_S)
         trace_by_id = {step["destinationNodeId"]: step for step in finished["trace"]["steps"]}
         assert trace_by_id[parent.id]["status"] == "completed"
         for child, leaf in zip(children, leaves):
@@ -460,7 +474,9 @@ def test_cancel_parallel_run_reaches_all_active_steps_without_replaying_them(tmp
             doc.add_model_node(source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         token = (await send("previewGraphRun", []))["previewToken"]
         lock = threading.Lock()
-        entered, release = threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        both_active = asyncio.Event()
+        release = threading.Event()
         calls = 0
 
         def blocked(**_kwargs):
@@ -468,17 +484,24 @@ def test_cancel_parallel_run_reaches_all_active_steps_without_replaying_them(tmp
             with lock:
                 calls += 1
                 if calls == 2:
-                    entered.set()
-            assert release.wait(10)
+                    loop.call_soon_threadsafe(both_active.set)
+            # Remain inside the external call until cancellation receipts
+            # for both dispatched steps have been written.
+            release.wait()
             return {"message": {"content": "arrived after cancel"}}
 
         monkeypatch.setattr(local_model, "local_ollama_complete", blocked)
         pending = asyncio.create_task(send("executeGraphRun", [], token, "cancel-two-models", 2))
         try:
-            assert await asyncio.to_thread(entered.wait, 6)
+            await asyncio.wait_for(both_active.wait(), timeout=_MODEL_SYNC_WATCHDOG_S)
+            with lock:
+                assert calls == 2
+            before = load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
+            assert [s["status"] for s in before["steps"]] == ["running", "running", "pending"]
+            assert all(s["externalAttempt"]["phase"] == "dispatched" for s in before["steps"][:2])
             pending.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(pending, timeout=10)
+                await asyncio.wait_for(pending, timeout=_MODEL_SYNC_WATCHDOG_S)
         finally:
             release.set()
         saved = load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
@@ -490,7 +513,8 @@ def test_cancel_parallel_run_reaches_all_active_steps_without_replaying_them(tmp
         result = await send("resumeGraphRun", "cancel-two-models")
         assert result["status"] == "reconciliation-required"
         assert result["steps"][-1]["status"] == "completed"
-        assert calls == 3  # The original two requests were never replayed.
+        with lock:
+            assert calls == 3  # The original two requests were never replayed.
         assert all(s["startedAt"] and s["finishedAt"] for s in result["steps"])
 
     asyncio.run(scenario())
