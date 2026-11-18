@@ -78,6 +78,13 @@ export const initialNotificationState: NotificationState = {
   msgType: "info",
 };
 
+/** ModelRef's persisted provider + model identity (not a display label). */
+export interface ComparisonModel {
+  provider: string;
+  modelId: string;
+  label: string;
+}
+
 type Listener = () => void;
 
 export class ComposerStore {
@@ -259,6 +266,34 @@ export class ComposerStore {
       COMPOSER_DRAFT_OFFLINE_COALESCE_KEY,
       () => this.onDraftSettled(generation),
       () => this.onDraftCoalesced(generation),
+    );
+  }
+
+  async loadComparisonModels(): Promise<ComparisonModel[]> {
+    // Read-only discovery from the server's configured-model catalog.
+    // IDs must be provider-qualified: two providers can name a model alike.
+    const result = await this.transport.request("scene", "listComparisonModels", []);
+    const rows = (result as { models?: unknown } | null)?.models;
+    if (!Array.isArray(rows)) throw new Error("The comparison model list is unavailable.");
+    return rows.filter((row): row is ComparisonModel =>
+      !!row && typeof row === "object" &&
+      typeof row.provider === "string" &&
+      typeof row.modelId === "string" &&
+      typeof row.label === "string"
+    );
+  }
+
+  sendModelComparison(
+    text: string,
+    models: Array<Pick<ComparisonModel, "provider" | "modelId">>,
+    branchFromNodeId: string | null,
+    onSettled?: (succeeded: boolean) => void,
+  ): void {
+    // Creating a shared user turn and several assistant branches is NOT an
+    // offline-queueable intent. Never replay an already-expensive fan-out.
+    this.transport.fireIntent(
+      "scene", "compareModels", [text, models, branchFromNodeId],
+      undefined, false, undefined, onSettled,
     );
   }
 
