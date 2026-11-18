@@ -76,7 +76,7 @@ def _calorimetry(data):
     }
 
 
-OPERATIONS = (
+OPERATIONS: tuple[Operation, ...] = (
     Operation(
         "spring_oscillator",
         "Model a spring oscillator",
