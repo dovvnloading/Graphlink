@@ -1,0 +1,22 @@
+{
+  "source": "JCGM 100:2008, Annex H; https://doi.org/10.59161/JCGM100-2008E",
+  "H1": {
+    "length_mm": 50.000838,
+    "standard_uncertainty_nm": 32,
+    "effective_degrees_of_freedom_truncated": 16,
+    "sensitivity_contributions_nm": {"lS": 25.0, "d": 9.7, "deltaAlpha": 2.9, "deltaTheta": 16.6},
+    "second_order_standard_uncertainty_nm": 34
+  },
+  "H2": {
+    "voltage_V": [5.007, 4.994, 5.005, 4.990, 4.999],
+    "current_mA": [19.663, 19.639, 19.640, 19.685, 19.678],
+    "phase_rad": [1.0456, 1.0438, 1.0468, 1.0428, 1.0433],
+    "published_correlations_two_digits": {"V_I": -0.36, "V_phi": 0.86, "I_phi": -0.65},
+    "published_results_ohm": {
+      "R": {"estimate": 127.732, "standard_uncertainty": 0.071},
+      "X": {"estimate": 219.847, "standard_uncertainty": 0.295},
+      "Z": {"estimate": 254.260, "standard_uncertainty": 0.236}
+    },
+    "published_uncorrelated_standard_uncertainty_ohm": {"R": 0.195, "X": 0.201, "Z": 0.204}
+  }
+}
