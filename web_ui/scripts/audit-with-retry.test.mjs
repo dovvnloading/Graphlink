@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { classifyAuditRun, severeEntries } from "./audit-with-retry.mjs";
+import { classifyAuditRun, severeEntries, unacceptedSevereNames } from "./audit-with-retry.mjs";
 
 const REAL_FINDING = JSON.stringify({
   metadata: { vulnerabilities: { info: 0, low: 0, moderate: 1, high: 2, critical: 1 } },
@@ -69,5 +69,57 @@ describe("severeEntries", () => {
   it("survives a report with no vulnerabilities block", () => {
     expect(severeEntries({})).toEqual([]);
     expect(severeEntries(null)).toEqual([]);
+  });
+});
+
+describe("unacceptedSevereNames", () => {
+  const PICO = "https://github.com/advisories/GHSA-fc5q-39xc-vjpf";
+  const RULES = [{ url: PICO, package: "picomatch", expires: "2026-12-18", reason: "no fix" }];
+  // The real 2026-11-18 shape: one advisory on picomatch, surfacing through
+  // every dev-tool package that depends on it.
+  const PICO_CHAIN = {
+    vulnerabilities: {
+      picomatch: { severity: "high", via: [{ name: "picomatch", url: PICO, severity: "high" }] },
+      fdir: { severity: "high", via: ["picomatch"] },
+      tinyglobby: { severity: "high", via: ["fdir", "picomatch"] },
+      vite: { severity: "high", via: ["fdir", "picomatch", "tinyglobby"] },
+      qs: { severity: "moderate", via: [{ name: "qs", url: "https://x/qs", severity: "moderate" }] },
+    },
+  };
+
+  it("excuses a chain that traces only to an accepted, unexpired advisory", () => {
+    expect(unacceptedSevereNames(PICO_CHAIN, RULES, "2026-11-18")).toEqual([]);
+  });
+
+  it("stops excusing it after the expiry date", () => {
+    expect(unacceptedSevereNames(PICO_CHAIN, RULES, "2026-12-19").sort())
+      .toEqual(["fdir", "picomatch", "tinyglobby", "vite"]);
+  });
+
+  it("still fails a package that ALSO has an unaccepted advisory", () => {
+    const report = structuredClone(PICO_CHAIN);
+    report.vulnerabilities.vite.via.push({ name: "vite", url: "https://x/vite-new", severity: "high" });
+    expect(unacceptedSevereNames(report, RULES, "2026-11-18")).toEqual(["vite"]);
+  });
+
+  it("never excuses an unrelated high or critical advisory", () => {
+    const report = {
+      vulnerabilities: {
+        lodash: { severity: "critical", via: [{ name: "lodash", url: "https://x/l", severity: "critical" }] },
+      },
+    };
+    expect(unacceptedSevereNames(report, RULES, "2026-11-18")).toEqual(["lodash"]);
+  });
+
+  it("does not let the accepted URL excuse a different package", () => {
+    const report = {
+      vulnerabilities: { other: { severity: "high", via: [{ name: "other", url: PICO, severity: "high" }] } },
+    };
+    expect(unacceptedSevereNames(report, RULES, "2026-11-18")).toEqual(["other"]);
+  });
+
+  it("fails an entry whose via chain names a package missing from the report", () => {
+    const report = { vulnerabilities: { vite: { severity: "high", via: ["ghost"] } } };
+    expect(unacceptedSevereNames(report, RULES, "2026-11-18")).toEqual(["vite"]);
   });
 });
