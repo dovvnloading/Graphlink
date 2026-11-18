@@ -228,31 +228,26 @@ export const ChartNodeView = memo(function ChartNodeView({
   const [publicationOpen, setPublicationOpen] = useState(false);
   const [publicationFormat, setPublicationFormat] = useState<PublicationFormat>("svg");
   const [publicationSize, setPublicationSize] = useState<PublicationSize>("single");
-  const [publicationDpi, setPublicationDpi] = useState<300 | 600>(300);
-  const [customWidthMm, setCustomWidthMm] = useState(120);
-  const [customHeightMm, setCustomHeightMm] = useState(80);
-  const [colorblindSafe, setColorblindSafe] = useState(false);
-  const [grayscaleSafe, setGrayscaleSafe] = useState(false);
   const [publicationBusy, setPublicationBusy] = useState(false);
   const [publicationError, setPublicationError] = useState("");
 
-  const chartAspect = data.chartHeight / data.chartWidth;
-  const publicationOptions: PublicationExportOptions = {
-    format: publicationFormat,
-    size: publicationSize,
-    ...(publicationSize === "custom"
-      ? { widthMm: customWidthMm, heightMm: customHeightMm } : {}),
-    dpi: publicationDpi,
-    colorblindSafe,
-    grayscaleSafe,
-  };
-
-  async function exportPublication() {
+  async function exportPublication(form: HTMLFormElement) {
     if (publicationBusy) return;
+    const fields = new FormData(form);
+    const settings: PublicationExportOptions = {
+      format: publicationFormat, size: publicationSize,
+      ...(publicationSize === "custom" ? {
+        widthMm: Number(fields.get("widthMm")),
+        heightMm: Number(fields.get("heightMm")),
+      } : {}),
+      dpi: Number(fields.get("dpi")) as 300 | 600,
+      colorblindSafe: fields.has("colorblindSafe"),
+      grayscaleSafe: fields.has("grayscaleSafe"),
+    };
     setPublicationBusy(true);
     setPublicationError("");
     try {
-      await downloadPublicationChartExport(id, publicationOptions, chartAspect);
+      await downloadPublicationChartExport(id, settings, data.chartHeight / data.chartWidth);
     } catch (error) {
       setPublicationError(error instanceof Error ? error.message : "Publication export failed");
     } finally {
@@ -346,16 +341,14 @@ export const ChartNodeView = memo(function ChartNodeView({
           Publication export…
         </button>
         {publicationOpen && (
-          <div
-            id={`chart-publication-${id}`}
-            role="group"
-            aria-label="Publication export settings"
+          <form
+            id={`chart-publication-${id}`} role="group" aria-label="Publication export settings"
             className="chart-node-publication-options nodrag nowheel"
             style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: 8,
                      flexBasis: "100%", width: "100%", maxHeight: 190, overflowY: "auto" }}
+            onSubmit={(event) => { event.preventDefault(); void exportPublication(event.currentTarget); }}
           >
-            <label>
-              Format{" "}
+            <label>Format{" "}
               <select aria-label="Publication format" value={publicationFormat}
                 onChange={(event) => setPublicationFormat(event.target.value as PublicationFormat)}>
                 <option value="svg">SVG (vector)</option>
@@ -363,8 +356,7 @@ export const ChartNodeView = memo(function ChartNodeView({
                 <option value="png">PNG</option>
               </select>
             </label>
-            <label>
-              Size{" "}
+            <label>Size{" "}
               <select aria-label="Publication size" value={publicationSize}
                 onChange={(event) => setPublicationSize(event.target.value as PublicationSize)}>
                 <option value="single">Single column (85 mm)</option>
@@ -374,44 +366,33 @@ export const ChartNodeView = memo(function ChartNodeView({
             </label>
             {publicationSize === "custom" && (
               <>
-                <label>
-                  Width (mm){" "}
-                  <input aria-label="Custom width in millimeters" type="number" min={35} max={300} step={1}
-                    value={customWidthMm} style={{ width: 68 }}
-                    onChange={(event) => setCustomWidthMm(Number(event.target.value))} />
+                <label>Width (mm){" "}
+                  <input aria-label="Custom width in millimeters" name="widthMm" type="number"
+                    min={35} max={300} step={1} defaultValue={120} style={{ width: 68 }} />
                 </label>
-                <label>
-                  Height (mm){" "}
-                  <input aria-label="Custom height in millimeters" type="number" min={30} max={300} step={1}
-                    value={customHeightMm} style={{ width: 68 }}
-                    onChange={(event) => setCustomHeightMm(Number(event.target.value))} />
+                <label>Height (mm){" "}
+                  <input aria-label="Custom height in millimeters" name="heightMm" type="number"
+                    min={30} max={300} step={1} defaultValue={80} style={{ width: 68 }} />
                 </label>
               </>
             )}
-            <label>
-              DPI{" "}
-              <select aria-label="Publication DPI" value={publicationDpi}
-                onChange={(event) => setPublicationDpi(Number(event.target.value) as 300 | 600)}>
-                <option value={300}>300</option>
-                <option value={600}>600</option>
+            <label>DPI{" "}
+              <select aria-label="Publication DPI" name="dpi" defaultValue="300">
+                <option value="300">300</option>
+                <option value="600">600</option>
               </select>
             </label>
             <label>
-              <input type="checkbox" checked={colorblindSafe}
-                onChange={(event) => setColorblindSafe(event.target.checked)} />
-              Colorblind-safe palette
+              <input type="checkbox" name="colorblindSafe" />Colorblind-safe palette
             </label>
             <label>
-              <input type="checkbox" checked={grayscaleSafe}
-                onChange={(event) => setGrayscaleSafe(event.target.checked)} />
-              Grayscale-safe hatches, markers and dashes
+              <input type="checkbox" name="grayscaleSafe" />Grayscale-safe hatches, markers and dashes
             </label>
-            <button type="button" className="chart-node-btn" disabled={publicationBusy}
-              onClick={() => { void exportPublication(); }}>
+            <button type="submit" className="chart-node-btn" disabled={publicationBusy}>
               {publicationBusy ? "Exporting…" : `Download ${publicationFormat.toUpperCase()}`}
             </button>
             {publicationError && <span role="alert">{publicationError}</span>}
-          </div>
+          </form>
         )}
       </div>}
     </NodeShell>

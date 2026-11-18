@@ -89,12 +89,17 @@ describe("authenticated publication export request", () => {
     expect(socket.closed).toBe(true);
   });
 
-  it("does not allocate a socket for invalid size or DPI", async () => {
+  it("reports server-side dimension rejections without downloading", async () => {
     vi.stubGlobal("WebSocket", FakeSocket);
-    await expect(requestPublicationChartExport("chart-1",
-      { ...options, size: "custom", widthMm: 300, heightMm: 300, dpi: 600 },
-      1,
-    )).rejects.toThrow(/megapixel/);
-    expect(FakeSocket.instances).toHaveLength(0);
+    const result = requestPublicationChartExport("chart-1",
+      { ...options, size: "custom", widthMm: 300, heightMm: 300, dpi: 600 }, 1);
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    ws.respond({ kind: "error", id: "publication-export",
+      error: "Something went wrong while handling this request." });
+    await expect(result).rejects.toThrow("Something went wrong");
+    expect(ws.closed).toBe(true);
+    expect(vi.mocked(downloadBlob)).not.toHaveBeenCalled();
   });
+
 });

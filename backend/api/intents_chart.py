@@ -46,15 +46,14 @@ def _make_publication_export_handler(document: SceneDocument):
         node = document.nodes.get(node_id) if isinstance(node_id, str) else None
         if node is None or node.kind != "chart" or not isinstance(node.state, ChartState):
             raise ChartDataError("Unknown chart node")
-        state = node.state
-        if not isinstance(state.chart_data, dict):
+        if not isinstance(node.state.chart_data, dict):
             raise ChartDataError("Chart has no data to export")
-        aspect = state.chart_height / state.chart_width
+        aspect = node.state.chart_height / node.state.chart_width
         settings = validate_publication_export(options, aspect_ratio=aspect)
         content = await asyncio.to_thread(
             render_chart_publication,
-            state.chart_type,
-            state.chart_data,
+            node.state.chart_type,
+            node.state.chart_data,
             width_mm=settings["widthMm"],
             height_mm=settings["heightMm"],
             fmt=settings["format"],
@@ -70,7 +69,7 @@ def _make_publication_export_handler(document: SceneDocument):
         # intents_chart is a real application startup cycle.
         from backend.assets import _sanitize_chart_filename
 
-        title = state.chart_data.get("title", "")
+        title = node.state.chart_data.get("title", "")
         name = _sanitize_chart_filename(str(title or ""))
         return {
             "filename": f"{name}.{settings['format']}",

@@ -1,116 +1,72 @@
-/** One-shot publication export over the existing authenticated scene intents.
- *
- * The legacy /api/assets/chart/.../export route only understands PNG/SVG,
- * has fixed dimensions, and cannot be modified in this change's file scope.
- * Reuse its server-side renderer through a dedicated, bounded intent instead.
- * One temporary WS (same session/capability as the app transport) is closed
- * after the response; no token is sent to a navigated download URL.
+/** Authenticated, one-shot scene intent for print-sized chart exports.
+ * The existing HTTP chart endpoint cannot serve PDF; avoid navigated token URLs.
  */
 import { defaultWsUrl } from "../../../lib/ws/transport";
 import { downloadBlob } from "../downloadTextFile";
-import {
-  resolvePublicationExportOptions,
-  type PublicationExportOptions,
-} from "../chartSpec";
+import type { PublicationExportOptions } from "../chartSpec";
 
-interface ExportResponse {
-  filename: string;
-  mimeType: string;
-  base64: string;
-  widthMm: number;
-  heightMm: number;
-  dpi: number;
-}
+interface ExportFile { filename: string; mimeType: string; base64: string }
+interface DownloadFile { bytes: Uint8Array; filename: string; mimeType: string }
+const MIME = { png: "image/png", pdf: "application/pdf", svg: "image/svg+xml" };
 
-const MIME_TYPES = {
-  png: "image/png",
-  svg: "image/svg+xml",
-  pdf: "application/pdf",
-} as const;
-
-function decodeExport(payload: ExportResponse, format: PublicationExportOptions["format"]): {
-  bytes: Uint8Array;
-  filename: string;
-  mimeType: string;
-} {
-  if (!payload || typeof payload.base64 !== "string"
-      || payload.base64.length > 33_000_000
-      || !/^[A-Za-z0-9+/]*={0,2}$/.test(payload.base64)
-      || payload.mimeType !== MIME_TYPES[format]
-      || typeof payload.filename !== "string"
-      || !/^[A-Za-z0-9_-]+\.(?:png|svg|pdf)$/.test(payload.filename)
-      || !payload.filename.endsWith("." + format)) {
-    throw new Error("Chart export returned an invalid file");
+function decodeFile(file: ExportFile, format: PublicationExportOptions["format"]): DownloadFile {
+  if (!file || typeof file.base64 !== "string" || file.base64.length > 33_000_000
+      || !/^[A-Za-z0-9+/]*={0,2}$/.test(file.base64)
+      || file.mimeType !== MIME[format] || typeof file.filename !== "string"
+      || !/^[A-Za-z0-9_-]+\.(png|pdf|svg)$/.test(file.filename)
+      || !file.filename.endsWith("." + format)) {
+    throw new Error("Invalid publication export response");
   }
-  // Decode in chunks, not by spreading a multi-MB string into function args.
-  const binary = atob(payload.base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  const magic = format === "png" ? [137, 80, 78, 71] : format === "pdf" ? [37, 80, 68, 70] : [];
-  if (!magic.every((byte, index) => bytes[index] === byte)
-      || (format === "svg" && !binary.includes("<svg"))) {
+  const binary = atob(file.base64);
+  if (!(format === "pdf" ? binary.startsWith("%PDF-")
+    : format === "png" ? binary.startsWith("\x89PNG\r\n\x1a\n")
+      : binary.includes("<svg"))) {
     throw new Error("Chart export file format did not match the request");
   }
-  return { bytes, filename: payload.filename, mimeType: payload.mimeType };
+  return {
+    filename: file.filename, mimeType: file.mimeType,
+    bytes: Uint8Array.from(binary, (char) => char.charCodeAt(0)),
+  };
 }
 
 export function requestPublicationChartExport(
-  nodeId: string, options: PublicationExportOptions, chartAspectRatio: number,
-): Promise<{ bytes: Uint8Array; filename: string; mimeType: string }> {
-  try {
-    resolvePublicationExportOptions(options, chartAspectRatio);
-  } catch (error) {
-    return Promise.reject(error);
-  }
+  nodeId: string, options: PublicationExportOptions, _chartAspectRatio: number,
+): Promise<DownloadFile> {
   if (!nodeId) return Promise.reject(new Error("Chart node ID is required"));
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(defaultWsUrl());
-    const requestId = "publication-export";
-    let finished = false;
-    const timeout = window.setTimeout(() => finish(new Error("Publication export timed out")), 120_000);
-    function finish(error?: Error, value?: { bytes: Uint8Array; filename: string; mimeType: string }) {
-      if (finished) return;
-      finished = true;
-      window.clearTimeout(timeout);
-      socket.close();
+    const ws = new WebSocket(defaultWsUrl());
+    let settled = false;
+    const timer = setTimeout(() => finish(new Error("Publication export timed out")), 120_000);
+    function finish(error: Error | null, file?: DownloadFile) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ws.close();
       if (error) reject(error);
-      else if (value) resolve(value);
+      else if (file) resolve(file);
     }
-    socket.onopen = () => {
-      socket.send(JSON.stringify({
-        kind: "intent", topic: "scene", intent: "exportPublicationChart",
-        args: [nodeId, options], id: requestId,
-      }));
-    };
-    socket.onmessage = (event) => {
-      let message: { kind?: string; id?: string; error?: string; value?: ExportResponse };
+    ws.onopen = () => ws.send(JSON.stringify({
+      kind: "intent", topic: "scene", intent: "exportPublicationChart",
+      args: [nodeId, options], id: "publication-export",
+    }));
+    ws.onmessage = ({ data }) => {
       try {
-        message = JSON.parse(String(event.data)) as typeof message;
-      } catch {
-        finish(new Error("Invalid chart export response"));
-        return;
-      }
-      if (!message || typeof message !== "object" || message.id !== requestId) return;
-      if (message.kind === "error") {
-        finish(new Error(message.error || "Publication export failed"));
-      } else if (message.kind === "result") {
-        try {
-          finish(undefined, decodeExport(message.value as ExportResponse, options.format));
-        } catch (error) {
-          finish(error instanceof Error ? error : new Error("Invalid chart export"));
-        }
+        const msg = JSON.parse(String(data));
+        if (msg?.id !== "publication-export") return;
+        if (msg.kind === "error") finish(new Error(msg.error || "Publication export failed"));
+        else if (msg.kind === "result") finish(null, decodeFile(msg.value, options.format));
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error("Invalid publication export response"));
       }
     };
-    socket.onerror = () => finish(new Error("Chart export connection failed"));
-    socket.onclose = () => finish(new Error("Chart export connection closed"));
+    ws.onerror = () => finish(new Error("Chart export connection failed"));
+    ws.onclose = () => finish(new Error("Chart export connection closed"));
   });
 }
 
 export async function downloadPublicationChartExport(
-  nodeId: string, options: PublicationExportOptions, chartAspectRatio: number,
+  nodeId: string, options: PublicationExportOptions, aspectRatio: number,
 ): Promise<void> {
-  const result = await requestPublicationChartExport(nodeId, options, chartAspectRatio);
-  // Using the Blob download utility avoids putting the capability token into
-  // a URL exposed to the operating system's external browser or history.
-  downloadBlob(new Blob([result.bytes.buffer as ArrayBuffer], { type: result.mimeType }), result.filename);
+  const { bytes, mimeType, filename } = await requestPublicationChartExport(nodeId, options, aspectRatio);
+  downloadBlob(new Blob([bytes.buffer as ArrayBuffer], { type: mimeType }), filename);
 }

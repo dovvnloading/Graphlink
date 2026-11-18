@@ -195,7 +195,7 @@ heatmap. Grayscale style takes precedence if both options are checked.
 The interactive canvas's theme is intentionally unaffected.
 
 These are per-export options: they do not change the version-1 chart
-JSON or persist new fields. Client and backend both validate options.
+JSON or persist new fields. The backend validates all options; the UI provides constrained numeric form fields.
 Physical dimensions must be 35–300 mm wide and 30–300 mm high;
 DPI is restricted to 300 or 600 and the export is capped at 30 million
 raster-equivalent pixels and a 24 MB wire response. Invalid settings and
