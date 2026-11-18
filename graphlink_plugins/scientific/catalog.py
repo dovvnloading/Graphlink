@@ -17,7 +17,7 @@ PACKS = {
     "environment": ("Environmental Science", "Calculate flow-weighted concentrations, runoff and growing degree days."),
     "materials": ("Materials Science", "Analyze measured density, tensile response and apparent porosity."),
     "signals": ("Signal Processing", "Smooth, transform and resample measured signals."),
-    "fitting": ("Fitting and Inference", "Weighted and nonlinear fits, Welch tests and chi-square goodness-of-fit."),
+    "fitting": ("Fitting and Inference", "Regression, classical tests, correlations and multiple-comparison adjustments."),
     "uncertainty": ("Measurement Uncertainty", "First-order GUM propagation with correlations and Student t coverage."),
 }
 
@@ -25,4 +25,7 @@ PACKS = {
 def operations(pack_id: str) -> tuple[Operation, ...]:
     if pack_id not in PACKS:
         raise ValueError("Unknown scientific pack.")
-    return import_module(f".packs.{pack_id}", __package__).OPERATIONS
+    base = import_module(f".packs.{pack_id}", __package__).OPERATIONS
+    if pack_id == "fitting":
+        return base + import_module(".packs.inferential", __package__).OPERATIONS
+    return base
