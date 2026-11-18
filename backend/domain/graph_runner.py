@@ -16,8 +16,8 @@ from backend.domain.nodes_content import _text_digest
 from backend.domain.table_workflows import _current_result, _fingerprint, table_output
 from graphlink_plugins.scientific.graph_run_adapter import (
     configured as science_configured, config_hash as science_config_hash,
-    dependencies as science_dependencies, output_hash as science_output_hash,
-    prepare as prepare_science,
+    dependencies as science_dependencies, operation_id as science_operation_id,
+    output_hash as science_output_hash, prepare as prepare_science,
 )
 
 if TYPE_CHECKING:
@@ -177,7 +177,7 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
     for node in document.nodes.values():
         if science_configured(node):
             parents = science_dependencies(document, node)
-            operation = node.state.data["runner"].get("operationId", "")
+            operation = science_operation_id(node)
             bindings[node.id] = (parents[0] if parents else "", operation)
             sources[node.id] = parents
         else:
@@ -203,7 +203,7 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
     for target_id, (source_id, operation) in bindings.items():
         if target_id in included:
             node = document.nodes[target_id]
-            step = {
+            step: dict[str, Any] = {
                 "nodeId": target_id, "sourceId": source_id, "kind": _kind(node),
                 "operation": operation, "label": node.title or node.kind.title(),
                 "status": "blocked", "detail": "", "inputHash": "",
@@ -222,13 +222,13 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
     while pending:
         target = pending.popleft()
         step = steps[target]
-        parents = [steps[parent] for parent in sources[target] if parent in steps]
-        if any(parent["status"] == "blocked" for parent in parents):
+        parent_steps = [steps[parent] for parent in sources[target] if parent in steps]
+        if any(parent["status"] == "blocked" for parent in parent_steps):
             step["detail"] = "The upstream step is blocked."
         elif any(
             parent["status"] == "waiting"
             or (parent["kind"] in {"model", "scientific"} and parent["status"] == "ready")
-            for parent in parents
+            for parent in parent_steps
         ):
             # Neither a Model reply nor an isolated scientific calculation
             # can be guessed during a read-only preview.
@@ -264,7 +264,7 @@ def _matching_node(document: SceneDocument, step: dict[str, Any]) -> SceneNode:
         raise SceneError("The connection changed since the preview. Preview the branch again.")
     if step["kind"] == "scientific":
         if (not science_configured(node)
-                or node.state.data["runner"].get("operationId") != step["operation"]
+                or science_operation_id(node) != step["operation"]
                 or science_dependencies(document, node) != step_sources(step)):
             raise SceneError("The scientific inputs changed since preview. Preview the branch again.")
     elif _binding(node) != (step["sourceId"], step["operation"]):

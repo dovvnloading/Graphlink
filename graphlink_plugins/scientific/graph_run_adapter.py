@@ -10,7 +10,7 @@ from typing import Any
 
 from backend.domain.model import SceneError
 from graphlink_plugins.scientific.catalog import PACKS, operations
-from graphlink_plugins.scientific.core import fingerprint, readable_result, validated_inputs_with_units
+from graphlink_plugins.scientific.core import Operation, fingerprint, readable_result, validated_inputs_with_units
 from graphlink_plugins.scientific.data_table import numeric_column, table_metadata_valid
 from graphlink_plugins.scientific.workbench import (
     SCIENCE_KINDS, STATE_TYPES, _extract, _same_sources, _verify_sources,
@@ -22,7 +22,7 @@ def configured(node: Any) -> bool:
             and isinstance(node.state.data.get("runner"), dict))
 
 
-def _configuration(node: Any) -> tuple[str, Any, dict]:
+def _configuration(node: Any) -> tuple[str, Operation, dict[str, Any]]:
     if not configured(node):
         raise SceneError("This scientific node has not been configured for Graph Runner.")
     pack = node.kind.removeprefix("science_").split(".", 1)[0]
@@ -46,6 +46,12 @@ def _configuration(node: Any) -> tuple[str, Any, dict]:
     if not readable_result(state, pack):
         raise SceneError("The saved scientific result is damaged or unavailable.")
     return pack, operation, config
+
+
+def operation_id(node: Any) -> str:
+    """Use the validated catalog operation ID when pinning a Graph Runner step."""
+    _, operation, _ = _configuration(node)
+    return operation.id
 
 
 def _connected_source(document: Any, node: Any, reference: dict) -> Any:

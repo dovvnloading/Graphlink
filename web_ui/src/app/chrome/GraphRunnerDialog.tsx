@@ -135,6 +135,8 @@ function Runner({ store }: { store: SceneStore }) {
     return () => { active = false; };
   }, [store]);
 
+  // Poll in-flight requests to expose the backend's cancellable running state.
+  // Do not invent a local run: a lost reply must remain retryable by operation ID.
   useEffect(() => {
     if (!(running || busy === "Running graph…" || busy === "Resuming run…") || error) return;
     let active = true;
@@ -174,10 +176,9 @@ function Runner({ store }: { store: SceneStore }) {
         ? "Continue only unaffected pending steps. The uncertain external request will not be repeated."
         : "Continue from the last saved step."}</p>
       <button type="button" className="appbar-btn" disabled={!!busy || running} onClick={() =>
-        (setLatest({ ...run, status: "running" }),
-          void perform("Resuming run…", () => updateRun(
-            store.resumeGraphRun(run.runId, run.steps.some((step) => step.kind === "scientific")),
-          )))
+        void perform("Resuming run…", () => updateRun(
+          store.resumeGraphRun(run.runId, run.steps.some((step) => step.kind === "scientific")),
+        ))
       }>{uncertain ? "Continue safe steps" : "Resume run"}</button>
     </div>;
   }
@@ -359,22 +360,15 @@ function Runner({ store }: { store: SceneStore }) {
         <span>{ready} ready</span>
       </header>
       {preview.steps.length ? <RunSteps steps={preview.steps} names={names} /> :
-        <p>No executable outputs in this scope. Bind a note or table output, or save a Scientific Workbench operation for Graph Runner.</p>}
+        <p>No connected outputs in this scope. Bind a note's text input, create a table output, or save a Scientific Workbench operation for Graph Runner.</p>}
       {ready > 0 && <div className="runner-commit">
         <p>Running saves this graph and records each finished step.</p>
-        <button type="button" className="appbar-btn" disabled={!!busy || running} onClick={() => {
-          setLatest({
-            runId: preview.operationId, startedAt: new Date().toISOString(), status: "running",
-            steps: preview.steps.map((step) => ({
-              ...step, status: ["ready", "waiting"].includes(step.status) ? "pending" : step.status,
-            })),
-            history: latest ? [latest, ...(latest.history ?? [])] : [],
-          });
+        <button type="button" className="appbar-btn" disabled={!!busy || running} onClick={() =>
           void perform("Running graph…", () => updateRun(store.executeGraphRun(
             preview.nodeIds, preview.previewToken, preview.operationId,
             preview.steps.some((step) => step.kind === "scientific"),
-          )));
-        }}>Run graph</button>
+          )))
+        }>Run graph</button>
       </div>}
     </section>}
     {latest && <section aria-label="Latest run">
