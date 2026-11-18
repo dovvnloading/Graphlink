@@ -106,3 +106,17 @@ def test_student_t_heavy_tail_does_not_underflow_while_probability_is_finite():
     assert _student_t_ppf(1e-200, 1) == pytest.approx(
         -1 / math.tan(math.pi * 1e-200), rel=2e-13,
     )
+
+
+def test_welch_keeps_representable_heavy_tail_p_value():
+    # A nonzero sample variance with n=2 and a constant second sample
+    # gives Welch-Satterthwaite df=1. The enormous but finite statistic
+    # has a Cauchy p-value above binary64's smallest subnormal number.
+    result = run("fitting", "welch_t_test", {
+        "sample_a": [0, 1e-154], "sample_b": [1e150, 1e150],
+    })
+    assert result["degrees_of_freedom"] == pytest.approx(1)
+    assert result["p_value"] > 0
+    assert result["p_value"] == pytest.approx(
+        2 / (math.pi * abs(result["t_statistic"])), rel=2e-13,
+    )
