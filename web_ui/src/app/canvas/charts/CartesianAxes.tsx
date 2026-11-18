@@ -19,6 +19,7 @@ export interface CartesianAxesProps {
   innerHeight: number;
   yTicks: number[];
   yScale: Scale;
+  yTickFormat?: (value: number) => string;
   xAxisLabel: string;
   yAxisLabel: string;
   xTicks: XTick[];
@@ -38,6 +39,7 @@ export function CartesianAxes({
   innerHeight,
   yTicks,
   yScale,
+  yTickFormat = formatValue,
   xAxisLabel,
   yAxisLabel,
   xTicks,
@@ -52,7 +54,7 @@ export function CartesianAxes({
           <Fragment key={tick}>
             <line x1={0} x2={innerWidth} y1={y} y2={y} stroke={theme.gridline} strokeOpacity={0.35} strokeDasharray="3 3" />
             <text x={-8} y={y} textAnchor="end" dominantBaseline="middle" fill={theme.textMuted} fontSize={10}>
-              {formatValue(tick)}
+              {yTickFormat(tick)}
             </text>
           </Fragment>
         );
