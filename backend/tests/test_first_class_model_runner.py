@@ -332,47 +332,85 @@ def test_independent_model_steps_respect_default_and_configured_parallel_limit(t
 
 def test_model_fan_out_starts_children_together_after_parent_receipt(tmp_path, monkeypatch):
     async def scenario():
-        _path, _bus, doc, source, _target, send = session(tmp_path)
+        path, _bus, doc, source, _target, send = session(tmp_path)
         parent = doc.add_model_node(source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         children = [doc.add_model_node(parent.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b") for _ in range(2)]
         leaves = [doc.add_note(0, 0) for _ in range(2)]
         for child, leaf in zip(children, leaves):
             doc.bind_note_text_input(child.id, leaf.id)
         token = (await send("previewGraphRun", []))["previewToken"]
-        entered, release = threading.Event(), threading.Event()
+
+        loop = asyncio.get_running_loop()
+        children_started = asyncio.Event()
+        release_children = threading.Event()
         lock = threading.Lock()
-        child_count = 0
+        observed_starts = []
+        active_children = peak_children = 0
 
         def answer(*, prompt, **_kwargs):
-            nonlocal child_count
-            if prompt == source.content:
-                return {"message": {"content": "shared parent output"}}
-            assert prompt == "shared parent output"
+            nonlocal active_children, peak_children
             with lock:
-                child_count += 1
-                if child_count == 2:
-                    entered.set()
-            assert release.wait(10)
-            return {"message": {"content": "child answer"}}
+                if prompt == source.content:
+                    observed_starts.append("parent")
+                    return {"message": {"content": "shared parent output"}}
+                assert prompt == "shared parent output"
+                observed_starts.append("child")
+                active_children += 1
+                peak_children = max(peak_children, active_children)
+                if active_children == len(children):
+                    loop.call_soon_threadsafe(children_started.set)
+            try:
+                assert release_children.wait(30), "child calls were never released"
+                return {"message": {"content": "child answer"}}
+            finally:
+                with lock:
+                    active_children -= 1
 
         monkeypatch.setattr(local_model, "local_ollama_complete", answer)
         pending = asyncio.create_task(send("executeGraphRun", [], token, "parallel-fan-out"))
         try:
-            assert await asyncio.to_thread(entered.wait, 6)
+            # Both child calls must enter before either can finish. This proves
+            # actual overlap without depending on trace timestamp precision.
+            await asyncio.wait_for(children_started.wait(), timeout=30)
+            with lock:
+                assert observed_starts == ["parent", "child", "child"]
+                assert active_children == peak_children == len(children)
+
             state = await send("getGraphRun")
             by_id = {step["nodeId"]: step for step in state["steps"]}
             assert by_id[parent.id]["status"] == "completed"
             assert all(by_id[child.id]["status"] == "running" for child in children)
             assert all(by_id[leaf.id]["status"] == "pending" for leaf in leaves)
+
+            # Each child has begun only after the parent's completed receipt
+            # was durably saved, and both outbound requests have their fences.
+            saved = load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
+            saved_by_id = {step["nodeId"]: step for step in saved["steps"]}
+            assert saved_by_id[parent.id]["status"] == "completed"
+            assert saved_by_id[parent.id]["externalAttempt"]["phase"] == "completed"
+            assert all(
+                saved_by_id[child.id]["status"] == "running"
+                and saved_by_id[child.id]["externalAttempt"]["phase"] == "dispatched"
+                for child in children
+            )
+            assert all(saved_by_id[leaf.id]["status"] == "pending" for leaf in leaves)
         finally:
-            release.set()
-        finished = await asyncio.wait_for(pending, timeout=10)
-        by_id = {step["destinationNodeId"]: step for step in finished["trace"]["steps"]}
+            release_children.set()
+
+        finished = await asyncio.wait_for(pending, timeout=30)
+        trace_by_id = {step["destinationNodeId"]: step for step in finished["trace"]["steps"]}
+        assert trace_by_id[parent.id]["status"] == "completed"
         for child, leaf in zip(children, leaves):
-            assert by_id[child.id]["startedAt"] >= by_id[parent.id]["finishedAt"]
-            assert by_id[leaf.id]["startedAt"] >= by_id[child.id]["finishedAt"]
+            assert trace_by_id[child.id]["status"] == "completed"
+            assert trace_by_id[child.id]["sourceNodeId"] == parent.id
+            assert trace_by_id[leaf.id]["status"] == "completed"
+            assert trace_by_id[leaf.id]["sourceNodeId"] == child.id
             assert doc.nodes[leaf.id].content == "child answer"
-        assert finished["status"] == "completed" and child_count == 2
+        with lock:
+            assert observed_starts == ["parent", "child", "child"]
+            assert active_children == 0
+            assert peak_children == len(children)
+        assert finished["status"] == "completed"
 
     asyncio.run(scenario())
 
