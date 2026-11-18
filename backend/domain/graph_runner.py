@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 from collections import defaultdict, deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -269,7 +269,7 @@ async def schedule_graph_steps(
     steps: list[dict[str, Any]],
     *,
     max_concurrency: int,
-    execute: Callable[[dict[str, Any]], Awaitable[None]],
+    execute: Callable[[dict[str, Any]], Coroutine[Any, Any, None]],
     checkpoint_blocked: Callable[[], Awaitable[None]],
     dependencies: Callable[[dict[str, Any]], tuple[str, ...]] | None = None,
 ) -> None:
