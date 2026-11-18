@@ -219,14 +219,14 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
     series.push(row);
   }
   const count = series[0].values.length;
-  if (count > MAX_SERIES_POINTS || series.length * count > MAX_SERIES_POINTS) {
-    throw new ChartSpecError("Charts support at most 300 total series points");
-  }
-  if (type === "line" && count < 2) throw new ChartSpecError("Line charts require at least two data points");
   for (const row of series) {
     if (row.values.length !== count) {
       throw new ChartSpecError("series " + (row.name ?? "values") + " length must match the other series (" + count + ")");
     }
+  }
+  if (type === "line" && count < 2) throw new ChartSpecError("Line charts require at least two data points");
+  if (count > MAX_SERIES_POINTS || series.length * count > MAX_SERIES_POINTS) {
+    throw new ChartSpecError("Charts support at most 300 total series points");
   }
   if (xValues && xValues.length !== count) {
     throw new ChartSpecError("xValues length must match the series length (" + count + ")");
