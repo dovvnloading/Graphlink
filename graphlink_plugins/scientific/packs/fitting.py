@@ -129,6 +129,21 @@ def _linear(data):
         raise ValueError("The regression exceeds the supported numerical range.") from None
 
 
+
+def _one_minus_exp_neg(z):
+    """Compute 1 - exp(-z) without losing a small nonzero z to cancellation."""
+    if abs(z) > Decimal("1e-8"):
+        return Decimal(1) - (-z).exp()
+    term = total = z
+    for k in range(2, 128):
+        term *= -z / k
+        updated = total + term
+        if updated == total:
+            return total
+        total = updated
+    return total
+
+
 def _model(name, x, b):
     """Return model value and its analytic derivative w.r.t. parameters."""
     one = Decimal(1)
@@ -138,8 +153,10 @@ def _model(name, x, b):
         return a * e + baseline, [e, a * x * e, one]
     if name == "saturating_exponential":  # NIST Misra1a
         a, rate = b
-        e = (-rate * x).exp()
-        return a * (one - e), [one - e, a * x * e]
+        z = rate * x
+        e = (-z).exp()
+        difference = _one_minus_exp_neg(z)
+        return a * difference, [difference, a * x * e]
     if name == "power_law":               # a x^b, x positive
         if x <= 0:
             raise ValueError("Power-law fitting requires strictly positive x values.")
@@ -407,8 +424,27 @@ def _student_t_cdf(t, df):
         x = t * t / (df + t * t)
         half = _beta_i(0.5, df / 2, x) / 2
         return 0.5 - half if t < 0 else 0.5 + half
-    x = (df / (df + t * t)) if math.isfinite(t * t) else 0.0
-    half = _beta_i(df / 2, 0.5, x) / 2
+    squared = t * t
+    if math.isfinite(squared):
+        # Ratios avoid overflowing the denominator df + t².
+        x = 1 / (1 + squared / df) if df >= squared else (df / squared) / (1 + df / squared)
+    else:
+        # t² can overflow although the Student-t tail is representable.
+        # Evaluate the beta argument via ratios before falling back to its
+        # small-x leading term in log space.
+        magnitude = abs(t)
+        scaled = df / magnitude
+        x = scaled / (magnitude + scaled)
+    if x:
+        half = _beta_i(df / 2, 0.5, x) / 2
+    else:
+        a = df / 2
+        # For x too small for binary64, I_x(a, 1/2) ~
+        # x^a / (a * B(a, 1/2)). The next term is negligible.
+        log_x = math.log(df) - 2 * math.log(abs(t))
+        log_half = (math.lgamma(a + 0.5) - math.lgamma(a) - math.lgamma(0.5)
+                    - math.log(2 * a) + a * log_x)
+        half = math.exp(log_half)
     return half if t < 0 else 1 - half
 
 
@@ -425,7 +461,7 @@ def _student_t_ppf(probability, df):
     lo, hi = 0.0, 1.0
     while _student_t_cdf(-hi, df) > lower_tail:
         hi *= 2
-        if hi > 1e150:
+        if not math.isfinite(hi):
             raise ValueError("Student t quantile exceeds the supported range.")
     for _ in range(90):
         midpoint = (lo + hi) / 2
