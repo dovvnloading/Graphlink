@@ -1227,3 +1227,98 @@ def search_chunks(
         ]
     finally:
         conn.close()
+
+# -- stable retrieval provenance (no migration, works for existing data) ------
+
+# A heading is attributed to chunks starting at or below its source offset.
+# Both ATX and setext Markdown styles are supported; plain text has no
+# invented heading, so the honest fallback is "Unsectioned".
+_ATX_SECTION_RE = re.compile(r"(?m)^[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$")
+_SETEXT_SECTION_RE = re.compile(r"(?m)^([^\n]+)\n[ \t]*[=-]{3,}[ \t]*$")
+
+
+def _headings_in_chunk(text: str, offset_start: int) -> list[tuple[int, str]]:
+    headings = []
+    for match in _ATX_SECTION_RE.finditer(text):
+        title = match.group(1).strip()
+        if title:
+            headings.append((offset_start + match.start(), title))
+    for match in _SETEXT_SECTION_RE.finditer(text):
+        title = match.group(1).strip()
+        if title:
+            headings.append((offset_start + match.start(), title))
+    return headings
+
+
+def _stable_chunk_citation(result: dict) -> str:
+    """Identifier derived from source and exact excerpt, not SQLite row IDs.
+
+    Delete/reingest and stable graph reindexing can allocate new chunk IDs;
+    an unchanged excerpt should still retain its citation identity.
+    """
+    parts = (
+        str(result["source_uri"]), str(result.get("source_node_id") or ""),
+        str(result["offset_start"]), str(result["offset_end"]),
+        str(result["text"]),
+    )
+    digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:20]
+    return f"kb:{digest}"
+
+
+def provenance_for_hits(db_path: Path, results: list[dict]) -> dict[int, dict[str, str]]:
+    """Return source file, nearest preceding section, and stable citation.
+
+    Uses existing chunk offsets/Markdown headings; no database migration or
+    cloud service is needed. A single SQLite read obtains headings for every
+    document represented in the hit set, including older ingested files.
+    Graph nodes share a document but each has offsets relative to its own
+    node text; their headings are scoped by source_node_id so one node's
+    heading cannot label another node's search result.
+    Where a chunk begins at a heading, that heading takes precedence. When
+    there are no headings, report `Unsectioned` rather than guessing.
+    """
+    if not results:
+        return {}
+    document_ids = sorted({int(result["document_id"]) for result in results})
+    placeholders = ",".join("?" for _ in document_ids)
+    conn = _connect(db_path)
+    try:
+        rows = conn.execute(
+            "SELECT document_id, offset_start, text, source_node_id FROM chunks "
+            f"WHERE document_id IN ({placeholders}) "
+            "ORDER BY document_id, source_node_id, offset_start, ordinal",
+            document_ids,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    headings: dict[tuple[int, str | None], list[tuple[int, str]]] = {}
+    for document_id, start, text, source_node_id in rows:
+        key = (int(document_id), source_node_id)
+        headings.setdefault(key, []).extend(_headings_in_chunk(text, int(start)))
+    for key, items in headings.items():
+        # Overlap between adjacent chunks may repeat one heading; the offset
+        # is absolute, so collapsing it is safe and order-independent.
+        headings[key] = sorted(set(items))
+
+    metadata: dict[int, dict[str, str]] = {}
+    for result in results:
+        start = int(result["offset_start"])
+        end = int(result["offset_end"])
+        options = headings.get((int(result["document_id"]), result.get("source_node_id")), [])
+        before = [item for item in options if item[0] <= start]
+        if before:
+            section = before[-1][1]
+        else:
+            # Only a heading at the very start of the hit (up to leading
+            # whitespace) can label this chunk; later headings belong to a
+            # subsequent section and must not retroactively label it.
+            lead = len(result["text"]) - len(result["text"].lstrip())
+            first = next((name for pos, name in options if start <= pos <= min(end, start + lead)), None)
+            section = first or "Unsectioned"
+        metadata[result["chunk_id"]] = {
+            "source_file": str(result["source_uri"]),
+            "section": section,
+            "citation_id": _stable_chunk_citation(result),
+        }
+    return metadata
