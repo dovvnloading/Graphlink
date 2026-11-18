@@ -13,6 +13,8 @@ import os
 import pickle
 import time
 from multiprocessing.connection import Connection
+from multiprocessing.process import BaseProcess
+from typing import Literal
 
 from .core import Operation, calculate_result
 
@@ -20,6 +22,8 @@ DEFAULT_TIMEOUT_SECONDS = 15.0
 MAX_TIMEOUT_SECONDS = 600.0
 TIMEOUT_ENV = "GRAPHLINK_SCIENTIFIC_TIMEOUT_SECONDS"
 _POLL_SECONDS = 0.025
+
+_WorkerReply = tuple[Literal["ok"], dict] | tuple[Literal["invalid_input", "worker_error"], str]
 
 
 class ExecutionFailure(Exception):
@@ -59,7 +63,7 @@ def _calculate_in_worker(sender: Connection, pack_id: str, operation_id: str, op
                 # inside the worker instead of changing their public pack API.
                 from .catalog import operations
                 operation = next(op for op in operations(pack_id) if op.id == operation_id)
-            answer = ("ok", calculate_result(pack_id, operation, inputs, sources))
+            answer: _WorkerReply = ("ok", calculate_result(pack_id, operation, inputs, sources))
         except ValueError as exc:
             answer = ("invalid_input", str(exc))
         except Exception:
@@ -73,7 +77,7 @@ def _calculate_in_worker(sender: Connection, pack_id: str, operation_id: str, op
         sender.close()
 
 
-def _stop_worker(process: multiprocessing.Process) -> None:
+def _stop_worker(process: BaseProcess) -> None:
     """Reap even on timeout, explicit cancel, or parent task cancellation."""
     if process.pid is None:
         process.close()

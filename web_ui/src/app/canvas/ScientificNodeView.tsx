@@ -362,12 +362,13 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
         </div>
       </div>}
       <div className="science-actions">
-        <button className="science-run" type="submit" disabled={conflict || stale}>{busy ? "Running…" : "Run calculation"}</button>
+        <button className="science-run" type="submit" disabled={busy || conflict || stale}>Run calculation</button>
         <button type="button" onClick={() => {
           setDraft({ ...restoreDraft(op, null, revision), dirty: true }); setError(null);
         }}>Load example</button>
       </div>
     </fieldset>
+    {busy && <p role="status">{running ? "Running calculation…" : "Loading selected table column…"}</p>}
     {/* Outside the disabled fieldset; only real calculations can be cancelled, not table-column imports. */}
     {running && <div className="science-actions">
       <button type="button" className="science-cancel" disabled={cancelling} onClick={async () => {

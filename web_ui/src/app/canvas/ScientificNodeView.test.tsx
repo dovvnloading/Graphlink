@@ -261,6 +261,7 @@ describe("scientific workbench card", () => {
     request.mockReturnValueOnce(new Promise((resolve) => { finishRun = resolve; }));
     fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
     expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Running calculation…");
     const cancel = screen.getByRole("button", { name: "Cancel calculation" });
     expect(cancel).toBeEnabled();
     fireEvent.click(cancel);
@@ -365,6 +366,7 @@ describe("typed table import and numeric selections", () => {
     request.mockReturnValueOnce(new Promise((resolve) => { finishColumn = resolve; }));
     fireEvent.change(select, { target: { value: drop.value } });
     expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
+    expect(screen.getByText("Loading selected table column…")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Cancel calculation" })).toBeNull();
     finishColumn({ ok: true, values: [10, 20], reference });
     await waitFor(() => expect(screen.getByLabelText("Samples (m)")).toHaveValue("[10,20]"));
