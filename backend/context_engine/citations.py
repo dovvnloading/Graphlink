@@ -124,7 +124,7 @@ def assemble_chat_context(
 
     supplemental = knowledge_candidates(hits)
     augmented_system = (
-        (system_prompt + "\n\n" if (system_prompt or "").strip() else "")
+        ((system_prompt or "") + "\n\n" if (system_prompt or "").strip() else "")
         + _CITE_INSTRUCTIONS
     )
     try:

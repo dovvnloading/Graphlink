@@ -6,12 +6,12 @@
   max-width: 100%; overflow-wrap: anywhere;
 }
 .chat-citation-chip {
-  border: 1px solid var(--border-color, #7777);
+  border: 1px solid var(--border-color, currentColor);
   color: inherit; background: var(--surface-color, transparent); cursor: pointer;
 }
 .chat-citation-chip:hover, .chat-citation-chip:focus-visible { text-decoration: underline; }
 .chat-citation-unverified { border: 1px dashed currentColor; opacity: .75; }
-.chat-citation-excerpt { border: 1px solid var(--border-color, #7777); border-radius: 8px;
+.chat-citation-excerpt { border: 1px solid var(--border-color, currentColor); border-radius: 8px;
   padding: 10px; margin-top: 8px; overflow-wrap: anywhere; }
 .chat-citation-origin { opacity: .75; margin-top: 4px; }
 .chat-citation-excerpt pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit;

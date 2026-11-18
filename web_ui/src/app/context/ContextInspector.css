@@ -63,4 +63,4 @@
 
 .context-inspector-citations { margin-top: 12px; }
 .context-inspector-citations ul { list-style: none; margin: 8px 0 0; padding: 0; }
-.context-inspector-citations li { padding: 8px 0; border-top: 1px solid var(--border-color, #7777); overflow-wrap: anywhere; }
+.context-inspector-citations li { padding: 8px 0; border-top: 1px solid var(--border-color, currentColor); overflow-wrap: anywhere; }
