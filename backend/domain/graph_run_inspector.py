@@ -64,7 +64,7 @@ def _duration_ms(start: str | None, end: str | None) -> int | None:
 def _blocked_cause(step: dict[str, Any]) -> str | None:
     """Classify *untrusted* free-form details; do not copy their text to JSON."""
     status = step.get("status")
-    if status not in {"blocked", "failed", "reconciliation-required"}:
+    if not isinstance(status, str) or status not in {"blocked", "failed", "reconciliation-required"}:
         return None
     if status == "reconciliation-required":
         return "External request outcome is uncertain; reconcile before retrying."
@@ -160,8 +160,8 @@ def build_graph_run_trace(run: dict[str, Any]) -> dict[str, Any]:
             "index": index,
             "sourceNodeId": _node_id(step.get("sourceId")),
             "destinationNodeId": _node_id(step.get("nodeId")),
-            "kind": step["kind"] if step.get("kind") in _KINDS else "unknown",
-            "operation": step["operation"] if step.get("operation") in _OPERATIONS else "unknown",
+            "kind": step.get("kind") if isinstance(step.get("kind"), str) and step["kind"] in _KINDS else "unknown",
+            "operation": step.get("operation") if isinstance(step.get("operation"), str) and step["operation"] in _OPERATIONS else "unknown",
             "provider": provider,
             "model": model,
             "inputFingerprints": {
@@ -174,7 +174,7 @@ def build_graph_run_trace(run: dict[str, Any]) -> dict[str, Any]:
                 "sha256": _digest(step.get("outputHash")),
                 "number": version if type(version) is int and 0 < version <= 2147483647 else None,
             },
-            "status": step["status"] if step.get("status") in _STATUSES else "unknown",
+            "status": step.get("status") if isinstance(step.get("status"), str) and step["status"] in _STATUSES else "unknown",
             "blockedCause": _blocked_cause(step),
             "startedAt": step_started,
             "finishedAt": step_finished,
@@ -184,7 +184,7 @@ def build_graph_run_trace(run: dict[str, Any]) -> dict[str, Any]:
     return {
         "schemaVersion": 1,
         "runId": _node_id(run.get("runId")),
-        "status": run["status"] if run.get("status") in _STATUSES else "unknown",
+        "status": run.get("status") if isinstance(run.get("status"), str) and run["status"] in _STATUSES else "unknown",
         "startedAt": started,
         "finishedAt": finished,
         "durationMs": _duration_ms(started, finished),
