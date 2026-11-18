@@ -65,3 +65,17 @@ failed pre-dispatch persistence, timeout, cancellation, failed completion
 persistence, malformed metadata, and save/reopen through the real graph DB.
 The UI test checks that an uncertain request reveals its ID without a
 one-click Resume action.
+
+## Concurrent Graph Runner calls
+
+Graph Runner can now have several independent steps in flight (default three;
+explicit `maxConcurrency` from one through eight). This does not weaken the
+external-call contract: each concurrently running model step obtains a distinct
+request ID, and the shared graph/checkpoint writer serializes SQLite saves.
+No call is sent until **its own** pre-dispatch fence has been confirmed durable,
+and every output is saved with its corresponding completed receipt. One uncertain
+step prevents dispatch of its dependents but does not stop siblings. Cancelling
+the parent run cancels and drains every active step before releasing its graph
+mutation guard. After a restart, all saved `dispatched` attempts are still
+reconciliation-required, even if multiple requests were in flight; only
+never-dispatched independent steps can resume automatically.

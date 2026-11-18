@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from collections import defaultdict, deque
-from typing import TYPE_CHECKING
+from collections.abc import Awaitable, Callable, Coroutine
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_states import ModelState, NoteState
@@ -260,3 +263,89 @@ def execute_graph_step(document: SceneDocument, step: dict[str, str]) -> str:
             raise SceneError(f"The {name} changed since the preview. Preview the branch again.")
     _evaluate(document, step)
     return _output_digest(node)
+
+
+async def schedule_graph_steps(
+    steps: list[dict[str, Any]],
+    *,
+    max_concurrency: int,
+    execute: Callable[[dict[str, Any]], Coroutine[Any, Any, None]],
+    checkpoint_blocked: Callable[[], Awaitable[None]],
+    dependencies: Callable[[dict[str, Any]], tuple[str, ...]] | None = None,
+) -> None:
+    """Run eligible steps in stable plan order, without waiting for unrelated branches.
+
+    The current graph bindings each have one source. The optional dependency
+    selector also supports multiple prerequisites (fan-in) for callers with
+    multi-input steps. No dependent is scheduled until *all* its prerequisites
+    have completed or were already current. A failed or uncertain branch only
+    blocks its descendants.
+
+    Only the caller writes graph outputs or checkpoints. In particular, its
+    checkpoint callback must serialize concurrent workers' SQLite saves.
+    """
+    if type(max_concurrency) is not int or not 1 <= max_concurrency <= 8:
+        raise ValueError("Graph Runner concurrency must be between 1 and 8.")
+
+    by_node_id = {step["nodeId"]: step for step in steps}
+    successful = {"current", "completed"}
+    unsuccessful = {"blocked", "failed", "reconciliation-required"}
+
+    def parents(step: dict[str, Any]) -> list[dict[str, Any]]:
+        sources = dependencies(step) if dependencies is not None else (step["sourceId"],)
+        # Deduplicate shared inputs without changing their plan order.
+        return [by_node_id[source] for source in dict.fromkeys(sources) if source in by_node_id]
+
+    active: dict[asyncio.Task[None], int] = {}
+    try:
+        while True:
+            in_flight = set(active.values())
+            waiting = [
+                (index, step) for index, step in enumerate(steps)
+                if step["status"] == "pending" and index not in in_flight
+            ]
+
+            blocked = [step for _, step in waiting if any(
+                parent["status"] in unsuccessful for parent in parents(step)
+            )]
+            if blocked:
+                for step in blocked:
+                    step.update(
+                        status="blocked", detail="The upstream step is blocked or incomplete.",
+                        finishedAt=datetime.now(timezone.utc).isoformat(),
+                    )
+                await checkpoint_blocked()
+                continue
+
+            ready = [(index, step) for index, step in waiting if all(
+                parent["status"] in successful for parent in parents(step)
+            )]
+            for index, step in ready[:max(0, max_concurrency - len(active))]:
+                active[asyncio.create_task(execute(step))] = index
+
+            if active:
+                done, _ = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    active.pop(task)
+                    task.result()  # Propagate persistence failures; never continue dispatching.
+                continue
+
+            if not waiting:
+                return
+
+            # A malformed/cyclic recovered plan cannot make progress. Mark
+            # only the affected pending steps; completed branches stay intact.
+            for _, step in waiting:
+                step.update(
+                    status="blocked", detail="A dependency cycle prevents this step from running.",
+                    finishedAt=datetime.now(timezone.utc).isoformat(),
+                )
+            await checkpoint_blocked()
+            return
+    finally:
+        # The parent intent owns the graph mutation guard. Never release it
+        # while a child is still dispatching, applying a result, or saving.
+        if active:
+            for task in active:
+                task.cancel()
+            await asyncio.gather(*active, return_exceptions=True)

@@ -94,6 +94,11 @@ def restore_graph_runs(raw: Any, ids: dict[str, str]) -> list[dict[str, Any]]:
             continue
         run = {key: record[key] for key in keys}
         run["previewHash"] = preview_hash
+        # Legacy runs used sequential scheduling. Missing concurrency metadata
+        # defaults to three only for new work remaining after an interruption.
+        # Invalid imported limits never authorize unbounded fan-out.
+        limit = record.get("maxConcurrency", 3)
+        run["maxConcurrency"] = limit if type(limit) is int and 1 <= limit <= 8 else 3
         finished_at = _timestamp(record.get("finishedAt"))
         if finished_at is not None:
             run["finishedAt"] = finished_at

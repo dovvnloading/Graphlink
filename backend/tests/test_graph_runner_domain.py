@@ -1,10 +1,14 @@
 """The branch preview must predict the input every individual write will see."""
 
+import asyncio
+
 import pytest
 
 import backend.agents  # noqa: F401 - initialize the ordinary canvas import graph
 from backend.domain.graph import SceneDocument
-from backend.domain.graph_runner import execute_graph_step, plan_graph_run, validate_graph_run_ancestors
+from backend.domain.graph_runner import (
+    execute_graph_step, plan_graph_run, schedule_graph_steps, validate_graph_run_ancestors,
+)
 from backend.domain.model import SceneError
 from backend.domain.nodes_content import _text_digest
 
@@ -232,3 +236,56 @@ def test_grouped_csv_preserves_exact_decimals_above_json_number_precision():
     steps = plan_graph_run(doc, [grouped.id])
     assert [s["status"] for s in steps] == ["blocked", "blocked"]
     assert "decimal precision" in steps[0]["detail"]
+
+
+
+def test_bounded_scheduler_waits_for_every_fan_in_input_after_parallel_fan_out():
+    async def scenario():
+        # Existing v1 bindings are single-source; the scheduler itself also
+        # handles multi-prerequisite DAGs for future graph input types.
+        graph = {
+            "root": (),
+            "left": ("root",),
+            "right": ("root",),
+            "join": ("left", "right"),
+        }
+        steps = [
+            {"nodeId": node, "sourceId": "source", "status": "pending"}
+            for node in graph
+        ]
+        started, finished = {}, {}
+        both_running = asyncio.Event()
+        release = asyncio.Event()
+        clock = asyncio.get_running_loop().time
+
+        async def execute(step):
+            node = step["nodeId"]
+            started[node] = clock()
+            if node in {"left", "right"}:
+                if {"left", "right"} <= started.keys():
+                    both_running.set()
+                await release.wait()
+            finished[node] = clock()
+            step["status"] = "completed"
+
+        async def checkpoint_blocked():
+            pytest.fail("A healthy fan-in DAG must not be blocked.")
+
+        task = asyncio.create_task(schedule_graph_steps(
+            steps, max_concurrency=2, execute=execute,
+            checkpoint_blocked=checkpoint_blocked,
+            dependencies=lambda step: graph[step["nodeId"]],
+        ))
+        try:
+            await asyncio.wait_for(both_running.wait(), timeout=5)
+            assert "join" not in started
+            assert "root" in finished
+        finally:
+            release.set()
+        await asyncio.wait_for(task, timeout=5)
+        assert started["left"] >= finished["root"]
+        assert started["right"] >= finished["root"]
+        assert started["join"] >= max(finished["left"], finished["right"])
+        assert all(step["status"] == "completed" for step in steps)
+
+    asyncio.run(scenario())
