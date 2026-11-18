@@ -257,3 +257,20 @@ def convert_measurement(value: float, source: str, target: str) -> float:
     if not math.isfinite(result):
         raise ValueError("The converted measurement exceeds the numerical range.")
     return result
+
+
+_HEADER_UNIT = re.compile(r"^(.+?)\s+\(([^()\r\n]+)\)$")
+
+
+def split_column_header(header: str) -> tuple[str, str]:
+    """Read optional units from a typed-table heading without converting data.
+
+    Preserve the original label in table metadata; unknown domain-specific
+    units must remain usable even when the SI converter cannot parse them.
+    Existing unit parsing and conversion behavior is intentionally unchanged.
+    """
+    clean = header.strip()
+    match = _HEADER_UNIT.fullmatch(clean)
+    if match and match.group(1).strip() and match.group(2).strip():
+        return match.group(1).strip(), match.group(2).strip()
+    return clean, ""
