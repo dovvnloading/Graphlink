@@ -82,6 +82,13 @@ function allow(value: unknown, pattern: RegExp): string | null {
   return typeof value === "string" && pattern.test(value) ? value : null;
 }
 
+const sensitiveIdentifier = /api[_-]?key|credential|password|secret|prompt|response|output|bearer|authorization|token/i;
+
+function metadataIdentifier(value: unknown): string | null {
+  const identifier = allow(value, namePattern);
+  return identifier && !sensitiveIdentifier.test(identifier) ? identifier : null;
+}
+
 function choice(value: unknown, allowed: readonly string[]): string {
   return typeof value === "string" && allowed.includes(value) ? value : "unknown";
 }
@@ -116,8 +123,9 @@ export function serializeGraphRunTrace(trace: GraphRunTrace): string {
       destinationNodeId: allow(step.destinationNodeId, idPattern) ?? "",
       kind: choice(step.kind, kinds),
       operation: choice(step.operation, operations),
-      provider: allow(step.provider, namePattern),
-      model: allow(step.model, namePattern),
+      provider: step.kind === "model" || step.kind === "tool"
+        ? metadataIdentifier(step.provider) : null,
+      model: step.kind === "model" ? metadataIdentifier(step.model) : null,
       inputFingerprints: {
         input: allow(fingerprints.input, digestPattern),
         configuration: allow(fingerprints.configuration, digestPattern),
@@ -137,9 +145,9 @@ export function serializeGraphRunTrace(trace: GraphRunTrace): string {
       attempts: (Array.isArray(step.attempts) ? step.attempts : []).map((attempt) => ({
         requestId: allow(attempt.requestId, requestPattern),
         kind: choice(attempt.kind, ["model", "tool"]),
-        provider: allow(attempt.provider, namePattern),
-        model: allow(attempt.model, namePattern),
-        tool: allow(attempt.tool, namePattern),
+        provider: metadataIdentifier(attempt.provider),
+        model: metadataIdentifier(attempt.model),
+        tool: metadataIdentifier(attempt.tool),
         inputFingerprint: allow(attempt.inputFingerprint, digestPattern),
         persistedPhase: choice(attempt.persistedPhase, phases),
         phase: choice(attempt.phase, phases),
