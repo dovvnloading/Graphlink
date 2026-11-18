@@ -43,6 +43,7 @@ def _legacy_prompt(history, system, *, window=32_000):
             {"role": "assistant", "content": "orphan"},
             {"role": "user", "content": "latest"},
         ]),
+        ("persona", [{"role": "assistant", "content": "standalone latest answer"}]),
         ("persona", [
             {"role": "user", "content": [
                 {"type": "text", "text": "identify photo"},

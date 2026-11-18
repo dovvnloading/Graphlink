@@ -72,10 +72,15 @@ class ContextCandidate:
             raise ValueError("knowledge hits must have retrieved trust")
         if self.kind == "summary" and self.trust != "generated":
             raise ValueError("summaries must have generated trust")
-        if self.kind == "current_message" and (
-            self.trust != "user" or self.message.get("role") != "user"
-        ):
-            raise ValueError("the current message must be user-role")
+        if self.kind == "current_message":
+            # Real sends end in a user message. Older direct ChatWorker
+            # callers (and the trim_history keep-newest contract) also accept
+            # a sole assistant turn: retain that existing wire shape rather
+            # than raising just because its role is generated.
+            if (self.message.get("role"), self.trust) not in (
+                ("user", "user"), ("assistant", "generated"),
+            ):
+                raise ValueError("the newest message has inconsistent role/trust")
         if self.kind == "instructions" and self.message.get("role") != "system":
             raise ValueError("instructions must use system role")
         if self.kind in _WRAPPED_KINDS and self.trust in ("retrieved", "generated"):
