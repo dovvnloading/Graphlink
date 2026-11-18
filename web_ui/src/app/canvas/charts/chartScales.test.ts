@@ -171,6 +171,11 @@ describe("boxplot statistics and heatmap palette", () => {
     expect(computeBoxplotStats([5, 5])).toEqual({
       min: 5, q1: 5, median: 5, q3: 5, max: 5, outliers: [],
     });
+    for (const value of [Number.MIN_VALUE, Number.MAX_VALUE]) {
+      expect(computeBoxplotStats([value, value])).toEqual({
+        min: value, q1: value, median: value, q3: value, max: value, outliers: [],
+      });
+    }
   });
 
   it("uses the entire matrix domain and zero-centered diverging stops", () => {
