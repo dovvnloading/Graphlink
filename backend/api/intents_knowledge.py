@@ -109,7 +109,7 @@ def branch_history_to_text(history: list[dict]) -> str:
 
 
 def format_search_result_row(result: dict) -> dict:
-    """The 7 citation fields every hybrid_search() result carries, shared
+    """The seven original fields plus stable provenance and rank diagnostics, shared
     verbatim with backend/api/intents_global_search.py's own
     _format_global_search_results (that one adds sourceNodeId/graphId on
     top of exactly this shape) - kept in one place so the two callers can
@@ -122,6 +122,11 @@ def format_search_result_row(result: dict) -> dict:
         "text": result["text"],
         "offsetStart": result["offset_start"],
         "offsetEnd": result["offset_end"],
+        "sourceFile": result["source_file"],
+        "section": result["section"],
+        "citationId": result["citation_id"],
+        "rankSignals": result.get("rank_signals", {}),
+        "rrfScore": result.get("rrf_score"),
     }
 
 

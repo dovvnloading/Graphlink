@@ -53,6 +53,11 @@ class TestSearchIntent:
         assert "fox" in row["text"].lower()
         assert isinstance(row["offsetStart"], int)
         assert isinstance(row["offsetEnd"], int)
+        assert row["sourceFile"] == "doc.txt"
+        assert row["section"] == "Unsectioned"
+        assert row["citationId"].startswith("kb:")
+        assert row["rankSignals"] == {"fts5": 1}
+        assert row["rrfScore"] is None
 
     def test_search_is_read_only_and_never_publishes_scene(self, _isolated_knowledge_db):
         bus, document, recorder = make_bus()

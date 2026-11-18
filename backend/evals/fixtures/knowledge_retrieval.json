@@ -1,0 +1,83 @@
+{
+  "description": "Offline helpdesk/runbook corpus: six independently archived copies of a search index, six authoritative procedures and two distractors. Questions seek the actual procedure, not the link-only index.",
+  "documents": [
+    {
+      "source_uri": "handbook/helpdesk-index-jan.md",
+      "title": "Helpdesk index - January",
+      "text": "# Helpdesk quick reference\n\nWhere are the recovery codes stored? See the identity recovery procedure for the responsible team.\n\nHow do we restore the billing database after corruption? See the data operations procedure for steps.\n\nWho approves emergency production access? See the privileged access procedure for approvals.\n\nWhen can we purge personal data after a deletion request? See the privacy procedure for retention requirements.\n\nWhat is the rollback procedure for a broken release? See the deployment operations procedure for instructions.\n\nHow do contractors request paid time off? See the people operations procedure for eligibility.\n\nIndex archive January; this page only links to the authoritative runbooks."
+    },
+    {
+      "source_uri": "handbook/helpdesk-index-feb.md",
+      "title": "Helpdesk index - February",
+      "text": "# Helpdesk quick reference\n\nWhere are the recovery codes stored? See the identity recovery procedure for the responsible team.\n\nHow do we restore the billing database after corruption? See the data operations procedure for steps.\n\nWho approves emergency production access? See the privileged access procedure for approvals.\n\nWhen can we purge personal data after a deletion request? See the privacy procedure for retention requirements.\n\nWhat is the rollback procedure for a broken release? See the deployment operations procedure for instructions.\n\nHow do contractors request paid time off? See the people operations procedure for eligibility.\n\nIndex archive February; this page only links to the authoritative runbooks."
+    },
+    {
+      "source_uri": "handbook/helpdesk-index-mar.md",
+      "title": "Helpdesk index - March",
+      "text": "# Helpdesk quick reference\n\nWhere are the recovery codes stored? See the identity recovery procedure for the responsible team.\n\nHow do we restore the billing database after corruption? See the data operations procedure for steps.\n\nWho approves emergency production access? See the privileged access procedure for approvals.\n\nWhen can we purge personal data after a deletion request? See the privacy procedure for retention requirements.\n\nWhat is the rollback procedure for a broken release? See the deployment operations procedure for instructions.\n\nHow do contractors request paid time off? See the people operations procedure for eligibility.\n\nIndex archive March; this page only links to the authoritative runbooks."
+    },
+    {
+      "source_uri": "handbook/helpdesk-index-apr.md",
+      "title": "Helpdesk index - April",
+      "text": "# Helpdesk quick reference\n\nWhere are the recovery codes stored? See the identity recovery procedure for the responsible team.\n\nHow do we restore the billing database after corruption? See the data operations procedure for steps.\n\nWho approves emergency production access? See the privileged access procedure for approvals.\n\nWhen can we purge personal data after a deletion request? See the privacy procedure for retention requirements.\n\nWhat is the rollback procedure for a broken release? See the deployment operations procedure for instructions.\n\nHow do contractors request paid time off? See the people operations procedure for eligibility.\n\nIndex archive April; this page only links to the authoritative runbooks."
+    },
+    {
+      "source_uri": "handbook/helpdesk-index-may.md",
+      "title": "Helpdesk index - May",
+      "text": "# Helpdesk quick reference\n\nWhere are the recovery codes stored? See the identity recovery procedure for the responsible team.\n\nHow do we restore the billing database after corruption? See the data operations procedure for steps.\n\nWho approves emergency production access? See the privileged access procedure for approvals.\n\nWhen can we purge personal data after a deletion request? See the privacy procedure for retention requirements.\n\nWhat is the rollback procedure for a broken release? See the deployment operations procedure for instructions.\n\nHow do contractors request paid time off? See the people operations procedure for eligibility.\n\nIndex archive May; this page only links to the authoritative runbooks."
+    },
+    {
+      "source_uri": "handbook/helpdesk-index-jun.md",
+      "title": "Helpdesk index - June",
+      "text": "# Helpdesk quick reference\n\nWhere are the recovery codes stored? See the identity recovery procedure for the responsible team.\n\nHow do we restore the billing database after corruption? See the data operations procedure for steps.\n\nWho approves emergency production access? See the privileged access procedure for approvals.\n\nWhen can we purge personal data after a deletion request? See the privacy procedure for retention requirements.\n\nWhat is the rollback procedure for a broken release? See the deployment operations procedure for instructions.\n\nHow do contractors request paid time off? See the people operations procedure for eligibility.\n\nIndex archive June; this page only links to the authoritative runbooks."
+    },
+    {
+      "source_uri": "security/identity-recovery.md",
+      "title": "Identity recovery procedure",
+      "text": "# Lost authenticator recovery\n\nIf an employee loses the second-factor device, an administrator verifies identity in person before issuing one-time backup codes. The sealed credential vault keeps those backup tokens, with access logged for audit. Never put temporary login secrets into a helpdesk ticket."
+    },
+    {
+      "source_uri": "operations/billing-recovery.md",
+      "title": "Billing restoration procedure",
+      "text": "# Database recovery\n\nTo recover the payment ledger after storage damage, pause writers and restore the latest verified encrypted snapshot. Replay the write-ahead log to the selected point in time, then run the balance reconciliation before lifting read-only mode."
+    },
+    {
+      "source_uri": "security/privileged-access.md",
+      "title": "Privileged access procedure",
+      "text": "# Break-glass access\n\nTemporary administrator privileges during a live incident require two independent approvals: the incident commander and the security on-call engineer. Time-box the elevation to thirty minutes and retain audit logs in the incident record."
+    },
+    {
+      "source_uri": "privacy/erasure.md",
+      "title": "Customer erasure procedure",
+      "text": "# Erasure and retention\n\nA verified right-to-erasure request starts an identity check and a legal-hold review. Delete customer identifiers from active systems within thirty days; encrypted disaster recovery archives age out after ninety days unless a litigation hold applies."
+    },
+    {
+      "source_uri": "operations/release-reversal.md",
+      "title": "Release reversal procedure",
+      "text": "# Undoing a faulty deployment\n\nFor a bad production build, stop the canary rollout, switch traffic to the last known-good artifact, and reverse the database migration only if the change is backward compatible. Record the version identifier and notify the incident channel."
+    },
+    {
+      "source_uri": "people/contractor-leave.md",
+      "title": "Contractor absence procedure",
+      "text": "# Time-off eligibility\n\nExternal vendors are not enrolled in employee paid leave. A contractor must notify their agency coordinator and request an absence in the vendor portal, then get the project lead's approval for coverage; unpaid days are handled by their agency."
+    },
+    {
+      "source_uri": "operations/printer-setup.md",
+      "title": "Office printer setup",
+      "text": "# Printing\n\nInstall the building print queue from the staff laptop portal, select grayscale by default, and use the badge reader at the printer to release a queued job."
+    },
+    {
+      "source_uri": "finance/expense-reports.md",
+      "title": "Expense submission",
+      "text": "# Reimbursements\n\nSubmit travel receipts through the expense portal by the fifth business day, label the cost center, and keep original invoices until the monthly reconciliation completes."
+    }
+  ],
+  "questions": [
+    {"question": "Where are the recovery codes stored?", "relevant_sources": ["security/identity-recovery.md"]},
+    {"question": "How do we restore the billing database after corruption?", "relevant_sources": ["operations/billing-recovery.md"]},
+    {"question": "Who approves emergency production access?", "relevant_sources": ["security/privileged-access.md"]},
+    {"question": "When can we purge personal data after a deletion request?", "relevant_sources": ["privacy/erasure.md"]},
+    {"question": "What is the rollback procedure for a broken release?", "relevant_sources": ["operations/release-reversal.md"]},
+    {"question": "How do contractors request paid time off?", "relevant_sources": ["people/contractor-leave.md"]}
+  ]
+}
