@@ -771,11 +771,15 @@ async def _send_model_comparison(
                 on_end=_end,
                 on_partial=_on_partial,
             )
-        except Exception as exc:
-            # A broken selected profile never prevents the remaining models
-            # from starting or finishing.
+        except Exception:
+            # Do not write a provider exception into persistent canvas text:
+            # some SDKs include endpoint and credential details in errors.
+            # A broken profile must not prevent sibling models from running.
             reply.state.response_incomplete = True
-            reply.content = _comparison_content(reply, answer=str(exc), status="Failed", elapsed=None)
+            reply.content = _comparison_content(
+                reply, answer="This model could not start. Check its provider settings.",
+                status="Failed", elapsed=None,
+            )
             persist_reply(reply)
             await publish_scene()
     return user.id
