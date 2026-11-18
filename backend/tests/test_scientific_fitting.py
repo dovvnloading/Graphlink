@@ -39,7 +39,7 @@ def test_manifest_and_all_examples_have_verifiable_receipts():
         "weighted_linear_least_squares", "nonlinear_least_squares", "welch_t_test", "chi_square_gof",
         "one_way_anova", "mann_whitney_u", "wilcoxon_signed_rank", "shapiro_wilk",
         "pearson_correlation", "spearman_correlation", "bonferroni_correction",
-        "benjamini_hochberg_correction",
+        "benjamini_hochberg_correction", "custom_nonlinear_least_squares", "compare_models",
     }
     for operation in operations("fitting"):
         result = _run(operation.id, operation.example)
@@ -269,3 +269,159 @@ def test_float_underflow_is_rejected_not_silently_rounded_to_zero():
     from decimal import Decimal
     with pytest.raises(ValueError, match="numeric range"):
         fitting._as_float(Decimal("1e-500"), "Tiny covariance")
+
+
+# Independently published StRD fits must also work when the scientist supplies
+# the complete equation through the uncertainty pack's safe expression grammar.
+_NIST_EXPRESSIONS = {
+    "misra1a": ("a*(1-exp(-b*x))", ["a", "b"]),
+    "thurber": ("(b1+b2*x+b3*x^2+b4*x^3)/(1+b5*x+b6*x^2+b7*x^3)",
+                [f"b{i}" for i in range(1, 8)]),
+    "mgh09": ("b1*(x^2+b2*x)/(x^2+b3*x+b4)", [f"b{i}" for i in range(1, 5)]),
+}
+
+
+@pytest.mark.parametrize("case", ["misra1a", "thurber", "mgh09"])
+@pytest.mark.parametrize("start_index", [0, 1])
+def test_nist_custom_expression_matches_all_11_certified_digits(case, start_index):
+    item = FIXTURE[case]
+    expression, names = _NIST_EXPRESSIONS[case]
+    rows = item["data_y_x"]
+    fit = _run("custom_nonlinear_least_squares", {
+        "expression": expression,
+        "parameters": json.dumps(dict(zip(names, item["starts"][start_index]))),
+        "x": [row[1] for row in rows], "y": [row[0] for row in rows],
+        "weights": [1] * len(rows),
+    })
+    values = fit["values"]
+    assert values["converged"] == "true"
+    for i, value in enumerate(item["parameters"]):
+        _certified(values[f"parameter_{i}"], value, item["digits"])
+        _certified(values[f"estimate_{names[i]}"], value, item["digits"])
+    for i, error in enumerate(item["standard_errors"]):
+        _certified(values[f"standard_error_{i}"], error, item["digits"])
+    _certified(values["weighted_residual_sum_squares"], item["residual_sum_squares"], item["digits"])
+    assert all(isinstance(values[k], float) for k in ("aic", "aicc", "bic"))
+    assert len(fit["plot"]["y"]) == len(rows)
+    assert values["residual_shapiro_p_value"] >= 0
+    assert 0 <= values["runs_test_p_value"] <= 1
+    assert fit["table"]["rows"][0][0] == names[0]
+
+
+def test_expression_on_original_nonlinear_operation_and_named_bounds():
+    x = list(range(12))
+    y = [2 + 3 * t + (0.03 if t % 2 else -0.03) for t in x]
+    weights = [1] * len(x)
+    old_interface = _run("nonlinear_least_squares", {
+        "model": "a+b*x", "x": x, "y": y, "weights": weights,
+        "initial_parameters": [1, 2.5],
+    })
+    assert old_interface["values"]["estimate_a"] == pytest.approx(2, abs=.03)
+    assert old_interface["values"]["estimate_b"] == pytest.approx(3, abs=.02)
+    assert len(old_interface["plot"]["y"]) == len(x)
+    assert "aicc" in old_interface["values"]
+    bounded = _run("custom_nonlinear_least_squares", {
+        "expression": "intercept+slope*x", "x": x, "y": y, "weights": weights,
+        "parameters": '{"intercept":{"start":2},"slope":{"start":4,"lower":4}}',
+    })
+    assert bounded["values"]["estimate_slope"] == pytest.approx(4, abs=1e-9)
+    assert "reached a bound" in bounded["values"]["warnings"]
+    assert all("residual_" + str(i) in bounded["values"] for i in range(len(x)))
+
+
+def test_all_builtin_fit_diagnostics_and_covariance_correlations():
+    x = list(range(1, 15))
+    y = [1 + 2 * xx + (xx % 3 - 1) * .05 for xx in x]
+    linear = _run("weighted_linear_least_squares", {
+        "predictors": [[xx] for xx in x], "response": y, "weights": [1] * len(x),
+    })
+    nonlinear = _run("nonlinear_least_squares", {
+        "model": "polynomial", "x": x, "y": y,
+        "weights": [1] * len(x), "initial_parameters": [0, 1.5],
+    })
+    for fit in (linear, nonlinear):
+        v = fit["values"]
+        assert v["aic"] < v["aicc"]
+        assert math.isfinite(v["bic"])
+        assert v["runs_count"] >= 1
+        assert 0 <= v["runs_test_p_value"] <= 1
+        assert 0 <= v["residual_shapiro_p_value"] <= 1
+        assert -1 <= v["parameter_correlation_0_1"] <= 1
+        assert isinstance(v["warnings"], str)
+        assert all(f"residual_{i}" in v for i in range(len(x)))
+
+
+def test_aicc_undefined_for_too_few_observations_and_zero_weights():
+    fit = _run("weighted_linear_least_squares", {
+        "predictors": [[i] for i in range(4)], "response": [2, 4.05, 6, 8.1],
+        "weights": [1] * 4,
+    })
+    assert fit["values"]["aicc"] == "undefined"
+    assert "AICc undefined" in fit["values"]["warnings"]
+    ignored = _run("weighted_linear_least_squares", {
+        "predictors": [[i] for i in range(7)],
+        "response": [2, 4.05, 6, 8.1, 10, 12, 9999],
+        "weights": [1, 1, 1, 1, 1, 1, 0],
+    })
+    assert ignored["values"]["aicc"] != "undefined"
+    assert ignored["values"]["residual_6"] > 9000
+
+
+def test_compare_models_refits_and_normalizes_akaike_weights():
+    x = list(range(14))
+    y = [1 + 2 * xx + (0.1 if xx % 2 else -0.1) for xx in x]
+    result = _run("compare_models", {
+        "x": x, "y": y, "weights": [1] * len(x),
+        "models": json.dumps([
+            {"name": "quadratic", "expression": "a+b*x+c*x^2",
+             "parameters": {"a": 1, "b": 2, "c": .01}},
+            {"name": "straight line", "model": "polynomial", "initial_parameters": [1, 2]},
+        ]),
+    })
+    rows = result["table"]["rows"]
+    assert [r[0] for r in rows] == [1, 2]
+    assert rows[0][3] <= rows[1][3]
+    assert rows[0][5] == pytest.approx(0)
+    assert math.fsum(row[6] for row in rows) == pytest.approx(1)
+    assert rows[0][1] == "straight line"
+    assert result["values"]["best_model"] == "straight line"
+
+
+@pytest.mark.parametrize("expression,parameters", [
+    ("__import__('os').system('true')", '{"a":1}'),
+    ("a**x", '{"a":1}'),
+    ("a*x+unknown", '{"a":1}'),
+    ("a*x", '{"a":{"start":1,"lower":2}}'),
+    ("a*x", '{"a":{"start":1,"lower":5,"upper":3}}'),
+    ("a*x", '{"x":1}'),
+    ("a*x", '{"a":1,"a":2}'),
+])
+def test_custom_model_parser_and_bounds_reject_invalid_inputs(expression, parameters):
+    with pytest.raises(ValueError):
+        _run("custom_nonlinear_least_squares", {
+            "expression": expression, "parameters": parameters,
+            "x": [1,2,3,4,5,6], "y": [1,2,3,4,5,6], "weights": [1]*6,
+        })
+
+
+def test_compare_models_rejects_mixed_or_uncomparable_specifications():
+    x = [1, 2, 3, 4]
+    y = [1, 1.9, 3.1, 4.2]
+    for specs in (
+        [{"name":"same","model":"polynomial","initial_parameters":[0,1]},
+         {"name":"same","model":"polynomial","initial_parameters":[1,0]}],
+        [{"name":"full","model":"polynomial","initial_parameters":[0,1,1]},
+         {"name":"plain","model":"polynomial","initial_parameters":[0,1]}],
+    ):
+        with pytest.raises(ValueError):
+            _run("compare_models", {"x": x, "y": y, "weights": [1]*4,
+                                   "models": json.dumps(specs)})
+
+def test_custom_constant_model_without_x_is_valid():
+    fit = _run("custom_nonlinear_least_squares", {
+        "expression": "baseline", "parameters": '{"baseline": 0}',
+        "x": [1, 2, 3, 4, 5, 6],
+        "y": [1, 2, 3, 4, 5, 6], "weights": [1] * 6,
+    })
+    assert fit["values"]["estimate_baseline"] == pytest.approx(3.5)
+    assert fit["values"]["aicc"] > fit["values"]["aic"]
