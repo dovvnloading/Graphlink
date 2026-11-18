@@ -70,7 +70,14 @@ export interface ScientificSeries {
   xError?: ErrorPair[] | null;
   yError?: ErrorPair[] | null;
 }
-export type ScientificChartSpec = ChartDataRow & {
+export interface ScientificChartSpec {
+  version?: ChartDataRow["version"];
+  type?: ChartDataRow["type"];
+  title?: ChartDataRow["title"];
+  labels?: ChartDataRow["labels"];
+  values?: ChartDataRow["values"];
+  xAxis?: ChartDataRow["xAxis"];
+  yAxis?: ChartDataRow["yAxis"];
   xValues?: number[];
   series?: ScientificSeries[];
   xError?: ErrorPair[] | null;
