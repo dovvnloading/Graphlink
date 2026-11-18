@@ -1663,7 +1663,12 @@ export class SceneStore {
   }
 
   private async scientificIntent(pluginId: string, name: string, args: Record<string, unknown>) {
-    const answer = await this.transport.request("app-plugins", "invokePluginIntent", [pluginId, name, args]);
+    // The server kills each worker by 600 s at the latest. Do not let the
+    // transport's generic 10 s timeout abandon a longer scientific run.
+    const call = [pluginId, name, args];
+    const answer = name === "run"
+      ? await this.transport.request("app-plugins", "invokePluginIntent", call, 615_000)
+      : await this.transport.request("app-plugins", "invokePluginIntent", call);
     if (answer && typeof answer === "object" && "ok" in answer && answer.ok === true) return answer;
     if (answer && typeof answer === "object" && "error" in answer && typeof answer.error === "string") {
       throw new Error(answer.error);
@@ -1676,6 +1681,10 @@ export class SceneStore {
     await this.scientificIntent(pluginId, "run", {
       node_id: nodeId, operation_id: operationId, inputs, sources, ...(expectedRun && { expected_run: expectedRun }),
     });
+  }
+
+  async cancelScientificOperation(pluginId: string, nodeId: string, operationId: string): Promise<void> {
+    await this.scientificIntent(pluginId, "cancel", { node_id: nodeId, operation_id: operationId });
   }
 
   async exportScientificResult(pluginId: string, nodeId: string, expectedRun?: string): Promise<string> {
