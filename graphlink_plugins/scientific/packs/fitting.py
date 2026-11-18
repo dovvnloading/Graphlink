@@ -495,8 +495,10 @@ def _welch(data):
     df = 1 / (wa * wa / (len(a) - 1) + wb * wb / (len(b) - 1))
     if not math.isfinite(df) or df <= 0:
         raise ValueError("Welch degrees of freedom cannot be evaluated for these samples.")
-    p = (1 - _beta_i(0.5, df / 2, t * t / (df + t * t))) if abs(t) <= 1 else (
-        _beta_i(df / 2, 0.5, df / (df + t * t)) if math.isfinite(t * t) else 0.0)
+    # Twice the negative-t survival tail is stable even if t² overflows.
+    # The old t²/(df+t²) formula incorrectly returned p=0 for finite
+    # Cauchy-like tails when |t| was above ~1e154.
+    p = min(1.0, 2 * _student_t_cdf(-abs(t), df))
     return {
         "summary": "Two-sided Welch independent-samples t test with unequal variances and Satterthwaite degrees of freedom.",
         "values": {"mean_a": mean_a, "mean_b": mean_b, "t_statistic": t, "degrees_of_freedom": df,
