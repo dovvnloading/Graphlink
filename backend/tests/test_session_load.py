@@ -590,9 +590,8 @@ def test_pr586_590_typeless_saved_chart_loads_renders_and_resaves_with_type(char
     assert "type" not in old_data  # no mutation of the imported workspace
     assert (chart.state.chart_width, chart.state.chart_height) == (640.0, 420.0)
     assert not chart.state.chart_aspect_locked
-    assert render_chart_svg(chart_type, chart.state.chart_data, 640, 420).startswith(b"<?xml") or (
-        b"<svg " in render_chart_svg(chart_type, chart.state.chart_data, 640, 420)
-    )
+    svg = render_chart_svg(chart_type, chart.state.chart_data, 640, 420)
+    assert b"<svg " in svg
 
     # A saved workspace now writes the discriminator; subsequent reopening is
     # lossless for the complete chart data, not only its chart-type badge.
