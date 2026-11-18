@@ -120,3 +120,11 @@ def test_welch_keeps_representable_heavy_tail_p_value():
     assert result["p_value"] == pytest.approx(
         2 / (math.pi * abs(result["t_statistic"])), rel=2e-13, abs=0,
     )
+
+
+def test_gum_rejects_uncertainty_contribution_that_underflows_to_zero():
+    # GUM Eq. (10) assigns c_x = 1/10 for y=x/10, so u(y) is
+    # strictly positive for positive u(x). A subnormal standard
+    # uncertainty cannot silently become an exactly-zero contribution.
+    with pytest.raises(ValueError, match="numerical range"):
+        propagate("x / 10", "x", 10, math.ulp(0.0))
