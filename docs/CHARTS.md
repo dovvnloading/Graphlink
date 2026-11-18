@@ -1,0 +1,86 @@
+# Chart data contract
+
+Graphlink chart nodes use the version-1 canonical JSON object validated by
+`graphlink_chart_data.canonicalize_chart_data`. The server is the authority;
+`web_ui/src/app/canvas/chartSpec.ts` performs the same defensive validation.
+The version remains **1** because the new scientific fields are optional.
+
+## Existing charts
+
+The five existing shapes remain unchanged. A bar, line, or pie chart has
+`type`, `labels: string[]`, `values: number[]`, `title`, `xAxis`, and
+`yAxis`. Histogram uses `values` and optional `bins`. Sankey uses a
+`flows` array containing `{source, target, value}`. Existing default
+titles, axis labels, category ordering, validations, and visual renderers
+are preserved without adding optional fields to legacy payloads.
+
+## Scientific line and scatter charts
+
+Both accept optional `xValues: number[]`, `series`, `xScale`,
+`yScale`, `xUnit`, and `yUnit`. The two scale values are
+`"linear"` (default) or `"log10"`. Units are plain strings; renderers
+display them as `Axis label (unit)` without altering numeric data. If
+`series` is present it is an array of named series, each with `name`,
+`values: number[]`, and optional `xError` and `yError` arrays. The
+arrays use the same shared x positions and have the same length. The
+series names appear in the legend.
+
+An error array has one entry per data point. An entry is either a
+nonnegative number (symmetric), or a two-element array
+`[negativeMagnitude, positiveMagnitude]` (asymmetric). These describe
+**magnitudes**, not signed lower/upper endpoints. Each point is rendered
+at its original value with the corresponding interval; the value is never
+moved or rounded to obtain its error bars.
+
+For one-series line charts, `xError` and `yError` may be specified
+at the top level along with the historical `labels` and `values`.
+When `series` is present, errors belong to the individual series.
+A scatter chart requires numeric `xValues` and either a
+`series` array or one top-level `values` array. A scientific line
+chart can supply numeric `xValues`; without them it retains its
+historical evenly spaced, categorically labeled x positions. A log10
+x-axis therefore requires `xValues`.
+
+Example:
+
+```json
+{
+  "type": "scatter",
+  "title": "Calibration",
+  "xAxis": "Concentration",
+  "yAxis": "Response",
+  "xUnit": "mg/L",
+  "yUnit": "mV",
+  "xScale": "log10",
+  "yScale": "linear",
+  "xValues": [1, 10, 100],
+  "series": [
+    {"name": "Control", "values": [0.9, 1.8, 3.2],
+     "xError": [0.05, [1, 2], 10],
+     "yError": [0.1, [0.1, 0.3], 0.2]},
+    {"name": "Treatment", "values": [1.1, 2.1, 3.5]}
+  ]
+}
+```
+
+## Validation rules
+
+* All coordinates, values, and error magnitudes must be finite numbers.
+  NaN, positive/negative infinity, and numeric overflow are rejected.
+* Series must be nonempty and named. Every series, coordinate array, and
+  error array must have the same number of points, within the existing
+  300-point chart limit. The validator never truncates or drops points.
+* Error magnitudes must be nonnegative. The two magnitudes of an
+  asymmetric error must both be present and valid.
+* A log10 axis requires **strictly positive** coordinates, including the
+  lower endpoint of every error interval on that axis. A coordinate of
+  zero, a negative coordinate, or a zero/negative lower endpoint is an
+  error; it is never silently omitted or clipped.
+* Existing bar, pie, histogram, and Sankey validation rules are unchanged.
+  An invalid scientific chart is rejected with a field/index-specific
+  message; a render request with invalid data continues to show the
+  existing chart-error placeholder.
+
+Interactive SVG and the matplotlib PNG/SVG exporter use the original
+numeric coordinates and error magnitudes. Hover tooltips use unrounded
+number strings with units (not the shortened tick-label formatter).
