@@ -166,7 +166,13 @@ fields described above and do not invent missing observations. Invalid
 model output still creates a valid error-state chart node, just as with
 scatter in PR #586. The existing chart-creation submenu is defined outside
 this change's permitted file scope and does not yet expose these two
-choices; programmatic intent calls and saved chart nodes are supported.
+choices. Programmatic intent calls and live scene chart nodes are supported.
+The legacy session-save/load path is also outside this scope: it serializes
+only the canonical nested chart data, while its loader looks for `data.type`.
+Because the version-1 wire format omits that nested discriminator for these
+new types (as for scatter in PR #586), legacy session reload currently drops
+them. Persisted-session round trips require a separate scoped migration to
+carry the enclosing `chartType` through save/load.
 
 Regression fixtures live under `backend/evals/fixtures/chart/`, with
 Python canonicalizer/export tests in `backend/tests/` and TypeScript
