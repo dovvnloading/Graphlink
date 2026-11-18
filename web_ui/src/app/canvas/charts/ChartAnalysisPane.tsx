@@ -2,7 +2,7 @@
  * pane so bar/pie/heatmap/sankey retain their historic pan/zoom behavior.
  * Every committed annotation is expressed in original data units.
  */
-import { useEffect, useId, useRef, useState, type PointerEvent, type RefObject, type KeyboardEvent, type WheelEvent } from "react";
+import { useId, useRef, useState, type PointerEvent, type RefObject, type KeyboardEvent, type WheelEvent } from "react";
 import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
 import {
   canonicalizeChartAnalysis, chartAnalysisOf, usesScientificMarks,
@@ -44,8 +44,11 @@ export function ChartAnalysisPane({
 }: ChartAnalysisPaneProps) {
   const frame = chartFrame(chartData, chartType, width, height);
   const persisted = chartAnalysisOf(chartData);
-  const [override, setOverride] = useState<ChartAnalysis | null>(null);
-  const analysis = override ?? persisted;
+  // Optimistic edits are valid only for the exact scene snapshot they edit.
+  // On save, reload or undo a new chartData object automatically wins, so
+  // there is no synchronous setState-in-effect update (or stale overlay).
+  const [pending, setPending] = useState<{ source: ChartDataRow; value: ChartAnalysis } | null>(null);
+  const analysis = pending?.source === chartData ? pending.value : persisted;
   const [view, setView] = useState<ViewDomains | null>(null);
   const current: ViewDomains = {
     x: analysis.lockX && analysis.xRange ? analysis.xRange : view?.x ?? frame.base.x,
@@ -63,19 +66,15 @@ export function ChartAnalysisPane({
   const clipId = useId();
   const toolsId = useId();
 
-  // An undo/reload/remote scene update is authoritative over optimistic edits.
-  // A data update does not reset an uncommitted, purely local zoom.
-  useEffect(() => { setOverride(null); }, [chartData]);
-
   function commit(next: ChartAnalysis): void {
     try {
       const normalized = canonicalizeChartAnalysis(
         next, chartType, frame.xKind, frame.yKind,
       );
       setError("");
-      setOverride(normalized);
+      setPending({ source: chartData, value: normalized });
       Promise.resolve(onAnalysisChange?.(normalized)).catch((reason: unknown) => {
-        setOverride(null);
+        setPending(null);
         setError(reason instanceof Error ? reason.message : "Could not save chart annotation");
         setToolsOpen(true);
       });

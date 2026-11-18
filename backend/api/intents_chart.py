@@ -87,6 +87,92 @@ def _make_publication_export_handler(document: SceneDocument):
     return export_publication_chart
 
 
+def _chart_source_options(chart_type, options):
+    """Only the four scientific capabilities are requestable. Options
+    steer extraction; they never supply, fabricate or override data."""
+    if options is None or options == {}:
+        return ""
+    if not isinstance(options, dict):
+        raise ChartDataError("chartOptions must be an object")
+    allowed = {"multipleSeries", "errorBars", "xScale", "yScale", "xUnit", "yUnit"}
+    unknown = set(options) - allowed
+    if unknown:
+        raise ChartDataError("Unsupported chartOptions: " + ", ".join(sorted(map(str, unknown))))
+    if chart_type not in ("line", "scatter"):
+        raise ChartDataError("Scientific chartOptions require line or scatter")
+    lines = []
+    for key in ("multipleSeries", "errorBars"):
+        if key in options:
+            if not isinstance(options[key], bool):
+                raise ChartDataError(f"{key} must be a boolean")
+            if options[key]:
+                lines.append("Extract " + ("multiple named series" if key == "multipleSeries"
+                                           else "per-point error magnitudes") +
+                             " only where they are explicitly stated in the source.")
+    for key in ("xScale", "yScale"):
+        if key in options:
+            if options[key] not in ("linear", "log10"):
+                raise ChartDataError(f"{key} must be linear or log10")
+            lines.append(f"Use {key}={options[key]} exactly.")
+    for key in ("xUnit", "yUnit"):
+        if key in options:
+            value = options[key]
+            if not isinstance(value, str) or not value.strip() or len(value.strip()) > 160:
+                raise ChartDataError(f"{key} must be a nonempty unit of at most 160 characters")
+            lines.append(f"Use {key}={value.strip()!r} exactly.")
+    return "\n".join(lines)
+
+def register_chart_edit_intents(bus: SessionBus, document: SceneDocument, publish_scene) -> None:
+    """Keep undoable chart analysis and sizing edits separate from generation."""
+
+    async def set_chart_analysis(node_id, analysis):
+        """One atomic, undoable edit of the chart's analysis overlay.
+
+        Only validated analysis is replaced. The original series, observations,
+        bins, labels and scientific provenance stay byte-for-byte equivalent.
+        """
+        node = document.nodes.get(node_id) if isinstance(node_id, str) else None
+        if node is None or node.kind != "chart" or not isinstance(node.state, ChartState):
+            raise ChartDataError("Unknown chart node")
+        current = node.state.chart_data
+        if not isinstance(current, dict):
+            raise ChartDataError("Chart has no data")
+        canonical = canonicalize_chart_data(current, node.state.chart_type)
+        clean = canonicalize_chart_analysis(
+            analysis, node.state.chart_type,
+            x_scale=canonical.get("xScale", "linear"),
+            y_scale=canonical.get("yScale", "linear"),
+        )
+        if current.get("analysis") == clean:
+            return clean
+
+        def update():
+            node.state.chart_data = {**node.state.chart_data, "analysis": clean}
+
+        document.record_command("setChartAnalysis", "user", update, node_ids=[node_id])
+        await publish_scene()
+        return clean
+
+    async def resize_chart(node_id, width, height):
+        document.record_command(
+            "resizeChart", "user", lambda: document.resize_chart(node_id, width, height),
+            node_ids=[node_id],
+        )
+        await publish_scene()
+
+    async def toggle_chart_aspect_lock(node_id):
+        document.record_command(
+            "toggleChartAspectLock", "user",
+            lambda: document.toggle_chart_aspect_lock(node_id),
+            node_ids=[node_id],
+        )
+        await publish_scene()
+
+    bus.register_intent("scene", "setChartAnalysis", set_chart_analysis)
+    bus.register_intent("scene", "resizeChart", resize_chart)
+    bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
+
+
 def register_chart_intents(
     bus: SessionBus,
     document: SceneDocument,
@@ -99,41 +185,6 @@ def register_chart_intents(
     from backend.canvas import _chart_source_text, _placeholder_chart_data
 
     publish_scene = make_publish_scene(bus)
-
-    def chart_source_options(chart_type, options):
-        """Only the four scientific capabilities are requestable. Options
-        steer extraction; they never supply, fabricate or override data."""
-        if options is None or options == {}:
-            return ""
-        if not isinstance(options, dict):
-            raise ChartDataError("chartOptions must be an object")
-        allowed = {"multipleSeries", "errorBars", "xScale", "yScale", "xUnit", "yUnit"}
-        unknown = set(options) - allowed
-        if unknown:
-            raise ChartDataError("Unsupported chartOptions: " + ", ".join(sorted(map(str, unknown))))
-        if chart_type not in ("line", "scatter"):
-            raise ChartDataError("Scientific chartOptions require line or scatter")
-        lines = []
-        for key in ("multipleSeries", "errorBars"):
-            if key in options:
-                if not isinstance(options[key], bool):
-                    raise ChartDataError(f"{key} must be a boolean")
-                if options[key]:
-                    lines.append("Extract " + ("multiple named series" if key == "multipleSeries"
-                                               else "per-point error magnitudes") +
-                                 " only where they are explicitly stated in the source.")
-        for key in ("xScale", "yScale"):
-            if key in options:
-                if options[key] not in ("linear", "log10"):
-                    raise ChartDataError(f"{key} must be linear or log10")
-                lines.append(f"Use {key}={options[key]} exactly.")
-        for key in ("xUnit", "yUnit"):
-            if key in options:
-                value = options[key]
-                if not isinstance(value, str) or not value.strip() or len(value.strip()) > 160:
-                    raise ChartDataError(f"{key} must be a nonempty unit of at most 160 characters")
-                lines.append(f"Use {key}={value.strip()!r} exactly.")
-        return "\n".join(lines)
 
     def scientific_chart_source(node):
         """Read a pack-granted, receipt-verified result, not untrusted content.
@@ -258,7 +309,7 @@ def register_chart_intents(
                 return None
 
         try:
-            option_prompt = chart_source_options(normalized_chart_type, chartOptions)
+            option_prompt = _chart_source_options(normalized_chart_type, chartOptions)
         except ChartDataError as exc:
             notifications.show(str(exc), "warning")
             await bus.publish("notification")
@@ -363,55 +414,10 @@ def register_chart_intents(
         )
         return result_holder.get("node_id")
 
-    async def set_chart_analysis(node_id, analysis):
-        """One atomic, undoable edit of the chart's analysis overlay.
-
-        Only validated analysis is replaced. The original series, observations,
-        bins, labels and scientific provenance stay byte-for-byte equivalent.
-        """
-        node = document.nodes.get(node_id) if isinstance(node_id, str) else None
-        if node is None or node.kind != "chart" or not isinstance(node.state, ChartState):
-            raise ChartDataError("Unknown chart node")
-        current = node.state.chart_data
-        if not isinstance(current, dict):
-            raise ChartDataError("Chart has no data")
-        canonical = canonicalize_chart_data(current, node.state.chart_type)
-        clean = canonicalize_chart_analysis(
-            analysis, node.state.chart_type,
-            x_scale=canonical.get("xScale", "linear"),
-            y_scale=canonical.get("yScale", "linear"),
-        )
-        if current.get("analysis") == clean:
-            return clean
-
-        def update():
-            node.state.chart_data = {**node.state.chart_data, "analysis": clean}
-
-        document.record_command("setChartAnalysis", "user", update, node_ids=[node_id])
-        await publish_scene()
-        return clean
-
-    async def resize_chart(node_id, width, height):
-        document.record_command(
-            "resizeChart", "user", lambda: document.resize_chart(node_id, width, height),
-            node_ids=[node_id],
-        )
-        await publish_scene()
-
-    async def toggle_chart_aspect_lock(node_id):
-        document.record_command(
-            "toggleChartAspectLock", "user",
-            lambda: document.toggle_chart_aspect_lock(node_id),
-            node_ids=[node_id],
-        )
-        await publish_scene()
-
     # R6.2: a single combined create+generate action, unlike every
     # node-creation flow above - see generate_chart's own docstring.
     bus.register_intent("scene", "generateChart", generate_chart)
-    bus.register_intent("scene", "setChartAnalysis", set_chart_analysis)
-    bus.register_intent("scene", "resizeChart", resize_chart)
-    bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
+    register_chart_edit_intents(bus, document, publish_scene)
     async def export_publication_chart(node_id, options):
         return await _make_publication_export_handler(document)(node_id, options)
 
