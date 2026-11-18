@@ -277,7 +277,7 @@ export interface CodeReviewQaRow {
 
 export interface ChartDataRow {
   version?: number | null;
-  type?: "bar" | "line" | "pie" | "histogram" | "sankey" | null;
+  type?: "bar" | "line" | "pie" | "histogram" | "sankey" | "scatter" | "boxplot" | "heatmap" | null;
   title?: string | null;
   labels?: string[] | null;
   values?: number[] | null;
@@ -285,12 +285,37 @@ export interface ChartDataRow {
   yAxis?: string | null;
   bins?: number | null;
   flows?: ChartFlowRow[] | null;
+  xValues?: number[] | null;
+  series?: ChartScientificSeriesRow[] | null;
+  xError?: number[][] | null;
+  yError?: number[][] | null;
+  xScale?: "linear" | "log10" | null;
+  yScale?: "linear" | "log10" | null;
+  xUnit?: string | null;
+  yUnit?: string | null;
+  groups?: ChartBoxplotGroupRow[] | null;
+  rowLabels?: string[] | null;
+  columnLabels?: string[] | null;
+  matrix?: number[][] | null;
+  valueUnit?: string | null;
 }
 
 export interface ChartFlowRow {
   source: string;
   target: string;
   value: number;
+}
+
+export interface ChartScientificSeriesRow {
+  name: string;
+  values: number[];
+  xError?: number[][] | null;
+  yError?: number[][] | null;
+}
+
+export interface ChartBoxplotGroupRow {
+  label: string;
+  values: number[];
 }
 
 export interface ToolInvocationRow {
@@ -464,9 +489,21 @@ const CHART_FLOW_ROW_FIELDS: WireFields = [
   ["value", "n", 0],
 ];
 
+const CHART_SCIENTIFIC_SERIES_ROW_FIELDS: WireFields = [
+  ["name", "s", 0],
+  ["values", { a: "n" }, 0],
+  ["xError", { a: { a: "n" } }, 1],
+  ["yError", { a: { a: "n" } }, 1],
+];
+
+const CHART_BOXPLOT_GROUP_ROW_FIELDS: WireFields = [
+  ["label", "s", 0],
+  ["values", { a: "n" }, 0],
+];
+
 const CHART_DATA_ROW_FIELDS: WireFields = [
   ["version", "n", 1],
-  ["type", { e: ["bar", "line", "pie", "histogram", "sankey"] }, 1],
+  ["type", { e: ["bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"] }, 1],
   ["title", "s", 1],
   ["labels", { a: "s" }, 1],
   ["values", { a: "n" }, 1],
@@ -474,6 +511,19 @@ const CHART_DATA_ROW_FIELDS: WireFields = [
   ["yAxis", "s", 1],
   ["bins", "n", 1],
   ["flows", { a: { o: CHART_FLOW_ROW_FIELDS } }, 1],
+  ["xValues", { a: "n" }, 1],
+  ["series", { a: { o: CHART_SCIENTIFIC_SERIES_ROW_FIELDS } }, 1],
+  ["xError", { a: { a: "n" } }, 1],
+  ["yError", { a: { a: "n" } }, 1],
+  ["xScale", { e: ["linear", "log10"] }, 1],
+  ["yScale", { e: ["linear", "log10"] }, 1],
+  ["xUnit", "s", 1],
+  ["yUnit", "s", 1],
+  ["groups", { a: { o: CHART_BOXPLOT_GROUP_ROW_FIELDS } }, 1],
+  ["rowLabels", { a: "s" }, 1],
+  ["columnLabels", { a: "s" }, 1],
+  ["matrix", { a: { a: "n" } }, 1],
+  ["valueUnit", "s", 1],
 ];
 
 const TOOL_INVOCATION_ROW_FIELDS: WireFields = [

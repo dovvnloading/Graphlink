@@ -258,3 +258,39 @@ def test_the_registry_covers_exactly_what_the_spa_imports():
         "every codegen entry must be imported by the SPA, and vice versa; "
         f"unused={sorted(declared - imported)} missing={sorted(imported - declared)}"
     )
+
+
+
+def test_chart_wire_type_accepts_new_scientific_fields_and_all_saved_workspaces():
+    """The optional nested type remains readable; fresh canonical data stamps it."""
+    from graphlink_chart_data import canonicalize_chart_data
+    from graphlink_scene_payload import ChartDataRow
+    from graphlink_wire_schema import validate_payload
+
+    schema = json_schema_for(ChartDataRow)
+    assert schema["properties"]["type"]["enum"] == [
+        "bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap",
+    ]
+    assert {"series", "xValues", "xError", "yError", "xScale", "yScale",
+            "xUnit", "yUnit", "groups", "rowLabels", "columnLabels", "matrix",
+            "valueUnit"} <= schema["properties"].keys()
+    historic = [
+        ("bar", {"labels": ["A"], "values": [2]}),
+        ("line", {"labels": ["A", "B"], "values": [2, 3]}),
+        ("pie", {"labels": ["A", "B"], "values": [2, 3]}),
+        ("histogram", {"values": [1, 2, 3], "bins": 2}),
+        ("sankey", {"flows": [{"source": "A", "target": "B", "value": 2}]}),
+        ("scatter", {"xValues": [1, 10], "series": [
+            {"name": "Control", "values": [2, 3], "yError": [[0.1, 0.2], [0.2, 0.3]]},
+        ], "xScale": "log10", "yScale": "linear", "xUnit": "mg/L"}),
+        ("boxplot", {"groups": [{"label": "Control", "values": [2, 3, 4]}]}),
+        ("heatmap", {"rowLabels": ["A"], "columnLabels": ["X", "Y"],
+                     "matrix": [[1, -2]], "valueUnit": "AU"}),
+    ]
+    for chart_type, source in historic:
+        fresh = canonicalize_chart_data(source, chart_type)
+        saved = {key: value for key, value in fresh.items() if key != "type"}
+        assert validate_payload(fresh, ChartDataRow) == []
+        assert validate_payload(saved, ChartDataRow) == []
+        assert canonicalize_chart_data(saved, chart_type) == fresh
+        assert fresh["type"] == chart_type
