@@ -14,12 +14,14 @@ from typing import Any
 from backend.domain.graph import SceneDocument
 from backend.domain.graph_run_external import RECONCILIATION_DETAIL, ExternalCall, dispatch_external_attempt
 from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID
+from backend.domain.graph_run_inspector import build_graph_run_trace
 from backend.domain.graph_runner import (
-    _inspect, _matching_node, execute_graph_step, plan_graph_run, validate_graph_run_ancestors,
+    _inspect, _matching_node, _output_digest, execute_graph_step, plan_graph_run, validate_graph_run_ancestors,
 )
 from backend.domain.model import SceneError
 from backend.domain.node_states import ModelState
 from backend.domain.nodes_content import _text_digest
+from backend.domain.table_workflows import table_output
 from backend.events import IntentValidationError, SessionBus
 
 
@@ -57,6 +59,7 @@ def _public_run(run: dict[str, Any]) -> dict[str, Any]:
     return {
         "runId": run["runId"], "status": run["status"], "startedAt": run["startedAt"],
         "steps": [_public_step(step) for step in run["steps"]],
+        "trace": build_graph_run_trace(run),
     }
 
 
@@ -72,6 +75,7 @@ def register_graph_runner(
             # reader must not receive a success receipt before it commits,
             # including an opt-in model step handled by the sibling intents.
             result["status"] = "running"
+            result["trace"]["status"] = "running"
         return result
 
     def plan(node_ids: list[str]) -> tuple[str, list[dict[str, str]]]:
@@ -103,6 +107,13 @@ def register_graph_runner(
         latest = visible_run(document.graph_runs[-1])
         latest["history"] = [visible_run(run) for run in reversed(document.graph_runs[:-1])]
         return latest
+
+    def pin_output_version(step: dict[str, Any]) -> None:
+        """Record a table's existing version at checkpoint time, not at inspection."""
+        node = document.nodes.get(step["nodeId"])
+        output = table_output(node) if node is not None else None
+        if output is not None:
+            step["outputVersion"] = output.current.version
 
     def find_run(run_id: str):
         return next((run for run in document.graph_runs if run["runId"] == run_id), None)
@@ -207,10 +218,14 @@ def register_graph_runner(
             for step in run["steps"]:
                 if step["status"] != "pending":
                     continue
+                step.setdefault("startedAt", datetime.now(timezone.utc).isoformat())
                 if "externalAttempt" in step:
                     # A recovered outbound request cannot pass through the
                     # deterministic transform runner or be sent a second time.
-                    step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
+                    step.update(
+                        status="reconciliation-required", detail=RECONCILIATION_DETAIL,
+                        finishedAt=datetime.now(timezone.utc).isoformat(),
+                    )
                     await checkpoint()
                     await bus.publish("scene")
                     continue
@@ -227,13 +242,17 @@ def register_graph_runner(
                         # dispatch_external_attempt already left its fence.
                         if "externalAttempt" not in step:
                             step.update(status="blocked", detail="Model dispatch could not start.")
+                    step.setdefault("finishedAt", datetime.now(timezone.utc).isoformat())
                     try:
                         await checkpoint()
                     finally:
                         await bus.publish("scene")
                     continue
                 if step["kind"] == "tool":
-                    step.update(status="blocked", detail="No Graph Runner tool adapter is authorized.")
+                    step.update(
+                        status="blocked", detail="No Graph Runner tool adapter is authorized.",
+                        finishedAt=datetime.now(timezone.utc).isoformat(),
+                    )
                     await checkpoint()
                     await bus.publish("scene")
                     continue
@@ -253,6 +272,8 @@ def register_graph_runner(
                     step.update(status="blocked", detail=str(exc))
                 else:
                     step.update(status="completed", detail="Output updated.", outputHash=digest)
+                    pin_output_version(step)
+                step["finishedAt"] = datetime.now(timezone.utc).isoformat()
                 # save_chat writes the graph, notes and journal in one SQLite
                 # transaction. Restart sees either side of the transform intact.
                 try:
@@ -268,6 +289,7 @@ def register_graph_runner(
                     "partial" if any(s["status"] in {"blocked", "failed"} for s in run["steps"])
                     else "completed"
                 )
+            run["finishedAt"] = datetime.now(timezone.utc).isoformat()
             await checkpoint()
             terminal_saved = True
             return _public_run(run)
@@ -276,6 +298,7 @@ def register_graph_runner(
             active_run_id = None
             if not terminal_saved:
                 run["status"] = "interrupted"
+                run.pop("finishedAt", None)
 
     @serialize_mutation
     async def start_run(node_ids: list[str], preview_token: str, run_id: str):
@@ -287,6 +310,11 @@ def register_graph_runner(
         for step in steps:
             if step["status"] in {"ready", "waiting"}:
                 step.update(status="pending", detail="Waiting to run.")
+            elif step["status"] == "current":
+                # A current step also has an inspectable content-addressed
+                # version, even though it does not execute in this run.
+                step["outputHash"] = _output_digest(document.nodes[step["nodeId"]])
+                pin_output_version(step)
         run = {
             "runId": run_id, "previewHash": token, "selectionHash": _digest(sorted(set(node_ids))),
             "startedAt": datetime.now(timezone.utc).isoformat(), "steps": steps, "status": "running",
