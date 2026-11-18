@@ -298,6 +298,7 @@ export interface ChartDataRow {
   columnLabels?: string[] | null;
   matrix?: number[][] | null;
   valueUnit?: string | null;
+  analysis?: ChartAnalysisRow | null;
 }
 
 export interface ChartFlowRow {
@@ -316,6 +317,26 @@ export interface ChartScientificSeriesRow {
 export interface ChartBoxplotGroupRow {
   label: string;
   values: number[];
+}
+
+export interface ChartAnalysisRow {
+  lockX: boolean;
+  lockY: boolean;
+  annotations: ChartAnnotationRow[];
+  xRange?: number[] | null;
+  yRange?: number[] | null;
+}
+
+export interface ChartAnnotationRow {
+  kind: "label" | "arrow" | "region";
+  x?: number | null;
+  y?: number | null;
+  text?: string | null;
+  x2?: number | null;
+  y2?: number | null;
+  axis?: "x" | "y" | null;
+  to?: number | null;
+  from?: number | null;
 }
 
 export interface ToolInvocationRow {
@@ -501,6 +522,26 @@ const CHART_BOXPLOT_GROUP_ROW_FIELDS: WireFields = [
   ["values", { a: "n" }, 0],
 ];
 
+const CHART_ANNOTATION_ROW_FIELDS: WireFields = [
+  ["kind", { e: ["label", "arrow", "region"] }, 0],
+  ["x", "n", 1],
+  ["y", "n", 1],
+  ["text", "s", 1],
+  ["x2", "n", 1],
+  ["y2", "n", 1],
+  ["axis", { e: ["x", "y"] }, 1],
+  ["to", "n", 1],
+  ["from", "n", 1],
+];
+
+const CHART_ANALYSIS_ROW_FIELDS: WireFields = [
+  ["lockX", "b", 0],
+  ["lockY", "b", 0],
+  ["annotations", { a: { o: CHART_ANNOTATION_ROW_FIELDS } }, 0],
+  ["xRange", { a: "n" }, 1],
+  ["yRange", { a: "n" }, 1],
+];
+
 const CHART_DATA_ROW_FIELDS: WireFields = [
   ["version", "n", 1],
   ["type", { e: ["bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"] }, 1],
@@ -524,6 +565,7 @@ const CHART_DATA_ROW_FIELDS: WireFields = [
   ["columnLabels", { a: "s" }, 1],
   ["matrix", { a: { a: "n" } }, 1],
   ["valueUnit", "s", 1],
+  ["analysis", { o: CHART_ANALYSIS_ROW_FIELDS }, 1],
 ];
 
 const TOOL_INVOCATION_ROW_FIELDS: WireFields = [

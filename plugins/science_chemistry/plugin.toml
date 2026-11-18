@@ -1,7 +1,7 @@
 [plugin]
 id = "science_chemistry"
 name = "Chemistry"
-description = "Analyze absorption measurements, transmission spectra and isotope abundances."
+description = "Quantitative chemistry: acid/base equilibria, buffers, titration, kinetics, gas laws, molar mass, dilution and yields; plus optical and isotope methods."
 version = "1.1.0"
 sdk_api_version = 1
 entry_point = "plugin:register"

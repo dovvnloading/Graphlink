@@ -1,7 +1,9 @@
 /** Scientific line and scatter marks. No charting library: the same finite
  * coordinates/error magnitudes checked by both canonicalizers are mapped to
  * SVG; only the scale (linear/log10) changes, never the numeric data. */
+import { useId } from "react";
 import type { AxisScale, ErrorPair } from "../chartSpec";
+import type { ViewDomains } from "./chartViewport";
 import type { ChartMarksProps } from "./BarChartMarks";
 import { CartesianAxes, type XTick } from "./CartesianAxes";
 import {
@@ -71,8 +73,9 @@ function errorWithUnit(pair: ErrorPair, unit?: string | null): string {
 }
 
 export function ScientificChartMarks({
-  chartData, theme, width, height, onHover, wrapperRef, chartType,
-}: ChartMarksProps & { chartType: string }) {
+  chartData, theme, width, height, onHover, wrapperRef, chartType, viewport,
+}: ChartMarksProps & { chartType: string; viewport?: ViewDomains }) {
+  const clipId = useId();
   const data = chartData;
   const named = data.series;
   const series: PlottedSeries[] = named ?? [{
@@ -87,8 +90,8 @@ export function ScientificChartMarks({
   const xScaleType = data.xScale ?? "linear";
   const yScaleType = data.yScale ?? "linear";
   const extents = scientificExtents(xValues, series);
-  const xDomain = scientificDomain(...extents.x, xScaleType);
-  const yDomain = scientificDomain(...extents.y, yScaleType);
+  const xDomain = viewport?.x ?? scientificDomain(...extents.x, xScaleType);
+  const yDomain = viewport?.y ?? scientificDomain(...extents.y, yScaleType);
 
   const legendColumns = Math.min(4, named?.length ?? 0);
   const legendRows = named ? Math.ceil(named.length / legendColumns) : 0;
@@ -104,13 +107,13 @@ export function ScientificChartMarks({
   const innerHeight = Math.max(1, height - marginTop - marginBottom);
   const x = scaleFor(xDomain, [0, innerWidth], xScaleType);
   const y = scaleFor(yDomain, [innerHeight, 0], yScaleType);
-  const yTicks = labeledTicks(yDomain, yScaleType);
+  const yTicks = labeledTicks(yDomain, yScaleType).filter((value) => value >= yDomain[0] && value <= yDomain[1]);
   const xTicks: XTick[] = categorical
-    ? indexes.map((index) => ({
+    ? indexes.filter((index) => !viewport || (xValues[index] >= xDomain[0] && xValues[index] <= xDomain[1])).map((index) => ({
         position: x(xValues[index]),
         lines: wrapLabel(data.labels?.[index] ?? "", 14, 2),
       }))
-    : labeledTicks(xDomain, xScaleType).map((value) => ({
+    : labeledTicks(xDomain, xScaleType).filter((value) => value >= xDomain[0] && value <= xDomain[1]).map((value) => ({
         position: x(value),
         lines: [xScaleType === "log10" ? formatLogTick(value) : formatScientificTick(value)],
       }));
@@ -131,6 +134,7 @@ export function ScientificChartMarks({
         rotateXTicks={rotate}
         zeroLineY={yDomain[0] < 0 && yDomain[1] > 0 && yScaleType === "linear" ? y(0) : null}
       />
+      {viewport && <defs><clipPath id={clipId}><rect x={0} y={0} width={innerWidth} height={innerHeight} /></clipPath></defs>}
       {named && (
         <g className="chart-series-legend" aria-label="Series legend">
           {named.map((row, index) => {
@@ -147,6 +151,7 @@ export function ScientificChartMarks({
           })}
         </g>
       )}
+      <g clipPath={viewport ? "url(#" + clipId + ")" : undefined}>
       {series.map((row, seriesIndex) => {
         const color = palette[seriesIndex % palette.length];
         const name = row.name || data.title || "Series";
@@ -203,6 +208,7 @@ export function ScientificChartMarks({
           </g>
         );
       })}
+      </g>
     </g>
   );
 }
