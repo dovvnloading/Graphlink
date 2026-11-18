@@ -5,8 +5,9 @@ from __future__ import annotations
 import math
 
 
-SUPPORTED_CHART_TYPES = frozenset({"bar", "line", "pie", "histogram", "sankey"})
+SUPPORTED_CHART_TYPES = frozenset({"bar", "line", "pie", "histogram", "sankey", "scatter"})
 MAX_SERIES_POINTS = 300
+MAX_NAMED_SERIES = 12
 MAX_SANKEY_FLOWS = 300
 MAX_LABEL_LENGTH = 160
 MAX_TITLE_LENGTH = 200
@@ -39,6 +40,36 @@ class ChartDataError(ValueError):
 # something concrete to enforce, catching the most common shape mistakes
 # (wrong container type, missing key) before canonicalize_chart_data's own,
 # stricter pass.
+# Optional scientific fields do not change any of the five legacy shapes.
+_ERROR_ITEM_SCHEMA = {
+    "anyOf": [
+        {"type": "number"},
+        {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+    ]
+}
+_ERROR_SCHEMA = {"type": "array", "items": _ERROR_ITEM_SCHEMA}
+_SCIENTIFIC_PROPERTIES = {
+    "xValues": {"type": "array", "items": {"type": "number"}},
+    "xScale": {"type": "string", "enum": ["linear", "log10"]},
+    "yScale": {"type": "string", "enum": ["linear", "log10"]},
+    "xUnit": {"type": "string"},
+    "yUnit": {"type": "string"},
+    "xError": _ERROR_SCHEMA,
+    "yError": _ERROR_SCHEMA,
+    "series": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "values": {"type": "array", "items": {"type": "number"}},
+                "xError": _ERROR_SCHEMA,
+                "yError": _ERROR_SCHEMA,
+            },
+            "required": ["name", "values"],
+        },
+    },
+}
 _SERIES_PROPERTIES = {
     "title": {"type": "string"},
     "labels": {"type": "array", "items": {"type": "string"}},
@@ -55,8 +86,14 @@ CHART_JSON_SCHEMAS: dict[str, dict] = {
     },
     "line": {
         "type": "object",
-        "properties": {"type": {"type": "string", "enum": ["line"]}, **_SERIES_PROPERTIES},
+        "properties": {"type": {"type": "string", "enum": ["line"]}, **_SERIES_PROPERTIES, **_SCIENTIFIC_PROPERTIES},
         "required": ["type", "labels", "values"],
+    },
+    "scatter": {
+        "type": "object",
+        "properties": {"type": {"type": "string", "enum": ["scatter"]},
+                       **_SERIES_PROPERTIES, **_SCIENTIFIC_PROPERTIES},
+        "required": ["type", "xValues"],
     },
     "pie": {
         "type": "object",
@@ -238,6 +275,167 @@ def _assert_acyclic(flows):
         visit(node)
 
 
+
+def _scientific_errors(raw, field, count):
+    """Normalize symmetric and asymmetric errors into [minus, plus] pairs."""
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ChartDataError(f"{field} must be a list")
+    if len(raw) != count:
+        raise ChartDataError(f"{field} length must match the series length ({count})")
+    normalized = []
+    for index, entry in enumerate(raw):
+        name = f"{field} at index {index}"
+        if isinstance(entry, list):
+            if len(entry) != 2:
+                raise ChartDataError(f"{name} must have exactly two magnitudes")
+            minus = _finite_number(entry[0], f"{name} lower magnitude")
+            plus = _finite_number(entry[1], f"{name} upper magnitude")
+        else:
+            minus = plus = _finite_number(entry, name)
+        if minus < 0 or plus < 0:
+            raise ChartDataError(f"{name} magnitudes must be nonnegative")
+        normalized.append([minus, plus])
+    return normalized
+
+
+def _check_scientific_axis(values, errors, scale, field):
+    """Check all coordinates AND error endpoints (including overflow)."""
+    for index, value in enumerate(values):
+        minus, plus = errors[index] if errors is not None else (0.0, 0.0)
+        lower, upper = value - minus, value + plus
+        if not math.isfinite(lower) or not math.isfinite(upper):
+            raise ChartDataError(f"{field} at index {index} has a non-finite error endpoint")
+        if scale == "log10" and lower <= 0:
+            raise ChartDataError(
+                f"{field} at index {index} and its lower error endpoint must be "
+                "greater than zero on a log10 axis"
+            )
+
+
+def _scientific_chart(data, chart_type, result):
+    """Additive v1 scientific path. Plain legacy line data never enters here."""
+    raw_x = data.get("xValues")
+    if chart_type == "scatter" and raw_x is None:
+        raise ChartDataError("Scatter charts require numeric xValues")
+    if raw_x is not None:
+        if not isinstance(raw_x, list):
+            raise ChartDataError("xValues must be a list")
+        if not raw_x:
+            raise ChartDataError("xValues require at least one data point")
+        if len(raw_x) > MAX_SERIES_POINTS:
+            raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
+        x_values = [_finite_number(value, f"xValues at index {i}") for i, value in enumerate(raw_x)]
+        result["xValues"] = x_values
+    else:
+        x_values = None
+
+    for axis in ("xScale", "yScale"):
+        scale = data.get(axis, "linear")
+        if scale not in ("linear", "log10"):
+            raise ChartDataError(f"{axis} must be linear or log10")
+        result[axis] = scale
+    if result["xScale"] == "log10" and x_values is None:
+        raise ChartDataError("A log10 x-axis requires numeric xValues")
+
+    for field in ("xUnit", "yUnit"):
+        if field in data and data[field] is not None:
+            result[field] = _clean_text(data[field], field)
+
+    labels = data.get("labels")
+    if labels is not None:
+        if not isinstance(labels, list):
+            raise ChartDataError("Labels must be a list")
+        result["labels"] = [_clean_text(label, f"Label at index {i}") for i, label in enumerate(labels)]
+
+    raw_series = data.get("series")
+    if raw_series is not None:
+        if not isinstance(raw_series, list) or not raw_series:
+            raise ChartDataError("series must be a nonempty list")
+        if len(raw_series) > MAX_NAMED_SERIES:
+            raise ChartDataError(f"Charts support at most {MAX_NAMED_SERIES} named series")
+        if "values" in data or "xError" in data or "yError" in data:
+            raise ChartDataError("Named series cannot be combined with top-level values or errors")
+        series = []
+        seen_names = set()
+        for index, raw in enumerate(raw_series):
+            if not isinstance(raw, dict):
+                raise ChartDataError(f"series at index {index} must be an object")
+            name = _clean_text(raw.get("name"), f"series at index {index} name")
+            if name in seen_names:
+                raise ChartDataError(f"Duplicate series name: {name}")
+            seen_names.add(name)
+            values = raw.get("values")
+            if not isinstance(values, list):
+                raise ChartDataError(f"series {name} values must be a list")
+            if not values:
+                raise ChartDataError(f"series {name} requires at least one data point")
+            row = {
+                "name": name,
+                "values": [_finite_number(value, f"series {name} value at index {i}") for i, value in enumerate(values)],
+            }
+            for axis in ("xError", "yError"):
+                if axis in raw:
+                    row[axis] = _scientific_errors(raw[axis], f"series {name} {axis}", len(values))
+            series.append(row)
+        result["series"] = series
+    else:
+        raw_values = data.get("values")
+        if not isinstance(raw_values, list) or not raw_values:
+            raise ChartDataError(f"{chart_type.title()} charts require at least one data point")
+        series = [{
+            "values": [_finite_number(value, f"Value at index {i}") for i, value in enumerate(raw_values)],
+        }]
+        result["values"] = series[0]["values"]
+        for axis in ("xError", "yError"):
+            if axis in data:
+                errors = _scientific_errors(data[axis], axis, len(raw_values))
+                result[axis] = errors
+                series[0][axis] = errors
+
+    count = len(series[0]["values"])
+    if count > MAX_SERIES_POINTS or len(series) * count > MAX_SERIES_POINTS:
+        raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} total series points")
+    if chart_type == "line" and count < 2:
+        raise ChartDataError("Line charts require at least two data points")
+    for row in series:
+        if len(row["values"]) != count:
+            raise ChartDataError(f"series {row.get('name', 'values')} length must match the other series ({count})")
+    if x_values is not None and len(x_values) != count:
+        raise ChartDataError(f"xValues length must match the series length ({count})")
+    if "labels" in result and len(result["labels"]) != count:
+        raise ChartDataError(f"labels length must match the series length ({count})")
+    if chart_type == "line" and x_values is None and "labels" not in result:
+        raise ChartDataError("Line charts require labels or numeric xValues")
+
+    # Categorical line x positions are zero-based indexes, as before. Only
+    # numeric x-values can have an error interval or logarithmic scale.
+    if x_values is None and any(row.get("xError") is not None for row in series):
+        raise ChartDataError("xError requires numeric xValues")
+    if x_values is not None:
+        for row in series:
+            _check_scientific_axis(x_values, row.get("xError"), result["xScale"], "xValues")
+    for row in series:
+        _check_scientific_axis(row["values"], row.get("yError"), result["yScale"],
+                               f"series {row.get('name', 'values')} values")
+
+    # Check range arithmetic too: two finite endpoints can have an infinite
+    # span, which neither SVG pixel geometry nor mpl axis limits can draw.
+    for axis, values in (("xValues", x_values), ("values", [v for row in series for v in row["values"]])):
+        if values is not None and not math.isfinite(max(values) - min(values)):
+            raise ChartDataError(f"{axis} range must be finite")
+
+    result["xAxis"] = _clean_text(
+        data.get("xAxis"), "X-axis label",
+        default="X" if chart_type == "scatter" else "Sequence",
+    )
+    result["yAxis"] = _clean_text(
+        data.get("yAxis"), "Y-axis label", default="Y" if chart_type == "scatter" else "Value",
+    )
+    return result
+
+
 def canonicalize_chart_data(data, chart_type=None):
     """Return a new, bounded chart payload or raise :class:`ChartDataError`.
 
@@ -265,6 +463,19 @@ def canonicalize_chart_data(data, chart_type=None):
             max_length=MAX_TITLE_LENGTH,
         ),
     }
+
+    if expected_type == "scatter" or (
+        expected_type == "line" and any(key in data for key in
+            ("xValues", "series", "xError", "yError", "xScale", "yScale", "xUnit", "yUnit"))
+    ):
+        # The existing frontend wire validator accepts additive object keys,
+        # but its generated v1 enum (outside this feature's edit scope) has
+        # no "scatter" entry. ChartState.chart_type is already the
+        # authoritative discriminator. Omit only this optional nested field
+        # for scatter, so scene snapshots remain valid without touching codegen.
+        if expected_type == "scatter":
+            result.pop("type")
+        return _scientific_chart(data, expected_type, result)
 
     if expected_type in {"bar", "line", "pie"}:
         labels = data.get("labels")
