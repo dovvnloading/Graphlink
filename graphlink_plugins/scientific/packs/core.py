@@ -3,9 +3,9 @@
 import csv
 import io
 from decimal import Decimal, InvalidOperation
-from fractions import Fraction
 
 from graphlink_plugins.scientific.core import MAX_CELLS, MAX_COLUMNS, MAX_POINTS, Field, Operation, finite
+from graphlink_plugins.scientific.units import convert_measurement
 
 
 def _numeric_csv(data):
@@ -47,42 +47,25 @@ def _numeric_csv(data):
     }
 
 
-# dimension, scale to SI, SI offset (temperature entries are absolute measurements).
-_UNITS = {
-    "mm": ("length", 0.001, 0), "cm": ("length", 0.01, 0),
-    "m": ("length", 1, 0), "km": ("length", 1000, 0),
-    "mg": ("mass", 1e-6, 0), "g": ("mass", .001, 0), "kg": ("mass", 1, 0),
-    "ms": ("time", .001, 0), "s": ("time", 1, 0), "min": ("time", 60, 0), "h": ("time", 3600, 0),
-    "mL": ("volume", 1e-6, 0), "L": ("volume", .001, 0), "m³": ("volume", 1, 0),
-    "K": ("temperature", 1, 0), "°C": ("temperature", 1, 273.15),
-}
+# Preserve the wire-visible summaries of every previously supported conversion.
+# Existing receipts reference those summaries and must not be recomputed.
+_LEGACY_GROUPS = (
+    ("length", frozenset(("mm", "cm", "m", "km"))),
+    ("mass", frozenset(("mg", "g", "kg"))),
+    ("time", frozenset(("ms", "s", "min", "h"))),
+    ("volume", frozenset(("mL", "L", "m³"))),
+    ("temperature", frozenset(("K", "°C"))),
+)
 
 
 def _convert(data):
     source = data["from_unit"].strip()
     target = data["to_unit"].strip()
-    if source not in _UNITS or target not in _UNITS:
-        raise ValueError("Use a listed unit symbol. Symbols are case-sensitive.")
-    dimension, source_scale, source_offset = _UNITS[source]
-    target_dimension, target_scale, target_offset = _UNITS[target]
-    if dimension != target_dimension:
-        raise ValueError("Source and destination units must measure the same dimension.")
-    value = data["value"]
-    if dimension == "temperature" and value < -source_offset:
-        raise ValueError("Absolute temperature must be at least 0 K.")
-    if source == target:
-        converted = value
-    elif dimension == "temperature":
-        # Unit input is displayed as decimal. Use the exact defined 273.15 K offset.
-        converted = float(Decimal(str(value)) + Decimal(str(source_offset)) - Decimal(str(target_offset)))
-    else:
-        ratio = Fraction(str(source_scale)) / Fraction(str(target_scale))
-        converted = float(Fraction(value) * ratio)
-    if dimension != "temperature" and value and converted == 0:
-        raise ValueError("The converted measurement is below the numerical range.")
-
-    return {"summary": f"Converted {dimension} from {source} to {target}.",
-            "values": {f"value ({target})": converted}}
+    converted = convert_measurement(data["value"], source, target)
+    legacy = next((kind for kind, symbols in _LEGACY_GROUPS if source in symbols and target in symbols), None)
+    summary = (f"Converted {legacy} from {source} to {target}." if legacy
+               else f"Converted {source} to {target}.")
+    return {"summary": summary, "values": {f"value ({target})": converted}}
 
 
 def _plot(data):
@@ -96,12 +79,19 @@ def _plot(data):
     }
 
 
-_SYMBOLS = "Supported symbols: " + ", ".join(_UNITS) + "."
+_SYMBOLS = (
+    "Case-sensitive SI base units (m, kg, s, A, K, mol, cd), SI prefixes, "
+    "derived units (N, Pa, J, W, Hz, C, V, ohm/Ω, Wb, T, F, H, L, eV), "
+    "and min, h, bar, Wh. Examples: km/h, kWh, MJ, m³, W/(m*K). "
+    "Use *, /, ^, parentheses and superscript powers. Absolute temperatures: "
+    "K, degC/°C, degF/°F. Temperature differences: delta_K, delta_degC, "
+    "delta_degF (or ΔK, Δ°C, Δ°F)."
+)
 OPERATIONS = (
     Operation("numeric_csv", "Import numeric CSV", "Read comma-separated measurements with a header row.",
               (Field("csv", "CSV measurements", "text", description="Quoted headers and blank lines are accepted. Integer counts must be exactly representable."),),
               {"csv": "Time (s),Distance (m)\n0,0\n1,2\n2,4"}, _numeric_csv),
-    Operation("convert_unit", "Convert a measurement", "Convert length, mass, time, volume or absolute temperature.",
+    Operation("convert_unit", "Convert a measurement", "Convert compatible SI dimensions, compound and prefixed units, and affine temperatures.",
               (Field("value", "Measured value", "number"), Field("from_unit", "Source unit", "text", description=_SYMBOLS),
                Field("to_unit", "Destination unit", "text", description=_SYMBOLS)),
               {"value": 25, "from_unit": "°C", "to_unit": "K"}, _convert),
