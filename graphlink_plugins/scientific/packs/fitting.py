@@ -418,20 +418,23 @@ def _student_t_ppf(probability, df):
         raise ValueError("A Student t quantile needs probability in (0, 1) and positive df.")
     if probability == 0.5:
         return 0.0
-    if probability < 0.5:
-        return -_student_t_ppf(1 - probability, df)
+    # Never form 1 - p for an extreme lower-tail probability: e.g.
+    # 1 - 1e-20 rounds to 1 in binary64, although the quantile is finite.
+    # Invert the negative-t tail directly, whose CDF uses the stable beta tail.
+    lower_tail = min(probability, 1 - probability)
     lo, hi = 0.0, 1.0
-    while _student_t_cdf(hi, df) < probability:
+    while _student_t_cdf(-hi, df) > lower_tail:
         hi *= 2
         if hi > 1e150:
             raise ValueError("Student t quantile exceeds the supported range.")
     for _ in range(90):
         midpoint = (lo + hi) / 2
-        if _student_t_cdf(midpoint, df) < probability:
+        if _student_t_cdf(-midpoint, df) > lower_tail:
             lo = midpoint
         else:
             hi = midpoint
-    return (lo + hi) / 2
+    magnitude = (lo + hi) / 2
+    return -magnitude if probability < 0.5 else magnitude
 
 
 def _chi_square_cdf(x, df):
@@ -471,7 +474,10 @@ def _chi_square(data):
         raise ValueError("Provide at least two corresponding observed and expected categories.")
     if any(v < 0 or not v.is_integer() for v in observed) or any(v <= 0 for v in expected):
         raise ValueError("Observed counts must be nonnegative integers and expectations strictly positive.")
-    if not math.isclose(math.fsum(observed), math.fsum(expected), rel_tol=1e-12, abs_tol=1e-10):
+    observed_total = math.fsum(observed)
+    if observed_total <= 0:
+        raise ValueError("Pearson goodness of fit requires a positive observed total.")
+    if not math.isclose(observed_total, math.fsum(expected), rel_tol=1e-12, abs_tol=1e-10):
         raise ValueError("Observed and expected category totals must agree; no normalization is performed.")
     chi2 = math.fsum((o - e) ** 2 / e for o, e in zip(observed, expected))
     if not math.isfinite(chi2):
