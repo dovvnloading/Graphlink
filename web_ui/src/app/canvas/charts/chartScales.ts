@@ -105,7 +105,7 @@ export function scientificLinearTicks(min: number, max: number, targetCount = 5)
   const result: number[] = [];
   for (let i = lo; i <= hi; i += 1) {
     const tick = i * step;
-    if (Number.isFinite(tick)) {
+    if (Number.isFinite(tick) && tick >= min && tick <= max) {
       const rounded = Number(tick.toPrecision(12));
       if (result[result.length - 1] !== rounded) result.push(rounded);
     }
@@ -114,10 +114,9 @@ export function scientificLinearTicks(min: number, max: number, targetCount = 5)
 }
 
 export function formatScientificTick(value: number): string {
-  if (value !== 0 && (Math.abs(value) < 0.01 || Math.abs(value) >= 1e6)) {
-    return value.toExponential(2).replace(/\.00e/, "e").replace(/(\.\d)0e/, "$1e");
-  }
-  return formatValue(value);
+  // Number.toString is the shortest round-trippable decimal, so adjacent
+  // scientific ticks never become two misleading identical rounded labels.
+  return String(value);
 }
 
 /** "Nice" round-number ticks spanning at least [min, max] - the classic
