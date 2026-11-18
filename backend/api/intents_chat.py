@@ -600,7 +600,7 @@ def _comparison_content(node, *, answer: str, status: str, elapsed: float | None
 async def _send_model_comparison(
     *, bus, document, notifications, agent_dispatcher, composer_document,
     token_counter, publish_scene, publish_token_counter, text, models,
-    branch_from_node_id=None,
+    branch_from_node_id=None, cancelled_requests=None,
 ):
     """One user turn, 2-4 independently streamed and cancellable sibling replies.
 
@@ -700,13 +700,16 @@ async def _send_model_comparison(
                 return
             reply.pending_request_id = None
             if not run["finished"]:
-                status = "Canceled" if run["cancelled"] else "Failed or interrupted"
+                was_cancelled = cancelled_requests is not None and run["request_id"] in cancelled_requests
+                status = "Canceled" if was_cancelled else "Failed or interrupted"
                 reply.state.response_incomplete = True
                 reply.content = _comparison_content(
                     reply, answer=run["partial"], status=status,
                     elapsed=(time.monotonic() - run["started"]) if run["started"] is not None else None,
                 )
             persist_reply(reply)
+            if cancelled_requests is not None:
+                cancelled_requests.discard(run["request_id"])
 
         async def _on_reply(answer, *, reply=reply, run=run):
             if reply.id not in document.nodes or reply.pending_request_id != run["request_id"]:
@@ -792,6 +795,7 @@ def register_chat_intents(
 
     publish_scene = make_publish_scene(bus)
     publish_token_counter = make_publish_token_counter(bus)
+    comparison_cancelled_requests: set[str] = set()
 
     async def send_message(text, branch_from_node_id=None):
         # R3.3: the real Send action - a real user ChatNode, continuing the
@@ -1011,6 +1015,7 @@ def register_chat_intents(
             token_counter=token_counter, publish_scene=publish_scene,
             publish_token_counter=publish_token_counter,
             text=text, models=models, branch_from_node_id=branch_from_node_id,
+            cancelled_requests=comparison_cancelled_requests,
         )
 
     bus.register_intent("scene", "listComparisonModels", list_comparison_models)
@@ -1031,6 +1036,7 @@ def register_chat_intents(
         if handle is not None and handle.kind.startswith("chat_comparison:"):
             # The node-scoped Stop button already sends this intent. Mark
             # exactly its own run cancelled; do not touch sibling handles.
+            comparison_cancelled_requests.add(request_id)
             return agent_dispatcher._runs.cancel(request_id, kind=handle.kind)
         return agent_dispatcher.cancel(request_id)
 
