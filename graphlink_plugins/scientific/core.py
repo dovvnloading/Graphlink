@@ -40,6 +40,8 @@ class Operation:
     fields: tuple[Field, ...]
     example: dict
     calculate: Callable[[dict], dict]
+    # Optional pack-level wall-clock override. None uses deployment configuration.
+    timeout_s: float | None = None
 
     def describe(self) -> dict:
         return {

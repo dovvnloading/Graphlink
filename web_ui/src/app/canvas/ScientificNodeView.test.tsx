@@ -87,7 +87,7 @@ describe("scientific workbench card", () => {
     expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", ["science_mathematics", "run", {
       node_id: "target", operation_id: "integral", inputs: { samples: [1, 8, 3] },
       sources: { samples: { nodeId: "parent", resultHash: "abc", selector: ["column", 1] } },
-    }]);
+    }], 615_000);
     await waitFor(() => expect(screen.getByText("Run calculation")).toBeEnabled());
     fireEvent.change(screen.getByLabelText("Samples (m)"), { target: { value: "[2]" } });
     fireEvent.click(screen.getByText("Run calculation"));
@@ -253,6 +253,37 @@ describe("scientific workbench card", () => {
     fireEvent.change(screen.getByLabelText("Samples (m)"), { target: { value: "[4,5]" } });
     refresh(JSON.stringify({ ...state, nodeKey: "second" }));
     expect(screen.getByLabelText("Samples (m)")).toHaveValue("[1,2,3]");
+  });
+
+  it("cancels an in-flight scientific worker without disabling the Cancel control", async () => {
+    const { request } = mount();
+    let finishRun: (value: unknown) => void = () => {};
+    request.mockReturnValueOnce(new Promise((resolve) => { finishRun = resolve; }));
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
+    const cancel = screen.getByRole("button", { name: "Cancel calculation" });
+    expect(cancel).toBeEnabled();
+    fireEvent.click(cancel);
+    expect(request).toHaveBeenNthCalledWith(2, "app-plugins", "invokePluginIntent", [
+      "science_mathematics", "cancel", { node_id: "target", operation_id: "integral" },
+    ]);
+    finishRun({ ok: false, errorType: "cancelled", elapsedMs: 42,
+      error: "Scientific calculation cancelled after 42 ms." });
+    expect(await screen.findByRole("alert")).toHaveTextContent("cancelled after 42 ms");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled());
+    expect(screen.queryByRole("button", { name: "Cancel calculation" })).toBeNull();
+  });
+
+  it("shows a typed timed-out run without replacing the last successful result", async () => {
+    const { request } = mount(JSON.stringify({ ...state, latest: result }));
+    request.mockResolvedValueOnce({
+      ok: false, errorType: "timeout", elapsedMs: 500,
+      error: "Scientific calculation exceeded its 0.5 s budget (500 ms elapsed).",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("500 ms elapsed");
+    expect(screen.getByText("Computed 3 samples.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Run calculation" })).toBeEnabled();
   });
 
   it("rejects damaged or unsupported state without rendering a run button", () => {

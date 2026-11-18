@@ -73,7 +73,7 @@ function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
   const baseName = `${provenance.packId}-${result.operationId}`;
   const csv = table ?? (plot ? { columns: [plot.xLabel, plot.yLabel], rows: plot.x.map((v, i) => [v, plot.y[i]]) } : { columns: ["Metric", "Value"], rows: Object.entries(result.values) });
   return <section className="science-results" aria-label="Latest result">
-    <h4>Last run · {title}</h4>
+    <h4>Last successful run · {title}</h4>
     <p role="status">{result.summary}</p>
     <dl>{Object.entries(result.values).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{display(value)}</dd></div>)}</dl>
     {plot && <Plot plot={plot} />}
@@ -146,13 +146,14 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
 }
 
 type Run = (operationId: string, inputs: Record<string, unknown>, sources: Sources, expectedRun?: string) => Promise<void>;
+type Cancel = (operationId: string) => Promise<void>;
 function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revision: string): EditorDraft {
   return { values: draftInputs(op, result?.inputs ?? op.example), sources: result?.provenance.sources ?? {}, revision, dirty: false };
 }
 
-function OperationEditor({ session, op, result, revision, runToken, limits, options, run, busy, setBusy }: {
+function OperationEditor({ session, op, result, revision, runToken, limits, options, run, cancel, busy, setBusy }: {
   session: ScienceEditorSession; op: ScienceOperation; result: ScienceResult | null; revision: string; runToken?: string; limits?: ScienceLimits;
-  options: SourceOption[]; run: Run; busy: boolean; setBusy: (busy: boolean) => void;
+  options: SourceOption[]; run: Run; cancel: Cancel; busy: boolean; setBusy: (busy: boolean) => void;
 }) {
   const [draft, setDraft] = useState(() => session.drafts.get(op.id) ?? restoreDraft(op, result, revision));
   useLayoutEffect(() => {
@@ -160,6 +161,7 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
     else session.drafts.delete(op.id);
   }, [session, op.id, draft]);
   const [error, setError] = useState<{ message: string; field?: string } | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const errorId = useId();
   const changed = draft.revision !== revision;
   if (changed && !draft.dirty) {
@@ -233,12 +235,21 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
         }}>Load example</button>
       </div>
     </fieldset>
+    {/* This button must stay outside the disabled fieldset while a worker runs. */}
+    {busy && <div className="science-actions">
+      <button type="button" className="science-cancel" disabled={cancelling} onClick={async () => {
+        setCancelling(true);
+        try { await cancel(op.id); }
+        catch (e) { setError({ message: e instanceof Error ? e.message : "Unable to cancel the calculation." }); }
+        finally { setCancelling(false); }
+      }}>{cancelling ? "Stopping…" : "Cancel calculation"}</button>
+    </div>}
     {error && <p id={errorId} role="alert">{error.message}</p>}
   </form>;
 }
 
-function Workbench({ session, state, options, run, exportJson, charts, onChart, onRefresh }: {
-  session: ScienceEditorSession; state: ScienceState; options: SourceOption[]; run: Run; exportJson: () => Promise<string>;
+function Workbench({ session, state, options, run, cancel, exportJson, charts, onChart, onRefresh }: {
+  session: ScienceEditorSession; state: ScienceState; options: SourceOption[]; run: Run; cancel: Cancel; exportJson: () => Promise<string>;
   charts: ScienceChartLink[]; onChart: (type: ScienceChartType) => void; onRefresh: (chart: ScienceChartLink) => void;
 }) {
   const [selected, setSelected] = useState(session.selected ?? state.latest?.operationId ?? state.operations[0].id);
@@ -251,7 +262,7 @@ function Workbench({ session, state, options, run, exportJson, charts, onChart, 
       {state.operations.map((operation) => <option key={operation.id} value={operation.id}>{operation.title}</option>)}
     </select></label>
     <OperationEditor key={op.id} session={session} op={op} result={result} revision={revision} runToken={state.runToken} limits={state.limits}
-      options={options} run={run} busy={busy} setBusy={setBusy} />
+      options={options} run={run} cancel={cancel} busy={busy} setBusy={setBusy} />
     {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson}
       charts={charts} onChart={onChart} onRefresh={onRefresh} title={
       state.operations.find((candidate) => candidate.id === state.latest?.operationId)?.title ?? state.latest.operationId
@@ -272,7 +283,8 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
         charts={data.charts ?? []}
         onChart={(chartType) => data.store.generateChart(id, chartType)}
         onRefresh={(chart) => data.store.generateChart(chart.id, chart.chartType)}
-        run={(operationId, inputs, sources, token) => data.store.runScientificOperation(data.pluginId, id, operationId, inputs, sources, token)} />
+        run={(operationId, inputs, sources, token) => data.store.runScientificOperation(data.pluginId, id, operationId, inputs, sources, token)}
+        cancel={(operationId) => data.store.cancelScientificOperation(data.pluginId, id, operationId)} />
       : <p role="alert">This workbench version could not be loaded. Check the plugin in Settings.</p>}
   </NodeShell>;
 });
