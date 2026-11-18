@@ -382,4 +382,7 @@ def register_chart_intents(
     bus.register_intent("scene", "generateChart", generate_chart)
     bus.register_intent("scene", "resizeChart", resize_chart)
     bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
-    bus.register_intent("scene", "exportPublicationChart", _make_publication_export_handler(document))
+    async def export_publication_chart(node_id, options):
+        return await _make_publication_export_handler(document)(node_id, options)
+
+    bus.register_intent("scene", "exportPublicationChart", export_publication_chart)
