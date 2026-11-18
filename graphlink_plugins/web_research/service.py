@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
+from .evidence_report import find_duplicate, validate_report
 from .domain import (
     CancellationToken,
+    FetchedDocument,
     EvidenceChunk,
     ProgressCallback,
     ProgressEvent,
@@ -192,7 +196,7 @@ class WebResearchService:
             raise ResearchFailure("No search results were found for this query.", code="no_search_results", retryable=False)
 
         source_records: list[ResearchSource] = []
-        accepted_documents = []
+        accepted_documents: list[FetchedDocument] = []
         warnings: list[str] = []
         candidates = search_results[: request.limits.max_sources]
         for index, result in enumerate(candidates, start=1):
@@ -212,21 +216,31 @@ class WebResearchService:
             try:
                 payload = self.fetcher.fetch(result, limits=request.limits, token=token)
                 source.final_url = payload.final_url
+                source.fetched_at = payload.fetched_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 source.truncated = payload.truncated
                 self._emit(request, progress, ResearchStage.EXTRACTING, f"Extracting source {index} of {len(candidates)}.", index - 1, len(candidates), result.source_id)
                 document = self.extractor.extract(payload, limits=request.limits, token=token)
                 source.title = document.title or source.title
                 source.final_url = document.final_url
                 source.content_hash = document.content_hash
+                source.publisher = document.publisher or urlsplit(document.final_url).hostname or "Unknown"
+                source.published_at = document.published_at
                 self._emit(request, progress, ResearchStage.VALIDATING, f"Assessing source {index} of {len(candidates)}.", index, len(candidates), result.source_id)
                 assessment = self.model.assess_source(effective_query, document, limits=request.limits, token=token)
                 # A model may return after Stop without raising itself.
                 # Do not classify a cancelled final source as rejected.
                 token.raise_if_cancelled()
+                source.quality = assessment.quality
                 if not assessment.accepted:
                     source.status = "rejected"
                     source.error_code = assessment.reason or "source_rejected"
                     warnings.append(f"Source {index} was not used ({source.error_code}).")
+                    continue
+                duplicate_of = find_duplicate(document, accepted_documents)
+                if duplicate_of is not None:
+                    source.status = "duplicate"
+                    source.merged_into = duplicate_of
+                    warnings.append(f"Source {index} was merged with [{duplicate_of}] (duplicate content).")
                     continue
                 source.status = "accepted"
                 accepted_documents.append(document)
@@ -264,31 +278,22 @@ class WebResearchService:
             raise ResearchFailure("Usable sources did not contain bounded evidence.", code="no_evidence", retryable=False)
         evidence_payload = [f"[{chunk.source_id}] {chunk.text}" for chunk in chunks]
         self._emit(request, progress, ResearchStage.SYNTHESIZING, "Synthesizing a cited answer.", len(candidates), len(candidates))
-        answer = self.model.summarize(query, request.branch_history, evidence_payload, limits=request.limits, token=token)
+        # The model proposes structured claims, but none are emitted as facts
+        # until every quoted citation has been checked against fetched text.
+        raw_report = self.model.summarize(query, request.branch_history, evidence_payload, limits=request.limits, token=token)
         token.raise_if_cancelled()
-        answer, markers, unsupported = self._normalize_answer_citations(answer, source_records)
-        if unsupported:
-            warnings.append("The model emitted unsupported citations; those markers were removed.")
-        citations = []
-        for source in source_records:
-            if source.status != "accepted":
-                continue
-            source_marker = source.source_id.lower()
-            source.citation_count = 1 if source_marker in markers else 0
-            citations.append({"source_id": source.source_id, "marker": f"[{source.source_id}]"})
-        if not markers:
-            warnings.append("The model did not emit inline citations to accepted sources; source references are shown below.")
-            answer = answer.rstrip() + "\n\n### Sources\n" + "\n".join(f"- [{source.source_id}] {source.title}" for source in source_records if source.status == "accepted")
-
-        from .domain import ResearchCitation
-
+        answer, claims, citations, report_warnings = validate_report(
+            raw_report, source_records, accepted_documents, token,
+        )
+        warnings.extend(report_warnings)
         research_result = ResearchResult(
             request_id=request.request_id,
             original_query=query,
             effective_query=effective_query,
             answer_markdown=answer,
             sources=source_records,
-            citations=[ResearchCitation(**citation) for citation in citations],
+            citations=citations,
+            claims=claims,
             warnings=warnings,
             provider_snapshot=dict(request.provider_snapshot),
         )
