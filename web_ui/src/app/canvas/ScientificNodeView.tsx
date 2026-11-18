@@ -84,6 +84,9 @@ function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
       </table>
       {table.rows.length > PREVIEW_ROWS && <small>Showing {PREVIEW_ROWS} of {table.rows.length} rows. Export CSV for all rows.</small>}
     </div>}
+    {provenance.inputUnits && <details><summary>Units used</summary>
+      <pre>{JSON.stringify(provenance.inputUnits, null, 2)}</pre>
+    </details>}
     <details><summary>Inputs and provenance</summary>
       <pre>{JSON.stringify({ inputs: result.inputs, provenance }, null, 2)}</pre>
     </details>
@@ -125,17 +128,26 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
   options: SourceOption[]; onImport: (option: SourceOption) => void; imported?: string; errorId?: string; stale: boolean;
 }) {
   const id = useId();
-  const description = [field.description && id + "-hint", imported && id + "-source", errorId].filter(Boolean).join(" ");
+  const description = [field.description && id + "-hint", field.kind !== "text" && id + "-units",
+    imported && id + "-source", errorId].filter(Boolean).join(" ");
   const common = { id, name: field.key, value, "aria-invalid": errorId || stale ? true as const : undefined,
     "aria-describedby": description || undefined };
   return <div className="science-field">
-    <label htmlFor={id}>{field.unit ? `${field.label} (${field.unit})` : field.label}</label>
+    <label htmlFor={id}>{field.kind !== "text" ? `${field.label} (${field.unit || field.default_unit || "1"})` : field.label}</label>
     {field.kind === "number" || field.kind === "integer"
-      ? <input {...common} type="text" inputMode={field.kind === "integer" ? "numeric" : "decimal"}
+      ? <input {...common} type="text" inputMode="text"
         onChange={(e) => onEdit(e.target.value)} />
       : <textarea {...common} rows={field.kind === "matrix" || field.kind === "text" ? 3 : 2}
         onChange={(e) => onEdit(e.target.value)} spellCheck={field.kind === "text"} />}
     {field.description && <small id={id + "-hint"}>{field.description}</small>}
+    {field.kind !== "text" && <small id={id + "-units"}>
+      Default unit: {field.column_units?.length
+        ? field.column_units.map((unit, i) => `column ${i + 1}: ${unit}`).join("; ")
+        : field.default_unit || field.unit || "1"} · {field.dimension || "dimensionless"}.
+      {field.kind === "vector" || field.kind === "matrix"
+        ? ' Use JSON arrays; quote values with unit suffixes, e.g. ["25 mm", "2 cm"].'
+        : " You may append a compatible unit, e.g. 25 mm."}
+    </small>
     {options.length > 0 && <select aria-label={`Import ${field.label} from a connected result`} value=""
       onChange={(e) => { if (e.target.value) onImport(options[Number(e.target.value)]); }}>
       <option value="">Use connected result…</option>
