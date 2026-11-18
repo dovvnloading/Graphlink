@@ -69,6 +69,17 @@ def test_tukey_whiskers_and_outliers_are_not_just_min_max():
     }
 
 
+def test_boxplot_medians_stay_finite_for_valid_extreme_samples():
+    # statistics.median would overflow the two equally large operands.
+    huge = _boxplot_statistics([1e308, 1e308])
+    assert huge == {
+        "med": 1e308, "q1": 1e308, "q3": 1e308,
+        "whislo": 1e308, "whishi": 1e308, "fliers": [],
+    }
+    tiny = _boxplot_statistics([5e-324, 5e-324])
+    assert tiny["med"] == tiny["q1"] == tiny["q3"] == 5e-324
+
+
 @pytest.mark.parametrize("payload,match", [
     ({"groups": []}, "nonempty groups"),
     ({"groups": [{}]}, "label.*non-empty"),
