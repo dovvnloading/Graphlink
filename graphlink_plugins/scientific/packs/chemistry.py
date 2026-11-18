@@ -68,7 +68,7 @@ def isotope_average(data):
     }
 
 
-OPERATIONS = (
+OPERATIONS: tuple[Operation, ...] = (
     Operation(
         "beer_lambert",
         "Beer–Lambert concentration",
