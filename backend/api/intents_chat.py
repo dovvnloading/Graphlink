@@ -31,12 +31,58 @@ against a future increment if this needs fixing.
 from __future__ import annotations
 
 from functools import partial
+import asyncio
+import logging
+
+from backend.context_engine.citations import apply_reply_citations
+from backend.knowledge_retrieval import search_chat_knowledge
+
+_logger = logging.getLogger(__name__)
+
 
 from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene, make_publish_token_counter
 from backend.composer import ComposerDocument
 from backend.domain.graph import SceneDocument
 from backend.domain.model import SceneError
+
+
+async def _history_with_chat_knowledge(
+    history: list[dict], query: str, workspace_id: str | int | None,
+) -> list[dict]:
+    """Add ephemeral retrieval data to the last turn, never to graph history.
+
+    The dispatcher passes the list to ChatWorker unchanged. Only that worker
+    reads this private key, then strips it from the wire messages. A missing
+    database, empty hit list, or failed local search leaves plain chat alone.
+    """
+    if not history or not isinstance(query, str) or not query.strip():
+        return history
+    try:
+        hits = await asyncio.to_thread(
+            search_chat_knowledge, query[:1500], workspace_id,
+        )
+    except Exception:
+        _logger.warning("Chat knowledge lookup failed; proceeding without retrieval", exc_info=True)
+        return history
+    if not hits:
+        return history
+    return [*history[:-1], {**history[-1], "_knowledge_hits": hits}]
+
+
+def _latest_user_query(history: list[dict]) -> str:
+    for turn in reversed(history):
+        if turn.get("role") != "user":
+            continue
+        content = turn.get("content", "")
+        if isinstance(content, str):
+            return content.split("\n\n--- Attached:", 1)[0]
+        if isinstance(content, list):
+            return " ".join(
+                str(part.get("text", "")) for part in content
+                if isinstance(part, dict) and part.get("type") == "text"
+            ).split("\n\n--- Attached:", 1)[0]
+    return ""
 
 
 def _merge_staged_attachments(text: str, staged: list) -> "tuple[str, list | None]":
@@ -422,6 +468,7 @@ def _make_send_on_reply(
             # The command's after-snapshot must contain the request-time
             # provider/model, not an unstamped copy of this reply.
             _stamp_reply_provenance(ai, provenance_provider, provenance_model)
+            apply_reply_citations(ai, reply_text)
             return ai
 
         ai_node, command = document.record_command(
@@ -511,6 +558,7 @@ def _make_regenerate_on_reply(
             _regenerate_in_place(document, node_to_regenerate, reply_text)
             # Stamp inside record_command so Undo/Redo retains the model.
             _stamp_reply_provenance(node_to_regenerate, provenance_provider, provenance_model)
+            apply_reply_citations(node_to_regenerate, reply_text)
 
         _, command = document.record_command(
             "regenerateResponse", "agent", _commit,
@@ -541,6 +589,10 @@ def _land_partial_regenerate(document, node_to_regenerate, partial_text):
         document.update_chat_node_content(
             node_to_regenerate.id, partial_text, incomplete=True
         )
+        # A failed stream has no trusted included-passage snapshot. Drop
+        # the previous reply's ledger within this same undoable mutation,
+        # preserving real tool-call rows.
+        apply_reply_citations(node_to_regenerate, str(partial_text))
 
     document.record_command(
         "regenerateResponse", "agent", _commit,
@@ -643,6 +695,7 @@ async def _send_model_comparison(
     document.add_session_tokens(full_text)
 
     history = document.chat_branch_history(user.id)
+    history = await _history_with_chat_knowledge(history, text, document.current_workspace_id)
     parent_edge = document._branch_parent_edge(user.id)
     context_history = (
         document.chat_branch_history(parent_edge.source) if parent_edge else []
@@ -724,6 +777,7 @@ async def _send_model_comparison(
             document.add_session_tokens(answer)
             elapsed = time.monotonic() - run["started"] if run["started"] is not None else None
             reply.state.response_incomplete = False
+            apply_reply_citations(reply, answer)
             reply.content = _comparison_content(reply, answer=answer, status="Complete", elapsed=elapsed)
             persist_reply(reply)
 
@@ -848,6 +902,7 @@ def register_chat_intents(
         document.add_session_tokens(full_text)
         await publish_scene()
         history = document.chat_branch_history(node.id)
+        history = await _history_with_chat_knowledge(history, text, document.current_workspace_id)
 
         # R8a (token counter wiring): contextTokens is the branch history the
         # reply will be generated FROM - explicitly NOT `history` above,
@@ -940,6 +995,9 @@ def register_chat_intents(
             return None
 
         history = document.chat_branch_history(parent_id)
+        history = await _history_with_chat_knowledge(
+            history, _latest_user_query(history), document.current_workspace_id,
+        )
         # R8a (token counter wiring): unlike send_message, `history` here
         # already excludes the node being regenerated (rooted at parent_id,
         # not node_id) - there is no fresh draft text to double-count

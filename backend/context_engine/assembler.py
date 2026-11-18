@@ -58,6 +58,8 @@ class ContextCandidate:
     kind: str
     message: dict
     required: bool = False
+    # Content-free retrieval provenance, emitted only for knowledge hits.
+    metadata: dict[str, str] | None = None
 
     def __post_init__(self) -> None:
         if not self.source_id or not self.origin:
@@ -350,6 +352,7 @@ class ContextAssembler:
             "included": i in selected,
             "leavesDevice": bool(leaves_device and i in selected),
             "reason": ("current message truncated to model budget" if i in truncated else reasons.get(i, "excluded by policy")),
+            **((src.metadata or {}) if src.kind == "knowledge_hit" else {}),
         } for i, src in enumerate(sources))
         return ContextPlan(
             tuple(wire_messages[i] for i, src in enumerate(sources) if i in selected),

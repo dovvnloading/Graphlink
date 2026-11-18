@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import api_provider
 from backend.context_engine import ContextAssembler, ContextBudgetError, selected_context_window
+from backend.context_engine.citations import assemble_chat_context, inspected_reply_citations
+from backend.knowledge_retrieval import search_chat_knowledge
 from backend.domain.model import SceneError
 from graphlink_chat_agent import ChatAgent
 from graphlink_memory import message_tokens
@@ -32,12 +34,10 @@ def _branch_origins(document, node_id: str) -> list[str]:
 
 
 def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draft_text: str = "") -> dict:
-    """Explain the next dispatch from node_id, without mutating anything.
+    """Explain the next dispatch and audit the last reply without mutation.
 
-    The preview is limited to known history and the supplied draft. Incoming
-    document/image attachments not yet sent cannot be inferred here. The
-    existing chat reply path does not auto-inject pinned notes or knowledge
-    hits; this preview does not invent them or run retrieval on a read.
+    Incoming draft attachments cannot be inferred. An existing knowledge
+    database is searched read-only against this workspace, as on real Send.
     """
     node = document.nodes.get(node_id)
     if node is None or node.kind != "chat":
@@ -52,6 +52,7 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
         raise SceneError("branch history changed during inspection")
     history.append({"role": "user", "content": draft_text})
     origins.append(f"draft:after:{node_id}")
+    last_reply_citations = inspected_reply_citations(document, origins)
 
     override = dispatcher._resolve_branch_system_prompt(document, node_id)
     persona = override if override is not None else dispatcher.persona()
@@ -87,7 +88,20 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
         system_prompt, history, origins=origins, system_origin=system_origin,
     )
     try:
-        plan = assembler.assemble(candidates, context_window=window, leaves_device=not local)
+        knowledge_hits = (
+            search_chat_knowledge(draft_text[:1500], document.current_workspace_id)
+            if draft_text.strip() else []
+        )
+    except Exception:
+        # Inspection is best-effort, never an ingestion or provider call.
+        knowledge_hits = []
+    try:
+        plan, _included_knowledge = assemble_chat_context(
+            assembler, system_prompt, history,
+            context_window=window, knowledge_hits=knowledge_hits,
+            origins=origins, system_origin=system_origin,
+            leaves_device=not local,
+        )
     except ContextBudgetError as exc:
         # A preview must disclose the failure without claiming a send can
         # proceed. No provider is called and no context is silently dropped.
@@ -106,6 +120,7 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
             "leavesDevice": not local,
             "draftIncluded": bool(draft_text),
             "error": str(exc),
+            **({"lastReplyCitations": last_reply_citations} if last_reply_citations else {}),
             "sources": [
                 {
                     "sourceId": src.source_id,
@@ -129,6 +144,7 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
         "model": model,
         "leavesDevice": not local,
         "draftIncluded": bool(draft_text),
-        "notice": "Preview of the supplied draft and persisted branch only. Unsent attachments and model-generated summaries are not available until send. Knowledge search and ordinary notes are not auto-injected by this chat path.",
+        "notice": "Preview includes read-only workspace knowledge retrieval for the draft. Unsent attachments and model-generated summaries are not available until send; the corpus or selected model may change.",
+        **({"lastReplyCitations": last_reply_citations} if last_reply_citations else {}),
     })
     return result

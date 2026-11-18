@@ -37,6 +37,7 @@ from graphlink_prompts import CONTEXT_SUMMARY_SYSTEM_PROMPT
 from graphlink_token_estimator import TokenEstimator
 from graphlink_memory import clone_history, history_to_transcript, trim_history
 from backend.context_engine import ContextAssembler, selected_context_window
+from backend.context_engine.citations import CitedChatReply, assemble_chat_context
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +230,14 @@ class ChatWorker:
             # so the kept conversation is always a contiguous suffix - a
             # window with holes in the middle would present the model an
             # incoherent dialogue.
+            # Intents attach a retrieval snapshot to the in-memory last
+            # turn; clone_history strips this sideband before trimming and
+            # before any content is sent to the provider.
+            knowledge_hits = (
+                conversation_history[-1].get("_knowledge_hits", ())
+                if conversation_history and isinstance(conversation_history[-1], dict)
+                else ()
+            )
             normalized_history = clone_history(conversation_history)
             trimmed_history, _ = trim_history(
                 normalized_history,
@@ -273,12 +282,11 @@ class ChatWorker:
             # Legacy trim/summarize stays first for parity; the assembler
             # enforces the selected model's actual prompt ceiling, including
             # summaries and image costs. Fits retain identical wire messages.
-            plan = ContextAssembler(self.token_estimator).assemble(
-                ContextAssembler.chat_sources(
-                    final_system_prompt, trimmed_history,
-                    generated_indices=(0,) if summary_inserted else (),
-                ),
-                context_window=window,
+            plan, included_knowledge = assemble_chat_context(
+                ContextAssembler(self.token_estimator),
+                final_system_prompt, trimmed_history,
+                generated_indices=(0,) if summary_inserted else (),
+                context_window=window, knowledge_hits=knowledge_hits,
             )
             messages = list(plan.messages)
             if on_chunk is not None:
@@ -314,7 +322,10 @@ class ChatWorker:
                     except Exception:
                         pass  # accounting must never fail the reply
             ai_message = response['message']['content']
-            return ai_message
+            # The answer stays an ordinary string for all callers. Only
+            # knowledge-backed replies carry the server-approved source
+            # snapshot, never model-supplied titles, URLs or citations.
+            return CitedChatReply(ai_message, included_knowledge) if included_knowledge else ai_message
         except Exception:
             logger.exception("ChatWorker API call failed")
             raise
