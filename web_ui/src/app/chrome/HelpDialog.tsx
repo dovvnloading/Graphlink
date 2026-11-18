@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
-import { HELP_SECTIONS, type HelpItem, type HelpSection } from "./help-data/sections";
+import { useEffect, useMemo, useState } from "react";
+import helpDataUrl from "./help-data/sections.json?url";
+import type { HelpItem, HelpSection } from "./help-data/sections";
 import { Dialog } from "../overlays/overlays";
 
 /**
@@ -41,11 +42,11 @@ interface Match {
 /** Substring match over everything a person might type: the item, its
  *  subsection, its section, and the chords themselves - so "ctrl+f" finds
  *  canvas search by its key and not only by its name. */
-function matches(query: string): Match[] {
+function matches(query: string, sections: HelpSection[]): Match[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
   const found: Match[] = [];
-  for (const section of HELP_SECTIONS) {
+  for (const section of sections) {
     for (const subsection of section.subsections) {
       for (const item of subsection.items) {
         const haystack = [
@@ -91,16 +92,36 @@ function Item({ item, context }: { item: HelpItem; context?: string }) {
 }
 
 export function HelpDialog() {
-  const [activeSectionName, setActiveSectionName] = useState(HELP_SECTIONS[0].name);
+  const [sections, setSections] = useState<HelpSection[] | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [activeSectionName, setActiveSectionName] = useState("");
   const [query, setQuery] = useState("");
-  const results = useMemo(() => matches(query), [query]);
-  const searching = query.trim().length > 0;
 
-  const activeSection =
-    HELP_SECTIONS.find((section) => section.name === activeSectionName) ?? HELP_SECTIONS[0];
+  useEffect(() => {
+    let disposed = false;
+    // This effect only mounts after LazySurface opens Help. Fetching an
+    // asset URL (rather than importing JSON) keeps reference prose out of
+    // every JS chunk, including the lazily loaded HelpDialog chunk.
+    void fetch(helpDataUrl).then(async (response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const content: unknown = await response.json();
+      if (!Array.isArray(content) || content.length === 0) throw new Error("Empty help content");
+      return content as HelpSection[];
+    }).then(
+      (content) => { if (!disposed) setSections(content); },
+      () => { if (!disposed) setLoadError("Help content could not load. Close and reopen Help to try again."); },
+    );
+    return () => { disposed = true; };
+  }, []);
+
+  const availableSections = sections ?? [];
+  const results = useMemo(() => matches(query, availableSections), [query, availableSections]);
+  const searching = query.trim().length > 0;
+  const activeSection = availableSections.find((section) => section.name === activeSectionName) ?? availableSections[0];
 
   return (
     <Dialog name="help" title="Help" className="help-dialog">
+      {loadError ? <p role="alert">{loadError}</p> : !sections ? <p role="status">Loading help…</p> : (
       <div className="help-shell">
         <nav className="help-rail" aria-label="Help sections">
           <input
@@ -122,16 +143,16 @@ export function HelpDialog() {
             }}
           />
           <div className="help-rail-buttons">
-            {HELP_SECTIONS.map((section) => (
+            {availableSections.map((section) => (
               <button
                 key={section.name}
                 type="button"
                 className={
                   "help-rail-button" +
-                  (!searching && section.name === activeSectionName ? " active" : "")
+                  (!searching && section.name === activeSection.name ? " active" : "")
                 }
                 aria-current={
-                  !searching && section.name === activeSectionName ? "page" : undefined
+                  !searching && section.name === activeSection.name ? "page" : undefined
                 }
                 onClick={() => {
                   setQuery("");
@@ -180,6 +201,7 @@ export function HelpDialog() {
           </div>
         )}
       </div>
+      )}
     </Dialog>
   );
 }
