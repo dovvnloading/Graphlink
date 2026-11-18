@@ -439,6 +439,7 @@ def _render_heatmap(figure, ax, chart_data: dict[str, Any],
     matrix = chart_data["matrix"]
     smallest = min(min(row) for row in matrix)
     largest = max(max(row) for row in matrix)
+    norm: Normalize
     if smallest < 0 < largest:
         cmap = LinearSegmentedColormap.from_list(
             "graphlink-diverging", ["#2166AC", "#F7F7F7", "#B2182B"]
