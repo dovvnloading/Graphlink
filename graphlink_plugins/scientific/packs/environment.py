@@ -436,7 +436,7 @@ def _mk_exact_tied_two_sided_p(measurements: list[float], observed_s: int) -> fl
     multiplicities = tuple(frequencies[value] for value in sorted(frequencies))
     states = {(0,) * len(multiplicities): {0: 1}}
     for _ in measurements:
-        next_states = {}
+        next_states: dict[tuple[int, ...], dict[int, int]] = {}
         for used, distribution in states.items():
             for index, limit in enumerate(multiplicities):
                 if used[index] == limit:
