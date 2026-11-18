@@ -32,7 +32,7 @@ The parser in `graphlink_plugins/scientific/packs/uncertainty.py` is a small rec
 - Unary functions **only** `sqrt(expr)`, `exp(expr)`, `ln(expr)`, `log10(expr)`, `sin(expr)` and `cos(expr)`. Trigonometric arguments are in **radians**. Function names are reserved and cannot name input variables.
 - Powers are right-associative (`2^3^2` is 512). Exponentiation binds more tightly than unary negation (`-2^2` is -4); `2^-2` is 0.25. Multiplication must be written explicitly (`2*x`, not `2x`).
 
-The parser rejects extra tokens, identifiers not declared as measurements, malformed function calls, strings, indexing, attributes, comprehensions, assignments, comments, `**`, and unsupported operators. Nested parentheses/functions are limited to 48 levels. Each evaluation (including all derivative perturbations) must produce a finite **real** result: division by zero, invalid logarithm/square-root domains, complex powers and overflow fail validation. A failed calculation cannot replace the last successful workbench result.
+The parser rejects extra tokens, identifiers not declared as measurements, malformed function calls, strings, indexing, attributes, comprehensions, assignments, comments, `**`, and unsupported operators. Nested parentheses/functions are limited to 48 levels. Each model evaluation and each analytic sensitivity must produce a finite **real** result: division by zero, invalid logarithm/square-root domains, complex powers, undefined derivatives and overflow fail validation. A failed calculation cannot replace the last successful workbench result.
 
 ## Propagation and analytic sensitivity coefficients
 
