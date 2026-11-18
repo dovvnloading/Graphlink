@@ -160,7 +160,10 @@ def test_scatter_fixture_validates_identically_to_scripted_eval_expected():
     folder = Path(__file__).parents[1] / "evals" / "fixtures" / "chart"
     fixture = json.loads((folder / "scatter_calibration_error_bars.json").read_text(encoding="utf-8"))
     actual = canonicalize_chart_data(json.loads(fixture["scripted_response"]), "scatter")
-    assert actual == fixture["expected"]
+    # The PR 586 fixture records the old typeless scene payload. Its values,
+    # series, uncertainties and axes must stay byte-shape compatible.
+    assert "type" not in fixture["expected"]
+    assert actual == {**fixture["expected"], "type": "scatter"}
 
 
 def test_matplotlib_png_and_svg_both_render_scatter_errors_and_log_scales(monkeypatch):
@@ -196,8 +199,6 @@ def test_scientific_line_exports_connected_series_without_affecting_legacy():
     svg = render_chart_svg("line", payload, 640, 480)
     assert b"<svg " in svg
     assert b"legend" in svg
-
-
 
 def test_pr586_saved_scatter_without_nested_type_recovers_the_same_scientific_data():
     canonical = canonicalize_chart_data(_scatter(), "scatter")
