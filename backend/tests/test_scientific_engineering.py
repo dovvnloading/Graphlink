@@ -143,7 +143,6 @@ def test_pipe_moody_reference_to_stated_six_digits_and_head_loss():
 
 def test_pipe_laminar_stagnant_transition_and_roughness_rejection():
     # Hagen–Poiseuille/Darcy f=64/Re for fully developed laminar flow.
-    case = OP["pipe_flow"].example
     q = math.pi*0.1**2/4 * 0.01
     lam = run("pipe_flow", volume_flow_m3_s=q)["values"]
     assert lam["reynolds_number_1"] == pytest.approx(1000)
