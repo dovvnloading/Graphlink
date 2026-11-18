@@ -16,12 +16,11 @@ from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
 from typing import Literal
 
-from .core import Operation, calculate_result
+from .core import Operation, calculate_result, readable_result
 
 DEFAULT_TIMEOUT_SECONDS = 15.0
 MAX_TIMEOUT_SECONDS = 600.0
 TIMEOUT_ENV = "GRAPHLINK_SCIENTIFIC_TIMEOUT_SECONDS"
-_POLL_SECONDS = 0.025
 
 _WorkerReply = tuple[Literal["ok"], dict] | tuple[Literal["invalid_input", "worker_error"], str]
 
@@ -97,10 +96,12 @@ def _stop_worker(process: BaseProcess) -> None:
 async def execute_in_process(pack_id: str, operation: Operation, inputs: dict, sources: dict | None,
                              *, timeout_s: float, cancel_event: asyncio.Event,
                              input_units: dict | None = None) -> dict:
-    """Run without executor threads; terminate/reap the child on every exit.
+    """Run the calculation in a spawned, killable process with a hard deadline.
 
-    Spawn works on Windows (forking the multithreaded server would be unsafe).
-    IPC uses a one-way Pipe rather than multiprocessing.Queue's feeder thread.
+    Pipe.poll() only means *some* bytes are available. recv() may still block
+    waiting for a large or incomplete frame. Receive on a thread while the
+    event loop independently watches cancellation and the wall-clock deadline.
+    The child is terminated and reaped before any run can finish.
     """
     started = time.monotonic()
 
@@ -109,51 +110,83 @@ async def execute_in_process(pack_id: str, operation: Operation, inputs: dict, s
 
     if cancel_event.is_set():
         raise ExecutionFailure("cancelled", "Scientific calculation cancelled (0 ms elapsed).", elapsed_ms())
+
     context = multiprocessing.get_context("spawn")
     reader, writer = context.Pipe(duplex=False)
-    try:
-        pickle.dumps(operation)
-        transferable_operation: Operation | None = operation
-    except (pickle.PickleError, AttributeError, TypeError):
-        transferable_operation = None  # Resolve built-in operation by ID in child.
-    worker = context.Process(
-        target=_calculate_in_worker,
-        args=(writer, pack_id, operation.id, transferable_operation, inputs, sources, input_units),
-        daemon=True, name=f"graphlink-science-{pack_id}-{operation.id}",
-    )
+    worker: BaseProcess | None = None
+    receive_task: asyncio.Task | None = None
+    cancel_task: asyncio.Task | None = None
     try:
         try:
+            pickle.dumps(operation)
+            transferable_operation: Operation | None = operation
+        except (pickle.PickleError, AttributeError, TypeError):
+            # Registered built-in lambdas are resolved by ID in the worker.
+            transferable_operation = None
+        try:
+            worker = context.Process(
+                target=_calculate_in_worker,
+                args=(writer, pack_id, operation.id, transferable_operation, inputs, sources, input_units),
+                daemon=True, name=f"graphlink-science-{pack_id}-{operation.id}",
+            )
             worker.start()
-        except (OSError, RuntimeError, TypeError) as exc:
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
             raise ExecutionFailure("worker_error", "Unable to start the isolated scientific worker.", elapsed_ms()) from exc
         finally:
             writer.close()
-        while True:
-            if cancel_event.is_set():
-                raise ExecutionFailure("cancelled", f"Scientific calculation cancelled after {elapsed_ms()} ms.", elapsed_ms())
-            remaining = timeout_s - (time.monotonic() - started)
-            if remaining <= 0:
-                raise ExecutionFailure("timeout", f"Scientific calculation exceeded its {timeout_s:g} s budget ({elapsed_ms()} ms elapsed).", elapsed_ms())
-            if reader.poll():
-                try:
-                    status, payload = reader.recv()
-                except (EOFError, OSError):
-                    break
-                if cancel_event.is_set():
-                    raise ExecutionFailure("cancelled", f"Scientific calculation cancelled after {elapsed_ms()} ms.", elapsed_ms())
-                if status == "ok":
-                    return payload
-                raise ExecutionFailure(status, str(payload), elapsed_ms())
-            if not worker.is_alive():
-                break
-            # Cancellation is immediately wakeable; the short poll bound
-            # accommodates Windows where asyncio.add_reader is unavailable.
-            try:
-                await asyncio.wait_for(cancel_event.wait(), timeout=min(_POLL_SECONDS, remaining))
-            except asyncio.TimeoutError:
-                pass
-        raise ExecutionFailure("worker_error", "The scientific worker exited without a complete result.", elapsed_ms())
+
+        # A large frame may be only partially written even when poll() says
+        # readable. Do not call recv() on the session's event-loop thread.
+        receive_task = asyncio.create_task(asyncio.to_thread(reader.recv))
+        cancel_task = asyncio.create_task(cancel_event.wait())
+        remaining = timeout_s - (time.monotonic() - started)
+        if remaining <= 0:
+            raise ExecutionFailure("timeout",
+                                   f"Scientific calculation exceeded its {timeout_s:g} s budget ({elapsed_ms()} ms elapsed).",
+                                   elapsed_ms())
+        done, _ = await asyncio.wait(
+            {receive_task, cancel_task}, timeout=remaining, return_when=asyncio.FIRST_COMPLETED,
+        )
+        if cancel_event.is_set():
+            raise ExecutionFailure("cancelled", f"Scientific calculation cancelled after {elapsed_ms()} ms.", elapsed_ms())
+        if receive_task not in done or time.monotonic() - started >= timeout_s:
+            raise ExecutionFailure("timeout",
+                                   f"Scientific calculation exceeded its {timeout_s:g} s budget ({elapsed_ms()} ms elapsed).",
+                                   elapsed_ms())
+        try:
+            answer = receive_task.result()
+        except (EOFError, OSError, ValueError, TypeError, pickle.UnpicklingError):
+            raise ExecutionFailure("worker_error", "The scientific worker exited without a complete result.",
+                                   elapsed_ms()) from None
+        if not isinstance(answer, tuple) or len(answer) != 2:
+            raise ExecutionFailure("worker_error", "The scientific worker returned a malformed reply.", elapsed_ms())
+        status, payload = answer
+        if status == "ok":
+            if (not isinstance(payload, dict) or payload.get("operationId") != operation.id
+                    or payload.get("inputs") != inputs
+                    or not readable_result({"version": 1, "latest": payload}, pack_id)
+                    or payload["provenance"]["sources"] != (sources or {})
+                    or (input_units is not None and payload["provenance"].get("inputUnits") != input_units)):
+                raise ExecutionFailure("worker_error", "The scientific worker returned an incomplete or invalid result.",
+                                       elapsed_ms())
+            return payload
+        if status in ("invalid_input", "worker_error") and isinstance(payload, str):
+            raise ExecutionFailure(status, payload, elapsed_ms())
+        raise ExecutionFailure("worker_error", "The scientific worker returned a malformed reply.", elapsed_ms())
     finally:
-        reader.close()
-        writer.close()
-        _stop_worker(worker)
+        if cancel_task is not None:
+            cancel_task.cancel()
+        try:
+            if worker is not None:
+                _stop_worker(worker)
+        finally:
+            # Kill/reap the sender before closing the receiver; its recv thread
+            # then gets either the complete frame or EOF on Windows and POSIX.
+            writer.close()
+            # Do not cancel receive_task: cancelling asyncio.to_thread only
+            # detaches its Python thread. With the worker reaped and all
+            # senders closed, recv must finish (message or EOF) before return.
+            pending = [task for task in (receive_task, cancel_task) if task is not None]
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
+            reader.close()
