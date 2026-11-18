@@ -25,6 +25,13 @@ function makeStore(
   const removeAttachment = vi.fn();
   const cancelChatRequest = vi.fn();
   const dismissNotification = vi.fn();
+  const loadComparisonModels = vi.fn().mockResolvedValue(
+    ["alpha", "beta", "gamma", "delta", "epsilon"].map((modelId) => ({
+      provider: "Ollama", modelId, label: `Ollama · ${modelId}`,
+    })),
+  );
+  const sendModelComparison = vi.fn();
+
   const store = {
     subscribe: (listener: () => void) => {
       listeners.add(listener);
@@ -41,10 +48,12 @@ function makeStore(
     removeAttachment,
     cancelChatRequest,
     dismissNotification,
+    loadComparisonModels,
+    sendModelComparison,
   };
   return {
     store, updateDraft, setReasoningLevel, selectModel, attachFile, removeAttachment,
-    cancelChatRequest, dismissNotification,
+    cancelChatRequest, dismissNotification, loadComparisonModels, sendModelComparison,
   };
 }
 
@@ -74,6 +83,74 @@ function makeSceneStore(
 }
 
 describe("Composer", () => {
+
+  it("comparison mode requires two models and sends provider-qualified siblings instead of a normal send", async () => {
+    const user = userEvent.setup();
+    const { store, sendModelComparison, updateDraft } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "compare this" },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore, sendMessage } = makeSceneStore();
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Compare Off/ }));
+    expect(await screen.findByRole("checkbox", { name: "Ollama · alpha" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: "Ollama · alpha" }));
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: "Ollama · beta" }));
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendModelComparison).toHaveBeenCalledWith(
+      "compare this",
+      [{ provider: "Ollama", modelId: "alpha" }, { provider: "Ollama", modelId: "beta" }],
+      null,
+      expect.any(Function),
+    );
+    expect(updateDraft).not.toHaveBeenCalled();
+    const onSettled = sendModelComparison.mock.calls[0][3];
+    onSettled(false);
+    expect(updateDraft).not.toHaveBeenCalled();
+    onSettled(true);
+    expect(updateDraft).toHaveBeenCalledWith("");
+  });
+
+  it("limits comparison selection to four and can switch back to ordinary send", async () => {
+    const user = userEvent.setup();
+    const { store } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "one model" },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore, sendMessage } = makeSceneStore();
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: /Compare Off/ }));
+    for (const name of ["alpha", "beta", "gamma", "delta"]) {
+      await user.click(await screen.findByRole("checkbox", { name: `Ollama · ${name}` }));
+    }
+    expect(screen.getByRole("checkbox", { name: "Ollama · epsilon" })).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: "Ollama · delta" }));
+    expect(screen.getByRole("checkbox", { name: "Ollama · epsilon" })).not.toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Use single-model send" }));
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(sendMessage).toHaveBeenCalledWith("one model");
+  });
+
   it("renders the draft text and forwards edits", async () => {
     const user = userEvent.setup();
     const { store, updateDraft } = makeStore({ composer: { draft: { ...initialComposerState.draft, text: "hi" } } });
