@@ -111,6 +111,8 @@ describe("log10 scientific scales", () => {
     expect(ticks.every((v) => v > 0 && Number.isFinite(v))).toBe(true);
     expect(formatScientificTick(1e-200)).toBe("1e-200");
     expect(formatScientificTick(0)).toBe("0");
+    expect(formatScientificTick(1.001)).toBe("1.001");
+    expect(formatScientificTick(1.0000000000000002)).toBe("1.0000000000000002");
     expect(scientificLinearTicks(Number.MIN_VALUE, 1e-320).length).toBeGreaterThan(0);
   });
 
