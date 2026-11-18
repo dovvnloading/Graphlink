@@ -1,7 +1,7 @@
 [plugin]
 id = "science_astronomy"
 name = "Astronomy"
-description = "Estimate stellar distances and blackbody peak wavelengths."
+description = "Propagate Keplerian orbits; transform sky coordinates; compute observing, cosmology, AB photometry and transit quantities."
 version = "1.1.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
