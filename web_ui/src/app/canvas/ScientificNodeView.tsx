@@ -84,7 +84,7 @@ function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
       </table>
       {table.rows.length > PREVIEW_ROWS && <small>Showing {PREVIEW_ROWS} of {table.rows.length} rows. Export CSV for all rows.</small>}
     </div>}
-    {provenance.inputUnits && <details><summary>Units used</summary>
+    {provenance.inputUnits != null && <details><summary>Units used</summary>
       <pre>{JSON.stringify(provenance.inputUnits, null, 2)}</pre>
     </details>}
     <details><summary>Inputs and provenance</summary>
@@ -147,7 +147,7 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
       {field.kind === "vector" || field.kind === "matrix"
         ? ' Use JSON arrays; quote values with unit suffixes, e.g. ["25 mm", "2 cm"].'
         : " You may append a compatible unit, e.g. 25 mm."}
-    </small>
+    </small>}
     {options.length > 0 && <select aria-label={`Import ${field.label} from a connected result`} value=""
       onChange={(e) => { if (e.target.value) onImport(options[Number(e.target.value)]); }}>
       <option value="">Use connected result…</option>

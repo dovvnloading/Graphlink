@@ -20,7 +20,7 @@ _TEMPERATURE = (0, 0, 0, 0, 1, 0, 0)
 
 @dataclass(frozen=True)
 class Unit:
-    dimensions: tuple[int, ...]
+    dimensions: tuple[int | Fraction, ...]
     scale: Fraction = Fraction(1)
     offset: Fraction = Fraction(0)
     # A temperature point (absolute) is not a temperature interval (difference).
@@ -256,7 +256,7 @@ def parse_unit(symbol: str) -> Unit:
     return parsed
 
 
-def dimension_string(dimensions: tuple[int, ...]) -> str:
+def dimension_string(dimensions: tuple[int | Fraction, ...]) -> str:
     """Format an SI base-dimension vector for diagnostics."""
     items = [f"{symbol}^{exponent}" if exponent != 1 else symbol
              for symbol, exponent in zip(_DIMENSION_SYMBOLS, dimensions) if exponent]
@@ -317,7 +317,7 @@ _DIMENSION_NAMES = {
 }
 
 
-def dimension_name(dimensions: tuple[int, ...]) -> str:
+def dimension_name(dimensions: tuple[int | Fraction, ...]) -> str:
     """A human-readable expected dimension for workbench input diagnostics."""
     return _DIMENSION_NAMES.get(dimensions, f"SI dimensions {dimension_string(dimensions)}")
 

@@ -85,6 +85,7 @@ class Field:
 
 def _effective_unit(field: Field, raw: dict) -> str:
     name = field.unit
+    unit: object
     if name in ("1 / selected time unit", "1 / (predator × time unit)", "1 / (prey × time unit)"):
         time = raw.get("time_unit")
         unit = f"1/({time})" if isinstance(time, str) else ""
@@ -180,7 +181,10 @@ def _field_with_units(field: Field, value, unit: str):
             return value, unit
         if isinstance(value, str):
             number, used = _measurement(field, value, unit)
-            original = Decimal(_NUMBER_UNIT.fullmatch(value).group(1))
+            match = _NUMBER_UNIT.fullmatch(value)
+            if match is None:
+                raise ValueError(f"{field.label} needs a decimal and optional unit.")
+            original = Decimal(match.group(1))
             source, target = parse_unit(used), parse_unit(unit)
             exact = ((Fraction(original) * source.scale + source.offset - target.offset)
                      / target.scale)
@@ -207,9 +211,9 @@ def _field_with_units(field: Field, value, unit: str):
         if field.column_units and len(field.column_units) != width:
             raise ValueError(f"{field.label} requires {len(field.column_units)} columns with declared units.")
         target_units = field.column_units or (unit,) * width
-        converted = [[_measurement(field, v, target_units[i]) for i, v in enumerate(row)] for row in value]
-        return ([[n for n, _ in row] for row in converted],
-                [[u for _, u in row] for row in converted])
+        converted_rows = [[_measurement(field, v, target_units[i]) for i, v in enumerate(row)] for row in value]
+        return ([[n for n, _ in row] for row in converted_rows],
+                [[u for _, u in row] for row in converted_rows])
     raise ValueError(f"Unsupported field kind {field.kind}.")
 
 
