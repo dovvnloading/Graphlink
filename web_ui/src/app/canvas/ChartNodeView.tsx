@@ -12,7 +12,8 @@ import { NodeHeading } from "./NodeHeading";
 import TableOutput, { type TableOutputBinding } from "./TableOutput";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
-import type { PublicationExportOptions, PublicationFormat, PublicationSize } from "./chartSpec";
+import type { ChartAnalysis, PublicationExportOptions, PublicationFormat, PublicationSize } from "./chartSpec";
+import { saveChartAnalysis } from "./charts/analysisIntent";
 import { downloadPublicationChartExport } from "./charts/publicationExport";
 
 // ADR-013 stage 13.2: the interactive renderer lives in its own lazily
@@ -159,11 +160,20 @@ export const ChartNodeView = memo(function ChartNodeView({
 }: NodeProps<ChartFlowNode>) {
   const overview = useLodVisibility();
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const analysisSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const [publicationOpen, setPublicationOpen] = useState(false);
   const [publicationFormat, setPublicationFormat] = useState<PublicationFormat>("svg");
   const [publicationSize, setPublicationSize] = useState<PublicationSize>("single");
   const [publicationBusy, setPublicationBusy] = useState(false);
   const [publicationError, setPublicationError] = useState("");
+
+  function persistChartAnalysis(analysis: ChartAnalysis): Promise<void> {
+    // Retain order if a user adds two annotations before the previous
+    // request's scene publication returns; each edit is one undo step.
+    const next = analysisSaveQueue.current.then(() => saveChartAnalysis(id, analysis));
+    analysisSaveQueue.current = next.catch(() => {});
+    return next;
+  }
 
   async function exportPublication(form: HTMLFormElement) {
     if (publicationBusy) return;
@@ -237,7 +247,7 @@ export const ChartNodeView = memo(function ChartNodeView({
       <Suspense fallback={<div className="chart-node-placeholder">Loading chart…</div>}>
         {overview
           ? <LazyChartOverview chartType={data.chartType} chartData={data.chartData} />
-          : <LazyChartRenderer chartType={data.chartType} chartData={data.chartData} />}
+          : <LazyChartRenderer chartType={data.chartType} chartData={data.chartData} onAnalysisChange={persistChartAnalysis} />}
       </Suspense>
       {!overview && <div className="chart-node-toolbar nodrag" style={{ flexWrap: "wrap" }}>
         <button
