@@ -227,3 +227,70 @@ def test_solar_position_cardinal_convention_and_polar_undefined_azimuth():
     assert 0 <= equinox["azimuth_deg"] < 360
     pole = run("solar_position", latitude_deg=90)["values"]
     assert pole["azimuth_deg"] == 0
+
+
+def test_karney_antimeridian_inverse_and_undefined_polar_bearings():
+    # Independent WGS84 GeographicLib/Karney inverse oracle; shortest dateline arc.
+    crossing = run("geodesic_inverse", latitude_a_deg=10, longitude_a_deg=179.999,
+                   latitude_b_deg=10, longitude_b_deg=-179.999)["values"]
+    assert crossing["distance_m"] == pytest.approx(219.278728137, abs=.001)
+    assert crossing["initial_bearing_deg"] == pytest.approx(89.9998263518, abs=.00001)
+    antipodal_poles = run("geodesic_inverse", latitude_a_deg=-90, longitude_a_deg=0,
+                          latitude_b_deg=90, longitude_b_deg=30)["values"]
+    assert antipodal_poles["distance_m"] == pytest.approx(20003931.4586, abs=.005)
+    assert antipodal_poles["initial_bearing_deg"] == 0
+    assert antipodal_poles["reverse_bearing_deg"] == 0
+    assert "undefined" in antipodal_poles["solution_method"]
+
+
+def test_utm_nga_zone_boundaries_and_antimeridian():
+    cases = [
+        (0, -180, 1), (0, 180, 60), (60, 2.999999, 31),
+        (60, 3, 32), (60, 11.999999, 32), (60, 12, 33),
+        (75, 8.999999, 31), (75, 9, 33), (75, 20.999999, 33),
+        (75, 21, 35), (75, 32.999999, 35), (75, 33, 37),
+    ]
+    for latitude, longitude, zone in cases:
+        assert run("utm_forward", latitude_deg=latitude,
+                   longitude_deg=longitude)["values"]["zone_1"] == zone
+    with pytest.raises(ValueError, match="UTM covers"):
+        run("utm_forward", latitude_deg=-80.0001)
+
+
+def test_large_finite_radiometric_age_does_not_overflow_intermediate():
+    age = run("radiometric_age", parent_ratio_1=1, radiogenic_daughter_ratio_1=1e-300,
+              half_life_ma=1.5e308, half_life_standard_uncertainty_ma=1.5e308)["values"]
+    expected = 1.5e308 * (math.log1p(1e-300) / math.log(2))
+    assert age["age_ma"] == pytest.approx(expected, rel=1e-12)
+    assert age["age_standard_uncertainty_ma"] == pytest.approx(expected, rel=1e-12)
+
+
+def test_large_finite_theis_geometry_keeps_representable_well_argument():
+    values = run("theis_drawdown", pumping_rate_m3_s=.02,
+                 transmissivity_m2_s=1e200, storativity_1=1e-10,
+                 radial_distance_m=1e200, time_since_pumping_s=1e200)["values"]
+    assert values["theis_u_1"] == pytest.approx(2.5e-11, rel=1e-10)
+    assert values["well_function_e1_1"] > 0
+    assert values["drawdown_m"] > 0
+
+
+def test_seismic_moment_uses_representable_binary64_limits():
+    # Previous artificial 10^300 cutoff rejected finite, well-scaled values.
+    values = run("seismic_moment", moment_magnitude_mw=197)["values"]
+    assert values["seismic_moment_nm"] == pytest.approx(10**304.6, rel=1e-12)
+    assert run("moment_magnitude", seismic_moment_nm=values["seismic_moment_nm"]
+               )["values"]["moment_magnitude_mw"] == pytest.approx(197, abs=1e-12)
+    # A positive scalar moment must not silently yield a zero energy estimate.
+    with pytest.raises(ValueError, match="radiated energy"):
+        run("moment_magnitude", seismic_moment_nm=1e-323)
+
+
+def test_gutenberg_richter_decimal_bin_edges_and_completeness_guard():
+    # 0.3/0.1 is 2.999999... in binary64; the last bin must survive.
+    result = run("gutenberg_richter", magnitudes_mw=[0, .1, .2, .3],
+                 completeness_magnitude_mw=0, bin_width_mw=.1,
+                 target_magnitude_mw=.3)
+    assert [row[0] for row in result["table"]["rows"]] == [0, .1, .2, .3]
+    assert [row[1] for row in result["table"]["rows"]] == [4, 3, 2, 1]
+    with pytest.raises(ValueError, match="Target magnitude.*completeness"):
+        run("gutenberg_richter", target_magnitude_mw=1.9)

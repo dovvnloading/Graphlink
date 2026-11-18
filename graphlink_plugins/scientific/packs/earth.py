@@ -229,6 +229,15 @@ def geodesic_inverse(data):
         if not converged:
             distance, initial, reverse = _inverse_shooting(phi1, math.radians(lon1), phi2, math.radians(lon2))
             method = "Vincenty direct shooting (WGS84 antipodal fallback)"
+    # At a geographic pole there is no unique local direction of north.
+    # Preserve the distance and the other endpoint's bearing, but do not
+    # report an arbitrary meridian-dependent bearing at the pole.
+    if abs(lat1) == 90 or abs(lat2) == 90:
+        method += "; pole bearing(s) undefined (0° convention)"
+        if abs(lat1) == 90:
+            initial = 0.0
+        if abs(lat2) == 90:
+            reverse = 0.0
     return {"summary": f"WGS84 ellipsoidal geodesic {distance:.3f} m; {method}.",
             "values": {"distance_m": distance, "initial_bearing_deg": math.degrees(initial) % 360,
                        "reverse_bearing_deg": math.degrees(reverse) % 360,
@@ -322,8 +331,11 @@ def radiometric_age(data):
     uncertainty = data["half_life_standard_uncertainty_ma"]
     if parent <= 0 or daughter < 0 or half <= 0 or uncertainty < 0:
         raise ValueError("Require positive parent ratio and half-life, nonnegative radiogenic daughter and half-life uncertainty.")
-    age = (half / math.log(2)) * math.log1p(daughter / parent)
-    sigma = (uncertainty / half) * age
+    # Factor first to avoid overflowing half/ln(2) or uncertainty/half
+    # when the final age and uncertainty are both representable.
+    age_per_half_life = math.log1p(daughter / parent) / math.log(2)
+    age = half * age_per_half_life
+    sigma = uncertainty * age_per_half_life
     return {"summary": "Closed-system decay age from radiogenic daughter/remaining parent; half-life uncertainty only (1σ).",
             "values": {"age_ma": age, "age_standard_uncertainty_ma": sigma,
                        "daughter_parent_ratio_1": daughter / parent}}
@@ -379,7 +391,13 @@ def theis_drawdown(data):
     r, t = data["radial_distance_m"], data["time_since_pumping_s"]
     if q < 0 or trans <= 0 or not 0 < storage <= 1 or r <= 0 or t <= 0:
         raise ValueError("Require pumping rate ≥0, positive transmissivity/distance/time and storativity in (0,1].")
-    u = ((r / 2)**2 / (trans * t)) * storage
+    # r², T*t and their quotient can overflow/underflow individually even
+    # when the dimensionless Theis argument is representable.
+    log_u = 2 * (math.log(r) - math.log(2)) + math.log(storage) - math.log(trans) - math.log(t)
+    if not (math.log(float.fromhex("0x0.0000000000001p-1022")) <= log_u
+            <= math.log(float.fromhex("0x1.fffffffffffffp+1023"))):
+        raise ValueError("Theis dimensionless well argument is outside the supported numerical range.")
+    u = math.exp(log_u)
     w = _expint_e1(u)
     s = (q / (4 * math.pi * trans)) * w
     return {"summary": "Theis confined-aquifer drawdown for a fully penetrating constant-rate well (no boundaries).",
@@ -392,6 +410,8 @@ def moment_magnitude(data):
         raise ValueError("Seismic moment must be positive in N·m.")
     mw = (2 / 3) * (math.log10(moment) - 9.1)
     energy = 10 ** (1.5 * mw + 4.8)
+    if energy == 0:
+        raise ValueError("Seismic moment implies radiated energy below the supported numerical range.")
     return {"summary": "Moment magnitude Mw from M0 (N·m); radiated energy is an empirical estimate, not M0.",
             "values": {"moment_magnitude_mw": mw, "estimated_radiated_energy_j": energy}}
 
@@ -400,7 +420,11 @@ def seismic_moment(data):
     mw = data["moment_magnitude_mw"]
     moment_log = 1.5 * mw + 9.1
     energy_log = 1.5 * mw + 4.8
-    if not -300 < moment_log < 300 or not -300 < energy_log < 300:
+    # Both quantities must be positive, finite IEEE-754 binary64 values.
+    # A fixed 10^300 cutoff wrongly rejects representable moments up to ~10^308.
+    min_log = math.log10(float.fromhex("0x0.0000000000001p-1022"))
+    max_log = math.log10(float.fromhex("0x1.fffffffffffffp+1023"))
+    if not all(min_log <= exponent <= max_log for exponent in (moment_log, energy_log)):
         raise ValueError("Magnitude implies seismic moment or energy outside the supported numerical range.")
     return {"summary": "Seismic moment derived from Mw; energy uses the approximate Gutenberg–Richter energy relation.",
             "values": {"seismic_moment_nm": 10 ** moment_log,
@@ -412,6 +436,8 @@ def gutenberg_richter(data):
     mc, delta, target = data["completeness_magnitude_mw"], data["bin_width_mw"], data["target_magnitude_mw"]
     if delta <= 0 or delta > 2:
         raise ValueError("Magnitude bin width must be positive and no greater than 2 Mw.")
+    if target < mc:
+        raise ValueError("Target magnitude must be at or above the catalogue completeness magnitude Mc.")
     complete = [m for m in mags if m >= mc]
     if len(complete) < 2:
         raise ValueError("At least two events above the magnitude of completeness are required.")
@@ -423,10 +449,13 @@ def gutenberg_richter(data):
     if not math.isfinite(count_est):
         raise ValueError("Target magnitude causes numerical overflow in the fitted frequency.")
     observed = sum(m >= target for m in complete)
-    max_steps = min(100, int(max(0, (max(complete) - mc) / delta)) + 1)
+    # Decimal reported bin edges must not shift past an observed magnitude
+    # (or lose the final bin) through binary floating-point accumulation.
+    mc_bin, delta_bin = Fraction(str(mc)), Fraction(str(delta))
+    max_steps = min(100, int((Fraction(str(max(complete))) - mc_bin) / delta_bin) + 1)
     rows = []
     for index in range(max_steps):
-        threshold = mc + index * delta
+        threshold = float(mc_bin + index * delta_bin)
         log_count = math.log10(len(complete)) - b * (threshold - mc)
         rows.append([threshold, sum(m >= threshold for m in complete), 10 ** log_count])
     return {"summary": f"Gutenberg–Richter MLE b={b:.4g}/Mw from {len(complete)} complete events; Aki bin correction.",
