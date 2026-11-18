@@ -39,6 +39,10 @@ import { OverlayProvider, useOverlays } from "./overlays/overlays";
 // its own chunk, fetched on demand; LazySurface below (not just Suspense)
 // is what makes "on demand" mean "the user actually opened it" rather than
 // "React attempted to render it," see that component's own comment.
+// The read-only inspector is a separate chunk, keeping the 512 KB shell budget.
+const ContextInspectorLauncher = lazy(() =>
+  import("./context/ContextInspectorLauncher").then((m) => ({ default: m.ContextInspectorLauncher })),
+);
 const ChatLibraryDialog = lazy(() =>
   import("./chrome/ChatLibraryDialog").then((m) => ({ default: m.ChatLibraryDialog })),
 );
@@ -506,6 +510,9 @@ function App() {
                     </div>
                   </div>
                   <footer className="app-composer-layer" aria-label="Message composer">
+                    <Suspense fallback={null}>
+                      <ContextInspectorLauncher sceneStore={sceneStore} composerStore={composerStore} transport={transport} />
+                    </Suspense>
                     <Composer
                       store={composerStore}
                       sceneStore={sceneStore}
