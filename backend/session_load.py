@@ -1431,6 +1431,27 @@ def _restore_notes(document: SceneDocument, notes_data: list) -> dict[int, str]:
     return notes_map
 
 
+def _saved_chart_type(raw_data: dict) -> str:
+    """Recover PR 586/590 chart types whose *saved* data omitted "type".
+
+    The on-disk chart record has no separate chartType field, so identify only
+    the three unambiguous new shapes. Other historical chart types always
+    carried their nested type. Keep explicit unknown types unknown, and never
+    guess for an empty or conflicting shape.
+    """
+    declared = str(raw_data.get("type") or "").strip().lower()
+    if declared:
+        return declared
+    matches = [
+        name for name, present in (
+            ("scatter", "xValues" in raw_data),
+            ("boxplot", "groups" in raw_data),
+            ("heatmap", any(key in raw_data for key in ("matrix", "rowLabels", "columnLabels"))),
+        ) if present
+    ]
+    return matches[0] if len(matches) == 1 else ""
+
+
 def _restore_charts(
     document: SceneDocument, charts_data: list, all_nodes_map: dict[int, str], nodes_by_id: dict[str, str],
 ) -> tuple[dict[int, str], dict[str, str]]:
@@ -1446,7 +1467,7 @@ def _restore_charts(
         try:
             raw_data = chart_payload.get("data")
             raw_data = raw_data if isinstance(raw_data, dict) else {}
-            chart_type = str(raw_data.get("type", "") or "").strip().lower()
+            chart_type = _saved_chart_type(raw_data)
             if chart_type not in SUPPORTED_CHART_TYPES:
                 continue
             try:
@@ -1460,7 +1481,24 @@ def _restore_charts(
                 chart_data = canonicalize_chart_data(raw_data, chart_type)
                 chart_error = ""
             except ChartDataError as exc:
-                chart_data = _placeholder_chart_data(chart_type)
+                # The shared legacy placeholder covers only categorical charts,
+                # histograms and Sankey. Keep restored scientific/matrix charts
+                # renderable even when their saved values fail validation.
+                if chart_type == "scatter":
+                    chart_data = canonicalize_chart_data(
+                        {"xValues": [1, 2], "values": [1, 1]}, "scatter",
+                    )
+                elif chart_type == "boxplot":
+                    chart_data = canonicalize_chart_data(
+                        {"groups": [{"label": "No valid data", "values": [0, 0]}]}, "boxplot",
+                    )
+                elif chart_type == "heatmap":
+                    chart_data = canonicalize_chart_data(
+                        {"rowLabels": ["No valid data"], "columnLabels": ["Value"],
+                         "matrix": [[0]]}, "heatmap",
+                    )
+                else:
+                    chart_data = _placeholder_chart_data(chart_type)
                 chart_error = f"This chart's saved data could not be validated: {exc}"
             parent_id = _resolve_ref(
                 chart_payload, "parent_node_id", "parent_node_index", nodes_by_id, all_nodes_map,

@@ -122,13 +122,10 @@ def test_new_eval_fixtures_match_canonical_output(chart_type, fixture_name):
     folder = Path(__file__).parents[1] / "evals" / "fixtures" / "chart"
     fixture = json.loads((folder / fixture_name).read_text(encoding="utf-8"))
     assert fixture["input"]["chart_type"] == chart_type
-    # The shipped PR 590 fixture is a historical saved shape: it predates
-    # the nested type field. Keep the fixture unchanged and verify only the
-    # new discriminator is added, not any plotted sample/matrix data.
-    assert "type" not in fixture["expected"]
+    assert fixture["expected"]["type"] == chart_type
     assert canonicalize_chart_data(
         json.loads(fixture["scripted_response"]), chart_type,
-    ) == {**fixture["expected"], "type": chart_type}
+    ) == fixture["expected"]
 
 
 def test_boxplot_exports_png_svg_with_exact_tukey_statistics(monkeypatch):

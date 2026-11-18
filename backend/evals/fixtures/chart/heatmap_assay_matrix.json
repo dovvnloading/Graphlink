@@ -8,6 +8,7 @@
   "scripted_response": "{\"type\":\"heatmap\",\"title\":\"Assay response\",\"xAxis\":\"Time\",\"yAxis\":\"Group\",\"valueUnit\":\"AU\",\"rowLabels\":[\"Control\",\"Treatment\"],\"columnLabels\":[\"0h\",\"24h\",\"48h\"],\"matrix\":[[-2,0,1],[1.5,3,5]]}",
   "expected": {
     "version": 1,
+    "type": "heatmap",
     "title": "Assay response",
     "xAxis": "Time",
     "yAxis": "Group",

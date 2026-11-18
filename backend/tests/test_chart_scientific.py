@@ -160,10 +160,8 @@ def test_scatter_fixture_validates_identically_to_scripted_eval_expected():
     folder = Path(__file__).parents[1] / "evals" / "fixtures" / "chart"
     fixture = json.loads((folder / "scatter_calibration_error_bars.json").read_text(encoding="utf-8"))
     actual = canonicalize_chart_data(json.loads(fixture["scripted_response"]), "scatter")
-    # The PR 586 fixture records the old typeless scene payload. Its values,
-    # series, uncertainties and axes must stay byte-shape compatible.
-    assert "type" not in fixture["expected"]
-    assert actual == {**fixture["expected"], "type": "scatter"}
+    assert fixture["expected"]["type"] == "scatter"
+    assert actual == fixture["expected"]
 
 
 def test_matplotlib_png_and_svg_both_render_scatter_errors_and_log_scales(monkeypatch):

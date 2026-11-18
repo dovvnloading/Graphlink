@@ -8,6 +8,7 @@
   "scripted_response": "{\"type\":\"scatter\",\"title\":\"Calibration\",\"xAxis\":\"Concentration\",\"yAxis\":\"Response\",\"xUnit\":\"mg/L\",\"yUnit\":\"mV\",\"xScale\":\"log10\",\"yScale\":\"linear\",\"xValues\":[1,10,100],\"series\":[{\"name\":\"Control\",\"values\":[0.9,1.8,3.2],\"xError\":[0.05,[1,2],10],\"yError\":[0.1,[0.1,0.3],0.2]},{\"name\":\"Treatment\",\"values\":[1.1,2.1,3.5]}]}",
   "expected": {
     "version": 1,
+    "type": "scatter",
     "title": "Calibration",
     "xAxis": "Concentration",
     "yAxis": "Response",
