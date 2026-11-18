@@ -12,6 +12,7 @@ import api_provider
 from backend.context_engine import ContextAssembler, ContextBudgetError, selected_context_window
 from backend.domain.model import SceneError
 from graphlink_chat_agent import ChatAgent
+from graphlink_memory import message_tokens
 
 
 def _branch_origins(document, node_id: str) -> list[str]:
@@ -77,13 +78,36 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
     except ContextBudgetError as exc:
         # A preview must disclose the failure without claiming a send can
         # proceed. No provider is called and no context is silently dropped.
+        # Nothing is dispatched in this case: still enumerate every source
+        # with its original measured cost, instead of hiding the context
+        # precisely when the user most needs to inspect it.
+        reserve = min(4096, window // 4)
         return {
             "nodeId": node_id,
             "provider": provider,
             "model": model,
+            "contextWindow": window,
+            "outputReserve": reserve,
+            "promptBudget": window - reserve,
+            "promptTokens": 0,
             "leavesDevice": not local,
+            "draftIncluded": bool(draft_text),
             "error": str(exc),
-            "sources": [],
+            "sources": [
+                {
+                    "sourceId": src.source_id,
+                    "origin": src.origin,
+                    "kind": src.kind,
+                    "trust": src.trust,
+                    "tokenCount": message_tokens(src.message, assembler.token_estimator),
+                    "sentTokenCount": 0,
+                    "included": False,
+                    "truncated": False,
+                    "leavesDevice": False,
+                    "reason": "not sent: mandatory context exceeds model budget",
+                }
+                for src in candidates
+            ],
         }
     result = plan.inspect()
     result.update({

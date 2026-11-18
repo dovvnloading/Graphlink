@@ -118,7 +118,7 @@ export function ContextInspectorLauncher({
                 </p>
               )}
               <p className="context-inspector-meta">
-                {preview.leavesDevice ? "Included content leaves the device for the selected provider." : "Local model route; included context stays on the device."}
+                {preview.error ? "No context was dispatched: the required sources cannot fit." : preview.leavesDevice ? "Included content leaves the device for the selected provider." : "Local model route; included context stays on the device."}
               </p>
               {preview.error && <p role="alert">{preview.error}</p>}
               {preview.notice && <p className="context-inspector-note">{preview.notice}</p>}

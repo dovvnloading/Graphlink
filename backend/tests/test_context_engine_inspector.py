@@ -108,3 +108,15 @@ def test_empty_draft_is_distinguishable_from_sending_and_is_not_dispatched():
     assert result["draftIncluded"] is False
     assert result["sources"][-1]["origin"] == f"draft:after:{node_id}"
     assert result["sources"][-1]["kind"] == "current_message"
+
+
+def test_impossible_mandatory_budget_lists_all_unsent_sources():
+    document, _, last_id = _document()
+    dispatcher = _Dispatcher(provider="OpenAI", window=300, override="Z" * 100_000)
+    response = inspect_next_chat_send(document, last_id, dispatcher, draft_text="hello")
+    assert "error" in response
+    assert len(response["sources"]) == 4
+    assert response["promptTokens"] == 0
+    assert all(not row["included"] for row in response["sources"])
+    assert all(not row["leavesDevice"] for row in response["sources"])
+    assert all("mandatory" in row["reason"] for row in response["sources"])

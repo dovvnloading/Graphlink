@@ -83,6 +83,12 @@ class ContextCandidate:
                 raise ValueError("the newest message has inconsistent role/trust")
         if self.kind == "instructions" and self.message.get("role") != "system":
             raise ValueError("instructions must use system role")
+        if self.kind != "instructions" and self.message.get("role") in ("system", "tool"):
+            raise ValueError("only trusted instructions can use a system/tool role")
+        if self.kind == "branch_ancestor" and self.message.get("role") not in ("user", "assistant"):
+            raise ValueError("branch history must be user or assistant")
+        if self.trust == "retrieved" and self.kind not in ("knowledge_hit", "attachment", "pinned_note"):
+            raise ValueError("retrieved text must be supplementary data")
         if self.kind in _WRAPPED_KINDS and self.trust in ("retrieved", "generated"):
             if self.message.get("role") != "user":
                 raise ValueError("lower-trust sources cannot become system/tool messages")
@@ -365,5 +371,18 @@ def selected_context_window(runtime, model_ref=None) -> int:
     if provider == "ollama":
         return int(api_provider._ollama_effective_context_window(model_ref.model_id))
     if provider == "llama.cpp":
+        # A cloud task default can coexist with a llama.cpp node pin.
+        # Runtime.context_window(TASK_CHAT) alone would report the CLOUD
+        # default's window rather than the pinned local model's n_ctx.
+        snapshot = runtime.snapshot() if hasattr(runtime, "snapshot") else None
+        settings = getattr(snapshot, "llama_cpp_settings", {}) if snapshot is not None else {}
+        try:
+            n_ctx = int(settings.get("n_ctx") or 0)
+        except (AttributeError, ValueError, TypeError):
+            n_ctx = 0
+        if n_ctx > 0:
+            return n_ctx
+        if snapshot is not None:
+            return int(api_provider._DEFAULT_CONTEXT_WINDOW)
         return int(runtime.context_window(config.TASK_CHAT))
     return int(api_provider.known_context_window(model_ref.model_id))
