@@ -32,6 +32,16 @@ class RunArgs:
     inputs: dict
     sources: dict | None = None
     expected_run: str | None = None
+    graph_run_id: str | None = None
+
+
+@dataclass
+class ConfigureRunnerArgs:
+    node_id: str
+    operation_id: str
+    inputs: dict
+    sources: dict | None = None
+    expected_run: str | None = None
 
 
 @dataclass
@@ -239,6 +249,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             "scienceVersion": 1, "packId": pack_id, "operations": [] if error else schema,
             "nodeKey": data.get("nodeKey") if isinstance(data.get("nodeKey"), str) else "",
             "latest": None if error else data.get("latest"), "error": error,
+            "runner": None if error else data.get("runner"),
             "table": None if error else data.get("table"),
             "limits": INPUT_LIMITS, "runToken": "" if error else _run_token(data),
         }, separators=(",", ":"), allow_nan=False)
@@ -258,10 +269,56 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             return TableState.from_data(recovered)
         return PluginStateSnapshot.from_data(recovered)
 
+    def configure_runner(document, ctx, request):
+        """Explicit, undoable opt-in; never runs a calculation or an agent tool."""
+        node, error = _current_state(document, request.node_id, kind, request.expected_run)
+        if error:
+            return error
+        operation = catalog.get(request.operation_id)
+        if operation is None:
+            return {"ok": False, "error": "Choose an operation registered for this pack."}
+        try:
+            inputs = validated_inputs(operation, request.inputs)
+            sources = _verify_sources(
+                document, node, inputs, request.sources or {}, ctx.is_plugin_granted,
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        configuration = {
+            "version": 1, "operationId": operation.id, "inputs": inputs, "sources": sources,
+        }
+        prior = node.state.data
+        if prior.get("runner") == configuration:
+            return {"ok": True}
+
+        def save_config():
+            saved = {**prior, "runner": configuration}
+            node.state = (TableState.from_data(saved) if "table" in saved
+                          else PluginStateSnapshot.from_data(saved))
+
+        document.record_command(
+            f"science:{pack_id}:configure_runner", "user", save_config, node_ids=[node.id],
+        )
+        return PluginSceneUpdate({"ok": True})
+
     async def run(document, ctx, request):
         node, error = _current_state(document, request.node_id, kind, request.expected_run)
         if error:
             return error
+        if request.graph_run_id is not None:
+            # A caller cannot impersonate an unrelated run for undo grouping.
+            authorized = any(
+                record.get("runId") == request.graph_run_id and record.get("status") == "running"
+                and any(
+                    step.get("nodeId") == node.id and step.get("kind") == "scientific"
+                    and step.get("operation") == request.operation_id and step.get("status") == "pending"
+                    for step in record.get("steps", [])
+                )
+                for record in document.graph_runs
+            )
+            if not authorized:
+                return {"ok": False, "errorType": "validation",
+                        "error": "This scientific operation is not part of that running graph."}
         op = catalog.get(request.operation_id)
         if op is None:
             return {"ok": False, "error": "Choose an operation registered for this pack."}
@@ -333,6 +390,8 @@ def register_pack(host: HostContext, pack_id: str) -> None:
                     child.state.chart_error = "Scientific result changed · refresh this chart from its source."
             node_key = state.data.get("nodeKey")
             saved = {"version": 1, "nodeKey": node_key or uuid4().hex, "latest": result}
+            if "runner" in state.data:
+                saved["runner"] = state.data["runner"]
             if "table" in state.data:
                 saved["table"] = state.data["table"]
                 node.state = TableState.from_data(saved)
@@ -341,7 +400,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             node.content = result["summary"]
 
         document.record_command(f"science:{pack_id}:{op.id}", "user", save_result,
-                                node_ids=[node.id, *chart_children])
+                                node_ids=[node.id, *chart_children], run_id=request.graph_run_id)
         return PluginSceneUpdate({"ok": True})
 
     def cancel(document, ctx, request):
@@ -440,6 +499,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         serialize_saved=serialize_saved, deserialize=deserialize, externalize_state=True,
     )
     host.register_picker_entry(node_kind="workbench", name=title, description=description, category="Scientific Workbench")
+    host.register_intent("configure_runner", configure_runner, args_schema=ConfigureRunnerArgs, expose_to_builder=False)
     host.register_intent("run", run, args_schema=RunArgs, expose_to_builder=False)
     host.register_intent("cancel", cancel, args_schema=CancelArgs, expose_to_builder=False)
     host.register_intent("export_result", export_result, args_schema=ExportArgs, expose_to_builder=False)

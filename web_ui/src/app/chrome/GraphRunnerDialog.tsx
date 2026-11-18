@@ -11,7 +11,8 @@ const LazyGraphRunnerInspectorContent = lazy(() =>
 );
 
 const statuses: Record<string, string> = {
-  ready: "Ready", waiting: "Waiting on Model", current: "Up to date", blocked: "Blocked", failed: "Failed",
+  ready: "Ready", waiting: "Waiting on upstream", current: "Up to date", blocked: "Blocked", failed: "Failed",
+  cancelled: "Cancelled",
   pending: "Pending", completed: "Completed", partial: "Completed with issues",
   interrupted: "Interrupted", running: "Running",
   "reconciliation-required": "Reconciliation required",
@@ -28,7 +29,16 @@ function RunSteps({ steps, names }: { steps: GraphRunStep[]; names: Map<string, 
         <strong>{step.label || names.get(step.nodeId) || step.nodeId}</strong>
         <span data-status={step.status}>{statuses[step.status] ?? step.status}</span>
       </div>
-      <div>{operations[step.operation] ?? step.operation}{step.sourceId && <> from {names.get(step.sourceId) || step.sourceId}</>}</div>
+      <div>{step.kind === "scientific" ? `Scientific · ${step.operation}` : (operations[step.operation] ?? step.operation)}
+        {(step.sourceIds?.length ? step.sourceIds : step.sourceId ? [step.sourceId] : []).length > 0 &&
+          <> from {(step.sourceIds?.length ? step.sourceIds : [step.sourceId])
+            .map((id) => names.get(id) || id).join(", ")}</>}
+      </div>
+      {step.kind === "scientific" && <div>
+        {step.elapsedMs !== undefined && <>Elapsed: {step.elapsedMs.toLocaleString()} ms. </>}
+        {step.errorType && <>Error type: <strong>{step.errorType}</strong></>}
+        {step.scientificResult && <p>Result: {step.scientificResult.summary}</p>}
+      </div>}
       {step.detail && <p>{step.detail}</p>}
       {step.externalAttempt && <Disclosure label="External request" className="runner-fingerprints">
         <div>Provider <code>{step.externalAttempt.provider}</code></div>
@@ -107,6 +117,7 @@ function Runner({ store }: { store: SceneStore }) {
   const [preview, setPreview] = useState<(GraphRunPreview & { nodeIds: string[]; operationId: string }) | null>(null);
   const [latest, setLatest] = useState<LatestGraphRun | null>(null);
   const [busy, setBusy] = useState("Loading run history…");
+  const [cancellingRun, setCancellingRun] = useState(false);
   const [error, setError] = useState("");
   const running = latest?.status === "running" || latest?.history?.some((run) => run.status === "running");
 
@@ -125,7 +136,7 @@ function Runner({ store }: { store: SceneStore }) {
   }, [store]);
 
   useEffect(() => {
-    if (busy || !running || error) return;
+    if (!(running || busy === "Running graph…" || busy === "Resuming run…") || error) return;
     let active = true;
     const timer = setTimeout(() => {
       store.getGraphRun().then((run) => {
@@ -163,7 +174,10 @@ function Runner({ store }: { store: SceneStore }) {
         ? "Continue only unaffected pending steps. The uncertain external request will not be repeated."
         : "Continue from the last saved step."}</p>
       <button type="button" className="appbar-btn" disabled={!!busy || running} onClick={() =>
-        void perform("Resuming run…", () => updateRun(store.resumeGraphRun(run.runId)))
+        (setLatest({ ...run, status: "running" }),
+          void perform("Resuming run…", () => updateRun(
+            store.resumeGraphRun(run.runId, run.steps.some((step) => step.kind === "scientific")),
+          )))
       }>{uncertain ? "Continue safe steps" : "Resume run"}</button>
     </div>;
   }
@@ -214,9 +228,21 @@ function Runner({ store }: { store: SceneStore }) {
     });
   }
 
+  async function cancelActiveRun(runId: string) {
+    if (cancellingRun) return;
+    setCancellingRun(true);
+    setError("");
+    try {
+      const answer = await store.cancelGraphRun(runId);
+      if (!answer.ok) throw new Error("The run has already finished or is not active.");
+      setLatest(await store.getGraphRun());
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
+    finally { setCancellingRun(false); }
+  }
+
   const ready = preview?.steps.filter((step) => step.status === "ready").length ?? 0;
   return <>
-    <p className="runner-intro">Preview a dependency-ordered graph. Model nodes execute explicitly through local Ollama; downstream transforms wait for committed replies. A preview never sends a model request.</p>
+    <p className="runner-intro">Preview a dependency-ordered graph. Local Model nodes and explicitly configured Scientific Workbench operations run only after approval; every connected input must be ready. Scientific calculations use a bounded, cancellable local worker. Preview never executes either.</p>
     <div className="runner-controls">
       <label>Run scope
         <select value={scope} disabled={!!busy} onChange={(event) => {
@@ -333,12 +359,22 @@ function Runner({ store }: { store: SceneStore }) {
         <span>{ready} ready</span>
       </header>
       {preview.steps.length ? <RunSteps steps={preview.steps} names={names} /> :
-        <p>No connected outputs in this scope. Bind a note's text input or create an output from a data table.</p>}
+        <p>No executable outputs in this scope. Bind a note or table output, or save a Scientific Workbench operation for Graph Runner.</p>}
       {ready > 0 && <div className="runner-commit">
         <p>Running saves this graph and records each finished step.</p>
-        <button type="button" className="appbar-btn" disabled={!!busy || running} onClick={() =>
-          void perform("Running graph…", () => updateRun(store.executeGraphRun(preview.nodeIds, preview.previewToken, preview.operationId)))
-        }>Run graph</button>
+        <button type="button" className="appbar-btn" disabled={!!busy || running} onClick={() => {
+          setLatest({
+            runId: preview.operationId, startedAt: new Date().toISOString(), status: "running",
+            steps: preview.steps.map((step) => ({
+              ...step, status: ["ready", "waiting"].includes(step.status) ? "pending" : step.status,
+            })),
+            history: latest ? [latest, ...(latest.history ?? [])] : [],
+          });
+          void perform("Running graph…", () => updateRun(store.executeGraphRun(
+            preview.nodeIds, preview.previewToken, preview.operationId,
+            preview.steps.some((step) => step.kind === "scientific"),
+          )));
+        }}>Run graph</button>
       </div>}
     </section>}
     {latest && <section aria-label="Latest run">
@@ -347,6 +383,12 @@ function Runner({ store }: { store: SceneStore }) {
         <span role="status" data-status={latest.status}>{statuses[latest.status] ?? latest.status}</span>
       </header>
       <div className="runner-note">{runDate(latest)}</div>
+      {latest.status === "running" && <div className="runner-commit">
+        <button type="button" className="appbar-btn" disabled={cancellingRun}
+          onClick={() => void cancelActiveRun(latest.runId)}>
+          {cancellingRun ? "Stopping run…" : "Cancel run"}
+        </button>
+      </div>}
       <RunSteps steps={latest.steps} names={names} />
       <RunInspector run={latest} names={names} onSelect={selectInspectorNode} />
       {latest.status === "reconciliation-required" && <p className="runner-note" role="alert">One or more external requests have an uncertain outcome. Graph Runner will not retry them automatically.</p>}

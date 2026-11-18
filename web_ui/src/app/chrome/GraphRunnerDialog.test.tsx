@@ -232,7 +232,7 @@ describe("Graph Runner", () => {
     expect(request.mock.calls.some(([, action]) => action === "executeGraphRun")).toBe(false);
     await user.click(screen.getByRole("button", { name: "Preview run" }));
     const preview = await screen.findByRole("region", { name: "Run preview" });
-    expect(preview).toHaveTextContent("Waiting on Model");
+    expect(preview).toHaveTextContent("Waiting on upstream");
     expect(within(preview).getByRole("button", { name: "Run graph" })).toBeEnabled();
     expect(request).toHaveBeenCalledWith("scene", "previewGraphRun", [[]]);
   });

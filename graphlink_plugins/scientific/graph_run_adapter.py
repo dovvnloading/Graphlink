@@ -1,0 +1,168 @@
+"""Pure, explicit Scientific Workbench bindings for the Graph Runner.
+
+Only a saved, user-configured operation participates in a graph run. The
+adapter resolves *live* connected scientific receipts into typed operands;
+it never evaluates an operation or makes a model/tool call.
+"""
+from __future__ import annotations
+
+from typing import Any
+
+from backend.domain.model import SceneError
+from graphlink_plugins.scientific.catalog import PACKS, operations
+from graphlink_plugins.scientific.core import fingerprint, readable_result, validated_inputs
+from graphlink_plugins.scientific.data_table import numeric_column, table_metadata_valid
+from graphlink_plugins.scientific.workbench import (
+    SCIENCE_KINDS, STATE_TYPES, _extract, _same_sources, _verify_sources,
+)
+
+
+def configured(node: Any) -> bool:
+    return (node.kind in SCIENCE_KINDS and type(node.state) in STATE_TYPES
+            and isinstance(node.state.data.get("runner"), dict))
+
+
+def _configuration(node: Any) -> tuple[str, Any, dict]:
+    if not configured(node):
+        raise SceneError("This scientific node has not been configured for Graph Runner.")
+    pack = node.kind.removeprefix("science_").split(".", 1)[0]
+    state = node.state.data
+    config = state["runner"]
+    if (pack not in PACKS or config.get("version") != 1
+            or not isinstance(config.get("operationId"), str)
+            or not isinstance(config.get("inputs"), dict)
+            or not isinstance(config.get("sources"), dict)
+            or len(config["sources"]) > 32):
+        raise SceneError("The saved scientific Graph Runner configuration is invalid.")
+    operation = next((op for op in operations(pack) if op.id == config["operationId"]), None)
+    if operation is None:
+        raise SceneError("The configured scientific operation is no longer available.")
+    try:
+        validated_inputs(operation, config["inputs"])
+    except ValueError as exc:
+        raise SceneError(str(exc)) from exc
+    if set(config["sources"]) - set(config["inputs"]):
+        raise SceneError("The saved scientific field bindings are invalid.")
+    if not readable_result(state, pack):
+        raise SceneError("The saved scientific result is damaged or unavailable.")
+    return pack, operation, config
+
+
+def _connected_source(document: Any, node: Any, reference: dict) -> Any:
+    if not isinstance(reference, dict):
+        raise SceneError("A scientific input reference is invalid.")
+    key = reference.get("sourceKey")
+    selector = reference.get("selector")
+    if not isinstance(key, str) or len(key) != 32 or not isinstance(selector, list):
+        raise SceneError("Scientific connections require a saved source identity and selector.")
+    candidates = [
+        document.nodes[edge.source] for edge in document.edges.values()
+        if edge.target == node.id and edge.source in document.nodes
+        and document.nodes[edge.source].kind in SCIENCE_KINDS
+        and type(document.nodes[edge.source].state) in STATE_TYPES
+        and document.nodes[edge.source].state.data.get("nodeKey") == key
+    ]
+    if len(candidates) != 1 or candidates[0] is node:
+        raise SceneError("The scientific source was disconnected or changed.")
+    return candidates[0]
+
+
+def dependencies(document: Any, node: Any) -> tuple[str, ...]:
+    _, _, config = _configuration(node)
+    return tuple(dict.fromkeys(
+        _connected_source(document, node, reference).id
+        for reference in config["sources"].values()
+    ))
+
+
+def _stable_sources(sources: dict) -> dict:
+    # Runtime node IDs are reminted after workspace restore. Source identity
+    # and the receipt/selection, not the transient id, determine freshness.
+    return {
+        field: {
+            "sourceKey": ref.get("sourceKey"), "selector": ref.get("selector"),
+            "resultHash": ref.get("resultHash"), "receiptHash": ref.get("receiptHash"),
+        }
+        for field, ref in sorted(sources.items())
+    }
+
+
+def config_hash(node: Any) -> str:
+    pack, operation, config = _configuration(node)
+    return fingerprint([
+        "science_runner_v1", pack, operation.id, node.state.data.get("nodeKey"),
+        {key: value for key, value in config["inputs"].items() if key not in config["sources"]},
+        {field: {"sourceKey": ref.get("sourceKey"), "selector": ref.get("selector")}
+         for field, ref in sorted(config["sources"].items())},
+    ])
+
+
+def output_hash(node: Any) -> str:
+    state = node.state.data
+    table = state.get("table")
+    return fingerprint([
+        state.get("latest"), node.content,
+        table.get("provenance", {}).get("receiptHash") if isinstance(table, dict) else None,
+    ])
+
+
+def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, str, bool]:
+    """Resolve operands from the live graph with the Workbench's own caps.
+
+    The stored numerical value is only a fallback for an unlinked field.
+    Linked fields are always replaced by the currently verified typed output.
+    """
+    pack, operation, config = _configuration(node)
+    if not granted("science_" + pack):
+        raise SceneError("Enable the scientific pack in Settings before running it.")
+    raw = dict(config["inputs"])
+    references = {}
+    for field, saved in config["sources"].items():
+        source = _connected_source(document, node, saved)
+        if not granted(source.kind.split(".", 1)[0]):
+            raise SceneError("Enable the connected scientific source pack.")
+        source_data = source.state.data
+        source_pack = source.kind.removeprefix("science_").split(".", 1)[0]
+        if not readable_result(source_data, source_pack):
+            raise SceneError("The connected scientific result is damaged.")
+        selector = saved["selector"]
+        if len(selector) == 5 and selector[0] == "table_column":
+            table = source_data.get("table")
+            if not table_metadata_valid(table):
+                raise SceneError("The connected typed table is unavailable.")
+            try:
+                value = numeric_column(table, *selector[1:])
+            except (ValueError, IndexError, KeyError, TypeError) as exc:
+                raise SceneError("The connected typed table selection is invalid.") from exc
+            result_hash = table["asset_ref"]
+            receipt_hash = table["provenance"]["receiptHash"]
+        else:
+            latest = source_data.get("latest")
+            if not isinstance(latest, dict):
+                raise SceneError("Run the connected scientific source first.")
+            try:
+                value = _extract(latest, selector)
+            except (ValueError, IndexError, KeyError, TypeError) as exc:
+                raise SceneError("The connected scientific output selection is unavailable.") from exc
+            result_hash = latest["provenance"]["resultHash"]
+            receipt_hash = latest["provenance"]["receiptHash"]
+        raw[field] = value
+        references[field] = {
+            "nodeId": source.id, "sourceKey": source_data["nodeKey"],
+            "selector": selector, "resultHash": result_hash, "receiptHash": receipt_hash,
+        }
+    try:
+        inputs = validated_inputs(operation, raw)
+        sources = _verify_sources(document, node, inputs, references, granted)
+    except (ValueError, IndexError, TypeError, KeyError) as exc:
+        raise SceneError(str(exc)) from exc
+    current = node.state.data.get("latest")
+    if isinstance(current, dict) and node.content != current["summary"]:
+        raise SceneError("The scientific output has manual edits; review them before running.")
+    same = bool(
+        isinstance(current, dict) and current["operationId"] == operation.id
+        and current["inputs"] == inputs
+        and _same_sources(current["provenance"].get("sources", {}), sources)
+    )
+    digest = fingerprint([operation.id, inputs, _stable_sources(sources)])
+    return operation, inputs, sources, digest, same

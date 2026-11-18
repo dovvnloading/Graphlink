@@ -1,5 +1,37 @@
 # Scientific Workbench
 
+## Graph Runner (explicit opt-in)
+
+A Scientific Workbench node participates in a graph run only after choosing an
+operation, entering or importing typed inputs, and selecting **Save for Graph
+Runner** on that node. This saves an undoable, versioned operation configuration;
+it does **not** execute the operation. A normal **Run calculation** remains a
+separate, manual action.
+
+Connected scientific fields remember their source node identity and selector,
+not a mutable copied number. During a run, each linked field is resolved from
+the *current* connected scientific result or bounded typed table column,
+validated by the same input caps and source-grant checks as the Workbench.
+Upstream configured scientific operations may run first; a downstream operation
+waits until **every** linked input has a committed result. Read-only previews
+never calculate scientific or Model outputs.
+
+Execution reuses the Workbench's isolated, killable PR 621 worker and each
+operation's wall-clock budget. The Graph Runner receipt saves the scientific
+result, elapsed milliseconds, source identities, fingerprints and a typed
+timeout, cancellation, validation or worker error when applicable. A completed
+step's receipt is checkpointed with the graph and is never executed again on
+resume. Cancel **run** stops scheduling new steps, cancels and drains active
+calculations, and marks untouched work cancelled; a remote Model request that
+may already have been sent still requires reconciliation.
+
+Scientific operations remain deterministic, local and side-effect free, with
+the original text/vector/matrix/table limits. They are *not* registered as
+agent/Builder tools. Model steps can coexist with scientific steps in an
+explicit Graph Runner plan, but neither models nor agents are allowed to
+invoke calculations implicitly.
+
+
 Enable the desired packs in **Settings → Plugins**, then open **Plugins → Scientific Workbench** on the canvas. Each enabled pack can start a new node or branch from a selected node. Choose an operation, inspect the example, enter measurements in the labeled units, and press **Run calculation**. A grant applies to one pack. Every pack runs locally with Python's standard library.
 
 ## Feature plan and acceptance criteria

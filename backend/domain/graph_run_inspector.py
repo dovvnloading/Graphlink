@@ -26,11 +26,11 @@ _SENSITIVE_IDENTIFIER = re.compile(
 _TIMESTAMP = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})"
 )
-_KINDS = {"note", "chart", "artifact", "table", "model", "tool"}
+_KINDS = {"note", "chart", "artifact", "table", "model", "tool", "scientific"}
 _OPERATIONS = {"copy", "word_count", "group_sum", "model", "tool"}
 _STATUSES = {
     "ready", "waiting", "current", "blocked", "failed", "pending",
-    "completed", "partial", "interrupted", "running", "reconciliation-required",
+    "completed", "partial", "interrupted", "running", "cancelled", "reconciliation-required",
 }
 
 
@@ -106,10 +106,14 @@ def _ordered_steps(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     children: list[list[int]] = [[] for _ in steps]
     degrees = [0] * len(steps)
     for index, step in enumerate(steps):
-        parent = by_destination.get(_node_id(step.get("sourceId")))
-        if parent is not None:
-            children[parent].append(index)
-            degrees[index] += 1
+        sources = step.get("sourceIds") if step.get("kind") == "scientific" else None
+        if not isinstance(sources, list):
+            sources = [step.get("sourceId")]
+        for source_id in dict.fromkeys(_node_id(source) for source in sources):
+            parent = by_destination.get(source_id)
+            if parent is not None:
+                children[parent].append(index)
+                degrees[index] += 1
     ready = [i for i, degree in enumerate(degrees) if degree == 0]
     heapq.heapify(ready)
     result: list[int] = []
@@ -167,12 +171,25 @@ def build_graph_run_trace(run: dict[str, Any]) -> dict[str, Any]:
             "resolvedAt": step_finished,
         }] if attempt else []
         version = step.get("outputVersion")
+        scientific = step.get("kind") == "scientific"
+        scientific_operation = _identifier(step.get("operation")) if scientific else None
+        elapsed = step.get("elapsedMs")
+        error_type = step.get("errorType")
+        if error_type not in {"timeout", "cancelled", "invalid_input", "worker_error", "validation", "conflict"}:
+            error_type = None
+        result = step.get("scientificResult") if scientific else None
+        receipt = result.get("provenance") if isinstance(result, dict) else None
+        source_ids = step.get("sourceIds") if scientific else None
         trace_steps.append({
             "index": index,
             "sourceNodeId": _node_id(step.get("sourceId")),
+            "sourceNodeIds": [_node_id(source) for source in source_ids] if isinstance(source_ids, list) else None,
             "destinationNodeId": _node_id(step.get("nodeId")),
             "kind": step.get("kind") if isinstance(step.get("kind"), str) and step["kind"] in _KINDS else "unknown",
-            "operation": step.get("operation") if isinstance(step.get("operation"), str) and step["operation"] in _OPERATIONS else "unknown",
+            "operation": (
+                step.get("operation") if step.get("operation") in _OPERATIONS
+                else scientific_operation if scientific_operation is not None else "unknown"
+            ),
             "provider": provider,
             "model": model,
             "inputFingerprints": {
@@ -190,6 +207,12 @@ def build_graph_run_trace(run: dict[str, Any]) -> dict[str, Any]:
             "startedAt": step_started,
             "finishedAt": step_finished,
             "durationMs": _duration_ms(step_started, step_finished),
+            "elapsedMs": elapsed if scientific and type(elapsed) is int and 0 <= elapsed <= 86400000 else None,
+            "errorType": error_type if scientific else None,
+            "scientificResult": {
+                "resultHash": _digest(receipt.get("resultHash")),
+                "receiptHash": _digest(receipt.get("receiptHash")),
+            } if isinstance(receipt, dict) else None,
             "attempts": attempts,
         })
     return {

@@ -3399,7 +3399,10 @@ def register_chat_library(
     )
 
     if canvas_document is not None:
-        register_graph_runner(bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent)
+        register_graph_runner(
+            bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
+            settings_manager=settings_manager,
+        )
         register_graph_model_runner(
             bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
         )
