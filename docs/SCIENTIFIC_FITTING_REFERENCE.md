@@ -75,3 +75,90 @@ python -m pytest -n0 backend/tests/test_scientific*.py tests/test_scientific*.py
 ```
 
 Result artifacts and receipts are part of the existing Scientific Workbench graph node; their hashes include the pack ID, operation ID, validated input fingerprint, pack version and output. A separate receipt hash covers UTC time and input provenance. Export JSON preserves those canonical measurements and hashes for later verification.
+
+
+## One-way ANOVA with Tukey–Kramer HSD (\`one_way_anova\`)
+
+Inputs: \`values\` contains the numeric responses and \`groups\` contains one numeric group code for **each** response in the same order. Codes are arbitrary finite numbers (e.g., \`[1,1,2,2,3,3]\`), and **unequal** group sizes are supported. There must be 2–32 distinct groups, with at least two observations in each group. A zero pooled within-group variance is an **error**: the F statistic and studentized-range post-hoc probabilities are undefined in that case.
+
+For \(k\) groups, \(n\) observations, group means \(\bar x_i\), grand mean \(\bar x\), and within-group values \(x_{ij}\), calculate \(SS_B=\sum_i n_i(\bar x_i-\bar x)^2\), \(SS_W=\sum_{ij}(x_{ij}-\bar x_i)^2\). The F statistic is \(F=[SS_B/(k-1)]/[SS_W/(n-k)]\); the upper-tail p-value uses the **regularized incomplete beta** calculation in the existing fitting module. The output includes both sums and mean squares, between/within degrees of freedom, F, p-value, \(R^2=SS_B/(SS_B+SS_W)\) and the residual standard deviation. Summation, centering and mean calculation use **76-digit decimal arithmetic** on the normalized finite inputs to preserve small residuals near large baselines, with the result converted to binary64 only at the artifact boundary.
+
+The post-hoc table contains **every pair** of numeric group codes in ascending order, observed difference \(\bar x_i-\bar x_j\), Tukey–Kramer standard error \(s_{ij}=\sqrt{MS_W(1/n_i+1/n_j)/2}\), studentized-range \(q=|\bar x_i-\bar x_j|/s_{ij}\), Tukey-adjusted two-sided p-value, and **simultaneous familywise 95% confidence limits** \((\bar x_i-\bar x_j)\pm q_{0.95;k,n-k}s_{ij}\). For unequal sizes this is the conventional conservative Tukey–Kramer extension. The distribution is evaluated by deterministic Gauss–Legendre quadrature of the **normal-range and chi-square scale mixture** (Hartley integral), rather than a t-distribution substitution or Bonferroni approximation; for two groups the exact relation \(q=\sqrt2|t|\) is used.
+
+Assumptions: independent observations, independent normally distributed errors with equal population variance across groups, and a fixed one-way treatment model. Tukey HSD controls **familywise** pairwise error under the same assumptions; it does not correct for data-dependent subgroup selection, heterogeneous variances or dependent repeated measurements. The pairwise confidence intervals are not the marginal per-comparison intervals.
+
+## Mann–Whitney U (\`mann_whitney_u\`)
+
+Inputs: \`sample_a\`, \`sample_b\` (independent samples, at least **two** observations in each). The method assigns **midranks** for equal pooled measurements, then reports \(U_A=R_A-n_A(n_A+1)/2\), \(U_B=n_An_B-U_A\), the smaller U, both sample sizes and the **two-sided** p-value.
+
+For **\(n_A+n_B\le30\)**, p-values are **exact permutation probabilities conditional on the observed ranks**. Dynamic programming counts all \(\binom{n_A+n_B}{n_A}\) label assignments, with ranks multiplied by two to represent half-integer tied midranks without floating-point ambiguity. The two-sided probability is \(2\min\{P(U_A\le u),P(U_A\ge u)\}\), capped at 1. Thus exact small-sample p-values **also support ties**, but can differ from programs that use a tie-ignorant exact null distribution.
+
+For pooled sizes **greater than 30**, a normal approximation uses mean \(n_An_B/2\), tie-corrected variance
+\[
+\operatorname{Var}(U_A)=\frac{n_An_B}{12}
+\left[N+1-\frac{\sum_t(t^3-t)}{N(N-1)}\right],
+\quad N=n_A+n_B,
+\]
+where \(t\) are pooled tie-block sizes. A **0.5 continuity correction** is applied toward the null mean; the resulting two-sided normal tail is reported, together with the method. A sample in which all pooled observations are identical is rejected.
+
+The test is about **distributions/stochastic ordering**; interpret it as a median shift only when the groups have comparable shapes. Independence and exchangeability under the null are necessary for the exact permutation p-value.
+
+## Wilcoxon signed-rank (\`wilcoxon_signed_rank\`)
+
+Inputs: \`before\`, \`after\` matched by position and of **equal length**. The operation ranks the absolute **after minus before** differences, assigns midranks for tied magnitudes, and uses the **Wilcoxon zero convention**: exact zeros are dropped *before* ranking. At least **two nonzero differences** are required. The result includes total/nonzero/dropped pairs, \(W^+\) (positive rank sum), \(W^-\) (negative), \(\min(W^+,W^-)\), and a two-sided p-value. A paired-difference magnitude outside finite range is rejected.
+
+For **up to 30 nonzero pairs**, exact p-values count all \(2^n\) sign assignments of the observed doubled midranks using a subset-sum dynamic program (conditional exact test even **with ties**). Above 30, the tie-corrected normal variance is
+\[
+\operatorname{Var}(W^+) =
+\frac{n(n+1)(2n+1)}{24}-\frac{\sum_t(t^3-t)}{48},
+\quad E[W^+]=n(n+1)/4,
+\]
+with a **0.5 continuity correction** toward the null mean. Do not interpret this as a generic paired median test unless the paired-difference distribution is **symmetric**; pairs should be independent and matched meaningfully.
+
+## Shapiro–Wilk normality (\`shapiro_wilk\`)
+
+Input: \`sample\`, **3–1024** finite observations (the shared workbench vector limit; Royston's algorithm itself supports up to 5000). All-equal data are rejected. The operation calculates the classical \(W=[\sum_i a_i x_{(i)}]^2/\sum_i(x_i-\bar x)^2\) with antisymmetric weights. The weight construction uses **Royston's AS R94** approximation: Blom normal-order scores \(m_i=\Phi^{-1}[(i-3/8)/(n+1/4)]\), polynomial corrections to the outer one/two weights and normalization of the remaining weights. The ordered observations are centered and scaled before taking squares, reducing cancellation and overflow.
+
+For **\(n=3\)** the significance probability is **exact**, \(p=(6/\pi)[\arcsin(\sqrt W)-\pi/3]\); for \(4\le n\le11\), the short-sample Royston transform and fitted normal parameters are used; for \(n\ge12\), the log-\(n\) Royston approximation applies. This is an **approximate** null p-value for all \(n\ge4\); even a p-value above 0.05 does not prove the measurements are normal. The method assumes an independent continuous sample.
+
+## Pearson and Spearman correlations (\`pearson_correlation\`, \`spearman_correlation\`)
+
+Both accept position-matched numeric vectors \`x\` and \`y\`, with **at least four pairs** to define the requested confidence intervals; unequal lengths or constant variables are rejected. Computation uses centered and range-scaled values and stable sums. All p-values are **two-sided**.
+
+**Pearson** returns the product-moment \(r\), degrees of freedom \(n-2\), and a Student-t null test \(t=r\sqrt{(n-2)/(1-r^2)}\). Its **95% Fisher-z confidence interval** is \(\tanh[\operatorname{atanh}(r)\pm z_{0.975}/\sqrt{n-3}]\). This interval and t test assume independent, approximately bivariate-normal paired observations; extreme outliers and nonlinearity can invalidate interpretation.
+
+**Spearman** returns Pearson correlation computed **on midranks** (correctly incorporating ties). For **up to 8 pairs**, its two-sided p-value is the **exact permutation** proportion conditional on the observed ranks, including ties. For larger paired samples, it uses the usual **Student-t approximation** with \(n-2\) degrees of freedom. Its **approximate 95% confidence interval** uses the *Bonett–Wright (2000)* modified Fisher-z variance \((1+\rho^2/2)/(n-3)\). This interval is a **large-sample approximation**, not an exact small-sample confidence interval; it is least reliable for \(n<10\), heavy ties or nearly perfect correlations. At \(r=\pm1\), the output takes the limiting endpoint convention \([\pm1,\pm1]\), not a finite-sample coverage guarantee. Spearman correlation is about **monotone association**, not a causal relationship.
+
+## Multiplicity correction (\`bonferroni_correction\`, \`benjamini_hochberg_correction\`)
+
+Both operations accept \`p_values\` (one or more valid numbers in **[0, 1]**) and a desired threshold \`alpha\` **strictly between 0 and 1**. Output rows preserve the **input order** and show zero-based hypothesis index, raw p, adjusted p and rejection at the supplied alpha. A count of rejected hypotheses is also returned.
+
+- **Bonferroni:** \(p^{adj}_i=\min(1,mp_i)\). Familywise error control does not require independent tests, provided the input p-values are valid.
+- **Benjamini–Hochberg:** sort p-values to \(p_{(1)}\le\cdots\le p_{(m)}\) and calculate \(p^{adj}_{(i)}=\min_{j\ge i}\min(1,mp_{(j)}/j)\), working backward to ensure **monotonic adjusted probabilities**; unsort into the original order. BH controls **false discovery rate** under independent or suitably **positive-regression-dependent** p-values, not arbitrary dependence.
+
+These corrections apply to the **full family of planned tests**; submitting only a selected subset of significant p-values invalidates the declared multiplicity control. They do not repair biased sampling, inappropriate test statistics or violations of assumptions.
+
+## Independent certification cases for the additional tests
+
+\`backend/tests/test_scientific_inference.py\` uses exact NIST StRD data and **15 published significant digits** for each published ANOVA sum of squares, mean square, F, \(R^2\) and residual standard deviation (where NIST supplies that result). The hard-case \`SmLs07\` rows preserve the 13 leading common digits. All three tests compare **formatted published significant digits** (not a loose absolute epsilon):
+
+| NIST dataset | Between df / within df | Between SS | Within SS | Certified F |
+| --- | --- | --- | --- | --- |
+| [SiRstv](https://www.itl.nist.gov/div898/strd/anova/SiRstv.dat) | 4 / 20 | 0.0511462616000000 | 0.216636560000000 | 1.18046237440255 |
+| [AtmWtAg](https://www.itl.nist.gov/div898/strd/anova/AtmWtAg.dat) | 1 / 46 | 3.63834187500000e-9 | 1.04951729166667e-8 | 15.9467335677930 |
+| [SmLs07](https://www.itl.nist.gov/div898/strd/anova/SmLs07.dat) | 8 / 180 | 1.68000000000000 | 1.80000000000000 | 21.0000000000000 |
+
+Other independent worked-example tests cover:
+
+- [NIST Tukey critical value](https://www.itl.nist.gov/div898/handbook/prc/section4/prc471.htm), \(q_{0.95;5,10}\approx4.65\), plus the two-group exact t identity.
+- [ACCP published Wilcoxon diuretic example](https://www.accp.com/docs/bookstore/biosampl.pdf), \(W^+=4\), exact two-sided \(p=0.21875\), and an [8-pair all-decreasing example](https://binarydecimal.com/tools/statistics-calculator/wilcoxon-signed-rank-test), exact \(p=2/256\).
+- [Royston/Shapiro 11-value worked example](https://algorithm.tamnd.com/shapiro-wilk-test/), \(W\approx0.78881\), \(p\approx0.006704\).
+- [Emory rank correlation example](https://mathcenter.oxford.emory.edu/site/math117/rankCorrelation/), \(\rho=-0.1785714\), plus an exact 5-case permutation example.
+- [Benjamini–Hochberg's original 15 p-values](https://algorithm.tamnd.com/benjamini-hochberg-procedure/) (four BH and three Bonferroni rejections at 0.05), including adjusted probabilities and monotonicity.
+- Exact tied-rank permutation probabilities checked by **independent brute-force enumeration** and large-sample tie/continuity corrections checked against independently written null-variance formulas, as well as degenerate-input errors and verifiable workbench receipts.
+
+Run the new tests along with the original numerical certification suite:
+
+\`\`\`sh
+python -m pytest -n0 backend/tests/test_scientific_inference.py backend/tests/test_scientific_fitting.py
+\`\`\`
