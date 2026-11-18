@@ -513,8 +513,10 @@ def test_restart_with_two_external_steps_in_flight_preserves_both_fences(tmp_pat
             "reconciliation-required", "reconciliation-required", "completed",
         ]
         assert calls == 3  # Only the never-sent third step dispatched.
-        assert all(s["startedAt"] and s["finishedAt"] for s in resumed["trace"]["steps"][:2])
-        assert all(s["durationMs"] is not None for s in resumed["trace"]["steps"][:2])
+        # Crash recovery knows when dispatch began, not when the lost
+        # process's external calls ended. Never invent terminal times.
+        assert all(s["startedAt"] and s["finishedAt"] is None for s in resumed["trace"]["steps"][:2])
+        assert all(s["durationMs"] is None for s in resumed["trace"]["steps"][:2])
         persisted = load_chat_row(snapshot, reopened.current_chat_id)["data"]["graph_runs"][-1]
         assert [s["externalAttempt"]["requestId"] for s in persisted["steps"][:2]] == requests
 
