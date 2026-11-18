@@ -237,6 +237,7 @@ class ChatWorker:
                 system_prompt_estimate=sys_tokens,
             )
             dropped = len(normalized_history) - len(trimmed_history)
+            summary_inserted = False
             if dropped > 0:
                 # ADR-006 stage 6.6: summarize the dropped older turns with
                 # ONE nested blocking chat() call (legal on this worker
@@ -261,6 +262,7 @@ class ChatWorker:
                         "content": "[Summary of earlier conversation]\n" + summary,
                     })
                     summarized = True
+                    summary_inserted = True
                 if cache_miss and on_context_trimmed is not None:
                     try:
                         on_context_trimmed(dropped, summarized)
@@ -272,7 +274,10 @@ class ChatWorker:
             # enforces the selected model's actual prompt ceiling, including
             # summaries and image costs. Fits retain identical wire messages.
             plan = ContextAssembler(self.token_estimator).assemble(
-                ContextAssembler.chat_sources(final_system_prompt, trimmed_history),
+                ContextAssembler.chat_sources(
+                    final_system_prompt, trimmed_history,
+                    generated_indices=(0,) if summary_inserted else (),
+                ),
                 context_window=window,
             )
             messages = list(plan.messages)
