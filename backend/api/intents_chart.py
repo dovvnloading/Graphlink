@@ -136,7 +136,17 @@ def register_chart_intents(
                 # shape and chart_error set, same "degrade gracefully, never
                 # drop the request" contract as the agent's own internal
                 # fallback chain.
-                chart_data = _placeholder_chart_data(normalized_chart_type)
+                if normalized_chart_type == "scatter":
+                    # The legacy helper lives in backend/canvas.py (outside
+                    # this feature's edit scope) and only constructs
+                    # categorical placeholders. Scatter needs real numeric
+                    # x coordinates even for an error-state chart.
+                    chart_data = canonicalize_chart_data({
+                        "type": "scatter", "title": "Chart",
+                        "xValues": [1.0, 2.0], "values": [1.0, 1.0],
+                    }, "scatter")
+                else:
+                    chart_data = _placeholder_chart_data(normalized_chart_type)
                 chart_error = f"The generated chart data could not be validated: {exc}"
             # ADR-010 stage 10.1: agent provenance - this node is produced by
             # a model generation, not a direct user action (stage 10.5's
