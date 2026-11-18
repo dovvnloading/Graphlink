@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fieldText, matchesSource, parseInputs, sourceOptions, type ScienceField, type ScienceState } from "./scientificWorkbench";
+import { chartableScienceTypes, fieldText, matchesSource, parseInputs, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
 
 const limits = { points: 3, columns: 2, cells: 4, text: 3 };
 function parse(kind: ScienceField["kind"], raw: string) {
@@ -63,5 +63,35 @@ describe("scientific catalog input and parent contracts", () => {
     expect(axis.value).toEqual([0, 2]);
     expect(matchesSource(axis, { ...axis.reference, nodeId: "old" })).toBe(true);
     expect(matchesSource(axis, { ...axis.reference, receiptHash: "previous" })).toBe(false);
+  });
+});
+
+
+describe("chartable scientific results", () => {
+  const result: ScienceResult = {
+    operationId: "plot_xy", inputs: {}, summary: "", values: {},
+    plot: { title: "Measured", x: [0, 1, 2], y: [1, 2, 3], xLabel: "Time (s)", yLabel: "Value (V)" },
+    table: { columns: ["X", "Y"], rows: [[0, 1], [1, 2], [2, 3]] },
+    provenance: { packId: "core", resultHash: "x" },
+  };
+  it("offers scatter and fitting only for genuinely compatible result shapes", () => {
+    expect(chartableScienceTypes(result)).toEqual(["scatter", "boxplot", "heatmap"]);
+    expect(chartableScienceTypes({ ...result, operationId: "linear_regression",
+      provenance: { ...result.provenance, packId: "statistics" },
+      inputs: { x: [0, 1, 2], y: [1, 2, 4] } })).toEqual([
+      "line", "scatter", "boxplot", "heatmap",
+    ]);
+    expect(chartableScienceTypes({ ...result, plot: undefined, table: undefined,
+      values: { estimate: 42, combined_standard_uncertainty: 0.2 } })).toEqual(["scatter"]);
+    expect(chartableScienceTypes({ ...result, plot: undefined, table: undefined,
+      values: { count: 10 } })).toEqual([]);
+  });
+  it("respects the existing chart point and matrix limits", () => {
+    const long = Array.from({ length: 301 }, (_, i) => i);
+    expect(chartableScienceTypes({ ...result, plot: { ...result.plot!, x: long, y: long },
+      table: undefined })).toEqual([]);
+    const table = { columns: Array.from({ length: 30 }, (_, i) => String(i)),
+      rows: Array.from({ length: 11 }, () => Array.from({ length: 30 }, () => 1)) };
+    expect(chartableScienceTypes({ ...result, plot: undefined, table })).toEqual([]);
   });
 });

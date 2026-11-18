@@ -268,3 +268,61 @@ export function matchesSource(option: SourceOption, source: SourceReference): bo
     reference.resultHash === source.resultHash && (!source.receiptHash || reference.receiptHash === source.receiptHash) &&
     reference.selector.length === source.selector.length && reference.selector.every((part, i) => part === source.selector[i]);
 }
+
+
+/** These are the four existing ChartSpec types, not new renderers. The menu
+ * only offers shapes that fit the chart canonicalizer's exact limits. */
+export type ScienceChartType = "scatter" | "line" | "boxplot" | "heatmap";
+export interface ScienceChartLink {
+  id: string;
+  title: string;
+  chartType: ScienceChartType;
+  receiptHash: string;
+  stale: boolean;
+}
+
+export function chartableScienceTypes(result: ScienceResult): ScienceChartType[] {
+  const types: ScienceChartType[] = [];
+  const { inputs, values, table, plot } = result;
+  const pair = (a: unknown, b: unknown) => vector(a) && vector(b) && a.length === b.length;
+  const fit = (result.provenance.packId === "statistics" && result.operationId === "linear_regression"
+    && pair(inputs.x, inputs.y) && (inputs.x as number[]).length >= 3) ||
+    (result.provenance.packId === "fitting" && result.operationId === "nonlinear_least_squares"
+      && pair(inputs.x, inputs.y)) ||
+    (result.provenance.packId === "fitting" && result.operationId === "weighted_linear_least_squares"
+      && Array.isArray(inputs.predictors) && vector(inputs.response)
+      && inputs.predictors.length === (inputs.response as number[]).length
+      && inputs.predictors.every((row) => Array.isArray(row) && row.length === 1 && finite(row[0])));
+  const count = result.operationId === "weighted_linear_least_squares"
+    ? (inputs.response as number[] | undefined)?.length ?? 0
+    : (inputs.x as number[] | undefined)?.length ?? 0;
+  if (fit && count > 0 && count <= 75) types.push("line");
+  if ((plot && pair(plot.x, plot.y) && plot.x.length <= 300)
+      || (finite(values.estimate) && finite(values.combined_standard_uncertainty)
+        && values.combined_standard_uncertainty >= 0)
+      || (table && table.rows.length > 0 && table.rows.length <= 300 && table.columns.length <= 3
+        && table.columns.filter((_, i) => vector(table.rows.map((row) => row[i]))).length >= 2)) {
+    types.push("scatter");
+  }
+  if (!table || !table.rows.length || !table.columns.length) return types;
+
+  const numeric = table.columns.map((_, i) => table.rows.map((row) => row[i]))
+    .filter((cells) => vector(cells));
+  const grouped = table.columns.length === 2 && table.rows.every((row) =>
+    typeof row[0] === "string" && finite(row[1]));
+  if (grouped) {
+    const groups = new Map<string, number>();
+    for (const row of table.rows) groups.set(row[0] as string, (groups.get(row[0] as string) ?? 0) + 1);
+    if (groups.size <= 12 && groups.size > 0 && [...groups.values()].every((n) => n >= 2)
+        && table.rows.length <= 300) types.push("boxplot");
+  } else if (table.rows.length >= 2 && numeric.length > 0
+             && numeric.length <= 12 && table.rows.length * numeric.length <= 300) {
+    types.push("boxplot");
+  }
+  const withLabel = table.columns.length > 1 && table.rows.every((row) => typeof row[0] === "string")
+    && new Set(table.rows.map((row) => row[0])).size === table.rows.length;
+  const heat = table.rows.map((row) => withLabel ? row.slice(1) : row);
+  if (heat.length * heat[0].length <= 300 && heat.every((row) =>
+    row.length === heat[0].length && row.every(finite))) types.push("heatmap");
+  return types;
+}

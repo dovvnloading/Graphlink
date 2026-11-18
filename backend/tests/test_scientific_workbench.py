@@ -383,3 +383,123 @@ def test_repeated_renders_validate_immutable_state_once_and_hide_it_on_revoke(se
     assert len(calls) <= 1
     dispatch(bus, "setPluginGrant", "science_core", False)
     assert document._plugin_state_wire(document.nodes[node]) == {}
+
+
+
+def test_chart_this_result_is_connected_receipted_refreshable_and_undoable(session):
+    from backend.api.intents_chart import register_chart_intents
+
+    document, bus, registry, settings = session
+
+    class NoExtractionAgent:
+        async def start_chart_generation(self, **kwargs):
+            raise AssertionError("A scientific chart must never use model extraction")
+
+    register_chart_intents(bus, document, NotificationState(), NoExtractionAgent())
+    grant(bus, "core")
+    source = dispatch(bus, "executePlugin", "Scientific Core")
+    samples = {"x": [0, 1, 2], "y": [1, 2, 4], "x_label": "Time (s)", "y_label": "Distance (m)"}
+    assert run(bus, "core", source, "plot_xy", samples)["ok"]
+    first_receipt = envelope(document, source)["latest"]["provenance"]
+    chart_id = asyncio.run(bus.dispatch_intent("scene", "generateChart", [source, "scatter"]))
+    chart = document.nodes[chart_id]
+    assert chart.kind == "chart"
+    assert chart.state.chart_type == "scatter"
+    assert chart.state.chart_source_node_id == source
+    assert any(edge.source == source and edge.target == chart_id for edge in document.edges.values())
+    assert chart.state.chart_data["xUnit"] == "s"
+    assert chart.state.chart_data["yUnit"] == "m"
+    assert chart.state.chart_data["scienceReceipt"] == {
+        "sourceKey": envelope(document, source)["nodeKey"],
+        "resultHash": first_receipt["resultHash"], "receiptHash": first_receipt["receiptHash"],
+    }
+    assert document.scene_payload()["nodes"][-1]["chartData"]["scienceReceipt"]["receiptHash"] == first_receipt["receiptHash"]
+
+    # A duplicate run is a no-op. A changed run changes the receipt, but
+    # retains the old plotted data until this exact chart is refreshed.
+    assert run(bus, "core", source, "plot_xy", samples)["ok"]
+    assert chart.state.chart_error == ""
+    assert run(bus, "core", source, "plot_xy", {**samples, "y": [1, 3, 9]})["ok"]
+    assert "refresh" in document.nodes[chart_id].state.chart_error
+    assert document.nodes[chart_id].state.chart_data["values"] == [1, 2, 4]
+    assert len([n for n in document.nodes.values() if n.kind == "chart"]) == 1
+    receipt = envelope(document, source)["latest"]["provenance"]["receiptHash"]
+
+    assert asyncio.run(bus.dispatch_intent("scene", "generateChart", [chart_id, "scatter"])) == chart_id
+    assert document.nodes[chart_id].state.chart_data["values"] == [1, 3, 9]
+    assert document.nodes[chart_id].state.chart_data["scienceReceipt"]["receiptHash"] == receipt
+    assert document.nodes[chart_id].state.chart_error == ""
+    assert document.undo()
+    assert document.nodes[chart_id].state.chart_data["values"] == [1, 2, 4]
+    assert document.nodes[chart_id].state.chart_error
+    assert document.redo()
+    assert document.nodes[chart_id].state.chart_error == ""
+
+    # The regular chart serializer stores chartData and its parent. Both
+    # survive reopening, with source ids reminted and stable nodeKey intact.
+    saved = build_chat_data(document, plugin_registry=registry, settings_manager=settings)
+    restore_chat_into_document(document, {"data": saved}, [], [],
+                               plugin_registry=registry, settings_manager=settings)
+    restored_source = next(n for n in document.nodes.values() if n.kind == "science_core.workbench")
+    restored_chart = next(n for n in document.nodes.values() if n.kind == "chart")
+    assert restored_chart.state.chart_source_node_id == restored_source.id
+    assert restored_chart.state.chart_data["scienceReceipt"]["receiptHash"] == receipt
+    assert any(e.source == restored_source.id and e.target == restored_chart.id for e in document.edges.values())
+
+
+def test_chart_this_does_not_bypass_science_grants_or_accept_bad_source_shapes(session):
+    from backend.api.intents_chart import register_chart_intents
+
+    document, bus, _, _ = session
+
+    class NoExtractionAgent:
+        async def start_chart_generation(self, **kwargs):
+            raise AssertionError("Do not invoke model generation for scientific results")
+
+    register_chart_intents(bus, document, NotificationState(), NoExtractionAgent())
+    grant(bus, "core")
+    source = dispatch(bus, "executePlugin", "Scientific Core")
+    assert run(bus, "core", source, "numeric_csv", {"csv": "A,B\n1,2\n3,4"})["ok"]
+    chart_id = asyncio.run(bus.dispatch_intent("scene", "generateChart", [source, "heatmap"]))
+    assert chart_id in document.nodes
+    assert document.nodes[chart_id].state.chart_data["matrix"] == [[1, 2], [3, 4]]
+    dispatch(bus, "setPluginGrant", "science_core", False)
+    assert asyncio.run(bus.dispatch_intent("scene", "generateChart", [source, "boxplot"])) is None
+    assert asyncio.run(bus.dispatch_intent("scene", "generateChart", [chart_id, "heatmap"])) is None
+    assert len([node for node in document.nodes.values() if node.kind == "chart"]) == 1
+
+
+
+def test_chart_receipt_freshness_detects_equal_numbers_from_different_sources(session):
+    from backend.api.intents_chart import register_chart_intents
+
+    document, bus, _, _ = session
+    register_chart_intents(bus, document, NotificationState(), None)
+    grant(bus, "core")
+    source_a = dispatch(bus, "executePlugin", "Scientific Core")
+    source_b = dispatch(bus, "executePlugin", "Scientific Core")
+    child = dispatch(bus, "executePlugin", "Scientific Core", source_a)
+    document.connect(source_b, child)
+    for node_id in (source_a, source_b):
+        assert run(bus, "core", node_id, "numeric_csv", {"csv": "Y\n1\n2\n3"})["ok"]
+
+    def cite(node_id):
+        snapshot = envelope(document, node_id)
+        receipt = snapshot["latest"]["provenance"]
+        return {"nodeId": node_id, "sourceKey": snapshot["nodeKey"],
+                "resultHash": receipt["resultHash"], "receiptHash": receipt["receiptHash"],
+                "selector": ["column", 0]}
+
+    assert cite(source_a)["resultHash"] == cite(source_b)["resultHash"]
+    assert cite(source_a)["receiptHash"] != cite(source_b)["receiptHash"]
+    inputs = {"x": [0, 1, 2], "y": [1, 2, 3], "x_label": "Time (s)", "y_label": "Measurement"}
+    assert run(bus, "core", child, "plot_xy", inputs, sources={"y": cite(source_a)})["ok"]
+    chart_id = asyncio.run(bus.dispatch_intent("scene", "generateChart", [child, "scatter"]))
+    before = document.nodes[chart_id].state.chart_data["scienceReceipt"]["receiptHash"]
+
+    assert run(bus, "core", child, "plot_xy", inputs, sources={"y": cite(source_b)})["ok"]
+    updated = envelope(document, child)["latest"]["provenance"]
+    assert updated["resultHash"] == document.nodes[chart_id].state.chart_data["scienceReceipt"]["resultHash"]
+    assert updated["receiptHash"] != before
+    assert "refresh" in document.nodes[chart_id].state.chart_error
+    assert document.nodes[chart_id].state.chart_data["values"] == [1, 2, 3]

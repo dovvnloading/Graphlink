@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from "vitest";
 import type { WsTransport } from "../../lib/ws/transport";
 import { SceneStore } from "./sceneStore";
 import { ScientificNodeView, type ScientificFlowNode } from "./ScientificNodeView";
-import { readScienceState, type ScienceState, type ScienceResult } from "./scientificWorkbench";
+import { readScienceState, type ScienceChartLink, type ScienceState, type ScienceResult } from "./scientificWorkbench";
 import * as download from "./downloadTextFile";
 
 const operation = {
@@ -26,18 +26,38 @@ const result: ScienceResult = {
 };
 const parent = { title: "Samples", nodeId: "parent", raw: JSON.stringify({ ...state, latest: result }) };
 
-function mount(raw = JSON.stringify(state), parents = [parent]) {
+function mount(raw = JSON.stringify(state), parents = [parent], charts: ScienceChartLink[] = []) {
   const request = vi.fn<WsTransport["request"]>().mockResolvedValue({ ok: true });
   const store = new SceneStore({ request } as unknown as WsTransport);
-  function draw(value: string, currentParents = parents) {
-    const props = { id: "target", data: { title: "Mathematics", raw: value, pluginId: "science_mathematics", parents: currentParents, store } } as NodeProps<ScientificFlowNode>;
+  const generateChart = vi.spyOn(store, "generateChart").mockImplementation(() => {});
+  function draw(value: string, currentParents = parents, currentCharts = charts) {
+    const props = { id: "target", data: { title: "Mathematics", raw: value, pluginId: "science_mathematics", parents: currentParents, charts: currentCharts, store } } as NodeProps<ScientificFlowNode>;
     return <ScientificNodeView {...props} />;
   }
   const view = render(draw(raw), { wrapper: ReactFlowProvider });
-  return { request, remount: (value: string) => { view.unmount(); render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents) => view.rerender(draw(value, currentParents)) };
+  return { request, generateChart, remount: (value: string) => { view.unmount(); render(draw(value), { wrapper: ReactFlowProvider }); }, refresh: (value: string, currentParents = parents, currentCharts = charts) => view.rerender(draw(value, currentParents, currentCharts)) };
 }
 
 describe("scientific workbench card", () => {
+  it("charts a saved XY trace and exposes receipt-aware refresh for its linked chart", () => {
+    const charts: ScienceChartLink[] = [{
+      id: "child-chart", title: "Distance chart", chartType: "scatter",
+      receiptHash: "b".repeat(64), stale: true,
+    }];
+    const { generateChart } = mount(JSON.stringify({ ...state, latest: result }), [parent], charts);
+    expect(screen.getByRole("button", { name: "Chart this" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "Chart type" })).toHaveValue("scatter");
+    fireEvent.click(screen.getByRole("button", { name: "Chart this" }));
+    expect(generateChart).toHaveBeenCalledWith("target", "scatter");
+    fireEvent.change(screen.getByRole("combobox", { name: "Chart type" }), { target: { value: "heatmap" } });
+    fireEvent.click(screen.getByRole("button", { name: "Chart this" }));
+    expect(generateChart).toHaveBeenCalledWith("target", "heatmap");
+    expect(screen.getByText("Source changed · refresh to update")).toBeVisible();
+    expect(screen.getByText(/Receipt bbbbbbbbbbbb/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh chart" }));
+    expect(generateChart).toHaveBeenCalledWith("child-chart", "scatter");
+  });
+
   it("only runs on submit, validates numeric arrays, and preserves the draft on a backend error", async () => {
     const { request } = mount();
     const input = screen.getByLabelText("Samples (m)");
