@@ -395,9 +395,22 @@ def _boxplot_statistics(values):
     """
     ordered = sorted(values)
     mid = len(ordered) // 2
-    q1 = median(ordered[:mid])
-    q3 = median(ordered[mid + (len(ordered) % 2):])
-    med = median(ordered)
+
+    def stable_median(sorted_values):
+        """Avoid statistics.median's (a+b)/2 overflow on finite samples."""
+        center = len(sorted_values) // 2
+        if len(sorted_values) % 2:
+            return sorted_values[center]
+        low, high = sorted_values[center - 1], sorted_values[center]
+        # Use a midpoint that does not overflow near the float ceiling or
+        # underflow when both observations are tiny and equal.
+        difference = high - low
+        return (low + difference / 2 if math.isfinite(difference)
+                else low / 2 + high / 2)
+
+    q1 = stable_median(ordered[:mid])
+    q3 = stable_median(ordered[mid + (len(ordered) % 2):])
+    med = stable_median(ordered)
     fence = 1.5 * (q3 - q1)
     lower, upper = q1 - fence, q3 + fence
     inliers = [value for value in ordered if lower <= value <= upper]
