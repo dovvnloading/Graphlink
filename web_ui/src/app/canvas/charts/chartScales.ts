@@ -52,6 +52,28 @@ export function log10Ticks(min: number, max: number, targetCount = 6): number[] 
   return ticks;
 }
 
+/** A tick on a log axis must never be formatted as zero or rounded
+ * to a neighbouring integer (the legacy value-label formatter may do both). */
+export function formatLogTick(value: number): string {
+  return value.toExponential(0);
+}
+
+/** Shared scientific domain math: include every symmetric/asymmetric error
+ * endpoint. Interpolation is linear in data space or log10(data), never in
+ * point index. */
+export function scientificDomain(min: number, max: number, scale: "linear" | "log10"): [number, number] {
+  if (scale === "log10") {
+    const low = Math.log10(min);
+    const high = Math.log10(max);
+    const padding = Math.max((high - low) * 0.12, 0.18);
+    // Clamp to finite representable powers; neither endpoint can become
+    // Infinity/zero even when a valid value is near a float limit.
+    return [10 ** Math.max(-323, low - padding), 10 ** Math.min(308, high + padding)];
+  }
+  const padding = Math.max((max - min) * 0.12, Math.max(Math.abs(min), Math.abs(max), 1) * 0.02);
+  return [Math.max(-Number.MAX_VALUE, min - padding), Math.min(Number.MAX_VALUE, max + padding)];
+}
+
 /** "Nice" round-number ticks spanning at least [min, max] - the classic
  * Sparks/D3-style algorithm: pick a step from the {1, 2, 5} x 10^n family
  * closest to the ideal step for the requested tick count, then emit every
