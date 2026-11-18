@@ -1,0 +1,16 @@
+[plugin]
+id = "science_linalg"
+name = "Linear Algebra"
+description = "Pivoted QR, Cholesky, least squares, symmetric eigenpairs, SVD, inverse, determinant and PCA."
+version = "1.1.0"
+sdk_api_version = 1
+entry_point = "plugin:register"
+
+[scopes]
+grants = ["graph.read", "graph.mutate"]
+
+[frontend]
+view = "generic"
+
+[persistence]
+passive_node_kinds = ["workbench"]
