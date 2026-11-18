@@ -157,16 +157,24 @@ def _safe_correlation(a, b):
         raise ValueError("Correlation requires the same number of paired x and y values.")
     if len(a) < 4:
         raise ValueError("A 95% correlation confidence interval requires at least four pairs.")
-    # Normalize magnitudes *before* differencing: finite x values of
-    # opposite signs can have an unrepresentable span (e.g. ±1e308).
-    ascale = max(map(abs, a)) or 1.0
-    bscale = max(map(abs, b)) or 1.0
-    norm_a = [v / ascale for v in a]
-    norm_b = [v / bscale for v in b]
-    amin, bmin = min(norm_a), min(norm_b)
-    ax = [x - amin for x in norm_a]
-    by = [y - bmin for y in norm_b]
+    # Subtract before scaling whenever the span fits in binary64: scaling
+    # first can discard low bits even for small integer rank examples.
+    amin, bmin = min(a), min(b)
+    ax = [x - amin for x in a]
+    by = [y - bmin for y in b]
     sx, sy = max(ax), max(by)
+    # Preserve support for finite observations whose span overflows binary64
+    # (e.g. -1e308 to +1e308) by normalizing only that variable first.
+    if not math.isfinite(sx):
+        ascale = max(map(abs, a)) or 1.0
+        amin_scaled = amin / ascale
+        ax = [x / ascale - amin_scaled for x in a]
+        sx = max(ax)
+    if not math.isfinite(sy):
+        bscale = max(map(abs, b)) or 1.0
+        bmin_scaled = bmin / bscale
+        by = [y / bscale - bmin_scaled for y in b]
+        sy = max(by)
     if not math.isfinite(sx) or not math.isfinite(sy):
         raise ValueError("Correlation differences exceed the supported numeric range.")
     if sx == 0 or sy == 0:

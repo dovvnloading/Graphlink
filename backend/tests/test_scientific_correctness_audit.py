@@ -108,6 +108,15 @@ def test_pearson_correlation_avoids_overflowing_finite_spans():
     assert values["p_value"] == pytest.approx(0, abs=1e-12)
 
 
+def test_pearson_finite_spans_keep_precision_after_large_translation():
+    # Pearson r is translation invariant. Scaling ~1e9 before subtracting
+    # these unit differences used to shift the result by ~7e-9.
+    x = [1_000_000_000 + i for i in range(1, 6)]
+    y = [2, 1, 4, 3, 5]
+    r = _run(inferential, "pearson_correlation", x=x, y=y)["values"]["r"]
+    assert r == pytest.approx(4 / 5, abs=1e-12, rel=0)
+
+
 def test_spearman_rank_validation_also_accepts_finite_large_spans():
     xs = [-1e308, -5e307, 0, 5e307, 1e308]
     ys = [-2, -1, 0, 1, 2]
