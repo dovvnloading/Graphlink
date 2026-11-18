@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import itertools
 import math
+import random
 import statistics
 from collections import Counter
 from decimal import Decimal, localcontext
 from functools import lru_cache
 
 from graphlink_plugins.scientific.core import Field, Operation
-from graphlink_plugins.scientific.packs.fitting import _beta_i, _student_t_cdf
+from graphlink_plugins.scientific.packs.fitting import (
+    _as_float, _beta_i, _gamma_q, _normal_solve, _student_t_cdf, _student_t_ppf,
+)
 
 _NORMAL = statistics.NormalDist()
 _Z95 = _NORMAL.inv_cdf(0.975)
@@ -461,7 +464,652 @@ def _benjamini_hochberg(data):
     return _adjust_p_values(data, "benjamini_hochberg")
 
 
+# Additional standard-library inferential procedures. Integrated in inferential.py.
+
+
+def _two_way_anova(data):
+    ys, aa, bb = data["values"], data["factor_a"], data["factor_b"]
+    if len(ys) != len(aa) or len(ys) != len(bb):
+        raise ValueError("Two-way ANOVA requires one level of each factor per response.")
+    a_levels, b_levels = sorted(set(aa)), sorted(set(bb))
+    na, nb, n = len(a_levels), len(b_levels), len(ys)
+    if na < 2 or nb < 2:
+        raise ValueError("Two-way ANOVA requires at least two levels of each factor.")
+    if na * nb > 64:
+        raise ValueError("Two-way ANOVA supports at most 64 factor combinations.")
+    cells = {(a, b): [] for a in a_levels for b in b_levels}
+    for y, a, b in zip(ys, aa, bb):
+        cells[(a, b)].append(y)
+    if any(not sample for sample in cells.values()):
+        raise ValueError("Two-way ANOVA with interaction requires every factor combination to be observed.")
+    if n <= na * nb:
+        raise ValueError("Two-way ANOVA requires residual degrees of freedom (replicate measurements).")
+    with localcontext() as ctx:
+        ctx.prec = 76
+        dy = [Decimal(str(v)) for v in ys]
+        by_a = {a: [] for a in a_levels}
+        by_b = {b: [] for b in b_levels}
+        dcell = {(a, b): [] for a in a_levels for b in b_levels}
+        for y, a, b in zip(dy, aa, bb):
+            by_a[a].append(y)
+            by_b[b].append(y)
+            dcell[a, b].append(y)
+        def within(groups):
+            return sum((sum(((v - sum(group) / len(group)) ** 2 for v in group), Decimal(0))
+                        for group in groups), Decimal(0))
+        ss_a_only = within(by_a.values())
+        ss_b_only = within(by_b.values())
+        ss_full = within(dcell.values())
+        # Type-II main effects: compare additive fits, never a type-III
+        # main effect conditional on the higher-order interaction.
+        x = [[Decimal(1)] + [Decimal(int(a == level)) for level in a_levels[1:]]
+             + [Decimal(int(b == level)) for level in b_levels[1:]] for a, b in zip(aa, bb)]
+        p = 1 + na - 1 + nb - 1
+        gram = [[sum((row[i] * row[j] for row in x), Decimal(0)) for j in range(p)]
+                for i in range(p)]
+        rhs = [sum((row[i] * y for row, y in zip(x, dy)), Decimal(0)) for i in range(p)]
+        beta = _normal_solve(gram, rhs)
+        ss_add = sum(((y - sum((v * b for v, b in zip(row, beta)), Decimal(0))) ** 2
+                      for y, row in zip(dy, x)), Decimal(0))
+        ss = [ss_b_only - ss_add, ss_a_only - ss_add, ss_add - ss_full]
+        if any(v < 0 for v in ss):
+            raise ValueError("Two-way ANOVA sums of squares are numerically inconsistent.")
+        if ss_full <= 0:
+            raise ValueError("Two-way ANOVA residual variance is zero; F tests are undefined.")
+        df_error = n - na * nb
+        mse = ss_full / df_error
+        if float(mse) == 0.0:
+            raise ValueError("Two-way ANOVA residual mean square underflows the numeric range.")
+        dfs = [na - 1, nb - 1, (na - 1) * (nb - 1)]
+        rows = []
+        for label, s, df in zip(("factor A (Type II)", "factor B (Type II)", "interaction A:B"), ss, dfs):
+            ms = s / df
+            f = float(ms / mse)
+            pvalue = _beta_i(df_error / 2, df / 2, df_error / (df_error + df * f)) if math.isfinite(f) else 0.0
+            rows.append([label, df, _as_float(s, "ANOVA sum of squares") if s else 0.0,
+                         _as_float(ms, "ANOVA mean square") if ms else 0.0,
+                         _as_float(Decimal(str(f)), "ANOVA F statistic"), _probability(pvalue)])
+        rows.append(["residual", df_error, _as_float(ss_full, "ANOVA residual sum of squares"),
+                     _as_float(mse, "ANOVA residual mean square"), "", ""])
+        overall = sum(dy) / n
+        total = sum(((y - overall) ** 2 for y in dy), Decimal(0))
+        values = {"observations": n, "levels_a": na, "levels_b": nb,
+                  "degrees_of_freedom_residual": df_error, "residual_sum_squares": _as_float(ss_full, "Residual sum of squares"),
+                  "residual_mean_square": _as_float(mse, "Residual mean square"),
+                  "r_squared_full": _as_float(1 - ss_full / total, "R squared"),
+                  "ss_factor_a_type_ii": rows[0][2], "ss_factor_b_type_ii": rows[1][2],
+                  "ss_interaction": rows[2][2], "f_factor_a": rows[0][4], "f_factor_b": rows[1][4],
+                  "f_interaction": rows[2][4], "p_factor_a": rows[0][5], "p_factor_b": rows[1][5],
+                  "p_interaction": rows[2][5]}
+    return {"summary": "Two-way fixed-effects ANOVA with interaction. Type-II main-effect SS use additive model comparisons; all F tests use full-model residual error. Interpret interaction first.",
+            "values": values,
+            "table": {"columns": ["source", "df", "sum of squares", "mean square", "F", "p"], "rows": rows}}
+
+
+def _kruskal_wallis(data):
+    ys, labels = data["values"], data["groups"]
+    if len(ys) != len(labels):
+        raise ValueError("Kruskal-Wallis requires one group per measurement.")
+    groups = {label: [] for label in sorted(set(labels))}
+    for y, label in zip(ys, labels):
+        groups[label].append(y)
+    if not 2 <= len(groups) <= 32 or any(len(g) < 2 for g in groups.values()):
+        raise ValueError("Kruskal-Wallis requires 2-32 independent groups with at least two observations each.")
+    ranks, ties = _rank(ys)
+    n = len(ys)
+    correction = 1 - math.fsum(t**3 - t for t in ties) / (n**3 - n)
+    if correction <= 0:
+        raise ValueError("Kruskal-Wallis is undefined when all measurements are tied.")
+    sums = {label: 0.0 for label in groups}
+    for rank, label in zip(ranks, labels):
+        sums[label] += rank
+    h = max(0.0, (12 / (n * (n + 1)) *
+                  math.fsum(sums[label]**2 / len(group) for label, group in groups.items())
+                  - 3 * (n + 1)) / correction)
+    df = len(groups) - 1
+    pvalue = _gamma_q(df / 2, h / 2)
+    variance = (n * (n + 1) - math.fsum(t**3 - t for t in ties) / (n - 1)) / 12
+    labels = sorted(groups)
+    rows = []
+    for i, a in enumerate(labels):
+        for b in labels[i + 1:]:
+            diff = sums[a] / len(groups[a]) - sums[b] / len(groups[b])
+            se = math.sqrt(variance * (1 / len(groups[a]) + 1 / len(groups[b])))
+            z = diff / se
+            rows.append([a, b, diff, z, math.erfc(abs(z) / math.sqrt(2)), 0.0])
+    m = len(rows)
+    last = 0.0
+    for rank, idx in enumerate(sorted(range(m), key=lambda i: rows[i][4])):
+        last = max(last, min(1.0, (m - rank) * rows[idx][4]))
+        rows[idx][5] = last
+    return {"summary": "Kruskal-Wallis rank test with tie-corrected chi-square approximation; two-sided Dunn pairwise z tests, Holm familywise adjustment.",
+            "values": {"observations": n, "group_count": len(groups), "degrees_of_freedom": df,
+                       "h_statistic": h, "tie_correction": correction, "p_value": pvalue},
+            "table": {"columns": ["group A", "group B", "mean rank A - B", "Dunn z", "raw p", "Holm adjusted p"], "rows": rows}}
+
+
+def _count_table(raw, *, fisher=False):
+    if len(raw) < 2 or len(raw[0]) < 2:
+        raise ValueError("Contingency tables require at least two rows and two columns.")
+    if fisher and (len(raw) != 2 or len(raw[0]) != 2):
+        raise ValueError("Fisher's exact test requires a 2x2 contingency table.")
+    if any(v < 0 or not v.is_integer() or v > 2**53 - 1 for row in raw for v in row):
+        raise ValueError("Contingency counts must be nonnegative, exactly representable integers.")
+    table = [[int(v) for v in row] for row in raw]
+    row_totals = [sum(row) for row in table]
+    col_totals = [sum(row[j] for row in table) for j in range(len(table[0]))]
+    if any(v == 0 for v in row_totals + col_totals):
+        raise ValueError("Contingency tables require nonzero row and column margins.")
+    return table, row_totals, col_totals, sum(row_totals)
+
+
+def _chi_square_independence(data):
+    table, rt, ct, n = _count_table(data["table"])
+    r, c = len(rt), len(ct)
+    contributions = []
+    cells_below_5 = 0
+    rows = []
+    for i in range(r):
+        for j in range(c):
+            expected = rt[i] * ct[j] / n
+            observed = table[i][j]
+            residual = (observed - expected) / math.sqrt(expected)
+            contributions.append(residual**2)
+            cells_below_5 += expected < 5
+            rows.append([f"{i},{j}", observed, expected, residual])
+    chi = math.fsum(contributions)
+    df = (r - 1) * (c - 1)
+    return {"summary": "Pearson chi-square independence test (uncorrected) using an asymptotic chi-square tail; inspect cells with expected counts below five.",
+            "values": {"rows": r, "columns": c, "observations": n, "degrees_of_freedom": df,
+                       "chi_square": chi, "p_value": _gamma_q(df / 2, chi / 2),
+                       "expected_cells_below_5": cells_below_5,
+                       "cramers_v": math.sqrt(chi / (n * min(r - 1, c - 1)))},
+            "table": {"columns": ["row,column (zero-based)", "observed", "expected", "Pearson residual"], "rows": rows}}
+
+
+def _fisher_exact(data):
+    table, rt, ct, n = _count_table(data["table"], fisher=True)
+    a, b = table[0]
+    c, d = table[1]
+    lo, hi = max(0, ct[0] - rt[1]), min(ct[0], rt[0])
+    if hi - lo > 100000:
+        raise ValueError("Fisher's exact test supports at most 100001 feasible tables for fixed margins.")
+    def logcomb(n, k):
+        return math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
+    logden = logcomb(n, ct[0])
+    logs = [logcomb(rt[0], v) + logcomb(rt[1], ct[0] - v) - logden
+            for v in range(lo, hi + 1)]
+    scale = max(logs)
+    weights = [math.exp(v - scale) for v in logs]
+    total = math.fsum(weights)
+    observed_log = logs[a - lo]
+    # The probability-order two-sided convention (R fisher.test, SciPy).
+    p_two = math.fsum(w for lp, w in zip(logs, weights) if lp <= observed_log + 1e-10) / total
+    p_less = math.fsum(weights[:a - lo + 1]) / total
+    p_greater = math.fsum(weights[a - lo:]) / total
+    odds = "infinite" if b * c == 0 and a * d else (a * d / (b * c) if b * c else "undefined (zero margins)")
+    return {"summary": "Fisher conditional exact test for a 2x2 table; two-sided p sums all fixed-margin tables no more probable than observed. Odds ratio is the sample cross-product estimate.",
+            "values": {"observations": n, "odds_ratio": odds, "p_two_sided": _probability(p_two),
+                       "p_less": _probability(p_less), "p_greater": _probability(p_greater),
+                       "feasible_tables": hi - lo + 1}}
+
+
+def _ols_model(data):
+    matrix, response = data["predictors"], data["response"]
+    n = len(response)
+    if len(matrix) != n:
+        raise ValueError("Multiple regression needs one predictor row per response.")
+    p = len(matrix[0]) + 1
+    if p > 16:
+        raise ValueError("Multiple regression supports at most 15 predictors plus an intercept.")
+    if n <= p:
+        raise ValueError("Multiple regression requires positive residual degrees of freedom.")
+    with localcontext() as ctx:
+        ctx.prec = 76
+        x = [[Decimal(1)] + [Decimal(str(v)) for v in row] for row in matrix]
+        y = [Decimal(str(v)) for v in response]
+        gram = [[sum((row[i] * row[j] for row in x), Decimal(0)) for j in range(p)] for i in range(p)]
+        rhs = [sum((row[i] * yy for row, yy in zip(x, y)), Decimal(0)) for i in range(p)]
+        beta, inverse = _normal_solve(gram, rhs, inverse=True)
+        predicted = [sum((v * b for v, b in zip(row, beta)), Decimal(0)) for row in x]
+        residual = [yy - yh for yy, yh in zip(y, predicted)]
+        sse = sum((v * v for v in residual), Decimal(0))
+        mean = sum(y) / n
+        sst = sum(((v - mean)**2 for v in y), Decimal(0))
+        if sst <= 0:
+            raise ValueError("Multiple regression has a constant response (R squared is undefined).")
+        if sse <= 0:
+            raise ValueError("Multiple regression has zero residual variance; inferential standard errors are undefined.")
+        df = n - p
+        mse = sse / df
+        stdev = mse.sqrt()
+        crit = Decimal(str(_student_t_ppf(.975, df)))
+        rows = []
+        for j, coef in enumerate(beta):
+            se = (mse * inverse[j][j]).sqrt()
+            t = _as_float(coef / se, "Regression t statistic")
+            pvalue = 2 * _student_t_cdf(-abs(t), df)
+            if j:
+                xmean = sum((row[j] for row in x), Decimal(0)) / n
+                ssx = sum(((row[j] - xmean)**2 for row in x), Decimal(0))
+                vif = _as_float(ssx * inverse[j][j], "Variance inflation factor")
+            else:
+                vif = "not applicable"
+            rows.append(["intercept" if j == 0 else f"predictor_{j}",
+                         _as_float(coef, "Coefficient"), _as_float(se, "Standard error"),
+                         t, _probability(pvalue), _as_float(coef - crit * se, "95% CI"),
+                         _as_float(coef + crit * se, "95% CI"), vif])
+        diag_rows = []
+        leverage_max = Decimal(0)
+        max_std = max_cook = Decimal(0)
+        for i, (row, yhat, res) in enumerate(zip(x, predicted, residual)):
+            lever = sum((row[j] * inverse[j][k] * row[k] for j in range(p) for k in range(p)), Decimal(0))
+            leverage_max = max(leverage_max, lever)
+            if lever >= 1 - Decimal("1e-25"):
+                standardized, cooks = "undefined (unit leverage)", "undefined (unit leverage)"
+            else:
+                standardized_d = res / (stdev * (1 - lever).sqrt())
+                cook_d = res**2 / (p * mse) * lever / (1 - lever)**2
+                max_std = max(max_std, abs(standardized_d))
+                max_cook = max(max_cook, cook_d)
+                standardized = _as_float(standardized_d, "Standardized residual")
+                cooks = _as_float(cook_d, "Cook distance") if cook_d else 0.0
+            diag_rows.append([i, _as_float(yhat, "Fitted value"), _as_float(res, "Residual"),
+                              _as_float(lever, "Leverage"), standardized, cooks])
+        dw = sum(((residual[i] - residual[i-1])**2 for i in range(1, n)), Decimal(0)) / sse
+        m2 = sum((v**2 for v in residual), Decimal(0)) / n
+        m3 = sum((v**3 for v in residual), Decimal(0)) / n
+        m4 = sum((v**4 for v in residual), Decimal(0)) / n
+        jb = Decimal(n) / 6 * ((m3 / m2**Decimal("1.5"))**2 + (m4 / m2**2 - 3)**2 / 4)
+        r2 = 1 - sse / sst
+        adj = 1 - (sse / df) / (sst / (n - 1))
+        values = {"observations": n, "parameters": p, "degrees_of_freedom": df,
+                  "residual_sum_squares": _as_float(sse, "Residual SS"),
+                  "residual_standard_deviation": _as_float(stdev, "Residual SD"),
+                  "r_squared": _as_float(r2, "R squared"),
+                  "adjusted_r_squared": _as_float(adj, "Adjusted R squared"),
+                  "durbin_watson": _as_float(dw, "Durbin-Watson"),
+                  "jarque_bera": _as_float(jb, "Jarque-Bera"),
+                  "jarque_bera_p_value": math.exp(-_as_float(jb, "Jarque-Bera") / 2),
+                  "max_leverage": _as_float(leverage_max, "Leverage"),
+                  "max_abs_standardized_residual": _as_float(max_std, "Standardized residual") if max_std else 0.0,
+                  "max_cooks_distance": _as_float(max_cook, "Cook distance") if max_cook else 0.0}
+        for i, row in enumerate(diag_rows):
+            values[f"fitted_{i}"] = row[1]
+            values[f"residual_{i}"] = row[2]
+            values[f"leverage_{i}"] = row[3]
+            values[f"standardized_residual_{i}"] = row[4]
+            values[f"cooks_distance_{i}"] = row[5]
+        for j, row in enumerate(rows):
+            values[f"coefficient_{j}"] = row[1]
+            values[f"standard_error_{j}"] = row[2]
+            values[f"ci95_lower_{j}"] = row[5]
+            values[f"ci95_upper_{j}"] = row[6]
+            if j:
+                values[f"vif_{j}"] = row[7]
+    return {"summary": "Unweighted OLS with intercept; two-sided t/Wald 95% coefficient intervals, VIF and in-sample residual diagnostics. Durbin-Watson depends on observation order; Jarque-Bera is asymptotic.",
+            "values": values,
+            "table": {"columns": ["term", "estimate", "standard error", "t", "two-sided p", "95% lower", "95% upper", "VIF"], "rows": rows},
+            "plot": {"title": "OLS residuals versus fitted values", "xLabel": "Fitted response", "yLabel": "Observed minus fitted",
+                     "x": [row[1] for row in diag_rows], "y": [row[2] for row in diag_rows]}}
+
+
+def _sigmoid(z):
+    if z >= 0:
+        e = math.exp(-z)
+        return 1 / (1 + e)
+    e = math.exp(z)
+    return e / (1 + e)
+
+
+def _logistic_loglike(x, y, beta):
+    return math.fsum((yy * eta - (max(eta, 0.0) + math.log1p(math.exp(-abs(eta))))
+                      for row, yy in zip(x, y) for eta in (math.fsum(v * b for v, b in zip(row, beta)),)))
+
+
+def _logistic(data):
+    matrix, outcomes = data["predictors"], data["outcome"]
+    n = len(outcomes)
+    if n != len(matrix):
+        raise ValueError("Binary logistic regression requires one predictor row per outcome.")
+    if any(y not in (0, 1) for y in outcomes):
+        raise ValueError("Binary logistic regression outcomes must be exactly 0 or 1.")
+    if len(set(outcomes)) < 2:
+        raise ValueError("Binary logistic regression requires both outcome classes (degenerate outcome).")
+    p = len(matrix[0]) + 1
+    if p > 13 or n <= p:
+        raise ValueError("Binary logistic regression requires n>parameters and at most 12 predictors.")
+    with localcontext() as ctx:
+        ctx.prec = 76
+        raw = [[Decimal(str(v)) for v in row] for row in matrix]
+        means = [sum((row[j] for row in raw), Decimal(0)) / n for j in range(p - 1)]
+        scales = [(sum(((row[j] - means[j])**2 for row in raw), Decimal(0)) / n).sqrt()
+                  for j in range(p - 1)]
+        if any(v == 0 for v in scales):
+            raise ValueError("Binary logistic regression has a constant predictor (rank deficient).")
+        x = [[1.0] + [float((row[j] - means[j]) / scales[j]) for j in range(p - 1)] for row in raw]
+        # Check the unweighted design before IRLS; separation must not be
+        # disguised as a generic linear solve failure.
+        g = [[sum((Decimal(str(row[j])) * Decimal(str(row[k])) for row in x), Decimal(0))
+              for k in range(p)] for j in range(p)]
+        _normal_solve(g, [Decimal(0)] * p)
+        fraction = math.fsum(outcomes) / n
+        beta = [math.log(fraction / (1 - fraction))] + [0.] * (p - 1)
+        converged = False
+        for iteration in range(1, 101):
+            predicted = [_sigmoid(math.fsum(v * b for v, b in zip(row, beta))) for row in x]
+            weights = [pr * (1 - pr) for pr in predicted]
+            score = [math.fsum(row[j] * (yy - pr) for row, yy, pr in zip(x, outcomes, predicted))
+                     for j in range(p)]
+            gram = [[sum((Decimal(str(w)) * Decimal(str(row[j])) * Decimal(str(row[k]))
+                          for row, w in zip(x, weights)), Decimal(0))
+                     for k in range(p)] for j in range(p)]
+            try:
+                delta = _normal_solve(gram, [Decimal(str(v)) for v in score])
+            except ValueError:
+                raise ValueError("Binary logistic regression has complete/quasi separation or singular IRLS information.") from None
+            step = [float(v) for v in delta]
+            old_ll = _logistic_loglike(x, outcomes, beta)
+            multiplier = 1.
+            for _ in range(32):
+                candidate = [b + multiplier * s for b, s in zip(beta, step)]
+                new_ll = _logistic_loglike(x, outcomes, candidate)
+                if new_ll >= old_ll - 1e-12:
+                    break
+                multiplier /= 2
+            else:
+                raise ValueError("Binary logistic regression IRLS line search failed to converge.")
+            beta = candidate
+            if max(map(abs, beta)) > 40:
+                raise ValueError("Binary logistic regression has complete or quasi separation (diverging coefficients).")
+            if max(abs(multiplier * s) for s in step) < 1e-9:
+                converged = True
+                break
+        if not converged:
+            raise ValueError("Binary logistic regression did not converge; check for complete/quasi separation.")
+        predicted = [_sigmoid(math.fsum(v * b for v, b in zip(row, beta))) for row in x]
+        weights = [v * (1 - v) for v in predicted]
+        gram = [[sum((Decimal(str(w)) * Decimal(str(row[j])) * Decimal(str(row[k]))
+                      for row, w in zip(x, weights)), Decimal(0))
+                 for k in range(p)] for j in range(p)]
+        try:
+            _, inv = _normal_solve(gram, [Decimal(0)] * p, inverse=True)
+        except ValueError:
+            raise ValueError("Binary logistic regression has separation or singular fitted information.") from None
+        # Map coefficients and covariance from standardized predictors back
+        # to the supplied predictor units, including intercept covariances.
+        transform = [[Decimal(1)] + [-means[j] / scales[j] for j in range(p - 1)]]
+        transform.extend([[Decimal(0)] + [Decimal(int(j == k)) / scales[j] for k in range(p - 1)]
+                          for j in range(p - 1)])
+        coef = [sum((transform[i][j] * Decimal(str(beta[j])) for j in range(p)), Decimal(0)) for i in range(p)]
+        covariance = [[sum((transform[i][k] * inv[k][l] * transform[j][l]
+                            for k in range(p) for l in range(p)), Decimal(0))
+                       for j in range(p)] for i in range(p)]
+        rows = []
+        for j in range(p):
+            se = covariance[j][j].sqrt()
+            z = _as_float(coef[j] / se, "Logistic Wald z")
+            b = _as_float(coef[j], "Logistic coefficient")
+            err = _as_float(se, "Logistic standard error")
+            lo = _as_float(coef[j] - Decimal(str(_Z95)) * se, "Logistic CI")
+            hi = _as_float(coef[j] + Decimal(str(_Z95)) * se, "Logistic CI")
+            if not -700 < lo <= hi < 700:
+                raise ValueError("Logistic odds ratios or their confidence limits exceed the finite numeric range.")
+            rows.append(["intercept" if j == 0 else f"predictor_{j}", b, err, z,
+                         math.erfc(abs(z) / math.sqrt(2)), lo, hi,
+                         math.exp(b), math.exp(lo), math.exp(hi)])
+        loglike = _logistic_loglike(x, outcomes, beta)
+        null_ll = sum(outcomes) * math.log(fraction) + (n - sum(outcomes)) * math.log1p(-fraction)
+        lr = max(0.0, 2 * (loglike - null_ll))
+        values = {"observations": n, "parameters": p, "iterations": iteration,
+                  "log_likelihood": loglike, "null_log_likelihood": null_ll,
+                  "likelihood_ratio_chi_square": lr, "likelihood_ratio_p_value": _gamma_q((p - 1) / 2, lr / 2) if p > 1 else 1.0,
+                  "aic": 2 * p - 2 * loglike, "mcfadden_pseudo_r_squared": 1 - loglike / null_ll}
+        for j, row in enumerate(rows):
+            values[f"coefficient_{j}"] = row[1]
+            values[f"standard_error_{j}"] = row[2]
+            values[f"odds_ratio_{j}"] = row[7]
+            values[f"odds_ratio_ci95_lower_{j}"] = row[8]
+            values[f"odds_ratio_ci95_upper_{j}"] = row[9]
+    return {"summary": "Binary logistic maximum-likelihood regression by damped IRLS; two-sided Wald 95% odds-ratio intervals, likelihood ratio test and McFadden pseudo-R². Separation is rejected.",
+            "values": values,
+            "table": {"columns": ["term", "log-odds coefficient", "standard error", "z", "two-sided p", "log-odds lower", "log-odds upper", "odds ratio", "OR 95% lower", "OR 95% upper"], "rows": rows},
+            "plot": {"title": "Binary logistic fitted probabilities", "xLabel": "Observation index (zero-based)",
+                     "yLabel": "Fitted probability of outcome 1", "x": list(range(n)), "y": predicted}}
+
+
+def _sample_statistic(xs, name):
+    if name == "mean":
+        return math.fsum(xs) / len(xs)
+    if name == "median":
+        return statistics.median(xs)
+    if name == "standard_deviation":
+        return statistics.stdev(xs)
+    raise ValueError("Bootstrap statistic must be 'mean', 'median', or 'standard_deviation'.")
+
+
+def _quantile_sorted(xs, q):
+    at = (len(xs) - 1) * q
+    lo = math.floor(at)
+    hi = math.ceil(at)
+    return xs[lo] + (xs[hi] - xs[lo]) * (at - lo)
+
+
+def _bootstrap_ci(data):
+    sample, name = data["sample"], data["statistic"].strip().lower()
+    reps, seed, confidence = data["replicates"], data["seed"], data["confidence_level"]
+    n = len(sample)
+    if n < 3:
+        raise ValueError("BCa bootstrap needs at least three independent observations.")
+    if not 200 <= reps <= 20000:
+        raise ValueError("Bootstrap replicate count must lie between 200 and 20000.")
+    if not 0 < confidence < 1:
+        raise ValueError("Bootstrap confidence level must lie strictly between 0 and 1.")
+    observed = _sample_statistic(sample, name)
+    rng = random.Random(seed)
+    distribution = sorted(_sample_statistic([sample[rng.randrange(n)] for _ in range(n)], name)
+                          for _ in range(reps))
+    if not all(map(math.isfinite, distribution)):
+        raise ValueError("Bootstrap statistics exceed the finite numerical range.")
+    if distribution[0] == distribution[-1]:
+        raise ValueError("Bootstrap replicates are degenerate (all estimates identical).")
+    jack = [_sample_statistic(sample[:i] + sample[i+1:], name) for i in range(n)]
+    mean_j = math.fsum(jack) / n
+    influences = [mean_j - j for j in jack]
+    sumsq = math.fsum(v**2 for v in influences)
+    if sumsq <= 0:
+        raise ValueError("BCa bootstrap jackknife acceleration is undefined for degenerate data.")
+    acceleration = math.fsum(v**3 for v in influences) / (6 * sumsq**1.5)
+    count_less = sum(x < observed for x in distribution)
+    count_equal = sum(x == observed for x in distribution)
+    fraction = (count_less + count_equal / 2) / reps
+    if not 0 < fraction < 1:
+        raise ValueError("BCa bootstrap bias correction is undefined (all estimates on one side).")
+    bias = _NORMAL.inv_cdf(fraction)
+    alpha = (1 - confidence) / 2
+    def corrected(p):
+        z = _NORMAL.inv_cdf(p)
+        if 1 - acceleration * (bias + z) == 0:
+            raise ValueError("BCa bootstrap acceleration correction is singular.")
+        return _NORMAL.cdf(bias + (bias + z) / (1 - acceleration * (bias + z)))
+    lower, upper = corrected(alpha), corrected(1 - alpha)
+    if not 0 < lower < upper < 1:
+        raise ValueError("BCa bootstrap adjusted tail probabilities are degenerate.")
+    return {"summary": "Reproducible nonparametric iid bootstrap; linearly interpolated empirical percentile and bias-corrected accelerated (BCa) intervals using leave-one-out jackknife.",
+            "values": {"observations": n, "statistic": name, "estimate": observed,
+                       "replicates": reps, "seed": seed, "confidence_level": confidence,
+                       "percentile_lower": _quantile_sorted(distribution, alpha),
+                       "percentile_upper": _quantile_sorted(distribution, 1 - alpha),
+                       "bca_lower": _quantile_sorted(distribution, lower),
+                       "bca_upper": _quantile_sorted(distribution, upper),
+                       "bias_correction_z0": bias, "jackknife_acceleration": acceleration}}
+
+
+def _power_design(data):
+    if data["design"] not in ("one_sample", "paired", "two_sample"):
+        raise ValueError("t-test design must be 'one_sample', 'paired', or 'two_sample'.")
+    if data["tails"] not in ("one_sided", "two_sided"):
+        raise ValueError("Test tails must be 'one_sided' or 'two_sided'.")
+    if not 0 < data["alpha"] < 1 or not 0 < data["target_power"] < 1:
+        raise ValueError("Alpha and target power must lie strictly between 0 and 1.")
+    if not 3 <= data["sample_size"] <= 1000000:
+        raise ValueError("Power requires 3 to 1,000,000 observations per group/pair.")
+
+
+def _t_test_power_at(n, effect, alpha, tails, design):
+    df = n - 1 if design in ("one_sample", "paired") else 2 * n - 2
+    delta = effect * math.sqrt(n if design != "two_sample" else n / 2)
+    critical = -_student_t_ppf(alpha / (2 if tails == "two_sided" else 1), df)
+    sqrt2df = math.sqrt(2 * df)
+    tlo, thi = -min(sqrt2df, 12.0), 12.0
+    const = math.log(2) + df / 2 * math.log(df / 2) - math.lgamma(df / 2) - math.log(sqrt2df)
+    area = 0.0
+    for xi, wi in _legendre_nodes(128):
+        t = (thi + tlo) / 2 + (thi - tlo) / 2 * xi
+        scale = 1 + t / sqrt2df
+        if scale <= 0:
+            continue
+        density = math.exp(const + (df - 1) * math.log(scale) - df * scale**2 / 2)
+        if density < 1e-25:
+            continue
+        p = _NORMAL.cdf(delta - critical * scale)
+        if tails == "two_sided":
+            p += _NORMAL.cdf(-delta - critical * scale)
+        area += wi * density * p
+    return _probability(area * (thi - tlo) / 2)
+
+
+def _required_size(target, method):
+    low, high = 3, 3
+    if method(low) >= target:
+        return low
+    while method(high) < target:
+        low = high
+        high *= 2
+        if high > 1000000:
+            raise ValueError("Target power needs more than 1,000,000 observations per group.")
+    while high - low > 1:
+        mid = (low + high) // 2
+        if method(mid) >= target:
+            high = mid
+        else:
+            low = mid
+    return high
+
+
+def _t_test_power(data):
+    _power_design(data)
+    effect = abs(data["effect_size"])
+    if effect <= 0 or not math.isfinite(effect):
+        raise ValueError("Power calculation requires a nonzero standardized effect size.")
+    alpha, target = data["alpha"], data["target_power"]
+    tails, design, n = data["tails"], data["design"], data["sample_size"]
+    method = lambda size: _t_test_power_at(size, effect, alpha, tails, design)
+    required = _required_size(target, method)
+    return {"summary": "Exact noncentral-t power by deterministic chi-square mixing; minimum integer sample size for the target power, independent normal measurements and a standardized effect.",
+            "values": {"effect_size": effect, "alpha": alpha, "tails": tails, "design": design,
+                       "sample_size_per_group": n, "achieved_power": method(n),
+                       "target_power": target, "required_sample_size_per_group": required,
+                       "power_at_required_sample_size": method(required)}}
+
+
+def _proportion_power_at(n, a, b, alpha, tails, design):
+    difference = abs(a - b)
+    if design == "one_sample":
+        null_variance = b * (1 - b)
+        alternative_variance = a * (1 - a)
+    else:
+        pooled = (a + b) / 2
+        null_variance = 2 * pooled * (1 - pooled)
+        alternative_variance = a * (1 - a) + b * (1 - b)
+    z = _NORMAL.inv_cdf(1 - alpha / (2 if tails == "two_sided" else 1))
+    scale = math.sqrt(alternative_variance)
+    p = _NORMAL.cdf((difference * math.sqrt(n) - z * math.sqrt(null_variance)) / scale)
+    if tails == "two_sided":
+        p += _NORMAL.cdf((-difference * math.sqrt(n) - z * math.sqrt(null_variance)) / scale)
+    return _probability(p)
+
+
+def _proportion_power(data):
+    a, b = data["proportion_a"], data["proportion_b"]
+    if not 0 < a < 1 or not 0 < b < 1 or a == b:
+        raise ValueError("Power calculations require distinct interior probabilities (0 < p < 1).")
+    if data["design"] not in ("one_sample", "two_sample"):
+        raise ValueError("Proportion design must be 'one_sample' or 'two_sample'.")
+    _power_design(data)
+    alpha, target = data["alpha"], data["target_power"]
+    tails, design, n = data["tails"], data["design"], data["sample_size"]
+    method = lambda size: _proportion_power_at(size, a, b, alpha, tails, design)
+    required = _required_size(target, method)
+    return {"summary": "Normal-approximation z-test power and minimum integer sample size: one sample versus null proportion b, or equal-size independent two-sample proportions a/b (pooled-null variance).",
+            "values": {"proportion_a": a, "proportion_b": b, "alpha": alpha, "tails": tails,
+                       "design": design, "sample_size_per_group": n,
+                       "achieved_power": method(n), "target_power": target,
+                       "required_sample_size_per_group": required,
+                       "power_at_required_sample_size": method(required)}}
+
 OPERATIONS = (
+    Operation("two_way_anova", "Two-way ANOVA (Type II, interaction)",
+              "Full factorial fixed-effects ANOVA; Type-II main-effect SS from additive reduced models, interaction from full model.",
+              (Field("values", "Responses", "vector"), Field("factor_a", "Factor A numeric codes", "vector"),
+               Field("factor_b", "Factor B numeric codes", "vector")),
+              {"values": [10, 12, 13, 15, 16, 16, 20, 21, 25, 25, 26, 28],
+               "factor_a": [0]*6 + [1]*6, "factor_b": [0]*3+[1]*3+[0]*3+[1]*3}, _two_way_anova),
+    Operation("kruskal_wallis", "Kruskal-Wallis with Dunn post-hoc",
+              "Tie-corrected omnibus rank test with all pairwise Dunn z comparisons and Holm familywise p adjustment.",
+              (Field("values", "Measurements", "vector"), Field("groups", "Numeric group codes", "vector")),
+              {"values": [1, 1, 1, 1, 2, 2, 2, 4, 3, 3, 5, 6],
+               "groups": [1]*4+[2]*4+[3]*4}, _kruskal_wallis),
+    Operation("chi_square_independence", "Chi-square test of independence",
+              "Pearson contingency-table test, expected counts, Pearson residuals and Cramer's V.",
+              (Field("table", "Observed contingency counts", "matrix"),),
+              {"table": [[9, 1], [2, 8]]}, _chi_square_independence),
+    Operation("fisher_exact", "Fisher's exact test (2x2)",
+              "Fixed-margin hypergeometric test; probability-order two-sided and directional exact p-values.",
+              (Field("table", "2x2 observed counts", "matrix"),),
+              {"table": [[3, 1], [1, 3]]}, _fisher_exact),
+    Operation("multiple_linear_regression", "Multiple linear regression and diagnostics",
+              "Intercept OLS; Student-t coefficient limits, adjusted R squared, VIF, residuals, leverage, Cook's D and diagnostics.",
+              (Field("predictors", "Predictor rows (without intercept)", "matrix"),
+               Field("response", "Response measurements", "vector")),
+              {"predictors": [[i, i*i] for i in range(1, 12)],
+               "response": [i + .2*i*i + (-1)**i for i in range(1, 12)]}, _ols_model),
+    Operation("binary_logistic_regression", "Binary logistic regression (IRLS)",
+              "Binomial maximum likelihood by damped IRLS with Wald odds ratios/95% CI and separation detection.",
+              (Field("predictors", "Predictor rows (without intercept)", "matrix"),
+               Field("outcome", "Binary responses (0 or 1)", "vector")),
+              {"predictors": [[i] for i in range(1, 11)],
+               "outcome": [0, 0, 1, 0, 1, 0, 1, 1, 0, 1]}, _logistic),
+    Operation("bootstrap_confidence_interval", "Bootstrap percentile and BCa intervals",
+              "Seeded iid nonparametric bootstrap of the mean, median or sample standard deviation; jackknife BCa.",
+              (Field("sample", "Independent observations", "vector"),
+               Field("statistic", "Statistic: mean, median, standard_deviation", "text"),
+               Field("replicates", "Number of bootstrap replicates (200-20000)", "integer"),
+               Field("seed", "Pseudorandom generator seed", "integer"),
+               Field("confidence_level", "Confidence level in (0,1)", "number")),
+              {"sample": [1, 2, 3, 4, 5, 7, 10, 11, 16, 21], "statistic": "mean",
+               "replicates": 2000, "seed": 42, "confidence_level": .95}, _bootstrap_ci),
+    Operation("t_test_power", "t-test power and sample size",
+              "Noncentral-t power for one-sample, paired or equal-group two-sample t tests; minimal target-power sample size.",
+              (Field("effect_size", "Standardized effect magnitude (Cohen's d)", "number"),
+               Field("alpha", "Significance level", "number"),
+               Field("target_power", "Desired power", "number"),
+               Field("sample_size", "Observations per group/pairs", "integer"),
+               Field("design", "one_sample, paired, or two_sample", "text"),
+               Field("tails", "one_sided or two_sided", "text")),
+              {"effect_size": .5, "alpha": .05, "target_power": .8,
+               "sample_size": 30, "design": "two_sample", "tails": "two_sided"}, _t_test_power),
+    Operation("proportion_power", "Proportion z-test power and sample size",
+              "Normal-approximation power for one-sample proportion against p0 or two independent equal-sized proportions.",
+              (Field("proportion_a", "Alternative proportion p1", "number"),
+               Field("proportion_b", "Null p0 or second proportion p2", "number"),
+               Field("alpha", "Significance level", "number"),
+               Field("target_power", "Desired power", "number"),
+               Field("sample_size", "Observations per group", "integer"),
+               Field("design", "one_sample or two_sample", "text"),
+               Field("tails", "one_sided or two_sided", "text")),
+              {"proportion_a": .6, "proportion_b": .4, "alpha": .05,
+               "target_power": .8, "sample_size": 100, "design": "two_sample", "tails": "two_sided"}, _proportion_power),
     Operation("one_way_anova", "One-way ANOVA with Tukey HSD",
               "Fixed-effects one-way ANOVA with Tukey-Kramer pairwise familywise-adjusted tests and simultaneous confidence limits.",
               (Field("values", "Response measurements", "vector"), Field("groups", "Numeric group codes", "vector")),
