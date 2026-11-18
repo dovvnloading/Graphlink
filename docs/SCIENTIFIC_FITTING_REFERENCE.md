@@ -36,9 +36,57 @@ Candidate steps that fail to reduce the weighted objective are rejected and damp
 | `thurber` | *(β₁+β₂x+β₃x²+β₄x³)/(1+β₅x+β₆x²+β₇x³)* | Seven parameters; NIST StRD rational cubic/cubic |
 | `mgh09` | *β₁(x²+β₂x)/(x²+β₃x+β₄)* | Four parameters; NIST StRD rational model |
 
-The strings are case-insensitive. The two rational models are included because the specified NIST StRD certification cases **cannot** be represented by the other four model families. The saturating-exponential model evaluates `1 − exp(−bx)` using a small-argument series when needed; directly subtracting two nearly equal decimal exponentials would lose meaningful predicted values even at 76-digit precision when the amplitude is large. Rational denominators equal to zero at observed points are rejected for that trial. Models are not arbitrary Python expressions; no expression evaluator, network access or arbitrary code execution is involved.
+The built-in names are case-insensitive. The two rational models are retained for compatibility and certified NIST fits. The saturating-exponential model uses a small-argument series to protect against cancellation. Zero rational denominators are rejected at observed points. You can now also enter a **safe mathematical expression**, never Python code; see the custom-expression and bound interfaces below.
 
 At convergence, the local linearized covariance estimate is *C ≈ [S/(n₊−p)] (JᵀWJ)⁻¹*. Each `standard_error_j` is `sqrt(C[j,j])`; `ci95_lower_j` and `ci95_upper_j` equal *β̂ⱼ ± t₀.₉₇₅,ν × standard_error_j*. The fitted parameter table and residual plot are included in the artifact. **These are approximate local Wald confidence intervals**, not profile-likelihood intervals, bootstrap intervals, simultaneous intervals, or rigorous coverage guarantees for nonlinear or non-Gaussian data. Strong correlations, boundary parameters, non-identifiability, heteroscedasticity, narrow samples and nonnormal errors can render them unreliable. Reduced chi-square assumes inverse-variance weighting and a valid model. LM is a **local** method sensitive to starting parameters; failure to find a global minimum must not be reported as a verified global optimum. For polynomial fits, the linear solver is usually preferable.
+
+## Custom nonlinear models, safe expressions and optional bounds
+
+The original `nonlinear_least_squares` operation still accepts the exact five legacy fields `model`, `x`, `y`, `weights`, and `initial_parameters`. All built-in names, fitted values, uncertainty estimates, and existing solver settings remain valid. `model` also accepts a *safe expression in x*, e.g. `a*(1-exp(-b*x))`. Parameter names are inferred **in first-appearance order** (`a`, then `b` in this example), and `initial_parameters: [250,0.0005]` follows that order. Names are case-sensitive. When an explicit order or optional bounds are needed, `model` can instead be a JSON **text** specification:
+
+```json
+{
+  "expression": "a*(1-exp(-b*x))",
+  "parameter_names": ["a", "b"],
+  "bounds": {"a": [0, null], "b": [0, 0.01]}
+}
+```
+
+This JSON text is supplied as the `model` field; the separate `initial_parameters` vector remains mandatory for the legacy operation. The alternative JSON form `{"builtin":"exponential","bounds":[[0,null],[null,0],[null,null]]}` allows bounds on a built-in family without changing its equation. For an easier explicit-name interface, use `custom_nonlinear_least_squares` with `expression` (text), `parameters` (JSON text), and the same `x`, `y` and `weights` vectors:
+
+```json
+{
+  "expression": "a*(1-exp(-b*x))",
+  "parameters": "{\"a\":{\"start\":250,\"lower\":0},\"b\":{\"start\":0.0005,\"lower\":0,\"upper\":0.01}}",
+  "x": [77.6, 114.9, 141.1, 190.8, 239.9],
+  "y": [10.07, 14.73, 17.94, 23.93, 29.61],
+  "weights": [1, 1, 1, 1, 1]
+}
+```
+
+Each entry in the parameters JSON can be a number (its starting value) or an object with required `start` and optional `lower` and `upper`; omitted bounds are unrestricted. Bounds are inclusive and must satisfy lower strictly less than upper, when both are present. Initial values must lie inside the bounds. Candidate LM steps are projected to the valid interval, and convergence on a boundary produces a clear warning. A boundary fit still reports the **unconstrained local linearized** standard errors and Wald intervals, which are generally unreliable at an active bound; they are *not* constrained-confidence intervals.
+
+The expression grammar is exactly the Measurement Uncertainty pack's existing `_Parser` (recursive-descent tokenizer, length/token/depth limits, and allowed functions). It accepts numeric literals, `x`, up to **15 named fitted parameters**, parentheses, unary signs, arithmetic `+ - * /`, exponentiation `^` (not Python `**`), and the functions `sqrt`, `exp`, `ln`, `log10`, `sin`, and `cos`. The expression may use `x` (a parameter-only constant model is also valid) and must use **all named parameters**. Parameter names cannot be `x`, a function name, or an invalid identifier. The parser rejects attribute access, indexing, comprehensions, method calls, Python expressions, and arbitrary function names; no `eval`, `exec`, imports, file access or network calls are involved. The parsed AST is evaluated in 76-digit Decimal arithmetic with chain-rule analytic partial derivatives, except `sin` and `cos` values (and their analytic derivative factors) which use the finite binary64 standard-library trigonometric functions. Real-domain violations, undefined derivatives, nonfinite results and nondecreasing LM trials are rejected. As with all LM methods, **starting values matter**; the optimizer cannot guarantee a global optimum.
+
+### Fit diagnostics added to both linear and nonlinear fits
+
+Every successful weighted linear, built-in nonlinear, or custom nonlinear fit retains its previous outputs and additionally supplies:
+
+- `aic`, `aicc`, `bic`: **full weighted Gaussian log-likelihood** information criteria with an unknown common residual variance. They use the **positive-weight observations** `n₊` and `k = p + 1` fitted likelihood parameters (the regression parameters plus the noise variance), so `AIC = -2log(Lmax)+2k`, `BIC = -2log(Lmax)+k log(n₊)`, and `AICc = AIC + 2k(k+1)/(n₊-k-1)`. The common Gaussian weight normalization `-sum(log(weight_i))` is included. If `n₊ <= k+1` or the weighted residual sum of squares is exactly zero, an affected criterion is marked `"undefined"` with a warning rather than emitting an infinite or misleading value. Comparisons require defined AICc for *all* candidates.
+- `residual_0`, `residual_1`, etc., ordered exactly as the input (including zero-weight rows), plus the existing residual plot. The **runs test** uses only positive-weight residuals, discards exact zeros, counts sign runs about zero, and reports `runs_count`, `runs_test_z_absolute` and `runs_test_p_value` (two-sided normal approximation with continuity correction). The **Shapiro–Wilk** normality check reuses the existing Inference pack `_shapiro` implementation and reports `residual_shapiro_w` and `residual_shapiro_p_value`. Tests return `"undefined"` with an explanatory warning if the sample is degenerate/insufficient. The tests are *descriptive screening checks*: fitted residuals are not independent unmodified observations, and their p-values should not be treated as exact fit-validity probabilities.
+- `parameter_correlation_i_j` for each off-diagonal pair in parameter order, with `max_absolute_parameter_correlation`. Correlations come from the local fit covariance. `warnings` is the string `"none"` or an explicit semicolon-separated explanation when any pair has absolute correlation at least **0.99**, a standard error exceeds the absolute corresponding estimate, a fitted parameter meets a bound within the numerical tolerance, a diagnostic is undefined, or residual screening reports `p < 0.05`. Large correlations and wide errors flag poorly determined parameters; they do not prove global unidentifiability.
+
+All candidate models must use the **same positive-weight data**, same response transformation and the same interpretation of relative weights for information-criterion comparisons to be meaningful. AIC/AICc/BIC measure relative predictive tradeoffs under the Gaussian error model, *not* the probability that a model is scientifically true.
+
+### Compare models (`compare_models`)
+
+Inputs are shared `x`, `y`, `weights` vectors and `models` (a **JSON text array of 2–12 candidate specifications**). Each candidate is independently fitted by the same nonlinear solver; comparison never trusts a caller's precomputed AIC or purported fitted values. A candidate can be a built-in/legacy model with `{"name":"linear","model":"polynomial","initial_parameters":[1,2]}`, a raw safe expression in `model`, or an explicitly named bounded custom expression with `{"name":"saturating","expression":"a*(1-exp(-b*x))","parameters":{"a":{"start":250,"lower":0},"b":{"start":0.0005,"lower":0}}}`. Names must be unique. The operation refuses candidates for which fitting fails or AICc is undefined, rather than silently omitting them.
+
+The output table is ranked by ascending **AICc** and includes AIC, AICc, BIC, `delta AICc`, normalized **Akaike weights** `exp(-delta/2) / sum_j exp(-delta_j/2)`, weighted SSE, number of regression parameters and per-fit warnings. `values.best_model` and `akaike_weight_i` use the ranked order. These weights are conditional on the *candidate set*, not absolute posterior model probabilities; equal prior probabilities, Gaussian errors, and comparable observations/weights are implicit. The table preserves numerical diagnostics without replacing any existing result table.
+
+### Independent certification of user expressions
+
+In addition to all existing built-in NIST StRD cases, the **same published data, starting vectors and 11 published significant digits** are tested through safe *custom* equations for [Misra1a](https://www.itl.nist.gov/div898/strd/nls/data/LINKS/v-Misra1a.shtml), [Thurber](https://www.itl.nist.gov/div898/strd/nls/data/LINKS/v-Thurber.shtml), and [MGH09](https://www.itl.nist.gov/div898/strd/nls/data/LINKS/v-MGH09.shtml). Assertions cover every certified coefficient, every certified standard error and the residual sum of squares from **both** published initial vectors. The linear Longley certification, original nonlinear operations and other inference tests remain in place.
 
 ## Welch two-sample t test (`welch_t_test`)
 
