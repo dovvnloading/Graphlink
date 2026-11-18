@@ -74,7 +74,13 @@ export function scientificDomain(min: number, max: number, scale: "linear" | "lo
       ? Number.MAX_VALUE : 10 ** (high + padding);
     return [Math.min(min, lower), Math.max(max, upper)];
   }
-  const padding = Math.max((max - min) * 0.12, Math.max(Math.abs(min), Math.abs(max), 1) * 0.02);
+  const magnitude = Math.max(Math.abs(min), Math.abs(max));
+  // Do not use a unit-sized padding floor: a scientific domain around
+  // 1e-200 would otherwise collapse to [-.02,.02] on the interactive SVG
+  // while matplotlib correctly distinguishes every measurement.
+  const padding = magnitude === 0
+    ? 1
+    : Math.max((max - min) * 0.12, magnitude * 0.02, Number.MIN_VALUE);
   const lower = Math.max(-Number.MAX_VALUE, min - padding);
   const upper = Math.min(Number.MAX_VALUE, max + padding);
   // Padding must not overflow the finite original coordinate span.
