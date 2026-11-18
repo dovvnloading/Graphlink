@@ -548,6 +548,248 @@ def _land_partial_regenerate(document, node_to_regenerate, partial_text):
     )
 
 
+
+class _ComparisonChatRuns:
+    """Map the existing dispatcher's 'chat' kind onto one sibling-only slot.
+
+    All handles live in the SESSION's original RunRegistry: disconnect,
+    cancellation, diagnostics and eviction still see every comparison run.
+    Only its busy bucket is separate. Ordinary chat keeps its old bucket.
+    """
+
+    def __init__(self, registry, kind: str):
+        self._registry = registry
+        self._kind = kind
+
+    def is_busy(self, kind: str) -> bool:
+        return self._registry.is_busy(self._kind if kind == "chat" else kind)
+
+    def claim(self, kind: str, **kwargs):
+        return self._registry.claim(self._kind if kind == "chat" else kind, **kwargs)
+
+    def get(self, request_id):
+        return self._registry.get(request_id)
+
+    def release(self, request_id):
+        return self._registry.release(request_id)
+
+    def attach_task(self, handle, task):
+        return self._registry.attach_task(handle, task)
+
+
+def _comparison_content(node, *, answer: str, status: str, elapsed: float | None) -> str:
+    """Persistent, human-readable metrics without altering the scene schema."""
+    prompt = node.state.prompt_tokens
+    completion = node.state.completion_tokens
+    cost = node.state.estimated_cost_usd
+    latency = f"{elapsed:.2f}s" if elapsed is not None else "unavailable"
+    tokens = (
+        f"{prompt if prompt is not None else '?'} input / "
+        f"{completion if completion is not None else '?'} output"
+        if prompt is not None or completion is not None else "estimate unavailable"
+    )
+    cost_text = f"${cost:.6f} estimated" if cost is not None else "estimate unavailable"
+    heading = (
+        f"**{node.state.provider} · {node.state.model}**\n\n"
+        f"**{status}** · Latency: {latency} · Tokens: {tokens} · "
+        f"Cost: {cost_text}"
+    )
+    return heading + ("\n\n---\n\n" + answer if answer else "")
+
+
+async def _send_model_comparison(
+    *, bus, document, notifications, agent_dispatcher, composer_document,
+    token_counter, publish_scene, publish_token_counter, text, models,
+    branch_from_node_id=None, cancelled_requests=None,
+):
+    """One user turn, 2-4 independently streamed and cancellable sibling replies.
+
+    Each worker is a normal AgentDispatcher.start_chat_reply call, NOT a
+    shortcut to api_provider: persona/system-prompt overrides, context
+    assembly, token budgets, retries and the provider safety gates are
+    inherited intact from that path. Response nodes use existing chat-node
+    streaming, badges, branching and undo command snapshots.
+    """
+    import copy
+    import time
+    from dataclasses import asdict
+
+    import api_provider
+    from backend.canvas import _history_image_tokens, _history_token_text
+    from backend.context_engine.model_comparison import validate_comparison_models
+
+    settings = agent_dispatcher._settings_manager
+    refs = validate_comparison_models(models, settings, agent_dispatcher._provider_runtime)
+    if not isinstance(text, str) or not text.strip():
+        raise SceneError("Enter a message before comparing models.")
+    if agent_dispatcher._runs.is_busy("chat"):
+        raise SceneError("Finish the current chat request before comparing models.")
+
+    # Validate the selection BEFORE consuming staged attachments or writing
+    # any graph content. An individual provider connection can still fail
+    # independently AFTER the shared user turn and placeholders are created.
+    staged = composer_document.take_staged_attachments()
+    full_text, content_parts = _merge_staged_attachments(text, staged)
+    user, _ = document.record_command(
+        "sendMessage", "user",
+        lambda: document.send_message(
+            full_text, content_parts=content_parts, branch_from_node_id=branch_from_node_id,
+        ),
+        node_ids=[branch_from_node_id] if branch_from_node_id else (),
+    )
+    _promote_document_attachments(document, user, staged)
+    if staged:
+        await bus.publish("app-composer")
+    document.add_session_tokens(full_text)
+
+    history = document.chat_branch_history(user.id)
+    parent_edge = document._branch_parent_edge(user.id)
+    context_history = (
+        document.chat_branch_history(parent_edge.source) if parent_edge else []
+    )
+    token_counter.set_context_text(
+        _history_token_text(context_history), image_tokens=_history_image_tokens(context_history),
+    )
+    token_counter.reset_real_usage()
+    await publish_token_counter()
+
+    def _place_siblings():
+        created = []
+        for ref in refs:
+            x, y = document.place_child(user.id, "chat")
+            reply = document.add_chat_node(x, y, "Waiting for response…", False, parent_id=user.id)
+            reply.title = f"{ref.model_id} · comparison"
+            # Input pin is resolved by the SAME node/branch/workspace chain
+            # as ordinary chat; it is not merely a display badge.
+            # ModelRef is a dataclass; destructuring its fields avoids
+            # confusing the project's SceneNode state-migration guard with
+            # an unrelated ModelRef.provider property.
+            ref_fields = asdict(ref)
+            reply.state.override_provider = ref_fields["provider"]
+            reply.state.override_model_id = ref_fields["model_id"]
+            reply.state.provider, reply.state.model = api_provider.describe_active_model(
+                __import__("graphlink_task_config").TASK_CHAT, model_ref=ref,
+            )
+            created.append(reply)
+        # Deliberately leave last_chat_node_id pointing at the USER turn:
+        # selecting one of these parallel branches is an explicit action.
+        return created
+
+    replies, command = document.record_command(
+        "chatReply", "agent", _place_siblings, node_ids=[user.id],
+    )
+    await publish_scene()
+
+    def persist_reply(node):
+        # The initial placeholder's undo/redo snapshot must be updated when
+        # its asynchronously generated content and usage arrive.
+        if node.id in command.node_after:
+            command.node_after[node.id] = copy.deepcopy(node)
+
+    for index, (ref, reply) in enumerate(zip(refs, replies)):
+        run = {
+            "started": None, "request_id": None, "finished": False,
+            "answer": "", "partial": "", "cancelled": False,
+        }
+
+        def _begin(request_id, *, reply=reply, run=run):
+            run["started"] = time.monotonic()
+            run["request_id"] = request_id
+            if reply.id in document.nodes:
+                reply.pending_request_id = request_id
+
+        def _end(*, reply=reply, run=run):
+            # A late finalizer must never clear a newer regenerate's id
+            # after a cancel freed this sibling's registry slot.
+            if reply.id not in document.nodes or reply.pending_request_id != run["request_id"]:
+                return
+            reply.pending_request_id = None
+            if not run["finished"]:
+                was_cancelled = cancelled_requests is not None and run["request_id"] in cancelled_requests
+                status = "Canceled" if was_cancelled else "Failed or interrupted"
+                reply.state.response_incomplete = True
+                reply.content = _comparison_content(
+                    reply, answer=run["partial"], status=status,
+                    elapsed=(time.monotonic() - run["started"]) if run["started"] is not None else None,
+                )
+            persist_reply(reply)
+            if cancelled_requests is not None:
+                cancelled_requests.discard(run["request_id"])
+
+        async def _on_reply(answer, *, reply=reply, run=run):
+            if reply.id not in document.nodes or reply.pending_request_id != run["request_id"]:
+                return
+            run["finished"] = True
+            run["answer"] = answer
+            document.add_session_tokens(answer)
+            elapsed = time.monotonic() - run["started"] if run["started"] is not None else None
+            reply.state.response_incomplete = False
+            reply.content = _comparison_content(reply, answer=answer, status="Complete", elapsed=elapsed)
+            persist_reply(reply)
+
+        async def _on_partial(partial_text, *, reply=reply, run=run):
+            # The shared dispatcher calls this only on a failed stream, not
+            # on explicit cancellation; preserve any real partial on error.
+            run["partial"] = partial_text
+            if reply.id in document.nodes and reply.pending_request_id == run["request_id"]:
+                document.add_session_tokens(partial_text)
+
+        provenance_provider, provenance_model = reply.state.provider, reply.state.model
+        usage_callback = _make_on_usage(
+            document, token_counter, publish_token_counter, publish_scene,
+            lambda reply=reply: reply.id,
+            provenance_provider, provenance_model,
+            command_ref=lambda: command,
+        )
+
+        async def _on_usage(usage, *, reply=reply, run=run, usage_callback=usage_callback):
+            if reply.id not in document.nodes or reply.pending_request_id != run["request_id"]:
+                return
+            await usage_callback(usage)
+            elapsed = time.monotonic() - run["started"] if run["started"] is not None else None
+            reply.content = _comparison_content(reply, answer=run["answer"], status="Complete", elapsed=elapsed)
+            persist_reply(reply)
+
+        try:
+            runtime = api_provider.comparison_runtime(
+                ref, settings, runtime=agent_dispatcher._provider_runtime,
+            )
+            # One lightweight dispatcher per sibling, with the same settings
+            # manager and the SAME session run registry. It retains all
+            # dispatch policy; only the busy kind and provider snapshot vary.
+            scoped = AgentDispatcher(settings, provider_runtime=runtime)
+            scoped._runs = _ComparisonChatRuns(
+                agent_dispatcher._runs, f"chat_comparison:{user.id}:{index}",
+            )
+            await scoped.start_chat_reply(
+                bus=bus,
+                notifications_state=notifications,
+                composer_document=composer_document,
+                conversation_history=history,
+                on_reply=_on_reply,
+                on_usage=_on_usage,
+                canvas_document=document,
+                node_id=reply.id,
+                stream=True,
+                state_topic="scene",
+                on_begin=_begin,
+                on_end=_end,
+                on_partial=_on_partial,
+            )
+        except Exception:
+            # Do not write a provider exception into persistent canvas text:
+            # some SDKs include endpoint and credential details in errors.
+            # A broken profile must not prevent sibling models from running.
+            reply.state.response_incomplete = True
+            reply.content = _comparison_content(
+                reply, answer="This model could not start. Check its provider settings.",
+                status="Failed", elapsed=None,
+            )
+            persist_reply(reply)
+            await publish_scene()
+    return user.id
+
+
 def register_chat_intents(
     bus: SessionBus,
     document: SceneDocument,
@@ -562,6 +804,7 @@ def register_chat_intents(
 
     publish_scene = make_publish_scene(bus)
     publish_token_counter = make_publish_token_counter(bus)
+    comparison_cancelled_requests: set[str] = set()
 
     async def send_message(text, branch_from_node_id=None):
         # R3.3: the real Send action - a real user ChatNode, continuing the
@@ -768,6 +1011,25 @@ def register_chat_intents(
             document, node_id, agent_dispatcher, bus=bus, draft_text=draft_text,
         )
 
+    def list_comparison_models():
+        from backend.context_engine.model_comparison import available_comparison_models
+        return {"models": available_comparison_models(
+            agent_dispatcher._settings_manager, agent_dispatcher._provider_runtime,
+        )}
+
+    async def compare_models(text, models, branch_from_node_id=None):
+        return await _send_model_comparison(
+            bus=bus, document=document, notifications=notifications,
+            agent_dispatcher=agent_dispatcher, composer_document=composer_document,
+            token_counter=token_counter, publish_scene=publish_scene,
+            publish_token_counter=publish_token_counter,
+            text=text, models=models, branch_from_node_id=branch_from_node_id,
+            cancelled_requests=comparison_cancelled_requests,
+        )
+
+    bus.register_intent("scene", "listComparisonModels", list_comparison_models)
+    bus.register_intent("scene", "compareModels", compare_models)
+
     bus.register_intent("scene", "inspectChatContext", inspect_chat_context)
     bus.register_intent("scene", "sendMessage", send_message)
     bus.register_intent("scene", "regenerateResponse", regenerate_response)
@@ -778,4 +1040,14 @@ def register_chat_intents(
     # independent registration on a different topic, not a collision. It
     # points at the same underlying agent_dispatcher.cancel, which is purely
     # request_id-keyed and does not care which topic invoked it.
-    bus.register_intent("scene", "cancelChatRequest", lambda request_id: agent_dispatcher.cancel(request_id))
+    def cancel_chat_request(request_id):
+        registry = getattr(agent_dispatcher, "_runs", None)
+        handle = registry.get(request_id) if registry is not None else None
+        if handle is not None and handle.kind.startswith("chat_comparison:"):
+            # The node-scoped Stop button already sends this intent. Mark
+            # exactly its own run cancelled; do not touch sibling handles.
+            comparison_cancelled_requests.add(request_id)
+            return agent_dispatcher._runs.cancel(request_id, kind=handle.kind)
+        return agent_dispatcher.cancel(request_id)
+
+    bus.register_intent("scene", "cancelChatRequest", cancel_chat_request)

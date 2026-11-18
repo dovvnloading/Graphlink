@@ -1,7 +1,7 @@
 import { useMemo, useState, useSyncExternalStore } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
-import type { ComposerStore } from "./composerStore";
+import type { ComparisonModel, ComposerStore } from "./composerStore";
 import { TokenCounter } from "./TokenCounter";
 
 /**
@@ -89,12 +89,59 @@ export function Composer({
     sceneStore.getSynthesizeTargetNodeIds,
   );
 
+  // Comparison is opt-in; the ordinary single-model Send never changes its
+  // intent or model picker. Selection is an exact provider/model pair.
+  const [comparisonMode, setComparisonMode] = useState(false);
+  const [comparisonOptions, setComparisonOptions] = useState<ComparisonModel[]>([]);
+  const [selectedComparisonKeys, setSelectedComparisonKeys] = useState<string[]>([]);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [comparisonError, setComparisonError] = useState("");
+  const comparisonKey = (model: ComparisonModel) => JSON.stringify([model.provider, model.modelId]);
+  const selectedComparisonModels = comparisonOptions.filter(
+    (model) => selectedComparisonKeys.includes(comparisonKey(model)),
+  );
+  const comparisonReady = !comparisonMode || selectedComparisonModels.length >= 2;
+
+  async function openComparisonPicker() {
+    setComparisonMode(true);
+    overlays.toggle("model-comparison", "popover");
+    if (overlays.isOpen("model-comparison")) return;
+    setComparisonLoading(true);
+    setComparisonError("");
+    try {
+      const models = await store.loadComparisonModels();
+      setComparisonOptions(models);
+      setSelectedComparisonKeys((current) =>
+        current.filter((key) => models.some((model) => comparisonKey(model) === key)),
+      );
+    } catch (error) {
+      setComparisonError(error instanceof Error ? error.message : "Unable to list comparison models.");
+    } finally {
+      setComparisonLoading(false);
+    }
+  }
+
   const modelLabel = composer.route.modelLabel || composer.route.modelId || "Select a model";
   const isSynthesizing = !!synthesizeTargetNodeIds && synthesizeTargetNodeIds.length > 0;
 
   function send() {
     const text = composer.draft.text.trim();
     if (!text || !composer.request.canSend) return;
+    if (comparisonMode && !isSynthesizing) {
+      if (!comparisonReady) return;
+      store.sendModelComparison(
+        text,
+        selectedComparisonModels.map(({ provider, modelId }) => ({ provider, modelId })),
+        replyTargetNode?.id ?? null,
+        (succeeded) => {
+          if (!succeeded) return; // preserve the draft and staged branch target
+          if (replyTargetNode?.id) sceneStore.setReplyTargetNodeId(null);
+          if (store.getComposer().draft.text === text) store.updateDraft("");
+        },
+      );
+      return;
+    }
+    // Unmodified single-model and Synthesize Branches paths.
     sceneStore.sendMessage(text);
     store.updateDraft("");
   }
@@ -275,6 +322,23 @@ export function Composer({
           <Icon name="chevron" />
         </button>
 
+        <button
+          type="button"
+          className="composer-control"
+          data-overlay-trigger="model-comparison"
+          aria-haspopup="dialog"
+          aria-pressed={comparisonMode}
+          disabled={!composer.request.canSend || isSynthesizing}
+          title="Send one message to two to four models in parallel"
+          onClick={() => { void openComparisonPicker(); }}
+        >
+          <span className="composer-control-label">Compare</span>
+          <span className="composer-control-value">
+            {comparisonMode ? `${selectedComparisonModels.length} models` : "Single"}
+          </span>
+          <Icon name="chevron" />
+        </button>
+
         <div className="composer-rail-end">
           {showTokenCounter && <TokenCounter store={store} />}
 
@@ -297,8 +361,8 @@ export function Composer({
             <button
               type="button"
               className="composer-send-button"
-              disabled={!composer.draft.text.trim() || !composer.request.canSend}
-              title="Send message"
+              disabled={!composer.draft.text.trim() || !composer.request.canSend || (comparisonMode && !isSynthesizing && !comparisonReady)}
+              title={comparisonMode && !comparisonReady && !isSynthesizing ? "Choose at least two comparison models" : "Send message"}
               aria-label="Send message"
               onClick={send}
             >
@@ -308,6 +372,54 @@ export function Composer({
         </div>
       </div>
 
+      {overlays.isOpen("model-comparison") && (
+        <Popover anchored name="model-comparison" label="Compare models" className="reasoning-popover model-picker-popover">
+          <p>Choose 2–4 models. Each answer streams into its own canvas branch.</p>
+          {comparisonLoading && <p role="status">Loading configured models…</p>}
+          {comparisonError && <p role="alert">{comparisonError}</p>}
+          {!comparisonLoading && !comparisonError && comparisonOptions.length === 0 && (
+            <p role="status">No comparison models are configured. Add models in Settings.</p>
+          )}
+          <div className="model-picker-results" aria-label="Comparison model choices">
+            {comparisonOptions.map((model) => {
+              const key = comparisonKey(model);
+              const checked = selectedComparisonKeys.includes(key);
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  role="checkbox"
+                  aria-checked={checked}
+                  disabled={!checked && selectedComparisonKeys.length >= 4}
+                  className={"reasoning-option" + (checked ? " active" : "")}
+                  onClick={() => setSelectedComparisonKeys((current) =>
+                    current.includes(key) ? current.filter((item) => item !== key) : [...current, key].slice(0, 4)
+                  )}
+                >
+                  <span className="reasoning-option-label">{model.label}</span>
+                  {checked && <span aria-hidden="true">✓</span>}
+                </button>
+              );
+            })}
+          </div>
+          <p role="status">{selectedComparisonModels.length}/4 selected {comparisonMode && selectedComparisonModels.length < 2 ? "· choose at least two" : ""}</p>
+          <button
+            type="button"
+            className="reasoning-option"
+            onClick={() => { setComparisonMode(false); overlays.close(); }}
+          >
+            Use single-model send
+          </button>
+          <button
+            type="button"
+            className="reasoning-option"
+            disabled={selectedComparisonModels.length < 2}
+            onClick={() => overlays.close()}
+          >
+            Done
+          </button>
+        </Popover>
+      )}
       <Reasoning store={store} />
       {overlays.isOpen("model") && <ModelPicker key={composer.route.provider} store={store} />}
     </div>

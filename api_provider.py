@@ -2313,6 +2313,64 @@ _MODEL_REF_PROVENANCE_LABELS = {
 }
 
 
+
+def comparison_runtime(
+    model_ref: ModelRef, settings_manager=None, *, runtime: "ProviderRuntime | None" = None,
+) -> ProviderRuntime:
+    """An isolated, request-scoped provider configuration for a comparison sibling.
+
+    Never switch the session's active provider or its task assignments. Local
+    providers reuse their existing settings; a saved cloud profile gets its
+    own credential/endpoint-bound client via the normal client factory. The
+    ordinary task-keyed and node-pinned dispatch paths are unchanged.
+    """
+    if not isinstance(model_ref, ModelRef) or not model_ref.model_id:
+        raise ValueError("Select a configured comparison model.")
+    source = (runtime if runtime is not None else DEFAULT_RUNTIME).snapshot()
+    isolated = ProviderRuntime.from_snapshot(source)
+
+    if model_ref.provider == config.LOCAL_PROVIDER_OLLAMA:
+        isolated._write(
+            use_api_mode=False,
+            local_provider_type=config.LOCAL_PROVIDER_OLLAMA,
+            ollama_models={**source.ollama_models, config.TASK_CHAT: model_ref.model_id},
+        )
+    elif model_ref.provider == config.LOCAL_PROVIDER_LLAMACPP:
+        settings = (
+            settings_manager.get_llama_cpp_settings()
+            if settings_manager is not None else source.llama_cpp_settings
+        )
+        settings = _normalize_llama_cpp_settings(settings)
+        # A scanned, but unconfigured GGUF is NOT an executable model pin.
+        _resolve_llama_cpp_pinned_model_path(model_ref.model_id, settings)
+        isolated._write(
+            use_api_mode=False,
+            local_provider_type=config.LOCAL_PROVIDER_LLAMACPP,
+            llama_cpp_settings=settings,
+        )
+    elif model_ref.provider in CLOUD_PROVIDERS:
+        if settings_manager is None:
+            if not (source.use_api_mode and source.api_provider_type == model_ref.provider
+                    and source.api_client is not None):
+                raise ValueError(f"Cloud profile {model_ref.provider} is not configured.")
+            isolated._write(api_models=_resolve_api_task_models({config.TASK_CHAT: model_ref.model_id}))
+        else:
+            # initialize_api performs the existing endpoint/key validation,
+            # including custom endpoint protections and environment fallback.
+            isolated.initialize_api(
+                model_ref.provider,
+                settings_manager.get_provider_key(model_ref.provider),
+                settings_manager.get_api_base_url(model_ref.provider),
+                task_models={config.TASK_CHAT: model_ref.model_id},
+            )
+    else:
+        raise ValueError(f"Unknown comparison provider: {model_ref.provider!r}")
+
+    if not isolated.is_configured():
+        raise ValueError(f"Comparison model {model_ref.model_id} is not configured.")
+    return isolated
+
+
 def describe_active_model(
     task: str, runtime: "ProviderRuntime | None" = None, model_ref: "ModelRef | None" = None,
 ) -> tuple[str, str]:
