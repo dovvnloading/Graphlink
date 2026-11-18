@@ -20,6 +20,7 @@ import { applyCompareBranches, applySynthesizeBranches } from "./canvas/branchAc
 import { CanvasSearchProvider } from "./canvas/CanvasSearchContext";
 import { ExecutionLimitsProvider } from "./canvas/ExecutionLimitsContext";
 import { SceneCanvas, measuredNodeSize } from "./canvas/SceneCanvas";
+import { ContextInspectorLauncher } from "./context/ContextInspectorLauncher";
 import { SceneStore } from "./canvas/sceneStore";
 import { resolveTreeNavigationTarget, type TreeNavigationDirection } from "./canvas/treeNavigation";
 import { requestNewChat } from "./chrome/requestNewChat";
@@ -506,6 +507,7 @@ function App() {
                     </div>
                   </div>
                   <footer className="app-composer-layer" aria-label="Message composer">
+                    <ContextInspectorLauncher sceneStore={sceneStore} composerStore={composerStore} transport={transport} />
                     <Composer
                       store={composerStore}
                       sceneStore={sceneStore}

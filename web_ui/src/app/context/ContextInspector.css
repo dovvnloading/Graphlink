@@ -1,0 +1,62 @@
+.context-inspector-launcher {
+  position: fixed;
+  right: 20px;
+  bottom: 118px;
+  z-index: 30;
+  font-size: 12px;
+  color: var(--gl-surface-text-primary);
+}
+.context-inspector-toggle,
+.context-inspector-heading button {
+  border: 1px solid var(--gl-surface-border, #666);
+  border-radius: 5px;
+  padding: 5px 9px;
+  background: var(--gl-graph-surface, #252525);
+  color: inherit;
+  cursor: pointer;
+}
+.context-inspector-toggle:disabled { opacity: 0.5; cursor: default; }
+.context-inspector-panel {
+  position: absolute;
+  bottom: calc(100% + 9px);
+  right: 0;
+  width: min(460px, calc(100vw - 34px));
+  max-height: min(520px, 67vh);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 12px;
+  background: var(--gl-graph-surface, #252525);
+  border: 1px solid var(--gl-graph-border, #555);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px #0006;
+}
+.context-inspector-heading,
+.context-inspector-source-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.context-inspector-heading > div { display: flex; gap: 4px; }
+.context-inspector-meta, .context-inspector-note {
+  color: var(--gl-surface-text-secondary, #999);
+  overflow-wrap: anywhere;
+  margin: 7px 0;
+}
+.context-inspector-sources {
+  padding: 0;
+  margin: 10px 0 0;
+  list-style: none;
+  display: grid;
+  gap: 7px;
+}
+.context-inspector-sources li {
+  border: 1px solid var(--gl-graph-border, #555);
+  border-radius: 5px;
+  padding: 8px;
+  display: grid;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+.context-inspector-sources .excluded { opacity: .75; }
+.context-inspector-source-origin { color: var(--gl-surface-text-secondary, #999); }
