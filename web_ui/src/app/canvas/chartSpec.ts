@@ -124,6 +124,118 @@ function finiteNumber(value: unknown, fieldName: string): number {
 
 /** Error pairs and axis scales are defined by the generated scene wire type.
  * The canonicalizer checks that each pair contains exactly two magnitudes. */
+/** Persisted user-authored analysis metadata; absent for all unedited charts. */
+export type ChartAnnotation =
+  | { kind: "label"; x: number; y: number; text: string }
+  | { kind: "arrow"; x: number; y: number; x2: number; y2: number }
+  | { kind: "region"; axis: "x" | "y"; from: number; to: number };
+
+export interface ChartAnalysis {
+  lockX: boolean;
+  lockY: boolean;
+  xRange?: [number, number];
+  yRange?: [number, number];
+  annotations: ChartAnnotation[];
+}
+
+export type AnalysisChartData = ChartDataRow & { analysis?: ChartAnalysis };
+export const EMPTY_CHART_ANALYSIS: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
+
+export function chartAnalysisOf(data: ChartDataRow): ChartAnalysis {
+  return (data as AnalysisChartData).analysis ?? EMPTY_CHART_ANALYSIS;
+}
+
+/** Mirror graphlink_chart_data.canonicalize_chart_analysis; never silently
+ * drop malformed annotations or reinterpret real data as view coordinates. */
+export function canonicalizeChartAnalysis(
+  value: unknown, type: string, xScale: AxisScale = "linear", yScale: AxisScale = "linear",
+): ChartAnalysis {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new ChartSpecError("Chart analysis must be an object");
+  }
+  if (!["line", "scatter", "histogram", "boxplot"].includes(type)) {
+    throw new ChartSpecError("Chart analysis is only supported on cartesian analysis charts");
+  }
+  const raw = value as Record<string, unknown>;
+  if (Object.keys(raw).some((key) => !["lockX", "lockY", "xRange", "yRange", "annotations"].includes(key))) {
+    throw new ChartSpecError("Unknown chart analysis field");
+  }
+  const result: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
+  for (const [axis, scale] of [["x", xScale], ["y", yScale]] as const) {
+    const lock = axis === "x" ? "lockX" : "lockY";
+    const range = axis === "x" ? "xRange" : "yRange";
+    const locked = raw[lock] ?? false;
+    if (typeof locked !== "boolean") throw new ChartSpecError(lock + " must be a boolean");
+    result[lock] = locked;
+    if (range in raw) {
+      const bounds = raw[range];
+      if (!Array.isArray(bounds) || bounds.length !== 2) {
+        throw new ChartSpecError(range + " must contain two bounds");
+      }
+      const low = finiteNumber(bounds[0], range + " minimum");
+      const high = finiteNumber(bounds[1], range + " maximum");
+      if (!(low < high) || !Number.isFinite(high - low)) {
+        throw new ChartSpecError(range + " must increase across a finite span");
+      }
+      if (scale === "log10" && low <= 0) {
+        throw new ChartSpecError(range + " must be positive on a log10 axis");
+      }
+      result[range] = [low, high];
+    }
+    if (locked && !result[range]) throw new ChartSpecError(lock + " requires " + range);
+  }
+  if (raw.annotations !== undefined && (!Array.isArray(raw.annotations) || raw.annotations.length > 60)) {
+    throw new ChartSpecError("Chart annotations must be a list of at most 60 items");
+  }
+  for (const [index, entry] of ((raw.annotations ?? []) as unknown[]).entries()) {
+    const where = "Annotation " + index;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new ChartSpecError(where + " must be an object");
+    }
+    const item = entry as Record<string, unknown>;
+    const fields: Record<string, string[]> = {
+      label: ["kind", "x", "y", "text"],
+      arrow: ["kind", "x", "y", "x2", "y2"],
+      region: ["kind", "axis", "from", "to"],
+    };
+    const kind = item.kind;
+    if (typeof kind !== "string" || !fields[kind] ||
+        Object.keys(item).length !== fields[kind].length ||
+        Object.keys(item).some((key) => !fields[kind].includes(key))) {
+      throw new ChartSpecError(where + " has invalid fields");
+    }
+    const checked = (field: string, scale: AxisScale) => {
+      const numeric = finiteNumber(item[field], where + " " + field);
+      if (scale === "log10" && numeric <= 0) {
+        throw new ChartSpecError(where + " coordinates must be positive on log10 axes");
+      }
+      return numeric;
+    };
+    if (kind === "label") {
+      result.annotations.push({
+        kind, x: checked("x", xScale), y: checked("y", yScale),
+        text: cleanText(item.text, where + " text"),
+      });
+    } else if (kind === "arrow") {
+      result.annotations.push({
+        kind, x: checked("x", xScale), y: checked("y", yScale),
+        x2: checked("x2", xScale), y2: checked("y2", yScale),
+      });
+    } else {
+      if (item.axis !== "x" && item.axis !== "y") {
+        throw new ChartSpecError(where + " axis must be x or y");
+      }
+      const start = checked("from", item.axis === "x" ? xScale : yScale);
+      const end = checked("to", item.axis === "x" ? xScale : yScale);
+      if (!(start < end) || !Number.isFinite(end - start)) {
+        throw new ChartSpecError(where + " region must have increasing finite bounds");
+      }
+      result.annotations.push({ kind: "region", axis: item.axis, from: start, to: end });
+    }
+  }
+  return result;
+}
+
 export type ErrorPair = NonNullable<ChartDataRow["xError"]>[number];
 export type AxisScale = NonNullable<ChartDataRow["xScale"]>;
 
@@ -436,7 +548,7 @@ function legacySankeyFlows(payload: Record<string, unknown>): RawSankeyFlow[] | 
  * Never mutates `data`. Throws ChartSpecError on anything the backend would
  * also reject.
  */
-export function canonicalizeChartSpec(data: unknown, chartType?: string | null): ChartDataRow {
+function canonicalizeChartSpecBase(data: unknown, chartType?: string | null): ChartDataRow {
   if (typeof data !== "object" || data === null || Array.isArray(data)) {
     throw new ChartSpecError("Chart payload must be an object");
   }
@@ -561,6 +673,20 @@ export function canonicalizeChartSpec(data: unknown, chartType?: string | null):
   assertAcyclic(flows);
   result.flows = flows;
   return result;
+}
+
+export function canonicalizeChartSpec(data: unknown, chartType?: string | null): ChartDataRow {
+  const canonical = canonicalizeChartSpecBase(data, chartType);
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const raw = data as Record<string, unknown>;
+    if (raw.analysis != null) {
+      (canonical as AnalysisChartData).analysis = canonicalizeChartAnalysis(
+        raw.analysis, canonical.type ?? chartType ?? "",
+        canonical.xScale ?? "linear", canonical.yScale ?? "linear",
+      );
+    }
+  }
+  return canonical;
 }
 
 function assertAcyclic(flows: ChartFlowRow[]): void {

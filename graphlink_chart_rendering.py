@@ -876,6 +876,38 @@ def _render_error_image(figure, theme: dict[str, Any], message: str) -> None:
     figure.subplots_adjust(left=0.06, right=0.94, top=0.92, bottom=0.10)
 
 
+def _render_chart_analysis(ax, analysis: dict[str, Any], theme: dict[str, Any]) -> None:
+    """Apply persisted axis locks and vector annotations to publication artists.
+
+    Bounds/coordinates have already been canonicalized (including log10
+    positivity), and are in original data units, never CSS pixel space.
+    """
+    if analysis.get("lockX"):
+        ax.set_xlim(*analysis["xRange"])
+    if analysis.get("lockY"):
+        ax.set_ylim(*analysis["yRange"])
+    for item in analysis["annotations"]:
+        kind = item["kind"]
+        if kind == "region":
+            if item["axis"] == "x":
+                ax.axvspan(item["from"], item["to"], facecolor=theme["secondary"],
+                           alpha=0.16, linewidth=0, zorder=0.5)
+            else:
+                ax.axhspan(item["from"], item["to"], facecolor=theme["secondary"],
+                           alpha=0.16, linewidth=0, zorder=0.5)
+        elif kind == "label":
+            ax.text(item["x"], item["y"], item["text"], color=theme["text"],
+                    fontsize=9, fontweight="semibold", zorder=12, clip_on=True,
+                    bbox={"facecolor": theme["surface"], "alpha": 0.8,
+                          "edgecolor": "none", "pad": 1.5})
+        elif kind == "arrow":
+            ax.annotate("", xy=(item["x2"], item["y2"]),
+                        xytext=(item["x"], item["y"]),
+                        arrowprops={"arrowstyle": "-|>", "color": theme["primary"],
+                                    "lw": 1.7},
+                        zorder=12, annotation_clip=True)
+
+
 def _render_chart_content(figure, chart_type: str, chart_data: dict[str, Any], theme: dict[str, Any], layout_width: float) -> None:
     figure.clear()
     figure.patch.set_facecolor(theme["surface"])
@@ -907,6 +939,9 @@ def _render_chart_content(figure, chart_type: str, chart_data: dict[str, Any], t
         # chart_type against SUPPORTED_CHART_TYPES before ever calling this.
         # Kept as a defensive mirror of legacy's own dead `else: raise` branch.
         raise ValueError(f"Unsupported chart type: {chart_type}")
+
+    if canonical.get("analysis"):
+        _render_chart_analysis(ax, canonical["analysis"], theme)
 
     if use_tight_layout:
         figure.tight_layout(pad=1.25)

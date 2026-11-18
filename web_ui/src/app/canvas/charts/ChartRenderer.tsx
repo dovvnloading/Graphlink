@@ -16,8 +16,10 @@
  */
 
 import { useMemo, useState } from "react";
+import { supportsChartAnalysis } from "./chartViewport";
+import { ChartAnalysisPane } from "./ChartAnalysisPane";
 import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
-import { canonicalizeChartSpec, ChartSpecError, usesScientificMarks } from "../chartSpec";
+import { canonicalizeChartSpec, ChartSpecError, usesScientificMarks, type ChartAnalysis } from "../chartSpec";
 import { useChartTheme, useElementSize } from "./chartHooks";
 import { useZoomPane } from "./useZoomPane";
 import { ChartTooltip, type TooltipContent } from "./ChartTooltip";
@@ -33,9 +35,10 @@ import { SankeyChartMarks } from "./SankeyChartMarks";
 export interface ChartRendererProps {
   chartType: string;
   chartData: ChartDataRow;
+  onAnalysisChange?: (analysis: ChartAnalysis) => void | Promise<void>;
 }
 
-function ChartRenderer({ chartType, chartData }: ChartRendererProps) {
+function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRendererProps) {
   const [wrapperRef, size] = useElementSize<HTMLDivElement>();
   const theme = useChartTheme(wrapperRef);
   const { zoom, isZoomed, handlers, reset } = useZoomPane();
@@ -53,6 +56,22 @@ function ChartRenderer({ chartType, chartData }: ChartRendererProps) {
     return (
       <div className="chart-canvas-wrapper chart-canvas-placeholder" ref={wrapperRef}>
         <span>{canonical.error ?? "Chart unavailable"}</span>
+      </div>
+    );
+  }
+
+  // Domain-based interactions for numerical analysis, preserving the default
+  // marks and non-analysis chart zoom implementations without SVG scaling.
+  if (supportsChartAnalysis(chartType)) {
+    return (
+      <div className="chart-canvas-wrapper" ref={wrapperRef}>
+        {size.width > 0 && size.height > 0 && (
+          <ChartAnalysisPane
+            chartType={chartType} chartData={canonical.data}
+            width={size.width} height={size.height} theme={theme}
+            wrapperRef={wrapperRef} onAnalysisChange={onAnalysisChange}
+          />
+        )}
       </div>
     );
   }

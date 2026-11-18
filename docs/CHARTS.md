@@ -241,3 +241,81 @@ Python canonicalizer/export tests in `backend/tests/` and TypeScript
 validator, interactive rendering, and overview tests under
 `web_ui/src/app/canvas/`. Legacy bar, line, pie, histogram, Sankey and
 scientific line/scatter payloads keep their existing shapes and behavior.
+
+
+## Analysis tools on chart nodes
+
+**Line, scatter, histogram, and box plot** nodes expose **Chart tools** above
+the existing SVG chart. Data and the original axes remain unchanged until the
+user interacts; zooming never reorders data, drops observations, changes
+histogram bins, or modifies scientific error bars. Other chart types retain
+their existing interactions. Opening a saved chart with no analysis metadata
+renders the same marks and tick layout as before.
+
+* **Pan**: drag inside the plot, or focus the SVG with Tab and use the arrow
+  keys. **Box zoom**: choose Box zoom, then drag a rectangle within the plot.
+  The mouse wheel zooms about its cursor; **+**/**-** zoom about the center.
+  **Home** or **0**, or the one-click **Reset view**, restores the natural
+  data-space bounds for axes that are not locked. The **Apply ranges**
+  form sets exact numeric X/Y limits using the keyboard.
+* **Crosshair**: hover inside the plot to see the original x and y values,
+  without display-tick rounding, including any scientific `xUnit` and
+  `yUnit`. With SVG focus, **Shift+arrow keys** moves the crosshair so it
+  can be read without a mouse.
+* **Axis locking**: choose **Lock X range** and/or **Lock Y range** to freeze
+  the current visible numeric bounds, including after box-zoom or after
+  entering exact limits. Unlocking preserves the current viewport rather than
+  discarding it. Locked bounds persist with the chart and are undoable.
+  A locked axis does not move during subsequent zoom or pan; reset affects
+  only the unlocked axes.
+* **Annotations**: select **Text label**, **Arrow**, **Shade X** or **Shade Y**
+  in Chart tools and click/drag on the data plot. The same annotation types
+  can be created from the **Precise annotation coordinates** form without
+  using a pointer. Use **Remove last annotation** to remove the most recently
+  added one; Ctrl+Z / Redo use the existing scene undo stack for every
+  completed annotation edit.
+
+### Persisted `analysis` field
+
+The analysis overlay is an **optional, additive** version-1 ChartSpec field,
+absent from untouched charts. It is stored inside the existing chart's
+`chartData` JSON object (not in the original `values`, `series`, `groups`,
+or `bins`). All changes flow through the authenticated
+`scene/setChartAnalysis(nodeId, analysis)` intent, which validates the entire
+overlay and records one undoable document command before publishing the
+updated scene. Saving/reloading a workspace and undo/redo preserve the overlay.
+
+Example (add to any line/scatter/histogram/boxplot payload):
+```json
+{
+  "analysis": {
+    "lockX": true,
+    "lockY": false,
+    "xRange": [1, 100],
+    "annotations": [
+      {"kind": "label", "x": 10, "y": 4, "text": "Reference"},
+      {"kind": "arrow", "x": 5, "y": 3, "x2": 10, "y2": 4},
+      {"kind": "region", "axis": "x", "from": 2, "to": 20},
+      {"kind": "region", "axis": "y", "from": 3, "to": 6}
+    ]
+  }
+}
+```
+
+`lockX` requires `xRange`; `lockY` requires `yRange`. Ranges must
+contain exactly two increasing finite numeric endpoints. Each axis may use
+`linear` or `log10` scaling where already supported. On a log axis all
+specified bounds, arrow endpoints, labels and region boundaries must be
+strictly positive. The tool computes pan, pixel inversion and box zoom in
+**log10 space**, and only converts back to raw values for display and
+persistence. At most 60 annotations are accepted; text labels are bounded to
+160 characters. Malformed data are rejected rather than silently clipped or
+discarded. Annotation positions always use original data units (for legacy
+categorical lines and box plots, X is the zero-based category index).
+
+The existing SVG, PDF, and PNG **publication export** paths render the
+persisted annotation text, vector arrows, and translucent X/Y regions from
+the same validated chart data. Exported locked ranges match the saved axis
+limits. SVG text stays selectable; the PDF keeps embedded text, and neither
+export path mutates the stored data. Unsaved, local pan and zoom are not
+exported unless their bounds are locked.

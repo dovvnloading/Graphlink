@@ -647,7 +647,7 @@ def _heatmap_chart(data, result):
     return result
 
 
-def canonicalize_chart_data(data, chart_type=None):
+def _canonicalize_chart_data_base(data, chart_type=None):
     """Return a new, bounded chart payload or raise :class:`ChartDataError`.
 
     The function intentionally does not mutate ``data``. Callers that retain the
@@ -782,6 +782,97 @@ def canonicalize_chart_data(data, chart_type=None):
     ]
     _assert_acyclic(result["flows"])
     return result
+
+
+
+# Chart analysis is an additive, explicitly user-authored part of ChartSpec.
+# Omit it entirely for unedited charts: generating or opening an existing chart
+# must not alter its measurements, its visible domain, or the legacy defaults.
+CHART_ANALYSIS_TYPES = frozenset({"line", "scatter", "histogram", "boxplot"})
+MAX_CHART_ANNOTATIONS = 60
+
+
+def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_scale="linear"):
+    """Bounded document-state annotations and frozen axes; no data mutation."""
+    if not isinstance(analysis, dict):
+        raise ChartDataError("Chart analysis must be an object")
+    allowed = {"lockX", "lockY", "xRange", "yRange", "annotations"}
+    if set(analysis) - allowed:
+        raise ChartDataError("Unknown chart analysis field")
+    if chart_type not in CHART_ANALYSIS_TYPES:
+        raise ChartDataError("Chart analysis is only supported on cartesian analysis charts")
+    result = {}
+    for axis, scale in (("x", x_scale), ("y", y_scale)):
+        field = axis + "Range"
+        locked = "lock" + axis.upper()
+        value = analysis.get(locked, False)
+        if type(value) is not bool:
+            raise ChartDataError(locked + " must be a boolean")
+        result[locked] = value
+        if field in analysis:
+            bounds = analysis[field]
+            if not isinstance(bounds, list) or len(bounds) != 2:
+                raise ChartDataError(field + " must contain two bounds")
+            lo, hi = (_finite_number(bounds[0], field + " minimum"),
+                      _finite_number(bounds[1], field + " maximum"))
+            if not lo < hi or not math.isfinite(hi - lo):
+                raise ChartDataError(field + " must increase across a finite span")
+            if scale == "log10" and lo <= 0:
+                raise ChartDataError(field + " must be positive on a log10 axis")
+            result[field] = [lo, hi]
+        if value and field not in result:
+            raise ChartDataError(locked + " requires " + field)
+    annotations = analysis.get("annotations", [])
+    if not isinstance(annotations, list) or len(annotations) > MAX_CHART_ANNOTATIONS:
+        raise ChartDataError("Chart annotations must be a list of at most 60 items")
+    result["annotations"] = []
+    for index, item in enumerate(annotations):
+        where = f"Annotation {index}"
+        if not isinstance(item, dict):
+            raise ChartDataError(where + " must be an object")
+        kind = item.get("kind")
+        fields = {
+            "label": {"kind", "x", "y", "text"},
+            "arrow": {"kind", "x", "y", "x2", "y2"},
+            "region": {"kind", "axis", "from", "to"},
+        }
+        if not isinstance(kind, str) or kind not in fields or set(item) != fields[kind]:
+            raise ChartDataError(where + " has invalid fields")
+        row = {"kind": kind}
+        if kind in ("label", "arrow"):
+            for field in (("x", "y", "x2", "y2") if kind == "arrow" else ("x", "y")):
+                number = _finite_number(item[field], where + " " + field)
+                if (x_scale if field.startswith("x") else y_scale) == "log10" and number <= 0:
+                    raise ChartDataError(where + " coordinates must be positive on log10 axes")
+                row[field] = number
+            if kind == "label":
+                row["text"] = _clean_text(item["text"], where + " text")
+        else:
+            if item["axis"] not in ("x", "y"):
+                raise ChartDataError(where + " axis must be x or y")
+            lo = _finite_number(item["from"], where + " start")
+            hi = _finite_number(item["to"], where + " end")
+            if not lo < hi or not math.isfinite(hi - lo):
+                raise ChartDataError(where + " region must have increasing finite bounds")
+            if (x_scale if item["axis"] == "x" else y_scale) == "log10" and lo <= 0:
+                raise ChartDataError(where + " region must be positive on log10 axes")
+            row.update({"axis": item["axis"], "from": lo, "to": hi})
+        result["annotations"].append(row)
+    return result
+
+
+# Keep the historic per-type canonicalizers intact, including their early
+# returns. Analysis is deliberately a post-pass and cannot influence whether
+# a line uses the categorical or scientific rendering path.
+def canonicalize_chart_data(data, chart_type=None):
+    canonical = _canonicalize_chart_data_base(data, chart_type)
+    if "analysis" in data and data["analysis"] is not None:
+        canonical["analysis"] = canonicalize_chart_analysis(
+            data["analysis"], canonical["type"],
+            x_scale=canonical.get("xScale", "linear"),
+            y_scale=canonical.get("yScale", "linear"),
+        )
+    return canonical
 
 
 

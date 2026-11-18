@@ -23,7 +23,8 @@ import base64
 import json
 import re
 
-from graphlink_chart_data import ChartDataError, canonicalize_chart_data, scientific_result_chart, SUPPORTED_CHART_TYPES, validate_publication_export
+from graphlink_chart_data import (ChartDataError, canonicalize_chart_data, canonicalize_chart_analysis,
+                                  scientific_result_chart, SUPPORTED_CHART_TYPES, validate_publication_export)
 from graphlink_chart_rendering import render_chart_publication
 
 from backend.agents import AgentDispatcher
@@ -362,6 +363,34 @@ def register_chart_intents(
         )
         return result_holder.get("node_id")
 
+    async def set_chart_analysis(node_id, analysis):
+        """One atomic, undoable edit of the chart's analysis overlay.
+
+        Only validated analysis is replaced. The original series, observations,
+        bins, labels and scientific provenance stay byte-for-byte equivalent.
+        """
+        node = document.nodes.get(node_id) if isinstance(node_id, str) else None
+        if node is None or node.kind != "chart" or not isinstance(node.state, ChartState):
+            raise ChartDataError("Unknown chart node")
+        current = node.state.chart_data
+        if not isinstance(current, dict):
+            raise ChartDataError("Chart has no data")
+        canonical = canonicalize_chart_data(current, node.state.chart_type)
+        clean = canonicalize_chart_analysis(
+            analysis, node.state.chart_type,
+            x_scale=canonical.get("xScale", "linear"),
+            y_scale=canonical.get("yScale", "linear"),
+        )
+        if current.get("analysis") == clean:
+            return clean
+
+        def update():
+            node.state.chart_data = {**node.state.chart_data, "analysis": clean}
+
+        document.record_command("setChartAnalysis", "user", update, node_ids=[node_id])
+        await publish_scene()
+        return clean
+
     async def resize_chart(node_id, width, height):
         document.record_command(
             "resizeChart", "user", lambda: document.resize_chart(node_id, width, height),
@@ -380,6 +409,7 @@ def register_chart_intents(
     # R6.2: a single combined create+generate action, unlike every
     # node-creation flow above - see generate_chart's own docstring.
     bus.register_intent("scene", "generateChart", generate_chart)
+    bus.register_intent("scene", "setChartAnalysis", set_chart_analysis)
     bus.register_intent("scene", "resizeChart", resize_chart)
     bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
     async def export_publication_chart(node_id, options):
