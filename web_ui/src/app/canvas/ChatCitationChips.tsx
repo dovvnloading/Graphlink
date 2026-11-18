@@ -88,7 +88,7 @@ export function ChatCitationChips({ content, toolInvocations }: {
   const expanded = citations.find((citation) => citation.citationId === openCitationId)?.source;
   const originalUrl = expanded ? sectionUrl(expanded) : null;
   return (
-    <section className="chat-citations" aria-label="Knowledge citations">
+    <section className="chat-citations" aria-label="Citations">
       <div className="chat-citations-heading">Sources cited</div>
       <div className="chat-citations-chips">
         {citations.map(({ citationId, source }) => (
@@ -106,7 +106,7 @@ export function ChatCitationChips({ content, toolInvocations }: {
             </button>
           ) : (
             <span key={citationId} role="status" className="chat-citation-unverified"
-              title="This citation ID was not in the knowledge passages sent to the model.">
+              title="Not in model context.">
               Unverified [{citationId}]
             </span>
           )

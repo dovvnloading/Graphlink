@@ -42,7 +42,7 @@ describe("verified knowledge citation chips", () => {
     expect(screen.getByRole("region", { name: "Source section: Restore and verify" }))
       .toHaveTextContent(EXCERPT);
     expect(screen.getByText(/Offset 18–80/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open original at section" }))
+    expect(screen.getByRole("link", { name: "Open source section" }))
       .toHaveAttribute("href", "https://example.org/ops/recovery.md#restore-and-verify");
     fireEvent.click(chip);
     expect(screen.queryByRole("region", { name: /Source section/ })).not.toBeInTheDocument();
