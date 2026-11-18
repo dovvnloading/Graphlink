@@ -154,6 +154,53 @@ def test_record_replaced_on_regenerate_and_inspector_can_audit_cited_passages():
     assert assistant.state.tool_invocations == []
 
 
+def test_partial_regeneration_clears_stale_citations_and_is_undoable():
+    from backend.api.intents_chat import _land_partial_regenerate
+
+    document = SceneDocument()
+    user = document.add_chat_node(0, 0, "Restore?", True)
+    previous = "Verified previous answer [" + REAL_ID + "]"
+    assistant = document.add_chat_node(0, 160, previous, False, parent_id=user.id)
+    actual_tool = {
+        "id": "call_1", "name": "search_docs", "arguments": {"query": "restore"},
+        "result": "ok", "is_error": False,
+    }
+    assistant.state.tool_invocations.append(actual_tool)
+    apply_reply_citations(assistant, CitedChatReply(previous, [_hit()]))
+    before = list(assistant.state.tool_invocations)
+    assert len(before) == 2
+
+    # The partial text can mention the same ID, but its new run has no
+    # trusted included-source sidecar. It must not reuse the old ledger.
+    partial = "Interrupted new answer [" + REAL_ID + "]"
+    _land_partial_regenerate(document, assistant, partial)
+    interrupted = document.nodes[assistant.id]
+    assert interrupted.content == partial
+    assert interrupted.state.response_incomplete is True
+    assert interrupted.state.tool_invocations == [actual_tool]
+    assert inspected_reply_citations(
+        document, [f"node:{user.id}", f"node:{assistant.id}"],
+    ) == {
+        "replyNodeId": assistant.id,
+        "sources": [],
+        "unverifiedIds": [REAL_ID],
+    }
+
+    # Content and provenance change in one command: undo restores both,
+    # and redo does not resurrect the previous verified citation.
+    document.undo()
+    restored = document.nodes[assistant.id]
+    assert restored.content == previous
+    assert restored.state.response_incomplete is False
+    assert restored.state.tool_invocations == before
+
+    document.redo()
+    redone = document.nodes[assistant.id]
+    assert redone.content == partial
+    assert redone.state.response_incomplete is True
+    assert redone.state.tool_invocations == [actual_tool]
+
+
 def test_missing_database_and_cross_workspace_retrieval_isolation(tmp_path):
     db = tmp_path / "knowledge.db"
     assert search_chat_knowledge("recovery", 41, db_path=db) == []

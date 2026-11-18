@@ -589,6 +589,10 @@ def _land_partial_regenerate(document, node_to_regenerate, partial_text):
         document.update_chat_node_content(
             node_to_regenerate.id, partial_text, incomplete=True
         )
+        # A failed stream has no trusted included-passage snapshot. Drop
+        # the previous reply's ledger within this same undoable mutation,
+        # preserving real tool-call rows.
+        apply_reply_citations(node_to_regenerate, str(partial_text))
 
     document.record_command(
         "regenerateResponse", "agent", _commit,
