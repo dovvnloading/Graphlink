@@ -65,6 +65,10 @@ describe("scientific chart contract", () => {
     [{ ...SCATTER, yScale: "log10", series: [{ name: "A", values: [1, 2, 3], yError: [1, 0, 0] }] }, "lower error endpoint"],
     [{ ...SCATTER, yScale: "log10", series: [{ name: "A", values: [1, 0, 3] }] }, "log10 axis"],
     [{ ...SCATTER, xScale: "linear", xValues: [1, 2, 3], series: [{ name: "A", values: [0, 0, 0], yError: [1e308, 1e308, 1e308] }] }, "range including error endpoints"],
+    [{ ...SCATTER, series: [
+      { name: "Lower", values: [0, 0, 0], yError: [[1.5e308, 0], [1.5e308, 0], [1.5e308, 0]] },
+      { name: "Upper", values: [0, 0, 0], yError: [[0, 1.5e308], [0, 1.5e308], [0, 1.5e308]] },
+    ] }, "range including all series errors"],
   ])("rejects invalid scientific values without skipping a point", (input, message) => {
     expect(() => canonicalizeChartSpec(input, "scatter")).toThrow(message);
   });
