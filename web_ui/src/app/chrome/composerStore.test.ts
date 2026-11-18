@@ -51,6 +51,9 @@ function makeFakeTransport() {
       intents.push({ topic, intent, args });
       intentCallbacks.push({ onSettled, onOfflineCoalesced });
     }),
+    request: vi.fn().mockResolvedValue({
+      models: [{ provider: "Ollama", modelId: "alpha", label: "Ollama · alpha" }],
+    }),
     resubscribe: vi.fn((_topic: string, listener?: StateListener) => {
       if (listener) resubscribeListeners.push(listener);
       return true;
@@ -102,6 +105,29 @@ function validComposerPayload(overrides: Record<string, unknown> = {}) {
 }
 
 describe("ComposerStore", () => {
+  it("fetches configured comparison models and fires a non-queueable fan-out intent", async () => {
+    const { transport, intents } = makeFakeTransport();
+    const store = new ComposerStore(transport);
+    expect(await store.loadComparisonModels()).toEqual([
+      { provider: "Ollama", modelId: "alpha", label: "Ollama · alpha" },
+    ]);
+    expect(transport.request).toHaveBeenCalledWith("scene", "listComparisonModels", []);
+    const onSettled = vi.fn();
+    const models = [
+      { provider: "Ollama", modelId: "alpha" },
+      { provider: "Anthropic Claude", modelId: "claude-test" },
+    ];
+    store.sendModelComparison("hello", models, "n42", onSettled);
+    expect(intents.at(-1)).toEqual({
+      topic: "scene", intent: "compareModels", args: ["hello", models, "n42"],
+    });
+    expect(transport.fireIntent).toHaveBeenLastCalledWith(
+      "scene", "compareModels", ["hello", models, "n42"],
+      undefined, false, undefined, onSettled,
+    );
+  });
+
+
   it("accepts a valid composer snapshot", () => {
     const { transport, listeners } = makeFakeTransport();
     const store = new ComposerStore(transport);
