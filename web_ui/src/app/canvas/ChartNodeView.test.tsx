@@ -6,15 +6,8 @@ import { downloadPublicationChartExport } from "./charts/publicationExport";
 vi.mock("./charts/publicationExport", () => ({
   downloadPublicationChartExport: vi.fn().mockResolvedValue(undefined),
 }));
-import {
-  ChartNodeView,
-  chartExportUrl,
-  chartNodePropsAreEqual,
-  downloadChartExport,
-  filenameFromContentDisposition,
-  makeDebouncedChartResize,
-  type ChartFlowNode,
-} from "./ChartNodeView";
+import { chartExportUrl, downloadChartExport, filenameFromContentDisposition } from "./charts/legacyExport";
+import { ChartNodeView, chartNodePropsAreEqual, makeDebouncedChartResize, type ChartFlowNode } from "./ChartNodeView";
 
 // Rendered directly (not through a real <ReactFlow nodes=.../> mount) - see
 // ChatNodeView.test.tsx for why a bare ReactFlowProvider is enough here too

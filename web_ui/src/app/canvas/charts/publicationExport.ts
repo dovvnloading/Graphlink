@@ -11,22 +11,16 @@ const MIME = { png: "image/png", pdf: "application/pdf", svg: "image/svg+xml" };
 
 function decodeFile(file: ExportFile, format: PublicationExportOptions["format"]): DownloadFile {
   if (!file || typeof file.base64 !== "string" || file.base64.length > 33_000_000
-      || !/^[A-Za-z0-9+/]*={0,2}$/.test(file.base64)
       || file.mimeType !== MIME[format] || typeof file.filename !== "string"
-      || !/^[A-Za-z0-9_-]+\.(png|pdf|svg)$/.test(file.filename)
+      || !/^[\w-]+\.(png|pdf|svg)$/.test(file.filename)
       || !file.filename.endsWith("." + format)) {
     throw new Error("Invalid publication export response");
   }
   const binary = atob(file.base64);
-  if (!(format === "pdf" ? binary.startsWith("%PDF-")
-    : format === "png" ? binary.startsWith("\x89PNG\r\n\x1a\n")
-      : binary.includes("<svg"))) {
-    throw new Error("Chart export file format did not match the request");
-  }
-  return {
-    filename: file.filename, mimeType: file.mimeType,
-    bytes: Uint8Array.from(binary, (char) => char.charCodeAt(0)),
-  };
+  const header = { pdf: "%PDF-", png: "\x89PNG\r\n\x1a\n", svg: "<svg" }[format];
+  if (!binary.includes(header)) throw new Error("Chart export file format did not match the request");
+  return { filename: file.filename, mimeType: file.mimeType,
+    bytes: Uint8Array.from(binary, (char) => char.charCodeAt(0)) };
 }
 
 export function requestPublicationChartExport(
@@ -35,11 +29,8 @@ export function requestPublicationChartExport(
   if (!nodeId) return Promise.reject(new Error("Chart node ID is required"));
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(defaultWsUrl());
-    let settled = false;
     const timer = setTimeout(() => finish(new Error("Publication export timed out")), 120_000);
     function finish(error: Error | null, file?: DownloadFile) {
-      if (settled) return;
-      settled = true;
       clearTimeout(timer);
       ws.close();
       if (error) reject(error);

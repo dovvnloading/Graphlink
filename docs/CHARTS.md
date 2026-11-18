@@ -202,7 +202,10 @@ raster-equivalent pixels and a 24 MB wire response. Invalid settings and
 non-chart node IDs are rejected.
 
 The existing `GET /api/assets/chart/{node_id}/export?fmt=png|svg`
-endpoint remains supported for legacy display-sized downloads. Publication
+endpoint remains supported for legacy display-sized downloads; its frontend
+helper lives in `web_ui/src/app/canvas/charts/legacyExport.ts`. The chart
+node now uses one consolidated publication-export control instead of the
+old per-format shortcuts. Publication
 exports instead use the authenticated `scene.exportPublicationChart`
 WebSocket intent with arguments `[nodeId, options]`, returning a bounded
 base64 file with its filename, MIME type and resolved physical dimensions.
