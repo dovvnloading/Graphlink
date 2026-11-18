@@ -1,7 +1,7 @@
 [plugin]
 id = "science_environment"
 name = "Environmental Science"
-description = "Calculate flow-weighted concentrations, runoff and growing degree days."
+description = "EPA AQI, plume dispersion, river oxygen, pollutant decay, runoff, FAO-56 evapotranspiration and trends."
 version = "1.1.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
