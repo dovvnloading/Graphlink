@@ -36,6 +36,7 @@ import api_provider
 from graphlink_prompts import CONTEXT_SUMMARY_SYSTEM_PROMPT
 from graphlink_token_estimator import TokenEstimator
 from graphlink_memory import clone_history, history_to_transcript, trim_history
+from backend.context_engine import ContextAssembler, selected_context_window
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +218,7 @@ class ChatWorker:
             # is the legacy 8000 budget.
             try:
                 active_runtime = runtime if runtime is not None else api_provider.DEFAULT_RUNTIME
-                window = int(active_runtime.context_window(config.TASK_CHAT))
+                window = selected_context_window(active_runtime, model_ref)
             except Exception:
                 window = self.MAX_TOKENS
             reserve = min(4096, window // 4)
@@ -266,7 +267,15 @@ class ChatWorker:
                     except Exception:
                         pass
 
-            messages.extend(trimmed_history)
+            # C3: every provider prompt passes through context assembly.
+            # Legacy trim/summarize stays first for parity; the assembler
+            # enforces the selected model's actual prompt ceiling, including
+            # summaries and image costs. Fits retain identical wire messages.
+            plan = ContextAssembler(self.token_estimator).assemble(
+                ContextAssembler.chat_sources(final_system_prompt, trimmed_history),
+                context_window=window,
+            )
+            messages = list(plan.messages)
             if on_chunk is not None:
                 response = api_provider.chat_stream(
                     task=config.TASK_CHAT,

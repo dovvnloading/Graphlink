@@ -145,6 +145,10 @@ class ContextAssembler:
                 kind = "summary"
             trust = "generated" if message["role"] == "assistant" or kind == "summary" else "user"
             origin = origins[i] if origins is not None else f"branch:turn:{i}"
+            if kind == "summary":
+                message = typed_context_message(
+                    kind="summary", origin=origin, trust="generated", text=message["content"],
+                )
             sources.append(ContextCandidate(
                 f"{kind}:{origin}", origin, trust, kind, message,
                 required=kind == "current_message",
@@ -170,8 +174,8 @@ class ContextAssembler:
         ids = [source.source_id for source in sources]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate context source id")
-        if sum(source.kind == "current_message" for source in sources) != 1:
-            raise ValueError("exactly one current message is required")
+        if sum(source.kind == "current_message" for source in sources) > 1:
+            raise ValueError("at most one current message is allowed")
         costs = [message_tokens(source.message, self.token_estimator) for source in sources]
         selected = {i for i, source in enumerate(sources) if source.required}
         used = sum(costs[i] for i in selected)
@@ -229,3 +233,22 @@ class ContextAssembler:
             tuple(src.message for i, src in enumerate(sources) if i in selected),
             records, context_window, reserve, budget, used,
         )
+
+
+def selected_context_window(runtime, model_ref=None) -> int:
+    """Budget the selected model, not the chat-task default when pinned.
+
+    A node/branch/workspace ModelRef can select a different model from the
+    task default. Use the existing Ollama and cloud context estimators for
+    that exact model; llama.cpp's n_ctx remains the running server limit.
+    """
+    import api_provider
+    import graphlink_task_config as config
+
+    if model_ref is None:
+        return int(runtime.context_window(config.TASK_CHAT))
+    if model_ref.provider == config.LOCAL_PROVIDER_OLLAMA:
+        return int(api_provider._ollama_effective_context_window(model_ref.model_id))
+    if model_ref.provider == config.LOCAL_PROVIDER_LLAMACPP:
+        return int(runtime.context_window(config.TASK_CHAT))
+    return int(api_provider.known_context_window(model_ref.model_id))

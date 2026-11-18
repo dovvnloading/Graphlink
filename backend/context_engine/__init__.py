@@ -6,6 +6,7 @@ from .assembler import (
     ContextCandidate,
     ContextPlan,
     typed_context_message,
+    selected_context_window,
 )
 
 __all__ = [
@@ -14,4 +15,5 @@ __all__ = [
     "ContextCandidate",
     "ContextPlan",
     "typed_context_message",
+    "selected_context_window",
 ]
