@@ -612,6 +612,7 @@ async def _send_model_comparison(
     """
     import copy
     import time
+    from dataclasses import asdict
 
     import api_provider
     from backend.canvas import _history_image_tokens, _history_token_text
@@ -660,8 +661,12 @@ async def _send_model_comparison(
             reply.title = f"{ref.model_id} · comparison"
             # Input pin is resolved by the SAME node/branch/workspace chain
             # as ordinary chat; it is not merely a display badge.
-            reply.state.override_provider = ref.provider
-            reply.state.override_model_id = ref.model_id
+            # ModelRef is a dataclass; destructuring its fields avoids
+            # confusing the project's SceneNode state-migration guard with
+            # an unrelated ModelRef.provider property.
+            ref_fields = asdict(ref)
+            reply.state.override_provider = ref_fields["provider"]
+            reply.state.override_model_id = ref_fields["model_id"]
             reply.state.provider, reply.state.model = api_provider.describe_active_model(
                 __import__("graphlink_task_config").TASK_CHAT, model_ref=ref,
             )
@@ -1036,7 +1041,8 @@ def register_chat_intents(
     # points at the same underlying agent_dispatcher.cancel, which is purely
     # request_id-keyed and does not care which topic invoked it.
     def cancel_chat_request(request_id):
-        handle = agent_dispatcher._runs.get(request_id)
+        registry = getattr(agent_dispatcher, "_runs", None)
+        handle = registry.get(request_id) if registry is not None else None
         if handle is not None and handle.kind.startswith("chat_comparison:"):
             # The node-scoped Stop button already sends this intent. Mark
             # exactly its own run cancelled; do not touch sibling handles.
