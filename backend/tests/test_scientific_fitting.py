@@ -36,7 +36,10 @@ def test_manifest_and_all_examples_have_verifiable_receipts():
     assert manifest["scopes"]["grants"] == ["graph.read", "graph.mutate"]
     assert manifest["persistence"]["passive_node_kinds"] == ["workbench"]
     assert {op.id for op in operations("fitting")} == {
-        "weighted_linear_least_squares", "nonlinear_least_squares", "welch_t_test", "chi_square_gof"
+        "weighted_linear_least_squares", "nonlinear_least_squares", "welch_t_test", "chi_square_gof",
+        "one_way_anova", "mann_whitney_u", "wilcoxon_signed_rank", "shapiro_wilk",
+        "pearson_correlation", "spearman_correlation", "bonferroni_correction",
+        "benjamini_hochberg_correction",
     }
     for operation in operations("fitting"):
         result = _run(operation.id, operation.example)
