@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass
+from typing import ClassVar
 from uuid import uuid4
 from weakref import WeakKeyDictionary
 
@@ -39,6 +40,9 @@ class ExportArgs:
 
 @dataclass
 class ImportTableArgs:
+    # The UI omits defaulted options; accept them as optional on the intent wire.
+    WIRE_OMITS_DEFAULTS: ClassVar[bool] = True
+
     node_id: str
     text: str | None = None
     encoded_file: str | None = None
@@ -51,6 +55,9 @@ class ImportTableArgs:
 
 @dataclass
 class TableColumnArgs:
+    # Column selection likewise omits the default policy and row-window start.
+    WIRE_OMITS_DEFAULTS: ClassVar[bool] = True
+
     node_id: str
     source_node_id: str
     column: int
