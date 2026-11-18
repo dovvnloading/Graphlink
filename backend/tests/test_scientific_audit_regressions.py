@@ -93,7 +93,7 @@ def test_nist_saturating_exponential_keeps_tiny_nonzero_increment():
             [Decimal("1e300"), Decimal("1e-300")],
         )
     assert float(estimate) == pytest.approx(1.0, rel=1e-14)
-    assert float(derivatives[0]) == pytest.approx(1e-300, rel=1e-14)
+    assert float(derivatives[0]) == pytest.approx(1e-300, rel=1e-14, abs=0)
 
 
 def test_student_t_heavy_tail_does_not_underflow_while_probability_is_finite():
@@ -102,7 +102,7 @@ def test_student_t_heavy_tail_does_not_underflow_while_probability_is_finite():
     from graphlink_plugins.scientific.packs.fitting import _student_t_cdf
 
     t = 1e200
-    assert _student_t_cdf(-t, 1) == pytest.approx(1 / (math.pi * t), rel=2e-13)
+    assert _student_t_cdf(-t, 1) == pytest.approx(1 / (math.pi * t), rel=2e-13, abs=0)
     assert _student_t_ppf(1e-200, 1) == pytest.approx(
         -1 / math.tan(math.pi * 1e-200), rel=2e-13,
     )
@@ -118,5 +118,5 @@ def test_welch_keeps_representable_heavy_tail_p_value():
     assert result["degrees_of_freedom"] == pytest.approx(1)
     assert result["p_value"] > 0
     assert result["p_value"] == pytest.approx(
-        2 / (math.pi * abs(result["t_statistic"])), rel=2e-13,
+        2 / (math.pi * abs(result["t_statistic"])), rel=2e-13, abs=0,
     )
