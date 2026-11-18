@@ -77,3 +77,32 @@ def test_absolute_kelvin_submultiple_conversion_detects_binary64_underflow():
         run("core", "convert_unit", {
             "value": math.ulp(0.0), "from_unit": "mK", "to_unit": "K",
         })
+
+
+def test_nist_saturating_exponential_keeps_tiny_nonzero_increment():
+    # NIST StRD Misra1a uses a*(1-exp(-b*x)); when b*x=1e-300,
+    # exp(-b*x) rounds to 1 at 76-decimal-digit precision but the
+    # 1-exp(-b*x) difference still matters when a=1e300.
+    from decimal import Decimal, localcontext
+    from graphlink_plugins.scientific.packs.fitting import _model
+
+    with localcontext() as ctx:
+        ctx.prec = 76
+        estimate, derivatives = _model(
+            "saturating_exponential", Decimal(1),
+            [Decimal("1e300"), Decimal("1e-300")],
+        )
+    assert float(estimate) == pytest.approx(1.0, rel=1e-14)
+    assert float(derivatives[0]) == pytest.approx(1e-300, rel=1e-14)
+
+
+def test_student_t_heavy_tail_does_not_underflow_while_probability_is_finite():
+    # Student t(df=1) is standard Cauchy; P(T<-t) ~ 1/(pi*t).
+    # At t=1e200, t*t overflows, but the tail is still ~3.18e-201.
+    from graphlink_plugins.scientific.packs.fitting import _student_t_cdf
+
+    t = 1e200
+    assert _student_t_cdf(-t, 1) == pytest.approx(1 / (math.pi * t), rel=2e-13)
+    assert _student_t_ppf(1e-200, 1) == pytest.approx(
+        -1 / math.tan(math.pi * 1e-200), rel=2e-13,
+    )
