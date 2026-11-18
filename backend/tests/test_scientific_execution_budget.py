@@ -12,12 +12,18 @@ from pathlib import Path
 
 import pytest
 
-from backend.tests.test_scientific_workbench import dispatch, envelope, grant, session
+from backend.tests.test_scientific_workbench import (
+    dispatch, envelope, grant, session as _shared_session,
+)
 from graphlink_plugins.scientific import workbench
 from graphlink_plugins.scientific.core import Field, Operation
 from graphlink_plugins.scientific.execution import (
     ExecutionFailure, TIMEOUT_ENV, execute_in_process, execution_timeout,
 )
+
+# Re-export the shared pytest fixture under its injection name without
+# shadowing an imported binding in the test's parameter list.
+session = _shared_session
 
 
 def _quick(data):

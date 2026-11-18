@@ -279,6 +279,7 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
     else session.drafts.delete(op.id);
   }, [session, op.id, draft]);
   const [error, setError] = useState<{ message: string; field?: string } | null>(null);
+  const [running, setRunning] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const errorId = useId();
   const changed = draft.revision !== revision;
@@ -305,12 +306,13 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
       return;
     }
     pending.current = true;
+    setRunning(true);
     setBusy(true);
     try {
       await run(op.id, inputs, draft.sources, runToken);
       setDraft((old) => ({ ...old, dirty: false }));
     } catch (e) { setError({ message: e instanceof Error ? e.message : "The calculation failed." }); }
-    finally { pending.current = false; setBusy(false); }
+    finally { pending.current = false; setRunning(false); setBusy(false); }
   }
 
   return <form onSubmit={submit}>
@@ -366,8 +368,8 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
         }}>Load example</button>
       </div>
     </fieldset>
-    {/* This button must stay outside the disabled fieldset while a worker runs. */}
-    {busy && <div className="science-actions">
+    {/* Outside the disabled fieldset; only real calculations can be cancelled, not table-column imports. */}
+    {running && <div className="science-actions">
       <button type="button" className="science-cancel" disabled={cancelling} onClick={async () => {
         setCancelling(true);
         try { await cancel(op.id); }
@@ -375,7 +377,7 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
         finally { setCancelling(false); }
       }}>{cancelling ? "Stopping…" : "Cancel calculation"}</button>
     </div>}
-    {error && <p id={errorId} role="alert">{error.message}</p>
+    {error && <p id={errorId} role="alert">{error.message}</p>}
   </form>;
 }
 

@@ -361,8 +361,12 @@ describe("typed table import and numeric selections", () => {
       nodeId: "parent", sourceKey: "d".repeat(32), resultHash: meta.asset_ref,
       receiptHash: meta.provenance.receiptHash, selector: ["table_column", 0, "drop", 0, 3],
     };
-    request.mockResolvedValueOnce({ ok: true, values: [10, 20], reference });
+    let finishColumn: (value: unknown) => void = () => {};
+    request.mockReturnValueOnce(new Promise((resolve) => { finishColumn = resolve; }));
     fireEvent.change(select, { target: { value: drop.value } });
+    expect(screen.getByRole("button", { name: "Run calculation" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Cancel calculation" })).toBeNull();
+    finishColumn({ ok: true, values: [10, 20], reference });
     await waitFor(() => expect(screen.getByLabelText("Samples (m)")).toHaveValue("[10,20]"));
     fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
     await waitFor(() => expect(request.mock.lastCall?.[2]?.[1]).toBe("run"));
