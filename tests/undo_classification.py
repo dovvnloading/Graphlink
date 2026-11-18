@@ -253,6 +253,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
 
     # -- backend/api/intents_chart.py (scene) --------------------------------
     Classified("scene", "generateChart", "A", "content: agent-produced chart node"),
+    Classified("scene", "setChartAnalysis", "A", "content: chart axis locks and annotations persist and are undoable"),
     Classified("scene", "resizeChart", "A", "content: size is document state"),
     Classified("scene", "toggleChartAspectLock", "A", "content: lock flag is document state (snapshot/restore, safe to flip)"),
     Classified("scene", "exportPublicationChart", "B", "read-only: produces chart file bytes without mutating the scene"),

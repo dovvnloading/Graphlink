@@ -303,8 +303,9 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 238 -> 239 for connecting the Model's named text port from the canvas.
     # 239 -> 240 for C3's read-only scene/inspectChatContext preview intent.
     # 242 -> 243: read-only scene/exportPublicationChart publication file export.
-    assert len(real) == 243, (
-        f"expected exactly 243 real registered intents, found {len(real)} - "
+    # 243 -> 244: undoable scene/setChartAnalysis persists chart axis locks and annotations.
+    assert len(real) == 244, (
+        f"expected exactly 244 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"

@@ -5,6 +5,7 @@
  * (same y-domain padding rule, same <=12-points value-label cutoff).
  */
 
+import { useId } from "react";
 import { createLinearScale, formatValue, niceTicks, pickCategoricalTicks, wrapLabel } from "./chartScales";
 import { computeBottomMargin, computeLeftMargin, tooltipPositionFromEvent } from "./chartLayout";
 import { CartesianAxes, type XTick } from "./CartesianAxes";
@@ -13,7 +14,8 @@ import type { ChartMarksProps } from "./BarChartMarks";
 const MAX_LABELED_POINTS = 12;
 const POINT_RADIUS = 4.5;
 
-export function LineChartMarks({ chartData, theme, width, height, onHover, wrapperRef }: ChartMarksProps) {
+export function LineChartMarks({ chartData, theme, width, height, onHover, wrapperRef, viewport }: ChartMarksProps) {
+  const clipId = useId();
   const values = chartData.values ?? [];
   const labels = chartData.labels ?? [];
   if (values.length === 0 || width <= 0 || height <= 0) return null;
@@ -24,12 +26,14 @@ export function LineChartMarks({ chartData, theme, width, height, onHover, wrapp
   const buffer = span * 0.18 || Math.max(Math.abs(rawMax), 1) * 0.18 || 1;
   let domainMin = rawMin - buffer;
   let domainMax = rawMax + buffer;
-  const yTicks = niceTicks(domainMin, domainMax, 5);
-  domainMin = Math.min(domainMin, yTicks[0]);
-  domainMax = Math.max(domainMax, yTicks[yTicks.length - 1]);
+  const baseTicks = niceTicks(domainMin, domainMax, 5);
+  domainMin = Math.min(domainMin, baseTicks[0]);
+  domainMax = Math.max(domainMax, baseTicks[baseTicks.length - 1]);
+  const visibleY: [number, number] = viewport?.y ?? [domainMin, domainMax];
+  const yTicks = viewport ? niceTicks(...visibleY, 5).filter((value) => value >= visibleY[0] && value <= visibleY[1]) : baseTicks;
 
   const hasYAxisLabel = Boolean(chartData.yAxis);
-  const marginLeft = computeLeftMargin(yTicks, hasYAxisLabel);
+  const marginLeft = computeLeftMargin(baseTicks, hasYAxisLabel);
   const marginRight = 16;
   const marginTop = 12;
   const innerWidth = Math.max(1, width - marginLeft - marginRight);
@@ -38,11 +42,12 @@ export function LineChartMarks({ chartData, theme, width, height, onHover, wrapp
   const marginBottom = computeBottomMargin(rotate, Boolean(chartData.xAxis));
   const innerHeight = Math.max(1, height - marginTop - marginBottom);
 
-  const yScale = createLinearScale([domainMin, domainMax], [innerHeight, 0]);
+  const yScale = createLinearScale(viewport?.y ?? [domainMin, domainMax], [innerHeight, 0]);
   const slot = values.length > 1 ? innerWidth / (values.length - 1) : 0;
-  const positions = values.map((_, index) => (values.length > 1 ? index * slot : innerWidth / 2));
+  const xScale = createLinearScale(viewport?.x ?? [0, values.length - 1], [0, innerWidth]);
+  const positions = values.map((_, index) => viewport ? xScale(index) : (values.length > 1 ? index * slot : innerWidth / 2));
   const baseline = Math.min(0, rawMin);
-  const baselineInRange = baseline >= domainMin && baseline <= domainMax;
+  const baselineInRange = baseline >= (viewport?.y[0] ?? domainMin) && baseline <= (viewport?.y[1] ?? domainMax);
 
   const linePath = positions.map((x, index) => `${index === 0 ? "M" : "L"} ${x} ${yScale(values[index])}`).join(" ");
   const areaPath = baselineInRange
@@ -54,7 +59,7 @@ export function LineChartMarks({ chartData, theme, width, height, onHover, wrapp
       ].join(" ")
     : "";
 
-  const xTicks: XTick[] = tickIndexes.map((index) => ({
+  const xTicks: XTick[] = tickIndexes.filter((index) => !viewport || (index >= viewport.x[0] && index <= viewport.x[1])).map((index) => ({
     position: positions[index],
     lines: wrapLabel(labels[index] ?? "", 14, 2),
   }));
@@ -73,8 +78,10 @@ export function LineChartMarks({ chartData, theme, width, height, onHover, wrapp
         yAxisLabel={chartData.yAxis ?? ""}
         xTicks={xTicks}
         rotateXTicks={rotate}
-        zeroLineY={domainMin < 0 && domainMax > 0 ? yScale(0) : null}
+        zeroLineY={visibleY[0] < 0 && visibleY[1] > 0 ? yScale(0) : null}
       />
+      {viewport && <defs><clipPath id={clipId}><rect x={0} y={0} width={innerWidth} height={innerHeight} /></clipPath></defs>}
+      <g clipPath={viewport ? "url(#" + clipId + ")" : undefined}>
       {areaPath && <path d={areaPath} fill={lineColor} fillOpacity={0.06} stroke="none" />}
       <path d={linePath} fill="none" stroke={lineColor} strokeWidth={2.8} strokeLinejoin="round" strokeLinecap="round" />
       {positions.map((x, index) => {
@@ -103,6 +110,7 @@ export function LineChartMarks({ chartData, theme, width, height, onHover, wrapp
           </g>
         );
       })}
+      </g>
     </g>
   );
 }
