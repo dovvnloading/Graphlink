@@ -255,6 +255,7 @@ CLASSIFICATION: tuple[Classified, ...] = (
     Classified("scene", "generateChart", "A", "content: agent-produced chart node"),
     Classified("scene", "resizeChart", "A", "content: size is document state"),
     Classified("scene", "toggleChartAspectLock", "A", "content: lock flag is document state (snapshot/restore, safe to flip)"),
+    Classified("scene", "exportPublicationChart", "B", "read-only: produces chart file bytes without mutating the scene"),
 
     # -- backend/api/intents_chat.py (scene) ---------------------------------
     Classified("scene", "sendMessage", "A", "content: user message (hidden create - internally adds a chat node)"),

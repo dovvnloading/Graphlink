@@ -26,6 +26,69 @@ const MAX_TITLE_LENGTH = 200;
 
 export class ChartSpecError extends Error {}
 
+/** Print export settings are ephemeral, not persisted in the v1 ChartSpec. */
+export type PublicationFormat = "svg" | "pdf" | "png";
+export type PublicationSize = "single" | "double" | "custom";
+export interface PublicationExportOptions {
+  format: PublicationFormat;
+  size: PublicationSize;
+  widthMm?: number;
+  heightMm?: number;
+  dpi: 300 | 600;
+  colorblindSafe: boolean;
+  grayscaleSafe: boolean;
+}
+export interface ResolvedPublicationExportOptions extends Omit<PublicationExportOptions, "widthMm" | "heightMm"> {
+  widthMm: number;
+  heightMm: number;
+}
+
+export const PUBLICATION_PRESET_MM = { single: 85, double: 180 } as const;
+
+/** Mirrors graphlink_chart_data.validate_publication_export, including the
+ * pixel-allocation safety cap; physical sizes never depend on display DPI. */
+export function resolvePublicationExportOptions(
+  options: PublicationExportOptions,
+  aspectRatio: number,
+): ResolvedPublicationExportOptions {
+  if (!options || !["png", "svg", "pdf"].includes(options.format)) {
+    throw new ChartSpecError("Export format must be svg, pdf or png");
+  }
+  const allowed = new Set([
+    "format", "size", "widthMm", "heightMm", "dpi", "colorblindSafe", "grayscaleSafe",
+  ]);
+  if (Object.keys(options).some((key) => !allowed.has(key))) {
+    throw new ChartSpecError("Unknown publication export option");
+  }
+  if (options.dpi !== 300 && options.dpi !== 600) {
+    throw new ChartSpecError("Export DPI must be 300 or 600");
+  }
+  if (typeof options.colorblindSafe !== "boolean" || typeof options.grayscaleSafe !== "boolean") {
+    throw new ChartSpecError("Export palette options must be booleans");
+  }
+  if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) {
+    throw new ChartSpecError("Invalid chart aspect ratio");
+  }
+  const size = options.size;
+  if (size !== "single" && size !== "double" && size !== "custom") {
+    throw new ChartSpecError("Export size must be single, double or custom");
+  }
+  if (size !== "custom" && (options.widthMm !== undefined || options.heightMm !== undefined)) {
+    throw new ChartSpecError("Preset sizes derive dimensions from chart aspect ratio");
+  }
+  const widthMm = size === "custom" ? options.widthMm : PUBLICATION_PRESET_MM[size];
+  const heightMm = size === "custom" ? options.heightMm : (widthMm ?? 0) * aspectRatio;
+  if (typeof widthMm !== "number" || typeof heightMm !== "number"
+      || !Number.isFinite(widthMm) || !Number.isFinite(heightMm)
+      || widthMm < 35 || widthMm > 300 || heightMm < 30 || heightMm > 300) {
+    throw new ChartSpecError("Publication dimensions must be 35-300 mm wide and 30-300 mm high");
+  }
+  if ((widthMm / 25.4 * options.dpi) * (heightMm / 25.4 * options.dpi) > 30_000_000) {
+    throw new ChartSpecError("Export dimensions exceed the 30 megapixel safety limit");
+  }
+  return { ...options, widthMm, heightMm };
+}
+
 function isSupportedType(value: unknown): value is SupportedChartType {
   return typeof value === "string" && (SUPPORTED_CHART_TYPES as readonly string[]).includes(value);
 }

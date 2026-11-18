@@ -1,7 +1,6 @@
 import { NodeResizer, type Node, type NodeProps } from "@xyflow/react";
-import { lazy, memo, Suspense, useEffect, useRef } from "react";
+import { lazy, memo, Suspense, useEffect, useRef, useState } from "react";
 import type { ChartDataRow } from "../../lib/bridge-core/generated/scene-state";
-import { authHeaders } from "../../lib/auth/token";
 import {
   CHART_MAX_HEIGHT,
   CHART_MAX_WIDTH,
@@ -9,11 +8,12 @@ import {
   CHART_MIN_WIDTH,
   CHART_RESIZE_DEBOUNCE_MS,
 } from "./canvasConstants";
-import { downloadBlob } from "./downloadTextFile";
 import { NodeHeading } from "./NodeHeading";
 import TableOutput, { type TableOutputBinding } from "./TableOutput";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
+import type { PublicationExportOptions, PublicationFormat, PublicationSize } from "./chartSpec";
+import { downloadPublicationChartExport } from "./charts/publicationExport";
 
 // ADR-013 stage 13.2: the interactive renderer lives in its own lazily
 // loaded chunk (web_ui/src/app/canvas/charts/) - a plain SVG/React
@@ -69,15 +69,10 @@ const LazyChartRenderer = lazy(() => import("./charts/ChartRenderer"));
  * can't render (fails its own canonicalizeChartSpec re-check) shows its own
  * inline placeholder instead of crashing - see ChartRenderer.tsx.
  *
- * Export/PNG and Export/SVG both hit the same dedicated export endpoint (a
- * real matplotlib re-render server-side - PNG at 3x resolution, SVG as
- * vector - not anything this renderer draws), fetched with the capability
- * token in a header and saved from a blob. They are buttons rather than
- * new-tab links precisely because of that token - see chartExportUrl.
- * That stays server-side deliberately: a downloadable, print-quality
- * raster/vector asset is a different job than "draw this interactively."
- * ADR-013 stage 13.4 moved that render off the event loop
- * (asyncio.to_thread, backend/assets.py) and added the SVG option.
+ * The chart node's publication export opens an authenticated scene intent
+ * for physically sized SVG/PDF/PNG and saves a local Blob. The old HTTP
+ * chart exporter remains available in charts/legacyExport.ts for callers
+ * needing legacy fixed-size PNG/SVG. Interactive SVG remains client-side.
  */
 
 export interface ChartNodeData extends Record<string, unknown> {
@@ -94,65 +89,6 @@ export interface ChartNodeData extends Record<string, unknown> {
 }
 
 export type ChartFlowNode = Node<ChartNodeData, "chart">;
-
-/** The dedicated export endpoint - a real matplotlib re-render server-side
- * (PNG at 3x resolution via graphlink_chart_rendering.py's dpi_scale, or
- * SVG as vector - see render_chart_png/render_chart_svg), never anything
- * cached. `session=default` mirrors this app's single-session-per-window
- * assumption everywhere else (see lib/ws/transport.ts's own defaultWsUrl
- * default parameter). */
-export function chartExportUrl(nodeId: string, format: "png" | "svg" = "png"): string {
-  // Deliberately NO token in this URL. It used to be withAuthToken(...) and
-  // to be used as an <a href target="_blank">, which leaked the live
-  // capability token off the machine: in the pywebview/WebView2 shell a
-  // target=_blank click raises NewWindowRequested, whose default handler
-  // opens the fully-resolved URL in the OS default browser - so the token
-  // landed in that browser's address bar, history and download manager, and
-  // was copyable straight out of the link's context menu. A synced browser
-  // history uploads it. That token authorizes every /api intent, including
-  // the code-execution approval gate, so this was the one place the "the
-  // token never leaves this window" property (see lib/auth/token.ts) broke.
-  //
-  // The fetch below sends it as an Authorization HEADER instead, and the
-  // bytes are saved from a blob - nothing user-visible carries the secret.
-  return `/api/assets/chart/${nodeId}/export?session=default&fmt=${format}`;
-}
-
-/** Fetches a chart export with the capability token in a header and saves
- * the resulting bytes as a file via downloadTextFile.ts's shared
- * downloadBlob; the only difference from a plain text/image export is that
- * the bytes come from an authenticated request rather than from memory.
- * REVIEW-FIX: both call sites below invoke this fire-and-forget (`void
- * downloadChartExport(...)`), so a rejected promise - a non-OK response, a
- * network failure - used to surface as an unhandled promise rejection
- * instead of anything the user could see. Now swallowed with a
- * console.error, the same best-effort posture ImageNodeView's
- * handleExportImage already uses for the identical export button pattern. */
-export async function downloadChartExport(nodeId: string, format: "png" | "svg"): Promise<void> {
-  try {
-    const response = await fetch(chartExportUrl(nodeId, format), { headers: authHeaders() });
-    if (!response.ok) throw new Error(`Chart export failed (${response.status})`);
-    const blob = await response.blob();
-    // The server names the file from the chart's own title
-    // (backend/assets.py's _sanitize_chart_filename) and sends it in
-    // Content-Disposition - the same header the old navigated link relied on,
-    // so honoring it here keeps the downloaded filename identical.
-    const filename = filenameFromContentDisposition(response.headers.get("content-disposition"))
-      || `chart.${format}`;
-    downloadBlob(blob, filename);
-  } catch (error) {
-    console.error("[chart-node] Chart export failed:", error);
-  }
-}
-
-/** Pulls `filename="..."` out of a Content-Disposition header. Exported for
- * direct unit testing. Returns "" when the header is absent or unparseable,
- * letting the caller fall back to its own default. */
-export function filenameFromContentDisposition(header: string | null): string {
-  if (!header) return "";
-  const match = /filename\s*=\s*"([^"]+)"/i.exec(header) ?? /filename\s*=\s*([^;]+)/i.exec(header);
-  return match ? match[1].trim() : "";
-}
 
 function chartTypeBadgeLabel(chartType: string): string {
   if (chartType === "boxplot") return "Box plot";
@@ -205,6 +141,8 @@ export function chartNodePropsAreEqual(prev: NodeProps<ChartFlowNode>, next: Nod
   const b = next.data;
   return (
     a.tableOutput === b.tableOutput &&
+    a.chartWidth === b.chartWidth &&
+    a.chartHeight === b.chartHeight &&
     a.chartType === b.chartType &&
     a.chartError === b.chartError &&
     a.chartAspectLocked === b.chartAspectLocked &&
@@ -221,6 +159,35 @@ export const ChartNodeView = memo(function ChartNodeView({
 }: NodeProps<ChartFlowNode>) {
   const overview = useLodVisibility();
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [publicationOpen, setPublicationOpen] = useState(false);
+  const [publicationFormat, setPublicationFormat] = useState<PublicationFormat>("svg");
+  const [publicationSize, setPublicationSize] = useState<PublicationSize>("single");
+  const [publicationBusy, setPublicationBusy] = useState(false);
+  const [publicationError, setPublicationError] = useState("");
+
+  async function exportPublication(form: HTMLFormElement) {
+    if (publicationBusy) return;
+    const fields = new FormData(form);
+    const settings: PublicationExportOptions = {
+      format: publicationFormat, size: publicationSize,
+      ...(publicationSize === "custom" ? {
+        widthMm: Number(fields.get("widthMm")),
+        heightMm: Number(fields.get("heightMm")),
+      } : {}),
+      dpi: Number(fields.get("dpi")) as 300 | 600,
+      colorblindSafe: fields.has("colorblindSafe"),
+      grayscaleSafe: fields.has("grayscaleSafe"),
+    };
+    setPublicationBusy(true);
+    setPublicationError("");
+    try {
+      await downloadPublicationChartExport(id, settings, data.chartHeight / data.chartWidth);
+    } catch (error) {
+      setPublicationError(error instanceof Error ? error.message : "Publication export failed");
+    } finally {
+      setPublicationBusy(false);
+    }
+  }
 
   useEffect(
     () => () => {
@@ -272,7 +239,7 @@ export const ChartNodeView = memo(function ChartNodeView({
           ? <LazyChartOverview chartType={data.chartType} chartData={data.chartData} />
           : <LazyChartRenderer chartType={data.chartType} chartData={data.chartData} />}
       </Suspense>
-      {!overview && <div className="chart-node-toolbar nodrag">
+      {!overview && <div className="chart-node-toolbar nodrag" style={{ flexWrap: "wrap" }}>
         <button
           type="button"
           className="chart-node-btn"
@@ -281,23 +248,71 @@ export const ChartNodeView = memo(function ChartNodeView({
         >
           {data.chartAspectLocked ? "Unlock Aspect" : "Lock Aspect"}
         </button>
-        {/* Buttons, not <a target="_blank"> links: the export request has to
-            carry the capability token, and a navigated link would hand it to
-            the OS default browser - see chartExportUrl's own comment. */}
+        {/* The unified export control replaces duplicate format shortcuts.
+            It keeps download credentials on the authenticated connection. */}
         <button
           type="button"
-          className="chart-node-btn chart-node-export-link"
-          onClick={() => { void downloadChartExport(id, "png"); }}
+          className="chart-node-btn"
+          aria-expanded={publicationOpen}
+          aria-controls={`chart-publication-${id}`}
+          onClick={() => setPublicationOpen(!publicationOpen)}
         >
-          Export PNG
+          Publication export…
         </button>
-        <button
-          type="button"
-          className="chart-node-btn chart-node-export-link"
-          onClick={() => { void downloadChartExport(id, "svg"); }}
-        >
-          Export SVG
-        </button>
+        {publicationOpen && (
+          <form
+            id={`chart-publication-${id}`} role="group" aria-label="Publication export settings"
+            className="chart-node-publication-options nodrag nowheel"
+            style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", padding: 8,
+                     flexBasis: "100%", width: "100%", maxHeight: 190, overflowY: "auto" }}
+            onSubmit={(event) => { event.preventDefault(); void exportPublication(event.currentTarget); }}
+          >
+            <label>Format{" "}
+              <select aria-label="Publication format" value={publicationFormat}
+                onChange={(event) => setPublicationFormat(event.target.value as PublicationFormat)}>
+                <option value="svg">SVG (vector)</option>
+                <option value="pdf">PDF (vector)</option>
+                <option value="png">PNG</option>
+              </select>
+            </label>
+            <label>Size{" "}
+              <select aria-label="Publication size" value={publicationSize}
+                onChange={(event) => setPublicationSize(event.target.value as PublicationSize)}>
+                <option value="single">Single column (85 mm)</option>
+                <option value="double">Double column (180 mm)</option>
+                <option value="custom">Custom (mm)</option>
+              </select>
+            </label>
+            {publicationSize === "custom" && (
+              <>
+                <label>Width (mm){" "}
+                  <input aria-label="Custom width in millimeters" name="widthMm" type="number"
+                    min={35} max={300} step={1} defaultValue={120} style={{ width: 68 }} />
+                </label>
+                <label>Height (mm){" "}
+                  <input aria-label="Custom height in millimeters" name="heightMm" type="number"
+                    min={30} max={300} step={1} defaultValue={80} style={{ width: 68 }} />
+                </label>
+              </>
+            )}
+            <label>DPI{" "}
+              <select aria-label="Publication DPI" name="dpi" defaultValue="300">
+                <option value="300">300</option>
+                <option value="600">600</option>
+              </select>
+            </label>
+            <label>
+              <input type="checkbox" name="colorblindSafe" />Colorblind-safe palette
+            </label>
+            <label>
+              <input type="checkbox" name="grayscaleSafe" />Grayscale-safe hatches, markers and dashes
+            </label>
+            <button type="submit" className="chart-node-btn" disabled={publicationBusy}>
+              {publicationBusy ? "Exporting…" : `Download ${publicationFormat.toUpperCase()}`}
+            </button>
+            {publicationError && <span role="alert">{publicationError}</span>}
+          </form>
+        )}
       </div>}
     </NodeShell>
   );

@@ -21,6 +21,75 @@ MAX_TITLE_LENGTH = 200
 CHART_SPEC_VERSION = 1
 
 
+# Publication export settings are per-download, not persisted ChartSpec fields.
+# Validate before allocating a potentially very large raster/PDF.
+PUBLICATION_WIDTH_MM = {"single": 85.0, "double": 180.0}
+PUBLICATION_FORMATS = frozenset({"svg", "pdf", "png"})
+PUBLICATION_DPI = frozenset({300, 600})
+MAX_PUBLICATION_PIXELS = 30_000_000
+
+
+def validate_publication_export(options, *, aspect_ratio: float = 0.65) -> dict:
+    """Strict, bounded, side-effect-free publication export options.
+
+    Journal presets select a physical *width*; height follows the chart's
+    persisted aspect ratio. Custom size specifies both dimensions in mm.
+    The wire never accepts arbitrary DPI, booleans disguised as numbers,
+    unknown keys, or unbounded raster allocations.
+    """
+    if not isinstance(options, dict):
+        raise ChartDataError("Publication export options must be an object")
+    allowed = {"format", "size", "widthMm", "heightMm", "dpi",
+               "colorblindSafe", "grayscaleSafe"}
+    unknown = set(options) - allowed
+    if unknown:
+        raise ChartDataError("Unknown publication export options: " +
+                             ", ".join(sorted(map(str, unknown))))
+
+    fmt = options.get("format", "png")
+    if not isinstance(fmt, str) or fmt not in PUBLICATION_FORMATS:
+        raise ChartDataError("Export format must be svg, pdf or png")
+    dpi = options.get("dpi", 300)
+    if type(dpi) is not int or dpi not in PUBLICATION_DPI:
+        raise ChartDataError("Export DPI must be 300 or 600")
+    for field in ("colorblindSafe", "grayscaleSafe"):
+        if type(options.get(field, False)) is not bool:
+            raise ChartDataError(field + " must be a boolean")
+
+    size = options.get("size", "single")
+    if size not in ("single", "double", "custom") or not isinstance(size, str):
+        raise ChartDataError("Export size must be single, double or custom")
+    if type(aspect_ratio) not in (int, float) or not math.isfinite(aspect_ratio) or aspect_ratio <= 0:
+        raise ChartDataError("Invalid chart aspect ratio")
+    if size in PUBLICATION_WIDTH_MM:
+        if "widthMm" in options or "heightMm" in options:
+            raise ChartDataError("Preset sizes derive dimensions from chart aspect ratio")
+        width_mm = PUBLICATION_WIDTH_MM[size]
+        height_mm = width_mm * aspect_ratio
+    else:
+        if "widthMm" not in options or "heightMm" not in options:
+            raise ChartDataError("Custom export size requires widthMm and heightMm")
+        def dimension(field):
+            value = options[field]
+            if type(value) not in (float, int) or not math.isfinite(value):
+                raise ChartDataError(field + " must be a finite number of millimeters")
+            return float(value)
+        width_mm = dimension("widthMm")
+        height_mm = dimension("heightMm")
+
+    if not (35 <= width_mm <= 300 and 30 <= height_mm <= 300):
+        raise ChartDataError("Publication dimensions must be 35-300 mm wide and 30-300 mm high")
+    pixels = (width_mm / 25.4 * dpi) * (height_mm / 25.4 * dpi)
+    if pixels > MAX_PUBLICATION_PIXELS:
+        raise ChartDataError("Export dimensions exceed the 30 megapixel safety limit")
+    return {
+        "format": fmt, "size": size, "widthMm": width_mm,
+        "heightMm": height_mm, "dpi": dpi,
+        "colorblindSafe": options.get("colorblindSafe", False),
+        "grayscaleSafe": options.get("grayscaleSafe", False),
+    }
+
+
 class ChartDataError(ValueError):
     """Raised when a chart payload cannot be converted to the canonical schema."""
 
