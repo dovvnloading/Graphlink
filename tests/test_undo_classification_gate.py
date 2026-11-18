@@ -301,8 +301,9 @@ def test_the_scan_finds_the_real_population_of_registered_intents():
     # 233 -> 236 for saved model-port lookup, bind and unbind.
     # 236 -> 238 for first-class Model creation and configuration.
     # 238 -> 239 for connecting the Model's named text port from the canvas.
-    assert len(real) == 239, (
-        f"expected exactly 233 real registered intents, found {len(real)} - "
+    # 239 -> 240 for C3's read-only scene/inspectChatContext preview intent.
+    assert len(real) == 240, (
+        f"expected exactly 240 real registered intents, found {len(real)} - "
         "either the scan broke, or the app's registered-intent surface "
         "genuinely changed and tests/undo_classification.py's own count "
         "comment (and this assertion) need a deliberate update alongside it"
