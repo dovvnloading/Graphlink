@@ -366,8 +366,10 @@ def scs_curve_number(data):
                          "and initial abstraction ratio in [0, 1].")
     storage = 25400 / curve_number - 254  # SI version of NRCS S=1000/CN−10 in.
     abstraction = ratio * storage
-    runoff_depth = ((rainfall - abstraction) ** 2 / (rainfall - abstraction + storage)
-                    if rainfall > abstraction else 0.0)
+    # Evaluate as x*(x/(x+S)), without squaring x: for CN=100 and
+    # very small rainfall x**2 underflows; for large events it overflows.
+    excess = rainfall - abstraction
+    runoff_depth = excess * (excess / (excess + storage)) if excess > 0 else 0.0
     volume = runoff_depth * area * 1000  # mm × km² to m³
     return {
         "summary": f"NRCS curve-number direct runoff is {runoff_depth:.6g} mm "
@@ -428,6 +430,29 @@ def _mk_exact_two_sided_p(n: int, s: int) -> float:
     return min(1.0, 2 * sum(counts[:inversions + 1]) / math.factorial(n))
 
 
+def _mk_exact_tied_two_sided_p(measurements: list[float], observed_s: int) -> float:
+    """Exact conditional permutation p-value among distinct tied orderings."""
+    frequencies = Counter(measurements)
+    multiplicities = tuple(frequencies[value] for value in sorted(frequencies))
+    states = {(0,) * len(multiplicities): {0: 1}}
+    for _ in measurements:
+        next_states = {}
+        for used, distribution in states.items():
+            for index, limit in enumerate(multiplicities):
+                if used[index] == limit:
+                    continue
+                updated = used[:index] + (used[index] + 1,) + used[index + 1:]
+                step_s = sum(used[:index]) - sum(used[index + 1:])
+                target_distribution = next_states.setdefault(updated, {})
+                for previous_s, ways in distribution.items():
+                    new_s = previous_s + step_s
+                    target_distribution[new_s] = target_distribution.get(new_s, 0) + ways
+        states = next_states
+    distribution = states[multiplicities]
+    return (sum(ways for score, ways in distribution.items() if abs(score) >= abs(observed_s))
+            / sum(distribution.values()))
+
+
 def mann_kendall_sen(data):
     """Two-sided seasonal-unadjusted MK with tie variance and Sen median slope."""
     times, measurements = data["time_year"], data["observations"]
@@ -448,12 +473,14 @@ def mann_kendall_sen(data):
     variance = (n * (n - 1) * (2 * n + 5)
                 - sum(t * (t - 1) * (2 * t + 5) for t in counts.values())) / 18
     z = (s - 1 if s > 0 else s + 1 if s < 0 else 0) / math.sqrt(variance) if variance else 0.0
-    # For small tie-free samples, exact two-sided permutation tails are much
-    # better calibrated than the large-sample normal approximation.
-    exact = n <= 10 and ties == 0
-    p = (_mk_exact_two_sided_p(n, s) if exact else
+    # For small samples use the exact conditional permutation distribution:
+    # including ties avoids misclassifying weak trends at a significance edge.
+    exact = n <= 10
+    p = (_mk_exact_two_sided_p(n, s) if exact and ties == 0 else
+         _mk_exact_tied_two_sided_p(measurements, s) if exact else
          math.erfc(abs(z) / math.sqrt(2)) if variance else 1.0)
-    method = "exact permutation" if exact else "normal approximation (continuity/tie corrected)"
+    method = ("exact permutation (ties)" if ties else "exact permutation") if exact else (
+        "normal approximation (continuity/tie corrected)")
     tau_b = s / math.sqrt((n * (n - 1) // 2) * (n * (n - 1) // 2 - ties)) if ties < n * (n - 1) // 2 else 0.0
     slope = median(slopes)
     intercept = median([v - slope * t for t, v in zip(times, measurements)])
@@ -652,7 +679,7 @@ OPERATIONS: tuple[Operation, ...] = (
         "mann_kendall_sen",
         "Mann–Kendall trend and Sen slope",
         "Two-sided nonseasonal Mann–Kendall test with tie correction, exact p-values "
-        "for up to 10 untied observations (otherwise continuity-corrected normal), "
+        "for up to 10 observations, including ties (otherwise continuity-corrected normal), "
         "and median pairwise Sen slope. "
         "Times must increase in years; choose the unit of the observed environmental variable. "
         "Assumes independent observations; serial autocorrelation alters p-values.",
