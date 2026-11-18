@@ -12,6 +12,7 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from backend.domain.model import SceneError
@@ -128,6 +129,8 @@ async def dispatch_external_attempt(
         raise SceneError("The external step's pinned input or node identity changed.")
 
     prior_detail = step.get("detail", "")
+    prior_started = step.get("startedAt")
+    step.setdefault("startedAt", datetime.now(timezone.utc).isoformat())
     attempt = call.journal_record()
     step["externalAttempt"] = attempt
     step.update(status="running", detail="External request reserved; awaiting its outcome.")
@@ -140,7 +143,10 @@ async def dispatch_external_attempt(
         # this ID. Preserve it in memory too; a subsequent save must not erase
         # a fence simply because the cancelled coroutine did not invoke.
         attempt["phase"] = "reconciliation-required"
-        step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
+        step.update(
+            status="reconciliation-required", detail=RECONCILIATION_DETAIL,
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+        )
         try:
             await _drain_checkpoint(checkpoint)
         except BaseException:
@@ -151,6 +157,8 @@ async def dispatch_external_attempt(
         # A failed pre-dispatch checkpoint cannot authorize a network send.
         step.pop("externalAttempt")
         step.update(status="pending", detail=prior_detail)
+        if prior_started is None:
+            step.pop("startedAt", None)
         raise
 
     try:
@@ -160,7 +168,10 @@ async def dispatch_external_attempt(
             raise SceneError("External output must produce a SHA-256 artifact fingerprint.")
     except BaseException:
         attempt["phase"] = "reconciliation-required"
-        step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
+        step.update(
+            status="reconciliation-required", detail=RECONCILIATION_DETAIL,
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+        )
         try:
             await _drain_checkpoint(checkpoint)
         except BaseException:
@@ -170,12 +181,18 @@ async def dispatch_external_attempt(
         raise
 
     attempt["phase"] = "completed"
-    step.update(status="completed", detail="External output checkpointed.", outputHash=output_hash)
+    step.update(
+        status="completed", detail="External output checkpointed.", outputHash=output_hash,
+        finishedAt=datetime.now(timezone.utc).isoformat(),
+    )
     try:
         # The adapter's output and the completion receipt must be atomic.
         await _drain_checkpoint(checkpoint)
     except BaseException:
         attempt["phase"] = "reconciliation-required"
-        step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
+        step.update(
+            status="reconciliation-required", detail=RECONCILIATION_DETAIL,
+            finishedAt=datetime.now(timezone.utc).isoformat(),
+        )
         raise
     return output_hash
