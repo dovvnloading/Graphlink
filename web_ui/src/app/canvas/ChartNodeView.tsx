@@ -314,23 +314,8 @@ export const ChartNodeView = memo(function ChartNodeView({
         >
           {data.chartAspectLocked ? "Unlock Aspect" : "Lock Aspect"}
         </button>
-        {/* Buttons, not <a target="_blank"> links: the export request has to
-            carry the capability token, and a navigated link would hand it to
-            the OS default browser - see chartExportUrl's own comment. */}
-        <button
-          type="button"
-          className="chart-node-btn chart-node-export-link"
-          onClick={() => { void downloadChartExport(id, "png"); }}
-        >
-          Export PNG
-        </button>
-        <button
-          type="button"
-          className="chart-node-btn chart-node-export-link"
-          onClick={() => { void downloadChartExport(id, "svg"); }}
-        >
-          Export SVG
-        </button>
+        {/* The unified export control replaces duplicate format shortcuts.
+            It keeps download credentials on the authenticated connection. */}
         <button
           type="button"
           className="chart-node-btn"

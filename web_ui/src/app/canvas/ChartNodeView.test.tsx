@@ -98,18 +98,13 @@ describe("ChartNodeView", () => {
     expect(button).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("Export PNG/SVG are buttons, never navigated links that could leak the token", () => {
-    // They used to be <a target="_blank"> carrying ?token=<capability token>.
-    // In the WebView2 shell that opens in the OS default browser, putting a
-    // live token into another browser's history/address bar. Asserting they
-    // are BUTTONS (and that no link with these names exists) is what keeps
-    // that from being reintroduced.
+  it("uses one authenticated export button instead of token-bearing links", () => {
     renderChartNode({}, "chart-42");
+    expect(screen.getByRole("button", { name: "Publication export…" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Export (PNG|SVG)/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export PNG" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Export SVG" })).toBeNull();
 
-    expect(screen.getByRole("button", { name: "Export PNG" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Export SVG" })).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Export PNG" })).toBeNull();
-    expect(screen.queryByRole("link", { name: "Export SVG" })).toBeNull();
   });
 });
 
