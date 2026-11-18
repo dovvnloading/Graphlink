@@ -113,6 +113,15 @@ def test_brent_convergence_counts_and_failure_modes():
     assert abs(v["absolute_residual"]) < 1e-11
     assert 2 < v["function_evaluations"] <= 100
     assert value("brent_root", expression="x-1", lower=1, upper=3)["root"] == 1
+    left = value("brent_root", expression="x-1", lower=1, upper=3, max_evaluations=1)
+    assert left["root"] == 1 and left["function_evaluations"] == 1
+    with pytest.raises(ValueError, match="Root tolerance not met"):
+        run("brent_root", expression="x-1", lower=0, upper=3, max_evaluations=1)
+    # Convergence on precisely the final allowed evaluation must count as success.
+    last = value("brent_root", expression="exp(x)-1000", lower=-1, upper=10,
+                 max_evaluations=14)
+    assert last["function_evaluations"] == 14
+    assert last["estimated_absolute_error"] <= 1e-12 + 1e-12*abs(last["root"])
     with pytest.raises(ValueError, match="opposite endpoint signs"):
         run("brent_root", expression="x^2+1", lower=-1, upper=1)
     with pytest.raises(ValueError, match="tolerance not met"):

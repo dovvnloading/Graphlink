@@ -294,21 +294,28 @@ def _root(data):
         raise ValueError("Root bracket requires lower < upper.")
     params = _parameters(data["parameters"], {"x"})
     f, calls = _scalar(data["expression"], params, "x")
-    fa, fb = f(a), f(b)
-    if fa == 0 or fb == 0:
-        root = a if fa == 0 else b
-        return _root_output(root, 0.0, calls[0], 0, abs(b-a), abs(fa if fa == 0 else fb))
+    fa = f(a)
+    if fa == 0:
+        return _root_output(a, 0.0, calls[0], 0, abs(b-a), 0.0)
+    if calls[0] >= limit:
+        raise ValueError("Root tolerance not met: checking the bracket needs two evaluations.")
+    fb = f(b)
+    if fb == 0:
+        return _root_output(b, 0.0, calls[0], 0, abs(b-a), 0.0)
     if (fa > 0) == (fb > 0):
         raise ValueError(f"Root bracket does not contain opposite endpoint signs ({calls[0]} evaluations).")
     if abs(fa) < abs(fb):
         a, b, fa, fb = b, a, fb, fa
     c, d, fc, bisected = a, a, fa, True
     iterations = 0
-    while calls[0] < limit:
+    while True:
         width = abs(b-a)
         tol = atol + rtol * abs(b)
         if width <= tol:
             return _root_output(b, width, calls[0], iterations, width, abs(fb))
+        if calls[0] >= limit:
+            raise ValueError(f"Root tolerance not met: maximum {limit} evaluations exhausted "
+                             f"with bracket width {width:.8g}.")
         if fa != fc and fb != fc:
             s = (a * fb * fc / ((fa-fb)*(fa-fc))
                  + b * fa * fc / ((fb-fa)*(fb-fc))
@@ -339,8 +346,6 @@ def _root(data):
             a, fa = s, fs
         if abs(fa) < abs(fb):
             a, b, fa, fb = b, a, fb, fa
-    raise ValueError(f"Root tolerance not met: maximum {limit} evaluations exhausted "
-                     f"with bracket width {abs(b-a):.8g}.")
 
 
 def _root_output(root, error, evaluations, iterations, width, residual):
