@@ -82,7 +82,7 @@ def _expansion(data):
     }
 
 
-OPERATIONS = (
+OPERATIONS: tuple[Operation, ...] = (
     Operation(
         "resistor_network",
         "Combine ideal resistors",
