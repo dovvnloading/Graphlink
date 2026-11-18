@@ -47,7 +47,7 @@ Inputs: two independent numeric samples, each of size at least 2; unequal popula
 \[t=\frac{\bar x_1-\bar x_2}{\sqrt{s_1^2/n_1+s_2^2/n_2}},\quad
 \nu=\frac{(v_1+v_2)^2}{v_1^2/(n_1-1)+v_2^2/(n_2-1)},\quad v_j=s_j^2/n_j.\]
 
-The **two-sided** p-value is *I_{ν/(ν+t²)}(ν/2, 1/2)*, where *I* is the regularized incomplete beta function. Degrees of freedom use the Welch–Satterthwaite approximation and need not be integers. If both samples have zero variance, the test is undefined and rejected. Population independence and a meaningful sample distribution approximation are necessary; the pack does not perform pairing, multiple-test correction, normality tests or effect-size adjustment. `t_statistic`, `degrees_of_freedom`, `p_value`, means and sample sizes are reported.
+The **two-sided** p-value is *I_{ν/(ν+t²)}(ν/2, 1/2)*, where *I* is the regularized incomplete beta function. The implementation evaluates this as twice the stable negative-*t* tail, including the logarithmic small-beta-argument limit when `t²` overflows; a representable p-value must not silently become zero. Degrees of freedom use the Welch–Satterthwaite approximation and need not be integers. If both samples have zero variance, the test is undefined and rejected. Population independence and a meaningful sample distribution approximation are necessary; the pack does not perform pairing, multiple-test correction, normality tests or effect-size adjustment. `t_statistic`, `degrees_of_freedom`, `p_value`, means and sample sizes are reported.
 
 ## Pearson chi-square goodness of fit (`chi_square_gof`)
 
