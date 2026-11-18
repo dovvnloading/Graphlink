@@ -24,6 +24,8 @@ import { ChartTooltip, type TooltipContent } from "./ChartTooltip";
 import { BarChartMarks } from "./BarChartMarks";
 import { LineChartMarks } from "./LineChartMarks";
 import { ScientificChartMarks } from "./ScientificChartMarks";
+import { BoxplotChartMarks } from "./BoxplotChartMarks";
+import { HeatmapChartMarks } from "./HeatmapChartMarks";
 import { PieChartMarks } from "./PieChartMarks";
 import { HistogramChartMarks } from "./HistogramChartMarks";
 import { SankeyChartMarks } from "./SankeyChartMarks";
@@ -87,6 +89,8 @@ function ChartRenderer({ chartType, chartData }: ChartRendererProps) {
             {chartType === "pie" && <PieChartMarks {...marksProps} />}
             {chartType === "histogram" && <HistogramChartMarks {...marksProps} />}
             {chartType === "sankey" && <SankeyChartMarks {...marksProps} />}
+            {chartType === "boxplot" && <BoxplotChartMarks {...marksProps} />}
+            {chartType === "heatmap" && <HeatmapChartMarks {...marksProps} />}
           </g>
         </svg>
       )}

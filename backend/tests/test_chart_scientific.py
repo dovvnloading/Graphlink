@@ -145,7 +145,9 @@ def test_scientific_line_can_use_categorical_labels_and_y_error_without_changing
 def test_all_existing_chart_eval_fixtures_are_byte_shape_compatible():
     folder = Path(__file__).parents[1] / "evals" / "fixtures" / "chart"
     historic = sorted(path for path in folder.glob("*.json")
-                      if path.name != "scatter_calibration_error_bars.json")
+                      if path.name not in {"scatter_calibration_error_bars.json",
+                                           "boxplot_grouped_measurements.json",
+                                           "heatmap_assay_matrix.json"})
     assert {p.stem for p in historic} == {
         "bar_support_tickets", "line_daily_active_users", "pie_engineering_budget"
     }

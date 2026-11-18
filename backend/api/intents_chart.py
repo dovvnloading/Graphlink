@@ -145,6 +145,17 @@ def register_chart_intents(
                         "type": "scatter", "title": "Chart",
                         "xValues": [1.0, 2.0], "values": [1.0, 1.0],
                     }, "scatter")
+                elif normalized_chart_type == "boxplot":
+                    chart_data = canonicalize_chart_data({
+                        "type": "boxplot", "groups": [
+                            {"label": "No valid data", "values": [0, 0]}
+                        ],
+                    }, "boxplot")
+                elif normalized_chart_type == "heatmap":
+                    chart_data = canonicalize_chart_data({
+                        "type": "heatmap", "rowLabels": ["No valid data"],
+                        "columnLabels": ["Value"], "matrix": [[0]],
+                    }, "heatmap")
                 else:
                     chart_data = _placeholder_chart_data(normalized_chart_type)
                 chart_error = f"The generated chart data could not be validated: {exc}"

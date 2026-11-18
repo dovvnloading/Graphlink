@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   computeHistogramBins,
+  computeBoxplotStats,
+  heatmapColor,
   createLinearScale,
   formatValue,
   mean,
@@ -154,5 +156,29 @@ describe("mean/median", () => {
     expect(median([1e308, 1e308])).toBe(1e308);
     expect(mean([1e308, -1e308])).toBe(0);
     expect(median([1e308, -1e308])).toBe(0);
+  });
+});
+
+
+describe("boxplot statistics and heatmap palette", () => {
+  it("uses median-of-halves quartiles and 1.5-IQR outlier fences", () => {
+    expect(computeBoxplotStats([1, 2, 2, 3, 3, 4, 100])).toEqual({
+      min: 1, q1: 2, median: 3, q3: 4, max: 4, outliers: [100],
+    });
+    expect(computeBoxplotStats([1, 2, 3, 4])).toEqual({
+      min: 1, q1: 1.5, median: 2.5, q3: 3.5, max: 4, outliers: [],
+    });
+    expect(computeBoxplotStats([5, 5])).toEqual({
+      min: 5, q1: 5, median: 5, q3: 5, max: 5, outliers: [],
+    });
+  });
+
+  it("uses the entire matrix domain and zero-centered diverging stops", () => {
+    expect(heatmapColor(-2, -2, 3)).toBe("#2166ac");
+    expect(heatmapColor(0, -2, 3)).toBe("#f7f7f7");
+    expect(heatmapColor(3, -2, 3)).toBe("#b2182b");
+    expect(heatmapColor(1, 0, 1)).toBe("#0a6275");
+    expect(heatmapColor(1, 1, 1)).toBe("#e5f5f9");
+    expect(heatmapColor(0.5, 0, 1)).not.toBe(heatmapColor(0, 0, 1));
   });
 });

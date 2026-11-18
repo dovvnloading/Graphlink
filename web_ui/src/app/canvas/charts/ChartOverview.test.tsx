@@ -20,6 +20,25 @@ describe("chart overview", () => {
     expect(image).not.toHaveClass("nowheel");
   });
 
+  it("draws actual boxplot summaries and heatmap cells at overview scale", () => {
+    const box = { groups: [{ label: "Control", values: [1, 2, 2, 3, 10] }] } as unknown as ChartDataRow;
+    const heat = {
+      rowLabels: ["A", "B"], columnLabels: ["x", "y"],
+      matrix: [[-2, 0], [1, 5]],
+    } as unknown as ChartDataRow;
+
+    const { unmount } = render(<ChartOverview chartType="boxplot" chartData={{ ...box, title: "Boxes" }} />);
+    const boxImage = screen.getByRole("img", { name: "Boxes (boxplot chart)" });
+    expect(boxImage.querySelectorAll(".chart-overview-boxplots rect")).toHaveLength(1);
+    expect(boxImage.innerHTML).not.toMatch(/NaN|Infinity/);
+    unmount();
+
+    render(<ChartOverview chartType="heatmap" chartData={{ ...heat, title: "Matrix" }} />);
+    const heatImage = screen.getByRole("img", { name: "Matrix (heatmap chart)" });
+    expect(heatImage.querySelectorAll(".chart-overview-heatmap rect")).toHaveLength(4);
+    expect(heatImage.innerHTML).not.toMatch(/NaN|Infinity/);
+  });
+
   it("shows a reason for an unreadable saved chart in overview", () => {
     render(<ChartOverview chartType="bar" chartData={{ type: "bar" }} />);
     expect(screen.getByText("Labels and values must both be lists")).toBeInTheDocument();

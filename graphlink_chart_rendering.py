@@ -43,6 +43,7 @@ import matplotlib
 matplotlib.use("Agg")
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
+from matplotlib.colors import LinearSegmentedColormap, Normalize, TwoSlopeNorm
 from matplotlib.patches import FancyBboxPatch, PathPatch
 from matplotlib.path import Path as MplPath
 
@@ -383,6 +384,89 @@ def _render_scientific_cartesian(ax, data: dict[str, Any], theme: dict[str, Any]
     # matplotlib's dataLim accounts for errorbar cap endpoints; no silent
     # clipping, filtering or arbitrary domain transforms are introduced.
     ax.margins(x=0.08, y=0.16)
+    return True
+
+
+def _boxplot_statistics(values):
+    """Tukey median-of-halves quartiles, 1.5-IQR whiskers and explicit outliers.
+
+    Unlike pyplot.boxplot, calculating the stats here makes the PNG/SVG
+    exporter and the interactive SVG use the same definition for odd samples.
+    """
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    q1 = median(ordered[:mid])
+    q3 = median(ordered[mid + (len(ordered) % 2):])
+    med = median(ordered)
+    fence = 1.5 * (q3 - q1)
+    lower, upper = q1 - fence, q3 + fence
+    inliers = [value for value in ordered if lower <= value <= upper]
+    return {
+        "med": med, "q1": q1, "q3": q3,
+        "whislo": inliers[0], "whishi": inliers[-1],
+        "fliers": [value for value in ordered if value < lower or value > upper],
+    }
+
+
+def _render_boxplot(ax, chart_data: dict[str, Any], theme: dict[str, Any],
+                    layout_width: float) -> bool:
+    groups = chart_data["groups"]
+    entries = [dict(label=group["label"], **_boxplot_statistics(group["values"]))
+               for group in groups]
+    artists = ax.bxp(
+        entries, positions=list(range(len(groups))), widths=0.56,
+        patch_artist=True, showfliers=True, manage_ticks=False,
+        boxprops={"edgecolor": theme["text"], "linewidth": 1.1},
+        medianprops={"color": theme["text"], "linewidth": 2.0},
+        whiskerprops={"color": theme["muted"], "linewidth": 1.3},
+        capprops={"color": theme["muted"], "linewidth": 1.3},
+        flierprops={"marker": "o", "markersize": 4,
+                    "markerfacecolor": "none", "markeredgecolor": theme["text"]},
+    )
+    for index, patch in enumerate(artists["boxes"]):
+        patch.set_facecolor(theme["cycle"][index % len(theme["cycle"])])
+        patch.set_alpha(0.75)
+    _prepare_standard_axes(ax, theme, chart_data["xAxis"], chart_data["yAxis"])
+    _set_categorical_ticks(ax, list(range(len(groups))), [group["label"] for group in groups], layout_width)
+    ax.margins(x=0.07, y=0.16)
+    return True
+
+
+def _render_heatmap(figure, ax, chart_data: dict[str, Any],
+                    theme: dict[str, Any], layout_width: float) -> bool:
+    rows = chart_data["rowLabels"]
+    columns = chart_data["columnLabels"]
+    matrix = chart_data["matrix"]
+    smallest = min(min(row) for row in matrix)
+    largest = max(max(row) for row in matrix)
+    if smallest < 0 < largest:
+        cmap = LinearSegmentedColormap.from_list(
+            "graphlink-diverging", ["#2166AC", "#F7F7F7", "#B2182B"]
+        )
+        norm = TwoSlopeNorm(vmin=smallest, vcenter=0, vmax=largest)
+    else:
+        cmap = LinearSegmentedColormap.from_list(
+            "graphlink-sequential", ["#E5F5F9", "#0A6275"]
+        )
+        # A constant matrix should still produce a visible, uniform map.
+        norm = Normalize(vmin=smallest, vmax=largest if largest != smallest else smallest + 1)
+    image = ax.imshow(matrix, aspect="auto", interpolation="nearest", origin="upper",
+                      cmap=cmap, norm=norm, zorder=2)
+    _prepare_standard_axes(ax, theme, chart_data["xAxis"], chart_data["yAxis"],
+                           x_grid=False, y_grid=False)
+    _set_categorical_ticks(ax, list(range(len(columns))), columns, layout_width)
+    step = max(1, math.ceil(len(rows) / 12))
+    shown = list(range(0, len(rows), step))
+    if shown[-1] != len(rows) - 1:
+        shown.append(len(rows) - 1)
+    ax.set_yticks(shown, [_wrap_label(rows[i], 14, 2) for i in shown])
+    ax.set_xlim(-0.5, len(columns) - 0.5)
+    ax.set_ylim(len(rows) - 0.5, -0.5)
+    colorbar = figure.colorbar(image, ax=ax, fraction=0.045, pad=0.04)
+    colorbar.ax.tick_params(colors=theme["muted"], labelsize=8)
+    colorbar.outline.set_edgecolor(theme["border"])
+    if chart_data.get("valueUnit"):
+        colorbar.set_label(chart_data["valueUnit"], color=theme["muted"], fontsize=9)
     return True
 
 
@@ -735,6 +819,10 @@ def _render_chart_content(figure, chart_type: str, chart_data: dict[str, Any], t
         use_tight_layout = _render_histogram(ax, canonical, theme)
     elif chart_type == "sankey":
         use_tight_layout = _render_sankey_chart(figure, ax, canonical, theme)
+    elif chart_type == "boxplot":
+        use_tight_layout = _render_boxplot(ax, canonical, theme, layout_width)
+    elif chart_type == "heatmap":
+        use_tight_layout = _render_heatmap(figure, ax, canonical, theme, layout_width)
     else:
         # Unreachable in practice - render_chart_png already validates
         # chart_type against SUPPORTED_CHART_TYPES before ever calling this.
