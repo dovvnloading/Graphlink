@@ -1,4 +1,4 @@
-import { useReactFlow } from "@xyflow/react";
+import { useReactFlow, useStoreApi } from "@xyflow/react";
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { GraphModelBinding, GraphRun, GraphRunPreview, GraphRunStep, LatestGraphRun, SceneStore } from "../canvas/sceneStore";
 import { Dialog } from "../overlays/overlays";
@@ -130,9 +130,13 @@ function RunInspector({ run, names, onSelect }: {
 
 function Runner({ store }: { store: SceneStore }) {
   const rf = useReactFlow();
+  const rfStore = useStoreApi();
   function selectInspectorNode(nodeId: string) {
-    if (!nodeId || !rf.getNodes().some((node) => node.id === nodeId)) return;
-    rf.setNodes((nodes) => nodes.map((node) => ({ ...node, selected: node.id === nodeId })));
+    // The canvas owns an uncontrolled React Flow node store; use its same
+    // setter (SceneCanvas's scene-sync effect also calls setNodes here).
+    const nodes = rfStore.getState().nodes;
+    if (!nodeId || !nodes.some((node) => node.id === nodeId)) return;
+    rfStore.getState().setNodes(nodes.map((node) => ({ ...node, selected: node.id === nodeId })));
   }
   const [selectedIds] = useState(() => rf.getNodes().filter((node) => node.selected).map((node) => node.id));
   const [scope, setScope] = useState(selectedIds.length ? "selection" : "all");
