@@ -240,12 +240,24 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
   }
   if (xValues) series.forEach((row) => checkScientificAxis(xValues!, row.xError, output.xScale!, "xValues"));
   series.forEach((row) => checkScientificAxis(row.values, row.yError, output.yScale!, "series " + (row.name ?? "values") + " values"));
-  const allY = series.flatMap((row) => row.values);
-  if (xValues && !Number.isFinite(Math.max(...xValues) - Math.min(...xValues))) {
-    throw new ChartSpecError("xValues range must be finite");
-  }
-  if (!Number.isFinite(Math.max(...allY) - Math.min(...allY))) {
-    throw new ChartSpecError("values range must be finite");
+  // Separate series may have finite individual error spans yet overflow
+  // when their intervals are combined into the plot's shared axis.
+  for (const field of ["xValues", "values"] as const) {
+    if (field === "xValues" && !xValues) continue;
+    let smallest = Infinity;
+    let largest = -Infinity;
+    for (const row of series) {
+      const coordinates = field === "xValues" ? xValues! : row.values;
+      const errors = field === "xValues" ? row.xError : row.yError;
+      coordinates.forEach((value, index) => {
+        const [minus, plus] = errors?.[index] ?? [0, 0];
+        smallest = Math.min(smallest, value - minus);
+        largest = Math.max(largest, value + plus);
+      });
+    }
+    if (!Number.isFinite(largest - smallest)) {
+      throw new ChartSpecError(field + " range including all series errors must be finite");
+    }
   }
   output.xAxis = cleanText(raw.xAxis, "X-axis label", { default: type === "scatter" ? "X" : "Sequence" });
   output.yAxis = cleanText(raw.yAxis, "Y-axis label", { default: type === "scatter" ? "Y" : "Value" });
