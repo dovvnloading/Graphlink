@@ -5,6 +5,15 @@ Graphlink chart nodes use the version-1 canonical JSON object validated by
 `web_ui/src/app/canvas/chartSpec.ts` performs the same defensive validation.
 The version remains **1** because the new scientific fields are optional.
 
+**Scatter transport compatibility:** new chart generation input carries
+`"type": "scatter"`, but canonical *stored* scatter data deliberately leaves
+out its optional nested `type` field; the enclosing node's `chartType`
+is `"scatter"`. This preserves Graphlink's existing generated version-1
+scene validator, which does not yet enumerate scatter and is out of scope
+for this change. Pass `chart_type="scatter"` explicitly when canonicalizing
+that stored payload. Legacy chart types continue to store their nested
+`type` normally.
+
 ## Existing charts
 
 The five existing shapes remain unchanged. A bar, line, or pie chart has
@@ -76,6 +85,9 @@ Example:
   lower endpoint of every error interval on that axis. A coordinate of
   zero, a negative coordinate, or a zero/negative lower endpoint is an
   error; it is never silently omitted or clipped.
+* The full span across all coordinates **and** all error endpoints must
+  also be finite, not merely its individual endpoints. This avoids
+  overflowing a plotting domain or compressing unrelated points together.
 * Existing bar, pie, histogram, and Sankey validation rules are unchanged.
   An invalid scientific chart is rejected with a field/index-specific
   message; a render request with invalid data continues to show the
