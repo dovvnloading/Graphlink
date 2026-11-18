@@ -92,7 +92,7 @@ describe("saved Graph Runner inspector", () => {
     await user.click(screen.getByRole("button", { name: "Open runner" }));
     const latest = await screen.findByRole("region", { name: "Latest run" });
     await user.click(within(latest).getByRole("button", { name: "Inspect run trace (1 steps)" }));
-    await user.click(within(latest).getByRole("button", { name: /Step 1 · Reply note · Reconciliation required/ }));
+    await user.click(await within(latest).findByRole("button", { name: /Step 1 · Reply note · Reconciliation required/ }));
     await waitFor(() => expect(screen.getByTestId("selected-canvas-nodes")).toHaveTextContent("destination"));
     expect(latest).toHaveTextContent("Source note");
     expect(latest).toHaveTextContent("Output revision: 2");
@@ -121,7 +121,7 @@ describe("saved Graph Runner inspector", () => {
     await user.click(screen.getByRole("button", { name: / · Reconciliation required$/ }));
     const inspectorButtons = screen.getAllByRole("button", { name: "Inspect run trace (1 steps)" });
     await user.click(inspectorButtons[1]);
-    await user.click(screen.getByRole("button", { name: "Export trace JSON" }));
+    await user.click(await screen.findByRole("button", { name: "Export trace JSON" }));
     expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "graph-run-older-saved-run.trace.json");
   });
 });
