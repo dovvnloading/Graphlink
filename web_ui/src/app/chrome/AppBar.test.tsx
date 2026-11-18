@@ -126,6 +126,7 @@ describe("AppBar", () => {
       const user = userEvent.setup();
       renderAppBar();
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
       expect(screen.getByRole("dialog")).toBeInTheDocument();
       await user.keyboard("{Escape}");
       expect(screen.queryByRole("dialog")).toBeNull();
@@ -136,6 +137,7 @@ describe("AppBar", () => {
       renderAppBar();
 
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
       const menuItems = within(screen.getByRole("dialog"));
 
       for (const label of [
@@ -165,6 +167,7 @@ describe("AppBar", () => {
         const user = userEvent.setup();
         renderAppBar();
         await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
         await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: label }));
         expect(screen.queryByRole("dialog")).toBeNull();
       },
@@ -175,6 +178,7 @@ describe("AppBar", () => {
       const { store } = renderAppBar();
       const organizeSpy = vi.spyOn(store, "organizeNodes");
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
       await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Organize" }));
       expect(organizeSpy).not.toHaveBeenCalled();
       expect(screen.getByTestId("active-overlay")).toHaveTextContent("organize");
@@ -184,6 +188,7 @@ describe("AppBar", () => {
       const user = userEvent.setup();
       renderAppBar();
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
       await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pins" }));
 
       expect(screen.queryByRole("dialog")).toBeNull();
@@ -204,6 +209,7 @@ describe("AppBar", () => {
       const user = userEvent.setup();
       renderAppBar();
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
       const menu = within(screen.getByRole("dialog"));
       for (const label of ["Pins", "View", "Plugins", "About", "Help", "Diagnostics"]) {
         expect(menu.getByRole("button", { name: label })).toHaveAttribute("aria-pressed", "false");
@@ -214,6 +220,7 @@ describe("AppBar", () => {
       const user = userEvent.setup();
       renderAppBar();
       await user.click(screen.getByRole("button", { name: "More toolbar actions" }));
+      await within(screen.getByRole("dialog", { name: "More toolbar actions" })).findByRole("button", { name: "Pins" });
       const menu = screen.getByRole("dialog", { name: "More toolbar actions" });
 
       // Groups collapse whole and all at once, so an inline action and its
