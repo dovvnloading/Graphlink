@@ -135,10 +135,12 @@ export function invertScale(px: number, domain: Domain, pixels: Domain, kind: Ax
 
 /** Positive factor zooms in; log axes change by equal exponent intervals. */
 export function zoomDomain(domain: Domain, kind: AxisKind, anchor: number, factor: number): Domain {
-  if (!Number.isFinite(factor) || factor <= 0) return domain;
+  if (!Number.isFinite(factor) || factor <= 0 || !Number.isFinite(anchor) ||
+      (kind === "log10" && anchor <= 0)) return domain;
   const lo = transform(domain[0], kind);
   const hi = transform(domain[1], kind);
   const pivot = transform(anchor, kind);
+  // Distances from the pivot are scaled in axis space (log10 for log axes).
   const next: Domain = [
     untransform(pivot + (lo - pivot) / factor, kind),
     untransform(pivot + (hi - pivot) / factor, kind),

@@ -138,11 +138,10 @@ export interface ChartAnalysis {
   annotations: ChartAnnotation[];
 }
 
-export type AnalysisChartData = ChartDataRow & { analysis?: ChartAnalysis };
 export const EMPTY_CHART_ANALYSIS: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
 
 export function chartAnalysisOf(data: ChartDataRow): ChartAnalysis {
-  return (data as AnalysisChartData).analysis ?? EMPTY_CHART_ANALYSIS;
+  return (data.analysis as ChartAnalysis | null | undefined) ?? EMPTY_CHART_ANALYSIS;
 }
 
 /** Mirror graphlink_chart_data.canonicalize_chart_analysis; never silently
@@ -680,7 +679,7 @@ export function canonicalizeChartSpec(data: unknown, chartType?: string | null):
   if (data && typeof data === "object" && !Array.isArray(data)) {
     const raw = data as Record<string, unknown>;
     if (raw.analysis != null) {
-      (canonical as AnalysisChartData).analysis = canonicalizeChartAnalysis(
+      canonical.analysis = canonicalizeChartAnalysis(
         raw.analysis, canonical.type ?? chartType ?? "",
         canonical.xScale ?? "linear", canonical.yScale ?? "linear",
       );

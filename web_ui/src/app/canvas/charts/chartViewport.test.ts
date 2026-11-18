@@ -20,7 +20,7 @@ describe("data-space chart viewport math", () => {
     expect(selected[0]).toBeCloseTo(10);
     expect(selected[1]).toBeCloseTo(100);
     const zoomed = zoomDomain([1, 1000], "log10", 10, 2);
-    expect(zoomed[0]).toBeCloseTo(1 / Math.sqrt(10));
+    expect(zoomed[0]).toBeCloseTo(Math.sqrt(10)); // Halfway from 1 to 10 in log space.
     expect(zoomed[1]).toBeCloseTo(100);
     const panned = panDomain([1, 100], "log10", 0.5);
     expect(panned[0]).toBeCloseTo(10);
