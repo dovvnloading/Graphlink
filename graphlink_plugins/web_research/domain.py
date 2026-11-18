@@ -160,6 +160,7 @@ class FetchedPayload:
     truncated: bool = False
     status_code: int = 200
     duration_ms: int = 0
+    fetched_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,8 @@ class FetchedDocument:
     truncated: bool = False
     content_hash: str = ""
     duration_ms: int = 0
+    publisher: str = ""
+    published_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -200,6 +203,11 @@ class ResearchSource:
     truncated: bool = False
     content_hash: str = ""
     citation_count: int = 0
+    publisher: str = ""
+    published_at: str = ""
+    fetched_at: str = ""
+    quality: str = "unknown"
+    merged_into: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -217,6 +225,11 @@ class ResearchSource:
             "truncated": self.truncated,
             "content_hash": self.content_hash,
             "citation_count": self.citation_count,
+            "publisher": self.publisher,
+            "published_at": self.published_at,
+            "fetched_at": self.fetched_at,
+            "quality": self.quality,
+            "merged_into": self.merged_into,
         }
 
 
@@ -234,6 +247,30 @@ class ResearchCitation:
     source_id: str
     marker: str
     claim_context: str = ""
+    quote: str = ""
+    role: str = "support"  # "support" or "conflict"
+
+
+@dataclass
+class ResearchClaim:
+    claim_id: str
+    text: str
+    status: str  # supported / qualified / conflicted / unverified
+    topic: str = ""
+    value: str = ""
+    citations: list[ResearchCitation] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "claim_id": self.claim_id,
+            "text": self.text,
+            "status": self.status,
+            "topic": self.topic,
+            "value": self.value,
+            "citations": [citation.__dict__.copy() for citation in self.citations],
+            "flags": list(self.flags),
+        }
 
 
 @dataclass(frozen=True)
@@ -256,6 +293,7 @@ class ResearchResult:
     citations: list[ResearchCitation] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     provider_snapshot: dict[str, Any] = field(default_factory=dict)
+    claims: list[ResearchClaim] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -267,6 +305,7 @@ class ResearchResult:
             "citations": [citation.__dict__.copy() for citation in self.citations],
             "warnings": list(self.warnings),
             "provider_snapshot": dict(self.provider_snapshot),
+            "claims": [claim.to_dict() for claim in self.claims],
         }
 
     def to_legacy_dict(self) -> dict[str, Any]:
