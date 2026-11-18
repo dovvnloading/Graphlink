@@ -18,7 +18,7 @@ interface PlottedSeries {
   yError?: ErrorPair[] | null;
 }
 
-export function scientificAxisLabel(label: string, unit?: string): string {
+export function scientificAxisLabel(label: string, unit?: string | null): string {
   return unit ? label + " (" + unit + ")" : label;
 }
 
@@ -62,11 +62,11 @@ function labeledTicks(domain: [number, number], scale: AxisScale): number[] {
 
 /** Keep tooltips exact: the legacy abbreviated tick-label formatter rounds
  * >=1000 to integers and values <.001 to zero, which is wrong for readings. */
-export function exactWithUnit(value: number, unit?: string): string {
+export function exactWithUnit(value: number, unit?: string | null): string {
   return String(value) + (unit ? " " + unit : "");
 }
 
-function errorWithUnit(pair: ErrorPair, unit?: string): string {
+function errorWithUnit(pair: ErrorPair, unit?: string | null): string {
   return "-" + String(pair[0]) + "/+" + String(pair[1]) + (unit ? " " + unit : "");
 }
 
