@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 from dataclasses import dataclass
 from typing import ClassVar
@@ -14,12 +15,13 @@ from backend.domain.node_states import ChartState, PersistedPluginState, PluginS
 from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate
 
 from .catalog import PACKS, operations
-from .core import INPUT_LIMITS, canonical_bytes, fingerprint, readable_result, validated_inputs
+from .core import INPUT_LIMITS, _effective_unit, canonical_bytes, fingerprint, finite, readable_result, validated_inputs_with_units
 from .data_table import (
     TableState, decode_input, numeric_column, parse_table, persist_table,
     stage_from_saved, table_metadata_valid,
 )
 from .execution import ExecutionFailure, execute_in_process, execution_timeout
+from .units import convert_decimal_measurement, parse_unit
 
 STATE_TYPES = (PersistedPluginState, PluginStateSnapshot, TableState)
 SCIENCE_KINDS = frozenset(f"science_{pack}.workbench" for pack in PACKS)
@@ -27,6 +29,9 @@ SCIENCE_KINDS = frozenset(f"science_{pack}.workbench" for pack in PACKS)
 
 @dataclass
 class RunArgs:
+    # Most run intents omit the default propagation method.
+    WIRE_OMITS_DEFAULTS: ClassVar[bool] = True
+
     node_id: str
     operation_id: str
     inputs: dict
@@ -122,7 +127,16 @@ def _extract(result: dict, selector: list):
 
 
 def _verify_sources(document, node, inputs: dict, sources: dict, granted,
-                    uncertainty_inputs: dict | None = None) -> dict:
+                    uncertainty_inputs: dict | None = None, *,
+                    operation=None, input_units: dict | None = None) -> dict:
+    """Verify cited outputs and normalize linked measurements into input units.
+
+    Only an immutable, receipt-validated source determines a linked value's
+    units/uncertainty. Units are converted before propagation; standard
+    uncertainty and each signed lineage component use the linear scale only
+    (affine temperature offsets never change a standard uncertainty).
+    """
+    fields = {field.key: field for field in operation.fields} if operation else {}
     if not sources:
         return {}
     if set(sources) - set(inputs):
@@ -188,14 +202,53 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted,
             selected = _extract(latest, selector)
         except (IndexError, KeyError, TypeError):
             raise ValueError("The selected output is unavailable.") from None
-        if selected != inputs[key]:
-            raise ValueError("The supplied value differs from the selected source output.")
-        if uncertainty_inputs is not None:
-            from .propagation import connected_measurement
+        measurement = None
+        source_unit = ""
+        if (uncertainty_inputs is not None or operation is not None) and (
+                len(selector) == 2 and selector[0] == "values" and isinstance(selector[1], str)):
+            from .propagation import connected_measurement, result_unit
             identity = source.state.data.get("nodeKey") or receipt_hash or digest
             measurement = connected_measurement(latest, selector, identity)
-            if measurement is not None:
-                uncertainty_inputs[key] = measurement
+            source_unit = measurement["unit"] if measurement else result_unit(selector[1])
+        field = fields.get(key)
+        target_unit = _effective_unit(field, inputs) if field and field.kind == "number" else ""
+        normalized_source = selected
+        if target_unit and source_unit and type(selected) in (int, float):
+            try:
+                normalized_source = convert_decimal_measurement(str(selected), source_unit, target_unit)
+            except ValueError as exc:
+                raise ValueError(f"Connected input '{key}' has incompatible units: {exc}") from None
+        if (type(normalized_source) in (int, float) and type(inputs[key]) in (int, float)
+                and target_unit and source_unit):
+            matched = math.isclose(normalized_source, inputs[key], rel_tol=1e-13, abs_tol=1e-14)
+        else:
+            matched = normalized_source == inputs[key]
+        if not matched:
+            raise ValueError("The supplied value differs from the selected source output.")
+        if measurement is not None and uncertainty_inputs is not None:
+            # Older GUM outputs can have no declared unit. In that case the
+            # target operation explicitly supplies the physical interpretation.
+            unit = target_unit or source_unit
+            if unit and source_unit and source_unit != unit:
+                from_unit, to_unit = parse_unit(source_unit), parse_unit(unit)
+                if from_unit.dimensions != to_unit.dimensions or from_unit.kind != to_unit.kind:
+                    raise ValueError(f"Connected input '{key}' has incompatible units.")
+                factor = float(from_unit.scale / to_unit.scale)
+                components = {origin: finite(weight * factor, "Converted uncertainty component")
+                              for origin, weight in measurement["components"].items()}
+                sigma = finite(measurement["standardUncertainty"] * abs(factor), "Converted standard uncertainty")
+                interval = measurement.get("interval")
+                measurement = {
+                    **measurement, "value": inputs[key], "unit": unit,
+                    "sourceUnit": source_unit, "sourceValue": selected,
+                    "standardUncertainty": sigma, "components": components,
+                    **({"interval": [convert_decimal_measurement(str(bound), source_unit, unit)
+                                    for bound in interval]} if interval is not None else {}),
+                }
+            elif unit:
+                measurement = {**measurement, "value": inputs[key], "unit": unit,
+                               **({"sourceUnit": source_unit} if source_unit else {})}
+            uncertainty_inputs[key] = measurement
         verified[key] = {"nodeId": source_id, "sourceKey": source.state.data.get("nodeKey"),
                          "resultHash": digest, "selector": selector,
                          "packId": latest["provenance"]["packId"], "operationId": latest["operationId"]}
@@ -277,10 +330,11 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             return {"ok": False, "errorType": "busy", "error": "A calculation is already running on this scientific node."}
         state = node.state
         try:
-            inputs = validated_inputs(op, request.inputs)
+            inputs, input_units = validated_inputs_with_units(op, request.inputs)
             uncertainty_inputs: dict = {}
             sources = _verify_sources(document, node, inputs, request.sources or {},
-                                      ctx.is_plugin_granted, uncertainty_inputs)
+                                      ctx.is_plugin_granted, uncertainty_inputs,
+                                      operation=op, input_units=input_units)
             if request.uncertainty_method not in ("auto", "gum", "monte_carlo"):
                 raise ValueError("Uncertainty method must be auto, gum or monte_carlo.")
             budget = execution_timeout(op)
@@ -294,7 +348,8 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         try:
             result = await execute_in_process(
                 pack_id, op, inputs, sources, timeout_s=budget, cancel_event=ticket.cancel_event,
-                uncertainty_inputs=uncertainty_inputs, uncertainty_method=request.uncertainty_method,
+                input_units=input_units, uncertainty_inputs=uncertainty_inputs,
+                uncertainty_method=request.uncertainty_method,
             )
             if ticket.cancel_event.is_set():
                 elapsed_ms = int((time.monotonic() - ticket.started_at) * 1000)
@@ -305,7 +360,8 @@ def register_pack(host: HostContext, pack_id: str) -> None:
                 return {"ok": False, "conflict": True, "error": "The node changed during calculation. Review the current run."}
             if sources:
                 latest_uncertainty: dict = {}
-                _verify_sources(document, node, inputs, sources, ctx.is_plugin_granted, latest_uncertainty)
+                _verify_sources(document, node, inputs, sources, ctx.is_plugin_granted,
+                                latest_uncertainty, operation=op, input_units=input_units)
                 if latest_uncertainty != uncertainty_inputs:
                     return {"ok": False, "conflict": True,
                             "error": "The connected uncertainty changed while calculating. Run again."}
@@ -322,7 +378,10 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         latest = state.data.get("latest")
         if isinstance(latest, dict):
             previous = latest["provenance"]
-            if previous["resultHash"] == result["provenance"]["resultHash"] and _same_sources(previous.get("sources", {}), sources):
+            if (previous["resultHash"] == result["provenance"]["resultHash"]
+                    and previous.get("inputUnits") == result["provenance"].get("inputUnits")
+                    and latest.get("uncertainty") == result.get("uncertainty")
+                    and _same_sources(previous.get("sources", {}), sources)):
                 return {"ok": True}
 
         # Chart children pin the full receipt, not just the numerical result

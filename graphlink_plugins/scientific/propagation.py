@@ -15,7 +15,8 @@ import re
 import statistics
 from statistics import NormalDist
 
-from .core import Operation, finite, fingerprint
+from .core import Operation, _effective_unit, finite, fingerprint
+from .units import parse_unit
 
 _NORMAL_95 = NormalDist().inv_cdf(0.975)
 _MAX_ROOTS = 64
@@ -74,7 +75,7 @@ def _native_uncertainty(result: dict, key: str) -> dict | None:
             "rate_standard_error_per_day" if key == "decay_constant_per_day" else "",
         )
         for candidate in candidates:
-            if candidate and _numeric(values.get(candidate)):
+            if candidate and candidate != key and _numeric(values.get(candidate)):
                 sigma = values[candidate]
                 break
     if sigma is not None:
@@ -162,12 +163,25 @@ def _measure_field_units(operation: Operation, inputs: dict, attached: dict) -> 
         if field.key not in attached:
             continue
         unit = attached[field.key].get("unit", "")
-        expected = (inputs.get("from_unit", "") if operation.id == "convert_unit" and field.key == "value"
-                    else field.unit)
-        if unit and expected and unit != expected:
+        # The catalog's canonical unit takes precedence over a legacy label.
+        expected = _effective_unit(field, inputs)
+        if not unit:
+            continue  # Historic GUM outputs need not declare an output unit.
+        try:
+            measured, target = parse_unit(unit), parse_unit(expected)
+        except ValueError as exc:
+            raise ValueError(f"Connected input '{field.key}' has invalid units: {exc}") from None
+        if measured.dimensions != target.dimensions or measured.kind != target.kind:
             raise ValueError(
-                f"Connected input '{field.key}' carries units {unit}, but the "
-                f"operation expects {expected}. Convert units explicitly first."
+                f"Connected input '{field.key}' carries incompatible units {unit}; "
+                f"the operation expects {expected}."
+            )
+        if unit != expected:
+            # Source verification must scale both the value and the lineage.
+            # Compatible dimensions alone are not enough for a GUM budget.
+            raise ValueError(
+                f"Connected input '{field.key}' still carries units {unit}; "
+                f"normalize its value and standard uncertainty to {expected} first."
             )
 
 
@@ -252,6 +266,7 @@ def _budget(derivatives: dict[str, float], attached: dict) -> tuple[list[dict[st
                   for origin, value in item["components"].items()}
         signed_by_field[field] = vector
         rows.append({"input": field, "kind": "input", "unit": item.get("unit", ""),
+                     **({"sourceUnit": item["sourceUnit"]} if item.get("sourceUnit") else {}),
                      "standardUncertainty": item["standardUncertainty"], "sensitivity": slope,
                      "signedContribution": signed, "variance": signed * signed})
         for origin, value in vector.items():
@@ -443,6 +458,11 @@ def check_uncertainty(data: dict, values: dict) -> None:
             raise ValueError("Invalid propagated standard uncertainty or coverage.")
         if not isinstance(item.get("unit"), str) or len(item["unit"]) > 128:
             raise ValueError("Invalid propagated units.")
+        if ("sourceUnit" in item and
+                (not isinstance(item["sourceUnit"], str) or len(item["sourceUnit"]) > 128)):
+            raise ValueError("Invalid connected source units.")
+        if "sourceValue" in item and not _numeric(item["sourceValue"]):
+            raise ValueError("Invalid connected source measurement.")
         if ("sourceArtifact" in item and (not isinstance(item["sourceArtifact"], str)
                 or not re.fullmatch(r"[0-9a-f]{64}", item["sourceArtifact"]))):
             raise ValueError("Invalid native uncertainty source identity.")

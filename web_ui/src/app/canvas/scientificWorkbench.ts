@@ -4,6 +4,10 @@ export interface ScienceField {
   kind: "number" | "integer" | "vector" | "matrix" | "text";
   unit: string;
   description: string;
+  default_unit?: string;
+  dimension?: string;
+  column_units?: string[];
+  column_dimensions?: string[];
 }
 
 export interface ScienceOperation {
@@ -69,6 +73,22 @@ export interface ScientificUncertainty {
   unsupportedOutputs?: Record<string, string>;
 }
 
+/** Recognize explicit scalar output units, including legacy pack suffixes. */
+export function resultUnit(name: string): string {
+  const suffix = name.match(/\(([^()]+)\)\s*$/);
+  const short = name.match(/_(ma|mm|cm|km|kg|hz|pa|rad|deg|ohm|mol|ms|m|s|g|j|k|v|a|l)$/i);
+  return suffix?.[1] ?? (short ? ({
+    ma: "Ma", hz: "Hz", pa: "Pa", j: "J", k: "K", v: "V",
+    a: "A", l: "L",
+  } as Record<string, string>)[short[1].toLowerCase()] ?? short[1] : "");
+}
+
+/** Keep the source's physical unit in a linked scalar editor. */
+export function connectedInputText(field: ScienceField, option: SourceOption): string {
+  const raw = fieldText(field, option.value);
+  return field.kind === "number" && option.unit ? `${raw} ${option.unit}` : raw;
+}
+
 /** Format values without discarding the standard uncertainty or its units. */
 export function formatMeasurement(measurement: ScientificMeasurement): string {
   return `${measurement.value} ± ${measurement.standardUncertainty}${measurement.unit ? " " + measurement.unit : ""}`;
@@ -95,12 +115,10 @@ export function resultMeasurement(result: ScienceResult, name: string): Scientif
       name.startsWith("coefficient_") || name.startsWith("parameter_") ? "standard_error_" + index : "",
       name === "b_value_per_mw" ? "b_approx_standard_error_per_mw" : "",
       name === "decay_constant_per_day" ? "rate_standard_error_per_day" : ""];
-    sigma = candidates.filter(Boolean).map((candidate) => result.values[candidate]).find(finite);
+    sigma = candidates.filter((candidate) => candidate && candidate !== name).map((candidate) => result.values[candidate]).find(finite);
   }
   if (!finite(sigma) || sigma < 0 || !finite(factor) || factor <= 0) return undefined;
-  const suffix = name.match(/\(([^()]+)\)\s*$/);
-  const short = name.match(/_(ma|mm|cm|km|kg|hz|pa|rad|deg|ohm|mol|ms|m|s|g|j|k|v|a|l)$/i);
-  const unit = suffix?.[1] ?? (short ? ({ ma: "Ma", hz: "Hz", pa: "Pa", j: "J", k: "K", v: "V", a: "A", l: "L" } as Record<string, string>)[short[1].toLowerCase()] ?? short[1] : "");
+  const unit = resultUnit(name);
   return { value, standardUncertainty: sigma, coverageFactor: factor,
     coverageProbability: name === "estimate" && finite(result.values.coverage_probability)
       ? result.values.coverage_probability : 0.95, unit };
@@ -133,6 +151,7 @@ export interface ScienceParent { nodeId: string; title: string; raw: string }
 export interface SourceOption {
   label: string; value: unknown; reference: SourceReference; tableColumn?: ScientificTableSelection;
   uncertainty?: ScientificMeasurement;
+  unit?: string;
 }
 
 
@@ -141,7 +160,6 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-
 /** An interval by itself is not an input PDF or a standard uncertainty. */
 export function intervalOnly(result: ScienceResult, key: string): [number, number] | undefined {
   if (resultMeasurement(result, key) || !["estimate", "r", "rho"].includes(key) && !key.startsWith("odds_ratio_"))
@@ -165,7 +183,11 @@ const matrix = (value: unknown): value is number[][] => Array.isArray(value) && 
 
 function isField(value: unknown): value is ScienceField {
   return record(value) && ["key", "label", "unit", "description"].every((key) => typeof value[key] === "string")
-    && ["number", "integer", "vector", "matrix", "text"].includes(String(value.kind));
+    && ["number", "integer", "vector", "matrix", "text"].includes(String(value.kind))
+    && (value.default_unit === undefined || typeof value.default_unit === "string")
+    && (value.dimension === undefined || typeof value.dimension === "string")
+    && (value.column_units === undefined || strings(value.column_units))
+    && (value.column_dimensions === undefined || strings(value.column_dimensions));
 }
 
 function isOperation(value: unknown): value is ScienceOperation {
@@ -281,6 +303,25 @@ export class FieldError extends Error {
 
 const decimal = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 const arrayTokens = /[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/g;
+// The backend verifies SI symbols, compatibility and exact decimal conversion.
+const measurementWithUnit = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)[ \t]*([^\s].*)$/;
+function unitLiteral(raw: string, field: ScienceField): boolean {
+  if (decimal.test(raw.trim())) return false;
+  const match = measurementWithUnit.exec(raw.trim());
+  if (!match) return false;
+  parseMeasurement(match[1], field);
+  return true;
+}
+function unitArray(kind: ScienceField["kind"], value: unknown, field: ScienceField): boolean {
+  const cell = (item: unknown): boolean => typeof item === "number" && Number.isFinite(item)
+    || typeof item === "string" && unitLiteral(item, field);
+  if (!Array.isArray(value)) return false;
+  if (kind === "vector") return value.length > 0 && value.every(cell);
+  if (kind === "matrix") return value.length > 0 && Array.isArray(value[0]) &&
+    value[0].length > 0 && value.every((row) => Array.isArray(row) &&
+      row.length === value[0].length && row.every(cell));
+  return false;
+}
 
 /** Match the CSV importer: binary64 fractions may round, integer counts must be exact,
  * and a nonzero decimal must not silently become zero. Compare before JSON.parse
@@ -321,15 +362,19 @@ export function parseInputs(op: ScienceOperation, draft: Record<string, string>,
       value = raw;
     } else if (field.kind === "integer") {
       // Decimal/exponent conversion through Number first silently rounds e.g. 9007199254740990.5.
-      if (!/^[+-]?\d+$/.test(raw.trim())) invalid(`${field.label} must be a whole number written in integer notation.`);
-      value = Number(raw);
+      if (!/^[+-]?\d+$/.test(raw.trim()) && !unitLiteral(raw, field)) invalid(`${field.label} must be a whole number written in integer notation.`);
+      value = /^[+-]?\d+$/.test(raw.trim()) ? Number(raw) : raw.trim();
     } else if (field.kind === "number") {
       if (decimal.test(raw.trim())) value = parseMeasurement(raw.trim(), field);
+      else if (unitLiteral(raw, field)) value = raw.trim();
     } else {
       for (const match of raw.matchAll(arrayTokens)) parseMeasurement(match[0], field);
       try { value = JSON.parse(raw); } catch { value = undefined; }
     }
-    if (!accepts(field.kind, value)) invalid(`${field.label} must be ${expected[field.kind]}.`);
+    if (!accepts(field.kind, value) && !(typeof value === "string" && (field.kind === "number" || field.kind === "integer"))
+        && !unitArray(field.kind, value, field))
+      invalid(field.label + " must be " + expected[field.kind] + " (or unit-suffixed measurements); expected " +
+        (field.dimension ?? field.default_unit ?? "the declared units") + ".");
     if (Array.isArray(value)) {
       if (value.length > limits.points) invalid(`${field.label} exceeds ${limits.points} entries.`);
       if (field.kind === "matrix" && (value[0].length > limits.columns || value.length * value[0].length > limits.cells))
@@ -356,6 +401,8 @@ export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.po
           interval ? ` · interval [${interval[0]}, ${interval[1]}] · cannot propagate without a standard uncertainty` : "";
         options.push({ label: `${title} · ${name}${detail}`, value,
           ...(uncertainty && { uncertainty }),
+          ...(selector[0] === "values" && resultUnit(name) && { unit: uncertainty?.unit || resultUnit(name) }),
+          ...(uncertainty?.unit && { unit: uncertainty.unit }),
           reference: { nodeId: parent.nodeId, ...(state.nodeKey && { sourceKey: state.nodeKey }), resultHash: result.provenance.resultHash,
             ...(result.provenance.receiptHash && { receiptHash: result.provenance.receiptHash }), selector } });
       };

@@ -5,7 +5,7 @@ import type { WsTransport } from "../../lib/ws/transport";
 import { SceneStore } from "./sceneStore";
 import { ScientificNodeView, type ScientificFlowNode } from "./ScientificNodeView";
 import {
-  compatibleOptions, formatMeasurement, matchesSource, readScienceState,
+  compatibleOptions, connectedInputText, formatMeasurement, matchesSource, parseInputs, readScienceState,
   resultMeasurement, sourceOptions, type ScienceResult, type ScienceState,
 } from "./scientificWorkbench";
 
@@ -96,7 +96,7 @@ describe("uncertainty-aware Scientific Workbench connections", () => {
     const source = screen.getByRole("combobox", { name: "Import Measured value from a connected result" });
     const estimate = [...(source as HTMLSelectElement).options].find((option) => option.text.includes("estimate · 5 ± 0.2"))!;
     fireEvent.change(source, { target: { value: estimate.value } });
-    expect(screen.getByLabelText("Measured value")).toHaveValue("5");
+    expect(screen.getByLabelText(/^Measured value(?: \(.+\))?$/)).toHaveValue("5");
     expect(screen.getByText(/Source · Uncertainty · estimate · 5 ± 0.2/)).toBeVisible();
     fireEvent.change(screen.getByRole("combobox", { name: "Uncertainty propagation method" }),
       { target: { value: "monte_carlo" } });
@@ -135,4 +135,19 @@ describe("uncertainty-aware Scientific Workbench connections", () => {
       estimate: 5, percentile_lower: 4.1, percentile_upper: 5.8,
     } }, "estimate")).toBeUndefined();
   });
+  it("keeps connected source units on import and sends them to the SI normalizer", () => {
+    const field = { key: "distance", label: "Distance", kind: "number" as const,
+      unit: "m", default_unit: "m", dimension: "length (m)", description: "" };
+    const option = {
+      label: "Length · length_mm", value: 25, unit: "mm",
+      uncertainty: { value: 25, standardUncertainty: 0.5,
+        coverageFactor: 2, unit: "mm" },
+      reference: { nodeId: "source", resultHash: "a".repeat(64), selector: ["values", "length_mm"] },
+    };
+    const text = connectedInputText(field, option);
+    expect(text).toBe("25 mm");
+    expect(parseInputs({ id: "length", title: "Length", description: "",
+      fields: [field], example: { distance: 1 } }, { distance: text })).toEqual({ distance: "25 mm" });
+  });
+
 });

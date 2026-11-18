@@ -1,5 +1,5 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import type { WsTransport } from "../../lib/ws/transport";
 import { SceneStore } from "./sceneStore";
@@ -375,5 +375,40 @@ describe("typed table import and numeric selections", () => {
     expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
       inputs: { samples: [10, 20] }, sources: { samples: reference },
     });
+  });
+});
+
+describe("unit-aware scientific node inputs and receipts", () => {
+  it("renders the expected dimension and sends unit-suffixed values for backend conversion", async () => {
+    const typed = { ...operation2, fields: [{
+      ...operation2.fields[0], default_unit: "m", dimension: "length (m)",
+    }] };
+    const { request } = mount(JSON.stringify({ ...state, operations: [typed] }), []);
+    const input = screen.getByRole("textbox", { name: "Length (m)" });
+    expect(input).toHaveAccessibleDescription(/Default unit: m.*length \(m\)/);
+    fireEvent.change(input, { target: { value: "25 mm" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
+      "science_mathematics", "run", {
+        node_id: "target", operation_id: "scale", inputs: { length: "25 mm" }, sources: {},
+      },
+    ], 615_000));
+  });
+
+  it("accepts quoted array entries with units and shows the units saved with a result", async () => {
+    const { request } = mount(JSON.stringify({ ...state, latest: {
+      ...result, provenance: {
+        ...result.provenance, inputUnits: { samples: ["mm", "cm", "m"] },
+      },
+    } }), []);
+    fireEvent.click(screen.getByText("Units used"));
+    const unitsUsed = screen.getByText("Units used").closest("details");
+    expect(within(unitsUsed!).getByText(/"mm"/)).toBeVisible();
+    const input = screen.getByRole("textbox", { name: "Samples (m)" });
+    fireEvent.change(input, { target: { value: '["25 mm", "2 cm", 3]' } });
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    await waitFor(() => expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
+      inputs: { samples: ["25 mm", "2 cm", 3] },
+    }));
   });
 });

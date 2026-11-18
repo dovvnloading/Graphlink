@@ -11,7 +11,10 @@ import pytest
 
 from backend.domain.node_states import PluginStateSnapshot
 from graphlink_plugins.scientific.catalog import operations
-from graphlink_plugins.scientific.core import Field, Operation, fingerprint, readable_result, run_operation
+from graphlink_plugins.scientific.core import (
+    Field, Operation, calculate_result, fingerprint, readable_result, run_operation,
+    validated_inputs_with_units,
+)
 from graphlink_plugins.scientific.propagation import connected_measurement
 from graphlink_plugins.scientific.workbench import _verify_sources
 
@@ -228,3 +231,75 @@ def test_exact_inputs_keep_original_receipt_and_source_not_reinterpreted():
     with pytest.raises(ValueError, match="changed"):
         _verify_sources(document, target, {"a": 5.0}, {"a": {**ref, "resultHash": "0" * 64}},
                         lambda _: True, {})
+
+def test_unit_aware_connected_metric_keeps_converted_value_and_shared_uncertainty_budget():
+    """PR #625 + #626: one source's mm, sigma and lineage survive an SI-bound input."""
+    source_op = Operation(
+        "measured_length", "Measured length", "", (Field("x", "Length", "number", "mm"),),
+        {"x": 25}, lambda p: {
+            "summary": "Measured length",
+            "values": {"length_mm": p["x"], "length_standard_uncertainty_mm": 0.5},
+        },
+    )
+    source = run_operation("uncertainty", source_op, {"x": 25})
+    document, target, ref = _connected(source)
+    ref["selector"] = ["values", "length_mm"]
+    target_op = Operation(
+        "scale_length", "Scale length", "", (Field("distance", "Distance", "number", "m"),),
+        {"distance": 0.025}, lambda p: {
+            "summary": "Scaled length", "values": {"y_m": 2 * p["distance"]},
+        },
+    )
+    inputs, input_units = validated_inputs_with_units(target_op, {"distance": "25 mm"})
+    assert inputs == {"distance": pytest.approx(0.025)}
+    assert input_units == {"distance": "mm"}
+    attached = {}
+    sources = _verify_sources(
+        document, target, inputs, {"distance": ref}, lambda _: True, attached,
+        operation=target_op, input_units=input_units,
+    )
+    assert attached["distance"]["value"] == pytest.approx(0.025)
+    assert attached["distance"]["sourceValue"] == 25
+    assert attached["distance"]["sourceUnit"] == "mm"
+    assert attached["distance"]["unit"] == "m"
+    assert attached["distance"]["standardUncertainty"] == pytest.approx(0.0005)
+    assert list(attached["distance"]["components"].values()) == pytest.approx([0.0005])
+
+    result = calculate_result(
+        "core", target_op, inputs, sources, input_units=input_units,
+        uncertainty_inputs=attached,
+    )
+    measured = result["uncertainty"]["outputs"]["y_m"]
+    assert measured["value"] == pytest.approx(0.05)
+    assert measured["unit"] == "m"
+    assert measured["standardUncertainty"] == pytest.approx(0.001, rel=1e-8)
+    assert measured["budget"][0]["unit"] == "m"
+    assert measured["budget"][0]["sourceUnit"] == "mm"
+    assert result["provenance"]["inputUnits"]["distance"] == "mm"
+    assert readable_result({"version": 1, "latest": result}, "core")
+
+    with pytest.raises(ValueError, match="differs"):
+        _verify_sources(
+            document, target, {"distance": 0.03}, {"distance": ref},
+            lambda _: True, {}, operation=target_op,
+        )
+    seconds = Operation(
+        "incompatible_seconds", "Seconds", "",
+        (Field("distance", "Distance", "number", "s"),), {"distance": 25},
+        lambda p: {"summary": "Duration", "values": {"duration_s": p["distance"]}},
+    )
+    with pytest.raises(ValueError, match="incompatible units"):
+        _verify_sources(
+            document, target, {"distance": 25}, {"distance": ref}, lambda _: True,
+            {}, operation=seconds,
+        )
+
+def test_legacy_run_intent_can_omit_propagation_method():
+    """The optional method must not silently reject existing plugin wire calls."""
+    from graphlink_wire_schema import validate_payload
+    from graphlink_plugins.scientific.workbench import RunArgs
+
+    assert validate_payload({
+        "node_id": "n0", "operation_id": "convert_unit", "inputs": {"value": 1},
+    }, RunArgs) == []
+    assert RunArgs(node_id="n0", operation_id="convert_unit", inputs={"value": 1}).uncertainty_method == "auto"

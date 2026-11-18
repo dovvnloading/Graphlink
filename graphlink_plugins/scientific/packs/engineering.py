@@ -111,7 +111,7 @@ OPERATIONS: tuple[Operation, ...] = (
         (
             Field("length_m", "Initial length", "number", unit="m"),
             Field("coefficient_per_k", "Linear expansion coefficient", "number", unit="1/K"),
-            Field("temperature_change_k", "Signed temperature change", "number", unit="K"),
+            Field("temperature_change_k", "Signed temperature change", "number", unit="K", default_unit="delta_K"),
         ),
         {"length_m": 2, "coefficient_per_k": 0.000023, "temperature_change_k": 40},
         _expansion,

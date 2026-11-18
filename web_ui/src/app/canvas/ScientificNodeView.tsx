@@ -8,7 +8,7 @@ import { downloadBlob } from "./downloadTextFile";
 import { writeTableCsv } from "./tableCsv";
 import { createLinearScale } from "./charts/chartScales";
 import {
-  chartableScienceTypes, compatibleOptions, draftInputs, FieldError, fieldText, formatMeasurement, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
+  chartableScienceTypes, compatibleOptions, connectedInputText, draftInputs, FieldError, fieldText, formatMeasurement, matchesSource, parseInputs, readScienceState, resultMeasurement, sourceOptions,
   type EditorDraft, type ScienceField, type ScienceLimits, type ScienceOperation, type ScienceParent, type SciencePlot, type ScienceResult,
   type ScienceChartLink, type ScienceChartType, type ScienceState, type Sources, type SourceOption, type SourceReference,
 } from "./scientificWorkbench";
@@ -106,6 +106,9 @@ function Results({ result, title, exportJson, onChart, onRefresh, charts }: {
       </table>
       {table.rows.length > PREVIEW_ROWS && <small>Showing {PREVIEW_ROWS} of {table.rows.length} rows. Export CSV for all rows.</small>}
     </div>}
+    {provenance.inputUnits != null && <details><summary>Units used</summary>
+      <pre>{JSON.stringify(provenance.inputUnits, null, 2)}</pre>
+    </details>}
     <details><summary>Inputs and provenance</summary>
       <pre>{JSON.stringify({ inputs: result.inputs, provenance }, null, 2)}</pre>
     </details>
@@ -147,17 +150,26 @@ function FieldEditor({ field, value, onEdit, options, onImport, imported, errorI
   options: SourceOption[]; onImport: (option: SourceOption) => void; imported?: string; errorId?: string; stale: boolean;
 }) {
   const id = useId();
-  const description = [field.description && id + "-hint", imported && id + "-source", errorId].filter(Boolean).join(" ");
+  const description = [field.description && id + "-hint", field.kind !== "text" && id + "-units",
+    imported && id + "-source", errorId].filter(Boolean).join(" ");
   const common = { id, name: field.key, value, "aria-invalid": errorId || stale ? true as const : undefined,
     "aria-describedby": description || undefined };
   return <div className="science-field">
-    <label htmlFor={id}>{field.unit ? `${field.label} (${field.unit})` : field.label}</label>
+    <label htmlFor={id}>{field.kind !== "text" ? `${field.label} (${field.unit || field.default_unit || "1"})` : field.label}</label>
     {field.kind === "number" || field.kind === "integer"
-      ? <input {...common} type="text" inputMode={field.kind === "integer" ? "numeric" : "decimal"}
+      ? <input {...common} type="text" inputMode="text"
         onChange={(e) => onEdit(e.target.value)} />
       : <textarea {...common} rows={field.kind === "matrix" || field.kind === "text" ? 3 : 2}
         onChange={(e) => onEdit(e.target.value)} spellCheck={field.kind === "text"} />}
     {field.description && <small id={id + "-hint"}>{field.description}</small>}
+    {field.kind !== "text" && <small id={id + "-units"}>
+      Default unit: {field.column_units?.length
+        ? field.column_units.map((unit, i) => `column ${i + 1}: ${unit}`).join("; ")
+        : field.default_unit || field.unit || "1"} · {field.dimension || "dimensionless"}.
+      {field.kind === "vector" || field.kind === "matrix"
+        ? ' Use JSON arrays; quote values with unit suffixes, e.g. ["25 mm", "2 cm"].'
+        : " You may append a compatible unit, e.g. 25 mm."}
+    </small>}
     {options.length > 0 && <select aria-label={`Import ${field.label} from a connected result`} value=""
       onChange={(e) => { if (e.target.value) onImport(options[Number(e.target.value)]); }}>
       <option value="">Use connected result…</option>
@@ -288,15 +300,27 @@ function TableEditor({ state, nodeId, pluginId, store }: {
 type Run = (operationId: string, inputs: Record<string, unknown>, sources: Sources, expectedRun?: string,
   method?: "auto" | "gum" | "monte_carlo") => Promise<void>;
 type Cancel = (operationId: string) => Promise<void>;
-function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revision: string): EditorDraft {
-  return { values: draftInputs(op, result?.inputs ?? op.example), sources: result?.provenance.sources ?? {}, revision, dirty: false };
+function restoreDraft(op: ScienceOperation, result: ScienceResult | null, revision: string,
+  options: SourceOption[] = []): EditorDraft {
+  const sources = result?.provenance.sources ?? {};
+  const values = draftInputs(op, result?.inputs ?? op.example);
+  // Restore the linked scalar in its source units instead of reusing the
+  // normalized solver value and losing the original input-unit provenance.
+  for (const field of op.fields) {
+    const source = sources[field.key];
+    const option = source && options.find((candidate) => matchesSource(candidate, source));
+    if (option && field.kind === "number" && option.unit) {
+      values[field.key] = connectedInputText(field, option);
+    }
+  }
+  return { values, sources, revision, dirty: false };
 }
 
 function OperationEditor({ session, op, result, revision, runToken, limits, options, run, cancel, fetchTableColumn, busy, setBusy }: {
   session: ScienceEditorSession; op: ScienceOperation; result: ScienceResult | null; revision: string; runToken?: string; limits?: ScienceLimits;
   options: SourceOption[]; run: Run; cancel: Cancel; fetchTableColumn: FetchTableColumn; busy: boolean; setBusy: (busy: boolean) => void;
 }) {
-  const [draft, setDraft] = useState(() => session.drafts.get(op.id) ?? restoreDraft(op, result, revision));
+  const [draft, setDraft] = useState(() => session.drafts.get(op.id) ?? restoreDraft(op, result, revision, options));
   useLayoutEffect(() => {
     if (draft.dirty) session.drafts.set(op.id, draft);
     else session.drafts.delete(op.id);
@@ -308,7 +332,7 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
   const errorId = useId();
   const changed = draft.revision !== revision;
   if (changed && !draft.dirty) {
-    setDraft(restoreDraft(op, result, revision));
+    setDraft(restoreDraft(op, result, revision, options));
     setError(null);
   }
   const conflict = changed && draft.dirty;
@@ -371,7 +395,7 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
               }).finally(() => { pending.current = false; setBusy(false); });
               return;
             }
-            setDraft((old) => ({ ...old, dirty: true, values: { ...old.values, [field.key]: fieldText(field, option.value) },
+            setDraft((old) => ({ ...old, dirty: true, values: { ...old.values, [field.key]: connectedInputText(field, option) },
               sources: { ...old.sources, [field.key]: option.reference } }));
             setError(null);
           }} />;
@@ -389,7 +413,7 @@ function OperationEditor({ session, op, result, revision, runToken, limits, opti
         <p role="alert">The saved run changed while you were editing. Your inputs are still here.</p>
         <div className="science-actions">
           <button type="button" onClick={() => { setDraft({ ...draft, revision }); setError(null); }}>Keep my inputs</button>
-          <button type="button" onClick={() => { setDraft(restoreDraft(op, result, revision)); setError(null); }}>
+          <button type="button" onClick={() => { setDraft(restoreDraft(op, result, revision, options)); setError(null); }}>
             {result ? "Load saved inputs" : "Reset to example"}
           </button>
         </div>

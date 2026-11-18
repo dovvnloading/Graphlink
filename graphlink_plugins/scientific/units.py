@@ -20,7 +20,7 @@ _TEMPERATURE = (0, 0, 0, 0, 1, 0, 0)
 
 @dataclass(frozen=True)
 class Unit:
-    dimensions: tuple[int, ...]
+    dimensions: tuple[int | Fraction, ...]
     scale: Fraction = Fraction(1)
     offset: Fraction = Fraction(0)
     # A temperature point (absolute) is not a temperature interval (difference).
@@ -98,6 +98,48 @@ _PREFIXABLE = frozenset({
     "L", "l", "eV", "Wh", "bar",
 })
 
+# Scientific pack notation beyond SI: nominal astronomy constants, conventional
+# angles, concentrations, counts and calendar durations. All factors are exact
+# rational definitions of the stated decimal conventions (angles use a
+# high-precision rational approximation to pi, which is irrational).
+_DEGREE = Unit(_ZERO, Fraction(Decimal("0.017453292519943295769236907684886127134428718885417")))
+_YEAR = Unit(s.dimensions, Fraction(31_557_600))  # Julian year (365.25 d)
+_PC = Unit(m.dimensions, Fraction(30_856_775_814_913_673))
+_UNITS.update({
+    "deg": _DEGREE, "°": _DEGREE, "°N": _DEGREE, "°E": _DEGREE,
+    "arcmin": Unit(_ZERO, _DEGREE.scale / 60),
+    "arcsec": Unit(_ZERO, _DEGREE.scale / 3600),
+    "mas": Unit(_ZERO, _DEGREE.scale / 3_600_000),
+    "%": Unit(_ZERO, Fraction(1, 100)), "wt%": Unit(_ZERO, Fraction(1, 100)),
+    "ppm": Unit(_ZERO, Fraction(1, 10**6)), "ppb": Unit(_ZERO, Fraction(1, 10**9)),
+    "day": Unit(s.dimensions, Fraction(86400)), "days": Unit(s.dimensions, Fraction(86400)),
+    "yr": _YEAR, "year": _YEAR, "years": _YEAR,
+    "Ma": Unit(s.dimensions, _YEAR.scale * 10**6),
+    "pc": _PC, "AU": _UNITS["au"],
+    "M": mol / _UNITS["L"],  # molarity, e.g. mM and nM
+    "u": Unit(kg.dimensions, Fraction(Decimal("1.66053906660e-27"))),
+    "Jy": Unit((0, 1, -2, 0, 0, 0, 0), Fraction(1, 10**26)),
+    "solar radii": Unit(m.dimensions, Fraction(695_700_000)),
+    "solar masses": Unit(kg.dimensions, Fraction(Decimal("1.98847e30"))),
+    "cells": Unit(_ZERO), "cell": Unit(_ZERO),
+    "count": Unit(_ZERO), "samples": Unit(_ZERO), "individuals": Unit(_ZERO),
+    "individuals per taxon": Unit(_ZERO), "steps (dimensionless)": Unit(_ZERO),
+    "stellar radii": Unit(_ZERO), "relative flux": Unit(_ZERO),
+    "mag": Unit(_ZERO), "mag AB": Unit(_ZERO), "mag/airmass": Unit(_ZERO),
+    "Mw (1)": Unit(_ZERO), "1 (zone)": Unit(_ZERO),
+    "0/1 (dimensionless)": Unit(_ZERO), "JD (days)": Unit(s.dimensions, Fraction(86400)),
+    "mol charge/L": mol / _UNITS["L"],
+    "% activity": Unit(_ZERO, Fraction(1, 100)),
+    "HV, HBW, HBS, HRC or HRB (as selected)": Unit(_ZERO),
+    # Fracture mechanics uses stress times sqrt(length); these dimensions
+    # require half-integer exponents, which Unit algebra already supports.
+    "Pa√m": Unit(tuple(Fraction(a) + Fraction(b, 2) for a, b in zip(Pa.dimensions, m.dimensions))),
+    "kPa√m": Unit(tuple(Fraction(a) + Fraction(b, 2) for a, b in zip(Pa.dimensions, m.dimensions)), Fraction(1000)),
+    "MPa√m": Unit(tuple(Fraction(a) + Fraction(b, 2) for a, b in zip(Pa.dimensions, m.dimensions)), Fraction(10**6)),
+    "GPa√m": Unit(tuple(Fraction(a) + Fraction(b, 2) for a, b in zip(Pa.dimensions, m.dimensions)), Fraction(10**9)),
+})
+_PREFIXABLE = _PREFIXABLE | {"M", "Jy", "pc", "yr", "year"}
+
 # Standalone temperature points are affine; intervals have explicit delta
 # names. Composites use interval K (or delta_degC/F), never affine points.
 _ABSOLUTE = {
@@ -156,6 +198,8 @@ def parse_unit(symbol: str) -> Unit:
         return Unit(_TEMPERATURE, scale, offset, "absolute")
     if name in _DIFFERENCES:
         return Unit(_TEMPERATURE, _DIFFERENCES[name], kind="difference")
+    if name in _UNITS:
+        return _UNITS[name]
     # A prefixed kelvin alone is also an absolute temperature point; inside
     # an expression K always represents a linear temperature interval.
     if name.endswith("K") and name[:-1] in _PREFIX_POWERS:
@@ -212,7 +256,7 @@ def parse_unit(symbol: str) -> Unit:
     return parsed
 
 
-def dimension_string(dimensions: tuple[int, ...]) -> str:
+def dimension_string(dimensions: tuple[int | Fraction, ...]) -> str:
     """Format an SI base-dimension vector for diagnostics."""
     items = [f"{symbol}^{exponent}" if exponent != 1 else symbol
              for symbol, exponent in zip(_DIMENSION_SYMBOLS, dimensions) if exponent]
@@ -256,6 +300,64 @@ def convert_measurement(value: float, source: str, target: str) -> float:
             raise ValueError("The converted measurement is below the numerical range.")
     if not math.isfinite(result):
         raise ValueError("The converted measurement exceeds the numerical range.")
+    return result
+
+
+
+# User-visible dimensions are more informative than bare exponents for errors.
+_DIMENSION_NAMES = {
+    _ZERO: "dimensionless (1)",
+    m.dimensions: "length (m)", kg.dimensions: "mass (kg)",
+    s.dimensions: "time (s)", A.dimensions: "electric current (A)",
+    K.dimensions: "temperature (K)", mol.dimensions: "amount of substance (mol)",
+    cd.dimensions: "luminous intensity (cd)", Pa.dimensions: "pressure (Pa)",
+    N.dimensions: "force (N)", J.dimensions: "energy (J)",
+    W.dimensions: "power (W)", V.dimensions: "voltage (V)",
+    Ohm.dimensions: "electrical resistance (ohm)",
+}
+
+
+def dimension_name(dimensions: tuple[int | Fraction, ...]) -> str:
+    """A human-readable expected dimension for workbench input diagnostics."""
+    return _DIMENSION_NAMES.get(dimensions, f"SI dimensions {dimension_string(dimensions)}")
+
+
+def convert_decimal_measurement(text: str, source: str, target: str) -> float:
+    """Convert a typed decimal directly with exact rational factors and offsets.
+
+    Unlike converting an intermediate binary64 float, this preserves the
+    written decimal until the final result is rounded once for the solver.
+    """
+    from_unit, to_unit = parse_unit(source), parse_unit(target)
+    if from_unit.dimensions != to_unit.dimensions:
+        raise ValueError(
+            f"Incompatible units: {source} ({dimension_name(from_unit.dimensions)}) "
+            f"cannot be converted to {target} ({dimension_name(to_unit.dimensions)})."
+        )
+    if from_unit.kind != to_unit.kind:
+        raise ValueError(
+            f"Incompatible temperature kinds: {source} is {from_unit.kind}, "
+            f"but {target} is {to_unit.kind}; absolute temperature and differences cannot be mixed."
+        )
+    try:
+        decimal = Decimal(text)
+    except (ValueError, ArithmeticError):
+        raise ValueError("Supply a finite decimal measurement.") from None
+    if not decimal.is_finite() or (decimal and abs(decimal.adjusted()) > 1000):
+        raise ValueError("The converted measurement exceeds the numerical range.")
+    amount = Fraction(decimal)
+    kelvin_or_si = amount * from_unit.scale + (from_unit.offset if from_unit.kind == "absolute" else 0)
+    if from_unit.kind == "absolute" and kelvin_or_si < 0:
+        raise ValueError("Absolute temperature must be at least 0 K.")
+    exact = (kelvin_or_si - (to_unit.offset if to_unit.kind == "absolute" else 0)) / to_unit.scale
+    try:
+        result = float(exact)
+    except OverflowError:
+        raise ValueError("The converted measurement exceeds the numerical range.") from None
+    if not math.isfinite(result):
+        raise ValueError("The converted measurement exceeds the numerical range.")
+    if exact and result == 0:
+        raise ValueError("The converted measurement is below the numerical range.")
     return result
 
 
