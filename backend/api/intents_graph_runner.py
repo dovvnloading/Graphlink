@@ -35,7 +35,7 @@ class GraphRunSelection:
 class ExecuteGraphRunArgs(GraphRunSelection):
     previewToken: str
     operationId: str
-    maxConcurrency: int = 3
+    maxConcurrency: int | None = None
 
 
 @dataclass
@@ -78,6 +78,26 @@ def _find_run(document: SceneDocument, run_id: str) -> dict[str, Any] | None:
     return next((run for run in document.graph_runs if run["runId"] == run_id), None)
 
 
+def _plan(document: SceneDocument, node_ids: list[str]) -> tuple[str, list[dict[str, str]]]:
+    try:
+        steps = plan_graph_run(document, node_ids)
+        model_steps = [s for s in steps if s["kind"] == "model" and s["status"] in {"ready", "waiting"}]
+        if len(model_steps) > 8:
+            raise SceneError("A graph run can issue at most eight local model calls.")
+        # Existing current Model receipts are local data. They must
+        # remain usable in deterministic branches even when Ollama is
+        # offline; a new outbound call alone requires endpoint approval.
+        if model_steps:
+            from backend.api.intents_graph_model import _require_loopback_ollama
+            endpoint = _require_loopback_ollama()
+            for step in model_steps:
+                step["endpointHash"] = _digest(["local_model_endpoint", endpoint])
+    except SceneError as exc:
+        raise IntentValidationError([str(exc)]) from exc
+    token = _digest([str(document.graph_run_epoch), sorted(set(node_ids)), steps])
+    return token, steps
+
+
 def register_graph_runner(
     bus: SessionBus, document: SceneDocument, save_checkpoint: Callable[[], Awaitable[bool]], serialize_mutation: Callable,
 ) -> None:
@@ -94,27 +114,8 @@ def register_graph_runner(
             result["trace"]["status"] = "running"
         return result
 
-    def plan(node_ids: list[str]) -> tuple[str, list[dict[str, str]]]:
-        try:
-            steps = plan_graph_run(document, node_ids)
-            model_steps = [s for s in steps if s["kind"] == "model" and s["status"] in {"ready", "waiting"}]
-            if len(model_steps) > 8:
-                raise SceneError("A graph run can issue at most eight local model calls.")
-            # Existing current Model receipts are local data. They must
-            # remain usable in deterministic branches even when Ollama is
-            # offline; a new outbound call alone requires endpoint approval.
-            if model_steps:
-                from backend.api.intents_graph_model import _require_loopback_ollama
-                endpoint = _require_loopback_ollama()
-                for step in model_steps:
-                    step["endpointHash"] = _digest(["local_model_endpoint", endpoint])
-        except SceneError as exc:
-            raise IntentValidationError([str(exc)]) from exc
-        token = _digest([str(document.graph_run_epoch), sorted(set(node_ids)), steps])
-        return token, steps
-
     async def preview_graph_run(node_ids: list[str]):
-        token, steps = plan(node_ids)
+        token, steps = _plan(document, node_ids)
         return {"previewToken": token, "steps": [_public_step(step) for step in steps]}
 
     async def get_graph_run():
@@ -318,7 +319,7 @@ def register_graph_runner(
 
     @serialize_mutation
     async def start_run(node_ids: list[str], preview_token: str, run_id: str, max_concurrency: int):
-        token, steps = plan(node_ids)
+        token, steps = _plan(document, node_ids)
         if token != preview_token:
             raise IntentValidationError(["The graph or selection changed. Preview the run again."])
         if not any(step["status"] == "ready" for step in steps):
@@ -347,7 +348,8 @@ def register_graph_runner(
         document.graph_run_epoch = uuid.uuid4()
         return await drive(run)
 
-    async def execute_graph_run(node_ids: list[str], preview_token: str, run_id: str, max_concurrency: int = 3):
+    async def execute_graph_run(node_ids: list[str], preview_token: str, run_id: str, max_concurrency: int | None = None):
+        max_concurrency = 3 if max_concurrency is None else max_concurrency
         if type(max_concurrency) is not int or not 1 <= max_concurrency <= 8:
             raise IntentValidationError(["Graph Runner concurrency must be between 1 and 8."])
         if not RUN_ID.fullmatch(run_id):
