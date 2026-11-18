@@ -13,10 +13,10 @@ Priority when capacity is insufficient (highest first):
   5. Retrieved knowledge hits in caller-provided ranking order.
 
 The final wire order is ALWAYS the input order, independent of selection order.
-Within a class ties are stable and deterministic. Truncation means excluding
-whole optional sources, never slicing a citation, a system instruction, an image,
-or the current user message. If mandatory sources cannot fit, fail closed with
-ContextBudgetError BEFORE dispatching to a model. The output reserve is
+Within a class ties are stable and deterministic. Truncation means excluding whole optional sources, or when absolutely necessary
+truncating the trailing text of an oversized current message without removing
+its role. Never slice a citation, a system instruction or an image. If mandatory
+media or the system alone cannot fit, fail closed with ContextBudgetError. The output reserve is
 min(4096, context_window // 4), and is never available to prompt sources.
 """
 
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Sequence
 
 from graphlink_memory import clone_history, message_tokens
 from graphlink_token_estimator import TokenEstimator
@@ -145,10 +145,6 @@ class ContextAssembler:
                 kind = "summary"
             trust = "generated" if message["role"] == "assistant" or kind == "summary" else "user"
             origin = origins[i] if origins is not None else f"branch:turn:{i}"
-            if kind == "summary":
-                message = typed_context_message(
-                    kind="summary", origin=origin, trust="generated", text=message["content"],
-                )
             sources.append(ContextCandidate(
                 f"{kind}:{origin}", origin, trust, kind, message,
                 required=kind == "current_message",
@@ -176,7 +172,59 @@ class ContextAssembler:
             raise ValueError("duplicate context source id")
         if sum(source.kind == "current_message" for source in sources) > 1:
             raise ValueError("at most one current message is allowed")
-        costs = [message_tokens(source.message, self.token_estimator) for source in sources]
+        original_costs = [message_tokens(source.message, self.token_estimator) for source in sources]
+        costs = list(original_costs)
+        wire_messages = [source.message for source in sources]
+        truncated: set[int] = set()
+        # Keep both mandatory roles, even when the current text itself is
+        # enormous. The system text is never edited. If the current message
+        # is a plain string, retain the longest prefix that fits; media is
+        # atomic and cannot be cut safely. Report the original cost and the
+        # sent cost separately. This only changes over-window requests.
+        system_cost = sum(
+            costs[i] for i, source in enumerate(sources)
+            if source.required and source.kind == "instructions"
+        )
+        for i, source in enumerate(sources):
+            if not source.required or source.kind != "current_message":
+                continue
+            available = budget - system_cost
+            if costs[i] <= available:
+                continue
+            original = source.message
+            if not isinstance(original.get("content"), str):
+                raise ContextBudgetError("current multimodal message exceeds model prompt budget")
+            # Binary search on the SAME message-token estimator that counts
+            # the rest of the prompt. A short annotation is added only when
+            # it fits; never permit a token overrun for decoration.
+            value = original["content"]
+            suffix = "\n[Current message truncated to fit model context]"
+            def measure(length: int, marker: str = "") -> int:
+                return message_tokens(
+                    {**original, "content": value[:length] + marker},
+                    self.token_estimator,
+                )
+            if available < measure(0):
+                raise ContextBudgetError("system plus current message cannot fit model context")
+            low, high = 0, len(value)
+            while low < high:
+                mid = (low + high + 1) // 2
+                if measure(mid) <= available:
+                    low = mid
+                else:
+                    high = mid - 1
+            length = low
+            if length < len(value):
+                if measure(length, suffix) > available:
+                    while length > 0 and measure(length, suffix) > available:
+                        length = max(0, length - max(1, (length // 16)))
+                if measure(length, suffix) <= available:
+                    value = value[:length] + suffix
+                else:
+                    value = value[:low]
+                wire_messages[i] = {**original, "content": value}
+                costs[i] = message_tokens(wire_messages[i], self.token_estimator)
+                truncated.add(i)
         selected = {i for i, source in enumerate(sources) if source.required}
         used = sum(costs[i] for i in selected)
         if used > budget:
@@ -224,13 +272,15 @@ class ContextAssembler:
             "origin": src.origin,
             "trust": src.trust,
             "kind": src.kind,
-            "tokenCount": costs[i],
+            "tokenCount": original_costs[i],
+            "sentTokenCount": costs[i] if i in selected else 0,
+            "truncated": i in truncated,
             "included": i in selected,
             "leavesDevice": bool(leaves_device and i in selected),
-            "reason": reasons.get(i, "excluded by policy"),
+            "reason": ("current message truncated to model budget" if i in truncated else reasons.get(i, "excluded by policy")),
         } for i, src in enumerate(sources))
         return ContextPlan(
-            tuple(src.message for i, src in enumerate(sources) if i in selected),
+            tuple(wire_messages[i] for i, src in enumerate(sources) if i in selected),
             records, context_window, reserve, budget, used,
         )
 
