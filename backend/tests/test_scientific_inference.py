@@ -266,3 +266,168 @@ def test_anova_rejects_unrepresentable_nonzero_variances():
     with pytest.raises(ValueError, match="underflow"):
         _run("one_way_anova", values=[0.0, 1e-320, 0.0, 1e-320],
              groups=[1, 1, 2, 2])
+
+"""Reference checks for Scientific Workbench advanced inference.
+
+Only stdlib and pytest are imported. Published NIST, Minitab, Penn State,
+Spector and R worked examples are identified in the scientific reference.
+"""
+
+
+def test_two_way_type_ii_unbalanced_published_reduced_model_oracle():
+    # Unbalanced 2x2 fixed-effect cells: independent Type-II reduced model
+    # calculations, cross-checked with statsmodels anova_lm(typ=2).
+    vals = [8, 10, 12, 13, 14, 18, 19, 21, 23, 25, 27, 26]
+    a = [0]*5 + [1]*7
+    b = [0]*3 + [1]*2 + [0]*4 + [1]*3
+    v = _run("two_way_anova", values=vals, factor_a=a, factor_b=b)["values"]
+    assert v["degrees_of_freedom_residual"] == 8
+    assert v["ss_factor_a_type_ii"] == pytest.approx(364.03361344537814, abs=1e-11)
+    assert v["ss_factor_b_type_ii"] == pytest.approx(67.80504201680672, abs=1e-11)
+    assert v["ss_interaction"] == pytest.approx(3.573529411764706, abs=1e-12)
+    assert v["residual_sum_squares"] == 25.25
+    assert v["f_factor_a"] == pytest.approx(115.33738247774357, abs=1e-11)
+    assert v["p_interaction"] == pytest.approx(.3183647046405231, abs=1e-12)
+
+
+def test_kruskal_wallis_published_tied_example_and_dunn_holm():
+    # Clinical Biostats published 12-value tied-rank example:
+    # https://www.clinicalbiostats.com/tutorials/undergraduate-statistics-introduction-to-statistics/the-kruskal-wallis-test-for-independent-groups/
+    vals = [1]*4 + [2,2,2,4] + [3,3,5,6]
+    result = _run("kruskal_wallis", values=vals, groups=[1]*4 + [2]*4 + [3]*4)
+    v = result["values"]
+    assert v["h_statistic"] == pytest.approx(9.254612546125466, abs=1e-12)
+    assert v["p_value"] == pytest.approx(.009781071182572683, abs=1e-12)
+    rows = result["table"]["rows"]
+    # Independent tie-corrected Dunn variance: N(N+1)/12 - 90/(12*(N-1)).
+    variance = 12*13/12 - 90/(12*11)
+    assert rows[0][2] == -4.5
+    assert rows[0][3] == pytest.approx(-4.5 / math.sqrt(variance/2))
+    assert [row[5] for row in rows] == pytest.approx([.13959102183824423, .007531845259897691, .22673060424832295], abs=1e-12)
+    assert all(row[4] <= row[5] <= 1 for row in rows)
+
+
+def test_chi_square_and_fisher_published_contingency_examples():
+    # Minitab cookie preference 2x2 example, Pearson no Yates correction.
+    c = _run("chi_square_independence", table=[[9, 1], [2, 8]])
+    assert c["values"]["chi_square"] == pytest.approx(9.8989898989899, abs=1e-12)
+    assert c["values"]["p_value"] == pytest.approx(.0016536951637003395, abs=1e-12)
+    f = _run("fisher_exact", table=[[9, 1], [2, 8]])["values"]
+    assert f["p_two_sided"] == pytest.approx(.005477494641581329, abs=1e-11)
+    # Fisher tea tasting: 2-sided probability-order 34/70 and right-tail 17/70.
+    tea = _run("fisher_exact", table=[[3, 1], [1, 3]])["values"]
+    assert tea["odds_ratio"] == 9.0
+    assert tea["p_two_sided"] == pytest.approx(34/70, abs=1e-13)
+    assert tea["p_greater"] == pytest.approx(17/70, abs=1e-13)
+    assert c["table"]["rows"][0][2] == 5.5
+
+
+def test_nist_longley_multiple_regression_certified_digits():
+    # NIST StRD https://www.itl.nist.gov/div898/strd/lls/data/LINKS/v-Longley.shtml
+    rows = [
+        [60323,83.,234289,2356,1590,107608,1947],
+        [61122,88.5,259426,2325,1456,108632,1948],
+        [60171,88.2,258054,3682,1616,109773,1949],
+        [61187,89.5,284599,3351,1650,110929,1950],
+        [63221,96.2,328975,2099,3099,112075,1951],
+        [63639,98.1,346999,1932,3594,113270,1952],
+        [64989,99.0,365385,1870,3547,115094,1953],
+        [63761,100.0,363112,3578,3350,116219,1954],
+        [66019,101.2,397469,2904,3048,117388,1955],
+        [67857,104.6,419180,2822,2857,118734,1956],
+        [68169,108.4,442769,2936,2798,120445,1957],
+        [66513,110.8,444546,4681,2637,121950,1958],
+        [68655,112.6,482704,3813,2552,123366,1959],
+        [69564,114.2,502601,3931,2514,125368,1960],
+        [69331,115.7,518173,4806,2572,127852,1961],
+        [70551,116.9,554894,4007,2827,130081,1962],
+    ]
+    v = _run("multiple_linear_regression", predictors=[row[1:] for row in rows],
+             response=[row[0] for row in rows])["values"]
+    certified_coef = [-3482258.63459582,15.0618722713733,-.0358191792925910,
+                      -2.02022980381683,-1.03322686717359,-.0511041056535807,1829.15146461355]
+    certified_se = [890420.383607373,84.9149257747669,.0334910077722432,
+                    .488399681651699,.214274163161675,.226073200069370,455.478499142212]
+    for i, (coef, se) in enumerate(zip(certified_coef, certified_se)):
+        assert format(v[f"coefficient_{i}"], ".14e") == format(coef, ".14e")
+        assert format(v[f"standard_error_{i}"], ".14e") == format(se, ".14e")
+        assert v[f"ci95_lower_{i}"] < coef < v[f"ci95_upper_{i}"]
+    assert format(v["r_squared"], ".14e") == format(.995479004577296, ".14e")
+    assert format(v["residual_standard_deviation"], ".14e") == format(304.854073561965, ".14e")
+    assert v["vif_1"] > 1
+    assert len([k for k in v if k.startswith("cooks_distance_")]) == 16
+
+
+def test_spector_logistic_irls_matches_published_statsmodels_output():
+    # statsmodels discrete-choice Spector example (GRADE 1 indicates improvement).
+    gpa = [2.66,2.89,3.28,2.92,4,2.86,2.76,2.87,3.03,3.92,2.63,3.32,
+           3.57,3.26,3.53,2.74,2.75,2.83,3.12,3.16,2.06,3.62,2.89,3.51,
+           3.54,2.83,3.39,2.67,3.65,4,3.10,2.39]
+    tuce = [20,22,24,12,21,17,17,21,25,29,20,23,23,25,26,19,
+            25,19,23,25,22,28,14,26,24,27,17,24,21,23,21,19]
+    grade = [0,0,0,0,1,0,0,0,0,1,0,0,0,1,0,0,
+             0,0,0,1,0,1,0,0,1,1,1,0,1,1,0,1]
+    design = [[v, t, int(i >= 18)] for i, (v, t) in enumerate(zip(gpa, tuce))]
+    v = _run("binary_logistic_regression", predictors=design, outcome=grade)["values"]
+    published = [-13.0213468581,2.8261125949,.0951576613,2.3786876551]
+    errors = [4.9313242136,1.2629410756,.1415542057,1.0645642545]
+    for i, (coef, se) in enumerate(zip(published, errors)):
+        assert v[f"coefficient_{i}"] == pytest.approx(coef, abs=2e-9)
+        assert v[f"standard_error_{i}"] == pytest.approx(se, abs=2e-9)
+    assert v["mcfadden_pseudo_r_squared"] == pytest.approx(.374, abs=.0002)
+    assert v["odds_ratio_3"] == pytest.approx(10.7907, abs=.0001)
+
+
+def test_seeded_bootstrap_percentile_bca_and_t_and_proportion_power():
+    args = {"sample": [1,2,3,4,5,7,10,11,16,21], "statistic": "mean",
+            "replicates": 3000, "seed": 42, "confidence_level": .95}
+    first = _run("bootstrap_confidence_interval", **args)["values"]
+    second = _run("bootstrap_confidence_interval", **args)["values"]
+    assert first == second
+    assert first["percentile_lower"] == pytest.approx(4.4)
+    assert first["percentile_upper"] == pytest.approx(12.2)
+    assert first["bca_lower"] == pytest.approx(4.845876946545298, abs=1e-11)
+    assert first["bca_upper"] == pytest.approx(13.1)
+    # Noncentral-t independent worked example: d=0.5, two equal groups,
+    # two-sided alpha=.05, 80% target -> n=64 per group.
+    t = _run("t_test_power", effect_size=.5, alpha=.05, target_power=.8,
+             sample_size=30, design="two_sample", tails="two_sided")["values"]
+    assert t["required_sample_size_per_group"] == 64
+    assert t["achieved_power"] == pytest.approx(.4778965207601648, abs=2e-10)
+    assert t["power_at_required_sample_size"] == pytest.approx(.8014595579222752, abs=2e-10)
+    pr = _run("proportion_power", proportion_a=.6, proportion_b=.4,
+              alpha=.05, target_power=.8, sample_size=100,
+              design="two_sample", tails="two_sided")["values"]
+    assert pr["required_sample_size_per_group"] == 97
+    assert pr["achieved_power"] == pytest.approx(.8122918205911362, abs=1e-12)
+
+
+@pytest.mark.parametrize("name,args,diagnostic", [
+    ("two_way_anova", {"values": [1, 2, 3, 4], "factor_a": [0,0,1,1], "factor_b": [0,0,1,1]}, "every factor combination"),
+    ("two_way_anova", {"values": [1,1,3,3,5,5,7,7], "factor_a": [0]*4+[1]*4,
+                        "factor_b": [0,0,1,1]*2}, "residual variance is zero"),
+    ("kruskal_wallis", {"values": [1]*6, "groups": [0]*3+[1]*3}, "all measurements are tied"),
+    ("chi_square_independence", {"table": [[0,0],[1,2]]}, "nonzero row and column"),
+    ("fisher_exact", {"table": [[1,2,3],[4,5,6]]}, "2x2"),
+    ("multiple_linear_regression", {"predictors": [[i,2*i] for i in range(6)], "response": [2,3,4,2,5,6]}, "rank deficient"),
+    ("multiple_linear_regression", {"predictors": [[i] for i in range(5)], "response": [1]*5}, "constant response"),
+    ("binary_logistic_regression", {"predictors": [[i] for i in range(20)], "outcome": [0]*10+[1]*10}, "separation"),
+    ("binary_logistic_regression", {"predictors": [[i] for i in range(6)], "outcome": [1]*6}, "both outcome classes"),
+    ("bootstrap_confidence_interval", {"sample": [1]*6, "statistic": "mean", "replicates": 500, "seed": 0, "confidence_level": .95}, "degenerate"),
+    ("t_test_power", {"effect_size": 0, "alpha": .05, "target_power": .8,
+                       "sample_size": 20, "design": "two_sample", "tails": "two_sided"}, "nonzero"),
+    ("proportion_power", {"proportion_a": .5, "proportion_b": .5, "alpha": .05, "target_power": .8,
+                         "sample_size": 20, "design": "two_sample", "tails": "two_sided"}, "distinct"),
+])
+def test_advanced_inference_invalid_or_separable_inputs(name, args, diagnostic):
+    with pytest.raises(ValueError, match=diagnostic):
+        _run(name, **args)
+
+
+def test_advanced_ops_registered_receipted_and_stdlib_only():
+    expected = {"two_way_anova", "kruskal_wallis", "chi_square_independence", "fisher_exact",
+                "multiple_linear_regression", "binary_logistic_regression",
+                "bootstrap_confidence_interval", "t_test_power", "proportion_power"}
+    assert expected <= {op.id for op in operations("fitting")}
+    for op in inferential.OPERATIONS:
+        assert readable_result({"version": 1, "latest": _run(op.id, **op.example)}, "fitting")
