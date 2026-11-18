@@ -18,7 +18,7 @@ def _branch_origins(document, node_id: str) -> list[str]:
     """Mirror chat_branch_history's structural-parent walk, not raw edges."""
     reversed_ids = []
     seen = set()
-    current = node_id
+    current: str | None = node_id
     while current is not None and current not in seen:
         seen.add(current)
         node = document.nodes.get(current)
