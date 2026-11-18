@@ -361,7 +361,19 @@ def _butterworth_sos(kind, order, cutoffs, sample_rate):
     while pending:
         pole = pending.pop(0)
         if abs(pole.imag) < 1e-10:
-            group = [complex(pole.real)]
+            if kind == "bandpass":
+                # A wide band may map the odd prototype's conjugate analog
+                # pair onto two *real* digital poles. They still form one
+                # second-order bandpass section with zeros at z=1 and z=-1.
+                # Two highpass-like first-order numerators would lose the
+                # Nyquist zero and distort the entire passband.
+                candidates = [i for i, other in enumerate(pending) if abs(other.imag) < 1e-10]
+                if not candidates:
+                    raise ValueError("Butterworth real-pole pairing is numerically unstable.")
+                partner = pending.pop(candidates[0])
+                group = [complex(pole.real), complex(partner.real)]
+            else:
+                group = [complex(pole.real)]
         else:
             index = min(range(len(pending)), key=lambda i: abs(pending[i] - pole.conjugate()))
             partner = pending.pop(index)

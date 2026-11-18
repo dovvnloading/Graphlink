@@ -320,3 +320,29 @@ def test_all_new_operations_produce_valid_saved_results():
         assert result["provenance"]["resultHash"]
         assert result["provenance"]["receiptHash"]
         assert len(result["plot"]["x"]) == len(result["plot"]["y"])
+
+
+@pytest.mark.parametrize("order", [1, 3, 5])
+@pytest.mark.parametrize("cutoffs", [[1, 10], [25, 45], [1, 49]])
+def test_butterworth_wide_band_odd_order_has_nyquist_zero_and_correct_cutoffs(order, cutoffs):
+    # The bandpass quadratic can have two real digital poles for a wide band.
+    # They must share one biquad with both a DC and a Nyquist zero, not two
+    # first-order highpass numerators, which would leak high frequencies.
+    from graphlink_plugins.scientific.packs.signals import _butterworth_sos, _sos_gain
+
+    sections = _butterworth_sos("bandpass", order, cutoffs, 100)
+    assert len(sections) == order
+    assert _sos_gain(sections, 0, 100) == pytest.approx(0, abs=1e-12)
+    assert _sos_gain(sections, 50, 100) == pytest.approx(0, abs=1e-12)
+    for cutoff in cutoffs:
+        assert _sos_gain(sections, cutoff, 100) == pytest.approx(2 ** -0.5, abs=2e-10)
+
+
+def test_butterworth_wide_band_odd_order_rejects_nyquist_tone():
+    samples = sampled(lambda i: math.sin(math.tau * 3 * i / 128) + (-1) ** i, 512, 128)
+    out = run("butterworth_filter", **samples, filter_type="bandpass", order=1, cutoff_hz=[2, 30])
+    actual = out["plot"]["y"][128:-128]
+    original = [math.sin(math.tau * 3 * i / 128) for i in range(128, 384)]
+    assert sum(x * y for x, y in zip(actual, original)) / sum(x * x for x in original) > 0.5
+    high = [(-1) ** i for i in range(128, 384)]
+    assert abs(sum(x * y for x, y in zip(actual, high)) / len(actual)) < 1e-3
