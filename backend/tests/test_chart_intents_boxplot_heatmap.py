@@ -66,7 +66,7 @@ def test_failed_generated_data_creates_revalidatable_placeholder(chart_type, inv
         node_id = await bus.dispatch_intent("scene", "generateChart", [root, chart_type])
         assert document.nodes[node_id].state.chart_type == chart_type
         assert document.nodes[node_id].state.chart_error.startswith("The generated chart data could not be validated:")
-        assert "type" not in document.nodes[node_id].state.chart_data
+        assert document.nodes[node_id].state.chart_data["type"] == chart_type
         assert document.nodes[node_id].state.chart_data[placeholder]
 
     asyncio.run(run())
