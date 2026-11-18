@@ -346,3 +346,20 @@ def test_butterworth_wide_band_odd_order_rejects_nyquist_tone():
     assert sum(x * y for x, y in zip(actual, original)) / sum(x * x for x in original) > 0.5
     high = [(-1) ** i for i in range(128, 384)]
     assert abs(sum(x * y for x, y in zip(actual, high)) / len(actual)) < 1e-3
+
+def test_welch_large_constant_record_has_zero_density():
+    # Detrending must not overflow when summed raw samples exceed binary64.
+    data = sampled(lambda _: 1e308, 64, 64)
+    out = run("welch_psd", **data, window="rectangular",
+              segment_samples=16, overlap_samples=8)
+    assert out["values"]["integrated_power"] == 0
+    assert out["plot"]["y"] == [0] * 9
+
+
+def test_butterworth_constant_high_amplitude_odd_reflection_is_finite():
+    # 2*1e308 is infinite, but the odd reflection of a constant is 1e308.
+    data = sampled(lambda _: 1e308, 64, 8)
+    out = run("butterworth_filter", **data, filter_type="lowpass",
+              order=1, cutoff_hz=[2])
+    assert all(y == pytest.approx(1e308, rel=1e-14)
+               for y in out["plot"]["y"])

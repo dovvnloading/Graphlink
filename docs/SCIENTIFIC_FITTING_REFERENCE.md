@@ -162,3 +162,14 @@ Run the new tests along with the original numerical certification suite:
 ```sh
 python -m pytest -n0 backend/tests/test_scientific_inference.py backend/tests/test_scientific_fitting.py
 ```
+
+### Binary64 limits and quadrature resolution (2026-11-18 audit)
+
+The certified StRD sums and mean squares are computed in Decimal, but these
+diagnostics are published as binary64 numbers. If a nonzero variance diagnostic
+underflows to zero at that boundary, ANOVA now raises an explicit range error
+rather than producing mutually inconsistent zero sums and a finite F statistic.
+For large Tukey families (16–32 groups), the normal-range quadrature uses 128
+rather than 80 nodes to resolve the more sharply concentrated kernel; for
+example, the independently checked CDF at q=5, k=32, df=40 is
+0.828224730257006. This refinement does not change the test's assumptions.
