@@ -1,7 +1,7 @@
 [plugin]
 id = "science_physics"
 name = "Physics"
-description = "Model ideal oscillation, steady heat flow and calorimetry."
+description = "Physics workbench: dynamics, heat transfer, optics, relativity and circuits."
 version = "1.1.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
