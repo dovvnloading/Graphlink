@@ -310,6 +310,82 @@ def _render_line_chart(ax, chart_data: dict[str, Any], theme: dict[str, Any], la
     return True
 
 
+
+def _render_scientific_cartesian(ax, data: dict[str, Any], theme: dict[str, Any],
+                                  layout_width: float, chart_type: str) -> bool:
+    """Render exactly the validated numeric coordinates and error intervals.
+
+    This intentionally does not replace _render_line_chart: a saved v1
+    categorical line must keep its historical fill, ticks and labels.
+    Both PNG and SVG call this same function via _render_chart_content.
+    """
+    x_values = data.get("xValues")
+    rows = data.get("series")
+    if rows is None:
+        rows = [{"values": data["values"], "xError": data.get("xError"),
+                 "yError": data.get("yError")}]
+    if x_values is None:
+        x_values = list(range(len(rows[0]["values"])))
+
+    def error_bounds(errors):
+        if errors is None:
+            return None
+        return ([pair[0] for pair in errors], [pair[1] for pair in errors])
+
+    def axis_label(axis):
+        label = data[axis + "Axis"]
+        unit = data.get(axis + "Unit")
+        return f"{label} ({unit})" if unit else label
+
+    _prepare_standard_axes(
+        ax, theme, axis_label("x"), axis_label("y"), y_grid=True,
+    )
+    if data.get("xScale") == "log10":
+        ax.set_xscale("log", base=10)
+    if data.get("yScale") == "log10":
+        ax.set_yscale("log", base=10)
+
+    # Markers and line styles distinguish series even if two dark-theme
+    # palette entries have very similar RGB values.
+    markers = ("o", "s", "^", "D", "v", "P", "X", "*")
+    styles = ("-", "--", "-.", ":")
+    for index, row in enumerate(rows):
+        color = theme["cycle"][index % len(theme["cycle"])]
+        label = row.get("name")
+        ax.errorbar(
+            x_values,
+            row["values"],
+            xerr=error_bounds(row.get("xError")),
+            yerr=error_bounds(row.get("yError")),
+            fmt=markers[index % len(markers)],
+            linestyle=styles[index % len(styles)] if chart_type == "line" else "none",
+            linewidth=2.0,
+            markersize=6,
+            color=color,
+            markerfacecolor=theme["surface"],
+            markeredgecolor=color,
+            markeredgewidth=1.5,
+            ecolor=color,
+            elinewidth=1.35,
+            capsize=3.5,
+            capthick=1.2,
+            label=label,
+            zorder=4 + index,
+        )
+    if data.get("series"):
+        legend = ax.legend(frameon=False, loc="best", fontsize=8)
+        for text in legend.get_texts():
+            text.set_color(theme["text"])
+
+    if data.get("xValues") is None:
+        _set_categorical_ticks(ax, list(x_values), data["labels"], layout_width)
+    # Keep all interval endpoints visible, on both linear and log axes.
+    # matplotlib's dataLim accounts for errorbar cap endpoints; no silent
+    # clipping, filtering or arbitrary domain transforms are introduced.
+    ax.margins(x=0.08, y=0.16)
+    return True
+
+
 def _render_pie_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str, Any]) -> bool:
     values = chart_data["values"]
     labels = chart_data["labels"]
@@ -646,7 +722,13 @@ def _render_chart_content(figure, chart_type: str, chart_data: dict[str, Any], t
     if chart_type == "bar":
         use_tight_layout = _render_bar_chart(ax, canonical, theme, layout_width)
     elif chart_type == "line":
-        use_tight_layout = _render_line_chart(ax, canonical, theme, layout_width)
+        if any(key in canonical for key in
+               ("xValues", "series", "xError", "yError", "xScale", "yScale", "xUnit", "yUnit")):
+            use_tight_layout = _render_scientific_cartesian(ax, canonical, theme, layout_width, chart_type)
+        else:
+            use_tight_layout = _render_line_chart(ax, canonical, theme, layout_width)
+    elif chart_type == "scatter":
+        use_tight_layout = _render_scientific_cartesian(ax, canonical, theme, layout_width, chart_type)
     elif chart_type == "pie":
         use_tight_layout = _render_pie_chart(figure, ax, canonical, theme)
     elif chart_type == "histogram":
