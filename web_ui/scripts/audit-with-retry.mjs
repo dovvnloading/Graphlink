@@ -65,6 +65,66 @@ export function severeEntries(report) {
     .map(([name, entry]) => `${entry.severity}\t${name}`);
 }
 
+// Advisories that have NO patched release yet, accepted one by one with a
+// reason and a hard expiry. This is not a severity filter: an entry is
+// excused only when every advisory behind it (directly, or through the
+// packages npm lists in its `via` chain) is on this list and unexpired. Any
+// other high/critical advisory still fails the build, and an expired entry
+// fails it too, forcing a fresh decision instead of a silent permanent pass.
+export const ACCEPTED_ADVISORIES = [
+  {
+    url: "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
+    package: "picomatch",
+    expires: "2026-12-18",
+    reason:
+      "ReDoS via repeated extglobs in picomatch <=4.0.7; 4.0.7 is the latest release, so no " +
+      "fix exists. picomatch is reached only through dev tooling (vite, vitest, " +
+      "typescript-eslint), never the shipped bundle, and only ever matches the repo's own " +
+      "glob patterns.",
+  },
+];
+
+function activeAccepted(accepted, today) {
+  return accepted.filter((entry) => today <= entry.expires);
+}
+
+/**
+ * The high/critical package names in `report` that are NOT fully explained by
+ * an active accepted advisory. Empty means every severe entry traces back
+ * only to accepted advisories.
+ */
+export function unacceptedSevereNames(report, accepted = ACCEPTED_ADVISORIES, today = isoToday()) {
+  const vulns = (report && report.vulnerabilities) || {};
+  const active = activeAccepted(accepted, today);
+  const memo = new Map();
+
+  const acceptedOnly = (name, visiting) => {
+    if (memo.has(name)) return memo.get(name);
+    const entry = vulns[name];
+    if (!entry || !Array.isArray(entry.via) || entry.via.length === 0) return false;
+    if (visiting.has(name)) return true; // a cycle adds no new advisory
+    visiting.add(name);
+    const ok = entry.via.every((via) =>
+      typeof via === "string"
+        ? acceptedOnly(via, visiting)
+        : !!via &&
+          active.some((rule) => rule.url === via.url && rule.package === (via.name || name)),
+    );
+    visiting.delete(name);
+    memo.set(name, ok);
+    return ok;
+  };
+
+  return Object.entries(vulns)
+    .filter(([, entry]) => entry && (entry.severity === "high" || entry.severity === "critical"))
+    .map(([name]) => name)
+    .filter((name) => !acceptedOnly(name, new Set()));
+}
+
+function isoToday() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 // -- everything below is the CLI shell around the two functions above -------
 
 // True only when this file was invoked directly, so importing it from the
@@ -101,11 +161,23 @@ function main() {
       // A real finding fails immediately - retrying a genuine advisory would
       // only delay it.
       const report = JSON.parse(result.stdout);
+      const remaining = unacceptedSevereNames(report);
+      if (remaining.length === 0) {
+        const today = isoToday();
+        for (const rule of activeAccepted(ACCEPTED_ADVISORIES, today)) {
+          const message =
+            `npm audit: accepting ${rule.url} (${rule.package}) until ${rule.expires} - ${rule.reason}`;
+          console.log(isCi ? `::warning::${message}` : `WARNING: ${message}`);
+        }
+        console.log(`npm audit: every ${AUDIT_LEVEL}+ advisory traces to an accepted, unexpired entry.`);
+        return 0;
+      }
       console.error(
         `npm audit FAILED: ${AUDIT_LEVEL}+ advisories in the dependency set.\n` +
           `  counts: ${JSON.stringify(report.metadata.vulnerabilities)}`,
       );
       for (const line of severeEntries(report)) console.error(`  - ${line}`);
+      console.error(`  not covered by an accepted advisory: ${remaining.join(", ")}`);
       return 1;
     }
 
