@@ -17,6 +17,12 @@ from backend.domain.graph_run_external import restore_external_attempt
 _SHA256 = re.compile(r"[a-f0-9]{64}")
 _NODE_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _IDENTIFIER = re.compile(r"[A-Za-z0-9._:/@+-]{1,192}")
+# Even a syntactically valid identifier must not become a channel for an
+# imported credential, instruction or generated response to enter a trace.
+_SENSITIVE_IDENTIFIER = re.compile(
+    r"api[_-]?key|credential|password|secret|prompt|response|output|bearer|authorization|token",
+    re.IGNORECASE,
+)
 _TIMESTAMP = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})"
 )
@@ -44,7 +50,10 @@ def _digest(value: Any) -> str | None:
 
 
 def _identifier(value: Any) -> str | None:
-    return value if isinstance(value, str) and _IDENTIFIER.fullmatch(value) else None
+    return (
+        value if isinstance(value, str) and _IDENTIFIER.fullmatch(value)
+        and not _SENSITIVE_IDENTIFIER.search(value) else None
+    )
 
 
 def _node_id(value: Any) -> str:
@@ -134,8 +143,10 @@ def build_graph_run_trace(run: dict[str, Any]) -> dict[str, Any]:
         step_started = _timestamp(step.get("startedAt"))
         step_finished = _timestamp(step.get("finishedAt"))
         attempt = restore_external_attempt(step.get("externalAttempt"))
-        model = _identifier(step.get("modelId"))
-        provider = _identifier(step.get("provider"))
+        # Deterministic notes cannot have an external model identity. Only
+        # a model/tool step's validated journal can contribute these fields.
+        model = _identifier(step.get("modelId")) if step.get("kind") == "model" else None
+        provider = _identifier(step.get("provider")) if step.get("kind") == "model" else None
         if attempt:
             model = _identifier(attempt["model"]) or model
             provider = _identifier(attempt["provider"]) or provider
