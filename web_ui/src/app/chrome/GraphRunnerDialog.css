@@ -36,3 +36,20 @@
 .runner-disclosure:hover { color: var(--gl-surface-text-primary); }
 .runner-fingerprints { margin-top: 4px; font-size: 11px; }
 .runner-fingerprints code { overflow-wrap: anywhere; }
+
+/* Saved-run inspector extends the dialog's existing disclosure and step list. */
+.runner-inspector { margin-top: 10px; }
+.runner-inspector > div { padding-inline-start: 8px; }
+.runner-timeline { list-style: none; border-inline-start: 2px solid var(--gl-surface-border); padding-inline-start: 16px; }
+.runner-timeline > li { position: relative; }
+.runner-timeline > li::before {
+  content: ""; position: absolute; inset-inline-start: -22px; top: 14px;
+  width: 8px; height: 8px; border: 2px solid var(--gl-surface-border);
+  border-radius: 50%; background: var(--gl-surface-window);
+}
+.runner-trace-entry > .runner-disclosure { color: var(--gl-surface-text-primary); font-weight: 600; }
+.runner-trace-entry > div { padding-inline-start: 12px; }
+.runner-trace-entry .runner-fingerprints { margin-block: 8px; }
+.runner-attempts { margin-top: 8px; }
+.runner-attempts ol { padding-inline-start: 20px; margin: 2px 0; }
+.runner-attempts li { overflow-wrap: anywhere; }

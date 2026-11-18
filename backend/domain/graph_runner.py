@@ -52,6 +52,11 @@ def _config_and_target(document: SceneDocument, step: dict[str, str]) -> None:
         validate_local_model_identity(binding.provider_name, binding.model_id)
         if binding.version != 1 or not binding.binding_id:
             raise SceneError("The Model input version is unsupported.")
+        # A saved inspector must not depend on today's possibly-rebound node.
+        # The provider/model identifiers are non-secret metadata pinned to
+        # this run's configuration, just like the existing hashes.
+        step["provider"] = binding.provider_name
+        step["modelId"] = binding.model_id
         # Runtime node IDs are reminted after restoring a workspace. Pin the
         # durable binding identity and provider/model instead; _matching_node
         # separately verifies the remapped sourceId before every execution.

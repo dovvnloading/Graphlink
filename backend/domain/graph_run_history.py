@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from backend.domain.graph_run_external import RECONCILIATION_DETAIL, restore_external_attempt
+from backend.domain.graph_run_inspector import _identifier, _timestamp
 
 RUN_HISTORY_LIMIT = 12
 RUN_ID = re.compile(r"[a-zA-Z0-9_-]{8,100}")
@@ -34,6 +35,18 @@ def _restore_step(raw: Any, ids: dict[str, str]) -> dict[str, Any] | None:
         if not isinstance(raw["outputHash"], str) or not DIGEST.fullmatch(raw["outputHash"]):
             return None
         step["outputHash"] = raw["outputHash"]
+    version = raw.get("outputVersion")
+    if type(version) is int and 0 < version <= 2147483647:
+        step["outputVersion"] = version
+    for key in ("startedAt", "finishedAt"):
+        timestamp = _timestamp(raw.get(key))
+        if timestamp is not None:
+            step[key] = timestamp
+    if step["kind"] == "model":
+        for key in ("provider", "modelId"):
+            identifier = _identifier(raw.get(key))
+            if identifier is not None:
+                step[key] = identifier
     for key in ("nodeId", "sourceId"):
         # Never leave an unmapped saved id pointing at an unrelated new n0/n1.
         step[key] = ids.get(step[key], "")
@@ -81,6 +94,9 @@ def restore_graph_runs(raw: Any, ids: dict[str, str]) -> list[dict[str, Any]]:
             continue
         run = {key: record[key] for key in keys}
         run["previewHash"] = preview_hash
+        finished_at = _timestamp(record.get("finishedAt"))
+        if finished_at is not None:
+            run["finishedAt"] = finished_at
         if (not RUN_ID.fullmatch(run["runId"]) or run["runId"] in seen or run["status"] not in _RUN_STATUSES
                 or not DIGEST.fullmatch(run["selectionHash"])
                 or not isinstance(record.get("steps"), list)):
