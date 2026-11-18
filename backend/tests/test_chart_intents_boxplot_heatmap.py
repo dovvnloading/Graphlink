@@ -44,11 +44,10 @@ def test_generated_chart_node_stores_new_type_without_out_of_scope_wire_change(c
     async def run():
         bus, document, _, agent, root = _setup(model_data)
         node_id = await bus.dispatch_intent("scene", "generateChart", [root, chart_type])
-        state = document.nodes[node_id].state
-        assert state.chart_type == chart_type
-        assert "type" not in state.chart_data
-        assert state.chart_data[field]
-        assert state.chart_error == ""
+        assert document.nodes[node_id].state.chart_type == chart_type
+        assert "type" not in document.nodes[node_id].state.chart_data
+        assert document.nodes[node_id].state.chart_data[field]
+        assert document.nodes[node_id].state.chart_error == ""
         assert len(agent.calls) == 1
         assert agent.calls[0]["chart_type"] == chart_type
         assert "Source measurements" in agent.calls[0]["source_text"]
@@ -65,11 +64,10 @@ def test_failed_generated_data_creates_revalidatable_placeholder(chart_type, inv
     async def run():
         bus, document, _, _, root = _setup(invalid)
         node_id = await bus.dispatch_intent("scene", "generateChart", [root, chart_type])
-        state = document.nodes[node_id].state
-        assert state.chart_type == chart_type
-        assert state.chart_error.startswith("The generated chart data could not be validated:")
-        assert "type" not in state.chart_data
-        assert state.chart_data[placeholder]
+        assert document.nodes[node_id].state.chart_type == chart_type
+        assert document.nodes[node_id].state.chart_error.startswith("The generated chart data could not be validated:")
+        assert "type" not in document.nodes[node_id].state.chart_data
+        assert document.nodes[node_id].state.chart_data[placeholder]
 
     asyncio.run(run())
 
