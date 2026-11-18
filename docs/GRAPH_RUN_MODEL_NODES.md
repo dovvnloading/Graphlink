@@ -20,11 +20,12 @@ model binding and from legacy structural/reference edges.
    `Source → Model A → Model B → word-count note` plan shows the first
    Model as ready and its dependents as waiting. It cannot predict the
    model's text and never sends requests during preview.
-3. Choose **Run graph** to explicitly admit the bounded plan. Each Model
-   step checkpoints the run and a unique request ID to SQLite **before**
-   contacting the loopback Ollama API; its real reply is applied to the
-   Model node and checkpointed with its completion receipt before the next
-   Model or transform consumes it.
+3. Choose **Run graph** to explicitly admit the bounded plan. Independent
+   ready steps now run concurrently (default three in flight); each dependent
+   still waits for all its prerequisites to complete. Each Model step
+   checkpoints its own unique request ID to SQLite **before** contacting
+   loopback Ollama. Its real reply and completion receipt are checkpointed
+   atomically before a dependent consumes the result.
 4. Reopen the saved workspace to inspect previous outputs and request IDs.
    Model node IDs and input-port references are remapped and validated.
    Editing a source marks its dependent models stale without re-running.
@@ -56,8 +57,8 @@ autonomous trigger, or cross-provider profile is authorized in this slice.
 
 Workflows with other kinds continue to use their existing deterministic
 Graph Runner semantics. More advanced type ports, reusable subgraphs,
-parallel model dispatch, remote provider approvals/budgets and reliable
-remote reconciliation are separate roadmap gates.
+remote provider approvals/budgets and reliable remote reconciliation are
+separate roadmap gates.
 
 ## Tests
 
@@ -70,3 +71,36 @@ The offline integration tests substitute the local model transport while
 driving the real SessionBus and SQLite checkpoints. Live end-to-end inference
 requires an installed local Ollama model and running daemon. This is not
 equivalent to a proven cloud or tool-using graph agent.
+
+## Parallel scheduling and crash recovery
+
+The `executeGraphRun` intent accepts an optional fourth positional argument,
+`maxConcurrency`, an integer from **1 to 8** (default **3**). The limit is
+saved with the run and reused by `resumeGraphRun`; existing three-argument
+callers keep the default. The eight-Model-steps-per-plan cap remains unchanged.
+Current typed Model, note and table bindings have a single named input; the
+scheduler also accepts a multi-prerequisite dependency relation for future
+fan-in step types.
+
+A step is eligible only when its scheduled prerequisites are `current` or
+`completed`. Ready siblings run concurrently up to the cap, with stable
+preview-order admission. A blocked, failed or reconciliation-required step
+blocks only downstream dependents, not unrelated branches. Checkpoints are
+serialized even though external requests overlap: a **confirmed SQLite fence**
+is still required before every model send, and a completed response and receipt
+still share a transaction. Two model calls in flight at process death therefore
+restore as **two distinct reconciliation-required attempts**, never automatic
+retries. Remaining safe independent pending steps may be resumed.
+
+Step `startedAt` is captured when its worker actually begins and `finishedAt`
+when it resolves, not when it was queued. Overlapping timestamps are expected;
+blocked descendants that were never dispatched have no fictional start time.
+See [the inspector guide](GRAPH_RUN_INSPECTOR.md) for saved timing fidelity.
+
+Offline backend checks include bounded-concurrency (default and custom), fan-out,
+fan-in scheduling, branch failure, multi-step cancellation, and SQLite restart
+with two external requests simultaneously fenced. Run:
+
+```bash
+pytest -q -n0 backend/tests/test_first_class_model_runner.py backend/tests/test_graph_runner_domain.py backend/tests/test_graph_runner_intents.py backend/tests/test_graph_run_external.py backend/tests/test_graph_run_inspector.py
+```
