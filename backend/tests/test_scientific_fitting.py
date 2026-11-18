@@ -40,6 +40,9 @@ def test_manifest_and_all_examples_have_verifiable_receipts():
         "one_way_anova", "mann_whitney_u", "wilcoxon_signed_rank", "shapiro_wilk",
         "pearson_correlation", "spearman_correlation", "bonferroni_correction",
         "benjamini_hochberg_correction", "custom_nonlinear_least_squares", "compare_models",
+        "two_way_anova", "kruskal_wallis", "chi_square_independence", "fisher_exact",
+        "multiple_linear_regression", "binary_logistic_regression",
+        "bootstrap_confidence_interval", "t_test_power", "proportion_power",
     }
     for operation in operations("fitting"):
         result = _run(operation.id, operation.example)

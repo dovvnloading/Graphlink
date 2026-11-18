@@ -221,3 +221,192 @@ For large Tukey families (16–32 groups), the normal-range quadrature uses 128
 rather than 80 nodes to resolve the more sharply concentrated kernel; for
 example, the independently checked CDF at q=5, k=32, df=40 is
 0.828224730257006. This refinement does not change the test's assumptions.
+
+## Additional inferential methods (advanced scientific statistics)
+
+These operations are in the **Fitting and Inference** Workbench pack; they use the
+same receipt hashes, numeric-vector/matrix constraints and Python standard library
+as the existing methods. Numeric factor codes are categories, not covariates. The
+Workbench limits input vectors to 1,024 values, matrix widths to 32 columns and
+matrix cells to 4,096. Results are **unadjusted for selection** unless explicitly
+noted. No operation substitutes for appropriate experimental design.
+
+### Two-way factorial ANOVA (`two_way_anova`)
+
+Supply `values`, `factor_a` and `factor_b` as aligned numeric vectors. Each
+factor must have at least two levels; the Cartesian product of levels must
+contain no empty cells and may have at most 64 combinations. Independent
+replicates must leave positive error df `n - (a*b)`. The full model includes
+main effects and interaction and estimates an individual mean per cell. The
+pooled error mean square is `SSE(full) / (n-a*b)`; a zero error variance is
+rejected. The **Type II** main-effect sums of squares are partial reductions in
+SSE when adding A to B and B to A in the **additive** model:
+
+- `SS(A | B) = SSE(B-only) - SSE(A+B)`.
+- `SS(B | A) = SSE(A-only) - SSE(A+B)`.
+- `SS(A:B) = SSE(A+B) - SSE(full)`.
+
+The corresponding degrees of freedom are `a-1`, `b-1` and `(a-1)(b-1)`.
+Reported F ratios divide each term's mean square by **full-model** error mean
+square and use the incomplete-beta F tail. In unbalanced data these partial
+sums are generally **not additive**. Evaluate the interaction first: when it
+is important, a single averaged main effect can obscure cell-specific effects.
+Fixed factors, independent normal errors and common residual variance are
+assumed. Summations/linear solves use 76-digit decimal precision. The
+unbalanced reference test verifies `SS_A=364.03361344537814`,
+`SS_B=67.80504201680672`, `SS_AB=3.573529411764706` and `SSE=25.25` on
+an independently checked 2×2 factorial design. The definition follows
+[Langsrud, *ANOVA for unbalanced data: Use Type II instead of Type III sums of
+squares*](https://www.stat.yale.edu/~jtc5/312_612/readings/unbalanced_two-way_anova_and_interactions/unbalanced-anova-use-type-II-SS_Stat-Comput_03.pdf).
+
+### Kruskal–Wallis with Dunn comparisons (`kruskal_wallis`)
+
+Supply aligned `values` and `groups` vectors, for 2–32 groups with at least two
+observations per group. All pooled observations receive **midranks**; the
+omnibus H is divided by `C=1-Σ(t³-t)/(N³-N)` for ties, with an asymptotic
+upper chi-square tail on `k-1` df. Dunn's pairwise comparisons use differences
+of average midranks, variance
+`[N(N+1)-Σ(t³-t)/(N-1)]/12 × (1/n_i+1/n_j)`, two-sided normal tails and
+**Holm step-down** adjusted probabilities over *all* pairs. They are not
+Mann–Whitney permutation tests. The [published tied example](https://www.clinicalbiostats.com/tutorials/undergraduate-statistics-introduction-to-statistics/the-kruskal-wallis-test-for-independent-groups/)
+(4 ones; 2,2,2,4; 3,3,5,6) yields `H=9.254612546125466` and
+`p=0.009781071182573`. A pooled all-ties sample is invalid. These
+rank-based procedures assume independent observations and do not demonstrate
+identical medians unless group distribution shapes are comparable.
+
+### Contingency tables (`chi_square_independence`, `fisher_exact`)
+
+Each accepts `table` as a rectangular matrix of **nonnegative integer counts**.
+At least 2 rows and columns with all row and column margins positive are
+required. `chi_square_independence` calculates expected cell counts from
+`row_total * column_total / N`, Pearson's uncorrected statistic
+`Σ(O-E)²/E`, `(r-1)(c-1)` degrees of freedom, its upper chi-square tail,
+Cramér's V, and cellwise Pearson residuals. It flags expected counts below 5;
+small samples, dependent observations and structural zeros may invalidate the
+asymptotic test. No Yates correction or estimated-parameter adjustment is
+applied. On [Minitab's cookie preference example](https://support.minitab.com/en-us/minitab/help-and-how-to/statistics/tables/how-to/cross-tabulation-and-chi-square/methods-and-formulas/test-for-2x2-tables/)
+`[[9,1],[2,8]]`, chi-square is `9.8989898989899`, p is
+`0.00165369516370034` and Fisher p is `0.00547749464158133`.
+
+`fisher_exact` requires exactly 2×2, enumerates fixed-margin hypergeometric
+tables using logarithmic combinatorial weights, and reports one-sided
+`p_less`/`p_greater` and **two-sided probability-order**
+`p_two_sided` (sum of all table probabilities at most as likely as the
+observed table). It is not simply double the smaller tail. To bound execution,
+no more than 100,001 feasible tables are supported; larger enumeration raises
+an error. `odds_ratio` is the *sample cross-product ratio* `ad/bc`, not R's
+conditional-MLE odds ratio. For [Fisher's tea tasting](https://online.stat.psu.edu/stat504/Lesson04)
+`[[3,1],[1,3]]`, this yields `p_two_sided=34/70`, `p_greater=17/70`
+and sample odds ratio 9. Infinite odds ratios are represented as text rather
+than an invalid floating-point infinity. All tests require mutually exclusive
+categories and independent experimental units.
+
+### Multiple linear regression (`multiple_linear_regression`)
+
+Supply `predictors` as an `n × p` matrix **without** an intercept column and
+`response` as an aligned length-n vector. Up to 15 predictors plus a fitted
+intercept are supported. The full-rank unweighted OLS fit requires `n > p+1`,
+nonconstant response and strictly positive residual SSE. It reports each
+`coefficient_j`, `standard_error_j`, `ci95_lower_j`, `ci95_upper_j`,
+two-sided Student-t p-values and predictor `vif_j`, as well as the coefficient
+table. Here `j=0` identifies the intercept. The covariance estimate is
+`[SSE/(n-p-1)] (X'X)^-1`; VIF is `SST(X_j) × (X'X)^-1[j,j]`, with an
+intercept in X. Both calculations use equilibrated pivoted high-precision
+normal equations, avoiding binary64 normal-equation cancellation on difficult
+data. `r_squared` and `adjusted_r_squared` use centered total SS. Rank
+failure and zero error variance produce explicit errors, never fictitious
+confidence intervals.
+
+Individual `fitted_i`, `residual_i`, `leverage_i`, `standardized_residual_i`
+and `cooks_distance_i` values (zero-based `i`) are available, with a
+residual-versus-fitted plot. Additional aggregates are residual SD,
+Durbin–Watson, maximum absolute standardized residual/leverage/Cook's D,
+and the asymptotic Jarque–Bera statistic/p-value. A unit-leverage row has
+undefined standardized residual and Cook's D (reported as text). Durbin–Watson
+uses the *supplied row order*, and its usual interpretation requires a time
+ordering; Jarque–Bera is not reliable for very small samples. OLS t intervals
+assume independent homoscedastic normal errors with a correct linear model.
+The [NIST StRD Longley certification](https://www.itl.nist.gov/div898/strd/lls/data/LINKS/v-Longley.shtml)
+is asserted to **15 published significant digits** for all seven coefficients
+and SEs, residual SD and R².
+
+### Binary logistic IRLS (`binary_logistic_regression`)
+
+Supply `predictors` as rows (without the intercept) and an aligned binary
+`outcome` vector of **exactly 0/1** observations. Both classes, positive
+degrees of freedom, full predictor rank and at most 12 predictors are
+required. The binomial log-likelihood is maximized by a **damped iteratively
+reweighted least squares** Newton solver; features are standardized for the
+iteration and coefficients/covariances are transformed back to original units.
+The final information-matrix inverse gives conventional nonrobust Wald SE,
+95% normal intervals on log odds, odds ratios `exp(beta)`, and odds ratio
+intervals obtained by exponentiating the log-odds interval endpoints. AIC,
+log likelihood, the LR test, McFadden pseudo-R² and fitted probability plot
+are also provided. Nonconvergence, near-singular information or diverging
+coefficients (complete/quasi separation) are **errors**; this is not Firth or
+penalized regression, and the code does not silently report finite estimates
+under separation. Avoid interpreting Wald intervals when data are sparse or
+separation is plausible. The published [Spector example](https://www.statsmodels.org/v0.14.4/discretemod.html)
+(32 observations, predictors GPA/TUCE/PSI) yields beta
+`[-13.02134686, 2.82611259, 0.09515766, 2.37868766]` and SE
+`[4.93132421, 1.26294108, 0.14155421, 1.06456425]`.
+
+### Seeded percentile/BCa bootstrap (`bootstrap_confidence_interval`)
+
+Input `sample`, a `statistic` text selector (`mean`, `median`, or
+`standard_deviation`), integer `replicates` (200–20,000), integer `seed` and
+`confidence_level` strictly between 0 and 1. Bootstrap resampling is *iid
+with replacement* using a **local** `random.Random(seed)`; the seed and
+replicate count are receipted, and identical inputs produce exactly identical
+bounds. Both intervals use linearly interpolated sorted empirical quantiles.
+The **percentile interval** takes the alpha/2 and 1-alpha/2 quantiles;
+**BCa** applies `z0=Phi^-1(P(t*<t_hat))` (half weight for ties) and the
+leave-one-out jackknife acceleration
+`a=Σ(mean(jack)-jack_i)^3 / (6[Σ(mean(jack)-jack_i)^2]^(3/2))` to change
+quantile levels. An undefined jackknife acceleration, constant resampling
+statistic or an impossible BCa quantile gives an explicit error, rather than
+fabricating a BCa interval. Monte Carlo uncertainty decreases with the
+number of replicates; specify and preserve the seed, and use at least a few
+thousand replicates for reporting. This is **not** a cluster, block or
+parametric bootstrap. See [Efron/Narasimhan's BCa discussion](https://cran.wustl.edu/web/packages/bcaboot/vignettes/bcaboot.html).
+
+### Power and minimum sample size (`t_test_power`, `proportion_power`)
+
+Both return `achieved_power` for input `sample_size` and the smallest integer
+`required_sample_size_per_group` achieving `target_power` (plus power at that
+size), searching up to one million observations per group. `alpha` and
+`target_power` must each lie in `(0,1)`; `tails` is `one_sided` or
+`two_sided`. The one-sided calculation assumes the effect direction is
+**specified before sampling**. All calculations use known effect inputs,
+not effects estimated from the same study being tested.
+
+`t_test_power` takes a **nonzero positive magnitude** of Cohen's `effect_size`
+(absolute value of signed input). `design` is `one_sample`, `paired` (the
+effect is the mean paired difference divided by its SD), or `two_sample`
+(equal n in independent groups and Cohen's d based on common SD). Degrees of
+freedom are `n-1` for the first two, and `2n-2` for two samples;
+noncentrality is `d*sqrt(n)` or `d*sqrt(n/2)` respectively. Exact noncentral
+t probabilities are calculated deterministically by Gauss–Legendre
+quadrature over the chi-square scale mixture, not by the normal approximation.
+The independently checked example `d=0.5`, two-sided alpha `0.05`, desired
+power `0.8`, two equal groups requires **64 per group** (power
+`0.801459557922275`).
+
+`proportion_power` accepts interior probabilities `proportion_a` and
+`proportion_b` which must be unequal. `design=one_sample` compares an
+alternative `p1=a` against null `p0=b`; `design=two_sample` compares
+independent equal-n groups with proportions `a,b`. It uses the usual **normal
+z-test approximation** with null variance at the pooled proportion (two
+samples) or p0 (one sample), and alternative variance at the proposed
+proportion(s). It does **not** apply continuity correction, exact/binomial
+small-sample power or account for attrition, unequal allocation or clustering.
+For `a=0.6,b=0.4`, two-sided alpha `0.05`, target power `0.8` the normal
+approximation recommends **97 per group**. These are prospective planning
+calculations; realized sample sizes, missingness and model assumptions affect
+actual power.
+
+Run the additional certification and regression suites after a full checkout:
+
+```sh
+python -m pytest -n0 backend/tests/test_scientific_inference.py backend/tests/test_scientific_fitting.py
+```
