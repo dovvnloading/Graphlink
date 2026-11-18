@@ -19,6 +19,7 @@ PACKS = {
     "signals": ("Signal Processing", "Smooth, transform and resample measured signals."),
     "fitting": ("Fitting and Inference", "Regression, classical tests, correlations and multiple-comparison adjustments."),
     "uncertainty": ("Measurement Uncertainty", "First-order GUM propagation with correlations and Student t coverage."),
+    "numerics": ("Numerical Methods", "Adaptive ODE initial-value solvers, roots, quadrature and cubic splines."),
 }
 
 
