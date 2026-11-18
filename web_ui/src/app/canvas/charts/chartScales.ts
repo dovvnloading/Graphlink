@@ -280,9 +280,20 @@ export interface BoxplotStats {
 export function computeBoxplotStats(values: number[]): BoxplotStats {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  const q1 = median(sorted.slice(0, mid));
-  const q3 = median(sorted.slice(mid + (sorted.length % 2)));
-  const center = median(sorted);
+  // Preserve extreme finite values, including subnormals: splitting each
+  // operand in half (the general-purpose median helper's overflow guard)
+  // can underflow a pair of equal Number.MIN_VALUE observations to zero.
+  const stableMedian = (sortedValues: number[]): number => {
+    const middle = Math.floor(sortedValues.length / 2);
+    if (sortedValues.length % 2) return sortedValues[middle];
+    const lo = sortedValues[middle - 1];
+    const hi = sortedValues[middle];
+    const difference = hi - lo;
+    return Number.isFinite(difference) ? lo + difference / 2 : lo / 2 + hi / 2;
+  };
+  const q1 = stableMedian(sorted.slice(0, mid));
+  const q3 = stableMedian(sorted.slice(mid + (sorted.length % 2)));
+  const center = stableMedian(sorted);
   const fence = 1.5 * (q3 - q1);
   const lower = q1 - fence;
   const upper = q3 + fence;
