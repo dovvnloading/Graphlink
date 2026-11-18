@@ -32,6 +32,7 @@ class RunArgs:
     inputs: dict
     sources: dict | None = None
     expected_run: str | None = None
+    uncertainty_method: str = "auto"
 
 
 @dataclass
@@ -120,7 +121,8 @@ def _extract(result: dict, selector: list):
     raise ValueError("Choose a metric, plot axis, numeric column or matrix from the source.")
 
 
-def _verify_sources(document, node, inputs: dict, sources: dict, granted) -> dict:
+def _verify_sources(document, node, inputs: dict, sources: dict, granted,
+                    uncertainty_inputs: dict | None = None) -> dict:
     if not sources:
         return {}
     if set(sources) - set(inputs):
@@ -188,6 +190,12 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted) -> dic
             raise ValueError("The selected output is unavailable.") from None
         if selected != inputs[key]:
             raise ValueError("The supplied value differs from the selected source output.")
+        if uncertainty_inputs is not None:
+            from .propagation import connected_measurement
+            identity = source.state.data.get("nodeKey") or receipt_hash or digest
+            measurement = connected_measurement(latest, selector, identity)
+            if measurement is not None:
+                uncertainty_inputs[key] = measurement
         verified[key] = {"nodeId": source_id, "sourceKey": source.state.data.get("nodeKey"),
                          "resultHash": digest, "selector": selector,
                          "packId": latest["provenance"]["packId"], "operationId": latest["operationId"]}
@@ -270,7 +278,11 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         state = node.state
         try:
             inputs = validated_inputs(op, request.inputs)
-            sources = _verify_sources(document, node, inputs, request.sources or {}, ctx.is_plugin_granted)
+            uncertainty_inputs: dict = {}
+            sources = _verify_sources(document, node, inputs, request.sources or {},
+                                      ctx.is_plugin_granted, uncertainty_inputs)
+            if request.uncertainty_method not in ("auto", "gum", "monte_carlo"):
+                raise ValueError("Uncertainty method must be auto, gum or monte_carlo.")
             budget = execution_timeout(op)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
@@ -282,6 +294,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         try:
             result = await execute_in_process(
                 pack_id, op, inputs, sources, timeout_s=budget, cancel_event=ticket.cancel_event,
+                uncertainty_inputs=uncertainty_inputs, uncertainty_method=request.uncertainty_method,
             )
             if ticket.cancel_event.is_set():
                 elapsed_ms = int((time.monotonic() - ticket.started_at) * 1000)
@@ -291,7 +304,11 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             if document.nodes.get(node.id) is not node or node.state is not state:
                 return {"ok": False, "conflict": True, "error": "The node changed during calculation. Review the current run."}
             if sources:
-                _verify_sources(document, node, inputs, sources, ctx.is_plugin_granted)
+                latest_uncertainty: dict = {}
+                _verify_sources(document, node, inputs, sources, ctx.is_plugin_granted, latest_uncertainty)
+                if latest_uncertainty != uncertainty_inputs:
+                    return {"ok": False, "conflict": True,
+                            "error": "The connected uncertainty changed while calculating. Run again."}
         except ExecutionFailure as exc:
             return exc.as_result()
         except ValueError as exc:

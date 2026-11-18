@@ -56,3 +56,11 @@
 .science-imported th small { display: block; font-weight: normal; white-space: nowrap; }
 .science-imported pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9em; }
 .science-imported td { min-width: 0; max-width: 140px; overflow-wrap: anywhere; }
+
+/* Keep a potentially wide GUM attribution table readable inside a 390px node. */
+.science-uncertainty-budget { min-width: 0; }
+.science-uncertainty-budget section { display: grid; gap: 5px; padding: 8px 0; border-bottom: 1px solid var(--gl-surface-border); }
+.science-uncertainty-budget h5 { margin: 0; overflow-wrap: anywhere; }
+.science-uncertainty-budget small { display: block; }
+.science-uncertainty-budget table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; font-size: .85em; font-variant-numeric: tabular-nums; }
+.science-uncertainty-budget :is(th, td) { text-align: start; padding: 4px 7px; border-bottom: 1px solid var(--gl-surface-border); white-space: nowrap; }

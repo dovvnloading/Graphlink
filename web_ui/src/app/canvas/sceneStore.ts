@@ -1677,9 +1677,11 @@ export class SceneStore {
   }
 
   async runScientificOperation(pluginId: string, nodeId: string, operationId: string,
-    inputs: Record<string, unknown>, sources: Sources, expectedRun?: string): Promise<void> {
+    inputs: Record<string, unknown>, sources: Sources, expectedRun?: string,
+    uncertaintyMethod: "auto" | "gum" | "monte_carlo" = "auto"): Promise<void> {
     await this.scientificIntent(pluginId, "run", {
       node_id: nodeId, operation_id: operationId, inputs, sources, ...(expectedRun && { expected_run: expectedRun }),
+      ...(uncertaintyMethod !== "auto" && { uncertainty_method: uncertaintyMethod }),
     });
   }
 

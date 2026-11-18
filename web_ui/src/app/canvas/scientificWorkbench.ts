@@ -47,6 +47,65 @@ export interface ScientificTableSelection {
 }
 export interface SciencePlot { x: number[]; y: number[]; xLabel: string; yLabel: string; title: string }
 
+export interface ScientificMeasurement {
+  value: number;
+  standardUncertainty: number;
+  coverageFactor: number;
+  coverageProbability?: number;
+  unit: string;
+  interval?: [number, number];
+  components?: Record<string, number>;
+  method?: "gum" | "monte_carlo";
+  budget?: Array<{ input: string; kind: "input" | "covariance"; variance: number;
+    unit?: string; standardUncertainty?: number; sensitivity?: number; signedContribution?: number }>;
+  monteCarloMean?: number;
+  monteCarloTrials?: number;
+  budgetNote?: string;
+}
+export interface ScientificUncertainty {
+  method: "gum" | "monte_carlo";
+  inputs: Record<string, ScientificMeasurement>;
+  outputs: Record<string, ScientificMeasurement>;
+  unsupportedOutputs?: Record<string, string>;
+}
+
+/** Format values without discarding the standard uncertainty or its units. */
+export function formatMeasurement(measurement: ScientificMeasurement): string {
+  return `${measurement.value} ± ${measurement.standardUncertainty}${measurement.unit ? " " + measurement.unit : ""}`;
+}
+
+/** Also understand pre-existing pack outputs without changing their receipts. */
+export function resultMeasurement(result: ScienceResult, name: string): ScientificMeasurement | undefined {
+  const value = result.values[name];
+  if (!finite(value)) return undefined;
+  const attached = result.uncertainty?.outputs[name];
+  if (attached) return attached;
+  let sigma: unknown;
+  let factor: unknown = 1.959963984540054;
+  if (name === "estimate" && finite(result.values.combined_standard_uncertainty)) {
+    sigma = result.values.combined_standard_uncertainty;
+    factor = result.values.coverage_factor ?? 1.959963984540054;
+  } else {
+    const index = name.split("_").slice(-1)[0];
+    const candidates = [name + "_standard_uncertainty", name + "_standard_error",
+      name.replace("_per_", "_standard_error_per_"),
+      name.replace("_per_", "_standard_uncertainty_per_"),
+      name.includes("_") ? name.replace("_", "_standard_uncertainty_") : "",
+      name.includes("_") ? name.replace("_", "_standard_error_") : "",
+      name.startsWith("coefficient_") || name.startsWith("parameter_") ? "standard_error_" + index : "",
+      name === "b_value_per_mw" ? "b_approx_standard_error_per_mw" : "",
+      name === "decay_constant_per_day" ? "rate_standard_error_per_day" : ""];
+    sigma = candidates.filter(Boolean).map((candidate) => result.values[candidate]).find(finite);
+  }
+  if (!finite(sigma) || sigma < 0 || !finite(factor) || factor <= 0) return undefined;
+  const suffix = name.match(/\(([^()]+)\)\s*$/);
+  const short = name.match(/_(ma|mm|cm|km|kg|hz|pa|rad|deg|ohm|mol|ms|m|s|g|j|k|v|a|l)$/i);
+  const unit = suffix?.[1] ?? (short ? ({ ma: "Ma", hz: "Hz", pa: "Pa", j: "J", k: "K", v: "V", a: "A", l: "L" } as Record<string, string>)[short[1].toLowerCase()] ?? short[1] : "");
+  return { value, standardUncertainty: sigma, coverageFactor: factor,
+    coverageProbability: name === "estimate" && finite(result.values.coverage_probability)
+      ? result.values.coverage_probability : 0.95, unit };
+}
+
 export interface ScienceResult {
   operationId: string;
   inputs: Record<string, unknown>;
@@ -54,6 +113,7 @@ export interface ScienceResult {
   values: Record<string, unknown>;
   table?: ScienceTable;
   plot?: SciencePlot;
+  uncertainty?: ScientificUncertainty;
   provenance: Record<string, unknown> & { resultHash: string; receiptHash?: string; sources?: Sources };
 }
 
@@ -72,6 +132,7 @@ export interface ScienceState {
 export interface ScienceParent { nodeId: string; title: string; raw: string }
 export interface SourceOption {
   label: string; value: unknown; reference: SourceReference; tableColumn?: ScientificTableSelection;
+  uncertainty?: ScientificMeasurement;
 }
 
 
@@ -80,6 +141,23 @@ function record(value: unknown): value is Record<string, unknown> {
 }
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
+
+/** An interval by itself is not an input PDF or a standard uncertainty. */
+export function intervalOnly(result: ScienceResult, key: string): [number, number] | undefined {
+  if (resultMeasurement(result, key) || !["estimate", "r", "rho"].includes(key) && !key.startsWith("odds_ratio_"))
+    return undefined;
+  const index = key.startsWith("odds_ratio_") ? key.slice("odds_ratio_".length) : "";
+  const pairs = [
+    ["ci95_lower", "ci95_upper"], ["percentile_lower", "percentile_upper"],
+    ["bca_lower", "bca_upper"], ["confidence_lower", "confidence_upper"],
+    ...(index ? [[`odds_ratio_ci95_lower_${index}`, `odds_ratio_ci95_upper_${index}`]] : []),
+  ];
+  for (const [lo, hi] of pairs) {
+    const lower = result.values[lo], upper = result.values[hi];
+    if (finite(lower) && finite(upper)) return [lower, upper];
+  }
+  return undefined;
+}
 const vector = (value: unknown): value is number[] => Array.isArray(value) && value.length > 0 && value.every(finite);
 const strings = (value: unknown): value is string[] => Array.isArray(value) && value.every((v) => typeof v === "string");
 const matrix = (value: unknown): value is number[][] => Array.isArray(value) && value.length > 0 &&
@@ -96,6 +174,15 @@ function isOperation(value: unknown): value is ScienceOperation {
     && value.fields.every(isField);
 }
 
+function isMeasurement(value: unknown): value is ScientificMeasurement {
+  return record(value) && finite(value.value) && finite(value.standardUncertainty)
+    && value.standardUncertainty >= 0 && finite(value.coverageFactor) && value.coverageFactor > 0
+    && typeof value.unit === "string"
+    && (value.coverageProbability === undefined || (finite(value.coverageProbability) && value.coverageProbability > 0 && value.coverageProbability < 1))
+    && (value.interval === undefined || (Array.isArray(value.interval) && value.interval.length === 2 && value.interval.every(finite)))
+    && (value.components === undefined || (record(value.components) && Object.values(value.components).every(finite)));
+}
+
 function isResult(value: unknown): value is ScienceResult {
   if (!record(value) || typeof value.operationId !== "string" || typeof value.summary !== "string" ||
       !record(value.inputs) || !record(value.values) || !record(value.provenance) ||
@@ -107,6 +194,14 @@ function isResult(value: unknown): value is ScienceResult {
     (source.sourceKey == null || typeof source.sourceKey === "string") &&
     (source.receiptHash === undefined || typeof source.receiptHash === "string") &&
     Array.isArray(source.selector) && source.selector.every((key) => typeof key === "string" || Number.isInteger(key))))) return false;
+  if (value.uncertainty !== undefined) {
+    const data = value.uncertainty;
+    if (!record(data) || !["gum", "monte_carlo"].includes(String(data.method))
+        || !record(data.inputs) || !record(data.outputs)
+        || !Object.values(data.inputs).every(isMeasurement) || !Object.values(data.outputs).every(isMeasurement)
+        || Object.entries(data.outputs).some(([key, item]) =>
+          !record(item) || !finite(value.values[key]) || item.value !== value.values[key])) return false;
+  }
   const { table, plot } = value;
   if (table !== undefined && !(record(table) && strings(table.columns) && Array.isArray(table.rows)
       && table.rows.every((row) => Array.isArray(row) && row.length === (table.columns as string[]).length))) return false;
@@ -252,7 +347,12 @@ export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.po
     const title = names.get(parent.title) === 1 ? parent.title : `${parent.title} (${parent.nodeId})`;
     if (result) {
       const add = (name: string, value: unknown, selector: SourceReference["selector"]) => {
-        options.push({ label: `${title} · ${name}`, value,
+        const uncertainty = selector[0] === "values" ? resultMeasurement(result, name) : undefined;
+        const interval = selector[0] === "values" ? intervalOnly(result, name) : undefined;
+        const detail = uncertainty ? " · " + formatMeasurement(uncertainty) :
+          interval ? ` · interval [${interval[0]}, ${interval[1]}] · cannot propagate without a standard uncertainty` : "";
+        options.push({ label: `${title} · ${name}${detail}`, value,
+          ...(uncertainty && { uncertainty }),
           reference: { nodeId: parent.nodeId, ...(state.nodeKey && { sourceKey: state.nodeKey }), resultHash: result.provenance.resultHash,
             ...(result.provenance.receiptHash && { receiptHash: result.provenance.receiptHash }), selector } });
       };
