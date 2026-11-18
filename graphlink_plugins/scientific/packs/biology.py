@@ -1,6 +1,15 @@
-"""Descriptive ecology for observed community counts and quadrat surveys."""
+"""Biology and ecology: surveys, nonlinear fits, population and survival analysis.
 
+The original three operations and their output contracts are deliberately kept
+byte-for-byte compatible with saved scientific workbench results. All new work
+uses Python's standard library (including the workbench's shared NLS solver).
+"""
+
+from __future__ import annotations
+
+import json
 import math
+from collections import Counter
 
 from graphlink_plugins.scientific.core import Field, Operation
 
@@ -73,6 +82,495 @@ def community_overlap(data):
     }
 
 
+def _unit(value, label):
+    if not isinstance(value, str) or not 1 <= len(value.strip()) <= 40 or any(ord(c) < 32 for c in value):
+        raise ValueError(f"{label} must be a unit label of 1–40 characters.")
+    return value.strip()
+
+
+def _paired(x, y, minimum, label, *, positive_x=False, positive_y=False):
+    if len(x) != len(y) or len(x) < minimum:
+        raise ValueError(f"{label} needs at least {minimum} paired observations.")
+    if any(v < 0 for v in x) or (positive_x and any(v <= 0 for v in x)):
+        raise ValueError(f"{label} requires {'positive' if positive_x else 'nonnegative'} x values.")
+    if positive_y and any(v <= 0 for v in y):
+        raise ValueError(f"{label} requires strictly positive responses.")
+    if len(set(x)) < minimum - 1:
+        raise ValueError(f"{label} needs at least {minimum - 1} distinct x values.")
+    return list(zip(x, y))
+
+
+def _nls(expression, names, starts, bounds, x, y):
+    """Reuse the scientific pack's Decimal LM + local covariance calculation.
+
+    The binding is intentionally to the established numerical core, rather
+    than importing an optional numerical package or maintaining a second LM.
+    """
+    from graphlink_plugins.scientific.packs.fitting import _original_nonlinear
+
+    specification = json.dumps({
+        "expression": expression, "parameter_names": names,
+        "bounds": {name: list(bound) for name, bound in zip(names, bounds)},
+    }, allow_nan=False)
+    result = _original_nonlinear({
+        "model": specification, "x": x, "y": y, "weights": [1] * len(x),
+        "initial_parameters": starts,
+    })
+    return result, {name: result["values"][f"parameter_{i}"] for i, name in enumerate(names)}, {
+        name: result["values"][f"standard_error_{i}"] for i, name in enumerate(names)
+    }
+
+
+def _multi_nls(expression, names, guesses, bounds, x, y):
+    """Different plateau/rate guesses keep sigmoid fitting from a poor basin."""
+    best = None
+    errors = []
+    for starts in guesses:
+        try:
+            fitted = _nls(expression, names, starts, bounds, x, y)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        if best is None or fitted[0]["values"]["weighted_residual_sum_squares"] < best[0]["values"]["weighted_residual_sum_squares"]:
+            best = fitted
+    if best is None:
+        raise ValueError("Nonlinear fit did not converge to identifiable parameters. "
+                         "Include both plateaus / a wider range of x values. " + (errors[0] if errors else ""))
+    return best
+
+
+def _sigmoid(z):
+    if z >= 0:
+        return 1 / (1 + math.exp(-z))
+    e = math.exp(z)
+    return e / (1 + e)
+
+
+def _fit_diagnostics(x, y, predictions, fit):
+    sse = fit["values"]["weighted_residual_sum_squares"]
+    mean = math.fsum(y) / len(y)
+    total = math.fsum((v - mean) ** 2 for v in y)
+    metrics = {"observations": len(x), "residual_sum_squares": sse,
+               "residual_standard_deviation": fit["values"]["residual_standard_deviation"],
+               "degrees_of_freedom": fit["values"]["degrees_of_freedom"],
+               "observations_unit": "observations", "degrees_of_freedom_unit": "1 (dimensionless)",
+               "converged": fit["values"]["converged"]}
+    if total > 0:
+        metrics["r_squared"] = 1 - sse / total
+    if any(not math.isfinite(v) for v in predictions):
+        raise ValueError("Model predictions exceed the numeric range.")
+    return metrics
+
+
+def _growth(data, model):
+    time_unit = _unit(data["time_unit"], "Time")
+    quantity_unit = _unit(data["abundance_unit"], "Abundance")
+    pairs = sorted(_paired(data["time"], data["abundance"], 5, "Growth fitting", positive_y=True))
+    time, observed = [p[0] for p in pairs], [p[1] for p in pairs]
+    if time[-1] <= time[0] or observed[-1] <= observed[0] or max(observed) == min(observed):
+        raise ValueError("Growth fitting needs an increasing population across distinct sampling times.")
+    relative = [t - time[0] for t in time]
+    span = relative[-1]
+    maximum = max(observed)
+    rate = max(1e-6 / span, min(20 / span, math.log(observed[-1] / observed[0]) / span))
+    if model == "logistic":
+        formula = "K/(1+exp(-r*(x-mid)))"
+        target = maximum * .5
+    else:
+        formula = "K*exp(-exp(-r*(x-mid)))"
+        target = maximum / math.e
+    initial_mid = relative[min(range(len(observed)), key=lambda i: abs(observed[i] - target))]
+    candidates = [
+        [maximum * factor, max(rate * rate_factor, 1e-8 / span), initial_mid]
+        for factor, rate_factor in ((1.05, 1), (1.5, 1), (1.1, 2))
+    ]
+    fit, params, errors = _multi_nls(formula, ["K", "r", "mid"], candidates,
+                                     [(1e-100, None), (1e-100, None), (None, None)], relative, observed)
+    K, r, mid = params["K"], params["r"], params["mid"]
+    if model == "logistic":
+        predict = lambda t: K * _sigmoid(r * (t - mid))
+        specific_rate = lambda n: r * (1 - n / K)
+    else:
+        def predict(t):
+            z = -r * (t - mid)
+            return K * math.exp(-math.exp(z)) if z < 700 else 0.0
+        specific_rate = lambda n: r * math.log(K / n)
+    fitted = [predict(t) for t in relative]
+    initial = predict(0)
+    if not 0 < initial < K or not 0 < r or not all(v > 0 for v in fitted):
+        raise ValueError("Growth curve is not identifiable in the observed range.")
+    doubling = "not reached (2 × initial abundance ≥ carrying capacity)"
+    if 2 * initial < K:
+        if model == "logistic":
+            doubling = math.log(2 * (K - initial) / (K - 2 * initial)) / r
+        else:
+            doubling = math.log(math.log(K / initial) / math.log(K / (2 * initial))) / r
+    values = {
+        "model": model, "carrying_capacity": K, "carrying_capacity_unit": quantity_unit,
+        "growth_rate_per_time_unit": r, "growth_rate_unit": f"1/{time_unit}",
+        "growth_rate_standard_error": errors["r"], "growth_rate_standard_error_unit": f"1/{time_unit}",
+        "carrying_capacity_standard_error": errors["K"], "carrying_capacity_standard_error_unit": quantity_unit,
+        "inflection_time": time[0] + mid, "inflection_time_unit": time_unit,
+        "initial_fitted_abundance": initial, "initial_fitted_abundance_unit": quantity_unit,
+        "initial_specific_growth_rate_per_time_unit": specific_rate(initial),
+        "initial_specific_growth_rate_unit": f"1/{time_unit}",
+        "doubling_time_from_first_sample": doubling, "doubling_time_unit": time_unit,
+        **_fit_diagnostics(time, observed, fitted, fit),
+        "residual_standard_deviation_unit": quantity_unit,
+        "residual_sum_squares_unit": f"({quantity_unit})²",
+        "r_squared_unit": "1 (dimensionless)",
+    }
+    return {
+        "summary": f"{model.title()} nonlinear least-squares fit: K={K:.6g} {quantity_unit}, "
+                   f"r={r:.6g} 1/{time_unit}. Doubling time is the fitted time "
+                   "from first-sample abundance to twice that abundance, when reachable; "
+                   "r is the intrinsic rate (logistic) or decay rate of per-capita growth (Gompertz).",
+        "values": values,
+        "table": {"columns": [f"Time ({time_unit})", f"Observed ({quantity_unit})",
+                              f"Fitted ({quantity_unit})", f"Residual ({quantity_unit})"],
+                  "rows": [[t, v, z, v - z] for t, v, z in zip(time, observed, fitted)]},
+        "plot": {"title": f"{model.title()} fitted growth curve", "xLabel": f"Time ({time_unit})",
+                 "yLabel": f"Fitted abundance ({quantity_unit})", "x": time, "y": fitted},
+    }
+
+
+def logistic_growth_fit(data):
+    return _growth(data, "logistic")
+
+
+def gompertz_growth_fit(data):
+    return _growth(data, "gompertz")
+
+
+def _lineweaver_burk(x, y):
+    valid = [(1 / s, 1 / v) for s, v in zip(x, y) if s > 0 and v > 0]
+    if len(valid) < 3 or len({p[0] for p in valid}) < 3:
+        return "unavailable", "unavailable"
+    mean_x = math.fsum(t[0] for t in valid) / len(valid)
+    mean_y = math.fsum(t[1] for t in valid) / len(valid)
+    var = math.fsum((a - mean_x) ** 2 for a, b in valid)
+    slope = math.fsum((a - mean_x) * (b - mean_y) for a, b in valid) / var
+    intercept = mean_y - slope * mean_x
+    if slope <= 0 or intercept <= 0 or not all(math.isfinite(v) for v in (slope, intercept)):
+        return "unavailable", "unavailable"
+    return 1 / intercept, slope / intercept
+
+
+def michaelis_menten_fit(data):
+    su = _unit(data["substrate_unit"], "Substrate concentration")
+    vu = _unit(data["rate_unit"], "Initial rate")
+    pairs = _paired(data["substrate"], data["initial_rate"], 4, "Enzyme kinetics")
+    x, y = [p[0] for p in pairs], [p[1] for p in pairs]
+    if max(y) <= 0:
+        raise ValueError("At least one measured initial rate must be positive.")
+    positives = sorted(v for v in x if v > 0)
+    if not positives:
+        raise ValueError("Supply positive substrate concentrations.")
+    maximum = max(y)
+    midpoint = positives[len(positives) // 2]
+    fit, p, se = _multi_nls("Vmax*x/(Km+x)", ["Vmax", "Km"],
+                             [[maximum * f, midpoint * g] for f, g in ((1.2, 1), (1.05, .25), (2, 2))],
+                             [(1e-100, None), (1e-100, None)], x, y)
+    vmax, km = p["Vmax"], p["Km"]
+    preds = [vmax * v / (km + v) for v in x]
+    lb_vmax, lb_km = _lineweaver_burk(x, y)
+    return {
+        "summary": f"Unweighted nonlinear least-squares Michaelis–Menten fit: Vmax={vmax:.6g} {vu}, "
+                   f"Km={km:.6g} {su}; standard errors use local (JᵀJ)⁻¹ × SSE/(n−2). "
+                   "Lineweaver–Burk is a reciprocal-plot comparison only, not the fitted estimate.",
+        "values": {"vmax": vmax, "vmax_standard_error": se["Vmax"], "vmax_unit": vu,
+                   "km": km, "km_standard_error": se["Km"], "km_unit": su,
+                   "lineweaver_burk_vmax_comparison": lb_vmax,
+                   "lineweaver_burk_vmax_unit": vu,
+                   "lineweaver_burk_km_comparison": lb_km,
+                   "lineweaver_burk_km_unit": su,
+                   **_fit_diagnostics(x, y, preds, fit),
+                   "residual_standard_deviation_unit": vu, "residual_sum_squares_unit": f"({vu})²",
+                   "r_squared_unit": "1 (dimensionless)"},
+        "table": {"columns": [f"[S] ({su})", f"Initial rate ({vu})", f"NLS fitted rate ({vu})",
+                              f"Residual ({vu})"],
+                  "rows": [[s, v, pred, v - pred] for s, v, pred in zip(x, y, preds)]},
+        "plot": {"title": "Michaelis–Menten nonlinear fit", "xLabel": f"[S] ({su})",
+                 "yLabel": f"Initial rate ({vu})", "x": sorted(x),
+                 "y": [vmax * s / (km + s) for s in sorted(x)]},
+    }
+
+
+def dose_response_4pl_fit(data):
+    xu = _unit(data["concentration_unit"], "Concentration")
+    yu = _unit(data["response_unit"], "Response")
+    mode = data["potency_metric"].strip().upper()
+    if mode not in ("EC50", "IC50"):
+        raise ValueError("Potency metric must be EC50 or IC50.")
+    pairs = sorted(_paired(data["concentration"], data["response"], 6, "Dose-response fitting"))
+    concentration, response = [p[0] for p in pairs], [p[1] for p in pairs]
+    positive = sorted(set(c for c in concentration if c > 0))
+    if len(positive) < 4 or max(response) == min(response):
+        raise ValueError("4PL needs four distinct positive doses and a varying response.")
+    lower_log, upper_log = math.log(positive[0]), math.log(positive[-1])
+    # At a true zero dose the limiting response is exactly the low-dose
+    # asymptote. A log-dose 500 natural-log units below the smallest measured
+    # positive dose evaluates that limit to below floating-point precision
+    # for Hill >= 0.1, without removing zero-dose controls from fitting.
+    log_doses = [math.log(c) if c > 0 else lower_log - 500 for c in concentration]
+    low_start = math.fsum(response[:min(3, len(response))]) / min(3, len(response))
+    high_start = math.fsum(response[-min(3, len(response)):]) / min(3, len(response))
+    initial_log = math.log(positive[len(positive) // 2])
+    guesses = [[low_start, high_start, initial_log, h] for h in (1.0, 2.0, .5)]
+    fit, p, se = _multi_nls("low+(high-low)/(1+exp(-hill*(x-log_mid)))",
+                             ["low", "high", "log_mid", "hill"], guesses,
+                             [(None, None), (None, None), (lower_log - 10, upper_log + 10), (.1, 20)],
+                             log_doses, response)
+    try:
+        c50 = math.exp(p["log_mid"])
+        def prediction(c):
+            return p["low"] if c == 0 else p["low"] + (p["high"] - p["low"]) * _sigmoid(
+                p["hill"] * (math.log(c) - p["log_mid"]))
+        calculated = [prediction(c) for c in concentration]
+        from graphlink_plugins.scientific.packs.fitting import _student_t_ppf
+        critical = _student_t_ppf(.975, fit["values"]["degrees_of_freedom"])
+        c50_lo = math.exp(p["log_mid"] - critical * se["log_mid"])
+        c50_hi = math.exp(p["log_mid"] + critical * se["log_mid"])
+    except OverflowError:
+        raise ValueError("Dose-response parameters or confidence interval overflowed.") from None
+    return {
+        "summary": f"Four-parameter logistic nonlinear least-squares fit ({mode}): {c50:.6g} {xu}, "
+                   f"Hill slope {p['hill']:.5g} (dimensionless). Low/high are low-dose/high-dose "
+                   "response plateaus; positive Hill allows either stimulation or inhibition.",
+        "values": {"potency_metric": mode, "potency_concentration": c50, "potency_unit": xu,
+                   "potency_standard_error": c50 * se["log_mid"],
+                   "potency_ci95_lower": c50_lo, "potency_ci95_upper": c50_hi,
+                   "hill_slope": p["hill"], "hill_slope_standard_error": se["hill"],
+                   "hill_slope_unit": "1 (dimensionless)",
+                   "low_dose_response": p["low"], "low_dose_response_standard_error": se["low"],
+                   "high_dose_response": p["high"], "high_dose_response_standard_error": se["high"],
+                   "plateau_unit": yu, "log_mid": p["log_mid"], "log_mid_unit": f"ln(concentration / 1 {xu})",
+                   **_fit_diagnostics(concentration, response, calculated, fit),
+                   "residual_standard_deviation_unit": yu, "residual_sum_squares_unit": f"({yu})²",
+                   "r_squared_unit": "1 (dimensionless)"},
+        "table": {"columns": [f"Concentration ({xu})", f"Response ({yu})",
+                              f"4PL fitted ({yu})", f"Residual ({yu})"],
+                  "rows": [[c, y, z, y - z] for c, y, z in zip(concentration, response, calculated)]},
+        "plot": {"title": f"4PL fitted {mode} curve", "xLabel": f"Concentration ({xu})",
+                 "yLabel": f"Response ({yu})", "x": concentration, "y": calculated},
+    }
+
+
+def lotka_volterra(data):
+    tu = _unit(data["time_unit"], "Time")
+    prey, predator = data["initial_prey"], data["initial_predators"]
+    a, b, d, g = data["prey_growth_rate"], data["predation_rate"], data["conversion_rate"], data["predator_death_rate"]
+    dt, steps = data["step_size"], data["steps"]
+    if prey <= 0 or predator <= 0 or min(a, b, d, g, dt) <= 0 or not 1 <= steps <= 1000:
+        raise ValueError("Initial populations and coefficients must be positive; step size > 0 and steps 1–1000.")
+
+    def deriv(x, y):
+        return (a * x - b * x * y, d * x * y - g * y)
+
+    def advance(x, y, h):
+        p1, q1 = deriv(x, y)
+        p2, q2 = deriv(x + h * p1 / 2, y + h * q1 / 2)
+        p3, q3 = deriv(x + h * p2 / 2, y + h * q2 / 2)
+        p4, q4 = deriv(x + h * p3, y + h * q3)
+        new = (x + h * (p1 + 2 * p2 + 2 * p3 + p4) / 6,
+               y + h * (q1 + 2 * q2 + 2 * q3 + q4) / 6)
+        if not all(math.isfinite(v) and v >= 0 for v in new):
+            raise ValueError("Numerically unstable predator–prey trajectory. Reduce the time step or rates.")
+        return new
+
+    rows = [[0.0, prey, predator]]
+    for i in range(1, steps + 1):
+        for _ in range(8):  # Eight RK4 substeps per reported interval.
+            prey, predator = advance(prey, predator, dt / 8)
+        rows.append([i * dt, prey, predator])
+    return {
+        "summary": f"Lotka–Volterra predator–prey phase trajectory using RK4 (8 substeps per {dt:g} {tu}). "
+                   "No environmental stochasticity, carrying capacity or demographic noise.",
+        "values": {"initial_prey": data["initial_prey"], "initial_predators": data["initial_predators"],
+                   "final_prey": prey, "final_predators": predator,
+                   "population_unit": "individuals", "duration": steps * dt, "time_unit": tu,
+                   "prey_growth_rate": a, "prey_growth_rate_unit": f"1/{tu}",
+                   "predation_rate": b, "predation_rate_unit": f"1/(predator·{tu})",
+                   "conversion_rate": d, "conversion_rate_unit": f"1/(prey·{tu})",
+                   "predator_death_rate": g, "predator_death_rate_unit": f"1/{tu}"},
+        "table": {"columns": [f"Time ({tu})", "Prey (individuals)", "Predators (individuals)"], "rows": rows},
+        "plot": {"title": "Lotka–Volterra phase portrait", "xLabel": "Prey (individuals)",
+                 "yLabel": "Predators (individuals)", "x": [r[1] for r in rows], "y": [r[2] for r in rows]},
+    }
+
+
+def hardy_weinberg(data):
+    obs = [data["homozygote_aa"], data["heterozygote_ab"], data["homozygote_bb"]]
+    if any(v < 0 for v in obs) or (n := sum(obs)) < 1:
+        raise ValueError("HWE needs nonnegative genotype counts and at least one diploid individual.")
+    p = (2 * obs[0] + obs[1]) / (2 * n)
+    q = 1 - p
+    exp = [n * p * p, n * 2 * p * q, n * q * q]
+    if p in (0, 1):
+        chi, pv, test = "undefined (monomorphic locus)", "undefined (monomorphic locus)", "not testable"
+        contributions = [0.0, 0.0, 0.0]
+    else:
+        contributions = [(a - e) ** 2 / e for a, e in zip(obs, exp)]
+        chi = math.fsum(contributions)
+        pv = math.erfc(math.sqrt(chi / 2))  # df = 3 - 1 sum constraint - 1 fitted p
+        test = "Pearson chi-square; df = 1 (p estimated)"
+    warning = "Expected genotype count < 5; asymptotic chi-square may be unreliable." if min(exp) < 5 else "none"
+    return {
+        "summary": f"Hardy–Weinberg equilibrium at a biallelic diploid locus: p={p:.6g}, q={q:.6g}; "
+                   f"{test}. {warning}",
+        "values": {"individuals": n, "individuals_unit": "individuals",
+                   "allele_a_frequency": p, "allele_b_frequency": q,
+                   "allele_frequency_unit": "1 (dimensionless)",
+                   "chi_square": chi, "chi_square_unit": "1 (dimensionless)",
+                   "degrees_of_freedom": 1 if p not in (0, 1) else 0,
+                   "p_value": pv, "p_value_unit": "probability (dimensionless)",
+                   "expected_count_below_5": sum(e < 5 for e in exp),
+                   "expected_count_below_5_unit": "genotypes",
+                   "degrees_of_freedom_unit": "1 (dimensionless)", "warning": warning},
+        "table": {"columns": ["Genotype (categorical)", "Observed (individuals)", "Expected (individuals)",
+                              "χ² contribution (dimensionless)"],
+                  "rows": [[label, actual, expected, part] for label, actual, expected, part in
+                           zip(("AA", "AB", "BB"), obs, exp, contributions)]},
+        "plot": {"title": "HWE expected genotype counts", "xLabel": "Genotype code (0=AA,1=AB,2=BB)",
+                 "yLabel": "Expected (individuals)", "x": [0, 1, 2], "y": exp},
+    }
+
+
+def kaplan_meier_logrank(data):
+    tu = _unit(data["time_unit"], "Survival time")
+    groups = []
+    for label, time_key, event_key in (("A", "time_a", "event_a"), ("B", "time_b", "event_b")):
+        ts, es = data[time_key], data[event_key]
+        if not ts or len(ts) != len(es) or any(t < 0 for t in ts) or any(e not in (0, 1) for e in es):
+            raise ValueError(f"Group {label} needs nonnegative times and matching 0=censored, 1=event indicators.")
+        groups.append((Counter((t, int(e)) for t, e in zip(ts, es)), len(ts)))
+    times = sorted({t for records, _ in groups for t, _ in records})
+    if len(times) > 400:
+        raise ValueError("For a readable two-curve workbench result, use at most 400 distinct follow-up times.")
+    risk = [groups[0][1], groups[1][1]]
+    survival = [1.0, 1.0]
+    greenwood = [0.0, 0.0]
+    median = ["not reached", "not reached"]
+    obs_a = expected_a = variance = 0.0
+    rows, xs, ys = [], [0.0], [1.0]
+    for t in times:
+        deaths = [groups[i][0][(t, 1)] for i in (0, 1)]
+        censored = [groups[i][0][(t, 0)] for i in (0, 1)]
+        total, events = sum(risk), sum(deaths)
+        if events:
+            obs_a += deaths[0]
+            expected_a += events * risk[0] / total
+            if total > 1:
+                variance += risk[0] * risk[1] * events * (total - events) / (total**2 * (total - 1))
+        for i in (0, 1):
+            if deaths[i]:
+                old_risk = risk[i]
+                survival[i] *= 1 - deaths[i] / old_risk
+                if deaths[i] < old_risk:
+                    greenwood[i] += deaths[i] / (old_risk * (old_risk - deaths[i]))
+                if median[i] == "not reached" and survival[i] <= .5:
+                    median[i] = t
+        rows.append([t, risk[0], deaths[0], censored[0], survival[0],
+                     risk[1], deaths[1], censored[1], survival[1]])
+        xs.append(t)
+        ys.append(survival[0])
+        risk = [risk[i] - deaths[i] - censored[i] for i in (0, 1)]
+    if variance > 0:
+        chi = (obs_a - expected_a) ** 2 / variance
+        pv = math.erfc(math.sqrt(chi / 2))
+    else:
+        chi, pv = "undefined (zero log-rank variance)", "undefined (zero log-rank variance)"
+    return {
+        "summary": "Two Kaplan–Meier product-limit survival curves (events before censoring at tied times); "
+                   "two-sided Mantel–Cox log-rank chi-square, 1 df with hypergeometric tie variance. "
+                   "Both curves appear in the table; the plot shows A.",
+        "values": {"group_a_size": groups[0][1], "group_b_size": groups[1][1],
+                   "group_size_unit": "subjects", "observed_events_a": obs_a,
+                   "expected_events_a": expected_a, "event_count_unit": "events",
+                   "logrank_variance": variance, "logrank_variance_unit": "events²",
+                   "logrank_chi_square": chi, "logrank_chi_square_unit": "1 (dimensionless)",
+                   "logrank_degrees_of_freedom": 1 if variance > 0 else 0,
+                   "logrank_degrees_of_freedom_unit": "1 (dimensionless)",
+                   "logrank_p_value": pv, "logrank_p_value_unit": "probability (dimensionless)",
+                   "median_survival_a": median[0], "median_survival_b": median[1],
+                   "median_survival_unit": tu, "final_survival_a": survival[0],
+                   "final_survival_b": survival[1], "survival_probability_unit": "probability (dimensionless)",
+                   "greenwood_se_a": (survival[0] * math.sqrt(greenwood[0]) if survival[0] else 0.0),
+                   "greenwood_se_b": (survival[1] * math.sqrt(greenwood[1]) if survival[1] else 0.0),
+                   "greenwood_se_unit": "probability (dimensionless)"},
+        "table": {"columns": [f"Time ({tu})", "A at risk (subjects)", "A events (events)",
+                              "A censored (subjects)", "A survival (probability)",
+                              "B at risk (subjects)", "B events (events)",
+                              "B censored (subjects)", "B survival (probability)"], "rows": rows},
+        "plot": {"title": "Kaplan–Meier curve A (compare B in table)", "xLabel": f"Time ({tu})",
+                 "yLabel": "Survival (probability)", "x": xs, "y": ys},
+    }
+
+
+def _rarefied(counts, n):
+    """Hurlbert exact E[S_n], using stable hypergeometric survival products."""
+    N = sum(counts)
+    if n == N:
+        return sum(c > 0 for c in counts)
+    total = 0.0
+    for count in counts:
+        if count == 0:
+            continue
+        if count > N - n:
+            total += 1
+            continue
+        k = min(count, n)
+        # Either multiply the draw-sized or species-sized product, whichever
+        # is shorter. For very large surveys use log-binomial gamma ratios.
+        if k <= 2000:
+            if n <= count:
+                log_absent = math.fsum(math.log1p(-count / (N - j)) for j in range(n))
+            else:
+                log_absent = math.fsum(math.log1p(-n / (N - j)) for j in range(count))
+        else:
+            log_absent = (math.lgamma(N - count + 1) - math.lgamma(N - count - n + 1)
+                          - math.lgamma(N + 1) + math.lgamma(N - n + 1))
+        total -= math.expm1(min(0.0, log_absent))
+    return total
+
+
+def richness_rarefaction(data):
+    counts = _counts(data["counts"])
+    N = _total_count(counts)
+    m = data["subsample_individuals"]
+    if N == 0 or not 1 <= m <= N:
+        raise ValueError("Rarefaction requires individuals and a subsample size in [1, total individuals].")
+    observed = sum(c > 0 for c in counts)
+    singletons = sum(c == 1 for c in counts)
+    doubletons = sum(c == 2 for c in counts)
+    if doubletons:
+        chao1 = observed + singletons**2 / (2 * doubletons)
+        method = "classic Chao1, f1²/(2 f2)"
+    else:
+        chao1 = observed + singletons * (singletons - 1) / 2
+        method = "Chao1 f2=0 bias-corrected fallback"
+    grid = sorted({1, m, N, *[max(1, round(1 + j * (N - 1) / 24)) for j in range(25)]})
+    rows = [[n, _rarefied(counts, n)] for n in grid]
+    requested = next(y for x, y in rows if x == m)
+    return {
+        "summary": f"{observed} observed taxa from {N} individuals; Chao1 = {chao1:.6g} taxa "
+                   f"({method}); without-replacement rarefaction at {m} individuals "
+                   f"expects {requested:.6g} taxa.",
+        "values": {"observed_richness": observed, "chao1_estimated_richness": chao1,
+                   "richness_unit": "taxa", "singleton_taxa": singletons, "doubleton_taxa": doubletons,
+                   "singleton_doubleton_unit": "taxa", "individuals": N, "individuals_unit": "individuals",
+                   "subsample_individuals": m, "subsample_unit": "individuals",
+                   "rarefied_expected_richness": requested, "rarefied_expected_richness_unit": "taxa",
+                   "chao1_method": method},
+        "table": {"columns": ["Subsample (individuals)", "Expected richness (taxa)"], "rows": rows},
+        "plot": {"title": "Individual-based rarefaction (without replacement)",
+                 "xLabel": "Subsample size (individuals)", "yLabel": "Expected richness (taxa)",
+                 "x": [row[0] for row in rows], "y": [row[1] for row in rows]},
+    }
+
+
+# The original Operation entries, ids, fields, examples and functions are
+# unchanged, preserving existing saved results and graph source bindings.
 OPERATIONS = (
     Operation(
         "community_diversity",
@@ -106,5 +604,94 @@ OPERATIONS = (
         ),
         {"site_a_counts": [3, 2, 0, 0], "site_b_counts": [1, 0, 4, 0]},
         community_overlap,
+    ),
+    Operation(
+        "logistic_growth_fit", "Fit logistic population growth",
+        "Nonlinear 3-parameter logistic growth, K and r, observed/fitted residuals and first-sample doubling time.",
+        (Field("time", "Sampling times", "vector", unit="selected time unit"),
+         Field("abundance", "Observed abundances", "vector", unit="selected abundance unit"),
+         Field("time_unit", "Time unit (e.g. days)", "text", unit="unit label"),
+         Field("abundance_unit", "Abundance unit (e.g. cells/mL)", "text", unit="unit label")),
+        {"time": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+         "abundance": [10.1, 15.9, 25.0, 37.7, 53.4, 67.7, 79.3, 87.6, 92.8],
+         "time_unit": "days", "abundance_unit": "cells/mL"}, logistic_growth_fit,
+    ),
+    Operation(
+        "gompertz_growth_fit", "Fit Gompertz population growth",
+        "Nonlinear 3-parameter Gompertz growth, K and rate, and first-sample doubling time.",
+        (Field("time", "Sampling times", "vector", unit="selected time unit"),
+         Field("abundance", "Observed abundances", "vector", unit="selected abundance unit"),
+         Field("time_unit", "Time unit (e.g. days)", "text", unit="unit label"),
+         Field("abundance_unit", "Abundance unit (e.g. cells/mL)", "text", unit="unit label")),
+        {"time": [0, 1, 2, 3, 4, 5, 6, 7, 8],
+         "abundance": [2.4, 8.2, 18.3, 33.1, 50.1, 65.7, 77.5, 86.1, 91.5],
+         "time_unit": "days", "abundance_unit": "cells/mL"}, gompertz_growth_fit,
+    ),
+    Operation(
+        "michaelis_menten_fit", "Fit Michaelis–Menten enzyme kinetics",
+        "Nonlinear least squares Vmax and Km with local standard errors; reciprocal Lineweaver–Burk comparison only.",
+        (Field("substrate", "Substrate concentrations [S]", "vector", unit="selected concentration unit"),
+         Field("initial_rate", "Initial reaction rates", "vector", unit="selected rate unit"),
+         Field("substrate_unit", "Concentration unit (e.g. mM)", "text", unit="unit label"),
+         Field("rate_unit", "Rate unit (e.g. mM/s)", "text", unit="unit label")),
+        {"substrate": [0, 1, 2, 5, 8, 12, 30, 50],
+         "initial_rate": [0, 11.1, 25.4, 44.8, 54.5, 58.2, 72, 60.1],
+         "substrate_unit": "mM", "rate_unit": "mM/s"}, michaelis_menten_fit,
+    ),
+    Operation(
+        "dose_response_4pl_fit", "Fit dose–response (4PL)",
+        "Fit low/high plateaus, EC50 or IC50, and Hill slope by nonlinear least squares; zero-dose controls supported.",
+        (Field("concentration", "Dose concentrations", "vector", unit="selected concentration unit"),
+         Field("response", "Measured responses", "vector", unit="selected response unit"),
+         Field("concentration_unit", "Dose unit (e.g. nM)", "text", unit="unit label"),
+         Field("response_unit", "Response unit (e.g. % activity)", "text", unit="unit label"),
+         Field("potency_metric", "Potency label: EC50 or IC50", "text", unit="category (dimensionless)")),
+        {"concentration": [0, 0.1, 0.3, 1, 3, 10, 30, 100, 300],
+         "response": [1, 2, 5, 18, 42, 75, 92, 97, 99],
+         "concentration_unit": "nM", "response_unit": "% activity", "potency_metric": "EC50"},
+        dose_response_4pl_fit,
+    ),
+    Operation(
+        "lotka_volterra", "Simulate Lotka–Volterra predator–prey",
+        "Fourth-order Runge–Kutta deterministic predator–prey system with labeled rates and phase portrait.",
+        (Field("initial_prey", "Prey initially", "number", unit="individuals"),
+         Field("initial_predators", "Predators initially", "number", unit="individuals"),
+         Field("prey_growth_rate", "Prey intrinsic growth α", "number", unit="1 / selected time unit"),
+         Field("predation_rate", "Predation β", "number", unit="1 / (predator × time unit)"),
+         Field("conversion_rate", "Predator conversion δ", "number", unit="1 / (prey × time unit)"),
+         Field("predator_death_rate", "Predator mortality γ", "number", unit="1 / selected time unit"),
+         Field("step_size", "Output time step", "number", unit="selected time unit"),
+         Field("steps", "Number of output steps", "integer", unit="steps (dimensionless)"),
+         Field("time_unit", "Time unit (e.g. days)", "text", unit="unit label")),
+        {"initial_prey": 40, "initial_predators": 9, "prey_growth_rate": .5,
+         "predation_rate": .025, "conversion_rate": .01, "predator_death_rate": .4,
+         "step_size": .1, "steps": 100, "time_unit": "days"}, lotka_volterra,
+    ),
+    Operation(
+        "hardy_weinberg", "Hardy–Weinberg equilibrium and chi-square",
+        "Allele frequencies from observed AA/AB/BB genotypes; Pearson χ² 1 df after estimating p.",
+        (Field("homozygote_aa", "AA homozygotes", "integer", unit="individuals"),
+         Field("heterozygote_ab", "AB heterozygotes", "integer", unit="individuals"),
+         Field("homozygote_bb", "BB homozygotes", "integer", unit="individuals")),
+        {"homozygote_aa": 30, "heterozygote_ab": 60, "homozygote_bb": 10}, hardy_weinberg,
+    ),
+    Operation(
+        "kaplan_meier_logrank", "Kaplan–Meier and log-rank (two groups)",
+        "Two survival curves with risk sets, censoring, Greenwood uncertainty, median and tie-aware log-rank test.",
+        (Field("time_a", "Group A follow-up times", "vector", unit="selected time unit"),
+         Field("event_a", "A event status (1 event, 0 censored)", "vector", unit="0/1 (dimensionless)"),
+         Field("time_b", "Group B follow-up times", "vector", unit="selected time unit"),
+         Field("event_b", "B event status (1 event, 0 censored)", "vector", unit="0/1 (dimensionless)"),
+         Field("time_unit", "Follow-up unit (e.g. days)", "text", unit="unit label")),
+        {"time_a": [2, 4, 5, 7, 9], "event_a": [1, 1, 0, 1, 1],
+         "time_b": [6, 8, 11, 13, 15], "event_b": [1, 0, 1, 1, 0], "time_unit": "days"},
+        kaplan_meier_logrank,
+    ),
+    Operation(
+        "richness_rarefaction", "Species richness: Chao1 and rarefaction",
+        "Abundance Chao1 richness and exact Hurlbert individual-based rarefaction without replacement.",
+        (Field("counts", "Abundances in taxon order", "vector", unit="individuals per taxon"),
+         Field("subsample_individuals", "Rarefaction subsample size", "integer", unit="individuals")),
+        {"counts": [5, 3, 2], "subsample_individuals": 5}, richness_rarefaction,
     ),
 )
