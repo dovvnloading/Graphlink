@@ -302,6 +302,7 @@ def _scientific_errors(raw, field, count):
 
 def _check_scientific_axis(values, errors, scale, field):
     """Check all coordinates AND error endpoints (including overflow)."""
+    smallest, largest = float("inf"), float("-inf")
     for index, value in enumerate(values):
         minus, plus = errors[index] if errors is not None else (0.0, 0.0)
         lower, upper = value - minus, value + plus
@@ -312,6 +313,9 @@ def _check_scientific_axis(values, errors, scale, field):
                 f"{field} at index {index} and its lower error endpoint must be "
                 "greater than zero on a log10 axis"
             )
+        smallest, largest = min(smallest, lower), max(largest, upper)
+    if not math.isfinite(largest - smallest):
+        raise ChartDataError(f"{field} range including error endpoints must be finite")
 
 
 def _scientific_chart(data, chart_type, result):
@@ -347,6 +351,8 @@ def _scientific_chart(data, chart_type, result):
     if labels is not None:
         if not isinstance(labels, list):
             raise ChartDataError("Labels must be a list")
+        if len(labels) > MAX_SERIES_POINTS:
+            raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
         result["labels"] = [_clean_text(label, f"Label at index {i}") for i, label in enumerate(labels)]
 
     raw_series = data.get("series")
@@ -371,6 +377,8 @@ def _scientific_chart(data, chart_type, result):
                 raise ChartDataError(f"series {name} values must be a list")
             if not values:
                 raise ChartDataError(f"series {name} requires at least one data point")
+            if len(values) > MAX_SERIES_POINTS:
+                raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
             row = {
                 "name": name,
                 "values": [_finite_number(value, f"series {name} value at index {i}") for i, value in enumerate(values)],
@@ -384,6 +392,8 @@ def _scientific_chart(data, chart_type, result):
         raw_values = data.get("values")
         if not isinstance(raw_values, list) or not raw_values:
             raise ChartDataError(f"{chart_type.title()} charts require at least one data point")
+        if len(raw_values) > MAX_SERIES_POINTS:
+            raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
         series = [{
             "values": [_finite_number(value, f"Value at index {i}") for i, value in enumerate(raw_values)],
         }]
