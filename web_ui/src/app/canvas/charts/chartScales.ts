@@ -66,12 +66,19 @@ export function scientificDomain(min: number, max: number, scale: "linear" | "lo
     const low = Math.log10(min);
     const high = Math.log10(max);
     const padding = Math.max((high - low) * 0.12, 0.18);
-    // Clamp to finite representable powers; neither endpoint can become
-    // Infinity/zero even when a valid value is near a float limit.
-    return [10 ** Math.max(-323, low - padding), 10 ** Math.min(308, high + padding)];
+    // A valid endpoint can be as small as Number.MIN_VALUE or as large
+    // as Number.MAX_VALUE. Clamping to powers -323/308 clips real points.
+    const lower = low - padding <= Math.log10(Number.MIN_VALUE)
+      ? Number.MIN_VALUE : 10 ** (low - padding);
+    const upper = high + padding >= Math.log10(Number.MAX_VALUE)
+      ? Number.MAX_VALUE : 10 ** (high + padding);
+    return [Math.min(min, lower), Math.max(max, upper)];
   }
   const padding = Math.max((max - min) * 0.12, Math.max(Math.abs(min), Math.abs(max), 1) * 0.02);
-  return [Math.max(-Number.MAX_VALUE, min - padding), Math.min(Number.MAX_VALUE, max + padding)];
+  const lower = Math.max(-Number.MAX_VALUE, min - padding);
+  const upper = Math.min(Number.MAX_VALUE, max + padding);
+  // Padding must not overflow the finite original coordinate span.
+  return Number.isFinite(upper - lower) ? [lower, upper] : [min, max];
 }
 
 /** "Nice" round-number ticks spanning at least [min, max] - the classic
