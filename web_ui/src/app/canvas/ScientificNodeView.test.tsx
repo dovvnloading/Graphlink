@@ -1,5 +1,5 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import type { WsTransport } from "../../lib/ws/transport";
 import { SceneStore } from "./sceneStore";
@@ -402,7 +402,8 @@ describe("unit-aware scientific node inputs and receipts", () => {
       },
     } }), []);
     fireEvent.click(screen.getByText("Units used"));
-    expect(screen.getByText(/"mm"/)).toBeVisible();
+    const unitsUsed = screen.getByText("Units used").closest("details");
+    expect(within(unitsUsed!).getByText(/"mm"/)).toBeVisible();
     const input = screen.getByRole("textbox", { name: "Samples (m)" });
     fireEvent.change(input, { target: { value: '["25 mm", "2 cm", 3]' } });
     fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
