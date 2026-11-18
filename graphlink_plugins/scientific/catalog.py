@@ -17,6 +17,7 @@ PACKS = {
     "environment": ("Environmental Science", "Calculate flow-weighted concentrations, runoff and growing degree days."),
     "materials": ("Materials Science", "Analyze measured density, tensile response and apparent porosity."),
     "signals": ("Signal Processing", "Smooth, transform and resample measured signals."),
+    "fitting": ("Fitting and Inference", "Weighted and nonlinear fits, Welch tests and chi-square goodness-of-fit."),
 }
 
 
