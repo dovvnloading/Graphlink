@@ -2,7 +2,7 @@ name: Nightly mutation testing
 
 # ADR-022 stage 22.6: mutation testing for the property-tested modules from
 # stages 22.2/22.3 (mutmut for the 4 Python files in pyproject.toml's own
-# [tool.mutmut], Stryker for the 5 TS files in web_ui/stryker.conf.mjs).
+# [tool.mutmut], Stryker for the 4 TS files in web_ui/stryker.conf.mjs).
 # Mirrors nightly-perf.yml's own pattern (single-purpose scheduled
 # workflow, read-only permissions, workflow_dispatch for on-demand runs)
 # but differs on two axes, each justified independently:
@@ -18,7 +18,7 @@ name: Nightly mutation testing
 #   per-commit than wall-clock perf does - daily cadence would spend
 #   Actions minutes on a signal that doesn't meaningfully change day to
 #   day. workflow_dispatch covers "run it now" (e.g. right after touching
-#   one of the 9 scoped files).
+#   one of the 8 scoped files).
 #
 # First landing reports score only, no hard floor - same "measure a real
 # baseline before setting a threshold" precedent as ADR-019 stage 19.1.
@@ -44,7 +44,7 @@ jobs:
     name: Mutation score (mutmut + Stryker, scoped modules)
     runs-on: ubuntu-latest
     # Generous, not tuned: a local --dryRunOnly run (just the initial test
-    # pass, before any of the 405 real mutants across the 5 TS files) alone
+    # pass, before any of the hundreds of real mutants across the 4 TS files) alone
     # took ~2m40s, dominated by process-spawn overhead, not test time. This
     # job is nightly and non-blocking, so a wide timeout costs nothing but
     # runner-minutes if unused.
@@ -57,15 +57,50 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install Python dependencies (prod lockfile + dev extra)
-        run: pip install -r requirements.txt && pip install -e .[dev]
+      - name: Install Python dependencies (prod lockfile + dev/mutation extras)
+        # pytest 9.2 triggered AnyIO's PytestRemovedIn10Warning during mutmut
+        # stats collection on Nov 2; 9.1.1 is the version in the last green run
+        # and the version pinned by ci.yml.
+        run: pip install -r requirements.txt && pip install -e '.[dev,mutation]' 'pytest==9.1.1'
+
+      - name: Verify mutmut CLI (fail early if missing)
+        run: |
+          if ! python -m mutmut --version; then
+            echo "::error::mutmut is missing or unusable; install the mutation extra (pip install -e '.[dev,mutation]')."
+            exit 1
+          fi
 
       - name: Run mutmut (Python, scoped to 4 files - see pyproject.toml's own [tool.mutmut])
-        run: python -m mutmut run
+        run: |
+          # No report from a previous attempt may count as a new score.
+          rm -f mutants/mutmut-cicd-stats.json
+          python -m mutmut run
 
-      - name: mutmut results (job-log score summary)
-        if: always()
-        run: python -m mutmut results
+      - name: mutmut results (verified nonempty mutation score)
+        run: |
+          python -m mutmut results
+          python -m mutmut export-cicd-stats
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path("mutants/mutmut-cicd-stats.json")
+          if not path.is_file():
+              raise SystemExit("::error::mutmut produced no CI/CD stats; refusing an empty mutation run")
+          stats = json.loads(path.read_text())
+          killed = int(stats.get("killed", 0))
+          timeout = int(stats.get("timeout", 0))
+          survived = int(stats.get("survived", 0))
+          tested = int(stats.get("total", 0)) - int(stats.get("skipped", 0))
+          if tested <= 0 or killed + timeout + survived <= 0:
+              raise SystemExit("::error::mutmut evaluated no mutants; refusing to report success")
+          score = 100 * (killed + timeout) / tested
+          result = f"mutmut: {score:.2f}% ({killed} killed, {timeout} timed out, {survived} survived; {tested} non-skipped mutants)"
+          print(result)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write(f"### Python mutation score\n{result}\n\n")
+          PY
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -77,6 +112,43 @@ jobs:
         working-directory: web_ui
         run: npm ci
 
-      - name: Run Stryker (TS, scoped to 5 files - see web_ui/stryker.conf.mjs)
+      - name: Verify Stryker CLI (fail early if missing)
         working-directory: web_ui
-        run: npx stryker run
+        run: |
+          if [ ! -x node_modules/.bin/stryker ]; then
+            echo "::error::Stryker is missing; npm ci must install @stryker-mutator/core from web_ui/package-lock.json."
+            exit 1
+          fi
+          ./node_modules/.bin/stryker --version
+
+      - name: Run Stryker (TS, scoped to 4 files - see web_ui/stryker.conf.mjs)
+        working-directory: web_ui
+        run: |
+          # Require a fresh report, and never let npx fetch a substitute.
+          rm -f reports/mutation/mutation.json
+          ./node_modules/.bin/stryker run --reporters clear-text,progress,html,json
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+
+          const reportPath = 'reports/mutation/mutation.json';
+          if (!fs.existsSync(reportPath)) {
+            console.error('::error::Stryker produced no JSON report; refusing an empty mutation run');
+            process.exit(1);
+          }
+          const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+          const mutants = Object.values(report.files ?? {}).flatMap(file => file.mutants ?? []);
+          const count = status => mutants.filter(mutant => mutant.status === status).length;
+          const killed = count('Killed');
+          const timeout = count('Timeout');
+          const survived = count('Survived');
+          const uncovered = count('NoCoverage');
+          const evaluated = killed + timeout + survived + uncovered;
+          if (evaluated <= 0 || count('Pending') > 0) {
+            console.error('::error::Stryker did not complete mutation testing; refusing to report success');
+            process.exit(1);
+          }
+          const score = (100 * (killed + timeout) / evaluated).toFixed(2);
+          const result = `Stryker: ${score}% (${killed} killed, ${timeout} timed out, ${survived} survived, ${uncovered} uncovered; ${evaluated} evaluated mutants)`;
+          console.log(result);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### TypeScript mutation score\n${result}\n`);
+          NODE
