@@ -146,6 +146,8 @@ def _one_minus_exp_neg(z):
 
 def _model(name, x, b):
     """Return model value and its analytic derivative w.r.t. parameters."""
+    if callable(name):
+        return name(x, b)
     one = Decimal(1)
     if name == "exponential":             # a exp(b x) + c
         a, rate, baseline = b
@@ -221,10 +223,10 @@ def _objective(model, x, y, w, b, *, jacobian=False):
 
 
 def _nonlinear(data):
-    model = data["model"].strip().lower()
     initial = data["initial_parameters"]
     p = len(initial)
-    if model not in _MODEL_PARAMS and model != "polynomial":
+    model, parameter_names, bounds = _fit_model_spec(data["model"], p)
+    if not callable(model) and model not in _MODEL_PARAMS and model != "polynomial":
         raise ValueError("Choose exponential, saturating_exponential, power_law, gaussian, polynomial, thurber or mgh09.")
     if (model in _MODEL_PARAMS and p != _MODEL_PARAMS[model]) or (model == "polynomial" and not 1 <= p <= 12):
         raise ValueError("The initial parameter count does not match the selected model.")
@@ -245,11 +247,25 @@ def _nonlinear(data):
         with localcontext() as context:
             context.prec = _PRECISION
             x, y, w, beta = list(map(_d, xs)), list(map(_d, ys)), list(map(_d, weights)), list(map(_d, initial))
+            if bounds and any(_project_parameter(b, limit) != b for b, limit in zip(beta, bounds)):
+                raise ValueError("Starting parameters must lie within their declared bounds.")
             damping = Decimal("0.001")
             accepted = rejected = 0
             converged = False
             for iteration in range(1, 1201):
                 sse, gram, grad, residuals = _objective(model, x, y, w, beta, jacobian=True)
+                # A variable pinned at a bound with an outward gradient
+                # is removed from the local LM system. Projection alone
+                # leaves a spurious coupling and may never converge.
+                if bounds:
+                    free = [j for j, (b, (lo, hi), g) in enumerate(zip(beta, bounds, grad))
+                            if not ((lo is not None and b == lo and g < 0) or
+                                    (hi is not None and b == hi and g > 0))]
+                else:
+                    free = list(range(p))
+                if not free:
+                    converged = True  # constrained KKT corner
+                    break
                 # Stop only when the predicted change is negligible at a
                 # precision much higher than the certified 10-11 digits.
                 step = None
@@ -259,8 +275,19 @@ def _nonlinear(data):
                     for j in range(p):
                         modified[j][j] += damping * max(gram[j][j], Decimal("1e-70"))
                     try:
-                        step = _normal_solve(modified, grad)
-                        candidate = [b + db for b, db in zip(beta, step)]
+                        if len(free) == p:
+                            step = _normal_solve(modified, grad)
+                        else:
+                            partial = _normal_solve(
+                                [[modified[i][j] for j in free] for i in free],
+                                [grad[j] for j in free])
+                            step = [Decimal(0)] * p
+                            for j, update in zip(free, partial):
+                                step[j] = update
+                        candidate = ([_project_parameter(b + db, limit) for b, db, limit in zip(beta, step, bounds)]
+                                     if bounds else [b + db for b, db in zip(beta, step)])
+                        if bounds:
+                            step = [c - b for c, b in zip(candidate, beta)]
                         next_sse = _objective(model, x, y, w, candidate)
                     except (ValueError, InvalidOperation, OverflowError, ZeroDivisionError):
                         next_sse = None
@@ -310,10 +337,11 @@ def _nonlinear(data):
                 low, high = b - critical95 * error, b + critical95 * error
                 values[f"ci95_lower_{j}"] = _as_float(low, "Confidence limit")
                 values[f"ci95_upper_{j}"] = _as_float(high, "Confidence limit")
-                rows.append([f"beta_{j}", values[f"parameter_{j}"], values[f"standard_error_{j}"],
+                rows.append([parameter_names[j] if callable(model) else f"beta_{j}",
+                             values[f"parameter_{j}"], values[f"standard_error_{j}"],
                              values[f"ci95_lower_{j}"], values[f"ci95_upper_{j}"]])
             return {
-                "summary": f"Levenberg–Marquardt {model} fit converged in {iteration} iterations. "
+                "summary": f"Levenberg–Marquardt {model if isinstance(model, str) else 'custom expression'} fit converged in {iteration} iterations. "
                            "95% intervals use the local linearized covariance and Student t quantile.",
                 "values": values,
                 "table": {"columns": ["parameter", "estimate", "standard error", "95% lower", "95% upper"], "rows": rows},
@@ -531,6 +559,359 @@ def _chi_square(data):
     }
 
 
+
+# Safe user models and fit diagnostics extend, but do not replace, the certified solvers.
+
+def _fit_model_spec(model_text, count):
+    """Use the uncertainty pack's bounded expression grammar, never Python evaluation."""
+    from graphlink_plugins.scientific.packs import uncertainty
+
+    text = model_text.strip()
+    config = None
+    if text.startswith("{"):
+        config = uncertainty._json(text, "Model specification")
+        if not isinstance(config, dict) or set(config) - {"expression", "builtin", "parameter_names", "bounds"}:
+            raise ValueError("Model JSON needs expression or builtin, with optional parameter_names and bounds.")
+        if ("expression" in config) == ("builtin" in config):
+            raise ValueError("Specify exactly one expression or builtin model.")
+        text = config.get("expression", config.get("builtin"))
+        if not isinstance(text, str):
+            raise ValueError("A model name or expression must be text.")
+    builtin = text.strip().lower() if config is None or "builtin" in config else None
+    if builtin in _MODEL_PARAMS or builtin == "polynomial":
+        names = [f"beta_{j}" for j in range(count)]
+        model = builtin
+    else:
+        if config is not None and "builtin" in config:
+            raise ValueError("Unknown built-in model.")
+        if config is not None and "parameter_names" in config:
+            names = config["parameter_names"]
+        else:
+            names = []
+            for match in uncertainty._TOKEN.finditer(text):
+                token = match.group()
+                if token.isidentifier() and token != "x" and token not in uncertainty._FUNCTIONS and token not in names:
+                    names.append(token)
+        if (not isinstance(names, list) or not 1 <= len(names) <= 15 or len(names) != count or
+                any(not isinstance(name, str) or not uncertainty._NAME.fullmatch(name) or
+                    name == "x" or name in uncertainty._FUNCTIONS or len(name) > 48 for name in names) or
+                len(set(names)) != len(names)):
+            raise ValueError("Provide 1–15 distinct named parameters matching the starting values (excluding x/functions).")
+        tokens = {match.group() for match in uncertainty._TOKEN.finditer(text)}
+        root = uncertainty._Parser(text, [*names, *(["x"] if "x" in tokens else [])]).parse()
+        model = _expression_model(root, names)
+    bounds = None
+    if config is not None and "bounds" in config:
+        raw = config["bounds"]
+        if isinstance(raw, dict):
+            if set(raw) - set(names):
+                raise ValueError("Bound names must match model parameters.")
+            raw = [raw.get(name, [None, None]) for name in names]
+        if not isinstance(raw, list) or len(raw) != count:
+            raise ValueError("Bounds must provide one [lower, upper] pair per parameter.")
+        from graphlink_plugins.scientific.core import finite
+        bounds = []
+        for pair in raw:
+            if not isinstance(pair, list) or len(pair) != 2:
+                raise ValueError("Each parameter bound must be [lower, upper], with null for no limit.")
+            lo, hi = (finite(v, "Parameter bound") if v is not None else None for v in pair)
+            if lo is not None and hi is not None and lo >= hi:
+                raise ValueError("A parameter's lower bound must be below its upper bound.")
+            bounds.append(((_d(lo) if lo is not None else None), (_d(hi) if hi is not None else None)))
+        if all(lo is None and hi is None for lo, hi in bounds):
+            bounds = None
+    return model, names, bounds
+
+
+def _expression_model(root, names):
+    """Propagate exact chain-rule partial derivatives through the parser's AST."""
+    indices = {name: i for i, name in enumerate(names)}
+    p = len(names)
+    zero = Decimal(0)
+    one = Decimal(1)
+
+    def visit(node, variables):
+        kind = node[0]
+        if kind == "literal":
+            return _d(node[1]), [zero] * p
+        if kind == "input":
+            name = node[1]
+            if name == "x":
+                return variables["x"], [zero] * p
+            grad = [zero] * p
+            grad[indices[name]] = one
+            return variables[name], grad
+        if kind in ("positive", "negative"):
+            value, grad = visit(node[1], variables)
+            return (value, grad) if kind == "positive" else (-value, [-g for g in grad])
+        if kind == "function":
+            arg, da = visit(node[2], variables)
+            fn = node[1]
+            if fn == "sqrt":
+                value = arg.sqrt()
+                if not value and any(da):
+                    raise ValueError("Square-root derivative is undefined at zero.")
+                factor = one / (2 * value) if value else zero
+            elif fn == "exp":
+                value = arg.exp()
+                factor = value
+            elif fn == "ln":
+                value = arg.ln()
+                factor = one / arg
+            elif fn == "log10":
+                value = arg.log10()
+                factor = one / (arg * Decimal(10).ln())
+            elif fn == "sin":
+                angle = _as_float(arg, "Trigonometric argument")
+                value, factor = _d(math.sin(angle)), _d(math.cos(angle))
+            else:
+                angle = _as_float(arg, "Trigonometric argument")
+                value, factor = _d(math.cos(angle)), -_d(math.sin(angle))
+            return value, [factor * d for d in da]
+        left, dl = visit(node[1], variables)
+        right, dr = visit(node[2], variables)
+        if kind == "+":
+            return left + right, [a + b for a, b in zip(dl, dr)]
+        if kind == "-":
+            return left - right, [a - b for a, b in zip(dl, dr)]
+        if kind == "*":
+            return left * right, [a * right + left * b for a, b in zip(dl, dr)]
+        if kind == "/":
+            value = left / right
+            return value, [(a - value * b) / right for a, b in zip(dl, dr)]
+        if left <= 0 and (any(dr) or right != right.to_integral_value()):
+            raise ValueError("Variable exponent on a nonpositive base is not differentiable in the real domain.")
+        if not any(dr) and right == right.to_integral_value():
+            exponent = int(right)
+            if abs(exponent) > 10000:
+                raise ValueError("Expression exponent is too large.")
+            value = left ** exponent
+            derivative = exponent * (left ** (exponent - 1)) if exponent and left else (one if exponent == 1 else zero)
+            return value, [derivative * a for a in dl]
+        if left == 0:
+            if right <= 0 or (right < 1 and any(dl)):
+                raise ValueError("Power sensitivity is undefined at zero.")
+            return zero, [zero] * p
+        logbase = left.ln()
+        value = (right * logbase).exp()
+        return value, [value * (b * logbase + right * a / left) for a, b in zip(dl, dr)]
+
+    def calculate(x, parameters):
+        variables = {"x": x, **dict(zip(names, parameters))}
+        try:
+            return visit(root, variables)
+        except (InvalidOperation, OverflowError, ZeroDivisionError, ValueError, ArithmeticError) as exc:
+            raise ValueError("Custom model or analytic sensitivity is outside the finite real domain.") from exc
+    return calculate
+
+
+def _project_parameter(value, limits):
+    lo, hi = limits
+    return max(lo, value) if hi is None and lo is not None else (
+        min(hi, value) if lo is None and hi is not None else (
+            max(lo, min(hi, value)) if lo is not None and hi is not None else value))
+
+
+def _enrich_fit(result, weights, parameters, covariance, bounds=None):
+    """Add comparable criteria and diagnostics without changing certified estimates."""
+    values = result["values"]
+    residuals = result["plot"]["y"]
+    for i, residual in enumerate(residuals):
+        values.setdefault(f"residual_{i}", residual)
+    active = [float(r) for r, w in zip(residuals, weights) if w > 0]
+    n = len(active)
+    p = len(parameters)
+    warnings = []
+    sse = _d(values["weighted_residual_sum_squares"])
+    k = p + 1  # Include the estimated Gaussian noise variance.
+    if sse > 0:
+        # Gaussian weights are relative precision 1/variance. The log weight
+        # determinant cancels when all candidates use the same data/weights.
+        aic_base = (Decimal(n) * ((sse / n).ln() + Decimal(1) +
+                                  (2 * Decimal(str(math.pi))).ln()) -
+                    sum((_d(w).ln() for w in weights if w > 0), Decimal(0)))
+        aic = aic_base + 2 * k
+        values["aic"] = _as_float(aic, "AIC")
+        values["bic"] = _as_float(aic_base + Decimal(k) * Decimal(n).ln(), "BIC")
+        values["aicc"] = (_as_float(aic + Decimal(2 * k * (k + 1)) / (n - k - 1), "AICc")
+                          if n > k + 1 else "undefined")
+        if n <= k + 1:
+            warnings.append("AICc undefined: insufficient positive-weight observations for its correction")
+    else:
+        values.update(aic="undefined", aicc="undefined", bic="undefined")
+        warnings.append("Information criteria undefined for an exact zero-residual fit")
+    signs = [1 if r > 0 else -1 for r in active if r != 0]
+    pos = signs.count(1)
+    neg = len(signs) - pos
+    if pos and neg and len(signs) >= 3:
+        observed = 1 + sum(a != b for a, b in zip(signs, signs[1:]))
+        m = len(signs)
+        mean = 1 + 2 * pos * neg / m
+        variance = 2 * pos * neg * (2 * pos * neg - m) / (m * m * (m - 1))
+        values["runs_count"] = observed
+        if variance > 0:
+            z = max(0, abs(observed - mean) - .5) / math.sqrt(variance)
+            values["runs_test_z_absolute"] = z
+            values["runs_test_p_value"] = math.erfc(z / math.sqrt(2))
+            if values["runs_test_p_value"] < .05:
+                warnings.append("Residual runs test indicates possible nonrandom ordering (p < 0.05)")
+        else:
+            values["runs_test_p_value"] = "undefined"
+            warnings.append("Residual runs test undefined: zero null variance")
+    else:
+        values["runs_count"] = len(signs) and (1 + sum(a != b for a, b in zip(signs, signs[1:]))) or 0
+        values["runs_test_p_value"] = "undefined"
+        warnings.append("Residual runs test undefined: both residual signs are needed")
+    try:
+        from graphlink_plugins.scientific.packs.inferential import _shapiro
+        normality = _shapiro({"sample": active})["values"]
+        values["residual_shapiro_w"] = normality["w_statistic"]
+        values["residual_shapiro_p_value"] = normality["p_value"]
+        if normality["p_value"] < .05:
+            warnings.append("Residual normality rejected by Shapiro-Wilk (p < 0.05)")
+    except ValueError:
+        values["residual_shapiro_w"] = "undefined"
+        values["residual_shapiro_p_value"] = "undefined"
+        warnings.append("Residual normality check undefined: at least 3 nonconstant residuals required")
+    max_correlation = Decimal(0)
+    for i in range(p):
+        for j in range(i + 1, p):
+            diagonal = covariance[i][i] * covariance[j][j]
+            if diagonal > 0:
+                corr = max(Decimal(-1), min(Decimal(1), covariance[i][j] / diagonal.sqrt()))
+                values[f"parameter_correlation_{i}_{j}"] = float(corr)  # underflow to zero is harmless here
+                max_correlation = max(max_correlation, abs(corr))
+            else:
+                values[f"parameter_correlation_{i}_{j}"] = "undefined"
+    values["max_absolute_parameter_correlation"] = float(max_correlation)
+    if max_correlation >= Decimal("0.99"):
+        warnings.append("Parameters are poorly determined: absolute parameter correlation >= 0.99")
+    for i, estimate in enumerate(parameters):
+        error = covariance[i][i]
+        if error > 0 and (not estimate or error.sqrt() >= abs(estimate)):
+            warnings.append(f"Parameter {i} is poorly determined: standard error >= absolute estimate")
+    if bounds:
+        for i, (estimate, limits) in enumerate(zip(parameters, bounds)):
+            lo, hi = limits
+            if ((lo is not None and abs(estimate - lo) <= Decimal("1e-10") * max(Decimal(1), abs(lo))) or
+                (hi is not None and abs(estimate - hi) <= Decimal("1e-10") * max(Decimal(1), abs(hi)))):
+                warnings.append(f"Parameter {i} reached a bound; local Wald intervals may be unreliable")
+    values["warnings"] = "; ".join(warnings) if warnings else "none"
+    return result
+
+
+# Wrap the original, certified numerical paths; existing coefficients do not change.
+_original_linear = _linear
+_original_nonlinear = _nonlinear
+
+
+def _linear(data):
+    result = _original_linear(data)
+    params = [_d(result["values"][f"coefficient_{i}"]) for i in range(result["values"]["parameters"])]
+    covariance = [[_d(value) for value in row[1:]] for row in result["table"]["rows"]]
+    with localcontext() as context:
+        context.prec = _PRECISION
+        return _enrich_fit(result, data["weights"], params, covariance)
+
+
+def _nonlinear(data):
+    result = _original_nonlinear(data)
+    p = result["values"]["parameters"]
+    model, names, bounds = _fit_model_spec(data["model"], p)
+    with localcontext() as context:
+        context.prec = _PRECISION
+        beta = [_d(result["values"][f"parameter_{i}"]) for i in range(p)]
+        _, gram, _, _ = _objective(model, list(map(_d, data["x"])), list(map(_d, data["y"])),
+                                  list(map(_d, data["weights"])), beta, jacobian=True)
+        _, inverse = _normal_solve(gram, [Decimal(0)] * p, inverse=True)
+        reduced = _d(result["values"]["reduced_chi_square"])
+        covariance = [[value * reduced for value in row] for row in inverse]
+        if callable(model):
+            for i, name in enumerate(names):
+                result["values"][f"estimate_{name}"] = result["values"][f"parameter_{i}"]
+        return _enrich_fit(result, data["weights"], beta, covariance, bounds)
+
+
+def _custom_nonlinear(data):
+    """Named start values with optional lower/upper bounds in the same JSON map."""
+    import json
+    from graphlink_plugins.scientific.core import finite
+    from graphlink_plugins.scientific.packs import uncertainty
+
+    spec = uncertainty._json(data["parameters"], "Parameters")
+    if not isinstance(spec, dict) or not 1 <= len(spec) <= 15:
+        raise ValueError("Provide 1–15 named parameters as a JSON object.")
+    starts, bounds = [], {}
+    for name, item in spec.items():
+        if not isinstance(name, str) or not uncertainty._NAME.fullmatch(name) or name == "x" or name in uncertainty._FUNCTIONS or len(name) > 48:
+            raise ValueError("Parameters require short identifiers other than x and function names.")
+        if isinstance(item, dict):
+            if "start" not in item or set(item) - {"start", "lower", "upper"}:
+                raise ValueError("A parameter entry needs start, optionally lower and upper.")
+            start = item["start"]
+            lo, hi = item.get("lower"), item.get("upper")
+        else:
+            start, lo, hi = item, None, None
+        starts.append(finite(start, f"Starting value for {name}"))
+        bounds[name] = [lo, hi]
+    combined = {"expression": data["expression"], "parameter_names": list(spec), "bounds": bounds}
+    return _nonlinear({"model": json.dumps(combined, allow_nan=False),
+                       "x": data["x"], "y": data["y"], "weights": data["weights"],
+                       "initial_parameters": starts})
+
+
+def _compare_models(data):
+    """Refit candidates on identical observations; never trust caller-supplied AICs."""
+    from graphlink_plugins.scientific.packs import uncertainty
+    from graphlink_plugins.scientific.core import finite
+    import json
+
+    models = uncertainty._json(data["models"], "Models")
+    if not isinstance(models, list) or not 2 <= len(models) <= 12:
+        raise ValueError("Compare between 2 and 12 models.")
+    rows, seen = [], set()
+    for i, spec in enumerate(models):
+        if not isinstance(spec, dict) or set(spec) - {"name", "model", "initial_parameters", "expression", "parameters"}:
+            raise ValueError("Model entry needs name and either model/initial_parameters or expression/parameters.")
+        name = spec.get("name", f"model_{i}")
+        if not isinstance(name, str) or not name or len(name) > 80 or name in seen:
+            raise ValueError("Compared models require distinct, nonempty names (up to 80 characters).")
+        seen.add(name)
+        common = {key: data[key] for key in ("x", "y", "weights")}
+        if set(spec) >= {"model", "initial_parameters"} and not ({"expression", "parameters"} & spec.keys()):
+            if not isinstance(spec["model"], str) or not isinstance(spec["initial_parameters"], list) or not spec["initial_parameters"]:
+                raise ValueError("A built-in/composite model requires a model and starting vector.")
+            starts = [finite(v, "Model starting value") for v in spec["initial_parameters"]]
+            fitted = _nonlinear({**common, "model": spec["model"], "initial_parameters": starts})
+        elif set(spec) >= {"expression", "parameters"} and not ({"model", "initial_parameters"} & spec.keys()):
+            if not isinstance(spec["expression"], str) or not isinstance(spec["parameters"], dict):
+                raise ValueError("A custom model needs expression and a parameter map.")
+            fitted = _custom_nonlinear({**common, "expression": spec["expression"],
+                                        "parameters": json.dumps(spec["parameters"], allow_nan=False)})
+        else:
+            raise ValueError("A model must use either the built-in or expression form, not both.")
+        v = fitted["values"]
+        if not isinstance(v["aicc"], float):
+            raise ValueError(f"Model {name} cannot be compared: AICc is undefined.")
+        rows.append((name, v))
+    rows.sort(key=lambda item: item[1]["aicc"])
+    best = rows[0][1]["aicc"]
+    weights = [math.exp(-.5 * (v["aicc"] - best)) for _, v in rows]
+    total = math.fsum(weights)
+    table = []
+    values = {"models_compared": len(rows), "best_model": rows[0][0]}
+    for i, ((name, v), likelihood) in enumerate(zip(rows, weights)):
+        delta = v["aicc"] - best
+        weight = likelihood / total
+        table.append([i + 1, name, v["aic"], v["aicc"], v["bic"], delta, weight,
+                      v["weighted_residual_sum_squares"], v["parameters"], v["warnings"]])
+        values[f"akaike_weight_{i}"] = weight
+        values[f"delta_aicc_{i}"] = delta
+    return {"summary": "Models refitted to identical x, y and weights; ranked by ascending AICc and normalized Akaike weights.",
+            "values": values,
+            "table": {"columns": ["rank", "model", "AIC", "AICc", "BIC", "delta AICc", "Akaike weight", "weighted SSE", "parameters", "warnings"],
+                      "rows": table}}
+
 OPERATIONS = (
     Operation(
         "weighted_linear_least_squares", "Weighted linear least squares",
@@ -544,8 +925,8 @@ OPERATIONS = (
     ),
     Operation(
         "nonlinear_least_squares", "Levenberg–Marquardt nonlinear fit",
-        "Fit exponential, saturating_exponential, power_law, gaussian, polynomial, thurber "
-        "or mgh09 models with analytic Jacobians, convergence diagnostics, errors and 95% Wald intervals.",
+        "Fit built-in models or uncertainty-parser-safe expressions in x with named parameters "
+        "(named starts and optional bounds via custom_nonlinear_least_squares). Includes diagnostics and 95% intervals.",
         (Field("model", "Model (case-insensitive names in description)", "text"),
          Field("x", "Predictor x", "vector"), Field("y", "Observed response", "vector"),
          Field("weights", "Relative inverse-variance weights", "vector"),
@@ -553,6 +934,29 @@ OPERATIONS = (
         {"model": "saturating_exponential", "x": [1, 2, 3, 4, 5],
          "y": [1.8, 3.2, 4.3, 5.1, 5.6], "weights": [1, 1, 1, 1, 1],
          "initial_parameters": [8, 0.25]}, _nonlinear,
+    ),
+    Operation(
+        "custom_nonlinear_least_squares", "Custom expression nonlinear least squares",
+        "Fit a safe x expression with JSON named starts; entries may have lower/upper bounds.",
+        (Field("expression", "Model expression in x (use ^ for powers)", "text"),
+         Field("parameters", "JSON named starts and optional bounds", "text"),
+         Field("x", "Predictor x", "vector"), Field("y", "Observed response", "vector"),
+         Field("weights", "Relative inverse-variance weights", "vector")),
+        {"expression": "a+b*x", "parameters": '{"a": {"start": 0}, "b": {"start": 1, "lower": 0}}',
+         "x": [0,1,2,3,4,5,6,7,8,9], "y": [1.1,2,2.9,4.2,5,6.1,6.9,8.1,9,10.2],
+         "weights": [1]*10}, _custom_nonlinear,
+    ),
+    Operation(
+        "compare_models", "Compare models by corrected Akaike information",
+        "Refit two to twelve built-in or custom models to the same data; rank by AICc and Akaike weights.",
+        (Field("x", "Predictor x", "vector"), Field("y", "Observed response", "vector"),
+         Field("weights", "Relative inverse-variance weights", "vector"),
+         Field("models", "JSON candidate models with starts", "text")),
+        {"x": [0,1,2,3,4,5,6,7,8,9], "y": [1.1,2,2.9,4.2,5,6.1,6.9,8.1,9,10.2],
+         "weights": [1]*10,
+         "models": '[{"name":"linear","model":"polynomial","initial_parameters":[0,1]},'
+                   '{"name":"quadratic","expression":"a+b*x+c*x^2",'
+                   '"parameters":{"a":0,"b":1,"c":0.01}}]'}, _compare_models,
     ),
     Operation(
         "welch_t_test", "Welch two-sample t test", "Two-sided Welch t test; independent samples and unequal population variances.",
