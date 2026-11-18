@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalizeChartSpec, scientificFields } from "../chartSpec";
-import { createLog10Scale, formatLogTick, log10Ticks, scientificDomain } from "./chartScales";
+import { createLog10Scale, formatLogTick, formatScientificTick, log10Ticks, scientificDomain, scientificLinearTicks } from "./chartScales";
 import ChartRenderer from "./ChartRenderer";
 
 const originalResizeObserver = globalThis.ResizeObserver;
@@ -105,6 +105,15 @@ describe("log10 scientific scales", () => {
     expect(linMax).toBeGreaterThanOrEqual(8e307);
   });
 
+  it("formats tiny nonzero ticks without fixed-decimal RangeError", () => {
+    const ticks = scientificLinearTicks(1e-200, 2e-200);
+    expect(ticks.length).toBeGreaterThan(2);
+    expect(ticks.every((v) => v > 0 && Number.isFinite(v))).toBe(true);
+    expect(formatScientificTick(1e-200)).toBe("1e-200");
+    expect(formatScientificTick(0)).toBe("0");
+    expect(scientificLinearTicks(Number.MIN_VALUE, 1e-320).length).toBeGreaterThan(0);
+  });
+
   it("keeps wide log tick collections bounded", () => {
     expect(log10Ticks(1e-250, 1e250).length).toBeLessThanOrEqual(7);
   });
@@ -184,6 +193,17 @@ describe("scientific React rendering", () => {
     } as never} />);
     expect(container.querySelector(".chart-scientific-marks")).toBeNull();
     expect(container.querySelector("path[fill='none']")).not.toBeNull();
+  });
+
+  it("renders micro-scale scatter values without overflow or collapsed axis labels", () => {
+    const { container } = render(<ChartRenderer chartType="scatter" chartData={{
+      type: "scatter", xValues: [1e-200, 2e-200, 3e-200],
+      values: [2e-200, 4e-200, 6e-200], xScale: "linear", yScale: "linear",
+      xUnit: "mol", yUnit: "V",
+    } as never} />);
+    expect(container.querySelector(".chart-canvas-svg")).not.toBeNull();
+    expect(container.querySelectorAll(".chart-series-marker")).toHaveLength(3);
+    expect(screen.getAllByText(/e-200/).length).toBeGreaterThan(0);
   });
 
   it("shows a specific error placeholder for invalid log intervals", () => {
