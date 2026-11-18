@@ -239,24 +239,33 @@ def test_committed_model_text_can_feed_local_steps_while_ollama_is_offline(tmp_p
 
 def test_model_output_edited_mid_inference_is_not_overwritten(tmp_path, monkeypatch):
     async def scenario():
-        _path, _bus, doc, source, _target, send = session(tmp_path)
+        path, _bus, doc, source, _target, send = session(tmp_path)
         node_id = await send("addModelNode", source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         preview = await send("previewGraphRun", [])
-        started, release = threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        model_started = asyncio.Event()
+        release = threading.Event()
 
-        def slow_model(**kwargs):
-            started.set()
-            assert release.wait(8)
+        def slow_model(**_kwargs):
+            # The fake transport cannot return until the test has made the
+            # mid-flight edit. No thread scheduling or wall-clock sleep race.
+            loop.call_soon_threadsafe(model_started.set)
+            release.wait()
             return {"message": {"content": "Unwanted stale model reply"}}
 
         monkeypatch.setattr(local_model, "local_ollama_complete", slow_model)
         running = asyncio.create_task(send("executeGraphRun", [], preview["previewToken"], "model-mid-edit-run"))
         try:
-            assert await asyncio.to_thread(started.wait, 5)
+            await asyncio.wait_for(model_started.wait(), timeout=_MODEL_SYNC_WATCHDOG_S)
+            # The model call starts only after its outbound fence is durable.
+            saved = load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
+            step = next(s for s in saved["steps"] if s["nodeId"] == node_id)
+            assert step["status"] == "running"
+            assert step["externalAttempt"]["phase"] == "dispatched"
             doc.nodes[node_id].content = "I edited this while the model was running"
         finally:
             release.set()
-        result = await running
+        result = await asyncio.wait_for(running, timeout=_MODEL_SYNC_WATCHDOG_S)
         assert result["status"] == "reconciliation-required"
         assert doc.nodes[node_id].content == "I edited this while the model was running"
         assert result["steps"][0]["status"] == "reconciliation-required"
