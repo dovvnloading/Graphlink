@@ -22,9 +22,14 @@
    ContextAssembler. With room for every source, the wire messages are
    byte-for-byte the old messages.
 6. backend/knowledge_retrieval.py has hybrid FTS5/vector retrieval, a token
-   budgeter, and an untrusted source formatter. Ordinary chat Send DOES NOT
-   automatically call it. backend/api/intents_knowledge.py supplies separate
-   explicit search. backend/api/intents_conversation.py shares the dispatcher.
+   budgeter, stable citation IDs (PR #599) and untrusted source formatting.
+   Ordinary chat Send and Regenerate now search ONLY the current workspace's
+   already-existing knowledge collection (with the legacy unscoped pool as
+   the fallback for a session without a workspace). Questions are first
+   searched as written, then with significant terms if the full question
+   has no lexical matches. They do not ingest or
+   create a collection. backend/api/intents_knowledge.py still supplies the
+   separate explicit search. Other agents retain their existing dispatch.
 
 ## Source contract
 
@@ -54,10 +59,59 @@ allowing tools must be enforced by the application's tool dispatcher
 independently of source text. ContextPlan.allowed_tools comes only from
 the trusted caller. A malicious retrieved document cannot add tool names.
 
-The first slice can accept pinned, retrieval and independent attachment
-candidates, but does not silently introduce new auto-retrieval or context
-pinning behavior in ordinary chat. Existing document extracts and image
-parts already included in a user message retain their legacy transport shape.
+Chat retrieval now uses a private, per-request `_knowledge_hits` sidecar on
+the last in-memory history turn (backend/api/intents_chat.py). It is NOT
+persisted in the user message, does not alter graph branch history, and is
+stripped by clone_history before the provider call. This keeps ordinary chat
+with no matching knowledge hits byte-identical to its pre-citation prompt.
+Existing document extracts and image parts already included in a user
+message retain their legacy transport shape.
+
+Each ranked hit becomes its own ContextCandidate of kind `knowledge_hit`,
+with stable sourceId `knowledge:kb:<digest>`, retrieved trust, and a typed
+JSON reference-data envelope. Its citation ID, title, source file, section
+and exact passage travel TOGETHER. The selected context window budgets the
+whole candidate; no cropped excerpt or unsent hit is promoted to an approved
+citation. If no knowledge candidate fits, the assembler falls back to the
+original prompt with no additional citation instructions. The context
+inspection sources contain metadata, not the raw passage text. A retrieved
+document can never grant provider tools or become a system message.
+
+The trusted system prompt asks the model to cite only stable `[kb:...]` IDs
+that appear in supplied passages, inline with the supported claims. The
+prompt instruction is conditional on at least one knowledge passage actually
+being selected, and does not contain a made-up valid example ID.
+
+### Reply citation provenance and validation
+
+The provider result remains a string. When knowledge was included, ChatWorker
+returns a `CitedChatReply(str)` with a separate, trusted, in-memory snapshot
+of EXACTLY the selected passages. The model itself controls only answer text;
+it cannot introduce source title, URL, section, offset or inclusion claims.
+The backend parses inline `[kb:...]` IDs and marks them as verified ONLY
+when they occur in that selected set. A hallucinated, malformed or never-sent
+ID has no approved source to link to, and appears as **Unverified** instead.
+A retrieved passage the model never cites is tracked as *Not cited*.
+Repeated citations refer to one source, not multiple duplicated chips.
+
+The existing chat node's `tool_invocations` persistence/wire path carries a
+reserved `graphlink.knowledge.citations` metadata row with the included
+source excerpts, cited flags and unverified IDs. This adds no graph schema,
+wire contract, migration or dependency. Its ID/name distinguish it from real
+tool calls, and the chat card hides it from the normal tool-call disclosure.
+Send, Regenerate and parallel model-comparison replies all attach metadata
+in the same command scope as the reply content, so undo/redo and save/reload
+retain the citation ledger. Regenerate replaces an old ledger instead of
+reusing stale source provenance.
+
+In ChatNodeView, citation chips render under the assistant's markdown. Each
+verified chip opens the exact saved excerpt with its document title, source
+file, section and offsets; an HTTP(S) source also exposes a hardened external
+link to the section-heading fragment. A local document opens its exact
+source section in the in-app excerpt rather than fabricating a filesystem
+URL. Unverified IDs appear as non-clickable labels. The chip renderer
+cross-checks the inline ID against the server-authored ledger and never
+constructs a source link from a model-written URL.
 
 ## Budget and priority
 
@@ -98,9 +152,14 @@ The intent returns provider/model, node, window, prompt budget, reserved
 output, estimated prompt tokens, whether included content leaves the
 device, and every candidate source with ID, origin, trust, kind, original
 and sent token counts, included/excluded status, truncation, egress and
-reason. It includes NO raw source text. The inspector does not run
-inference, search knowledge, consume staged attachments, edit nodes,
-publish scene state or modify settings. Local Ollama/llama.cpp routes stay
+reason. It includes NO raw source text. The inspector does not run inference, consume staged attachments, edit nodes,
+publish scene state or modify settings. If a draft is supplied, it runs the
+same read-only, workspace-scoped local retrieval and context selection to
+preview possible knowledge candidates. Preview metadata shows IDs, sections,
+inclusion, estimated token costs, exclusion reasons and device egress.
+The latest assistant ancestor's persisted citation ledger is audited
+separately as `lastReplyCitations`: each sent passage is marked **Cited**
+or **Not cited**, and hallucinated IDs are explicitly **Unverified**. Local Ollama/llama.cpp routes stay
 on-device; cloud model routes disclose egress for included sources only.
 
 web_ui/src/app/context/ContextInspectorLauncher.tsx and its CSS are mounted
@@ -111,9 +170,11 @@ existing websocket request/reply transport and color variables.
 
 **Preview limits:** Draft attachments not yet sent cannot be predicted;
 fresh summaries require a separate inference and are not generated on a
-read-only inspection. The provider/model/graph can change between preview
-and send. Existing embedded image/audio/document parts are accounted as
-part of their parent chat turn rather than as separate inspector entries.
+read-only inspection. The provider/model/graph and knowledge corpus can
+change between preview and send; the preview does not assert which sources
+a future response will cite. Existing embedded image/audio/document parts
+are accounted as part of their parent chat turn rather than as separate
+inspector entries.
 
 ## Tests and follow-on work
 
@@ -129,6 +190,13 @@ backend/tests/test_context_budget.py still covers history trimming and
 summary behavior. The full CI additionally checks frontend lint/typecheck,
 Python, Windows, wheel imports, POSIX permissions and Playwright.
 
-This first slice does NOT implement C3's full long-term memory, source
-revision invalidation, graph neighborhood reranking, automatic knowledge
-hits, source-level attachment breakdown, or broad agent integration.
+backend/tests/test_chat_knowledge_citations.py covers exact per-passage
+budget selection, lower-trust prompt formatting, no-hit chat parity, stream
+and non-stream prompts, invented IDs, regenerated ledgers, workspace
+isolation and ephemeral intent plumbing. The corresponding frontend tests
+under ChatCitationChips.test.tsx and ContextInspectorPanel.test.tsx exercise
+source chips, fragment links, unsafe URL rejection and citation auditing.
+
+Still out of scope: C3 long-term memory, source revision invalidation,
+graph-neighborhood reranking, source-level attachment breakdown and broad
+agent integration beyond the existing ordinary chat dispatch.

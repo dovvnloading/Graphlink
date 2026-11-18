@@ -9,6 +9,10 @@ type ContextSource = {
   truncated: boolean;
   leavesDevice: boolean;
   reason: string;
+  citationId?: string;
+  documentTitle?: string;
+  sourceFile?: string;
+  section?: string;
 };
 
 export type ContextPreview = {
@@ -24,6 +28,17 @@ export type ContextPreview = {
   notice?: string;
   error?: string;
   sources: ContextSource[];
+  lastReplyCitations?: {
+    replyNodeId: string;
+    sources: {
+      citationId: string;
+      documentTitle: string;
+      sourceFile: string;
+      section: string;
+      cited: boolean;
+    }[];
+    unverifiedIds: string[];
+  };
 };
 
 
@@ -69,6 +84,7 @@ export function ContextInspectorPanel({ preview, error, loading, onRefresh, onCl
                       <span>{source.tokenCount} tokens</span>
                     </div>
                     <div className="context-inspector-source-origin">{source.origin} · {source.trust} trust</div>
+                    {source.citationId && <div>{source.citationId} · {source.documentTitle} · {source.section}</div>}
                     <div>{source.reason}{source.truncated ? " (truncated)" : ""}</div>
                     <div>
                       {source.leavesDevice ? "Leaves device" : "Does not leave device"}
@@ -77,6 +93,26 @@ export function ContextInspectorPanel({ preview, error, loading, onRefresh, onCl
                   </li>
                 ))}
               </ul>
+              {preview.lastReplyCitations && (
+                <section aria-label="Latest reply citation audit" className="context-inspector-citations">
+                  <strong>Latest reply · cited knowledge passages</strong>
+                  <p className="context-inspector-note">Sources below were sent with that reply. Only those marked Cited appeared in its answer.</p>
+                  {preview.lastReplyCitations.sources.length === 0 && (
+                    <p>No knowledge passages were cited from that reply.</p>
+                  )}
+                  <ul>
+                    {preview.lastReplyCitations.sources.map((source) => (
+                      <li key={source.citationId}>
+                        <strong>{source.cited ? "Cited" : "Not cited"}</strong> · {source.documentTitle} · {source.section}
+                        <div>{source.citationId} · {source.sourceFile}</div>
+                      </li>
+                    ))}
+                    {preview.lastReplyCitations.unverifiedIds.map((citationId) => (
+                      <li key={citationId}><strong>Unverified</strong> · {citationId} (not in the sent knowledge context)</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
             </>
           )}
         </aside>

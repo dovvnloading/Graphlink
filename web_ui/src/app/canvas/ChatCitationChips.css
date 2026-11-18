@@ -1,0 +1,19 @@
+.chat-citations { margin: 10px 0 4px; padding: 0 10px; font-size: 12px; }
+.chat-citations-heading { font-weight: 600; opacity: .8; margin-bottom: 6px; }
+.chat-citations-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.chat-citation-chip, .chat-citation-unverified {
+  border-radius: 999px; padding: 4px 9px; font: inherit; line-height: 1.4;
+  max-width: 100%; overflow-wrap: anywhere;
+}
+.chat-citation-chip {
+  border: 1px solid var(--border-color, #7777);
+  color: inherit; background: var(--surface-color, transparent); cursor: pointer;
+}
+.chat-citation-chip:hover, .chat-citation-chip:focus-visible { text-decoration: underline; }
+.chat-citation-unverified { border: 1px dashed currentColor; opacity: .75; }
+.chat-citation-excerpt { border: 1px solid var(--border-color, #7777); border-radius: 8px;
+  padding: 10px; margin-top: 8px; overflow-wrap: anywhere; }
+.chat-citation-origin { opacity: .75; margin-top: 4px; }
+.chat-citation-excerpt pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit;
+  max-height: 240px; overflow-y: auto; margin: 8px 0; }
+.chat-citation-excerpt a { color: inherit; text-decoration: underline; }

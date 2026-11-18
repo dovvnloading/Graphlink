@@ -7,6 +7,7 @@ import { downloadTextFile } from "./downloadTextFile";
 import { GROUP_MONO_COLORS, GROUP_NAMED_COLORS } from "./GroupColorPicker";
 import type { MenuPosition } from "./menuPosition";
 import { NodeMarkdown } from "./NodeMarkdown";
+import { ChatCitationChips, KNOWLEDGE_CITATION_RECORD } from "./ChatCitationChips";
 import { NodeMenu } from "./NodeMenu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
@@ -847,6 +848,8 @@ export const ChatNodeView = memo(function ChatNodeView({
     return () => observer.disconnect();
   }, [data.content, streamedContent, collapsed]);
 
+  // Citation provenance uses a reserved structured row, not a model tool call.
+  const visibleToolInvocations = data.toolInvocations.filter((item) => item.name !== KNOWLEDGE_CITATION_RECORD);
   const hasUsage = data.promptTokens != null || data.completionTokens != null;
   const hasMetadata = Boolean(data.model || data.overrideModelId || hasUsage);
   // At map scale, keep a bounded plain-text excerpt; mounting Markdown for every
@@ -989,6 +992,9 @@ export const ChatNodeView = memo(function ChatNodeView({
           <div className="chat-node-content-fade" aria-hidden="true" />
         )}
       </div>
+      {!data.isUser && !data.pendingRequestId && (
+        <ChatCitationChips content={data.content} toolInvocations={data.toolInvocations} />
+      )}
       {contentOverflows && (
         <button
           type="button"
@@ -1008,14 +1014,14 @@ export const ChatNodeView = memo(function ChatNodeView({
           keyboard/AT support for a debug-style panel like this one. Hidden
           entirely (not just collapsed) when the turn made no tool calls -
           the overwhelming majority of chat nodes. */}
-      {data.toolInvocations.length > 0 && (
+      {visibleToolInvocations.length > 0 && (
         <details className="chat-node-tool-invocations">
           <summary>
-            {data.toolInvocations.length === 1
+            {visibleToolInvocations.length === 1
               ? "1 tool call"
-              : `${data.toolInvocations.length} tool calls`}
+              : `${visibleToolInvocations.length} tool calls`}
           </summary>
-          {data.toolInvocations.map((invocation, index) => (
+          {visibleToolInvocations.map((invocation, index) => (
             <div
               key={invocation.id || index}
               className={`chat-node-tool-invocation${invocation.isError ? " error" : ""}`}

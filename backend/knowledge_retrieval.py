@@ -7,6 +7,7 @@ No model or network call is made by the ranking or provenance stages.
 from __future__ import annotations
 
 import re
+import sqlite3
 from difflib import SequenceMatcher
 from pathlib import Path
 
@@ -204,3 +205,70 @@ def format_untrusted_context(results: list[dict]) -> str:
         for index, result in enumerate(results, start=1)
     ]
     return _UNTRUSTED_HEADER + "\n\n" + "\n\n".join(blocks)
+
+
+def search_chat_knowledge(
+    query: str, workspace_id: str | int | None = None, *,
+    db_path: Path | None = None, k: int = 5,
+) -> list[dict]:
+    """Retrieve ONLY this workspace's existing knowledge for a chat turn.
+
+    Merely sending chat must not create a knowledge database or collection.
+    The workspace lookup is a read-only connection, and a missing collection
+    never falls through to another workspace or to global search.
+    """
+    from backend import knowledge_store
+
+    path = db_path if db_path is not None else knowledge_store.DEFAULT_DB_PATH
+    if not isinstance(query, str) or not query.strip() or not path.is_file():
+        return []
+    if workspace_id is None:
+        collection_id = 0
+    else:
+        # URI read-only mode is important: preview and no-hit chat do not
+        # create an empty workspace collection or a new database.
+        connection = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            row = connection.execute(
+                "SELECT id FROM collections WHERE workspace_id = ? LIMIT 1",
+                (str(workspace_id),),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            return []
+        collection_id = int(row[0])
+    hits = hybrid_search(path, query, collection_id=collection_id, k=k)
+    if hits:
+        return hits
+    # FTS5 joins question words as AND. Conversational questions usually
+    # contain words ("how", "I", "the") absent from a runbook even when
+    # its relevant nouns are indexed. Fall back to significant terms,
+    # merging rank evidence before choosing a bounded result set.
+    stop = {
+        "about", "after", "are", "can", "could", "does", "for", "from",
+        "have", "how", "into", "much", "should", "that", "the", "their",
+        "there", "these", "this", "those", "what", "when", "where",
+        "which", "while", "with", "would", "your",
+    }
+    terms = list(dict.fromkeys(
+        term.casefold() for term in re.findall(r"\w+", query)
+        if len(term) >= 3 and term.casefold() not in stop
+    ))[:7]
+    if not terms:
+        return []
+    weighted: dict[str, dict] = {}
+    for term in terms:
+        for rank, hit in enumerate(
+            hybrid_search(path, term, collection_id=collection_id, k=k),
+            start=1,
+        ):
+            key = hit["citation_id"]
+            if key not in weighted:
+                weighted[key] = {"hit": hit, "matched": 0, "rrf": 0.0}
+            weighted[key]["matched"] += 1
+            weighted[key]["rrf"] += 1 / (60 + rank)
+    ordered = sorted(
+        weighted.values(), key=lambda item: (-item["matched"], -item["rrf"]),
+    )
+    return [item["hit"] for item in ordered[:k]]

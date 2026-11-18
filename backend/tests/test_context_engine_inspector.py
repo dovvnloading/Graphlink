@@ -120,3 +120,36 @@ def test_impossible_mandatory_budget_lists_all_unsent_sources():
     assert all(not row["included"] for row in response["sources"])
     assert all(not row["leavesDevice"] for row in response["sources"])
     assert all("mandatory" in row["reason"] for row in response["sources"])
+
+
+def test_inspector_includes_ranked_draft_passages_and_audits_last_reply(monkeypatch):
+    from backend.context_engine import inspector
+    from backend.context_engine.citations import CitedChatReply, apply_reply_citations
+
+    hit = {
+        "citation_id": "kb:0123456789abcdef0123",
+        "document_title": "Recovery guide",
+        "source_uri": "ops/recovery.md",
+        "source_file": "ops/recovery.md",
+        "section": "Backups",
+        "text": "Use a verified snapshot to restore service.",
+        "offset_start": 10, "offset_end": 53,
+    }
+    monkeypatch.setattr(inspector, "search_chat_knowledge", lambda *_args: [hit])
+    document, _root_id, last_id = _document()
+    apply_reply_citations(document.nodes[last_id], CitedChatReply(
+        "Restore using the backup [kb:0123456789abcdef0123]", [hit],
+    ))
+    before = deepcopy(document.nodes), deepcopy(document.edges)
+    report = inspect_next_chat_send(document, last_id, _Dispatcher(), draft_text="How to restore?")
+    assert before == (document.nodes, document.edges)
+    knowledge = [s for s in report["sources"] if s["kind"] == "knowledge_hit"]
+    assert len(knowledge) == 1
+    assert knowledge[0]["included"]
+    assert knowledge[0]["citationId"] == hit["citation_id"]
+    assert knowledge[0]["section"] == "Backups"
+    audit = report["lastReplyCitations"]
+    assert audit["replyNodeId"] == last_id
+    assert audit["sources"][0]["citationId"] == hit["citation_id"]
+    assert audit["sources"][0]["cited"] is True
+    assert audit["sources"][0]["section"] == "Backups"
