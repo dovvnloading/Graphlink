@@ -19,7 +19,7 @@ import { connectionBadgeLabel } from "./connectionBadge";
 import { applyCompareBranches, applySynthesizeBranches } from "./canvas/branchActions";
 import { CanvasSearchProvider } from "./canvas/CanvasSearchContext";
 import { ExecutionLimitsProvider } from "./canvas/ExecutionLimitsContext";
-import { SceneCanvas, measuredNodeSize } from "./canvas/SceneCanvas";
+import { measuredNodeSize } from "./canvas/measuredNodeSize";
 import { SceneStore } from "./canvas/sceneStore";
 import { resolveTreeNavigationTarget, type TreeNavigationDirection } from "./canvas/treeNavigation";
 import { requestNewChat } from "./chrome/requestNewChat";
@@ -40,6 +40,9 @@ import { OverlayProvider, useOverlays } from "./overlays/overlays";
 // is what makes "on demand" mean "the user actually opened it" rather than
 // "React attempted to render it," see that component's own comment.
 // The read-only inspector is a separate chunk, keeping the 512 KB shell budget.
+// The canvas is an interactive surface, not part of the static application shell.
+// Fetch its React Flow renderer on first mount; the shared size helper stays eager.
+const SceneCanvas = lazy(() => import("./canvas/SceneCanvas").then((m) => ({ default: m.SceneCanvas })));
 const ContextInspectorLauncher = lazy(() =>
   import("./context/ContextInspectorLauncher").then((m) => ({ default: m.ContextInspectorLauncher })),
 );
@@ -485,11 +488,16 @@ function App() {
                         own search-highlighting read) and SearchOverlay (the
                         query's only writer) - see CanvasSearchContext.tsx. */}
                     <CanvasSearchProvider>
-                      <SceneCanvas
-                        store={sceneStore}
-                        onOpenDocumentView={onOpenDocumentView}
-                        getComposerRoute={getComposerRoute}
-                      />
+                      <Suspense fallback={
+                        <div className="scene-canvas" role="status" aria-busy="true"
+                          style={{ display: "grid", placeItems: "center" }}>Loading canvas…</div>
+                      }>
+                        <SceneCanvas
+                          store={sceneStore}
+                          onOpenDocumentView={onOpenDocumentView}
+                          getComposerRoute={getComposerRoute}
+                        />
+                      </Suspense>
                       <div className="app-search-layer">
                         <LazySurface overlayName="search" fallback={null}>
                           <SearchOverlay store={sceneStore} />

@@ -71,6 +71,7 @@ import { useCanvasPan } from "./useCanvasPan";
 import { motionDuration } from "../reducedMotion";
 import { useNodeDragAndSizeSync } from "./useNodeDragAndSizeSync";
 import { hiddenGroupMemberIds } from "./collapsedGroups";
+import { measuredNodeSize } from "./measuredNodeSize";
 
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
@@ -2259,16 +2260,7 @@ export function isOrthogonalEligible(sourceKind: string | undefined, targetKind:
 // internal store alone is not enough and the DOM is the reliable fallback.
 // Exported since R7.5c: App.tsx's Ctrl+Arrow navigation has to center on a
 // node's MIDDLE, and hit the exact same empty-`measured` trap this solves.
-export type MeasuredSizeSource = { getInternalNode: (id: string) => { measured?: { width?: number; height?: number } } | undefined };
-export function measuredNodeSize(reactFlow: MeasuredSizeSource, id: string): { width: number; height: number } | null {
-  const measured = reactFlow.getInternalNode(id)?.measured;
-  if (measured?.width !== undefined && measured?.height !== undefined) {
-    return { width: measured.width, height: measured.height };
-  }
-  const el = document.querySelector(`.react-flow__node[data-id="${CSS.escape(id)}"]`);
-  if (!(el instanceof HTMLElement) || el.offsetWidth === 0) return null;
-  return { width: el.offsetWidth, height: el.offsetHeight };
-}
+export { measuredNodeSize, type MeasuredSizeSource } from "./measuredNodeSize";
 
 /**
  * ADR-011 stage 11.2: the virtualization-audit fallback for a smart-guide
