@@ -1271,6 +1271,9 @@ def provenance_for_hits(db_path: Path, results: list[dict]) -> dict[int, dict[st
     Uses existing chunk offsets/Markdown headings; no database migration or
     cloud service is needed. A single SQLite read obtains headings for every
     document represented in the hit set, including older ingested files.
+    Graph nodes share a document but each has offsets relative to its own
+    node text; their headings are scoped by source_node_id so one node's
+    heading cannot label another node's search result.
     Where a chunk begins at a heading, that heading takes precedence. When
     there are no headings, report `Unsectioned` rather than guessing.
     """
@@ -1281,27 +1284,28 @@ def provenance_for_hits(db_path: Path, results: list[dict]) -> dict[int, dict[st
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            "SELECT document_id, offset_start, text FROM chunks "
+            "SELECT document_id, offset_start, text, source_node_id FROM chunks "
             f"WHERE document_id IN ({placeholders}) "
-            "ORDER BY document_id, offset_start, ordinal",
+            "ORDER BY document_id, source_node_id, offset_start, ordinal",
             document_ids,
         ).fetchall()
     finally:
         conn.close()
 
-    headings: dict[int, list[tuple[int, str]]] = {}
-    for document_id, start, text in rows:
-        headings.setdefault(int(document_id), []).extend(_headings_in_chunk(text, int(start)))
-    for document_id, items in headings.items():
+    headings: dict[tuple[int, str | None], list[tuple[int, str]]] = {}
+    for document_id, start, text, source_node_id in rows:
+        key = (int(document_id), source_node_id)
+        headings.setdefault(key, []).extend(_headings_in_chunk(text, int(start)))
+    for key, items in headings.items():
         # Overlap between adjacent chunks may repeat one heading; the offset
         # is absolute, so collapsing it is safe and order-independent.
-        headings[document_id] = sorted(set(items))
+        headings[key] = sorted(set(items))
 
     metadata: dict[int, dict[str, str]] = {}
     for result in results:
         start = int(result["offset_start"])
         end = int(result["offset_end"])
-        options = headings.get(int(result["document_id"]), [])
+        options = headings.get((int(result["document_id"]), result.get("source_node_id")), [])
         before = [item for item in options if item[0] <= start]
         if before:
             section = before[-1][1]

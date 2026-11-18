@@ -96,6 +96,28 @@ def test_provenance_section_is_nearest_prior_heading_across_chunk_boundaries(tmp
     assert re.fullmatch(r"kb:[0-9a-f]{20}", provenance["citation_id"])
 
 
+def test_graph_node_sections_are_scoped_to_their_own_node(tmp_path):
+    from backend.knowledge_store import get_or_create_workspace_collection, reindex_graph_content
+
+    db = tmp_path / "knowledge.db"
+    reindex_graph_content(
+        db, graph_id=13, workspace_id=7, title="Incident graph",
+        node_chunks=[
+            ("node-alpha", "# Alpha runbook\n\nThe marmalade elevator is disabled."),
+            ("node-zulu", "# Zulu runbook\n\nThe quartz compass is available."),
+        ],
+    )
+    collection_id = get_or_create_workspace_collection(db, 7)
+    alpha = hybrid_search(db, "marmalade elevator", collection_id=collection_id)
+    zulu = hybrid_search(db, "quartz compass", collection_id=collection_id)
+    assert len(alpha) == len(zulu) == 1
+    assert alpha[0]["source_node_id"] == "node-alpha"
+    assert alpha[0]["section"] == "Alpha runbook"
+    assert zulu[0]["source_node_id"] == "node-zulu"
+    assert zulu[0]["section"] == "Zulu runbook"
+    assert alpha[0]["citation_id"] != zulu[0]["citation_id"]
+
+
 def test_stable_citation_survives_row_id_churn_and_changes_for_new_evidence(tmp_path):
     db = tmp_path / "knowledge.db"
     body = "# Policy\n\nArchive audit logs for at least one year."
