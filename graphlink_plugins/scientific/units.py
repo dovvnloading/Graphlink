@@ -80,8 +80,9 @@ _UNITS = {
     "atm": Unit(Pa.dimensions, Fraction(101325)),
 }
 
-# Prefix symbols and powers are from NIST SP 811, Table 5, including the
-# 2022 ronna/quetta and ronto/quecto additions. Use g, not kg, for mass prefixes.
+# Legacy prefix symbols and powers follow NIST SP 811, Table 5;
+# the 2022 ronna/quetta and ronto/quecto additions follow the updated
+# BIPM SI Brochure (SP 811 predates these additions). Use g, not kg, for mass prefixes.
 _PREFIX_POWERS = {
     "Q": 30, "R": 27, "Y": 24, "Z": 21, "E": 18, "P": 15,
     "T": 12, "G": 9, "M": 6, "k": 3, "h": 2, "da": 1,
