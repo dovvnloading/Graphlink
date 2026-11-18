@@ -72,6 +72,8 @@ def test_scatter_strictly_rejects_invalid_numeric_inputs(key, value, match):
      "non-finite error endpoint"),
     ({"series": [{"name": "One", "values": [1, 2, 3]},
                  {"name": "Two", "values": [1, 2]}]}, "length must match"),
+    ({"series": [{"name": "Full", "values": [1] * 300},
+                 {"name": "Short", "values": [1]}]}, "length must match"),
     ({"series": [{"name": "Same", "values": [1, 2, 3]},
                  {"name": "Same", "values": [2, 3, 4]}]}, "Duplicate series name"),
     ({"series": [
