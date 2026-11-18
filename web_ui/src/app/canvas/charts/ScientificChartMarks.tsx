@@ -1,7 +1,6 @@
 /** Scientific line and scatter marks. No charting library: the same finite
  * coordinates/error magnitudes checked by both canonicalizers are mapped to
  * SVG; only the scale (linear/log10) changes, never the numeric data. */
-import { scientificFields } from "../chartSpec";
 import type { AxisScale, ErrorPair } from "../chartSpec";
 import type { ChartMarksProps } from "./BarChartMarks";
 import { CartesianAxes, type XTick } from "./CartesianAxes";
@@ -74,7 +73,7 @@ function errorWithUnit(pair: ErrorPair, unit?: string): string {
 export function ScientificChartMarks({
   chartData, theme, width, height, onHover, wrapperRef, chartType,
 }: ChartMarksProps & { chartType: string }) {
-  const data = scientificFields(chartData);
+  const data = chartData;
   const named = data.series;
   const series: PlottedSeries[] = named ?? [{
     name: "",

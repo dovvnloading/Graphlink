@@ -6,6 +6,8 @@
  */
 import { describe, expect, it } from "vitest";
 import { CHART_SPEC_VERSION, ChartSpecError, canonicalizeChartSpec } from "./chartSpec";
+import { validateSceneState } from "../../lib/bridge-core/generated/scene-state";
+import { initialSceneState } from "./sceneStore";
 
 function barData(overrides: Record<string, unknown> = {}) {
   return { type: "bar", title: "Sales", labels: ["A", "B", "C"], values: [1, 2, 3], ...overrides };
@@ -261,10 +263,10 @@ describe("boxplot and heatmap v1 chart specs", () => {
     const before = JSON.stringify(box);
     const result = canonicalizeChartSpec(box, "boxplot");
     expect(result).toMatchObject({
-      version: 1, title: "Boxplot Chart", xAxis: "Group", yAxis: "Value",
+      version: 1, type: "boxplot", title: "Boxplot Chart", xAxis: "Group", yAxis: "Value",
       groups: box.groups,
     });
-    expect(result.type).toBeUndefined(); // v1 scene enum excludes new types
+    expect(result.type).toBe("boxplot");
     expect(canonicalizeChartSpec(result, "boxplot")).toEqual(result);
     expect(JSON.stringify(box)).toBe(before);
   });
@@ -272,11 +274,11 @@ describe("boxplot and heatmap v1 chart specs", () => {
   it("normalizes a rectangular matrix and preserves the exact row/column order", () => {
     const result = canonicalizeChartSpec(heat, "heatmap");
     expect(result).toMatchObject({
-      version: 1, title: "Heatmap Chart", xAxis: "Columns", yAxis: "Rows",
+      version: 1, type: "heatmap", title: "Heatmap Chart", xAxis: "Columns", yAxis: "Rows",
       rowLabels: ["A", "B"], columnLabels: ["x", "y"],
       matrix: [[-2, 0], [1, 5]], valueUnit: "AU",
     });
-    expect(result.type).toBeUndefined();
+    expect(result.type).toBe("heatmap");
     expect(canonicalizeChartSpec(result, "heatmap")).toEqual(result);
   });
 
@@ -304,5 +306,50 @@ describe("boxplot and heatmap v1 chart specs", () => {
       version: 1, type: "pie", title: "Pie Chart",
       labels: ["A", "B"], values: [1, 2], xAxis: "Sequence", yAxis: "Value",
     });
+  });
+});
+
+
+// Prior workspace versions omitted the nested type on PR 586/590 charts.
+// The generated scene validator must accept those bytes before ChartRenderer
+// restores the discriminator from the containing chart node.
+describe("saved chart wire compatibility", () => {
+  const savedCharts = [
+    ["bar", { labels: ["A", "B"], values: [1, 2] }],
+    ["line", { labels: ["A", "B"], values: [1, 3] }],
+    ["pie", { labels: ["A", "B"], values: [1, 2] }],
+    ["histogram", { values: [1, 2, 3], bins: 2 }],
+    ["sankey", { flows: [{ source: "A", target: "B", value: 3 }] }],
+    ["scatter", {
+      xValues: [1, 10], series: [
+        { name: "Control", values: [2, 3], yError: [[0.1, 0.2], [0.2, 0.3]] },
+      ], xScale: "log10", yScale: "linear", xUnit: "mg/L", yUnit: "mV",
+    }],
+    ["boxplot", { groups: [{ label: "Control", values: [1, 2, 3, 10] }] }],
+    ["heatmap", {
+      rowLabels: ["A", "B"], columnLabels: ["X", "Y"],
+      matrix: [[-2, 0], [1, 5]], valueUnit: "AU",
+    }],
+  ] as const;
+
+  it.each(savedCharts)("validates and restores historical %s chart data without altering the plotted values", (chartType, saved) => {
+    const typed = canonicalizeChartSpec({ type: chartType, ...saved }, chartType);
+    const legacy = { ...typed };
+    delete legacy.type;
+
+    for (const chartData of [typed, legacy]) {
+      const wire = validateSceneState({
+        ...initialSceneState,
+        nodes: [{
+          id: "saved-chart", x: 0, y: 0, title: "Saved chart",
+          kind: "chart", chartType, chartData,
+        }],
+      });
+      expect(wire.ok).toBe(true);
+      if (!wire.ok) continue;
+      const loaded = canonicalizeChartSpec(wire.value.nodes[0].chartData, wire.value.nodes[0].chartType);
+      expect(loaded).toEqual(typed);
+      expect(loaded.type).toBe(chartType);
+    }
   });
 });

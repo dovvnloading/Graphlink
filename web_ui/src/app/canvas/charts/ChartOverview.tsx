@@ -1,6 +1,6 @@
 import { memo } from "react";
 import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
-import { canonicalizeChartSpec, ChartSpecError, scientificFields, usesScientificMarks, boxplotFields, heatmapFields } from "../chartSpec";
+import { canonicalizeChartSpec, ChartSpecError, usesScientificMarks } from "../chartSpec";
 import { computeHistogramBins, computeBoxplotStats, heatmapColor, createLinearScale, createLog10Scale, formatValue, scientificDomain } from "./chartScales";
 import { computeSankeyLayout, sankeyFlowPath } from "./sankeyLayout";
 import { buildSlices } from "./pieSlices";
@@ -26,7 +26,7 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
   }
 
   if (chartType === "boxplot") {
-    const groups = boxplotFields(spec).groups ?? [];
+    const groups = spec.groups ?? [];
     const all = groups.flatMap((group) => group.values);
     const y = createLinearScale(scientificDomain(Math.min(...all), Math.max(...all), "linear"), [HEIGHT - 8, 8]);
     const slot = (WIDTH - 16) / groups.length;
@@ -53,7 +53,7 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
   }
 
   if (chartType === "heatmap") {
-    const data = heatmapFields(spec);
+    const data = spec;
     const matrix = data.matrix ?? [];
     const values = matrix.flat();
     const min = Math.min(...values);
@@ -71,7 +71,7 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
   }
 
   if (chartType === "scatter" || (chartType === "line" && usesScientificMarks(spec, chartType))) {
-    const data = scientificFields(spec);
+    const data = spec;
     const series = data.series ?? [{
       name: "",
       values: data.values ?? [],

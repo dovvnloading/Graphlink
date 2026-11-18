@@ -1,7 +1,6 @@
 /** Dense heatmap SVG cells with a single matrix-wide color domain.
  * Negative/positive matrices use zero-centered colors, matching exports. */
 import { useId } from "react";
-import { heatmapFields } from "../chartSpec";
 import type { ChartMarksProps } from "./BarChartMarks";
 import { heatmapColor, pickCategoricalTicks, wrapLabel } from "./chartScales";
 import { computeBottomMargin, tooltipPositionFromEvent } from "./chartLayout";
@@ -10,7 +9,7 @@ export function HeatmapChartMarks({
   chartData, theme, width, height, onHover, wrapperRef,
 }: ChartMarksProps) {
   const gradientId = useId();
-  const data = heatmapFields(chartData);
+  const data = chartData;
   const rows = data.rowLabels ?? [];
   const columns = data.columnLabels ?? [];
   const matrix = data.matrix ?? [];
