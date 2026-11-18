@@ -12,6 +12,71 @@ Enable the desired packs in **Settings → Plugins**, then open **Plugins → Sc
 | 4 | Reproducibility | Record exact inputs, method and version, result and input fingerprints, UTC time and any linked source. A run is one undoable graph edit. |
 | 5 | Storage and verification | Save and reopen a workspace with the same results. Carry verified result assets through archive export/import, preserve missing asset references, and exercise grants and frontend controls. |
 
+
+## Typed tables: real CSV and TSV datasets
+
+Every Scientific Workbench node includes a separate **Typed data table**
+panel. Choose **Paste CSV / TSV** or **Choose a file**, select comma or tab
+delimiters (a selected .tsv file selects TSV automatically), and press
+**Import typed table**. Files are read as bytes, not pasted through an
+operation's 65,536-character text input. UTF-8, optional UTF-8 BOM, quoted
+CSV/TSV fields and embedded line breaks are supported. A header and at least
+one data row are required; duplicate, empty or nonrectangular headers/rows
+are rejected. Imported tables can contain up to **100,000 rows, 256 columns
+and 1,000,000 cells**; the source file may contain up to 64 MiB of UTF-8
+data. Larger normalized JSON is bounded separately at 128 MiB.
+
+The importer infers and stores a type for each column: **numeric**, **text**,
+**categorical**, **date-time** or **boolean**. For example:
+
+    Sample,Temperature (degC),IsControl,Collected,Group
+    A,20.5,true,2026-11-01,control
+    B,NA,false,2026-11-02,trial
+
+Types are inferred from nonmissing cells, with optional per-header JSON
+overrides such as {"Group":"categorical","Collected":"datetime"}.
+Datetime values use ISO 8601 date/time strings; booleans accept
+true/false and yes/no, case-insensitively. Missing cells are stored
+as explicit **null**, never as zero, false or empty text. By default blank
+cells, NA, N/A and null count as missing; the **Missing-value markers**
+field lets you choose additional tokens. A column header such as
+Temperature (degC) retains the original label and separately records
+name "Temperature" and unit "degC". These units are metadata, not an
+implicit conversion. Arbitrary domain units are allowed in headers. The
+preview shows the first eight rows and columns, types and missing counts,
+while the underlying table remains complete.
+
+**Existing operations are backward compatible.** Their operation IDs,
+field names, numeric input validation and previously saved results/receipts
+are not changed. Their historical limits (**1,024 measurement points,
+32 matrix columns, 4,096 matrix cells**) still apply to a calculation;
+a scientific table does not silently turn a legacy calculation into a
+100,000-point operation. To use an imported dataset, draw an edge from its
+workbench to another Scientific Workbench node, then choose a **numeric**
+typed-table column in a vector input's connected-results menu. The menu
+identifies the first 1,024 rows if the table is larger; select a smaller
+row range programmatically through the table_column intent if needed.
+Only numeric columns are selectable. The default **Reject missing** option
+fails if the selected range contains any nulls. **Drop missing (explicit)**
+is a separate choice and records that choice in the selected
+source receipt; it does not modify the stored table.
+
+**Storage and reproducibility:** The canonical typed table (including
+nulls, types, units and all rows) is written to the existing SHA-256
+content-addressed AssetStore when the graph is saved; **only an asset
+reference, column schema, a bounded preview, row/column counts, and an
+import receipt** are persisted in graph/node state and sent over the scene
+wire. The import receipt records the **SHA-256 of the original file bytes**
+(or the pasted UTF-8 bytes), delimiter and format, encoding, header/unit
+handling, exact missing-marker list, type overrides, normalized table
+content hash and receipt checksum. A saved workspace reopens from the
+verified asset; archive export/import includes it using the existing
+asset-reference collector. If the asset is missing or corrupted, the
+operation refuses to substitute invented data. An explicitly selected
+numeric column carries the table hash, receipt checksum, row window and
+missing-data policy into the downstream calculation's existing provenance.
+The legacy 1.1.0 pack version and existing operation hashes stay stable.
+
 ## Pack specifications
 
 | Pack | Operations | Output and assumptions |

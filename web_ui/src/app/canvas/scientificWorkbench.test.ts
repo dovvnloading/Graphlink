@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartableScienceTypes, fieldText, matchesSource, parseInputs, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
+import { chartableScienceTypes, compatibleOptions, fieldText, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
 
 const limits = { points: 3, columns: 2, cells: 4, text: 3 };
 function parse(kind: ScienceField["kind"], raw: string) {
@@ -93,5 +93,47 @@ describe("chartable scientific results", () => {
     const table = { columns: Array.from({ length: 30 }, (_, i) => String(i)),
       rows: Array.from({ length: 11 }, () => Array.from({ length: 30 }, () => 1)) };
     expect(chartableScienceTypes({ ...result, plot: undefined, table })).toEqual([]);
+  });
+});
+
+
+describe("typed table metadata and numeric column choices", () => {
+  const table = {
+    version: 1 as const, asset_ref: "a".repeat(64), mime_type: "application/json",
+    rowCount: 100000, columnCount: 2, previewColumns: 2, sourceName: "measurements.tsv",
+    columns: [
+      { name: "Temperature", label: "Temperature (degC)", unit: "degC", type: "numeric" as const, missingCount: 2 },
+      { name: "Station", label: "Station", unit: "", type: "text" as const, missingCount: 0 },
+    ],
+    preview: [[12.5, "A"], [null, "B"]],
+    provenance: { fileHash: "b".repeat(64), tableHash: "a".repeat(64),
+      receiptHash: "c".repeat(64), parseOptions: { format: "tsv", missingValues: ["", "NA"] } },
+  };
+
+  it("reads the typed schema independently of any legacy result", () => {
+    const state: ScienceState = { scienceVersion: 1, packId: "core",
+      operations: [{ id: "numeric_csv", title: "Import numeric CSV", description: "", fields: [], example: {} }],
+      latest: null, table };
+    expect(readScienceState(JSON.stringify(state))?.table?.rowCount).toBe(100000);
+    expect(readScienceState(JSON.stringify({ ...state, table: { ...table, columns: [{ type: "nonsense" }] } }))).toBeNull();
+  });
+
+  it("offers only numeric typed columns with explicit missing policies and a bounded row window", () => {
+    const options = sourceOptions([{ nodeId: "parent", title: "Source", raw: JSON.stringify({
+      scienceVersion: 1, packId: "core", nodeKey: "d".repeat(32), latest: null,
+      operations: [{ id: "numeric_csv", title: "Import", description: "", fields: [], example: {} }], table,
+    }) }], 1024);
+    expect(options).toHaveLength(2);
+    expect(options[0].label).toContain("first 1024 of 100000 rows");
+    expect(options[0].label).toContain("Reject missing");
+    expect(options[1].label).toContain("Drop missing (explicit)");
+    expect(options[0].tableColumn).toEqual({
+      nodeId: "parent", column: 0, policy: "reject", start: 0, end: 1024,
+    });
+    expect(options[1].reference).toMatchObject({ resultHash: table.asset_ref, receiptHash: table.provenance.receiptHash,
+      selector: ["table_column", 0, "drop", 0, 1024] });
+    const field = (kind: ScienceField["kind"]): ScienceField => ({ key: "a", kind, label: "A", unit: "", description: "" });
+    expect(compatibleOptions(field("vector"), options)).toHaveLength(2);
+    expect(compatibleOptions(field("number"), options)).toEqual([]);
   });
 });
