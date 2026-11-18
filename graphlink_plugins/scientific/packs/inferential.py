@@ -326,7 +326,8 @@ def _studentized_range_cdf(q, k, df):
         return 0.0
     if k == 2:
         return _probability(2 * _student_t_cdf(q / math.sqrt(2), df) - 1)
-    nodes_z = _legendre_nodes(80)
+    # More normal-range nodes are necessary for the steeper k>=16 integrand.
+    nodes_z = _legendre_nodes(128 if k >= 16 else 80)
     z_data = [(9 * z, 9 * weight / math.sqrt(2 * math.pi) * math.exp(-.5 * (9 * z)**2),
                _NORMAL.cdf(9 * z)) for z, weight in nodes_z]
     sqrt2df = math.sqrt(2 * df)
@@ -393,6 +394,9 @@ def _one_way_anova(data):
             raise ValueError("ANOVA pooled within-group variance is zero; F and Tukey HSD are undefined.")
         df1, df2 = k - 1, n - k
         ms_between, ms_within = ss_between / df1, ss_within / df2
+        if any(value and float(value) == 0.0 for value in
+               (ss_between, ss_within, ms_between, ms_within)):
+            raise ValueError("ANOVA sums or mean squares underflow the supported floating-point range.")
         f = float(ms_between / ms_within)
         total = ss_between + ss_within
         vals = {

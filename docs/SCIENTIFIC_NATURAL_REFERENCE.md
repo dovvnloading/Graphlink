@@ -72,3 +72,13 @@ The three original operations and their stored result/receipt formats are unchan
 **Butterworth interpretation.** The analog frequency is prewarped using `Ω = 2Fs tan(πf/Fs)` before the bilinear transform. `order` denotes the *single-pass lowpass prototype*, not the final zero-phase order: a bandpass has twice as many poles before the forward-backward pass. A single-pass Butterworth response is −3.0103 dB at each specified cutoff; forward-backward filtering squares its magnitude, making the **filtered output** approximately −6.0206 dB there. Reflection padding and steady-state initial conditions reduce but cannot eliminate edge effects. Too-short records are rejected with the minimum sample requirement; poles too close to the unit circle or overly high prototype orders are rejected rather than producing unstable output.
 
 References: [MathWorks single-sided amplitude convention](https://www.mathworks.com/help/matlab/ref/fft.html), [SciPy periodic window definitions](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.get_window.html), [SciPy spectral scaling](https://docs.scipy.org/doc/scipy/tutorial/signal.html), [Welch PSD and ENBW](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.welch.html), [Butterworth cutoff convention](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.butter.html), [forward-backward filter and edge handling](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.sosfiltfilt.html), [Savitzky–Golay edge interpolation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.savgol_filter.html), and [peak height, prominence and distance](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.find_peaks.html).
+
+### Large-baseline regression cases (2026-11-18 audit)
+
+Welch detrending now subtracts each segment's first value before calculating
+the mean of the residuals, avoiding overflow for a constant record of 1e308
+whose analytic PSD is zero. Butterworth's reflected edge samples are
+evaluated as edge + (edge - sample), rather than 2*edge - sample; this preserves
+large finite constants without creating an intermediate infinity. Inputs
+whose actual intermediate results cannot be represented in binary64 still
+raise an explicit range error.

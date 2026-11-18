@@ -164,8 +164,9 @@ def _newton(system, t, base, hgamma, guess, rtol, atol):
     def residual(values):
         f = system.rhs(t, values)
         r = [values[i] - base[i] - hgamma * f[i] for i in range(len(z))]
-        norm = max(abs(v) / max(atol + rtol * max(abs(values[i]), abs(base[i])), 1e-30)
-                   for i, v in enumerate(r))
+        # Use the requested scale even for tiny states; an unrelated 1e-30
+        # floor can falsely declare convergence while the state is unchanged.
+        norm = _scale_error(r, values, base, rtol, atol)
         return r, norm
 
     for _ in range(12):
@@ -370,20 +371,23 @@ def _gk15(f, a, b):
     midpoint, half = a + (b-a)/2, (b-a)/2
     center = f(midpoint)
     pairs = [(f(midpoint-half*x), f(midpoint+half*x)) for x in _XGK[:-1]]
-    kronrod = _WGK[-1]*center + math.fsum(w*(l+r) for w, (l,r) in zip(_WGK, pairs))
-    gauss = _WG[-1]*center + math.fsum(_WG[j]*(pairs[i][0]+pairs[i][1])
-                                        for j, i in enumerate((1, 3, 5)))
-    absolute = _WGK[-1]*abs(center) + math.fsum(w*(abs(l)+abs(r)) for w, (l,r) in zip(_WGK, pairs))
-    mean = kronrod/2
-    asc = _WGK[-1]*abs(center-mean) + math.fsum(
-        w*(abs(l-mean)+abs(r-mean)) for w, (l,r) in zip(_WGK, pairs))
-    value = _real(half*kronrod, "Quadrature integral")
-    error = abs(half*(kronrod-gauss))
+    # Scale each sample before summation. Unscaled symmetric sums such as
+    # f(left)+f(right) can overflow even when the integral is representable.
+    kronrod = math.fsum([half*_WGK[-1]*center] +
+                        [half*w*v for w, pair in zip(_WGK, pairs) for v in pair])
+    gauss = math.fsum([half*_WG[-1]*center] +
+                      [half*_WG[j]*v for j, i in enumerate((1, 3, 5)) for v in pairs[i]])
+    absolute = math.fsum([abs(half)*_WGK[-1]*abs(center)] +
+                         [abs(half)*w*abs(v) for w, pair in zip(_WGK, pairs) for v in pair])
+    mean = kronrod / (b-a)
+    asc = math.fsum([abs(half)*_WGK[-1]*abs(center-mean)] +
+                    [abs(half)*w*abs(v-mean) for w, pair in zip(_WGK, pairs) for v in pair])
+    value = _real(kronrod, "Quadrature integral")
+    error = abs(kronrod-gauss)
     if asc and error:
-        error = abs(half)*asc*min(1, (200*error/(abs(half)*asc))**1.5)
-    error = _real(max(error, 50*_EPS*abs(half)*absolute), "Quadrature error estimate")
+        error = asc*min(1, (200*(error/asc))**1.5)
+    error = _real(max(error, 50*_EPS*absolute), "Quadrature error estimate")
     return value, error
-
 
 def _quadrature(data):
     rtol, atol = _tolerances(data)
@@ -475,7 +479,9 @@ def _spline(data):
     def interpolate(q):
         i = min(n-2, bisect.bisect_right(x, q)-1)
         a, b = (x[i+1]-q)/h[i], (q-x[i])/h[i]
-        value = a*y[i] + b*y[i+1] + h[i]**2/6*((a**3-a)*second[i] + (b**3-b)*second[i+1])
+        # Avoid squaring a potentially huge interval (including 0 * infinity
+        # for a perfectly linear spline with zero second derivatives).
+        value = a*y[i] + b*y[i+1] + (h[i]/6)*((a**3-a)*(h[i]*second[i]) + (b**3-b)*(h[i]*second[i+1]))
         gradient = slopes[i] + h[i]/6*((1-3*a*a)*second[i] + (3*b*b-1)*second[i+1])
         return _real(value, "Spline interpolated value"), _real(gradient, "Spline slope")
 
