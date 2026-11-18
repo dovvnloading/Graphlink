@@ -47,7 +47,7 @@ Inputs: two independent numeric samples, each of size at least 2; unequal popula
 \[t=\frac{\bar x_1-\bar x_2}{\sqrt{s_1^2/n_1+s_2^2/n_2}},\quad
 \nu=\frac{(v_1+v_2)^2}{v_1^2/(n_1-1)+v_2^2/(n_2-1)},\quad v_j=s_j^2/n_j.\]
 
-The **two-sided** p-value is *I_{ν/(ν+t²)}(ν/2, 1/2)*, where *I* is the regularized incomplete beta function. The implementation evaluates this as twice the stable negative-*t* tail, including the logarithmic small-beta-argument limit when `t²` overflows; a representable p-value must not silently become zero. Degrees of freedom use the Welch–Satterthwaite approximation and need not be integers. If both samples have zero variance, the test is undefined and rejected. Population independence and a meaningful sample distribution approximation are necessary; the pack does not perform pairing, multiple-test correction, normality tests or effect-size adjustment. `t_statistic`, `degrees_of_freedom`, `p_value`, means and sample sizes are reported.
+The **two-sided** p-value is *I_{ν/(ν+t²)}(ν/2, 1/2)*, where *I* is the regularized incomplete beta function. The implementation evaluates this as twice the stable negative-*t* tail, including the logarithmic small-beta-argument limit when `t²` overflows; a representable p-value must not silently become zero. Degrees of freedom use the Welch–Satterthwaite approximation and need not be integers. If both samples have zero variance, the test is undefined and rejected. Population independence and a meaningful sample distribution approximation are necessary; this Welch operation does not perform pairing or effect-size adjustment; the pack also provides paired-rank, normality and multiple-test procedures. `t_statistic`, `degrees_of_freedom`, `p_value`, means and sample sizes are reported.
 
 ## Pearson chi-square goodness of fit (`chi_square_gof`)
 
@@ -77,9 +77,9 @@ python -m pytest -n0 backend/tests/test_scientific*.py tests/test_scientific*.py
 Result artifacts and receipts are part of the existing Scientific Workbench graph node; their hashes include the pack ID, operation ID, validated input fingerprint, pack version and output. A separate receipt hash covers UTC time and input provenance. Export JSON preserves those canonical measurements and hashes for later verification.
 
 
-## One-way ANOVA with Tukey–Kramer HSD (\`one_way_anova\`)
+## One-way ANOVA with Tukey–Kramer HSD (`one_way_anova`)
 
-Inputs: \`values\` contains the numeric responses and \`groups\` contains one numeric group code for **each** response in the same order. Codes are arbitrary finite numbers (e.g., \`[1,1,2,2,3,3]\`), and **unequal** group sizes are supported. There must be 2–32 distinct groups, with at least two observations in each group. A zero pooled within-group variance is an **error**: the F statistic and studentized-range post-hoc probabilities are undefined in that case.
+Inputs: `values` contains the numeric responses and `groups` contains one numeric group code for **each** response in the same order. Codes are arbitrary finite numbers (e.g., `[1,1,2,2,3,3]`), and **unequal** group sizes are supported. There must be 2–32 distinct groups, with at least two observations in each group. A zero pooled within-group variance is an **error**: the F statistic and studentized-range post-hoc probabilities are undefined in that case.
 
 For \(k\) groups, \(n\) observations, group means \(\bar x_i\), grand mean \(\bar x\), and within-group values \(x_{ij}\), calculate \(SS_B=\sum_i n_i(\bar x_i-\bar x)^2\), \(SS_W=\sum_{ij}(x_{ij}-\bar x_i)^2\). The F statistic is \(F=[SS_B/(k-1)]/[SS_W/(n-k)]\); the upper-tail p-value uses the **regularized incomplete beta** calculation in the existing fitting module. The output includes both sums and mean squares, between/within degrees of freedom, F, p-value, \(R^2=SS_B/(SS_B+SS_W)\) and the residual standard deviation. Summation, centering and mean calculation use **76-digit decimal arithmetic** on the normalized finite inputs to preserve small residuals near large baselines, with the result converted to binary64 only at the artifact boundary.
 
@@ -87,9 +87,9 @@ The post-hoc table contains **every pair** of numeric group codes in ascending o
 
 Assumptions: independent observations, independent normally distributed errors with equal population variance across groups, and a fixed one-way treatment model. Tukey HSD controls **familywise** pairwise error under the same assumptions; it does not correct for data-dependent subgroup selection, heterogeneous variances or dependent repeated measurements. The pairwise confidence intervals are not the marginal per-comparison intervals.
 
-## Mann–Whitney U (\`mann_whitney_u\`)
+## Mann–Whitney U (`mann_whitney_u`)
 
-Inputs: \`sample_a\`, \`sample_b\` (independent samples, at least **two** observations in each). The method assigns **midranks** for equal pooled measurements, then reports \(U_A=R_A-n_A(n_A+1)/2\), \(U_B=n_An_B-U_A\), the smaller U, both sample sizes and the **two-sided** p-value.
+Inputs: `sample_a`, `sample_b` (independent samples, at least **two** observations in each). The method assigns **midranks** for equal pooled measurements, then reports \(U_A=R_A-n_A(n_A+1)/2\), \(U_B=n_An_B-U_A\), the smaller U, both sample sizes and the **two-sided** p-value.
 
 For **\(n_A+n_B\le30\)**, p-values are **exact permutation probabilities conditional on the observed ranks**. Dynamic programming counts all \(\binom{n_A+n_B}{n_A}\) label assignments, with ranks multiplied by two to represent half-integer tied midranks without floating-point ambiguity. The two-sided probability is \(2\min\{P(U_A\le u),P(U_A\ge u)\}\), capped at 1. Thus exact small-sample p-values **also support ties**, but can differ from programs that use a tie-ignorant exact null distribution.
 
@@ -103,9 +103,9 @@ where \(t\) are pooled tie-block sizes. A **0.5 continuity correction** is appli
 
 The test is about **distributions/stochastic ordering**; interpret it as a median shift only when the groups have comparable shapes. Independence and exchangeability under the null are necessary for the exact permutation p-value.
 
-## Wilcoxon signed-rank (\`wilcoxon_signed_rank\`)
+## Wilcoxon signed-rank (`wilcoxon_signed_rank`)
 
-Inputs: \`before\`, \`after\` matched by position and of **equal length**. The operation ranks the absolute **after minus before** differences, assigns midranks for tied magnitudes, and uses the **Wilcoxon zero convention**: exact zeros are dropped *before* ranking. At least **two nonzero differences** are required. The result includes total/nonzero/dropped pairs, \(W^+\) (positive rank sum), \(W^-\) (negative), \(\min(W^+,W^-)\), and a two-sided p-value. A paired-difference magnitude outside finite range is rejected.
+Inputs: `before`, `after` matched by position and of **equal length**. The operation ranks the absolute **after minus before** differences, assigns midranks for tied magnitudes, and uses the **Wilcoxon zero convention**: exact zeros are dropped *before* ranking. At least **two nonzero differences** are required. The result includes total/nonzero/dropped pairs, \(W^+\) (positive rank sum), \(W^-\) (negative), \(\min(W^+,W^-)\), and a two-sided p-value. A paired-difference magnitude outside finite range is rejected.
 
 For **up to 30 nonzero pairs**, exact p-values count all \(2^n\) sign assignments of the observed doubled midranks using a subset-sum dynamic program (conditional exact test even **with ties**). Above 30, the tie-corrected normal variance is
 \[
@@ -115,23 +115,23 @@ For **up to 30 nonzero pairs**, exact p-values count all \(2^n\) sign assignment
 \]
 with a **0.5 continuity correction** toward the null mean. Do not interpret this as a generic paired median test unless the paired-difference distribution is **symmetric**; pairs should be independent and matched meaningfully.
 
-## Shapiro–Wilk normality (\`shapiro_wilk\`)
+## Shapiro–Wilk normality (`shapiro_wilk`)
 
-Input: \`sample\`, **3–1024** finite observations (the shared workbench vector limit; Royston's algorithm itself supports up to 5000). All-equal data are rejected. The operation calculates the classical \(W=[\sum_i a_i x_{(i)}]^2/\sum_i(x_i-\bar x)^2\) with antisymmetric weights. The weight construction uses **Royston's AS R94** approximation: Blom normal-order scores \(m_i=\Phi^{-1}[(i-3/8)/(n+1/4)]\), polynomial corrections to the outer one/two weights and normalization of the remaining weights. The ordered observations are centered and scaled before taking squares, reducing cancellation and overflow.
+Input: `sample`, **3–1024** finite observations (the shared workbench vector limit; Royston's algorithm itself supports up to 5000). All-equal data are rejected. The operation calculates the classical \(W=[\sum_i a_i x_{(i)}]^2/\sum_i(x_i-\bar x)^2\) with antisymmetric weights. The weight construction uses **Royston's AS R94** approximation: Blom normal-order scores \(m_i=\Phi^{-1}[(i-3/8)/(n+1/4)]\), polynomial corrections to the outer one/two weights and normalization of the remaining weights. The ordered observations are centered and scaled before taking squares, reducing cancellation and overflow.
 
 For **\(n=3\)** the significance probability is **exact**, \(p=(6/\pi)[\arcsin(\sqrt W)-\pi/3]\); for \(4\le n\le11\), the short-sample Royston transform and fitted normal parameters are used; for \(n\ge12\), the log-\(n\) Royston approximation applies. This is an **approximate** null p-value for all \(n\ge4\); even a p-value above 0.05 does not prove the measurements are normal. The method assumes an independent continuous sample.
 
-## Pearson and Spearman correlations (\`pearson_correlation\`, \`spearman_correlation\`)
+## Pearson and Spearman correlations (`pearson_correlation`, `spearman_correlation`)
 
-Both accept position-matched numeric vectors \`x\` and \`y\`, with **at least four pairs** to define the requested confidence intervals; unequal lengths or constant variables are rejected. Computation uses centered and range-scaled values and stable sums. All p-values are **two-sided**.
+Both accept position-matched numeric vectors `x` and `y`, with **at least four pairs** to define the requested confidence intervals; unequal lengths or constant variables are rejected. Computation uses centered and range-scaled values and stable sums. All p-values are **two-sided**.
 
 **Pearson** returns the product-moment \(r\), degrees of freedom \(n-2\), and a Student-t null test \(t=r\sqrt{(n-2)/(1-r^2)}\). Its **95% Fisher-z confidence interval** is \(\tanh[\operatorname{atanh}(r)\pm z_{0.975}/\sqrt{n-3}]\). This interval and t test assume independent, approximately bivariate-normal paired observations; extreme outliers and nonlinearity can invalidate interpretation.
 
 **Spearman** returns Pearson correlation computed **on midranks** (correctly incorporating ties). For **up to 8 pairs**, its two-sided p-value is the **exact permutation** proportion conditional on the observed ranks, including ties. For larger paired samples, it uses the usual **Student-t approximation** with \(n-2\) degrees of freedom. Its **approximate 95% confidence interval** uses the *Bonett–Wright (2000)* modified Fisher-z variance \((1+\rho^2/2)/(n-3)\). This interval is a **large-sample approximation**, not an exact small-sample confidence interval; it is least reliable for \(n<10\), heavy ties or nearly perfect correlations. At \(r=\pm1\), the output takes the limiting endpoint convention \([\pm1,\pm1]\), not a finite-sample coverage guarantee. Spearman correlation is about **monotone association**, not a causal relationship.
 
-## Multiplicity correction (\`bonferroni_correction\`, \`benjamini_hochberg_correction\`)
+## Multiplicity correction (`bonferroni_correction`, `benjamini_hochberg_correction`)
 
-Both operations accept \`p_values\` (one or more valid numbers in **[0, 1]**) and a desired threshold \`alpha\` **strictly between 0 and 1**. Output rows preserve the **input order** and show zero-based hypothesis index, raw p, adjusted p and rejection at the supplied alpha. A count of rejected hypotheses is also returned.
+Both operations accept `p_values` (one or more valid numbers in **[0, 1]**) and a desired threshold `alpha` **strictly between 0 and 1**. Output rows preserve the **input order** and show zero-based hypothesis index, raw p, adjusted p and rejection at the supplied alpha. A count of rejected hypotheses is also returned.
 
 - **Bonferroni:** \(p^{adj}_i=\min(1,mp_i)\). Familywise error control does not require independent tests, provided the input p-values are valid.
 - **Benjamini–Hochberg:** sort p-values to \(p_{(1)}\le\cdots\le p_{(m)}\) and calculate \(p^{adj}_{(i)}=\min_{j\ge i}\min(1,mp_{(j)}/j)\), working backward to ensure **monotonic adjusted probabilities**; unsort into the original order. BH controls **false discovery rate** under independent or suitably **positive-regression-dependent** p-values, not arbitrary dependence.
@@ -140,7 +140,7 @@ These corrections apply to the **full family of planned tests**; submitting only
 
 ## Independent certification cases for the additional tests
 
-\`backend/tests/test_scientific_inference.py\` uses exact NIST StRD data and **15 published significant digits** for each published ANOVA sum of squares, mean square, F, \(R^2\) and residual standard deviation (where NIST supplies that result). The hard-case \`SmLs07\` rows preserve the 13 leading common digits. All three tests compare **formatted published significant digits** (not a loose absolute epsilon):
+`backend/tests/test_scientific_inference.py` uses exact NIST StRD data and **15 published significant digits** for each published ANOVA sum of squares, mean square, F, \(R^2\) and residual standard deviation (where NIST supplies that result). The hard-case `SmLs07` rows preserve the 13 leading common digits. All three tests compare **formatted published significant digits** (not a loose absolute epsilon):
 
 | NIST dataset | Between df / within df | Between SS | Within SS | Certified F |
 | --- | --- | --- | --- | --- |
@@ -159,6 +159,6 @@ Other independent worked-example tests cover:
 
 Run the new tests along with the original numerical certification suite:
 
-\`\`\`sh
+```sh
 python -m pytest -n0 backend/tests/test_scientific_inference.py backend/tests/test_scientific_fitting.py
-\`\`\`
+```
