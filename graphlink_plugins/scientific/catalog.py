@@ -18,6 +18,7 @@ PACKS = {
     "materials": ("Materials Science", "Analyze measured density, tensile response and apparent porosity."),
     "signals": ("Signal Processing", "Smooth, transform and resample measured signals."),
     "fitting": ("Fitting and Inference", "Weighted and nonlinear fits, Welch tests and chi-square goodness-of-fit."),
+    "uncertainty": ("Measurement Uncertainty", "First-order GUM propagation with correlations and Student t coverage."),
 }
 
 
