@@ -84,6 +84,42 @@ def test_scientific_rejects_bad_log_bounds_and_series_lengths(data, match):
         canonicalize_chart_data(base, "scatter")
 
 
+def test_uncertainty_span_overflow_is_rejected_before_reaching_both_renderers():
+    # All three coordinates and each lower/upper error endpoint are finite.
+    # Collectively the interval is too wide for a finite Cartesian domain.
+    with pytest.raises(ChartDataError, match="range including error endpoints must be finite"):
+        canonicalize_chart_data({
+            "type": "scatter", "xValues": [1, 2, 3], "values": [0, 0, 0],
+            "yError": [1e308, 1e308, 1e308],
+        }, "scatter")
+
+
+def test_existing_histogram_and_sankey_canonical_shapes_stay_exactly_the_same():
+    histogram = canonicalize_chart_data({"type": "histogram", "values": [1, 2, 3, 4]}, "histogram")
+    assert histogram == {
+        "version": 1, "type": "histogram", "title": "Histogram Chart",
+        "values": [1.0, 2.0, 3.0, 4.0], "bins": 4,
+        "xAxis": "Value", "yAxis": "Frequency",
+    }
+    sankey = canonicalize_chart_data({"type": "sankey", "flows": [
+        {"source": "Start", "target": "End", "value": 1},
+    ]}, "sankey")
+    assert sankey == {
+        "version": 1, "type": "sankey", "title": "Sankey Chart",
+        "flows": [{"source": "Start", "target": "End", "value": 1.0}],
+    }
+
+
+def test_model_schema_accepts_named_series_without_forcing_legacy_top_level_values():
+    from graphlink_chart_data import CHART_JSON_SCHEMAS
+
+    for chart_type in ("line", "scatter"):
+        schema = CHART_JSON_SCHEMAS[chart_type]
+        assert "series" in schema["properties"]
+        assert "values" not in schema["required"]
+        assert {"required": ["series"]} in schema["anyOf"]
+
+
 def test_scientific_line_can_use_categorical_labels_and_y_error_without_changing_legacy_line():
     old = {"type": "line", "labels": ["A", "B"], "values": [2, 4]}
     assert canonicalize_chart_data(old, "line") == {
