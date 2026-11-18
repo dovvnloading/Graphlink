@@ -437,11 +437,25 @@ def _scientific_chart(data, chart_type, result):
         _check_scientific_axis(row["values"], row.get("yError"), result["yScale"],
                                f"series {row.get('name', 'values')} values")
 
-    # Check range arithmetic too: two finite endpoints can have an infinite
-    # span, which neither SVG pixel geometry nor mpl axis limits can draw.
-    for axis, values in (("xValues", x_values), ("values", [v for row in series for v in row["values"]])):
-        if values is not None and not math.isfinite(max(values) - min(values)):
-            raise ChartDataError(f"{axis} range must be finite")
+    # Each row is locally finite, but multiple series can still have
+    # disjoint asymmetric intervals whose UNION has an infinite span. Use
+    # the same all-series extrema the React renderer uses for its domains.
+    for field, coordinates, error_field in (
+        ("xValues", x_values, "xError"),
+        ("values", None, "yError"),
+    ):
+        if field == "xValues" and coordinates is None:
+            continue
+        smallest, largest = float("inf"), float("-inf")
+        for row in series:
+            values = coordinates if coordinates is not None else row["values"]
+            errors = row.get(error_field)
+            for index, value in enumerate(values):
+                minus, plus = errors[index] if errors is not None else (0.0, 0.0)
+                smallest = min(smallest, value - minus)
+                largest = max(largest, value + plus)
+        if not math.isfinite(largest - smallest):
+            raise ChartDataError(f"{field} range including all series errors must be finite")
 
     result["xAxis"] = _clean_text(
         data.get("xAxis"), "X-axis label",
