@@ -50,38 +50,37 @@ export function ContextInspectorLauncher({
   const replyTargetId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getReplyTargetNodeId);
   const [isOpen, setIsOpen] = useState(false);
   const [revision, setRevision] = useState(0);
-  const [preview, setPreview] = useState<ContextPreview | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [response, setResponse] = useState<{ key: string; preview: ContextPreview | null; error: string | null } | null>(null);
 
   const selected = scene.nodes.find((node) => node.id === selectedId && node.kind === "chat");
   const replyTarget = scene.nodes.find((node) => node.id === replyTargetId && node.kind === "chat");
   const lastChat = scene.nodes.filter((node) => node.kind === "chat").slice(-1)[0];
   const nodeId = replyTarget?.id ?? selected?.id ?? lastChat?.id ?? null;
 
+  const requestKey = `${nodeId ?? ""}:${revision}`;
+  const currentResponse = response?.key === requestKey ? response : null;
+  const preview = currentResponse?.preview;
+  const error = currentResponse?.error;
+  const loading = isOpen && !!nodeId && !currentResponse;
+
   useEffect(() => {
     if (!isOpen || !nodeId) return;
     let disposed = false;
-    setLoading(true);
-    setError(null);
-    setPreview(null);
     // Snapshot draft at request time, rather than requerying on every
     // keystroke. Refresh is explicit to avoid a flood of network requests.
     const draft = composerStore.getComposer().draft.text;
     void transport.request("scene", "inspectChatContext", [nodeId, draft]).then(
       (result) => {
         if (disposed) return;
-        setPreview(result as ContextPreview);
-        setLoading(false);
+        setResponse({ key: requestKey, preview: result as ContextPreview, error: null });
       },
       (cause: unknown) => {
         if (disposed) return;
-        setError(cause instanceof Error ? cause.message : "Context inspection failed");
-        setLoading(false);
+        setResponse({ key: requestKey, preview: null, error: cause instanceof Error ? cause.message : "Context inspection failed" });
       },
     );
     return () => { disposed = true; };
-  }, [isOpen, nodeId, revision, transport, composerStore]);
+  }, [isOpen, nodeId, requestKey, transport, composerStore]);
 
   return (
     <div className="context-inspector-launcher">
