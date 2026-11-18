@@ -24,6 +24,11 @@ from backend import chat_library
 from graphlink_task_config import LOCAL_PROVIDER_OLLAMA
 
 
+# A deadlock safeguard, not a speed or scheduling assertion. Overlap is
+# proved by holding the fake transport workers until the test releases them.
+_MODEL_SYNC_WATCHDOG_S = 120
+
+
 def test_model_node_is_distinct_and_validates_cross_kind_cycles():
     doc = SceneDocument()
     source = doc.add_note(0, 0)
@@ -234,24 +239,33 @@ def test_committed_model_text_can_feed_local_steps_while_ollama_is_offline(tmp_p
 
 def test_model_output_edited_mid_inference_is_not_overwritten(tmp_path, monkeypatch):
     async def scenario():
-        _path, _bus, doc, source, _target, send = session(tmp_path)
+        path, _bus, doc, source, _target, send = session(tmp_path)
         node_id = await send("addModelNode", source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         preview = await send("previewGraphRun", [])
-        started, release = threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        model_started = asyncio.Event()
+        release = threading.Event()
 
-        def slow_model(**kwargs):
-            started.set()
-            assert release.wait(8)
+        def slow_model(**_kwargs):
+            # The fake transport cannot return until the test has made the
+            # mid-flight edit. No thread scheduling or wall-clock sleep race.
+            loop.call_soon_threadsafe(model_started.set)
+            release.wait()
             return {"message": {"content": "Unwanted stale model reply"}}
 
         monkeypatch.setattr(local_model, "local_ollama_complete", slow_model)
         running = asyncio.create_task(send("executeGraphRun", [], preview["previewToken"], "model-mid-edit-run"))
         try:
-            assert await asyncio.to_thread(started.wait, 5)
+            await asyncio.wait_for(model_started.wait(), timeout=_MODEL_SYNC_WATCHDOG_S)
+            # The model call starts only after its outbound fence is durable.
+            saved = load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
+            step = next(s for s in saved["steps"] if s["nodeId"] == node_id)
+            assert step["status"] == "running"
+            assert step["externalAttempt"]["phase"] == "dispatched"
             doc.nodes[node_id].content = "I edited this while the model was running"
         finally:
             release.set()
-        result = await running
+        result = await asyncio.wait_for(running, timeout=_MODEL_SYNC_WATCHDOG_S)
         assert result["status"] == "reconciliation-required"
         assert doc.nodes[node_id].content == "I edited this while the model was running"
         assert result["steps"][0]["status"] == "reconciliation-required"
@@ -268,7 +282,9 @@ def test_independent_model_steps_respect_default_and_configured_parallel_limit(t
             doc.add_model_node(source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         token = (await send("previewGraphRun", []))["previewToken"]
         lock = threading.Lock()
-        entered, release = threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        first_wave_started = asyncio.Event()
+        release = threading.Event()
         in_flight = peak = calls = 0
 
         def answer(**_kwargs):
@@ -279,9 +295,11 @@ def test_independent_model_steps_respect_default_and_configured_parallel_limit(t
                 in_flight += 1
                 peak = max(peak, in_flight)
                 if in_flight == expected:
-                    entered.set()
+                    loop.call_soon_threadsafe(first_wave_started.set)
             try:
-                assert release.wait(10), "model gate timed out"
+                # The test decides when the wave may finish; no worker
+                # times out just because Windows scheduling is slow.
+                release.wait()
                 return {"message": {"content": f"answer {invocation}"}}
             finally:
                 with lock:
@@ -293,7 +311,7 @@ def test_independent_model_steps_respect_default_and_configured_parallel_limit(t
             args.append(limit)
         running = asyncio.create_task(send("executeGraphRun", *args))
         try:
-            assert await asyncio.to_thread(entered.wait, 6)
+            await asyncio.wait_for(first_wave_started.wait(), timeout=_MODEL_SYNC_WATCHDOG_S)
             # Every running model has already durably reserved a request ID.
             saved = load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
             outbound = [s for s in saved["steps"] if s["status"] == "running"]
@@ -301,17 +319,22 @@ def test_independent_model_steps_respect_default_and_configured_parallel_limit(t
             assert all(s["externalAttempt"]["phase"] == "dispatched" for s in outbound)
             assert (await send("getGraphRun"))["status"] == "running"
             with lock:
-                assert calls == expected
+                # All slots are occupied simultaneously and remain held:
+                # this is a direct concurrency assertion, not a timestamp race.
+                assert (calls, in_flight, peak) == (expected, expected, expected)
         finally:
             release.set()
-        result = await asyncio.wait_for(running, timeout=10)
-        assert peak == expected and calls == 5
+        result = await asyncio.wait_for(running, timeout=_MODEL_SYNC_WATCHDOG_S)
+        with lock:
+            assert (calls, in_flight, peak) == (5, 0, expected)
         assert result["maxConcurrency"] == expected
         assert result["status"] == "completed"
         assert all(s["status"] == "completed" for s in result["steps"])
-        times = sorted(result["trace"]["steps"], key=lambda x: x["startedAt"])
-        assert times[0]["startedAt"] <= times[1]["startedAt"] < times[0]["finishedAt"]
-        assert all(s["startedAt"] <= s["finishedAt"] and s["durationMs"] is not None for s in times)
+        # The overlap assertion above replaces strict wall-clock ordering;
+        # trace metadata still has to be complete for every dispatched step.
+        trace_steps = result["trace"]["steps"]
+        assert len(trace_steps) == 5
+        assert all(s["startedAt"] and s["finishedAt"] and s["durationMs"] is not None for s in trace_steps)
         assert (await send("executeGraphRun", *args)) == result
         if limit is not None:
             with pytest.raises(IntentValidationError, match="concurrency limit"):
@@ -332,47 +355,85 @@ def test_independent_model_steps_respect_default_and_configured_parallel_limit(t
 
 def test_model_fan_out_starts_children_together_after_parent_receipt(tmp_path, monkeypatch):
     async def scenario():
-        _path, _bus, doc, source, _target, send = session(tmp_path)
+        path, _bus, doc, source, _target, send = session(tmp_path)
         parent = doc.add_model_node(source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         children = [doc.add_model_node(parent.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b") for _ in range(2)]
         leaves = [doc.add_note(0, 0) for _ in range(2)]
         for child, leaf in zip(children, leaves):
             doc.bind_note_text_input(child.id, leaf.id)
         token = (await send("previewGraphRun", []))["previewToken"]
-        entered, release = threading.Event(), threading.Event()
+
+        loop = asyncio.get_running_loop()
+        children_started = asyncio.Event()
+        release_children = threading.Event()
         lock = threading.Lock()
-        child_count = 0
+        observed_starts = []
+        active_children = peak_children = 0
 
         def answer(*, prompt, **_kwargs):
-            nonlocal child_count
-            if prompt == source.content:
-                return {"message": {"content": "shared parent output"}}
-            assert prompt == "shared parent output"
+            nonlocal active_children, peak_children
             with lock:
-                child_count += 1
-                if child_count == 2:
-                    entered.set()
-            assert release.wait(10)
-            return {"message": {"content": "child answer"}}
+                if prompt == source.content:
+                    observed_starts.append("parent")
+                    return {"message": {"content": "shared parent output"}}
+                assert prompt == "shared parent output"
+                observed_starts.append("child")
+                active_children += 1
+                peak_children = max(peak_children, active_children)
+                if active_children == len(children):
+                    loop.call_soon_threadsafe(children_started.set)
+            try:
+                release_children.wait()
+                return {"message": {"content": "child answer"}}
+            finally:
+                with lock:
+                    active_children -= 1
 
         monkeypatch.setattr(local_model, "local_ollama_complete", answer)
         pending = asyncio.create_task(send("executeGraphRun", [], token, "parallel-fan-out"))
         try:
-            assert await asyncio.to_thread(entered.wait, 6)
+            # Both child calls must enter before either can finish. This proves
+            # actual overlap without depending on trace timestamp precision.
+            await asyncio.wait_for(children_started.wait(), timeout=_MODEL_SYNC_WATCHDOG_S)
+            with lock:
+                assert observed_starts == ["parent", "child", "child"]
+                assert active_children == peak_children == len(children)
+
             state = await send("getGraphRun")
             by_id = {step["nodeId"]: step for step in state["steps"]}
             assert by_id[parent.id]["status"] == "completed"
             assert all(by_id[child.id]["status"] == "running" for child in children)
             assert all(by_id[leaf.id]["status"] == "pending" for leaf in leaves)
+
+            # Each child has begun only after the parent's completed receipt
+            # was durably saved, and both outbound requests have their fences.
+            saved = load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
+            saved_by_id = {step["nodeId"]: step for step in saved["steps"]}
+            assert saved_by_id[parent.id]["status"] == "completed"
+            assert saved_by_id[parent.id]["externalAttempt"]["phase"] == "completed"
+            assert all(
+                saved_by_id[child.id]["status"] == "running"
+                and saved_by_id[child.id]["externalAttempt"]["phase"] == "dispatched"
+                for child in children
+            )
+            assert all(saved_by_id[leaf.id]["status"] == "pending" for leaf in leaves)
         finally:
-            release.set()
-        finished = await asyncio.wait_for(pending, timeout=10)
-        by_id = {step["destinationNodeId"]: step for step in finished["trace"]["steps"]}
+            release_children.set()
+
+        finished = await asyncio.wait_for(pending, timeout=_MODEL_SYNC_WATCHDOG_S)
+        trace_by_id = {step["destinationNodeId"]: step for step in finished["trace"]["steps"]}
+        assert trace_by_id[parent.id]["status"] == "completed"
         for child, leaf in zip(children, leaves):
-            assert by_id[child.id]["startedAt"] >= by_id[parent.id]["finishedAt"]
-            assert by_id[leaf.id]["startedAt"] >= by_id[child.id]["finishedAt"]
+            assert trace_by_id[child.id]["status"] == "completed"
+            assert trace_by_id[child.id]["sourceNodeId"] == parent.id
+            assert trace_by_id[leaf.id]["status"] == "completed"
+            assert trace_by_id[leaf.id]["sourceNodeId"] == child.id
             assert doc.nodes[leaf.id].content == "child answer"
-        assert finished["status"] == "completed" and child_count == 2
+        with lock:
+            assert observed_starts == ["parent", "child", "child"]
+            assert active_children == 0
+            assert peak_children == len(children)
+        assert finished["status"] == "completed"
 
     asyncio.run(scenario())
 
@@ -422,7 +483,9 @@ def test_cancel_parallel_run_reaches_all_active_steps_without_replaying_them(tmp
             doc.add_model_node(source.id, LOCAL_PROVIDER_OLLAMA, "qwen3:8b")
         token = (await send("previewGraphRun", []))["previewToken"]
         lock = threading.Lock()
-        entered, release = threading.Event(), threading.Event()
+        loop = asyncio.get_running_loop()
+        both_active = asyncio.Event()
+        release = threading.Event()
         calls = 0
 
         def blocked(**_kwargs):
@@ -430,17 +493,24 @@ def test_cancel_parallel_run_reaches_all_active_steps_without_replaying_them(tmp
             with lock:
                 calls += 1
                 if calls == 2:
-                    entered.set()
-            assert release.wait(10)
+                    loop.call_soon_threadsafe(both_active.set)
+            # Remain inside the external call until cancellation receipts
+            # for both dispatched steps have been written.
+            release.wait()
             return {"message": {"content": "arrived after cancel"}}
 
         monkeypatch.setattr(local_model, "local_ollama_complete", blocked)
         pending = asyncio.create_task(send("executeGraphRun", [], token, "cancel-two-models", 2))
         try:
-            assert await asyncio.to_thread(entered.wait, 6)
+            await asyncio.wait_for(both_active.wait(), timeout=_MODEL_SYNC_WATCHDOG_S)
+            with lock:
+                assert calls == 2
+            before = load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
+            assert [s["status"] for s in before["steps"]] == ["running", "running", "pending"]
+            assert all(s["externalAttempt"]["phase"] == "dispatched" for s in before["steps"][:2])
             pending.cancel()
             with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(pending, timeout=10)
+                await asyncio.wait_for(pending, timeout=_MODEL_SYNC_WATCHDOG_S)
         finally:
             release.set()
         saved = load_chat_row(path, doc.current_chat_id)["data"]["graph_runs"][-1]
@@ -452,7 +522,8 @@ def test_cancel_parallel_run_reaches_all_active_steps_without_replaying_them(tmp
         result = await send("resumeGraphRun", "cancel-two-models")
         assert result["status"] == "reconciliation-required"
         assert result["steps"][-1]["status"] == "completed"
-        assert calls == 3  # The original two requests were never replayed.
+        with lock:
+            assert calls == 3  # The original two requests were never replayed.
         assert all(s["startedAt"] and s["finishedAt"] for s in result["steps"])
 
     asyncio.run(scenario())

@@ -17,7 +17,17 @@ MAX_COLUMNS = 32
 MAX_CELLS = 4096
 MAX_TEXT = 65536
 MAX_RESULT_BYTES = 512 * 1024
-INPUT_LIMITS = {"points": MAX_POINTS, "columns": MAX_COLUMNS, "cells": MAX_CELLS, "text": MAX_TEXT}
+# Legacy operation schemas and result receipts are deliberately unchanged.
+# Typed imported tables have independent, larger storage limits.
+TABLE_MAX_ROWS = 100_000
+TABLE_MAX_COLUMNS = 256
+TABLE_MAX_CELLS = 1_000_000
+TABLE_MAX_SOURCE_BYTES = 64 * 1024 * 1024
+INPUT_LIMITS = {
+    "points": MAX_POINTS, "columns": MAX_COLUMNS, "cells": MAX_CELLS, "text": MAX_TEXT,
+    "tableRows": TABLE_MAX_ROWS, "tableColumns": TABLE_MAX_COLUMNS,
+    "tableCells": TABLE_MAX_CELLS, "tableSourceBytes": TABLE_MAX_SOURCE_BYTES,
+}
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _NODE_KEY = re.compile(r"[0-9a-f]{32}")
 _OPERATION_ID = re.compile(r"[a-z][a-z0-9_]*")
@@ -182,6 +192,10 @@ def _source_valid(ref: dict) -> bool:
             return True
         case ["column", int(index)]:
             return type(index) is int and 0 <= index < MAX_COLUMNS
+        case ["table_column", int(index), ("reject" | "drop"), int(start), int(end)]:
+            return (type(index) is int and 0 <= index < TABLE_MAX_COLUMNS
+                    and type(start) is int and type(end) is int
+                    and 0 <= start < end <= TABLE_MAX_ROWS and end - start <= MAX_POINTS)
     return False
 
 

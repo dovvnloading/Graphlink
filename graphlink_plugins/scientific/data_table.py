@@ -1,0 +1,340 @@
+"""Typed, bounded scientific tables kept outside the graph as content-addressed assets.
+
+The temporary store bridges the interval before autosave. On save the plugin's
+serialize_saved hook copies the verified blob into the session's *actual* asset
+store (not a guessed default db path). On load the matching restore context
+rehydrates this cache. The graph and scene wire carry only bounded metadata.
+"""
+from __future__ import annotations
+
+import base64
+import binascii
+import csv
+import hashlib
+import io
+import json
+import math
+import re
+import tempfile
+from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+
+from backend.asset_store import AssetStore
+from backend.domain.node_states import NodeState
+from graphlink_plugins.scientific.core import (
+    MAX_POINTS, TABLE_MAX_ROWS, TABLE_MAX_COLUMNS, TABLE_MAX_CELLS,
+    TABLE_MAX_SOURCE_BYTES, canonical_bytes, fingerprint,
+)
+from graphlink_plugins.scientific.units import split_column_header
+# Canonical JSON expands UTF-8, delimiters and quotes; leave room for it.
+TABLE_MAX_ASSET_BYTES = 128 * 1024 * 1024
+TABLE_MAX_CELL_CHARS = 65_536
+MISSING_DEFAULT = ("", "NA", "N/A", "null")
+KINDS = frozenset(("numeric", "text", "categorical", "datetime", "boolean"))
+_REF = re.compile(r"[0-9a-f]{64}")
+_STAGING_DIR = tempfile.TemporaryDirectory(prefix="graphlink-scientific-")
+_STAGING = AssetStore(Path(_STAGING_DIR.name))
+
+
+@dataclass(frozen=True)
+class TableState(NodeState):
+    """Immutable, small metadata snapshot; never contains the full table."""
+    json_text: str
+
+    @classmethod
+    def from_data(cls, data: dict) -> "TableState":
+        return cls(canonical_bytes(data).decode("ascii"))
+
+    @property
+    def data(self) -> dict:
+        return json.loads(self.json_text)
+
+    def __deepcopy__(self, memo):
+        return self
+
+
+def _numeric(token: str) -> float:
+    try:
+        value = float(token)
+        exact = Decimal(token)
+        if not math.isfinite(value) or (value == 0 and exact != 0):
+            raise ValueError
+        if exact == exact.to_integral_value() and Decimal.from_float(value) != exact:
+            raise ValueError
+        return value
+    except (ValueError, OverflowError, InvalidOperation):
+        raise ValueError(f"Invalid finite numeric measurement {token[:40]!r}.") from None
+
+
+def _datetime(token: str) -> str:
+    try:
+        if "T" not in token and " " not in token:
+            return date.fromisoformat(token).isoformat()
+        return datetime.fromisoformat(token.replace("Z", "+00:00")).isoformat()
+    except ValueError:
+        raise ValueError(f"Expected an ISO 8601 date/time, got {token[:40]!r}.") from None
+
+
+def _boolean(token: str) -> bool:
+    match token.strip().casefold():
+        case "true" | "yes":
+            return True
+        case "false" | "no":
+            return False
+    raise ValueError(f"Expected true/false or yes/no, got {token[:40]!r}.")
+
+
+def _kind(tokens: list[str]) -> str:
+    if not tokens:
+        return "text"
+    if all(v.strip().casefold() in ("true", "false", "yes", "no") for v in tokens):
+        return "boolean"
+    try:
+        for v in tokens:
+            _numeric(v.strip())
+        return "numeric"
+    except ValueError:
+        pass
+    try:
+        for v in tokens:
+            _datetime(v.strip())
+        return "datetime"
+    except ValueError:
+        pass
+    distinct = len(set(tokens))
+    return "categorical" if distinct < len(tokens) and distinct <= min(64, max(2, len(tokens) // 5)) else "text"
+
+
+def _options(fmt: str, missing: list[str] | None, hints: dict[str, str] | None) -> dict:
+    if fmt not in ("csv", "tsv"):
+        raise ValueError("Choose CSV or TSV format.")
+    if missing is None:
+        missing = list(MISSING_DEFAULT)
+    if not isinstance(missing, list) or len(missing) > 32 or any(
+        not isinstance(s, str) or len(s) > 80 for s in missing
+    ):
+        raise ValueError("Missing-value tokens must be a list of up to 32 short strings.")
+    if not isinstance(hints, (dict, type(None))):
+        raise ValueError("Column types must be an object keyed by header.")
+    hints = hints or {}
+    if len(hints) > TABLE_MAX_COLUMNS or any(
+        not isinstance(k, str) or not isinstance(v, str) or v not in KINDS for k, v in hints.items()
+    ):
+        raise ValueError("Column type overrides must use numeric, text, categorical, datetime or boolean.")
+    if "" not in missing:
+        missing = ["", *missing]
+    return {
+        "format": fmt, "delimiter": "," if fmt == "csv" else "\t",
+        "encoding": "utf-8-sig", "header": True, "headerUnits": True,
+        "missingValues": missing, "columnTypes": hints,
+    }
+
+
+def parse_table(source: bytes, *, fmt: str = "csv", missing: list[str] | None = None,
+                hints: dict[str, str] | None = None, filename: str = "") -> dict:
+    """Parse untrusted raw file bytes (or the UTF-8 bytes of pasted text).
+
+    Never coerce a missing value to zero or a malformed typed value to null.
+    The SHA-256 records *original bytes*, before BOM removal/CSV unquoting.
+    """
+    options = _options(fmt, missing, hints)
+    if not isinstance(source, bytes) or not 0 < len(source) <= TABLE_MAX_SOURCE_BYTES:
+        raise ValueError("Provide 1 byte to 64 MiB of UTF-8 CSV or TSV data.")
+    try:
+        decoded = source.decode("utf-8-sig")
+    except UnicodeError:
+        raise ValueError("Data must use valid UTF-8 encoding.") from None
+    if "\x00" in decoded:
+        raise ValueError("NUL bytes are not supported in a scientific table.")
+    reader = csv.reader(io.StringIO(decoded, newline=""), delimiter=options["delimiter"], strict=True)
+    try:
+        header = next(reader, None)
+        if header is None:
+            raise ValueError("The table requires a header and at least one row.")
+        labels = [h.strip() for h in header]
+        if not 1 <= len(labels) <= TABLE_MAX_COLUMNS or any(
+            not h or len(h) > 256 or "\n" in h or "\r" in h for h in labels
+        ) or len(set(labels)) != len(labels):
+            raise ValueError("Use 1–256 distinct, nonempty headers (at most 256 characters each).")
+        unused_hints = set(options["columnTypes"])
+        col_names = [split_column_header(h)[0] for h in labels]
+        for key in unused_hints:
+            if key not in labels and col_names.count(key) != 1:
+                raise ValueError(f"Type override {key!r} does not identify one column.")
+        raw_rows: list[list[str]] = []
+        for row in reader:
+            if not row:
+                continue
+            if len(row) != len(labels):
+                raise ValueError(f"Line {reader.line_num} has {len(row)} cells; expected {len(labels)}.")
+            if len(raw_rows) >= TABLE_MAX_ROWS or (len(raw_rows) + 1) * len(labels) > TABLE_MAX_CELLS:
+                raise ValueError("Table exceeds 100,000 rows or 1,000,000 cells.")
+            if any(len(v) > TABLE_MAX_CELL_CHARS for v in row):
+                raise ValueError(f"Line {reader.line_num} contains a cell longer than 65,536 characters.")
+            raw_rows.append(row)
+    except csv.Error as exc:
+        raise ValueError(f"Invalid delimited text at line {reader.line_num}: {exc}") from None
+    if not raw_rows:
+        raise ValueError("The table needs at least one data row.")
+
+    missing_set = {s.casefold() for s in options["missingValues"]}
+    def missing_cell(value: str) -> bool:
+        return value.strip().casefold() in missing_set
+
+    columns: list[dict] = []
+    rows: list[list] = [[None] * len(labels) for _ in raw_rows]
+    for index, label in enumerate(labels):
+        name, unit = split_column_header(label)
+        present = [row[index] for row in raw_rows if not missing_cell(row[index])]
+        kind = options["columnTypes"].get(label, options["columnTypes"].get(name, _kind(present)))
+        missing_count = 0
+        for row_index, row in enumerate(raw_rows):
+            raw = row[index]
+            if missing_cell(raw):
+                missing_count += 1
+                continue
+            try:
+                value = {"numeric": lambda: _numeric(raw.strip()),
+                         "datetime": lambda: _datetime(raw.strip()),
+                         "boolean": lambda: _boolean(raw),
+                         "text": lambda: raw,
+                         "categorical": lambda: raw}[kind]()
+            except ValueError as exc:
+                raise ValueError(f"Row {row_index + 2}, {label}: {exc}") from None
+            rows[row_index][index] = value
+        columns.append({"name": name, "label": label, "unit": unit, "type": kind, "missingCount": missing_count})
+    payload = {"version": 1, "columns": columns, "rows": rows}
+    encoded = canonical_bytes(payload)
+    if len(encoded) > TABLE_MAX_ASSET_BYTES:
+        raise ValueError("The normalized table asset exceeds 128 MiB.")
+    ref = _STAGING.put(encoded)
+    source_hash = hashlib.sha256(source).hexdigest()
+    receipt = {"fileHash": source_hash, "parseOptions": options, "tableHash": ref}
+    receipt["receiptHash"] = fingerprint(receipt)
+    return {
+        "version": 1, "asset_ref": ref, "mime_type": "application/json",
+        "rowCount": len(rows), "columnCount": len(columns), "columns": columns,
+        "previewColumns": min(len(columns), 8),
+        "preview": [[(v[:80] + "…" if isinstance(v, str) and len(v) > 80 else v)
+                     for v in row[:8]] for row in rows[:8]],
+        "sourceName": (Path(filename).name[:128] if filename else "Pasted data"),
+        "provenance": receipt,
+    }
+
+
+def table_metadata_valid(data: object) -> bool:
+    if not isinstance(data, dict):
+        return False
+    try:
+        if data["version"] != 1 or not _REF.fullmatch(data["asset_ref"]) or data["mime_type"] != "application/json":
+            return False
+        cols = data["columns"]
+        rows = data["rowCount"]
+        if not isinstance(cols, list) or not 1 <= len(cols) == data["columnCount"] <= TABLE_MAX_COLUMNS:
+            return False
+        if type(rows) is not int or not 1 <= rows <= TABLE_MAX_ROWS or rows * len(cols) > TABLE_MAX_CELLS:
+            return False
+        if any(c.get("type") not in KINDS or not isinstance(c.get("label"), str) or
+               not isinstance(c.get("unit"), str) or type(c.get("missingCount")) is not int or
+               not 0 <= c["missingCount"] <= rows for c in cols):
+            return False
+        receipt = data["provenance"]
+        if (not _REF.fullmatch(receipt["fileHash"]) or receipt["tableHash"] != data["asset_ref"]
+                or not isinstance(receipt["parseOptions"], dict)):
+            return False
+        return receipt["receiptHash"] == fingerprint({k: v for k, v in receipt.items() if k != "receiptHash"})
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+        return False
+
+
+def stage_from_saved(data: dict) -> None:
+    """Copy verified imported bytes from the session's restore store to staging."""
+    from backend.session_load import _ACTIVE_ASSET_STORE
+    store = _ACTIVE_ASSET_STORE.get()
+    table = data.get("table")
+    if store is not None and isinstance(table, dict) and table_metadata_valid(table):
+        raw = store.get(table["asset_ref"], max_bytes=TABLE_MAX_ASSET_BYTES)
+        if raw is not None:
+            _STAGING.put(raw)
+
+
+def persist_table(data: dict) -> dict:
+    """Called only from serialize_saved, inside session_save's active store."""
+    table = data.get("table")
+    if table is None:
+        return data
+    if not table_metadata_valid(table):
+        raise OSError("Scientific table metadata has a damaged import receipt.")
+    from backend.session_save import _ACTIVE_SAVE_ASSET_STORE
+    store = _ACTIVE_SAVE_ASSET_STORE.get()
+    if store is None:
+        raise OSError("Saving a scientific table requires the workspace asset store.")
+    ref = table["asset_ref"]
+    raw = _STAGING.get(ref, max_bytes=TABLE_MAX_ASSET_BYTES)
+    if raw is not None:
+        if store.put(raw) != ref:
+            raise OSError("Scientific table asset digest changed during save.")
+    elif not store.verify(ref):
+        raise OSError("The scientific table asset is unavailable; restore it before saving.")
+    return data
+
+
+def read_table(meta: dict) -> dict:
+    if not table_metadata_valid(meta):
+        raise ValueError("The scientific table's import receipt is damaged.")
+    raw = _STAGING.get(meta["asset_ref"], max_bytes=TABLE_MAX_ASSET_BYTES)
+    if raw is None:
+        raise ValueError("The scientific table asset is missing. Restore the workspace asset and reopen.")
+    try:
+        table = json.loads(raw)
+        if (table["version"] != 1 or len(table["rows"]) != meta["rowCount"]
+                or table["columns"] != meta["columns"]):
+            raise ValueError
+    except (TypeError, ValueError, KeyError):
+        raise ValueError("The scientific table asset is damaged.") from None
+    return table
+
+
+def numeric_column(meta: dict, column: int, missing_policy: str = "reject",
+                   start: int = 0, end: int | None = None) -> list[float]:
+    if type(column) is not int or not 0 <= column < meta.get("columnCount", -1):
+        raise ValueError("Choose an existing table column.")
+    if meta["columns"][column]["type"] != "numeric":
+        raise ValueError("Only numeric table columns can supply numerical operation inputs.")
+    if missing_policy not in ("reject", "drop"):
+        raise ValueError("Choose either reject or explicitly drop missing measurements.")
+    table = read_table(meta)
+    stop = len(table["rows"]) if end is None else end
+    if type(start) is not int or type(stop) is not int or not 0 <= start < stop <= len(table["rows"]):
+        raise ValueError("Select a valid nonempty row range.")
+    if stop - start > MAX_POINTS:
+        raise ValueError(f"Existing operations accept at most {MAX_POINTS} measurements; choose a smaller row range.")
+    values = [row[column] for row in table["rows"][start:stop]]
+    if any(value is None for value in values):
+        if missing_policy == "reject":
+            raise ValueError("This column contains missing values. Choose 'Drop missing' explicitly.")
+        values = [v for v in values if v is not None]
+    if not values:
+        raise ValueError("No measurements remain after dropping missing values.")
+    return values
+
+
+def decode_input(*, text: str | None, encoded_file: str | None) -> bytes:
+    if (text is None) == (encoded_file is None):
+        raise ValueError("Supply either pasted text or a file, not both.")
+    if text is not None:
+        if not isinstance(text, str):
+            raise ValueError("Pasted data must be text.")
+        encoded = text.encode("utf-8")
+    else:
+        if not isinstance(encoded_file, str) or len(encoded_file) > TABLE_MAX_SOURCE_BYTES * 4 // 3 + 8:
+            raise ValueError("The uploaded file is too large.")
+        try:
+            encoded = base64.b64decode(encoded_file, validate=True)
+        except (ValueError, binascii.Error):
+            raise ValueError("The uploaded file encoding is invalid.") from None
+    if not 0 < len(encoded) <= TABLE_MAX_SOURCE_BYTES:
+        raise ValueError("Scientific table source must be between 1 byte and 64 MiB.")
+    return encoded

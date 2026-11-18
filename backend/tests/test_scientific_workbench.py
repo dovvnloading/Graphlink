@@ -520,3 +520,141 @@ def test_chart_receipt_freshness_detects_equal_numbers_from_different_sources(se
     assert updated["receiptHash"] != before
     assert "refresh" in document.nodes[chart_id].state.chart_error
     assert document.nodes[chart_id].state.chart_data["values"] == [1, 2, 3]
+
+
+def test_typed_table_import_link_drop_and_asset_roundtrip(session, tmp_path):
+    """A table is separate from the unchanged legacy operation/result receipt."""
+    import hashlib
+
+    from backend.asset_store import AssetStore
+    from graphlink_plugins.scientific.data_table import read_table
+
+    document, bus, registry, settings = session
+    grant(bus, "core")
+    grant(bus, "statistics")
+    source = dispatch(bus, "executePlugin", "Scientific Core")
+    source_text = (
+        "Sample,Temperature (degC),Flag,Observed,Group,Comment\n"
+        "A,12.5,true,2026-11-01,low,first\n"
+        "B,NA,false,2026-11-02,low,second\n"
+        "C,16.5,true,2026-11-03,high,third\n"
+    )
+    imported = dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
+        "node_id": source, "text": source_text, "format": "csv",
+        "missing_values": ["", "NA"], "filename": "observations.csv",
+        "column_types": {"Group": "categorical"},
+    })
+    assert imported == {"ok": True}
+    state = envelope(document, source)
+    assert state["latest"] is None
+    table = state["table"]
+    assert table["rowCount"] == 3 and table["columnCount"] == 6
+    assert len(table["preview"]) == 3
+    assert [c["type"] for c in table["columns"]] == [
+        "text", "numeric", "boolean", "datetime", "categorical", "text",
+    ]
+    assert table["columns"][1]["name"] == "Temperature"
+    assert table["columns"][1]["unit"] == "degC"
+    assert table["columns"][1]["missingCount"] == 1
+    assert table["preview"][1][1] is None
+    assert table["provenance"]["fileHash"] == hashlib.sha256(source_text.encode()).hexdigest()
+    assert table["provenance"]["parseOptions"]["missingValues"] == ["", "NA"]
+    assert table["provenance"]["parseOptions"]["delimiter"] == ","
+    assert read_table(table)["rows"][0][3] == "2026-11-01"
+
+    target = dispatch(bus, "executePlugin", "Statistics", source)
+    selection = {"node_id": target, "source_node_id": source, "column": 1,
+                 "expected_hash": table["asset_ref"]}
+    rejected = dispatch(bus, "invokePluginIntent", "science_statistics", "table_column", selection)
+    assert rejected["ok"] is False and "missing" in rejected["error"].lower()
+    chosen = dispatch(bus, "invokePluginIntent", "science_statistics", "table_column",
+                      {**selection, "policy": "drop"})
+    assert chosen["ok"] and chosen["values"] == [12.5, 16.5]
+    assert chosen["reference"]["selector"] == ["table_column", 1, "drop", 0, 3]
+    before = envelope(document, target)["latest"]
+    assert run(bus, "statistics", target, "describe",
+               {"observations": chosen["values"]},
+               sources={"observations": chosen["reference"]}) == {"ok": True}
+    result = envelope(document, target)["latest"]
+    assert result["values"]["mean"] == 14.5
+    assert result["provenance"]["sources"]["observations"]["receiptHash"] == table["provenance"]["receiptHash"]
+    assert before is None
+
+    store = AssetStore(tmp_path / "assets")
+    saved = build_chat_data(document, asset_store=store, plugin_registry=registry, settings_manager=settings)
+    assert store.verify(table["asset_ref"])
+    assert table["asset_ref"] in json.dumps(saved)
+    assert source_text not in json.dumps(saved)
+    restore_chat_into_document(document, {"data": saved}, [], [], asset_store=store,
+                               plugin_registry=registry, settings_manager=settings)
+    reloaded_source, reloaded_target = list(document.nodes)
+    assert envelope(document, reloaded_source)["table"] == table
+    assert envelope(document, reloaded_target)["latest"] == result
+    assert dispatch(bus, "invokePluginIntent", "science_statistics", "table_column", {
+        "node_id": reloaded_target, "source_node_id": reloaded_source,
+        "column": 1, "policy": "drop",
+    })["values"] == [12.5, 16.5]
+    # Old source node ids can still be resolved through the durable nodeKey.
+    assert run(bus, "statistics", reloaded_target, "describe",
+               {"observations": chosen["values"]},
+               sources={"observations": chosen["reference"]}) == {"ok": True}
+    # Saving the same table again does not duplicate its content-addressed asset.
+    assert store.verify(table["asset_ref"])
+
+
+def test_typed_table_parser_limits_tsv_and_error_atomicity(session):
+    import hashlib
+    from graphlink_plugins.scientific.data_table import (
+        TABLE_MAX_CELLS, TABLE_MAX_ROWS, numeric_column, parse_table, read_table,
+    )
+
+    body = b"Temperature (degC)\tOK\tWhen\n1.5\ttrue\t2026-10-02\n\tfalse\t2026-10-03\n"
+    meta = parse_table(body, fmt="tsv", filename="test.tsv")
+    assert meta["columns"][0] == {
+        "name": "Temperature", "label": "Temperature (degC)", "unit": "degC",
+        "type": "numeric", "missingCount": 1,
+    }
+    assert [col["type"] for col in meta["columns"]] == ["numeric", "boolean", "datetime"]
+    assert read_table(meta)["rows"] == [[1.5, True, "2026-10-02"], [None, False, "2026-10-03"]]
+    assert meta["provenance"]["parseOptions"]["format"] == "tsv"
+    assert meta["provenance"]["fileHash"] == hashlib.sha256(body).hexdigest()
+    with pytest.raises(ValueError, match="missing"):
+        numeric_column(meta, 0)
+    assert numeric_column(meta, 0, "drop") == [1.5]
+    with pytest.raises(ValueError, match="Only numeric"):
+        numeric_column(meta, 1)
+    with pytest.raises(ValueError, match="wrong number|cells; expected"):
+        parse_table(b"A,B\n1,2\n3\n")
+    with pytest.raises(ValueError, match="UTF-8"):
+        parse_table(b"Value\n\xff\n")
+    with pytest.raises(ValueError, match="Invalid finite numeric"):
+        parse_table(b"Count\n9007199254740993\n", hints={"Count": "numeric"})
+    with pytest.raises(ValueError, match="Invalid finite numeric"):
+        parse_table(b"Value\n1e-999\n", hints={"Value": "numeric"})
+    with pytest.raises(ValueError, match="Row 2"):
+        parse_table(b"Date\nnot-a-date\n", hints={"Date": "datetime"})
+
+    # Exercise the advertised row AND cell limits, rather than the old 1024/4096.
+    large = b"".join([b"a,b,c,d,e,f,g,h,i,j\n", b"1,2,3,4,5,6,7,8,9,10\n" * TABLE_MAX_ROWS])
+    full = parse_table(large)
+    assert full["rowCount"] == TABLE_MAX_ROWS and len(full["columns"]) * full["rowCount"] == TABLE_MAX_CELLS
+    assert len(read_table(full)["rows"]) == TABLE_MAX_ROWS
+    assert len(numeric_column(full, 0, "reject", 0, 1024)) == 1024
+    with pytest.raises(ValueError, match="1024"):
+        numeric_column(full, 0, "reject", 0, 1025)
+    with pytest.raises(ValueError, match="100,000 rows"):
+        parse_table(b"value\n" + b"1\n" * (TABLE_MAX_ROWS + 1))
+
+    document, bus, _, _ = session
+    grant(bus, "core")
+    source = dispatch(bus, "executePlugin", "Scientific Core")
+    assert dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
+        "node_id": source, "text": "Value\n1\n2\n",
+    }) == {"ok": True}
+    prior = envelope(document, source)["table"]
+    fail = dispatch(bus, "invokePluginIntent", "science_core", "import_table", {
+        "node_id": source, "text": "Value\n1\nbad\n",
+        "column_types": {"Value": "numeric"},
+    })
+    assert fail["ok"] is False
+    assert envelope(document, source)["table"] == prior
