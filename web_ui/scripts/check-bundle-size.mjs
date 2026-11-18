@@ -312,7 +312,15 @@ const LARGEST_CHUNK_CEILING_BYTES = 443_000;
 // rounded up to 1,605,500 (8,041 bytes of headroom, ~0.503%). Keep the
 // separate LARGEST_CHUNK_CEILING_BYTES at 443,000, unchanged. Tighten the
 // total ratchet again when a genuine reduction is measured.
-const TOTAL_JS_CEILING_BYTES = 1_605_500;
+// Deliberate, measured amendment — 2026-11-18 (ADR-019 §4), PR #608.
+// Main before PR #608: 1,597,459 bytes total JS; PR #608: 1,617,249
+// bytes (+19,790). The data-space viewport, interaction controls, precise
+// annotation forms, and client validation are behavior-bearing, with no new
+// dependency or obvious removable duplication in the reviewed analysis code.
+// Raise only by PR #608's measured 19,790 bytes: 1,605,500 -> 1,625,290.
+// This preserves the previous 8,041-byte headroom; keep the separate
+// 443,000-byte largest-chunk ceiling unchanged.
+const TOTAL_JS_CEILING_BYTES = 1_625_290;
 
 // Below this much headroom, say so. Both prior amendments record the same
 // story: the ceiling was set with ~3-5% room, ordinary week-to-week growth
