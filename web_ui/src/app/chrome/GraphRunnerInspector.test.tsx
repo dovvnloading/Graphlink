@@ -1,5 +1,5 @@
 import { ReactFlowProvider, useNodes } from "@xyflow/react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { makeRequestOnlyTransport } from "../../lib/ws/transport.testUtils";
@@ -93,7 +93,7 @@ describe("saved Graph Runner inspector", () => {
     const latest = await screen.findByRole("region", { name: "Latest run" });
     await user.click(within(latest).getByRole("button", { name: "Inspect run trace (1 steps)" }));
     await user.click(within(latest).getByRole("button", { name: /Step 1 · Reply note · Reconciliation required/ }));
-    expect(screen.getByTestId("selected-canvas-nodes")).toHaveTextContent("destination");
+    await waitFor(() => expect(screen.getByTestId("selected-canvas-nodes")).toHaveTextContent("destination"));
     expect(latest).toHaveTextContent("Source note");
     expect(latest).toHaveTextContent("Output revision: 2");
     expect(latest).toHaveTextContent("Attempt history (1)");
