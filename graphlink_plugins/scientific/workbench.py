@@ -13,8 +13,12 @@ from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate
 
 from .catalog import PACKS, operations
 from .core import INPUT_LIMITS, calculate_result, canonical_bytes, fingerprint, readable_result, validated_inputs
+from .data_table import (
+    TableState, decode_input, numeric_column, parse_table, persist_table,
+    stage_from_saved, table_metadata_valid,
+)
 
-STATE_TYPES = (PersistedPluginState, PluginStateSnapshot)
+STATE_TYPES = (PersistedPluginState, PluginStateSnapshot, TableState)
 SCIENCE_KINDS = frozenset(f"science_{pack}.workbench" for pack in PACKS)
 
 
@@ -33,10 +37,37 @@ class ExportArgs:
     expected_run: str | None = None
 
 
+@dataclass
+class ImportTableArgs:
+    node_id: str
+    text: str | None = None
+    encoded_file: str | None = None
+    format: str = "csv"
+    missing_values: list[str] | None = None
+    column_types: dict[str, str] | None = None
+    filename: str = ""
+    expected_run: str | None = None
+
+
+@dataclass
+class TableColumnArgs:
+    node_id: str
+    source_node_id: str
+    column: int
+    policy: str = "reject"
+    start: int = 0
+    end: int | None = None
+    expected_hash: str | None = None
+    expected_receipt: str | None = None
+
+
 def _run_token(data: dict) -> str:
     result = data.get("latest")
     receipt = result["provenance"] if result else {}
-    return fingerprint([data.get("nodeKey"), receipt.get("receiptHash") or fingerprint(receipt)])
+    # Preserve all legacy run tokens for nodes without an imported table.
+    original = [data.get("nodeKey"), receipt.get("receiptHash") or fingerprint(receipt)]
+    table = data.get("table")
+    return fingerprint([*original, table["provenance"]["receiptHash"]]) if table_metadata_valid(table) else fingerprint(original)
 
 
 def _current_state(document, node_id: str, kind: str, expected_run: str | None):
@@ -45,7 +76,8 @@ def _current_state(document, node_id: str, kind: str, expected_run: str | None):
         return None, {"ok": False, "error": "Select a node belonging to this scientific pack."}
     state = node.state
     pack = kind.removeprefix("science_").split(".")[0]
-    if type(state) not in STATE_TYPES or not readable_result(state.data, pack):
+    if (type(state) not in STATE_TYPES or not readable_result(state.data, pack)
+            or ("table" in state.data and not table_metadata_valid(state.data["table"]))):
         return None, {"ok": False, "error": "The scientific result is unavailable or damaged."}
     if expected_run is not None and expected_run != _run_token(state.data):
         return None, {"ok": False, "conflict": True, "error": "The result changed. Review the current run before continuing."}
@@ -99,6 +131,27 @@ def _verify_sources(document, node, inputs: dict, sources: dict, granted) -> dic
             raise ValueError("Enable the source pack before using its result.")
         if not readable_result(source.state.data, plugin_id.removeprefix("science_")):
             raise ValueError("The source scientific result is unavailable or damaged.")
+        # Imported tables have their own immutable, content-addressed receipt,
+        # independent of the source node's last numerical calculation.
+        if (len(selector) == 5 and selector[0] == "table_column"):
+            _, column, policy, start, end = selector
+            table = source.state.data.get("table")
+            if not table_metadata_valid(table):
+                raise ValueError("The connected source has no readable typed table.")
+            receipt = table["provenance"]
+            if (citation.get("resultHash") != table["asset_ref"]
+                    or citation.get("receiptHash") != receipt["receiptHash"]):
+                raise ValueError("The connected table changed. Select its current column.")
+            selected = numeric_column(table, column, policy, start, end)
+            if selected != inputs[key]:
+                raise ValueError("The supplied measurements differ from the selected table column.")
+            verified[key] = {
+                "nodeId": source_id, "sourceKey": source.state.data.get("nodeKey"),
+                "resultHash": table["asset_ref"], "receiptHash": receipt["receiptHash"],
+                "selector": selector, "packId": source.kind.removeprefix("science_").split(".")[0],
+                "operationId": "data_table",
+            }
+            continue
         latest = source.state.data.get("latest")
         if not isinstance(latest, dict) or not isinstance(latest.get("provenance"), dict):
             raise ValueError("Run the source operation first.")
@@ -156,18 +209,30 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             error = "The saved scientific result asset is unavailable. Restore the asset and reopen this workspace."
         elif not readable_result(data, pack_id):
             error = "The saved scientific result has an unsupported version or a damaged receipt."
+        elif "table" in data and not table_metadata_valid(data["table"]):
+            error = "The scientific table has an invalid import receipt."
         wire = json.dumps({
             "scienceVersion": 1, "packId": pack_id, "operations": [] if error else schema,
             "nodeKey": data.get("nodeKey") if isinstance(data.get("nodeKey"), str) else "",
             "latest": None if error else data.get("latest"), "error": error,
+            "table": None if error else data.get("table"),
             "limits": INPUT_LIMITS, "runToken": "" if error else _run_token(data),
         }, separators=(",", ":"), allow_nan=False)
         if type(state) is PluginStateSnapshot:
             wire_cache[state] = wire
         return {"science": wire}
 
+    def serialize_saved(node):
+        # The host calls this under the actual session_save asset-store context.
+        # The bytes themselves never enter the live graph or a saved JSON blob.
+        return persist_table(node.state.data)
+
     def deserialize(data):
-        return PluginStateSnapshot.from_data({"nodeKey": uuid4().hex, **data})
+        recovered = {"nodeKey": uuid4().hex, **data}
+        if "table" in recovered:
+            stage_from_saved(recovered)
+            return TableState.from_data(recovered)
+        return PluginStateSnapshot.from_data(recovered)
 
     async def run(document, ctx, request):
         node, error = _current_state(document, request.node_id, kind, request.expected_run)
@@ -221,7 +286,12 @@ def register_pack(host: HostContext, pack_id: str) -> None:
                         or receipt.get("resultHash") != result["provenance"]["resultHash"]):
                     child.state.chart_error = "Scientific result changed · refresh this chart from its source."
             node_key = state.data.get("nodeKey")
-            node.state = PluginStateSnapshot.from_data({"version": 1, "nodeKey": node_key or uuid4().hex, "latest": result})
+            saved = {"version": 1, "nodeKey": node_key or uuid4().hex, "latest": result}
+            if "table" in state.data:
+                saved["table"] = state.data["table"]
+                node.state = TableState.from_data(saved)
+            else:
+                node.state = PluginStateSnapshot.from_data(saved)
             node.content = result["summary"]
 
         document.record_command(f"science:{pack_id}:{op.id}", "user", save_result,
@@ -237,10 +307,83 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             return {"ok": False, "error": "Run a calculation before exporting its result."}
         return {"ok": True, "json": canonical_bytes(result).decode("ascii")}
 
+    async def import_table(document, ctx, request):
+        node, error = _current_state(document, request.node_id, kind, request.expected_run)
+        if error:
+            return error
+        previous_state = node.state
+        try:
+            raw = decode_input(text=request.text, encoded_file=request.encoded_file)
+            table = await asyncio.to_thread(
+                parse_table, raw, fmt=request.format, missing=request.missing_values,
+                hints=request.column_types, filename=request.filename,
+            )
+            if ctx.is_plugin_granted is None or not ctx.is_plugin_granted(ctx.plugin_id):
+                raise ValueError("The pack was disabled during import.")
+            if document.nodes.get(node.id) is not node or node.state is not previous_state:
+                return {"ok": False, "conflict": True, "error": "The node changed during import."}
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        current = previous_state.data
+        if current.get("table") == table:
+            return {"ok": True}
+
+        def save_import():
+            state_data = {**current, "table": table}
+            node.state = TableState.from_data(state_data)
+            if state_data.get("latest") is None:
+                node.content = f"Imported {table['rowCount']} rows, {table['columnCount']} typed columns."
+
+        document.record_command(f"science:{pack_id}:import_table", "user", save_import, node_ids=[node.id])
+        return PluginSceneUpdate({"ok": True})
+
+    async def table_column(document, ctx, request):
+        target, error = _current_state(document, request.node_id, kind, None)
+        if error:
+            return error
+        source_id = request.source_node_id
+        connected = any(edge.source == source_id and edge.target == target.id for edge in document.edges.values())
+        source = document.nodes.get(source_id)
+        if not connected or source is None or source.kind not in SCIENCE_KINDS:
+            return {"ok": False, "error": "Connect the source workbench before selecting its table."}
+        source_pack = source.kind.removeprefix("science_").split(".")[0]
+        if (ctx.is_plugin_granted is None or not ctx.is_plugin_granted(source.kind.split(".", 1)[0])
+                or type(source.state) not in STATE_TYPES
+                or not readable_result(source.state.data, source_pack)):
+            return {"ok": False, "error": "The source pack or result is unavailable."}
+        meta = source.state.data.get("table")
+        if not table_metadata_valid(meta):
+            return {"ok": False, "error": "The connected source has no readable typed table."}
+        if ((request.expected_hash is not None and request.expected_hash != meta["asset_ref"])
+                or (request.expected_receipt is not None
+                    and request.expected_receipt != meta["provenance"]["receiptHash"])):
+            return {"ok": False, "conflict": True, "error": "The table changed; select its current column."}
+        source_state = source.state
+        try:
+            values = await asyncio.to_thread(
+                numeric_column, meta, request.column, request.policy, request.start, request.end,
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if document.nodes.get(source_id) is not source or source.state is not source_state:
+            return {"ok": False, "conflict": True, "error": "The source table changed during selection."}
+        receipt = meta["provenance"]
+        return {
+            "ok": True, "values": values,
+            "reference": {
+                "nodeId": source_id, "sourceKey": source_state.data.get("nodeKey"),
+                "resultHash": meta["asset_ref"], "receiptHash": receipt["receiptHash"],
+                "selector": ["table_column", request.column, request.policy, request.start,
+                             meta["rowCount"] if request.end is None else request.end],
+            },
+        }
+
     host.register_node_kind(
-        "workbench", seed, requires_parent=False, serialize=serialize, deserialize=deserialize,
-        externalize_state=True,
+        "workbench", seed, requires_parent=False, serialize=serialize,
+        serialize_saved=serialize_saved, deserialize=deserialize, externalize_state=True,
     )
     host.register_picker_entry(node_kind="workbench", name=title, description=description, category="Scientific Workbench")
     host.register_intent("run", run, args_schema=RunArgs, expose_to_builder=False)
     host.register_intent("export_result", export_result, args_schema=ExportArgs, expose_to_builder=False)
+    host.register_intent("import_table", import_table, args_schema=ImportTableArgs, expose_to_builder=False)
+    host.register_intent("table_column", table_column, args_schema=TableColumnArgs, expose_to_builder=False)
