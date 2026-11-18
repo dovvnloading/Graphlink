@@ -80,3 +80,16 @@ Reproduce from the repo root after installing development test dependencies:
     python -m pytest -n0 backend/tests/test_scientific_numerics.py
     python -m pytest -n0 backend/tests/test_scientific_workbench.py backend/tests/test_scientific_uncertainty.py backend/tests/test_scientific_fitting.py
 
+
+## Numerical-range audit cases (2026-11-18)
+
+Implicit Newton convergence uses each component's **actual requested**
+absolute-plus-relative tolerance, without imposing a separate 1e-30
+residual floor. In particular, y'=-y with y(0)=1e-40 and zero-sized absolute
+tolerance relative to the state should decay rather than silently remain
+unchanged; the test suite uses a positive 1e-60 absolute tolerance.
+The Gauss–Kronrod rule scales each term before accumulation so the finite
+integral of f(x)=1e308 over [0,1] does not overflow on intermediate paired
+sums. Spline evaluation likewise avoids squaring a very wide knot interval
+when the final interpolated value is finite. Non-representable outputs
+remain outside the supported binary64 result range.

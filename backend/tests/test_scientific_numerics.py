@@ -208,3 +208,29 @@ def test_invalid_ode_models_parameters_limits_and_tolerances():
     with pytest.raises(ValueError, match="ODE tolerance not met"):
         run("solve_ivp_rk45", max_steps=1, relative_tolerance=1e-13,
             absolute_tolerance=1e-15)
+
+def test_sdirk2_tiny_nonzero_state_uses_requested_newton_tolerance():
+    # y'=-y has exact y(1)=1e-40/e. The old 1e-30 residual floor silently
+    # accepted the initial Newton guess and returned 1e-40 unchanged.
+    v = value("solve_ivp_implicit", rhs_expressions='["-y0"]',
+              initial_values=[1e-40], end_time=1.0,
+              relative_tolerance=1e-8, absolute_tolerance=1e-60)
+    assert v["final_y0"] == pytest.approx(1e-40 * math.exp(-1), rel=2e-4, abs=0)
+    assert v["linear_solves"] > 0
+
+
+def test_gauss_kronrod_finite_large_constant_does_not_overflow_pair_sum():
+    # Integral of 1e308 over [0,1] is representable; f(left)+f(right) is not.
+    v = value("gauss_kronrod_integral", expression="1e308",
+              lower=0.0, upper=1.0, relative_tolerance=1e-12,
+              absolute_tolerance=0.0, max_evaluations=15)
+    assert v["integral"] == pytest.approx(1e308, rel=1e-14)
+    assert v["function_evaluations"] == 15
+
+
+def test_natural_spline_large_interval_reproduces_linear_function():
+    # (1e200)**2 overflows even when both second derivatives are zero.
+    rows = run("cubic_spline", x=[0.0, 1e200], y=[0.0, 1.0],
+               queries=[5e199], boundary="natural")["table"]["rows"]
+    assert rows[0][1] == pytest.approx(0.5, abs=1e-14)
+    assert rows[0][2] == pytest.approx(1e-200, rel=1e-14, abs=0)

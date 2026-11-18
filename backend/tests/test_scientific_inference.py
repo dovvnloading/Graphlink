@@ -252,3 +252,17 @@ def test_registered_examples_are_receipted_and_no_scientific_external_dependency
     for op in inferential.OPERATIONS:
         r = _run(op.id, **op.example)
         assert readable_result({"version": 1, "latest": r}, "fitting")
+
+def test_studentized_range_32_group_cdf_independent_high_precision_reference():
+    # Independent high-accuracy integration also agrees with SciPy's CDF.
+    # 80 normal-range nodes miss this reference by ~1.15e-7.
+    assert inferential._studentized_range_cdf(5.0, 32, 40) == pytest.approx(
+        0.828224730257006, abs=2e-10)
+
+
+def test_anova_rejects_unrepresentable_nonzero_variances():
+    # The F statistic is finite, but SS_W ~ 1e-640 cannot be stored as
+    # binary64; reporting all sums as zero would contradict the raw data.
+    with pytest.raises(ValueError, match="underflow"):
+        _run("one_way_anova", values=[0.0, 1e-320, 0.0, 1e-320],
+             groups=[1, 1, 2, 2])

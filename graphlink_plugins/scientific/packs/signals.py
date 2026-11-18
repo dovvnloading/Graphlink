@@ -284,9 +284,13 @@ def welch_psd(data):
     count = 0
     for start in starts:
         block = samples[start:start + segment]
-        average = math.fsum(block) / segment
-        # Match Welch's conventional constant-detrended modified periodograms.
-        centered = [value - average for value in block]
+        # Subtract the baseline before computing the segment mean: a large
+        # constant offset can overflow fsum even though its PSD is zero.
+        offsets = [value - block[0] for value in block]
+        if not all(map(math.isfinite, offsets)):
+            raise ValueError("Welch segment dynamic range exceeds supported precision.")
+        average_offset = math.fsum(value / segment for value in offsets)
+        centered = [value - average_offset for value in offsets]
         _, _, _, density = _one_sided_transform(centered, weights, sample_rate)
         summed = [a + b for a, b in zip(summed, density)]
         count += 1
@@ -433,8 +437,11 @@ def _zero_phase_filter(samples, sections):
                                                    for _, _, b2, _, a2 in sections)))
     if len(samples) <= padding:
         raise ValueError(f"Butterworth zero-phase filtering needs at least {padding + 1} samples.")
-    left = [2 * samples[0] - samples[index] for index in range(padding, 0, -1)]
-    right = [2 * samples[-1] - samples[-2 - index] for index in range(padding)]
+    # Algebraically identical odd reflection without overflowing 2*edge.
+    left = [samples[0] + (samples[0] - samples[index]) for index in range(padding, 0, -1)]
+    right = [samples[-1] + (samples[-1] - samples[-2 - index]) for index in range(padding)]
+    if not all(map(math.isfinite, left + right)):
+        raise ValueError("Butterworth reflected padding exceeds the supported numerical range.")
     expanded = left + list(samples) + right
     forward = _run_sos(expanded, sections)
     reverse = _run_sos(forward[::-1], sections)[::-1]
