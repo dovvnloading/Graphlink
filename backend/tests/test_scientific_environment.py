@@ -210,8 +210,50 @@ def test_mann_kendall_sen_irregular_time_ties_and_independent_samples():
     flat = _run("mann_kendall_sen", observations=[1] * 8)["values"]
     assert flat["variance_s"] == flat["kendall_tau_b"] == flat["sen_slope_per_year"] == 0
     assert flat["two_sided_p_value"] == 1
-    assert "normal approximation" in flat["p_value_method"]
+    assert flat["p_value_method"] == "exact permutation (ties)"
     for changes in ({"time_year": [1, 1, 2]}, {"observations": [1]},
                     {"observation_unit": "\n"}, {"significance_level": 1}):
         with pytest.raises(ValueError):
             _run("mann_kendall_sen", **changes)
+
+
+def test_nrcs_curve_number_preserves_tiny_and_huge_finite_runoff():
+    # For CN=100, S=0: Q=P even when squaring P would underflow to 0.
+    tiny = _run("scs_curve_number", curve_number=100,
+                rainfall_mm=1e-200)["values"]
+    assert tiny["direct_runoff_depth_mm"] == 1e-200
+    assert tiny["event_runoff_coefficient"] == 1
+    # For very large P, Q stays representable even if the old P**2 did not.
+    large = _run("scs_curve_number", rainfall_mm=1e200,
+                 area_km2=1e-200)["values"]
+    assert math.isclose(large["direct_runoff_depth_mm"], 1e200, rel_tol=1e-12)
+    assert large["direct_runoff_volume_m3"] == pytest.approx(1000, rel=1e-12)
+
+
+def test_mann_kendall_small_tied_samples_use_conditional_exact_distribution():
+    # All 6!/(2!2!)=180 distinct rearrangements of [0,0,1,1,2,3].
+    # S=11 has an exact two-sided tail of 8/180, not the normal ~0.051.
+    result = _run("mann_kendall_sen", time_year=[0, 1, 2, 3, 4, 5],
+                  observations=[0, 1, 0, 1, 2, 3],
+                  observation_unit="mg/L", significance_level=.05)["values"]
+    assert result["mann_kendall_s"] == 11
+    assert result["two_sided_p_value"] == pytest.approx(8 / 180)
+    assert result["p_value_method"] == "exact permutation (ties)"
+    assert result["trend"] == "increasing"
+    small = _run("mann_kendall_sen", time_year=[0, 1, 2],
+                 observations=[1, 1, 2])["values"]
+    assert small["two_sided_p_value"] == pytest.approx(2 / 3)
+    assert small["trend"] == "not significant"
+    all_equal = _run("mann_kendall_sen", observations=[1] * 8)["values"]
+    assert all_equal["two_sided_p_value"] == 1
+
+
+def test_epa_aqi_truncation_above_breakpoints_and_fao_energy_balance():
+    # EPA truncates rather than rounds measured concentrations before interpolating.
+    assert _aqi(pm25_24h_ug_m3=9.09999)["values"]["aqi"] == 50
+    assert _aqi(pm25_24h_ug_m3=9.10000)["values"]["aqi"] == 51
+    assert _aqi(o3_8h_ppm=.20099, o3_1h_ppm=.405)["values"]["aqi"] == 301
+    no_wind = _run("fao56_evapotranspiration", wind_speed_2m_m_s=0)["values"]
+    assert no_wind["aerodynamic_term_mm_day"] == 0
+    assert no_wind["reference_et0_mm_day"] == pytest.approx(
+        no_wind["radiation_term_mm_day"])
