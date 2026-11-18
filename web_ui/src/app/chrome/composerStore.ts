@@ -5,8 +5,8 @@
  * expose the backend's registered intent surface 1:1.
  */
 
-import { TOPIC_VALIDATORS, type TopicName } from "../../lib/api-contract/topics";
-import { bindTopic } from "../../lib/api-contract/bindTopic";
+import { validateAppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
+import { bindTopic, type LiveTopicName } from "../../lib/api-contract/bindTopic";
 import type { AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import type { TokenCounterState } from "../../lib/bridge-core/generated/token-counter-state";
 import type { NotificationState } from "../../lib/bridge-core/generated/notification-state";
@@ -78,6 +78,13 @@ export const initialNotificationState: NotificationState = {
   msgType: "info",
 };
 
+/** ModelRef's persisted provider + model identity (not a display label). */
+export interface ComparisonModel {
+  provider: string;
+  modelId: string;
+  label: string;
+}
+
 type Listener = () => void;
 
 export class ComposerStore {
@@ -100,7 +107,7 @@ export class ComposerStore {
 
   constructor(private readonly transport: WsTransport) {}
 
-  private bind<T>(topic: TopicName, assign: (value: T) => void): () => void {
+  private bind<T>(topic: LiveTopicName, assign: (value: T) => void): () => void {
     return bindTopic(this.transport, topic, assign, () => this.emit());
   }
 
@@ -154,7 +161,7 @@ export class ComposerStore {
       // draftResyncGeneration stuck non-null and every future resync request
       // a permanent no-op for the rest of this store's life.
       if (payload === null) return;
-      const validated = TOPIC_VALIDATORS["app-composer"](payload);
+      const validated = validateAppComposerState(payload);
       if (!validated.ok) return;
       if (
         this.pendingDraftGenerations.size > 0 ||
@@ -259,6 +266,34 @@ export class ComposerStore {
       COMPOSER_DRAFT_OFFLINE_COALESCE_KEY,
       () => this.onDraftSettled(generation),
       () => this.onDraftCoalesced(generation),
+    );
+  }
+
+  async loadComparisonModels(): Promise<ComparisonModel[]> {
+    // Read-only discovery from the server's configured-model catalog.
+    // IDs must be provider-qualified: two providers can name a model alike.
+    const result = await this.transport.request("scene", "listComparisonModels", []);
+    const rows = (result as { models?: unknown } | null)?.models;
+    if (!Array.isArray(rows)) throw new Error("The comparison model list is unavailable.");
+    return rows.filter((row): row is ComparisonModel =>
+      !!row && typeof row === "object" &&
+      typeof row.provider === "string" &&
+      typeof row.modelId === "string" &&
+      typeof row.label === "string"
+    );
+  }
+
+  sendModelComparison(
+    text: string,
+    models: Array<Pick<ComparisonModel, "provider" | "modelId">>,
+    branchFromNodeId: string | null,
+    onSettled?: (succeeded: boolean) => void,
+  ): void {
+    // Creating a shared user turn and several assistant branches is NOT an
+    // offline-queueable intent. Never replay an already-expensive fan-out.
+    this.transport.fireIntent(
+      "scene", "compareModels", [text, models, branchFromNodeId],
+      undefined, false, undefined, onSettled,
     );
   }
 

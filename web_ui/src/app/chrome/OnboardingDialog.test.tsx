@@ -137,9 +137,9 @@ describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
     act(() => fixture.pushSettings({ hasCompletedOnboarding: false }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Next" }));
-    await user.click(screen.getByRole("button", { name: "Next" }));
-    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(await screen.findByRole("button", { name: "Next" }));
+    await user.click(await screen.findByRole("button", { name: "Next" }));
+    await user.click(await screen.findByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Done" }));
 
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -157,7 +157,7 @@ describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
     act(() => fixture.pushSettings({ hasCompletedOnboarding: false, providerMode: "Ollama (Local)" }));
     act(() => fixture.pushComposer({ available: false, label: "Ollama (Local)" }));
 
-    await user.click(screen.getByRole("button", { name: "Next" })); // welcome -> provider check
+    await user.click(await screen.findByRole("button", { name: "Next" })); // welcome -> provider check
 
     expect(screen.getByText(/isn't ready yet/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open Settings" }));
@@ -179,7 +179,7 @@ describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
     renderDialog(fixture);
     act(() => fixture.pushSettings({ hasCompletedOnboarding: false, providerMode: "Ollama (Local)" }));
     act(() => fixture.pushComposer({ available: false }));
-    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(await screen.findByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Connect a cloud provider" }));
     expect(fixture.intents).toContainEqual({ topic: "app-settings", intent: "setActiveSection", args: ["api endpoint"] });
   });
@@ -191,7 +191,7 @@ describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
     act(() => fixture.pushSettings({ hasCompletedOnboarding: false }));
     act(() => fixture.pushComposer({ available: true, label: "Ollama (Local)" }));
 
-    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(await screen.findByRole("button", { name: "Next" }));
 
     expect(screen.getByText(/is ready/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Settings" })).toBeNull();
@@ -204,8 +204,8 @@ describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
     act(() => fixture.pushSettings({ hasCompletedOnboarding: false }));
     act(() => fixture.pushComposer());
 
-    await user.click(screen.getByRole("button", { name: "Next" })); // welcome -> provider check
-    await user.click(screen.getByRole("button", { name: "Next" })); // provider check -> sample workspace
+    await user.click(await screen.findByRole("button", { name: "Next" })); // welcome -> provider check
+    await user.click(await screen.findByRole("button", { name: "Next" })); // provider check -> sample workspace
     await user.click(screen.getByRole("button", { name: "Load Sample Workspace" }));
 
     expect(fixture.intents).toContainEqual({ topic: "scene", intent: "loadSampleWorkspace", args: [] });
