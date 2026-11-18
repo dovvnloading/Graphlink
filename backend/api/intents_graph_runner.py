@@ -63,6 +63,18 @@ def _public_run(run: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _pin_output_version(document: SceneDocument, step: dict[str, Any]) -> None:
+    """Capture the table's version during execution, never at inspection time."""
+    node = document.nodes.get(step["nodeId"])
+    output = table_output(node) if node is not None else None
+    if output is not None:
+        step["outputVersion"] = output.current.version
+
+
+def _find_run(document: SceneDocument, run_id: str) -> dict[str, Any] | None:
+    return next((run for run in document.graph_runs if run["runId"] == run_id), None)
+
+
 def register_graph_runner(
     bus: SessionBus, document: SceneDocument, save_checkpoint: Callable[[], Awaitable[bool]], serialize_mutation: Callable,
 ) -> None:
@@ -107,16 +119,6 @@ def register_graph_runner(
         latest = visible_run(document.graph_runs[-1])
         latest["history"] = [visible_run(run) for run in reversed(document.graph_runs[:-1])]
         return latest
-
-    def pin_output_version(step: dict[str, Any]) -> None:
-        """Record a table's existing version at checkpoint time, not at inspection."""
-        node = document.nodes.get(step["nodeId"])
-        output = table_output(node) if node is not None else None
-        if output is not None:
-            step["outputVersion"] = output.current.version
-
-    def find_run(run_id: str):
-        return next((run for run in document.graph_runs if run["runId"] == run_id), None)
 
     async def checkpoint():
         # A cancelled WebSocket request must not release the graph's save guard
@@ -272,7 +274,7 @@ def register_graph_runner(
                     step.update(status="blocked", detail=str(exc))
                 else:
                     step.update(status="completed", detail="Output updated.", outputHash=digest)
-                    pin_output_version(step)
+                    _pin_output_version(document, step)
                 step["finishedAt"] = datetime.now(timezone.utc).isoformat()
                 # save_chat writes the graph, notes and journal in one SQLite
                 # transaction. Restart sees either side of the transform intact.
@@ -314,7 +316,7 @@ def register_graph_runner(
                 # A current step also has an inspectable content-addressed
                 # version, even though it does not execute in this run.
                 step["outputHash"] = _output_digest(document.nodes[step["nodeId"]])
-                pin_output_version(step)
+                _pin_output_version(document, step)
         run = {
             "runId": run_id, "previewHash": token, "selectionHash": _digest(sorted(set(node_ids))),
             "startedAt": datetime.now(timezone.utc).isoformat(), "steps": steps, "status": "running",
@@ -333,7 +335,7 @@ def register_graph_runner(
     async def execute_graph_run(node_ids: list[str], preview_token: str, run_id: str):
         if not RUN_ID.fullmatch(run_id):
             raise IntentValidationError(["Use an operation ID of 8–100 letters, digits, hyphens or underscores."])
-        existing = find_run(run_id)
+        existing = _find_run(document, run_id)
         if existing is not None:
             if existing["previewHash"] != preview_token or existing["selectionHash"] != _digest(sorted(set(node_ids))):
                 raise IntentValidationError(["This operation ID already belongs to another preview."])
@@ -345,7 +347,7 @@ def register_graph_runner(
 
     @serialize_mutation
     async def continue_run(run_id: str):
-        run = find_run(run_id)
+        run = _find_run(document, run_id)
         if run is None:
             raise IntentValidationError(["This run does not belong to the open graph."])
         if run["status"] == "interrupted":
