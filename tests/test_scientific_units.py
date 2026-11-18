@@ -10,7 +10,7 @@ import pytest
 
 from graphlink_plugins.scientific.catalog import operations
 from graphlink_plugins.scientific.core import VERSION, readable_result, run_operation
-from graphlink_plugins.scientific.units import convert_measurement, parse_unit
+from graphlink_plugins.scientific.units import parse_unit
 
 
 _CONVERT = next(op for op in operations("core") if op.id == "convert_unit")
