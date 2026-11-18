@@ -297,7 +297,22 @@ const LARGEST_CHUNK_CEILING_BYTES = 443_000;
 // was not caused by this 1,903-byte change. The largest initial JS chunk
 // remains within its UNCHANGED 512,000-byte first-paint budget. Any further
 // growth must be measured and reviewed, not silently absorbed.
-const TOTAL_JS_CEILING_BYTES = 1_594_000;
+// Deliberate, measured amendment — 2026-11-18 (ADR-019 §4), PRs #602 and #603.
+// Frontend CI (Node 24, npm run check) measured 78 JS chunks in each build:
+//   baseline before both: 1,590,435 bytes
+//   PR #602 alone:       1,593,927 bytes (+3,492)
+//   PR #603 alone:       1,593,967 bytes (+3,532)
+//   both merged on main: 1,597,459 bytes (+7,024; 3,459 over the ratchet)
+// Both PRs passed individually, but together their intended publication-chart
+// export and chat-citation UI additions exhausted the narrow total-JS margin.
+// Neither PR added an npm dependency; Vite still emits 78 chunks. Comparison
+// of the chunk-size logs points to growth in those feature chunks, not a
+// clearly duplicated dependency that can be removed without changing behavior.
+// Restore PR #596's 0.5% total-JS margin: 1,597,459 * 1.005 = 1,605,446.295,
+// rounded up to 1,605,500 (8,041 bytes of headroom, ~0.503%). Keep the
+// separate LARGEST_CHUNK_CEILING_BYTES at 443,000, unchanged. Tighten the
+// total ratchet again when a genuine reduction is measured.
+const TOTAL_JS_CEILING_BYTES = 1_605_500;
 
 // Below this much headroom, say so. Both prior amendments record the same
 // story: the ceiling was set with ~3-5% room, ordinary week-to-week growth
