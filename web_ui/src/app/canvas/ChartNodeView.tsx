@@ -27,7 +27,7 @@ const LazyChartRenderer = lazy(() => import("./charts/ChartRenderer"));
 /**
  * The chart node (Qt-removal plan R6.2, re-rendered client-side as of
  * ADR-013 stage 13.2) - graphlink_canvas_chart_item.py's React successor: a
- * card wrapping an interactive SVG chart (bar/line/pie/histogram/sankey)
+ * card wrapping an interactive SVG chart (bar/line/pie/histogram/sankey/scatter/boxplot/heatmap)
  * drawn directly from `chartData` in the browser. Unlike the legacy
  * QPainter chart item, there is no "card chrome painted on top of the chart
  * image" here at all: the rounded-rect/header/badge/resize-handle chrome
@@ -155,6 +155,8 @@ export function filenameFromContentDisposition(header: string | null): string {
 }
 
 function chartTypeBadgeLabel(chartType: string): string {
+  if (chartType === "boxplot") return "Box plot";
+  if (chartType === "heatmap") return "Heatmap";
   return chartType ? chartType.charAt(0).toUpperCase() + chartType.slice(1) : "Chart";
 }
 

@@ -3,14 +3,14 @@
 Graphlink chart nodes use the version-1 canonical JSON object validated by
 `graphlink_chart_data.canonicalize_chart_data`. The server is the authority;
 `web_ui/src/app/canvas/chartSpec.ts` performs the same defensive validation.
-The version remains **1** because the new scientific fields are optional.
+The version remains **1** because the scientific and new chart-type fields are additive.
 
-**Scatter transport compatibility:** new chart generation input carries
-`"type": "scatter"`, but canonical *stored* scatter data deliberately leaves
+**New-type transport compatibility:** generation input uses `"type": "scatter"`,
+`"boxplot"`, or `"heatmap"`, but canonical *stored* data for those types leaves
 out its optional nested `type` field; the enclosing node's `chartType`
-is `"scatter"`. This preserves Graphlink's existing generated version-1
-scene validator, which does not yet enumerate scatter and is out of scope
-for this change. Pass `chart_type="scatter"` explicitly when canonicalizing
+is authoritative. This preserves Graphlink's existing generated version-1
+scene validator, whose type enum does not enumerate those types and is out
+of scope. Pass the intended chart type explicitly when canonicalizing
 that stored payload. Legacy chart types continue to store their nested
 `type` normally.
 
@@ -96,3 +96,86 @@ Example:
 Interactive SVG and the matplotlib PNG/SVG exporter use the original
 numeric coordinates and error magnitudes. Hover tooltips use unrounded
 number strings with units (not the shortened tick-label formatter).
+
+## Box plots
+
+Use `"type": "boxplot"` when generating data and pass `"boxplot"` as
+`chart_type` when canonicalizing a stored chart. Each entry in `groups`
+is a `{label: string, values: number[]}` object containing **raw observed
+samples**, not precomputed quartiles. The chart keeps the group order and
+the observations unchanged. It supports 1–12 uniquely named groups, with
+at least two observations per group and no more than **300 observations
+total**. All observations must be finite, and their combined range must
+also be finite. The default axis labels are `Group` and `Value`.
+
+```json
+{
+  "type": "boxplot",
+  "title": "Response times",
+  "xAxis": "Condition",
+  "yAxis": "Milliseconds",
+  "groups": [
+    {"label": "Control", "values": [1, 2, 2, 3, 3, 4, 100]},
+    {"label": "Treatment", "values": [2, 3, 3, 4, 5]}
+  ]
+}
+```
+
+Quartiles use the median-of-halves (Tukey) definition: for odd samples,
+the overall median is excluded from the two halves. Whiskers stop at the
+most extreme observations inside **1.5 × IQR** from Q1/Q3; every remaining
+point appears as an outlier marker. This is the same algorithm for live
+SVG, overview, and matplotlib PNG/SVG exports. Tooltips show the sample
+size, quartiles, median, whiskers, and outlier count.
+
+## Heatmaps
+
+Use `"type": "heatmap"` and a **dense, rectangular** matrix. `rowLabels`
+and `columnLabels` are nonempty arrays of text labels; `matrix` is a
+row-major `number[][]` with exactly one numeric cell per row/column pair.
+An optional `valueUnit` labels the colorbar and exact-value tooltips.
+`xAxis` and `yAxis` default to `Columns` and `Rows`. A heatmap supports
+at most **300 cells**; ragged, missing, NaN, infinite, and overflowing
+value-range data are rejected rather than silently padded or discarded.
+
+```json
+{
+  "type": "heatmap",
+  "title": "Assay response",
+  "xAxis": "Time",
+  "yAxis": "Group",
+  "valueUnit": "AU",
+  "rowLabels": ["Control", "Treatment"],
+  "columnLabels": ["0h", "24h", "48h"],
+  "matrix": [[-2, 0, 1], [1.5, 3, 5]]
+}
+```
+
+Each matrix has one shared color domain across all rows. Signed matrices
+spanning zero use a blue–neutral–red diverging palette centered at zero;
+all-positive, all-negative, or constant matrices use a sequential palette.
+The interactive SVG exposes each original cell value and labels on hover,
+and both export formats include a colorbar. Row/column order is preserved.
+
+## Generation and testing
+
+The existing `scene.generateChart` intent accepts `"boxplot"` and
+`"heatmap"` as its chart type argument (for example, arguments
+`[sourceNodeId, "heatmap"]`). The model extraction schemas require the
+fields described above and do not invent missing observations. Invalid
+model output still creates a valid error-state chart node, just as with
+scatter in PR #586. The existing chart-creation submenu is defined outside
+this change's permitted file scope and does not yet expose these two
+choices. Programmatic intent calls and live scene chart nodes are supported.
+The legacy session-save/load path is also outside this scope: it serializes
+only the canonical nested chart data, while its loader looks for `data.type`.
+Because the version-1 wire format omits that nested discriminator for these
+new types (as for scatter in PR #586), legacy session reload currently drops
+them. Persisted-session round trips require a separate scoped migration to
+carry the enclosing `chartType` through save/load.
+
+Regression fixtures live under `backend/evals/fixtures/chart/`, with
+Python canonicalizer/export tests in `backend/tests/` and TypeScript
+validator, interactive rendering, and overview tests under
+`web_ui/src/app/canvas/`. Legacy bar, line, pie, histogram, Sankey and
+scientific line/scatter payloads keep their existing shapes and behavior.

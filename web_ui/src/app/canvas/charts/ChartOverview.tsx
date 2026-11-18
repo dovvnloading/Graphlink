@@ -1,7 +1,7 @@
 import { memo } from "react";
 import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
-import { canonicalizeChartSpec, ChartSpecError, scientificFields, usesScientificMarks } from "../chartSpec";
-import { computeHistogramBins, createLinearScale, createLog10Scale, formatValue, scientificDomain } from "./chartScales";
+import { canonicalizeChartSpec, ChartSpecError, scientificFields, usesScientificMarks, boxplotFields, heatmapFields } from "../chartSpec";
+import { computeHistogramBins, computeBoxplotStats, heatmapColor, createLinearScale, createLog10Scale, formatValue, scientificDomain } from "./chartScales";
 import { computeSankeyLayout, sankeyFlowPath } from "./sankeyLayout";
 import { buildSlices } from "./pieSlices";
 import { FALLBACK_CHART_THEME } from "./chartTheme";
@@ -21,6 +21,51 @@ function overviewMarks(spec: ChartDataRow, chartType: string) {
         {nodes.map((node) => <rect key={node.name}
           x={node.x} y={node.y} width={node.width} height={node.height}
           fill={PALETTE[node.level % PALETTE.length]} />)}
+      </g>
+    );
+  }
+
+  if (chartType === "boxplot") {
+    const groups = boxplotFields(spec).groups ?? [];
+    const all = groups.flatMap((group) => group.values);
+    const y = createLinearScale(scientificDomain(Math.min(...all), Math.max(...all), "linear"), [HEIGHT - 8, 8]);
+    const slot = (WIDTH - 16) / groups.length;
+    return (
+      <g className="chart-overview-boxplots">
+        {groups.map((group, index) => {
+          const stats = computeBoxplotStats(group.values);
+          const cx = 8 + (index + 0.5) * slot;
+          const hw = slot * 0.25;
+          return (
+            <g key={group.label} stroke={PALETTE[index % PALETTE.length]}>
+              <line x1={cx} x2={cx} y1={y(stats.min)} y2={y(stats.max)} strokeWidth={1.5} />
+              <rect x={cx - hw} y={y(stats.q3)} width={hw * 2}
+                height={Math.max(0.5, y(stats.q1) - y(stats.q3))}
+                fill={PALETTE[index % PALETTE.length]} fillOpacity=".7" />
+              <line x1={cx - hw} x2={cx + hw} y1={y(stats.median)}
+                y2={y(stats.median)} stroke={FALLBACK_CHART_THEME.text} strokeWidth={1.5} />
+              {stats.outliers.map((v, j) => <circle key={j} cx={cx} cy={y(v)} r={2} />)}
+            </g>
+          );
+        })}
+      </g>
+    );
+  }
+
+  if (chartType === "heatmap") {
+    const data = heatmapFields(spec);
+    const matrix = data.matrix ?? [];
+    const values = matrix.flat();
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const cellWidth = WIDTH / (data.columnLabels?.length ?? 1);
+    const cellHeight = HEIGHT / (data.rowLabels?.length ?? 1);
+    return (
+      <g className="chart-overview-heatmap">
+        {matrix.map((row, i) => row.map((value, j) => (
+          <rect key={i + ":" + j} x={j * cellWidth} y={i * cellHeight}
+            width={cellWidth} height={cellHeight} fill={heatmapColor(value, min, max)} />
+        )))}
       </g>
     );
   }
@@ -130,7 +175,7 @@ const ChartOverview = memo(function ChartOverview({ chartData, chartType }: {
   }
   return (
     <div className="chart-canvas-wrapper chart-overview">
-      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`${spec.title} (${spec.type} chart)`}>
+      <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`${spec.title} (${spec.type ?? chartType} chart)`}>
         {overviewMarks(spec, chartType)}
       </svg>
     </div>

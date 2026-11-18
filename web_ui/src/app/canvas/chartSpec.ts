@@ -15,7 +15,7 @@
 import type { ChartDataRow, ChartFlowRow } from "../../lib/bridge-core/generated/scene-state";
 
 export const CHART_SPEC_VERSION = 1;
-export const SUPPORTED_CHART_TYPES = ["bar", "line", "pie", "histogram", "sankey", "scatter"] as const;
+export const SUPPORTED_CHART_TYPES = ["bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"] as const;
 export type SupportedChartType = (typeof SUPPORTED_CHART_TYPES)[number];
 
 const MAX_SERIES_POINTS = 300;
@@ -87,6 +87,28 @@ export interface ScientificChartSpec {
   xUnit?: string;
   yUnit?: string;
 };
+/** New chart types omit their optional nested type on the existing v1 wire.
+ * ChartState.chartType is the discriminator until codegen can be updated. */
+export interface BoxplotGroup {
+  label: string;
+  values: number[];
+}
+export interface BoxplotChartSpec extends ChartDataRow {
+  groups?: BoxplotGroup[];
+}
+export interface HeatmapChartSpec extends ChartDataRow {
+  rowLabels?: string[];
+  columnLabels?: string[];
+  matrix?: number[][];
+  valueUnit?: string;
+}
+export function boxplotFields(spec: ChartDataRow): BoxplotChartSpec {
+  return spec as BoxplotChartSpec;
+}
+export function heatmapFields(spec: ChartDataRow): HeatmapChartSpec {
+  return spec as HeatmapChartSpec;
+}
+
 export function scientificFields(spec: ChartDataRow): ScientificChartSpec {
   return spec as ScientificChartSpec;
 }
@@ -264,6 +286,75 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
   return output;
 }
 
+function canonicalizeBoxplot(raw: Record<string, unknown>, result: ChartDataRow): ChartDataRow {
+  if (!Array.isArray(raw.groups) || !raw.groups.length) {
+    throw new ChartSpecError("Boxplot charts require a nonempty groups list");
+  }
+  if (raw.groups.length > MAX_NAMED_SERIES) throw new ChartSpecError("Boxplots support at most 12 groups");
+  const seen = new Set<string>();
+  let total = 0;
+  let smallest = Infinity;
+  let largest = -Infinity;
+  const groups: BoxplotGroup[] = raw.groups.map((entry, index) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new ChartSpecError("Boxplot group at index " + index + " must be an object");
+    }
+    const item = entry as Record<string, unknown>;
+    const label = cleanText(item.label, "Boxplot group at index " + index + " label");
+    if (seen.has(label)) throw new ChartSpecError("Duplicate boxplot group label: " + label);
+    seen.add(label);
+    if (!Array.isArray(item.values) || item.values.length < 2) {
+      throw new ChartSpecError("Boxplot group " + label + " requires at least two observations");
+    }
+    total += item.values.length;
+    if (total > MAX_SERIES_POINTS) throw new ChartSpecError("Boxplots support at most 300 observations total");
+    const values = item.values.map((value, i) => finiteNumber(value, "Boxplot group " + label + " value at index " + i));
+    smallest = Math.min(smallest, ...values);
+    largest = Math.max(largest, ...values);
+    return { label, values };
+  });
+  if (!Number.isFinite(largest - smallest)) throw new ChartSpecError("Boxplot observation range must be finite");
+  (result as BoxplotChartSpec).groups = groups;
+  result.xAxis = cleanText(raw.xAxis, "X-axis label", { default: "Group" });
+  result.yAxis = cleanText(raw.yAxis, "Y-axis label", { default: "Value" });
+  return result;
+}
+
+function canonicalizeHeatmap(raw: Record<string, unknown>, result: ChartDataRow): ChartDataRow {
+  if (!Array.isArray(raw.rowLabels) || !raw.rowLabels.length) {
+    throw new ChartSpecError("Heatmap rowLabels must be a nonempty list");
+  }
+  if (!Array.isArray(raw.columnLabels) || !raw.columnLabels.length) {
+    throw new ChartSpecError("Heatmap columnLabels must be a nonempty list");
+  }
+  if (raw.rowLabels.length * raw.columnLabels.length > MAX_SERIES_POINTS) {
+    throw new ChartSpecError("Heatmaps support at most 300 cells");
+  }
+  if (!Array.isArray(raw.matrix) || raw.matrix.length !== raw.rowLabels.length) {
+    throw new ChartSpecError("Heatmap matrix row count must match rowLabels");
+  }
+  let smallest = Infinity;
+  let largest = -Infinity;
+  const matrix = raw.matrix.map((row, i) => {
+    if (!Array.isArray(row) || row.length !== (raw.columnLabels as unknown[]).length) {
+      throw new ChartSpecError("Heatmap matrix row " + i + " length must match columnLabels");
+    }
+    const values = row.map((value, j) => finiteNumber(value, "Heatmap cell at row " + i + " column " + j));
+    smallest = Math.min(smallest, ...values);
+    largest = Math.max(largest, ...values);
+    return values;
+  });
+  if (!Number.isFinite(largest - smallest)) throw new ChartSpecError("Heatmap value range must be finite");
+  const output = result as HeatmapChartSpec;
+  output.rowLabels = raw.rowLabels.map((label, i) => cleanText(label, "Heatmap row label at index " + i));
+  output.columnLabels = raw.columnLabels.map((label, i) => cleanText(label, "Heatmap column label at index " + i));
+  output.matrix = matrix;
+  output.xAxis = cleanText(raw.xAxis, "X-axis label", { default: "Columns" });
+  output.yAxis = cleanText(raw.yAxis, "Y-axis label", { default: "Rows" });
+  if (raw.valueUnit != null) output.valueUnit = cleanText(raw.valueUnit, "Heatmap valueUnit");
+  return output;
+}
+
 interface RawSankeyFlow {
   source: unknown;
   target: unknown;
@@ -345,12 +436,15 @@ export function canonicalizeChartSpec(data: unknown, chartType?: string | null):
 
   const result: ChartDataRow = {
     version: CHART_SPEC_VERSION,
-    type: expectedType === "scatter" ? undefined : expectedType,
+    type: expectedType === "scatter" || expectedType === "boxplot" || expectedType === "heatmap" ? undefined : expectedType,
     title: cleanText(raw.title, "Chart title", {
       default: `${expectedType[0].toUpperCase()}${expectedType.slice(1)} Chart`,
       maxLength: MAX_TITLE_LENGTH,
     }),
   };
+
+  if (expectedType === "boxplot") return canonicalizeBoxplot(raw, result);
+  if (expectedType === "heatmap") return canonicalizeHeatmap(raw, result);
 
   if (expectedType === "scatter" || (expectedType === "line" && usesScientificMarks(raw as ChartDataRow, expectedType))) {
     return canonicalizeScientific(raw, expectedType, result);

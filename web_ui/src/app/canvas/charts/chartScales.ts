@@ -265,3 +265,63 @@ export function median(values: number[]): number {
   // Halve BEFORE adding to avoid overflowing two large finite values.
   return sorted.length % 2 === 0 ? sorted[mid - 1] / 2 + sorted[mid] / 2 : sorted[mid];
 }
+
+/** Tukey's median-of-halves quartiles and 1.5-IQR fences, shared with the
+ * matplotlib exporter. Whiskers stop at the most extreme non-outliers. */
+export interface BoxplotStats {
+  min: number;
+  q1: number;
+  median: number;
+  q3: number;
+  max: number;
+  outliers: number[];
+}
+
+export function computeBoxplotStats(values: number[]): BoxplotStats {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  // Preserve extreme finite values, including subnormals: splitting each
+  // operand in half (the general-purpose median helper's overflow guard)
+  // can underflow a pair of equal Number.MIN_VALUE observations to zero.
+  const stableMedian = (sortedValues: number[]): number => {
+    const middle = Math.floor(sortedValues.length / 2);
+    if (sortedValues.length % 2) return sortedValues[middle];
+    const lo = sortedValues[middle - 1];
+    const hi = sortedValues[middle];
+    const difference = hi - lo;
+    return Number.isFinite(difference) ? lo + difference / 2 : lo / 2 + hi / 2;
+  };
+  const q1 = stableMedian(sorted.slice(0, mid));
+  const q3 = stableMedian(sorted.slice(mid + (sorted.length % 2)));
+  const center = stableMedian(sorted);
+  const fence = 1.5 * (q3 - q1);
+  const lower = q1 - fence;
+  const upper = q3 + fence;
+  const inliers = sorted.filter((value) => value >= lower && value <= upper);
+  const outliers = sorted.filter((value) => value < lower || value > upper);
+  return { min: inliers[0], q1, median: center, q3, max: inliers[inliers.length - 1], outliers };
+}
+
+/** Same stops and zero-centered diverging behavior as the matplotlib export.
+ * Never rescale individual rows: one matrix has exactly one color domain. */
+export function heatmapColor(value: number, min: number, max: number): string {
+  const diverging = min < 0 && max > 0;
+  const fraction = diverging
+    ? value <= 0 ? (value / -min + 1) / 2 : (1 + value / max) / 2
+    : min === max ? 0 : (value - min) / (max - min);
+  const interpolate = (start: string, end: string, t: number) => {
+    const position = Math.max(0, Math.min(1, t));
+    const rgb = [1, 3, 5].map((offset) => {
+      const a = parseInt(start.slice(offset, offset + 2), 16);
+      const b = parseInt(end.slice(offset, offset + 2), 16);
+      return Math.round(a + (b - a) * position).toString(16).padStart(2, "0");
+    });
+    return "#" + rgb.join("");
+  };
+  if (diverging) {
+    return fraction <= 0.5
+      ? interpolate("#2166AC", "#F7F7F7", fraction * 2)
+      : interpolate("#F7F7F7", "#B2182B", (fraction - 0.5) * 2);
+  }
+  return interpolate("#E5F5F9", "#0A6275", fraction);
+}

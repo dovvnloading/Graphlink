@@ -51,6 +51,17 @@ const SAMPLE_DATA: Record<string, Record<string, unknown>> = {
   line: { type: "line", title: "Trend", labels: ["Mon", "Tue", "Wed"], values: [1, 5, 3] },
   pie: { type: "pie", title: "Share", labels: ["A", "B", "C"], values: [30, 20, 50] },
   histogram: { type: "histogram", title: "Distribution", values: [1, 2, 2, 3, 4, 5, 5, 5, 6], bins: 4 },
+  boxplot: {
+    type: "boxplot", title: "Measurements",
+    groups: [
+      { label: "Control", values: [1, 2, 2, 3, 3, 4, 100] },
+      { label: "Treatment", values: [2, 3, 4, 5] },
+    ],
+  },
+  heatmap: {
+    type: "heatmap", title: "Assay", rowLabels: ["A", "B"],
+    columnLabels: ["X", "Y"], matrix: [[-2, 0], [1, 5]], valueUnit: "AU",
+  },
   sankey: {
     type: "sankey",
     title: "Flow",
@@ -86,6 +97,32 @@ describe("ChartRenderer", () => {
     expect(screen.getByRole("tooltip")).toBeInTheDocument();
 
     fireEvent.pointerLeave(bar);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("shows full Tukey statistics and outliers on boxplot hover", () => {
+    const { container } = render(<ChartRenderer chartType="boxplot" chartData={SAMPLE_DATA.boxplot as never} />);
+    expect(container.querySelectorAll(".chart-boxplot-group")).toHaveLength(2);
+    expect(container.querySelectorAll(".chart-boxplot-outlier")).toHaveLength(1);
+    const hit = container.querySelector(".chart-boxplot-hit-target")!;
+    fireEvent.pointerMove(hit, { clientX: 100, clientY: 100 });
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Median");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Outliers");
+    fireEvent.pointerLeave(hit);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("shows original matrix values and labels on heatmap hover", () => {
+    const { container } = render(<ChartRenderer chartType="heatmap" chartData={SAMPLE_DATA.heatmap as never} />);
+    const cells = container.querySelectorAll(".chart-heatmap-cell");
+    expect(cells).toHaveLength(4);
+    expect(cells[0]).toHaveAttribute("fill", "#2166ac");
+    const last = cells[3];
+    fireEvent.pointerMove(last, { clientX: 100, clientY: 100 });
+    expect(screen.getByRole("tooltip")).toHaveTextContent("5 AU");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("B");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Y");
+    fireEvent.pointerLeave(last);
     expect(screen.queryByRole("tooltip")).toBeNull();
   });
 

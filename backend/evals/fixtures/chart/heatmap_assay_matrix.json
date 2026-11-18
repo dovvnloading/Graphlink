@@ -1,0 +1,37 @@
+{
+  "name": "heatmap_assay_matrix",
+  "kind": "chart",
+  "input": {
+    "chart_type": "heatmap",
+    "source_text": "Assay intensity change (AU), columns 0h, 24h, 48h: control -2, 0, 1; treatment 1.5, 3, 5. Display a heatmap."
+  },
+  "scripted_response": "{\"type\":\"heatmap\",\"title\":\"Assay response\",\"xAxis\":\"Time\",\"yAxis\":\"Group\",\"valueUnit\":\"AU\",\"rowLabels\":[\"Control\",\"Treatment\"],\"columnLabels\":[\"0h\",\"24h\",\"48h\"],\"matrix\":[[-2,0,1],[1.5,3,5]]}",
+  "expected": {
+    "version": 1,
+    "title": "Assay response",
+    "xAxis": "Time",
+    "yAxis": "Group",
+    "valueUnit": "AU",
+    "rowLabels": [
+      "Control",
+      "Treatment"
+    ],
+    "columnLabels": [
+      "0h",
+      "24h",
+      "48h"
+    ],
+    "matrix": [
+      [
+        -2,
+        0,
+        1
+      ],
+      [
+        1.5,
+        3,
+        5
+      ]
+    ]
+  }
+}

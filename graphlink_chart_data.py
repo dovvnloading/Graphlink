@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 
-SUPPORTED_CHART_TYPES = frozenset({"bar", "line", "pie", "histogram", "sankey", "scatter"})
+SUPPORTED_CHART_TYPES = frozenset({"bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"})
 MAX_SERIES_POINTS = 300
 MAX_NAMED_SERIES = 12
 MAX_SANKEY_FLOWS = 300
@@ -123,6 +123,41 @@ CHART_JSON_SCHEMAS: dict[str, dict] = {
             "yAxis": {"type": "string"},
         },
         "required": ["type", "values"],
+    },
+    "boxplot": {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["boxplot"]},
+            "title": {"type": "string"},
+            "xAxis": {"type": "string"},
+            "yAxis": {"type": "string"},
+            "groups": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "values": {"type": "array", "items": {"type": "number"}},
+                    },
+                    "required": ["label", "values"],
+                },
+            },
+        },
+        "required": ["type", "groups"],
+    },
+    "heatmap": {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["heatmap"]},
+            "title": {"type": "string"},
+            "xAxis": {"type": "string"},
+            "yAxis": {"type": "string"},
+            "valueUnit": {"type": "string"},
+            "rowLabels": {"type": "array", "items": {"type": "string"}},
+            "columnLabels": {"type": "array", "items": {"type": "string"}},
+            "matrix": {"type": "array", "items": {"type": "array", "items": {"type": "number"}}},
+        },
+        "required": ["type", "rowLabels", "columnLabels", "matrix"],
     },
     "sankey": {
         "type": "object",
@@ -467,6 +502,80 @@ def _scientific_chart(data, chart_type, result):
     return result
 
 
+def _boxplot_chart(data, result):
+    """Preserve observed samples; both renderers calculate Tukey statistics."""
+    raw_groups = data.get("groups")
+    if not isinstance(raw_groups, list) or not raw_groups:
+        raise ChartDataError("Boxplot charts require a nonempty groups list")
+    if len(raw_groups) > MAX_NAMED_SERIES:
+        raise ChartDataError(f"Boxplots support at most {MAX_NAMED_SERIES} groups")
+    groups = []
+    seen = set()
+    total = 0
+    overall_min, overall_max = float("inf"), float("-inf")
+    for index, raw in enumerate(raw_groups):
+        if not isinstance(raw, dict):
+            raise ChartDataError(f"Boxplot group at index {index} must be an object")
+        label = _clean_text(raw.get("label"), f"Boxplot group at index {index} label")
+        if label in seen:
+            raise ChartDataError(f"Duplicate boxplot group label: {label}")
+        seen.add(label)
+        values = raw.get("values")
+        if not isinstance(values, list) or len(values) < 2:
+            raise ChartDataError(f"Boxplot group {label} requires at least two observations")
+        total += len(values)
+        if total > MAX_SERIES_POINTS:
+            raise ChartDataError(f"Boxplots support at most {MAX_SERIES_POINTS} observations total")
+        cleaned = [_finite_number(value, f"Boxplot group {label} value at index {i}")
+                   for i, value in enumerate(values)]
+        overall_min = min(overall_min, min(cleaned))
+        overall_max = max(overall_max, max(cleaned))
+        groups.append({"label": label, "values": cleaned})
+    if not math.isfinite(overall_max - overall_min):
+        raise ChartDataError("Boxplot observation range must be finite")
+    result["groups"] = groups
+    result["xAxis"] = _clean_text(data.get("xAxis"), "X-axis label", default="Group")
+    result["yAxis"] = _clean_text(data.get("yAxis"), "Y-axis label", default="Value")
+    return result
+
+
+def _heatmap_chart(data, result):
+    """A dense, rectangular matrix; never pad, drop, or coerce cells."""
+    rows = data.get("rowLabels")
+    columns = data.get("columnLabels")
+    matrix = data.get("matrix")
+    if not isinstance(rows, list) or not rows:
+        raise ChartDataError("Heatmap rowLabels must be a nonempty list")
+    if not isinstance(columns, list) or not columns:
+        raise ChartDataError("Heatmap columnLabels must be a nonempty list")
+    if len(rows) * len(columns) > MAX_SERIES_POINTS:
+        raise ChartDataError(f"Heatmaps support at most {MAX_SERIES_POINTS} cells")
+    if not isinstance(matrix, list) or len(matrix) != len(rows):
+        raise ChartDataError("Heatmap matrix row count must match rowLabels")
+    cleaned_matrix = []
+    smallest, largest = float("inf"), float("-inf")
+    for index, row in enumerate(matrix):
+        if not isinstance(row, list) or len(row) != len(columns):
+            raise ChartDataError(f"Heatmap matrix row {index} length must match columnLabels")
+        values = [_finite_number(value, f"Heatmap cell at row {index} column {j}")
+                  for j, value in enumerate(row)]
+        smallest = min(smallest, min(values))
+        largest = max(largest, max(values))
+        cleaned_matrix.append(values)
+    if not math.isfinite(largest - smallest):
+        raise ChartDataError("Heatmap value range must be finite")
+    result["rowLabels"] = [_clean_text(label, f"Heatmap row label at index {i}")
+                           for i, label in enumerate(rows)]
+    result["columnLabels"] = [_clean_text(label, f"Heatmap column label at index {i}")
+                              for i, label in enumerate(columns)]
+    result["matrix"] = cleaned_matrix
+    result["xAxis"] = _clean_text(data.get("xAxis"), "X-axis label", default="Columns")
+    result["yAxis"] = _clean_text(data.get("yAxis"), "Y-axis label", default="Rows")
+    if data.get("valueUnit") is not None:
+        result["valueUnit"] = _clean_text(data["valueUnit"], "Heatmap valueUnit")
+    return result
+
+
 def canonicalize_chart_data(data, chart_type=None):
     """Return a new, bounded chart payload or raise :class:`ChartDataError`.
 
@@ -494,6 +603,13 @@ def canonicalize_chart_data(data, chart_type=None):
             max_length=MAX_TITLE_LENGTH,
         ),
     }
+
+    # The generated v1 scene wire enum does not include these additive
+    # chart types. The outer ChartState.chart_type remains authoritative.
+    if expected_type in {"boxplot", "heatmap"}:
+        result.pop("type")
+        return (_boxplot_chart(data, result) if expected_type == "boxplot"
+                else _heatmap_chart(data, result))
 
     if expected_type == "scatter" or (
         expected_type == "line" and any(key in data for key in
