@@ -520,16 +520,24 @@ def _rarefied(counts, n):
             total += 1
             continue
         k = min(count, n)
-        # Either multiply the draw-sized or species-sized product, whichever
-        # is shorter. For very large surveys use log-binomial gamma ratios.
-        if k <= 2000:
-            if n <= count:
-                log_absent = math.fsum(math.log1p(-count / (N - j)) for j in range(n))
-            else:
-                log_absent = math.fsum(math.log1p(-n / (N - j)) for j in range(count))
+        # The absent probability is the shorter product
+        # prod_j(1 - max(count,n)/(N-j)). Subtracting lgamma values near
+        # 2**53 erases small but scientifically resolvable contributions.
+        if count * n > 40 * N:
+            total += 1.0  # probability of absence < exp(-40)
+            continue
+        removed = max(count, n)
+        if k <= 8192:
+            log_absent = math.fsum(math.log1p(-removed / (N - j)) for j in range(k))
         else:
-            log_absent = (math.lgamma(N - count + 1) - math.lgamma(N - count - n + 1)
-                          - math.lgamma(N + 1) + math.lgamma(N - n + 1))
+            # Midpoint expansion of the same log product. Small expected
+            # occupancy implies removed/N <= 40/k, so the curvature term
+            # controls the approximation even for huge survey counts.
+            mid = (k - 1) / 2
+            remaining = N - mid
+            log_absent = (k * math.log1p(-removed / remaining)
+                          - removed * (2 * remaining - removed) * k * (k*k - 1)
+                          / (24 * remaining**2 * (remaining - removed)**2))
         total -= math.expm1(min(0.0, log_absent))
     return total
 

@@ -157,10 +157,15 @@ def _safe_correlation(a, b):
         raise ValueError("Correlation requires the same number of paired x and y values.")
     if len(a) < 4:
         raise ValueError("A 95% correlation confidence interval requires at least four pairs.")
-    # Subtract before scaling, then normalize to protect the sums of squares.
-    amin, bmin = min(a), min(b)
-    ax = [x - amin for x in a]
-    by = [y - bmin for y in b]
+    # Normalize magnitudes *before* differencing: finite x values of
+    # opposite signs can have an unrepresentable span (e.g. ±1e308).
+    ascale = max(map(abs, a)) or 1.0
+    bscale = max(map(abs, b)) or 1.0
+    norm_a = [v / ascale for v in a]
+    norm_b = [v / bscale for v in b]
+    amin, bmin = min(norm_a), min(norm_b)
+    ax = [x - amin for x in norm_a]
+    by = [y - bmin for y in norm_b]
     sx, sy = max(ax), max(by)
     if not math.isfinite(sx) or not math.isfinite(sy):
         raise ValueError("Correlation differences exceed the supported numeric range.")
@@ -237,6 +242,9 @@ def _shapiro(data):
         raise ValueError("Shapiro-Wilk requires at least 3 observations.")
     if n > 5000:
         raise ValueError("Royston's Shapiro-Wilk approximation supports at most 5000 observations.")
+    # Avoid overflow in max-min for finite observations of opposite sign.
+    magnitude = max(map(abs, xs)) or 1.0
+    xs = [x / magnitude for x in xs]
     baseline = xs[0]
     centered = [x - baseline for x in xs]
     scale = centered[-1]
@@ -634,17 +642,23 @@ def _fisher_exact(data):
     lo, hi = max(0, ct[0] - rt[1]), min(ct[0], rt[0])
     if hi - lo > 100000:
         raise ValueError("Fisher's exact test supports at most 100001 feasible tables for fixed margins.")
-    def logcomb(n, k):
-        return math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
-    logden = logcomb(n, ct[0])
-    logs = [logcomb(rt[0], v) + logcomb(rt[1], ct[0] - v) - logden
-            for v in range(lo, hi + 1)]
-    scale = max(logs)
-    weights = [math.exp(v - scale) for v in logs]
+    # lgamma subtraction loses all low-tail precision when margins are large.
+    # Recurrences of adjacent hypergeometric weights use only exact counts
+    # before division and are normalized around the distribution mode.
+    mode = max(lo, min(hi, ((rt[0] + 1) * (ct[0] + 1)) // (n + 2)))
+    weights = [0.0] * (hi - lo + 1)
+    weights[mode - lo] = 1.0
+    for v in range(mode + 1, hi + 1):
+        previous = v - 1
+        weights[v - lo] = (weights[previous - lo] * ((rt[0] - previous) / v)
+                           * ((ct[0] - previous) / (rt[1] - ct[0] + v)))
+    for v in range(mode - 1, lo - 1, -1):
+        weights[v - lo] = (weights[v + 1 - lo] * ((v + 1) / (rt[0] - v))
+                           * ((rt[1] - ct[0] + v + 1) / (ct[0] - v)))
     total = math.fsum(weights)
-    observed_log = logs[a - lo]
-    # The probability-order two-sided convention (R fisher.test, SciPy).
-    p_two = math.fsum(w for lp, w in zip(logs, weights) if lp <= observed_log + 1e-10) / total
+    observed_weight = weights[a - lo]
+    # Probability-order two-sided convention (R fisher.test / SciPy).
+    p_two = math.fsum(w for w in weights if w <= observed_weight * (1 + 1e-10)) / total
     p_less = math.fsum(weights[:a - lo + 1]) / total
     p_greater = math.fsum(weights[a - lo:]) / total
     odds = "infinite" if b * c == 0 and a * d else (a * d / (b * c) if b * c else "undefined (zero margins)")

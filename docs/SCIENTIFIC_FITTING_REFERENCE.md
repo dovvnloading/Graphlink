@@ -410,3 +410,9 @@ Run the additional certification and regression suites after a full checkout:
 ```sh
 python -m pytest -n0 backend/tests/test_scientific_inference.py backend/tests/test_scientific_fitting.py
 ```
+
+### Independent correctness audit: magnitude extremes and exact-test tails
+
+The **Pearson/Spearman correlation** helper and **Shapiro–Wilk** implementation now scale each finite input vector by its largest absolute magnitude **before subtracting** its baseline. A vector that spans values such as `−1e308` to `+1e308` is finite even though the unscaled subtraction overflows; normalization preserves the dimensionless Pearson `r`, Spearman `rho`, and Shapiro–Wilk `W` and their p-values, rather than rejecting those legitimate measurements. The input size and constant-data validations remain unchanged. Confidence intervals and p-values retain their previous methods and precision limitations.
+
+**Fisher's 2×2 exact test:** The null distribution is hypergeometric conditional on fixed row and column margins. Subtracting `lgamma` values for margins near `10¹⁵` loses extreme-tail accuracy and can inflate a true `~10⁻¹⁵` probability by more than an order of magnitude. The implementation now calculates unnormalized probabilities by adjacent hypergeometric probability ratios, starting at the exact integer mode, then normalizes their sum. The two-sided convention is unchanged: sum all tables whose probability does not exceed the observed table's; directional p-values are the inclusive upper/lower tails. For `[[10**15+1,0],[0,1]]`, the one-sided greater and two-sided p-values are both **`1/(10**15+2)`**, to binary64 precision; for `[[3,1],[1,3]]`, the two-sided p-value is **`34/70`**. The sample odds ratio remains an unconditional cross-product estimate. [SciPy Fisher exact convention and hypergeometric PMF](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.fisher_exact.html), Fisher (1935).
