@@ -47,10 +47,9 @@ def test_model_driven_scatter_requests_advanced_options_and_creates_a_chart():
             },
         ])
         assert node_id in document.nodes
-        state = document.nodes[node_id].state
-        assert state.chart_type == "scatter"
-        assert "type" not in state.chart_data  # v1 generated scene validator
-        assert state.chart_data["series"][0]["yError"] == [[0.1, 0.1], [0.2, 0.3]]
+        assert document.nodes[node_id].state.chart_type == "scatter"
+        assert "type" not in document.nodes[node_id].state.chart_data  # v1 generated scene validator
+        assert document.nodes[node_id].state.chart_data["series"][0]["yError"] == [[0.1, 0.1], [0.2, 0.3]]
         assert len(agent.calls) == 1
         prompt = agent.calls[0]["source_text"]
         assert "multiple named series" in prompt
@@ -92,10 +91,9 @@ def test_invalid_model_scatter_result_gets_a_valid_numeric_placeholder():
         })
         node_id = await bus.dispatch_intent("scene", "generateChart", [root, "scatter"])
         assert node_id in document.nodes
-        state = document.nodes[node_id].state
-        assert state.chart_type == "scatter"
-        assert "log10 axis" in state.chart_error
-        assert state.chart_data["xValues"] == [1.0, 2.0]
-        assert "type" not in state.chart_data
+        assert document.nodes[node_id].state.chart_type == "scatter"
+        assert "log10 axis" in document.nodes[node_id].state.chart_error
+        assert document.nodes[node_id].state.chart_data["xValues"] == [1.0, 2.0]
+        assert "type" not in document.nodes[node_id].state.chart_data
 
     asyncio.run(run())
