@@ -64,6 +64,7 @@ describe("scientific chart contract", () => {
     [{ ...SCATTER, xValues: [1, 10, 100], series: [{ name: "A", values: [1, 2, 3], xError: [1, 0, 0] }] }, "lower error endpoint"],
     [{ ...SCATTER, yScale: "log10", series: [{ name: "A", values: [1, 2, 3], yError: [1, 0, 0] }] }, "lower error endpoint"],
     [{ ...SCATTER, yScale: "log10", series: [{ name: "A", values: [1, 0, 3] }] }, "log10 axis"],
+    [{ ...SCATTER, xScale: "linear", xValues: [1, 2, 3], series: [{ name: "A", values: [0, 0, 0], yError: [1e308, 1e308, 1e308] }] }, "range including error endpoints"],
   ])("rejects invalid scientific values without skipping a point", (input, message) => {
     expect(() => canonicalizeChartSpec(input, "scatter")).toThrow(message);
   });
@@ -78,6 +79,22 @@ describe("log10 scientific scales", () => {
     expect(log10Ticks(0.1, 1000)).toEqual([0.1, 1, 10, 100, 1000]);
     expect(formatLogTick(0.0001)).toBe("1e-4");
     expect(scientificDomain(1, 100, "log10")[0]).toBeGreaterThan(0);
+  });
+
+  it("contains representable extreme values without clipping them", () => {
+    const tiny = Number.MIN_VALUE;
+    const huge = Number.MAX_VALUE;
+    const [logMin, logMax] = scientificDomain(tiny, huge, "log10");
+    expect(logMin).toBeGreaterThan(0);
+    expect(logMin).toBeLessThanOrEqual(tiny);
+    expect(logMax).toBeGreaterThanOrEqual(huge);
+    const log = createLog10Scale([logMin, logMax], [0, 100]);
+    expect(log(tiny)).toBeGreaterThanOrEqual(0);
+    expect(log(huge)).toBeLessThanOrEqual(100);
+    const [linMin, linMax] = scientificDomain(-9e307, 8e307, "linear");
+    expect(Number.isFinite(linMax - linMin)).toBe(true);
+    expect(linMin).toBeLessThanOrEqual(-9e307);
+    expect(linMax).toBeGreaterThanOrEqual(8e307);
   });
 
   it("keeps wide log tick collections bounded", () => {
@@ -111,6 +128,34 @@ describe("scientific React rendering", () => {
     expect(tip).toHaveTextContent("-0.1/+0.3 mV");
     fireEvent.pointerLeave(points[1]);
     expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+
+  it("maps asymmetric error-bar endpoints to the same numeric log positions as its points", () => {
+    const { container } = render(<ChartRenderer chartType="scatter" chartData={SCATTER as never} />);
+    const first = container.querySelector(".chart-scientific-series")!;
+    const marker = first.querySelector(".chart-series-marker")!;
+    const capLine = first.querySelector(".chart-x-error line")!;
+    const xDomain = scientificDomain(0.95, 110, "log10");
+    const scale = createLog10Scale(xDomain, [0, 640 - 74 - 22]);
+    expect(Number(marker.getAttribute("cx"))).toBeCloseTo(scale(1), 7);
+    expect(Number(capLine.getAttribute("x1"))).toBeCloseTo(scale(0.95), 7);
+    expect(Number(capLine.getAttribute("x2"))).toBeCloseTo(scale(1.05), 7);
+  });
+
+  it("renders a log10 y-axis with the original positive measurements and named lines", () => {
+    const input = {
+      type: "line", xValues: [1, 10, 100], xScale: "log10", yScale: "log10",
+      xUnit: "s", yUnit: "mV",
+      series: [{ name: "Detector", values: [0.001, 0.1, 10], yError: [0.0001, 0.01, 1] }],
+    };
+    const { container } = render(<ChartRenderer chartType="line" chartData={input as never} />);
+    expect(container.querySelectorAll(".chart-series-marker")).toHaveLength(3);
+    expect(container.querySelectorAll(".chart-series-line")).toHaveLength(1);
+    const marks = container.querySelectorAll(".chart-series-marker");
+    expect(Number(marks[1].getAttribute("cy"))).toBeLessThan(Number(marks[0].getAttribute("cy")));
+    fireEvent.pointerMove(marks[0], { clientX: 50, clientY: 50 });
+    expect(screen.getByRole("tooltip")).toHaveTextContent("0.001 mV");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("0.0001");
   });
 
   it("connects named lines, not scatters, and does not change legacy line geometry", () => {
