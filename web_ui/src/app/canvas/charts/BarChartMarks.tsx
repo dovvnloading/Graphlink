@@ -8,6 +8,7 @@
 
 import type { RefObject } from "react";
 import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
+import type { ViewDomains } from "./chartViewport";
 import type { ChartTheme } from "./chartTheme";
 import { createLinearScale, formatValue, niceTicks, pickCategoricalTicks, wrapLabel } from "./chartScales";
 import { computeBottomMargin, computeLeftMargin, tooltipPositionFromEvent } from "./chartLayout";
@@ -24,6 +25,7 @@ export interface ChartMarksProps {
   height: number;
   onHover: (content: TooltipContent | null) => void;
   wrapperRef: RefObject<HTMLElement>;
+  viewport?: ViewDomains;
 }
 
 export function BarChartMarks({ chartData, theme, width, height, onHover, wrapperRef }: ChartMarksProps) {

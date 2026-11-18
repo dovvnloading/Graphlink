@@ -444,6 +444,37 @@ class ChartBoxplotGroupRow:
     values: list[float]
 
 
+
+@dataclass(repr=False)
+class ChartAnnotationRow:
+    """A canonical chart annotation; per-kind required fields are enforced by
+    graphlink_chart_data.canonicalize_chart_analysis before it reaches the wire.
+    """
+    kind: Literal["label", "arrow", "region"]
+    x: float | None = None
+    y: float | None = None
+    text: str | None = None
+    x2: float | None = None
+    y2: float | None = None
+    axis: Literal["x", "y"] | None = None
+    to: float | None = None
+    # 'from' is a Python keyword but a real JSON property. These dataclasses
+    # describe the wire (they are not constructed for individual annotations).
+    # Exclude the keyword field from generated Python repr/init expressions.
+    __annotations__["from"] = float | None
+    locals()["from"] = field(default=None, init=False, repr=False, compare=False)
+
+
+@dataclass
+class ChartAnalysisRow:
+    """Persisted, opt-in chart axis locks and data-coordinate annotations."""
+    lockX: bool
+    lockY: bool
+    annotations: list[ChartAnnotationRow]
+    xRange: list[float] | None = None
+    yRange: list[float] | None = None
+
+
 @dataclass
 class ChartDataRow:
     """The additive union of all eight chart shapes on the scene wire.
@@ -487,6 +518,8 @@ class ChartDataRow:
     columnLabels: list[str] | None = None
     matrix: list[list[float]] | None = None
     valueUnit: str | None = None
+    # Saved by the chart canonicalizer only when analysis has been opted into.
+    analysis: ChartAnalysisRow | None = None
 
 
 @dataclass
