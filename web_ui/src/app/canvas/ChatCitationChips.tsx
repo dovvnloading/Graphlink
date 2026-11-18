@@ -119,7 +119,7 @@ export function ChatCitationChips({ content, toolInvocations }: {
           <pre>{expanded.excerpt}</pre>
           {originalUrl && (
             <a href={originalUrl} target="_blank" rel="nofollow noopener noreferrer">
-              Open original at section
+              Open source section
             </a>
           )}
         </div>
