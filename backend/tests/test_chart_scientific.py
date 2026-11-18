@@ -74,6 +74,12 @@ def test_scatter_strictly_rejects_invalid_numeric_inputs(key, value, match):
                  {"name": "Two", "values": [1, 2]}]}, "length must match"),
     ({"series": [{"name": "Same", "values": [1, 2, 3]},
                  {"name": "Same", "values": [2, 3, 4]}]}, "Duplicate series name"),
+    ({"series": [
+        {"name": "Lower", "values": [0, 0, 0],
+         "yError": [[1.5e308, 0], [1.5e308, 0], [1.5e308, 0]]},
+        {"name": "Upper", "values": [0, 0, 0],
+         "yError": [[0, 1.5e308], [0, 1.5e308], [0, 1.5e308]]},
+    ]}, "range including all series errors"),
 ])
 def test_scientific_rejects_bad_log_bounds_and_series_lengths(data, match):
     base = {"type": "scatter", "xValues": [1, 10, 100], "values": [1, 2, 3]}
