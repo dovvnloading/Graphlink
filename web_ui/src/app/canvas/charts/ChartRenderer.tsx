@@ -17,12 +17,13 @@
 
 import { useMemo, useState } from "react";
 import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
-import { canonicalizeChartSpec, ChartSpecError } from "../chartSpec";
+import { canonicalizeChartSpec, ChartSpecError, usesScientificMarks } from "../chartSpec";
 import { useChartTheme, useElementSize } from "./chartHooks";
 import { useZoomPane } from "./useZoomPane";
 import { ChartTooltip, type TooltipContent } from "./ChartTooltip";
 import { BarChartMarks } from "./BarChartMarks";
 import { LineChartMarks } from "./LineChartMarks";
+import { ScientificChartMarks } from "./ScientificChartMarks";
 import { PieChartMarks } from "./PieChartMarks";
 import { HistogramChartMarks } from "./HistogramChartMarks";
 import { SankeyChartMarks } from "./SankeyChartMarks";
@@ -79,7 +80,10 @@ function ChartRenderer({ chartType, chartData }: ChartRendererProps) {
         >
           <g transform={`translate(${zoom.x} ${zoom.y}) scale(${zoom.scale})`}>
             {chartType === "bar" && <BarChartMarks {...marksProps} />}
-            {chartType === "line" && <LineChartMarks {...marksProps} />}
+            {chartType === "line" && (usesScientificMarks(canonical.data, chartType)
+              ? <ScientificChartMarks {...marksProps} chartType={chartType} />
+              : <LineChartMarks {...marksProps} />)}
+            {chartType === "scatter" && <ScientificChartMarks {...marksProps} chartType={chartType} />}
             {chartType === "pie" && <PieChartMarks {...marksProps} />}
             {chartType === "histogram" && <HistogramChartMarks {...marksProps} />}
             {chartType === "sankey" && <SankeyChartMarks {...marksProps} />}

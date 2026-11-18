@@ -40,7 +40,42 @@ def register_chart_intents(
 
     publish_scene = make_publish_scene(bus)
 
-    async def generate_chart(parent_node_id, chart_type):
+    def chart_source_options(chart_type, options):
+        """Only the four scientific capabilities are requestable. Options
+        steer extraction; they never supply, fabricate or override data."""
+        if options is None or options == {}:
+            return ""
+        if not isinstance(options, dict):
+            raise ChartDataError("chartOptions must be an object")
+        allowed = {"multipleSeries", "errorBars", "xScale", "yScale", "xUnit", "yUnit"}
+        unknown = set(options) - allowed
+        if unknown:
+            raise ChartDataError("Unsupported chartOptions: " + ", ".join(sorted(map(str, unknown))))
+        if chart_type not in ("line", "scatter"):
+            raise ChartDataError("Scientific chartOptions require line or scatter")
+        lines = []
+        for key in ("multipleSeries", "errorBars"):
+            if key in options:
+                if not isinstance(options[key], bool):
+                    raise ChartDataError(f"{key} must be a boolean")
+                if options[key]:
+                    lines.append("Extract " + ("multiple named series" if key == "multipleSeries"
+                                               else "per-point error magnitudes") +
+                                 " only where they are explicitly stated in the source.")
+        for key in ("xScale", "yScale"):
+            if key in options:
+                if options[key] not in ("linear", "log10"):
+                    raise ChartDataError(f"{key} must be linear or log10")
+                lines.append(f"Use {key}={options[key]} exactly.")
+        for key in ("xUnit", "yUnit"):
+            if key in options:
+                value = options[key]
+                if not isinstance(value, str) or not value.strip() or len(value.strip()) > 160:
+                    raise ChartDataError(f"{key} must be a nonempty unit of at most 160 characters")
+                lines.append(f"Use {key}={value.strip()!r} exactly.")
+        return "\n".join(lines)
+
+    async def generate_chart(parent_node_id, chart_type, chartOptions=None):
         if not parent_node_id or parent_node_id not in document.nodes:
             notifications.show(
                 "Please select a valid node to branch from before generating a chart.",
@@ -58,8 +93,20 @@ def register_chart_intents(
             await bus.publish("notification")
             return None
 
+        try:
+            option_prompt = chart_source_options(normalized_chart_type, chartOptions)
+        except ChartDataError as exc:
+            notifications.show(str(exc), "warning")
+            await bus.publish("notification")
+            return None
+
         branch_history = document.chat_branch_history(parent_node_id)
         source_text = _chart_source_text(branch_history)
+        if option_prompt:
+            source_text = (
+                "Requested scientific chart options (only extract values present in the source):\n"
+                + option_prompt + "\n\n" + source_text
+            )
 
         result_holder: dict[str, str] = {}
 
@@ -89,7 +136,17 @@ def register_chart_intents(
                 # shape and chart_error set, same "degrade gracefully, never
                 # drop the request" contract as the agent's own internal
                 # fallback chain.
-                chart_data = _placeholder_chart_data(normalized_chart_type)
+                if normalized_chart_type == "scatter":
+                    # The legacy helper lives in backend/canvas.py (outside
+                    # this feature's edit scope) and only constructs
+                    # categorical placeholders. Scatter needs real numeric
+                    # x coordinates even for an error-state chart.
+                    chart_data = canonicalize_chart_data({
+                        "type": "scatter", "title": "Chart",
+                        "xValues": [1.0, 2.0], "values": [1.0, 1.0],
+                    }, "scatter")
+                else:
+                    chart_data = _placeholder_chart_data(normalized_chart_type)
                 chart_error = f"The generated chart data could not be validated: {exc}"
             # ADR-010 stage 10.1: agent provenance - this node is produced by
             # a model generation, not a direct user action (stage 10.5's

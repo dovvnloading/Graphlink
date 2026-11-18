@@ -1,16 +1,17 @@
 import { memo } from "react";
 import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
-import { canonicalizeChartSpec, ChartSpecError } from "../chartSpec";
-import { computeHistogramBins, createLinearScale, formatValue } from "./chartScales";
+import { canonicalizeChartSpec, ChartSpecError, scientificFields, usesScientificMarks } from "../chartSpec";
+import { computeHistogramBins, createLinearScale, createLog10Scale, formatValue, scientificDomain } from "./chartScales";
 import { computeSankeyLayout, sankeyFlowPath } from "./sankeyLayout";
 import { buildSlices } from "./pieSlices";
 import { FALLBACK_CHART_THEME } from "./chartTheme";
+import { scientificExtents } from "./ScientificChartMarks";
 
 const WIDTH = 240;
 const HEIGHT = 116;
 const PALETTE = FALLBACK_CHART_THEME.categorical;
 
-function overviewMarks(spec: ChartDataRow) {
+function overviewMarks(spec: ChartDataRow, chartType: string) {
   if (spec.type === "sankey") {
     const { nodes, flows } = computeSankeyLayout(spec.flows ?? []);
     return (
@@ -22,6 +23,48 @@ function overviewMarks(spec: ChartDataRow) {
           fill={PALETTE[node.level % PALETTE.length]} />)}
       </g>
     );
+  }
+
+  if (chartType === "scatter" || (chartType === "line" && usesScientificMarks(spec, chartType))) {
+    const data = scientificFields(spec);
+    const series = data.series ?? [{
+      name: "",
+      values: data.values ?? [],
+      xError: data.xError,
+      yError: data.yError,
+    }];
+    const xs = data.xValues ?? series[0].values.map((_, index) => index);
+    const extents = scientificExtents(xs, series);
+    const xDomain = scientificDomain(...extents.x, data.xScale ?? "linear");
+    const yDomain = scientificDomain(...extents.y, data.yScale ?? "linear");
+    const x = data.xScale === "log10"
+      ? createLog10Scale(xDomain, [8, WIDTH - 8])
+      : createLinearScale(xDomain, [8, WIDTH - 8]);
+    const y = data.yScale === "log10"
+      ? createLog10Scale(yDomain, [HEIGHT - 10, 8])
+      : createLinearScale(yDomain, [HEIGHT - 10, 8]);
+    return series.map((row, seriesIndex) => (
+      <g key={seriesIndex} className="chart-overview-scientific-series">
+        {chartType === "line" && (
+          <polyline fill="none" stroke={PALETTE[seriesIndex % PALETTE.length]}
+            strokeWidth="2" points={xs.map((v, i) => x(v) + "," + y(row.values[i])).join(" ")} />
+        )}
+        {xs.map((xValue, index) => {
+          const cx = x(xValue);
+          const cy = y(row.values[index]);
+          const xError = row.xError?.[index];
+          const yError = row.yError?.[index];
+          return (
+            <g key={index} stroke={PALETTE[seriesIndex % PALETTE.length]} strokeWidth="1">
+              {xError && <line x1={x(xValue - xError[0])} x2={x(xValue + xError[1])} y1={cy} y2={cy} />}
+              {yError && <line x1={cx} x2={cx} y1={y(row.values[index] - yError[0])}
+                y2={y(row.values[index] + yError[1])} />}
+              <circle cx={cx} cy={cy} r={2.7} fill={PALETTE[seriesIndex % PALETTE.length]} />
+            </g>
+          );
+        })}
+      </g>
+    ));
   }
 
   const values = spec.values ?? [];
@@ -88,7 +131,7 @@ const ChartOverview = memo(function ChartOverview({ chartData, chartType }: {
   return (
     <div className="chart-canvas-wrapper chart-overview">
       <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} role="img" aria-label={`${spec.title} (${spec.type} chart)`}>
-        {overviewMarks(spec)}
+        {overviewMarks(spec, chartType)}
       </svg>
     </div>
   );

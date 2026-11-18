@@ -28,6 +28,97 @@ export function createLinearScale(domain: [number, number], range: [number, numb
   return (value: number) => r0 + ((value - d0) / span) * (r1 - r0);
 }
 
+/** Log10 maps actual positive coordinates, never the point index or a
+ * rounded label. Callers validate all endpoints before constructing it. */
+export function createLog10Scale(domain: [number, number], range: [number, number]): Scale {
+  const [d0, d1] = domain.map((value) => Math.log10(value));
+  const [r0, r1] = range;
+  const span = d1 - d0;
+  if (!Number.isFinite(span) || span === 0) return () => (r0 + r1) / 2;
+  return (value: number) => r0 + (Math.log10(value) - d0) / span * (r1 - r0);
+}
+
+/** Power-of-ten ticks, downsampled for wide domains; bounded even across
+ * the full representable floating-point exponent range. */
+export function log10Ticks(min: number, max: number, targetCount = 6): number[] {
+  const first = Math.ceil(Math.log10(min));
+  const last = Math.floor(Math.log10(max));
+  if (first > last) return [min, max].filter((v, i, a) => i === 0 || v !== a[0]);
+  const stride = Math.max(1, Math.ceil((last - first + 1) / Math.max(1, targetCount)));
+  const ticks: number[] = [];
+  for (let power = first; power <= last; power += stride) {
+    ticks.push(10 ** power);
+  }
+  return ticks;
+}
+
+/** A tick on a log axis must never be formatted as zero or rounded
+ * to a neighbouring integer (the legacy value-label formatter may do both). */
+export function formatLogTick(value: number): string {
+  return value.toExponential(0);
+}
+
+/** Shared scientific domain math: include every symmetric/asymmetric error
+ * endpoint. Interpolation is linear in data space or log10(data), never in
+ * point index. */
+export function scientificDomain(min: number, max: number, scale: "linear" | "log10"): [number, number] {
+  if (scale === "log10") {
+    const low = Math.log10(min);
+    const high = Math.log10(max);
+    const padding = Math.max((high - low) * 0.12, 0.18);
+    // A valid endpoint can be as small as Number.MIN_VALUE or as large
+    // as Number.MAX_VALUE. Clamping to powers -323/308 clips real points.
+    const lower = low - padding <= Math.log10(Number.MIN_VALUE)
+      ? Number.MIN_VALUE : 10 ** (low - padding);
+    const upper = high + padding >= Math.log10(Number.MAX_VALUE)
+      ? Number.MAX_VALUE : 10 ** (high + padding);
+    return [Math.min(min, lower), Math.max(max, upper)];
+  }
+  const magnitude = Math.max(Math.abs(min), Math.abs(max));
+  // Do not use a unit-sized padding floor: a scientific domain around
+  // 1e-200 would otherwise collapse to [-.02,.02] on the interactive SVG
+  // while matplotlib correctly distinguishes every measurement.
+  const padding = magnitude === 0
+    ? 1
+    : Math.max((max - min) * 0.12, magnitude * 0.02, Number.MIN_VALUE);
+  const lower = Math.max(-Number.MAX_VALUE, min - padding);
+  const upper = Math.min(Number.MAX_VALUE, max + padding);
+  // Padding must not overflow the finite original coordinate span.
+  return Number.isFinite(upper - lower) ? [lower, upper] : [min, max];
+}
+
+/** Scientific linear ticks cannot use niceTicks: its fixed-decimal rounding
+ * throws RangeError for 1e-200 and its integer formatter labels tiny
+ * nonzero measurements "0". Never change the legacy chart tick helper. */
+export function scientificLinearTicks(min: number, max: number, targetCount = 5): number[] {
+  if (min === max) return [min];
+  const rawStep = (max - min) / Math.max(1, targetCount);
+  const magnitude = Math.max(Number.MIN_VALUE, 10 ** Math.floor(Math.log10(rawStep)));
+  const ratio = rawStep / magnitude;
+  const step = magnitude * (ratio >= 5 ? 5 : ratio >= 2 ? 2 : 1);
+  if (!Number.isFinite(step) || step <= 0) return [min, max];
+  const lo = Math.floor(min / step);
+  const hi = Math.ceil(max / step);
+  if (!Number.isSafeInteger(lo) || !Number.isSafeInteger(hi) || hi - lo > 12) {
+    return [min, max];
+  }
+  const result: number[] = [];
+  for (let i = lo; i <= hi; i += 1) {
+    const tick = i * step;
+    if (Number.isFinite(tick) && tick >= min && tick <= max) {
+      const rounded = Number(tick.toPrecision(12));
+      if (result[result.length - 1] !== rounded) result.push(rounded);
+    }
+  }
+  return result.length > 1 ? result : [min, max];
+}
+
+export function formatScientificTick(value: number): string {
+  // Number.toString is the shortest round-trippable decimal, so adjacent
+  // scientific ticks never become two misleading identical rounded labels.
+  return String(value);
+}
+
 /** "Nice" round-number ticks spanning at least [min, max] - the classic
  * Sparks/D3-style algorithm: pick a step from the {1, 2, 5} x 10^n family
  * closest to the ideal step for the requested tick count, then emit every

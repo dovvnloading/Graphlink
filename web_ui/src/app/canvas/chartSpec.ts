@@ -15,10 +15,11 @@
 import type { ChartDataRow, ChartFlowRow } from "../../lib/bridge-core/generated/scene-state";
 
 export const CHART_SPEC_VERSION = 1;
-export const SUPPORTED_CHART_TYPES = ["bar", "line", "pie", "histogram", "sankey"] as const;
+export const SUPPORTED_CHART_TYPES = ["bar", "line", "pie", "histogram", "sankey", "scatter"] as const;
 export type SupportedChartType = (typeof SUPPORTED_CHART_TYPES)[number];
 
 const MAX_SERIES_POINTS = 300;
+const MAX_NAMED_SERIES = 12;
 const MAX_SANKEY_FLOWS = 300;
 const MAX_LABEL_LENGTH = 160;
 const MAX_TITLE_LENGTH = 200;
@@ -55,6 +56,212 @@ function finiteNumber(value: unknown, fieldName: string): number {
   const num = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(num)) throw new ChartSpecError(`${fieldName} must be a finite number`);
   return num;
+}
+
+
+/** Additive scientific fields. The generated v1 wire validator accepts
+ * unknown properties, but not a new nested type enum: the outer chartType
+ * remains the scatter discriminator, and nested type is omitted for scatter. */
+export type ErrorPair = [number, number];
+export type AxisScale = "linear" | "log10";
+export interface ScientificSeries {
+  name: string;
+  values: number[];
+  xError?: ErrorPair[] | null;
+  yError?: ErrorPair[] | null;
+}
+export interface ScientificChartSpec {
+  version?: ChartDataRow["version"];
+  type?: ChartDataRow["type"];
+  title?: ChartDataRow["title"];
+  labels?: ChartDataRow["labels"];
+  values?: ChartDataRow["values"];
+  xAxis?: ChartDataRow["xAxis"];
+  yAxis?: ChartDataRow["yAxis"];
+  xValues?: number[];
+  series?: ScientificSeries[];
+  xError?: ErrorPair[] | null;
+  yError?: ErrorPair[] | null;
+  xScale?: AxisScale;
+  yScale?: AxisScale;
+  xUnit?: string;
+  yUnit?: string;
+};
+export function scientificFields(spec: ChartDataRow): ScientificChartSpec {
+  return spec as ScientificChartSpec;
+}
+export function usesScientificMarks(data: ChartDataRow, chartType: string): boolean {
+  return chartType === "scatter" ||
+    ["xValues", "series", "xError", "yError", "xScale", "yScale", "xUnit", "yUnit"].some((key) => key in data);
+}
+
+function scientificErrors(value: unknown, field: string, count: number): ErrorPair[] | null {
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value)) throw new ChartSpecError(field + " must be a list");
+  if (value.length !== count) {
+    throw new ChartSpecError(field + " length must match the series length (" + count + ")");
+  }
+  return value.map((entry, index): ErrorPair => {
+    const name = field + " at index " + index;
+    let minus: number;
+    let plus: number;
+    if (Array.isArray(entry)) {
+      if (entry.length !== 2) throw new ChartSpecError(name + " must have exactly two magnitudes");
+      minus = finiteNumber(entry[0], name + " lower magnitude");
+      plus = finiteNumber(entry[1], name + " upper magnitude");
+    } else {
+      minus = plus = finiteNumber(entry, name);
+    }
+    if (minus < 0 || plus < 0) throw new ChartSpecError(name + " magnitudes must be nonnegative");
+    return [minus, plus];
+  });
+}
+
+function checkScientificAxis(values: number[], errors: ErrorPair[] | null | undefined, scale: AxisScale, field: string): void {
+  let smallest = Infinity;
+  let largest = -Infinity;
+  values.forEach((value, index) => {
+    const [minus, plus] = errors?.[index] ?? [0, 0];
+    const lower = value - minus;
+    const upper = value + plus;
+    if (!Number.isFinite(lower) || !Number.isFinite(upper)) {
+      throw new ChartSpecError(field + " at index " + index + " has a non-finite error endpoint");
+    }
+    if (scale === "log10" && lower <= 0) {
+      throw new ChartSpecError(field + " at index " + index + " and its lower error endpoint must be greater than zero on a log10 axis");
+    }
+    smallest = Math.min(smallest, lower);
+    largest = Math.max(largest, upper);
+  });
+  if (!Number.isFinite(largest - smallest)) {
+    throw new ChartSpecError(field + " range including error endpoints must be finite");
+  }
+}
+
+interface ScientificValues {
+  name?: string;
+  values: number[];
+  xError?: ErrorPair[] | null;
+  yError?: ErrorPair[] | null;
+}
+
+function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "scatter", result: ChartDataRow): ChartDataRow {
+  const output = result as ScientificChartSpec;
+  if (type === "scatter" && raw.xValues == null) {
+    throw new ChartSpecError("Scatter charts require numeric xValues");
+  }
+  let xValues: number[] | undefined;
+  if (raw.xValues != null) {
+    if (!Array.isArray(raw.xValues)) throw new ChartSpecError("xValues must be a list");
+    if (raw.xValues.length === 0) throw new ChartSpecError("xValues require at least one data point");
+    if (raw.xValues.length > MAX_SERIES_POINTS) throw new ChartSpecError("Charts support at most 300 data points");
+    xValues = raw.xValues.map((value, i) => finiteNumber(value, "xValues at index " + i));
+    output.xValues = xValues;
+  }
+  for (const axis of ["xScale", "yScale"] as const) {
+    const scale = raw[axis] ?? "linear";
+    if (scale !== "linear" && scale !== "log10") throw new ChartSpecError(axis + " must be linear or log10");
+    output[axis] = scale;
+  }
+  if (output.xScale === "log10" && !xValues) {
+    throw new ChartSpecError("A log10 x-axis requires numeric xValues");
+  }
+  for (const field of ["xUnit", "yUnit"] as const) {
+    if (raw[field] != null) output[field] = cleanText(raw[field], field);
+  }
+  if (raw.labels != null) {
+    if (!Array.isArray(raw.labels)) throw new ChartSpecError("Labels must be a list");
+    output.labels = raw.labels.map((label, i) => cleanText(label, "Label at index " + i));
+  }
+  const series: ScientificValues[] = [];
+  if (raw.series != null) {
+    if (!Array.isArray(raw.series) || raw.series.length === 0) {
+      throw new ChartSpecError("series must be a nonempty list");
+    }
+    if (raw.series.length > MAX_NAMED_SERIES) throw new ChartSpecError("Charts support at most 12 named series");
+    if ("values" in raw || "xError" in raw || "yError" in raw) {
+      throw new ChartSpecError("Named series cannot be combined with top-level values or errors");
+    }
+    const names = new Set<string>();
+    raw.series.forEach((entry, index) => {
+      if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+        throw new ChartSpecError("series at index " + index + " must be an object");
+      }
+      const item = entry as Record<string, unknown>;
+      const name = cleanText(item.name, "series at index " + index + " name");
+      if (names.has(name)) throw new ChartSpecError("Duplicate series name: " + name);
+      names.add(name);
+      if (!Array.isArray(item.values)) throw new ChartSpecError("series " + name + " values must be a list");
+      if (!item.values.length) throw new ChartSpecError("series " + name + " requires at least one data point");
+      if (item.values.length > MAX_SERIES_POINTS) throw new ChartSpecError("Charts support at most 300 data points");
+      const values = item.values.map((value, i) => finiteNumber(value, "series " + name + " value at index " + i));
+      const row: ScientificValues = { name, values };
+      for (const field of ["xError", "yError"] as const) {
+        if (field in item) row[field] = scientificErrors(item[field], "series " + name + " " + field, values.length);
+      }
+      series.push(row);
+    });
+    output.series = series as ScientificSeries[];
+  } else {
+    if (!Array.isArray(raw.values) || !raw.values.length) {
+      throw new ChartSpecError(type[0].toUpperCase() + type.slice(1) + " charts require at least one data point");
+    }
+    if (raw.values.length > MAX_SERIES_POINTS) throw new ChartSpecError("Charts support at most 300 data points");
+    const values = raw.values.map((value, i) => finiteNumber(value, "Value at index " + i));
+    const row: ScientificValues = { values };
+    output.values = values;
+    for (const field of ["xError", "yError"] as const) {
+      if (field in raw) {
+        row[field] = scientificErrors(raw[field], field, values.length);
+        output[field] = row[field];
+      }
+    }
+    series.push(row);
+  }
+  const count = series[0].values.length;
+  for (const row of series) {
+    if (row.values.length !== count) {
+      throw new ChartSpecError("series " + (row.name ?? "values") + " length must match the other series (" + count + ")");
+    }
+  }
+  if (type === "line" && count < 2) throw new ChartSpecError("Line charts require at least two data points");
+  if (count > MAX_SERIES_POINTS || series.length * count > MAX_SERIES_POINTS) {
+    throw new ChartSpecError("Charts support at most 300 total series points");
+  }
+  if (xValues && xValues.length !== count) {
+    throw new ChartSpecError("xValues length must match the series length (" + count + ")");
+  }
+  if (output.labels && output.labels.length !== count) {
+    throw new ChartSpecError("labels length must match the series length (" + count + ")");
+  }
+  if (type === "line" && !xValues && !output.labels) throw new ChartSpecError("Line charts require labels or numeric xValues");
+  if (!xValues && series.some((row) => row.xError != null)) {
+    throw new ChartSpecError("xError requires numeric xValues");
+  }
+  if (xValues) series.forEach((row) => checkScientificAxis(xValues!, row.xError, output.xScale!, "xValues"));
+  series.forEach((row) => checkScientificAxis(row.values, row.yError, output.yScale!, "series " + (row.name ?? "values") + " values"));
+  // Separate series may have finite individual error spans yet overflow
+  // when their intervals are combined into the plot's shared axis.
+  for (const field of ["xValues", "values"] as const) {
+    if (field === "xValues" && !xValues) continue;
+    let smallest = Infinity;
+    let largest = -Infinity;
+    for (const row of series) {
+      const coordinates = field === "xValues" ? xValues! : row.values;
+      const errors = field === "xValues" ? row.xError : row.yError;
+      coordinates.forEach((value, index) => {
+        const [minus, plus] = errors?.[index] ?? [0, 0];
+        smallest = Math.min(smallest, value - minus);
+        largest = Math.max(largest, value + plus);
+      });
+    }
+    if (!Number.isFinite(largest - smallest)) {
+      throw new ChartSpecError(field + " range including all series errors must be finite");
+    }
+  }
+  output.xAxis = cleanText(raw.xAxis, "X-axis label", { default: type === "scatter" ? "X" : "Sequence" });
+  output.yAxis = cleanText(raw.yAxis, "Y-axis label", { default: type === "scatter" ? "Y" : "Value" });
+  return output;
 }
 
 interface RawSankeyFlow {
@@ -138,12 +345,16 @@ export function canonicalizeChartSpec(data: unknown, chartType?: string | null):
 
   const result: ChartDataRow = {
     version: CHART_SPEC_VERSION,
-    type: expectedType,
+    type: expectedType === "scatter" ? undefined : expectedType,
     title: cleanText(raw.title, "Chart title", {
       default: `${expectedType[0].toUpperCase()}${expectedType.slice(1)} Chart`,
       maxLength: MAX_TITLE_LENGTH,
     }),
   };
+
+  if (expectedType === "scatter" || (expectedType === "line" && usesScientificMarks(raw as ChartDataRow, expectedType))) {
+    return canonicalizeScientific(raw, expectedType, result);
+  }
 
   if (expectedType === "bar" || expectedType === "line" || expectedType === "pie") {
     const labels = raw.labels;
