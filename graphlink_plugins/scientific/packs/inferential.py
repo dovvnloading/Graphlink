@@ -695,7 +695,7 @@ def _ols_model(data):
                 vif = _as_float(ssx * inverse[j][j], "Variance inflation factor")
             else:
                 vif = "not applicable"
-            rows.append([f"intercept" if j == 0 else f"predictor_{j}",
+            rows.append(["intercept" if j == 0 else f"predictor_{j}",
                          _as_float(coef, "Coefficient"), _as_float(se, "Standard error"),
                          t, _probability(pvalue), _as_float(coef - crit * se, "95% CI"),
                          _as_float(coef + crit * se, "95% CI"), vif])
