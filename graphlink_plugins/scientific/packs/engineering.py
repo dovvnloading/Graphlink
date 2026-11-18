@@ -111,7 +111,7 @@ OPERATIONS: tuple[Operation, ...] = (
         (
             Field("length_m", "Initial length", "number", unit="m"),
             Field("coefficient_per_k", "Linear expansion coefficient", "number", unit="1/K"),
-            Field("temperature_change_k", "Signed temperature change", "number", unit="K"),
+            Field("temperature_change_k", "Signed temperature change", "number", unit="K", default_unit="delta_K"),
         ),
         {"length_m": 2, "coefficient_per_k": 0.000023, "temperature_change_k": 40},
         _expansion,
@@ -382,6 +382,11 @@ def heat_exchanger_sizing(data):
 
 
 def _second_step_fraction(zeta, u):
+    # The exact forms subtract numbers near one at early times, rounding
+    # the O(u²) step response to zero. The differential-equation series
+    # retains the first nonzero term for all three damping regimes.
+    if abs(u) <= 1e-4 and abs(zeta * u) <= 1e-4:
+        return u*u*(0.5 + u*(-zeta/3 + u*(4*zeta*zeta-1)/24))
     if zeta == 1:
         return -math.expm1(-u) - u*math.exp(-u)
     if zeta < 1:

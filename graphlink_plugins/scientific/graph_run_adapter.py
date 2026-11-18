@@ -10,7 +10,7 @@ from typing import Any
 
 from backend.domain.model import SceneError
 from graphlink_plugins.scientific.catalog import PACKS, operations
-from graphlink_plugins.scientific.core import fingerprint, readable_result, validated_inputs
+from graphlink_plugins.scientific.core import fingerprint, readable_result, validated_inputs_with_units
 from graphlink_plugins.scientific.data_table import numeric_column, table_metadata_valid
 from graphlink_plugins.scientific.workbench import (
     SCIENCE_KINDS, STATE_TYPES, _extract, _same_sources, _verify_sources,
@@ -38,7 +38,7 @@ def _configuration(node: Any) -> tuple[str, Any, dict]:
     if operation is None:
         raise SceneError("The configured scientific operation is no longer available.")
     try:
-        validated_inputs(operation, config["inputs"])
+        validated_inputs_with_units(operation, config["inputs"])
     except ValueError as exc:
         raise SceneError(str(exc)) from exc
     if set(config["sources"]) - set(config["inputs"]):
@@ -152,7 +152,7 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
             "selector": selector, "resultHash": result_hash, "receiptHash": receipt_hash,
         }
     try:
-        inputs = validated_inputs(operation, raw)
+        inputs, input_units = validated_inputs_with_units(operation, raw)
         sources = _verify_sources(document, node, inputs, references, granted)
     except (ValueError, IndexError, TypeError, KeyError) as exc:
         raise SceneError(str(exc)) from exc
@@ -162,7 +162,10 @@ def prepare(document: Any, node: Any, granted: Any) -> tuple[Any, dict, dict, st
     same = bool(
         isinstance(current, dict) and current["operationId"] == operation.id
         and current["inputs"] == inputs
+        and current["provenance"].get("inputUnits") == input_units
         and _same_sources(current["provenance"].get("sources", {}), sources)
     )
-    digest = fingerprint([operation.id, inputs, _stable_sources(sources)])
-    return operation, inputs, sources, digest, same
+    # Dispatch the original validated literals so the worker retains submitted
+    # units in provenance; pin the normalized values AND unit choices for replay.
+    digest = fingerprint([operation.id, inputs, input_units, _stable_sources(sources)])
+    return operation, raw, sources, digest, same

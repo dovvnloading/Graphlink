@@ -320,7 +320,15 @@ const LARGEST_CHUNK_CEILING_BYTES = 443_000;
 // Raise only by PR #608's measured 19,790 bytes: 1,605,500 -> 1,625,290.
 // This preserves the previous 8,041-byte headroom; keep the separate
 // 443,000-byte largest-chunk ceiling unchanged.
-const TOTAL_JS_CEILING_BYTES = 1_625_290;
+// Deliberate, measured amendment — 2026-11-18 (ADR-019 §4), PR #625.
+// Unit-aware Scientific Workbench fields add client-side measurement input
+// validation, unit metadata hints, and receipt provenance display. The SI
+// conversion tables remain backend-only; no new frontend dependency was added,
+// and the ScientificNodeView still loads in its existing lazy chunk.
+// Frontend CI measured 1,626,520 total JS bytes across 78 chunks, 1,230
+// above the prior ceiling. Raise only by those measured 1,230 bytes;
+// leave the separate largest-chunk ceiling unchanged.
+const TOTAL_JS_CEILING_BYTES = 1_626_520;
 
 // Below this much headroom, say so. Both prior amendments record the same
 // story: the ceiling was set with ~3-5% room, ordinary week-to-week growth

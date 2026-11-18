@@ -67,3 +67,9 @@ python -m pytest -n0 backend/tests/test_scientific_workbench.py backend/tests/te
 ```
 
 The `-n0` flag is useful in repository setups with pytest-xdist; it is not a runtime requirement of this pack.
+
+### Independent correctness audit: large exact fits and PCA feature units
+
+**Least squares:** The residual sum of squares is `RSS = Σ(y_i−(Ax)_i)²` (squared response units), and is exactly zero for an exact fit. Forming `(max(|y|))²` before multiplying by a normalized zero RSS incorrectly overflowed for otherwise representable 1e200-scale measurements. RSS is now obtained from the achieved residual L2 norm and squared **only after** checking the finite range. Thus the fit `A=[[1],[0]]`, `y=[1e200,0]` returns coefficient `1e200`, residual L2 norm `0` (response units) and RSS `0` (response units squared). A genuinely unrepresentable nonzero RSS still raises `ValueError` rather than serializing infinity. [NIST StRD least-squares glossary](https://www.itl.nist.gov/div898/strd/lls/data/LINKS/c-NoInt2.shtml).
+
+**PCA:** `feature_standard_deviations` now means the **measured sample standard deviation of each input feature**, in original feature units, in *both* `center` and `standardize` modes. Previously centered PCA incorrectly returned an array of ones, confusing its scale factors (used only for standardizing) with measured standard deviations. For observations `[[1,2],[2,4],[3,6],[4,8]]`, the values are `[sqrt(5/3), sqrt(20/3)]`, approximately `[1.29099445, 2.58198890]` in their respective feature units, not `[1,1]`. Centered scores still have original input units and standardized scores remain dimensionless. The SVD algorithm, rank threshold and condition-number policy are unchanged.

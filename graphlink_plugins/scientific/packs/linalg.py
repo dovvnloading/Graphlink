@@ -368,7 +368,13 @@ def _least_squares(data):
     residuals = [_number(math.fsum(matrix[i][j]*coefficients[j] for j in range(n)) - b[i],
                          "Least-squares residual") for i in range(m)]
     residual_norm = math.hypot(*residuals)
-    sum_squares = math.fsum((v/max(rhs_scale, 1.0))**2 for v in residuals)*max(rhs_scale, 1.0)**2
+    if not math.isfinite(residual_norm):
+        raise ValueError("Least-squares residual norm exceeds the numerical range.")
+    # Squaring the response scale overflows even for a perfect fit with
+    # exactly zero residuals. Square only the achieved residual norm.
+    sum_squares = _number(residual_norm * residual_norm, "Residual sum of squares")
+    if residual_norm and sum_squares == 0:
+        raise ValueError("Least-squares residual sum of squares underflows the numerical range.")
     a_norm = _fro(_scaled(matrix)[0]) * global_scale
     x_norm = math.hypot(*coefficients)
     b_norm = math.hypot(*b)
@@ -527,8 +533,9 @@ def _pca(data):
     total = math.fsum(variances)
     explained = [v/total for v in variances]
     means = [_number(x*global_scale, "PCA mean") for x in means_scaled]
-    feature_scales = ([1.0]*n if scaling == "center" else
-                      [_number(s*global_scale, "PCA standard deviation") for s in stdev])
+    # Feature standard deviations describe the original measurements in both
+    # modes; only the PCA score normalization depends on the chosen scaling.
+    feature_scales = [_number(s*global_scale, "PCA standard deviation") for s in stdev]
     rank, condition, _ = _spectral_info(singular, m, n)
     return {"summary": "PCA by economy SVD of column-centered data (optional sample-standard-deviation scaling).",
             "values": {"observations": m, "features": n, "components": k, "numerical_rank": rank,

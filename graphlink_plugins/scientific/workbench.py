@@ -14,7 +14,7 @@ from backend.domain.node_states import ChartState, PersistedPluginState, PluginS
 from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate
 
 from .catalog import PACKS, operations
-from .core import INPUT_LIMITS, canonical_bytes, fingerprint, readable_result, validated_inputs
+from .core import INPUT_LIMITS, canonical_bytes, fingerprint, readable_result, validated_inputs_with_units
 from .data_table import (
     TableState, decode_input, numeric_column, parse_table, persist_table,
     stage_from_saved, table_metadata_valid,
@@ -278,14 +278,14 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         if operation is None:
             return {"ok": False, "error": "Choose an operation registered for this pack."}
         try:
-            inputs = validated_inputs(operation, request.inputs)
+            inputs, _input_units = validated_inputs_with_units(operation, request.inputs)
             sources = _verify_sources(
                 document, node, inputs, request.sources or {}, ctx.is_plugin_granted,
             )
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
         configuration = {
-            "version": 1, "operationId": operation.id, "inputs": inputs, "sources": sources,
+            "version": 1, "operationId": operation.id, "inputs": dict(request.inputs), "sources": sources,
         }
         prior = node.state.data
         if prior.get("runner") == configuration:
@@ -326,7 +326,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
             return {"ok": False, "errorType": "busy", "error": "A calculation is already running on this scientific node."}
         state = node.state
         try:
-            inputs = validated_inputs(op, request.inputs)
+            inputs, input_units = validated_inputs_with_units(op, request.inputs)
             sources = _verify_sources(document, node, inputs, request.sources or {}, ctx.is_plugin_granted)
             budget = execution_timeout(op)
         except ValueError as exc:
@@ -339,6 +339,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         try:
             result = await execute_in_process(
                 pack_id, op, inputs, sources, timeout_s=budget, cancel_event=ticket.cancel_event,
+                input_units=input_units,
             )
             if ticket.cancel_event.is_set():
                 elapsed_ms = int((time.monotonic() - ticket.started_at) * 1000)
@@ -362,7 +363,9 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         latest = state.data.get("latest")
         if isinstance(latest, dict):
             previous = latest["provenance"]
-            if previous["resultHash"] == result["provenance"]["resultHash"] and _same_sources(previous.get("sources", {}), sources):
+            if (previous["resultHash"] == result["provenance"]["resultHash"]
+                    and previous.get("inputUnits") == result["provenance"].get("inputUnits")
+                    and _same_sources(previous.get("sources", {}), sources)):
                 return {"ok": True}
 
         # Chart children pin the full receipt, not just the numerical result

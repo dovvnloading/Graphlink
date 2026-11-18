@@ -7,9 +7,13 @@ import json
 import math
 import re
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from decimal import Decimal
+from fractions import Fraction
 from typing import Any
+
+from .units import parse_unit, dimension_name, convert_decimal_measurement
 
 VERSION = "1.1.0"
 MAX_POINTS = 1024
@@ -33,6 +37,19 @@ _NODE_KEY = re.compile(r"[0-9a-f]{32}")
 _OPERATION_ID = re.compile(r"[a-z][a-z0-9_]*")
 
 
+_NUMERIC = frozenset(("number", "integer", "vector", "matrix"))
+_NUMBER_UNIT = re.compile(r"^\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(?:\s*(\S.*?))?\s*$")
+_MATRIX_COLUMNS = re.compile(r"^col 1:\s*([^;]+);\s*col 2:\s*(.+)$")
+_DYNAMIC = {
+    "selected time unit": "time_unit",
+    "selected abundance unit": "abundance_unit",
+    "selected rate unit": "rate_unit",
+    "selected response unit": "response_unit",
+    "see rate_constant_unit": "rate_constant_unit",
+    "observation_unit": "observation_unit",
+}
+
+
 @dataclass(frozen=True)
 class Field:
     key: str
@@ -40,6 +57,50 @@ class Field:
     kind: str
     unit: str = ""
     description: str = ""
+    default_unit: str = ""
+    dimension: str = ""
+    column_units: tuple[str, ...] = ()
+    column_dimensions: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if self.kind == "matrix" and (columns := _MATRIX_COLUMNS.fullmatch(self.unit)):
+            units = tuple(value.strip() for value in columns.groups())
+            dimensions = tuple(dimension_name(parse_unit(value).dimensions) for value in units)
+            object.__setattr__(self, "column_units", units)
+            object.__setattr__(self, "column_dimensions", dimensions)
+            object.__setattr__(self, "default_unit", "1")
+            object.__setattr__(self, "dimension", "mixed: " + ", ".join(dimensions))
+            return
+        if self.kind in _NUMERIC:
+            unit = self.default_unit or self.unit or "1"
+            try:
+                parsed = parse_unit(unit)
+            except ValueError:
+                if self.default_unit:
+                    raise  # Explicit declarations must be valid SI expressions.
+                unit, parsed = "1", parse_unit("1")
+            object.__setattr__(self, "default_unit", unit)
+            object.__setattr__(self, "dimension", dimension_name(parsed.dimensions))
+
+
+def _effective_unit(field: Field, raw: dict) -> str:
+    name = field.unit
+    unit: object
+    if name in ("1 / selected time unit", "1 / (predator × time unit)", "1 / (prey × time unit)"):
+        time = raw.get("time_unit")
+        unit = f"1/({time})" if isinstance(time, str) else ""
+    elif name == "selected concentration unit":
+        unit = raw.get("substrate_unit" if field.key == "substrate" else "concentration_unit")
+    else:
+        key = "from_unit" if field.key == "value" and "from_unit" in raw else _DYNAMIC.get(name)
+        unit = raw.get(key) if key else None
+    if not isinstance(unit, str) or not unit.strip():
+        return field.default_unit
+    try:
+        parse_unit(unit)
+    except ValueError:
+        return field.default_unit  # Bare numbers with old free-form labels remain valid.
+    return unit.strip()
 
 
 @dataclass(frozen=True)
@@ -52,6 +113,13 @@ class Operation:
     calculate: Callable[[dict], dict]
     # Optional pack-level wall-clock override. None uses deployment configuration.
     timeout_s: float | None = None
+
+    def __post_init__(self):
+        # Expose a declared default unit and dimension for every numeric field.
+        object.__setattr__(self, "fields", tuple(
+            replace(f, default_unit=u) if (u := _effective_unit(f, self.example)) != f.default_unit else f
+            for f in self.fields
+        ))
 
     def describe(self) -> dict:
         return {
@@ -82,38 +150,91 @@ def finite(value, label: str) -> float:
     return number
 
 
-def _field_value(field: Field, value):
-    label = field.label
+def _measurement(field: Field, value, target: str) -> tuple[float, str]:
+    expected = dimension_name(parse_unit(target).dimensions)
+    if type(value) in (int, float):
+        return finite(value, field.label), target
+    if not isinstance(value, str) or len(value) > 256:
+        raise ValueError(f"{field.label} requires a finite number; expected {expected} ({target}).")
+    match = _NUMBER_UNIT.fullmatch(value)
+    if not match:
+        raise ValueError(f"{field.label} needs a decimal and optional unit; expected {expected} ({target}).")
+    decimal, suffix = match.groups()
+    supplied = suffix or target
+    # A typed 'K' on an interval field is a kelvin difference, not an absolute point.
+    converted_from = "delta_K" if target.startswith("delta_") and supplied == "K" else supplied
+    try:
+        number = convert_decimal_measurement(decimal, converted_from, target)
+    except ValueError as exc:
+        raise ValueError(f"{field.label}: {exc} Expected {dimension_name(parse_unit(target).dimensions)} (default {target}).") from None
+    if not suffix and Decimal(decimal) == Decimal(decimal).to_integral_value():
+        if Fraction(number) != Fraction(Decimal(decimal)):
+            raise ValueError(f"{field.label} contains an integer count that cannot be represented exactly.")
+    return number, supplied
+
+
+def _field_with_units(field: Field, value, unit: str):
     if field.kind == "number":
-        return finite(value, label)
+        return _measurement(field, value, unit)
     if field.kind == "integer":
-        if type(value) is not int or abs(value) > 2**53 - 1:
-            raise ValueError(f"{label} requires an exact integer in the supported range.")
-        return value
+        if type(value) is int and abs(value) <= 2**53 - 1:
+            return value, unit
+        if isinstance(value, str):
+            number, used = _measurement(field, value, unit)
+            match = _NUMBER_UNIT.fullmatch(value)
+            if match is None:
+                raise ValueError(f"{field.label} needs a decimal and optional unit.")
+            original = Decimal(match.group(1))
+            source, target = parse_unit(used), parse_unit(unit)
+            exact = ((Fraction(original) * source.scale + source.offset - target.offset)
+                     / target.scale)
+            if exact.denominator == 1 and abs(exact.numerator) <= 2**53 - 1 and number == exact.numerator:
+                return int(exact.numerator), used
+        raise ValueError(f"{field.label} requires an exact integer in the supported range; expected {field.dimension}.")
     if field.kind == "text":
         if not isinstance(value, str) or not 0 < len(value) <= MAX_TEXT:
-            raise ValueError(f"{label} requires 1–{MAX_TEXT} characters.")
-        return value
+            raise ValueError(f"{field.label} requires 1–{MAX_TEXT} characters.")
+        return value, None
     if not isinstance(value, list) or not 1 <= len(value) <= MAX_POINTS:
-        raise ValueError(f"{label} requires 1–{MAX_POINTS} entries.")
+        raise ValueError(f"{field.label} requires 1–{MAX_POINTS} entries.")
     if field.kind == "vector":
-        return [finite(v, label) for v in value]
+        converted = [_measurement(field, v, unit) for v in value]
+        return [n for n, _ in converted], [u for _, u in converted]
     if field.kind == "matrix":
         if not isinstance(value[0], list):
-            raise ValueError(f"{label} requires a rectangular numeric matrix.")
+            raise ValueError(f"{field.label} requires a rectangular numeric matrix.")
         width = len(value[0])
         if not 1 <= width <= MAX_COLUMNS or len(value) * width > MAX_CELLS:
-            raise ValueError(f"{label} exceeds the supported matrix dimensions.")
+            raise ValueError(f"{field.label} exceeds the supported matrix dimensions.")
         if any(not isinstance(row, list) or len(row) != width for row in value):
-            raise ValueError(f"{label} requires equal-length rows.")
-        return [[finite(v, label) for v in row] for row in value]
+            raise ValueError(f"{field.label} requires equal-length rows.")
+        if field.column_units and len(field.column_units) != width:
+            raise ValueError(f"{field.label} requires {len(field.column_units)} columns with declared units.")
+        target_units = field.column_units or (unit,) * width
+        converted_rows = [[_measurement(field, v, target_units[i]) for i, v in enumerate(row)] for row in value]
+        return ([[n for n, _ in row] for row in converted_rows],
+                [[u for _, u in row] for row in converted_rows])
     raise ValueError(f"Unsupported field kind {field.kind}.")
 
 
-def validated_inputs(operation: Operation, raw: dict) -> dict:
+def _field_value(field: Field, value):
+    return _field_with_units(field, value, field.default_unit)[0]
+
+
+def validated_inputs_with_units(operation: Operation, raw: dict) -> tuple[dict, dict]:
     if not isinstance(raw, dict) or set(raw) != {f.key for f in operation.fields}:
         raise ValueError("Supply exactly the inputs listed for this operation.")
-    return {f.key: _field_value(f, raw[f.key]) for f in operation.fields}
+    normalized, used = {}, {}
+    for field in operation.fields:
+        unit = _effective_unit(field, raw) if field.kind in _NUMERIC else ""
+        normalized[field.key], symbols = _field_with_units(field, raw[field.key], unit)
+        if field.kind in _NUMERIC:
+            used[field.key] = symbols
+    return normalized, used
+
+
+def validated_inputs(operation: Operation, raw: dict) -> dict:
+    return validated_inputs_with_units(operation, raw)[0]
 
 
 def check_artifact(data: dict) -> None:
@@ -151,10 +272,12 @@ def check_artifact(data: dict) -> None:
 
 
 def run_operation(pack: str, operation: Operation, raw: dict, sources: dict | None = None) -> dict:
-    return calculate_result(pack, operation, validated_inputs(operation, raw), sources)
+    values, units = validated_inputs_with_units(operation, raw)
+    return calculate_result(pack, operation, values, sources, input_units=units)
 
 
-def calculate_result(pack: str, operation: Operation, inputs: dict, sources: dict | None) -> dict:
+def calculate_result(pack: str, operation: Operation, inputs: dict, sources: dict | None,
+                     *, input_units: dict | None = None) -> dict:
     """Calculate with normalized inputs after any requested source bindings are verified."""
     try:
         output = operation.calculate(inputs)
@@ -169,6 +292,7 @@ def calculate_result(pack: str, operation: Operation, inputs: dict, sources: dic
             "packId": pack, "packVersion": VERSION, "operationId": operation.id,
             "inputHash": input_hash, "resultHash": result_hash,
             "createdAt": datetime.now(UTC).isoformat(), "sources": sources or {},
+            **({"inputUnits": input_units} if input_units is not None else {}),
         },
     }
     receipt = result["provenance"]

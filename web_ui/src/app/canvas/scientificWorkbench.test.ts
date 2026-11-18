@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartableScienceTypes, compatibleOptions, fieldText, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
+import { chartableScienceTypes, compatibleOptions, draftInputs, fieldText, matchesSource, parseInputs, readScienceState, sourceOptions, type ScienceField, type ScienceResult, type ScienceState } from "./scientificWorkbench";
 
 const limits = { points: 3, columns: 2, cells: 4, text: 3 };
 function parse(kind: ScienceField["kind"], raw: string) {
@@ -135,5 +135,56 @@ describe("typed table metadata and numeric column choices", () => {
     const field = (kind: ScienceField["kind"]): ScienceField => ({ key: "a", kind, label: "A", unit: "", description: "" });
     expect(compatibleOptions(field("vector"), options)).toHaveLength(2);
     expect(compatibleOptions(field("number"), options)).toEqual([]);
+  });
+});
+
+
+describe("unit-aware scientific drafts", () => {
+  const fields: ScienceField[] = [
+    { key: "distance", label: "Distance", kind: "number", unit: "m", default_unit: "m", dimension: "length (m)", description: "" },
+    { key: "temperature", label: "Temperature", kind: "number", unit: "K", default_unit: "K", dimension: "temperature (K)", description: "" },
+    { key: "samples", label: "Samples", kind: "vector", unit: "m", default_unit: "m", dimension: "length (m)", description: "" },
+    { key: "grid", label: "Grid", kind: "matrix", unit: "Pa", default_unit: "Pa", dimension: "pressure (Pa)", description: "" },
+    { key: "count", label: "Count", kind: "integer", unit: "count", default_unit: "count", dimension: "dimensionless (1)", description: "" },
+  ];
+  const operation = { id: "units", title: "Units", description: "", example: {}, fields };
+
+  it("keeps explicit measurement literals for server-side exact conversion", () => {
+    expect(parseInputs(operation, {
+      distance: "25 mm", temperature: "80 degF", samples: '["25 mm", 2, "1 cm"]',
+      grid: '[["1.2 kPa", 3], [4, "500 Pa"]]', count: "2 count",
+    })).toEqual({
+      distance: "25 mm", temperature: "80 degF", samples: ["25 mm", 2, "1 cm"],
+      grid: [["1.2 kPa", 3], [4, "500 Pa"]], count: "2 count",
+    });
+  });
+
+  it("retains numerical bare values and catches malformed measurements", () => {
+    expect(parseInputs(operation, {
+      distance: "0.025", temperature: "300", samples: "[1,2]", grid: "[[1,2]]", count: "2",
+    })).toEqual({
+      distance: 0.025, temperature: 300, samples: [1, 2], grid: [[1, 2]], count: 2,
+    });
+    expect(() => parseInputs(operation, {
+      distance: "1 m", temperature: "300", samples: '["not a number"]', grid: "[[1]]", count: "2",
+    })).toThrow(/array of numbers/);
+    expect(() => parseInputs(operation, {
+      distance: "1 m", temperature: "300", samples: "[1]", grid: "[[1]]", count: "2.0",
+    })).toThrow(/integer notation/);
+  });
+});
+
+describe("saved Graph Runner unit literals", () => {
+  it("quotes suffixed vector and matrix entries when restoring a saved configuration", () => {
+    const fields: ScienceField[] = [
+      { key: "samples", label: "Samples", kind: "vector", unit: "m", description: "" },
+      { key: "grid", label: "Grid", kind: "matrix", unit: "m", description: "" },
+    ];
+    const op = { id: "units", title: "Units", description: "", example: {}, fields };
+    const inputs = { samples: ["25 mm", 2], grid: [["1 cm", 3]] };
+    const draft = draftInputs(op, inputs);
+    expect(draft.samples).toBe('["25 mm",2]');
+    expect(draft.grid).toBe('[["1 cm",3]]');
+    expect(parseInputs(op, draft)).toEqual(inputs);
   });
 });

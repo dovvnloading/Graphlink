@@ -4,6 +4,10 @@ export interface ScienceField {
   kind: "number" | "integer" | "vector" | "matrix" | "text";
   unit: string;
   description: string;
+  default_unit?: string;
+  dimension?: string;
+  column_units?: string[];
+  column_dimensions?: string[];
 }
 
 export interface ScienceOperation {
@@ -95,7 +99,11 @@ const matrix = (value: unknown): value is number[][] => Array.isArray(value) && 
 
 function isField(value: unknown): value is ScienceField {
   return record(value) && ["key", "label", "unit", "description"].every((key) => typeof value[key] === "string")
-    && ["number", "integer", "vector", "matrix", "text"].includes(String(value.kind));
+    && ["number", "integer", "vector", "matrix", "text"].includes(String(value.kind))
+    && (value.default_unit === undefined || typeof value.default_unit === "string")
+    && (value.dimension === undefined || typeof value.dimension === "string")
+    && (value.column_units === undefined || strings(value.column_units))
+    && (value.column_dimensions === undefined || strings(value.column_dimensions));
 }
 
 function isOperation(value: unknown): value is ScienceOperation {
@@ -167,7 +175,7 @@ export function fieldText(field: ScienceField, value: unknown): string {
   if (value === undefined) return "";
   if (field.kind === "text") return String(value);
   if (typeof value === "number") return editableNumber(value);
-  if (Array.isArray(value)) return "[" + value.map((part) => fieldText(field, part)).join(",") + "]";
+  if (Array.isArray(value)) return "[" + value.map((part) => typeof part === "string" ? JSON.stringify(part) : fieldText(field, part)).join(",") + "]";
   return JSON.stringify(value);
 }
 
@@ -194,6 +202,25 @@ export class FieldError extends Error {
 
 const decimal = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 const arrayTokens = /[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/g;
+// The backend verifies SI symbols, compatibility and exact decimal conversion.
+const measurementWithUnit = /^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)[ \t]*([^\s].*)$/;
+function unitLiteral(raw: string, field: ScienceField): boolean {
+  if (decimal.test(raw.trim())) return false;
+  const match = measurementWithUnit.exec(raw.trim());
+  if (!match) return false;
+  parseMeasurement(match[1], field);
+  return true;
+}
+function unitArray(kind: ScienceField["kind"], value: unknown, field: ScienceField): boolean {
+  const cell = (item: unknown): boolean => typeof item === "number" && Number.isFinite(item)
+    || typeof item === "string" && unitLiteral(item, field);
+  if (!Array.isArray(value)) return false;
+  if (kind === "vector") return value.length > 0 && value.every(cell);
+  if (kind === "matrix") return value.length > 0 && Array.isArray(value[0]) &&
+    value[0].length > 0 && value.every((row) => Array.isArray(row) &&
+      row.length === value[0].length && row.every(cell));
+  return false;
+}
 
 /** Match the CSV importer: binary64 fractions may round, integer counts must be exact,
  * and a nonzero decimal must not silently become zero. Compare before JSON.parse
@@ -234,15 +261,19 @@ export function parseInputs(op: ScienceOperation, draft: Record<string, string>,
       value = raw;
     } else if (field.kind === "integer") {
       // Decimal/exponent conversion through Number first silently rounds e.g. 9007199254740990.5.
-      if (!/^[+-]?\d+$/.test(raw.trim())) invalid(`${field.label} must be a whole number written in integer notation.`);
-      value = Number(raw);
+      if (!/^[+-]?\d+$/.test(raw.trim()) && !unitLiteral(raw, field)) invalid(`${field.label} must be a whole number written in integer notation.`);
+      value = /^[+-]?\d+$/.test(raw.trim()) ? Number(raw) : raw.trim();
     } else if (field.kind === "number") {
       if (decimal.test(raw.trim())) value = parseMeasurement(raw.trim(), field);
+      else if (unitLiteral(raw, field)) value = raw.trim();
     } else {
       for (const match of raw.matchAll(arrayTokens)) parseMeasurement(match[0], field);
       try { value = JSON.parse(raw); } catch { value = undefined; }
     }
-    if (!accepts(field.kind, value)) invalid(`${field.label} must be ${expected[field.kind]}.`);
+    if (!accepts(field.kind, value) && !(typeof value === "string" && (field.kind === "number" || field.kind === "integer"))
+        && !unitArray(field.kind, value, field))
+      invalid(field.label + " must be " + expected[field.kind] + " (or unit-suffixed measurements); expected " +
+        (field.dimension ?? field.default_unit ?? "the declared units") + ".");
     if (Array.isArray(value)) {
       if (value.length > limits.points) invalid(`${field.label} exceeds ${limits.points} entries.`);
       if (field.kind === "matrix" && (value[0].length > limits.columns || value.length * value[0].length > limits.cells))
