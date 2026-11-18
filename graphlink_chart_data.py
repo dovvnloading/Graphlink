@@ -412,13 +412,13 @@ def _scientific_chart(data, chart_type, result):
                 series[0][axis] = errors
 
     count = len(series[0]["values"])
-    if count > MAX_SERIES_POINTS or len(series) * count > MAX_SERIES_POINTS:
-        raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} total series points")
-    if chart_type == "line" and count < 2:
-        raise ChartDataError("Line charts require at least two data points")
     for row in series:
         if len(row["values"]) != count:
             raise ChartDataError(f"series {row.get('name', 'values')} length must match the other series ({count})")
+    if chart_type == "line" and count < 2:
+        raise ChartDataError("Line charts require at least two data points")
+    if count > MAX_SERIES_POINTS or len(series) * count > MAX_SERIES_POINTS:
+        raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} total series points")
     if x_values is not None and len(x_values) != count:
         raise ChartDataError(f"xValues length must match the series length ({count})")
     if "labels" in result and len(result["labels"]) != count:
