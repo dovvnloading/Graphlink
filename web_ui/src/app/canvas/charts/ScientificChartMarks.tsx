@@ -6,8 +6,8 @@ import type { AxisScale, ErrorPair } from "../chartSpec";
 import type { ChartMarksProps } from "./BarChartMarks";
 import { CartesianAxes, type XTick } from "./CartesianAxes";
 import {
-  createLinearScale, createLog10Scale, formatLogTick, formatValue,
-  log10Ticks, niceTicks, pickCategoricalTicks, scientificDomain, wrapLabel,
+  createLinearScale, createLog10Scale, formatLogTick, formatScientificTick,
+  log10Ticks, scientificLinearTicks, pickCategoricalTicks, scientificDomain, wrapLabel,
   type Scale,
 } from "./chartScales";
 import { computeBottomMargin, tooltipPositionFromEvent } from "./chartLayout";
@@ -58,7 +58,7 @@ function scaleFor(domain: [number, number], range: [number, number], axis: AxisS
 }
 
 function labeledTicks(domain: [number, number], scale: AxisScale): number[] {
-  return scale === "log10" ? log10Ticks(...domain) : niceTicks(...domain, 5);
+  return scale === "log10" ? log10Ticks(...domain) : scientificLinearTicks(...domain, 5);
 }
 
 /** Keep tooltips exact: the legacy abbreviated tick-label formatter rounds
@@ -113,7 +113,7 @@ export function ScientificChartMarks({
       }))
     : labeledTicks(xDomain, xScaleType).map((value) => ({
         position: x(value),
-        lines: [xScaleType === "log10" ? formatLogTick(value) : formatValue(value)],
+        lines: [xScaleType === "log10" ? formatLogTick(value) : formatScientificTick(value)],
       }));
   const palette = theme.categorical.length ? theme.categorical : [theme.text];
 
@@ -126,7 +126,7 @@ export function ScientificChartMarks({
         xTicks={xTicks}
         yTicks={yTicks}
         yScale={y}
-        yTickFormat={yScaleType === "log10" ? formatLogTick : formatValue}
+        yTickFormat={yScaleType === "log10" ? formatLogTick : formatScientificTick}
         xAxisLabel={scientificAxisLabel(data.xAxis ?? "X", data.xUnit)}
         yAxisLabel={scientificAxisLabel(data.yAxis ?? "Y", data.yUnit)}
         rotateXTicks={rotate}
