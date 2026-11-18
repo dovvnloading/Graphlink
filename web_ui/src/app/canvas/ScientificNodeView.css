@@ -49,3 +49,10 @@
 .science-table { max-height: 160px; overflow: auto; }
 .science-table table { border-collapse: collapse; width: 100%; text-align: start; }
 .science-table :is(td, th) { padding: 3px 5px; text-align: start; border-bottom: 1px solid var(--gl-surface-border); }
+
+.science-data-table { display: grid; gap: 9px; padding-top: 10px; border-top: 1px solid var(--gl-surface-border); }
+.science-data-table form, .science-data-table fieldset, .science-imported { display: grid; gap: 7px; min-width: 0; }
+.science-imported .science-table { max-height: 190px; }
+.science-imported th small { display: block; font-weight: normal; white-space: nowrap; }
+.science-imported pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .9em; }
+.science-imported td { min-width: 0; max-width: 140px; overflow-wrap: anywhere; }

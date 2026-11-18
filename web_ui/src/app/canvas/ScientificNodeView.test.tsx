@@ -262,3 +262,81 @@ describe("scientific workbench card", () => {
     expect(readScienceState(JSON.stringify({ ...state, latest: { ...result, plot: { ...result.plot, y: [] } } }))).toBeNull();
   });
 });
+
+
+describe("typed table import and numeric selections", () => {
+  const meta = {
+    version: 1, asset_ref: "a".repeat(64), mime_type: "application/json", sourceName: "samples.tsv",
+    rowCount: 3, columnCount: 2, previewColumns: 2,
+    columns: [
+      { name: "Temperature", label: "Temperature (degC)", unit: "degC", type: "numeric", missingCount: 1 },
+      { name: "Station", label: "Station", unit: "", type: "text", missingCount: 0 },
+    ],
+    preview: [[10, "A"], [null, "B"], [20, "C"]],
+    provenance: { fileHash: "b".repeat(64), tableHash: "a".repeat(64),
+      receiptHash: "c".repeat(64), parseOptions: { format: "tsv", missingValues: ["", "NA"] } },
+  };
+
+  it("imports pasted TSV with explicit missing markers and type overrides", async () => {
+    const { request } = mount();
+    fireEvent.change(screen.getByLabelText("Table format"), { target: { value: "tsv" } });
+    fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "X\tFlag\n1\ttrue" } });
+    fireEvent.change(screen.getByLabelText("Missing-value markers"), { target: { value: "NA,missing" } });
+    fireEvent.change(screen.getByLabelText("Column type overrides"), { target: { value: '{"Flag":"boolean"}' } });
+    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    await waitFor(() => expect(request).toHaveBeenCalledWith("app-plugins", "invokePluginIntent", [
+      "science_mathematics", "import_table", {
+        node_id: "target", format: "tsv", text: "X\tFlag\n1\ttrue",
+        missing_values: ["", "NA", "missing"], column_types: { Flag: "boolean" },
+      },
+    ]));
+  });
+
+  it("imports file bytes rather than decoding and repasting CSV into the field", async () => {
+    const { request } = mount();
+    fireEvent.change(screen.getByLabelText("Table data source"), { target: { value: "file" } });
+    const file = new File(["Time (s)\tValue\n0\t1"], "samples.tsv", { type: "text/tab-separated-values" });
+    Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode("Time (s)\tValue\n0\t1").buffer });
+    fireEvent.change(screen.getByLabelText("CSV or TSV file"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("button", { name: "Import typed table" }));
+    await waitFor(() => expect(request).toHaveBeenCalled());
+    const args = request.mock.lastCall?.[2]?.[2] as Record<string, unknown>;
+    expect(request.mock.lastCall?.[2]?.[1]).toBe("import_table");
+    expect(args.format).toBe("tsv");
+    expect(args.filename).toBe("samples.tsv");
+    expect(atob(args.encoded_file as string)).toBe("Time (s)\tValue\n0\t1");
+    expect(args.text).toBeUndefined();
+  });
+
+  it("renders typed previews and selects a numeric column only after an explicit missing-value choice", async () => {
+    const parentTable = { nodeId: "parent", title: "Samples", raw: JSON.stringify({
+      ...state, nodeKey: "d".repeat(32), latest: null, table: meta,
+    }) };
+    const { request } = mount(JSON.stringify({ ...state, table: meta }), [parentTable]);
+    expect(screen.getByRole("table", { name: "Imported typed table preview" })).toHaveTextContent("Temperature (degC)");
+    expect(screen.getByText("numeric · 1 missing")).toBeVisible();
+    expect(screen.getByText(/samples.tsv · 3 rows · 2 columns/)).toBeVisible();
+
+    const select = screen.getByRole("combobox", { name: "Import Samples from a connected result" }) as HTMLSelectElement;
+    const opts = Array.from(select.options);
+    const reject = opts.find((op) => op.text.includes("Reject missing"))!;
+    const drop = opts.find((op) => op.text.includes("Drop missing (explicit)"))!;
+    expect(reject).toBeDefined();
+    expect(drop).toBeDefined();
+    request.mockResolvedValueOnce({ ok: false, error: "This column contains missing values." });
+    fireEvent.change(select, { target: { value: reject.value } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("missing values");
+    const reference = {
+      nodeId: "parent", sourceKey: "d".repeat(32), resultHash: meta.asset_ref,
+      receiptHash: meta.provenance.receiptHash, selector: ["table_column", 0, "drop", 0, 3],
+    };
+    request.mockResolvedValueOnce({ ok: true, values: [10, 20], reference });
+    fireEvent.change(select, { target: { value: drop.value } });
+    await waitFor(() => expect(screen.getByLabelText("Samples (m)")).toHaveValue("[10,20]"));
+    fireEvent.click(screen.getByRole("button", { name: "Run calculation" }));
+    await waitFor(() => expect(request.mock.lastCall?.[2]?.[1]).toBe("run"));
+    expect(request.mock.lastCall?.[2]?.[2]).toMatchObject({
+      inputs: { samples: [10, 20] }, sources: { samples: reference },
+    });
+  });
+});

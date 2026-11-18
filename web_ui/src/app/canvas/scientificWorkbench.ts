@@ -22,13 +22,29 @@ export interface SourceReference {
   selector: (string | number)[];
 }
 
-export interface ScienceLimits { points: number; columns: number; cells: number; text: number }
+export interface ScienceLimits {
+  points: number; columns: number; cells: number; text: number;
+  tableRows?: number; tableColumns?: number; tableCells?: number; tableSourceBytes?: number;
+}
 /** Fallback for a v1 server whose catalog predates the limits field. */
 const V1_LIMITS: ScienceLimits = { points: 1024, columns: 32, cells: 4096, text: 65536 };
 
 export type Sources = Record<string, SourceReference>;
 export interface EditorDraft { values: Record<string, string>; sources: Sources; revision: string; dirty: boolean }
 export interface ScienceTable { columns: string[]; rows: unknown[][] }
+export type ScientificColumnType = "numeric" | "text" | "categorical" | "datetime" | "boolean";
+export interface ScientificTableColumn {
+  name: string; label: string; type: ScientificColumnType; unit: string; missingCount: number;
+}
+export interface ScientificImportedTable {
+  version: 1; asset_ref: string; mime_type: string;
+  columns: ScientificTableColumn[]; rowCount: number; columnCount: number;
+  preview: unknown[][]; previewColumns: number; sourceName: string;
+  provenance: { fileHash: string; tableHash: string; receiptHash: string; parseOptions: Record<string, unknown> };
+}
+export interface ScientificTableSelection {
+  nodeId: string; column: number; policy: "reject" | "drop"; start: number; end: number;
+}
 export interface SciencePlot { x: number[]; y: number[]; xLabel: string; yLabel: string; title: string }
 
 export interface ScienceResult {
@@ -50,10 +66,13 @@ export interface ScienceState {
   error?: string;
   operations: ScienceOperation[];
   latest: ScienceResult | null;
+  table?: ScientificImportedTable | null;
 }
 
 export interface ScienceParent { nodeId: string; title: string; raw: string }
-export interface SourceOption { label: string; value: unknown; reference: SourceReference }
+export interface SourceOption {
+  label: string; value: unknown; reference: SourceReference; tableColumn?: ScientificTableSelection;
+}
 
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -96,6 +115,19 @@ function isResult(value: unknown): value is ScienceResult {
     && plot.x.length === plot.y.length);
 }
 
+function isImportedTable(value: unknown): value is ScientificImportedTable {
+  if (!record(value) || value.version !== 1 || typeof value.asset_ref !== "string"
+      || typeof value.rowCount !== "number" || !Number.isSafeInteger(value.rowCount)
+      || value.rowCount < 1 || !Array.isArray(value.columns) || value.columnCount !== value.columns.length
+      || !Array.isArray(value.preview) || !record(value.provenance)
+      || typeof value.provenance.fileHash !== "string" || typeof value.provenance.receiptHash !== "string"
+      || !record(value.provenance.parseOptions)) return false;
+  return value.columns.every((col) => record(col) && typeof col.name === "string"
+    && typeof col.label === "string" && typeof col.unit === "string"
+    && ["numeric", "text", "categorical", "datetime", "boolean"].includes(String(col.type))
+    && Number.isSafeInteger(col.missingCount) && Number(col.missingCount) >= 0);
+}
+
 /** Plugin state crosses the generic SDK wire as string values. Decode once per revision. */
 export function readScienceState(raw: string): ScienceState | null {
   try {
@@ -108,6 +140,7 @@ export function readScienceState(raw: string): ScienceState | null {
         (value.limits === undefined || (record(value.limits) && Object.keys(V1_LIMITS).every((k) =>
           Number.isSafeInteger((value.limits as Record<string, unknown>)[k]) && Number((value.limits as Record<string, unknown>)[k]) > 0))) &&
         value.operations.every(isOperation) &&
+        (value.table == null || isImportedTable(value.table)) &&
         (value.latest === null || isResult(value.latest))) return value as unknown as ScienceState;
   } catch { /* A missing plugin or unsupported saved version still leaves the card visible. */ }
   return null;
@@ -208,32 +241,59 @@ export function parseInputs(op: ScienceOperation, draft: Record<string, string>,
   }));
 }
 
-export function sourceOptions(parents: ScienceParent[]): SourceOption[] {
+export function sourceOptions(parents: ScienceParent[], maxPoints = V1_LIMITS.points): SourceOption[] {
   const options: SourceOption[] = [];
   const names = new Map<string, number>();
   for (const parent of parents) names.set(parent.title, (names.get(parent.title) ?? 0) + 1);
   for (const parent of parents) {
     const state = readScienceState(parent.raw);
-    const result = state?.latest;
-    if (!result || state.error) continue;
+    if (!state || state.error) continue;
+    const result = state.latest;
     const title = names.get(parent.title) === 1 ? parent.title : `${parent.title} (${parent.nodeId})`;
-    const add = (name: string, value: unknown, selector: SourceReference["selector"]) => {
-      options.push({ label: `${title} · ${name}`, value,
-        reference: { nodeId: parent.nodeId, ...(state.nodeKey && { sourceKey: state.nodeKey }), resultHash: result.provenance.resultHash,
-          ...(result.provenance.receiptHash && { receiptHash: result.provenance.receiptHash }), selector } });
-    };
-    for (const [name, value] of Object.entries(result.values)) add(name, value, ["values", name]);
-    if (result.plot) {
-      add(result.plot.xLabel, result.plot.x, ["plot", "x"]);
-      add(result.plot.yLabel, result.plot.y, ["plot", "y"]);
+    if (result) {
+      const add = (name: string, value: unknown, selector: SourceReference["selector"]) => {
+        options.push({ label: `${title} · ${name}`, value,
+          reference: { nodeId: parent.nodeId, ...(state.nodeKey && { sourceKey: state.nodeKey }), resultHash: result.provenance.resultHash,
+            ...(result.provenance.receiptHash && { receiptHash: result.provenance.receiptHash }), selector } });
+      };
+      for (const [name, value] of Object.entries(result.values)) add(name, value, ["values", name]);
+      if (result.plot) {
+        add(result.plot.xLabel, result.plot.x, ["plot", "x"]);
+        add(result.plot.yLabel, result.plot.y, ["plot", "y"]);
+      }
+      if (result.table) {
+        const { columns, rows } = result.table;
+        columns.forEach((label, i) => {
+          const column = rows.map((row) => row[i]);
+          if (vector(column)) add(label, column, ["column", i]);
+        });
+        if (matrix(rows)) add("Table rows", rows, ["table"]);
+      }
     }
-    if (result.table) {
-      const { columns, rows } = result.table;
-      columns.forEach((label, i) => {
-        const column = rows.map((row) => row[i]);
-        if (vector(column)) add(label, column, ["column", i]);
+    if (state.table) {
+      const table = state.table;
+      table.columns.forEach((col, column) => {
+        if (col.type !== "numeric") return;
+        // Existing calculation inputs still have their historical maximum.
+        // For larger datasets the dropdown explicitly chooses the first
+        // bounded row window instead of silently truncating the table.
+        const start = 0, end = Math.min(table.rowCount, maxPoints);
+        const modes: Array<"reject" | "drop"> = col.missingCount ? ["reject", "drop"] : ["reject"];
+        modes.forEach((policy) => {
+          const range = table.rowCount > end ? ` · first ${end} of ${table.rowCount} rows` : "";
+          const missing = policy === "drop" ? " · Drop missing (explicit)" : col.missingCount ? " · Reject missing" : "";
+          options.push({
+            label: `${title} · ${col.label} [typed table${range}${missing}]`,
+            value: undefined,
+            tableColumn: { nodeId: parent.nodeId, column, policy, start, end },
+            reference: {
+              nodeId: parent.nodeId, ...(state.nodeKey && { sourceKey: state.nodeKey }),
+              resultHash: table.asset_ref, receiptHash: table.provenance.receiptHash,
+              selector: ["table_column", column, policy, start, end],
+            },
+          });
+        });
       });
-      if (matrix(rows)) add("Table rows", rows, ["table"]);
     }
   }
   // A table and plot from the same run often give different ordering to a column with the same name.
@@ -253,7 +313,8 @@ export function sourceOptions(parents: ScienceParent[]): SourceOption[] {
 }
 
 export function compatibleOptions(field: ScienceField, options: SourceOption[], limits = V1_LIMITS): SourceOption[] {
-  return options.filter(({ value }) => {
+  return options.filter(({ value, tableColumn }) => {
+    if (tableColumn) return field.kind === "vector" && tableColumn.end - tableColumn.start <= limits.points;
     if (!accepts(field.kind, value)) return false;
     if (typeof value === "string") return value.length > 0 && (value.length <= limits.text || Array.from(value).length <= limits.text);
     if (!Array.isArray(value)) return true;
