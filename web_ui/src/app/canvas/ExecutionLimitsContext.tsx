@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
-import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
+import { validateExecutionLimitsState } from "../../lib/bridge-core/generated/execution-limits-state";
 import type { ExecutionLimitsState } from "../../lib/bridge-core/generated/execution-limits-state";
 
 /**
@@ -42,7 +42,7 @@ export function ExecutionLimitsProvider({
 
   useEffect(() => {
     return transport.subscribe("execution-limits", (payload) => {
-      const validated = TOPIC_VALIDATORS["execution-limits"](payload);
+      const validated = validateExecutionLimitsState(payload);
       if (validated.ok) setState(validated.value as ExecutionLimitsState);
       else console.error("[execution-limits] rejected snapshot:", validated.errors);
     });

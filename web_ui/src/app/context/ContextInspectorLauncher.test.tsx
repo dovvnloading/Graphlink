@@ -62,7 +62,7 @@ describe("Context Inspector", () => {
     fireEvent.click(screen.getByRole("button", { name: "Context Inspector" }));
     await waitFor(() => expect(f.request).toHaveBeenCalledTimes(1));
     f.composer.draft.text = "draft two";
-    fireEvent.click(screen.getByRole("button", { name: "Refresh context" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Refresh context" }));
     await waitFor(() => expect(f.request).toHaveBeenCalledWith("scene", "inspectChatContext", ["n1", "draft two"]));
     fireEvent.click(screen.getByRole("button", { name: "Close context inspector" }));
     expect(screen.queryByRole("region", { name: "Next chat context" })).not.toBeInTheDocument();

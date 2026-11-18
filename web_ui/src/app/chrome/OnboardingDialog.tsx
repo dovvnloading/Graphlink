@@ -1,10 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
-import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
+import { validateAppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
+import { validateAppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import type { AppComposerRoute, AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Dialog, useOverlays } from "../overlays/overlays";
+
+const LazyOnboardingSteps = lazy(() =>
+  import("./OnboardingSteps").then((m) => ({ default: m.OnboardingSteps })),
+);
 
 /**
  * ADR-012 stage 12.6: the first-run onboarding wizard - HelpDialog.tsx/
@@ -36,14 +41,6 @@ import { Dialog, useOverlays } from "../overlays/overlays";
  * is a standing way back into that dialog.
  */
 
-const STEP_COUNT = 4;
-
-function providerCheckMessage(route: AppComposerRoute | null): string {
-  if (route === null) return "Checking your configured provider…";
-  if (route.available) return `${route.label} is ready - your first message will get a real response.`;
-  return `${route.label} isn't ready yet - it needs a model or API key configured before it can respond.`;
-}
-
 export function OnboardingDialog({ transport, store }: { transport: WsTransport; store: SceneStore }) {
   const overlays = useOverlays();
   const isOpen = overlays.isOpen("onboarding");
@@ -64,7 +61,7 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
 
   useEffect(() => {
     const offSettings = transport.subscribe("app-settings", (payload) => {
-      const validated = TOPIC_VALIDATORS["app-settings"](payload);
+      const validated = validateAppSettingsState(payload);
       if (validated.ok) {
         const value = validated.value as AppSettingsState;
         setHasCompletedOnboarding(value.hasCompletedOnboarding);
@@ -74,7 +71,7 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
       }
     });
     const offComposer = transport.subscribe("app-composer", (payload) => {
-      const validated = TOPIC_VALIDATORS["app-composer"](payload);
+      const validated = validateAppComposerState(payload);
       if (validated.ok) setRoute((validated.value as AppComposerState).route);
       else console.error("[app-composer] rejected snapshot:", validated.errors);
     });
@@ -113,79 +110,17 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
   };
 
   return (
-    <Dialog name="onboarding" title="Welcome to Graphlink" className="onboarding-dialog">
-      <p className="onboarding-step-label">
-        Step {step + 1} of {STEP_COUNT}
-      </p>
-
-      {step === 0 && (
-        <div className="onboarding-step">
-          <p>
-            Graphlink is a visual AI workspace: every message becomes a node on a canvas, and you can branch a
-            conversation from any earlier node instead of only ever continuing the last one. When a task needs more
-            than one step, the Builder can plan and construct a whole branch for you, supervised at whatever level
-            you choose.
-          </p>
-          <p>This short wizard checks your provider and offers a small sample workspace, then gets out of the way.</p>
-        </div>
-      )}
-
-      {step === 1 && (
-        <div className="onboarding-step">
-          <p data-level={route && !route.available ? "warning" : undefined} className="settings-update-status">
-            {providerCheckMessage(route)}
-          </p>
-          {route && !route.available && (
-            <div className="settings-button-row">
-              <button type="button" className="settings-button" onClick={() => openProviderSettings(providerMode)}>
-                Open Settings
-              </button>
-              {providerMode !== "API Endpoint" && (
-                <button type="button" className="settings-button" onClick={() => openProviderSettings("API Endpoint")}>
-                  Connect a cloud provider
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {step === 2 && (
-        <div className="onboarding-step">
-          <p>
-            Load a small sample workspace - a note explaining Graphlink plus a short chat exchange - to see how nodes
-            and branches look before you start your own.
-          </p>
-          <button type="button" className="settings-button" onClick={() => store.loadSampleWorkspace()}>
-            Load Sample Workspace
-          </button>
-        </div>
-      )}
-
-      {step === 3 && (
-        <div className="onboarding-step">
-          <p>You're set. Type a message in the composer below to send your first real request.</p>
-        </div>
-      )}
-
-      {/* Reuses .settings-button-row/.settings-button(-primary) wholesale
-          (SettingsDialog.tsx's own CSS) rather than a parallel button
-          language just for this dialog - the primary action's own
-          margin-left:auto is what right-aligns it away from Back. */}
-      <div className="settings-button-row">
-        <button type="button" className="settings-button" disabled={step === 0} onClick={() => setStep((s) => s - 1)}>
-          Back
-        </button>
-        {step < STEP_COUNT - 1 ? (
-          <button type="button" className="settings-button settings-button-primary" onClick={() => setStep((s) => s + 1)}>
-            Next
-          </button>
-        ) : (
-          <button type="button" className="settings-button settings-button-primary" onClick={overlays.close}>
-            Done
-          </button>
-        )}
-      </div>
-    </Dialog>
+    isOpen ? (
+      <Suspense fallback={
+        <Dialog name="onboarding" title="Welcome to Graphlink" className="onboarding-dialog">
+          <p role="status">Loading onboarding…</p>
+        </Dialog>
+      }>
+        <LazyOnboardingSteps
+          step={step} setStep={setStep} providerMode={providerMode} route={route}
+          store={store} openProviderSettings={openProviderSettings}
+        />
+      </Suspense>
+    ) : null
   );
 }

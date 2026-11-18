@@ -1,4 +1,4 @@
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useMemo, useState, useSyncExternalStore } from "react";
 import type { SceneStore } from "../canvas/sceneStore";
 import { Popover, useOverlays } from "../overlays/overlays";
 import type { ComparisonModel, ComposerStore } from "./composerStore";
@@ -34,6 +34,10 @@ import { TokenCounter } from "./TokenCounter";
  * Theme is NOT read from this payload (see backend/composer.py's docstring
  * for why) - the SPA's tokens are already global CSS.
  */
+
+const LazyModelComparisonPicker = lazy(() =>
+  import("./ModelComparisonPicker").then((m) => ({ default: m.ModelComparisonPicker })),
+);
 
 function Icon({ name }: { name: "attach" | "send" | "chevron" | "stop" }) {
   const paths: Record<string, string> = {
@@ -373,52 +377,23 @@ export function Composer({
       </div>
 
       {overlays.isOpen("model-comparison") && (
-        <Popover anchored name="model-comparison" label="Compare models" className="reasoning-popover model-picker-popover">
-          <p>Choose 2–4 models. Each answer streams into its own canvas branch.</p>
-          {comparisonLoading && <p role="status">Loading configured models…</p>}
-          {comparisonError && <p role="alert">{comparisonError}</p>}
-          {!comparisonLoading && !comparisonError && comparisonOptions.length === 0 && (
-            <p role="status">No comparison models are configured. Add models in Settings.</p>
-          )}
-          <div className="model-picker-results" aria-label="Comparison model choices">
-            {comparisonOptions.map((model) => {
-              const key = comparisonKey(model);
-              const checked = selectedComparisonKeys.includes(key);
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  role="checkbox"
-                  aria-checked={checked}
-                  disabled={!checked && selectedComparisonKeys.length >= 4}
-                  className={"reasoning-option" + (checked ? " active" : "")}
-                  onClick={() => setSelectedComparisonKeys((current) =>
-                    current.includes(key) ? current.filter((item) => item !== key) : [...current, key].slice(0, 4)
-                  )}
-                >
-                  <span className="reasoning-option-label">{model.label}</span>
-                  {checked && <span aria-hidden="true">✓</span>}
-                </button>
-              );
-            })}
-          </div>
-          <p role="status">{selectedComparisonModels.length}/4 selected {comparisonMode && selectedComparisonModels.length < 2 ? "· choose at least two" : ""}</p>
-          <button
-            type="button"
-            className="reasoning-option"
-            onClick={() => { setComparisonMode(false); overlays.close(); }}
-          >
-            Use single-model send
-          </button>
-          <button
-            type="button"
-            className="reasoning-option"
-            disabled={selectedComparisonModels.length < 2}
-            onClick={() => overlays.close()}
-          >
-            Done
-          </button>
-        </Popover>
+        <Suspense fallback={
+          <Popover anchored name="model-comparison" label="Compare models" className="reasoning-popover model-picker-popover">
+            <p role="status">Loading comparison picker…</p>
+          </Popover>
+        }>
+          <LazyModelComparisonPicker
+            comparisonMode={comparisonMode}
+            comparisonOptions={comparisonOptions}
+            selectedComparisonKeys={selectedComparisonKeys}
+            selectedComparisonModels={selectedComparisonModels}
+            comparisonLoading={comparisonLoading}
+            comparisonError={comparisonError}
+            comparisonKey={comparisonKey}
+            setSelectedComparisonKeys={setSelectedComparisonKeys}
+            onUseSingleModel={() => setComparisonMode(false)}
+          />
+        </Suspense>
       )}
       <Reasoning store={store} />
       {overlays.isOpen("model") && <ModelPicker key={composer.route.provider} store={store} />}

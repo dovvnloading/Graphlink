@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HelpDialog } from "./HelpDialog";
 import { HELP_SECTIONS } from "./help-data/sections";
 import { resolveShortcut, type ShortcutId, type ShortcutKeyEvent } from "./shortcuts";
@@ -21,20 +21,30 @@ import { OverlayProvider, useOverlays } from "../overlays/overlays";
  * fails a test instead of lying to somebody.
  */
 
+beforeEach(() => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => HELP_SECTIONS,
+  }));
+});
+afterEach(() => vi.unstubAllGlobals());
+
 function OpenHelpOnMount({ children }: { children: React.ReactNode }) {
   const overlays = useOverlays();
   if (!overlays.isOpen("help")) overlays.open("help", "dialog");
   return <>{children}</>;
 }
 
-function renderOpen() {
-  return render(
+async function renderOpen() {
+  const view = render(
     <OverlayProvider>
       <OpenHelpOnMount>
         <HelpDialog />
       </OpenHelpOnMount>
     </OverlayProvider>,
   );
+  await screen.findByRole("navigation", { name: "Help sections" });
+  return view;
 }
 
 const allItems = HELP_SECTIONS.flatMap((section) =>
@@ -126,8 +136,8 @@ describe("Help content", () => {
 });
 
 describe("HelpDialog", () => {
-  it("opens on the first section with its rail", () => {
-    renderOpen();
+  it("opens on the first section with its rail", async () => {
+    await renderOpen();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(HELP_SECTIONS[0].name);
     expect(screen.getByRole("navigation", { name: "Help sections" })).toBeInTheDocument();
     for (const section of HELP_SECTIONS) {
@@ -137,13 +147,13 @@ describe("HelpDialog", () => {
 
   it("switches sections from the rail", async () => {
     const user = userEvent.setup();
-    renderOpen();
+    await renderOpen();
     await user.click(screen.getByRole("button", { name: "Keyboard" }));
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Keyboard");
   });
 
-  it("renders documented chords as <kbd>, not as prose in the title", () => {
-    renderOpen();
+  it("renders documented chords as <kbd>, not as prose in the title", async () => {
+    await renderOpen();
     // Start Here documents the palette; the chord is an element, so it can
     // be found as one rather than by parsing a heading string.
     const kbds = document.querySelectorAll("kbd.help-kbd");
@@ -154,7 +164,7 @@ describe("HelpDialog", () => {
   describe("search", () => {
     it("finds an entry by a word in its description, across sections", async () => {
       const user = userEvent.setup();
-      renderOpen();
+      await renderOpen();
       await user.type(screen.getByRole("searchbox", { name: "Search help" }), "minimap");
       const results = screen.getByRole("region", { name: "Help search results" });
       expect(within(results).getByText(/Click anywhere in it to jump there/)).toBeInTheDocument();
@@ -162,7 +172,7 @@ describe("HelpDialog", () => {
 
     it("finds a shortcut by its chord, which is what people actually type", async () => {
       const user = userEvent.setup();
-      renderOpen();
+      await renderOpen();
       await user.type(screen.getByRole("searchbox", { name: "Search help" }), "ctrl+p");
       const results = screen.getByRole("region", { name: "Help search results" });
       // Two entries name it - the Finding Things explainer and the Keyboard
@@ -172,7 +182,7 @@ describe("HelpDialog", () => {
 
     it("replaces the section view rather than filtering inside it", async () => {
       const user = userEvent.setup();
-      renderOpen();
+      await renderOpen();
       await user.type(screen.getByRole("searchbox", { name: "Search help" }), "autopilot");
       // The Builder's section is not selected, but its entry is reachable.
       expect(screen.queryByRole("region", { name: HELP_SECTIONS[0].name })).toBeNull();
@@ -185,14 +195,14 @@ describe("HelpDialog", () => {
 
     it("says so plainly when nothing matches", async () => {
       const user = userEvent.setup();
-      renderOpen();
+      await renderOpen();
       await user.type(screen.getByRole("searchbox", { name: "Search help" }), "zzzznope");
       expect(screen.getByText('Nothing matches "zzzznope".')).toBeInTheDocument();
     });
 
     it("choosing a section clears the query and goes back to browsing", async () => {
       const user = userEvent.setup();
-      renderOpen();
+      await renderOpen();
       await user.type(screen.getByRole("searchbox", { name: "Search help" }), "budget");
       await user.click(screen.getByRole("button", { name: "The Agent" }));
       expect(screen.getByRole("searchbox", { name: "Search help" })).toHaveValue("");
@@ -201,7 +211,7 @@ describe("HelpDialog", () => {
 
     it("Escape clears the query before it closes the dialog", async () => {
       const user = userEvent.setup();
-      renderOpen();
+      await renderOpen();
       const box = screen.getByRole("searchbox", { name: "Search help" });
       await user.type(box, "grid");
       await user.keyboard("{Escape}");

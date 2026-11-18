@@ -5,8 +5,8 @@
  * expose the backend's registered intent surface 1:1.
  */
 
-import { TOPIC_VALIDATORS, type TopicName } from "../../lib/api-contract/topics";
-import { bindTopic } from "../../lib/api-contract/bindTopic";
+import { validateAppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
+import { bindTopic, type LiveTopicName } from "../../lib/api-contract/bindTopic";
 import type { AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import type { TokenCounterState } from "../../lib/bridge-core/generated/token-counter-state";
 import type { NotificationState } from "../../lib/bridge-core/generated/notification-state";
@@ -107,7 +107,7 @@ export class ComposerStore {
 
   constructor(private readonly transport: WsTransport) {}
 
-  private bind<T>(topic: TopicName, assign: (value: T) => void): () => void {
+  private bind<T>(topic: LiveTopicName, assign: (value: T) => void): () => void {
     return bindTopic(this.transport, topic, assign, () => this.emit());
   }
 
@@ -161,7 +161,7 @@ export class ComposerStore {
       // draftResyncGeneration stuck non-null and every future resync request
       // a permanent no-op for the rest of this store's life.
       if (payload === null) return;
-      const validated = TOPIC_VALIDATORS["app-composer"](payload);
+      const validated = validateAppComposerState(payload);
       if (!validated.ok) return;
       if (
         this.pendingDraftGenerations.size > 0 ||

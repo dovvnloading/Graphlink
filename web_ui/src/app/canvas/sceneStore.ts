@@ -16,8 +16,8 @@
  * the actual return value, not just a fire-and-track.
  */
 
-import { TOPIC_VALIDATORS, type TopicName } from "../../lib/api-contract/topics";
-import { bindTopic } from "../../lib/api-contract/bindTopic";
+import { validateSceneState } from "../../lib/bridge-core/generated/scene-state";
+import { bindTopic, type LiveTopicName } from "../../lib/api-contract/bindTopic";
 import {
   hydrateSceneNodeRow,
   type SceneEdgeRow,
@@ -344,7 +344,7 @@ export class SceneStore {
 
   constructor(private readonly transport: WsTransport) {}
 
-  private bind<T>(topic: TopicName, assign: (value: T) => void): () => void {
+  private bind<T>(topic: LiveTopicName, assign: (value: T) => void): () => void {
     return bindTopic(this.transport, topic, assign, () => this.emit());
   }
 
@@ -485,7 +485,7 @@ export class SceneStore {
       minCompatibleSchemaVersion: this.scene.minCompatibleSchemaVersion,
       revision: patch.revision,
     };
-    const validated = TOPIC_VALIDATORS["scene"](candidate as unknown as Record<string, unknown>);
+    const validated = validateSceneState(candidate as unknown as Record<string, unknown>);
     if (!validated.ok) {
       console.error("[scene] patch produced an invalid scene, re-snapshotting:", validated.errors);
       return false;
