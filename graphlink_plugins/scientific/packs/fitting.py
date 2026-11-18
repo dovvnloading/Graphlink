@@ -129,6 +129,21 @@ def _linear(data):
         raise ValueError("The regression exceeds the supported numerical range.") from None
 
 
+
+def _one_minus_exp_neg(z):
+    """Compute 1 - exp(-z) without losing a small nonzero z to cancellation."""
+    if abs(z) > Decimal("1e-8"):
+        return Decimal(1) - (-z).exp()
+    term = total = z
+    for k in range(2, 128):
+        term *= -z / k
+        updated = total + term
+        if updated == total:
+            return total
+        total = updated
+    return total
+
+
 def _model(name, x, b):
     """Return model value and its analytic derivative w.r.t. parameters."""
     one = Decimal(1)
@@ -138,8 +153,10 @@ def _model(name, x, b):
         return a * e + baseline, [e, a * x * e, one]
     if name == "saturating_exponential":  # NIST Misra1a
         a, rate = b
-        e = (-rate * x).exp()
-        return a * (one - e), [one - e, a * x * e]
+        z = rate * x
+        e = (-z).exp()
+        difference = _one_minus_exp_neg(z)
+        return a * difference, [difference, a * x * e]
     if name == "power_law":               # a x^b, x positive
         if x <= 0:
             raise ValueError("Power-law fitting requires strictly positive x values.")
@@ -407,8 +424,27 @@ def _student_t_cdf(t, df):
         x = t * t / (df + t * t)
         half = _beta_i(0.5, df / 2, x) / 2
         return 0.5 - half if t < 0 else 0.5 + half
-    x = (df / (df + t * t)) if math.isfinite(t * t) else 0.0
-    half = _beta_i(df / 2, 0.5, x) / 2
+    squared = t * t
+    if math.isfinite(squared):
+        # Ratios avoid overflowing the denominator df + t².
+        x = 1 / (1 + squared / df) if df >= squared else (df / squared) / (1 + df / squared)
+    else:
+        # t² can overflow although the Student-t tail is representable.
+        # Evaluate the beta argument via ratios before falling back to its
+        # small-x leading term in log space.
+        magnitude = abs(t)
+        scaled = df / magnitude
+        x = scaled / (magnitude + scaled)
+    if x:
+        half = _beta_i(df / 2, 0.5, x) / 2
+    else:
+        a = df / 2
+        # For x too small for binary64, I_x(a, 1/2) ~
+        # x^a / (a * B(a, 1/2)). The next term is negligible.
+        log_x = math.log(df) - 2 * math.log(abs(t))
+        log_half = (math.lgamma(a + 0.5) - math.lgamma(a) - math.lgamma(0.5)
+                    - math.log(2 * a) + a * log_x)
+        half = math.exp(log_half)
     return half if t < 0 else 1 - half
 
 
@@ -418,20 +454,23 @@ def _student_t_ppf(probability, df):
         raise ValueError("A Student t quantile needs probability in (0, 1) and positive df.")
     if probability == 0.5:
         return 0.0
-    if probability < 0.5:
-        return -_student_t_ppf(1 - probability, df)
+    # Never form 1 - p for an extreme lower-tail probability: e.g.
+    # 1 - 1e-20 rounds to 1 in binary64, although the quantile is finite.
+    # Invert the negative-t tail directly, whose CDF uses the stable beta tail.
+    lower_tail = min(probability, 1 - probability)
     lo, hi = 0.0, 1.0
-    while _student_t_cdf(hi, df) < probability:
+    while _student_t_cdf(-hi, df) > lower_tail:
         hi *= 2
-        if hi > 1e150:
+        if not math.isfinite(hi):
             raise ValueError("Student t quantile exceeds the supported range.")
     for _ in range(90):
         midpoint = (lo + hi) / 2
-        if _student_t_cdf(midpoint, df) < probability:
+        if _student_t_cdf(-midpoint, df) > lower_tail:
             lo = midpoint
         else:
             hi = midpoint
-    return (lo + hi) / 2
+    magnitude = (lo + hi) / 2
+    return -magnitude if probability < 0.5 else magnitude
 
 
 def _chi_square_cdf(x, df):
@@ -456,8 +495,10 @@ def _welch(data):
     df = 1 / (wa * wa / (len(a) - 1) + wb * wb / (len(b) - 1))
     if not math.isfinite(df) or df <= 0:
         raise ValueError("Welch degrees of freedom cannot be evaluated for these samples.")
-    p = (1 - _beta_i(0.5, df / 2, t * t / (df + t * t))) if abs(t) <= 1 else (
-        _beta_i(df / 2, 0.5, df / (df + t * t)) if math.isfinite(t * t) else 0.0)
+    # Twice the negative-t survival tail is stable even if t² overflows.
+    # The old t²/(df+t²) formula incorrectly returned p=0 for finite
+    # Cauchy-like tails when |t| was above ~1e154.
+    p = min(1.0, 2 * _student_t_cdf(-abs(t), df))
     return {
         "summary": "Two-sided Welch independent-samples t test with unequal variances and Satterthwaite degrees of freedom.",
         "values": {"mean_a": mean_a, "mean_b": mean_b, "t_statistic": t, "degrees_of_freedom": df,
@@ -471,7 +512,10 @@ def _chi_square(data):
         raise ValueError("Provide at least two corresponding observed and expected categories.")
     if any(v < 0 or not v.is_integer() for v in observed) or any(v <= 0 for v in expected):
         raise ValueError("Observed counts must be nonnegative integers and expectations strictly positive.")
-    if not math.isclose(math.fsum(observed), math.fsum(expected), rel_tol=1e-12, abs_tol=1e-10):
+    observed_total = math.fsum(observed)
+    if observed_total <= 0:
+        raise ValueError("Pearson goodness of fit requires a positive observed total.")
+    if not math.isclose(observed_total, math.fsum(expected), rel_tol=1e-12, abs_tol=1e-10):
         raise ValueError("Observed and expected category totals must agree; no normalization is performed.")
     chi2 = math.fsum((o - e) ** 2 / e for o, e in zip(observed, expected))
     if not math.isfinite(chi2):

@@ -32,9 +32,9 @@ The parser in `graphlink_plugins/scientific/packs/uncertainty.py` is a small rec
 - Unary functions **only** `sqrt(expr)`, `exp(expr)`, `ln(expr)`, `log10(expr)`, `sin(expr)` and `cos(expr)`. Trigonometric arguments are in **radians**. Function names are reserved and cannot name input variables.
 - Powers are right-associative (`2^3^2` is 512). Exponentiation binds more tightly than unary negation (`-2^2` is -4); `2^-2` is 0.25. Multiplication must be written explicitly (`2*x`, not `2x`).
 
-The parser rejects extra tokens, identifiers not declared as measurements, malformed function calls, strings, indexing, attributes, comprehensions, assignments, comments, `**`, and unsupported operators. Nested parentheses/functions are limited to 48 levels. Each evaluation (including all derivative perturbations) must produce a finite **real** result: division by zero, invalid logarithm/square-root domains, complex powers and overflow fail validation. A failed calculation cannot replace the last successful workbench result.
+The parser rejects extra tokens, identifiers not declared as measurements, malformed function calls, strings, indexing, attributes, comprehensions, assignments, comments, `**`, and unsupported operators. Nested parentheses/functions are limited to 48 levels. Each model evaluation and each analytic sensitivity must produce a finite **real** result: division by zero, invalid logarithm/square-root domains, complex powers, undefined derivatives and overflow fail validation. A failed calculation cannot replace the last successful workbench result.
 
-## Propagation and numerical differentiation
+## Propagation and analytic sensitivity coefficients
 
 For a scalar measurement model `y = f(x_1, ..., x_N)` evaluated at the supplied best estimates, the operation uses the **first-order** GUM law of propagation of uncertainty, JCGM 100:2008, clauses **5.1.2** and **5.2.2**, Equations (10) and (13):
 
@@ -46,14 +46,9 @@ For a scalar measurement model `y = f(x_1, ..., x_N)` evaluated at the supplied 
 
 The **signed** input contribution is `a_i = c_i*u_i`; its magnitude is the standard-uncertainty contribution. Each input row in the result table reports its value, standard uncertainty, degrees of freedom, sensitivity, signed contribution and diagonal variance term `a_i²`. Each supplied pair adds a row containing the signed covariance term `2*a_i*a_j*r_ij`. These variance terms sum to the total propagated variance. The result `values` also includes `estimate`, `sensitivity_<name>`, `contribution_<name>`, `combined_standard_uncertainty` and input/correlation counts.
 
-Sensitivities use a **two-sided central difference**, with no symbolic differentiation and no automatic one-sided fallback:
+Sensitivities are computed **analytically using the chain rule on the bounded arithmetic expression tree**, not by finite differences or subtracting rounded model outputs. For example, `f(x)=x+1e20` has sensitivity 1 even though binary64 evaluation of `f(x+h)-f(x-h)` could round to zero. The derivative rules include the arithmetic operators, powers, and each documented function (`sqrt`, `exp`, `ln`, `log10`, `sin`, `cos`), using radians for trigonometry. Each differentiated path must remain in the finite real domain. Where a derivative is undefined (for example `sqrt(x)` at `x=0`), the operation rejects the calculation rather than reporting an unreliable uncertainty. No arbitrary expressions or Python evaluation are introduced.
 
-\[
- h_i = 10^{-4}\max(|x_i|, u(x_i), 10^{-12}),\qquad
- c_i \approx \frac{f(x_i+h_i)-f(x_i-h_i)}{(x_i+h_i)-(x_i-h_i)}.
-\]
-
-The denominator uses the **actually representable perturbed inputs**, reducing rounding error when forming `x_i ± h_i`. All other inputs remain at their central estimates. If either perturbation is outside the domain, or a perturbation is not distinguishable from the central value in binary64, the operation raises a validation error rather than hiding an inaccurate derivative. This deterministic step is a numerical convention, **not an uncertainty interval**. Finite-difference truncation and cancellation errors are possible for badly scaled, high-curvature, discontinuous or nearly singular models. Rounding/overflow are explicitly checked; the variance is accumulated from scaled signed contributions to reduce avoidable overflow and cancellation. There is no automatic check that first-order linearization is adequate.
+Analytic derivatives remove finite-difference step-size and output-subtraction errors, **not** the GUM's assumption of local differentiability and adequate *first-order* linearization. Floating-point overflow/underflow and badly conditioned algebra may still limit the numerical answer. A mathematically nonzero signed uncertainty contribution that underflows to zero in binary64 is rejected rather than reported as zero; variance accumulation uses scaled signed contributions to reduce avoidable overflow and cancellation. The pack does not automatically establish that a first-order approximation is adequate for the measurement model.
 
 ## Degrees of freedom and coverage
 
@@ -79,7 +74,7 @@ Source: [JCGM 100:2008, *Evaluation of measurement data — Guide to the express
 
 ## Assumptions and limits
 
-The model must represent a **scalar measurand** with consistent units and input estimates whose standard uncertainties and correlations have already been evaluated. The operation does **not** estimate those input distributions, correct systematic effects, compute correlations from raw observations, provide a full output covariance matrix for multiple measurands, or perform second-order/Monte Carlo propagation. Run separate operations for multiple outputs. No guarantees are made for nonlinear, non-Gaussian, skewed, heavy-tailed, discontinuous or badly scaled models; symmetric Student *t* intervals are approximations requiring suitable statistical justification. Near-boundary derivative failures should trigger a reconsideration of the model or a more appropriate propagation method, rather than changing the fixed step by hand. Physical measurement claims should report model assumptions, input units, coverage probability, degrees of freedom and the method used to determine each input's standard uncertainty.
+The model must represent a **scalar measurand** with consistent units and input estimates whose standard uncertainties and correlations have already been evaluated. The operation does **not** estimate those input distributions, correct systematic effects, compute correlations from raw observations, provide a full output covariance matrix for multiple measurands, or perform second-order/Monte Carlo propagation. Run separate operations for multiple outputs. No guarantees are made for nonlinear, non-Gaussian, skewed, heavy-tailed, discontinuous or badly scaled models; symmetric Student *t* intervals are approximations requiring suitable statistical justification. A nondifferentiable model at the estimate should trigger a reconsideration of the model or a more appropriate propagation method; no finite-difference step can repair the first-order assumption. Physical measurement claims should report model assumptions, input units, coverage probability, degrees of freedom and the method used to determine each input's standard uncertainty.
 
 ## Reproduce
 

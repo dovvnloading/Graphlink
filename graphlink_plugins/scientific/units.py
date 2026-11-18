@@ -80,8 +80,9 @@ _UNITS = {
     "atm": Unit(Pa.dimensions, Fraction(101325)),
 }
 
-# Prefix symbols and powers are from NIST SP 811, Table 5, including the
-# 2022 ronna/quetta and ronto/quecto additions. Use g, not kg, for mass prefixes.
+# Legacy prefix symbols and powers follow NIST SP 811, Table 5;
+# the 2022 ronna/quetta and ronto/quecto additions follow the updated
+# BIPM SI Brochure (SP 811 predates these additions). Use g, not kg, for mass prefixes.
 _PREFIX_POWERS = {
     "Q": 30, "R": 27, "Y": 24, "Z": 21, "E": 18, "P": 15,
     "T": 12, "G": 9, "M": 6, "k": 3, "h": 2, "da": 1,
@@ -245,7 +246,10 @@ def convert_measurement(value: float, source: str, target: str) -> float:
             kelvin = Fraction(str(value)) * from_unit.scale + from_unit.offset
             if kelvin < 0:
                 raise ValueError("Absolute temperature must be at least 0 K.")
-            result = value if source == target else float((kelvin - to_unit.offset) / to_unit.scale)
+            exact_result = (kelvin - to_unit.offset) / to_unit.scale
+            result = value if source == target else float(exact_result)
+            if source != target and exact_result != 0 and result == 0:
+                raise ValueError("The converted measurement is below the numerical range.")
     else:
         result = value if source == target else float(Fraction(value) * from_unit.scale / to_unit.scale)
         if value and result == 0:
