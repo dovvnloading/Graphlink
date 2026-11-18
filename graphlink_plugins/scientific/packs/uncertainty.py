@@ -334,7 +334,11 @@ def _calculate(data):
     for name in names:
         _, sensitivity = _differentiate(tree, values, name)
         sensitivities.append(sensitivity)
-        signed.append(_number(sensitivity * measurements[name][1], "Signed uncertainty contribution"))
+        uncertainty = measurements[name][1]
+        contribution = sensitivity * uncertainty
+        if sensitivity and uncertainty and contribution == 0:
+            raise ValueError("Signed uncertainty contribution is below the numerical range.")
+        signed.append(_number(contribution, "Signed uncertainty contribution"))
     scale = max(map(abs, signed))
     q = [v / scale for v in signed] if scale else [0.0] * len(names)
 
