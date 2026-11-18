@@ -116,7 +116,7 @@ and photometric band definitions; no extinction or K-correction is applied.
 For the transit calculation, `δ = 1 − f_in/f_out = (Rp/R*)²`, and for a
 **circular** orbit with `b = (a/R*) cos i`, the first-to-fourth contact duration
 is `T₁₄ = (P/π) asin[(R*/a) √((1+k)²−b²) / sin i]`, with `k = Rp/R*`.
-`T₂₃` substitutes `(1−k)²` if `b < 1−k`, otherwise zero for grazing transits;
+`T₂₃` substitutes `(1−k)²`. **Only non-grazing transits with `b < 1−k` are accepted**; for grazing events, the observed depth does not equal the full planetary area fraction, so inferring `k=√δ` would produce a biased radius. Supply a non-grazing fit or a limb-overlap model instead;
 one ingress or egress takes `(T₁₄−T₂₃)/2`. **No** dilution, finite integration
 cadence, starspots, limb darkening or orbital eccentricity. Use a fitted
 light-curve depth and system parameters, not a noisy single sample; results
@@ -151,3 +151,7 @@ frame inversion, field-unit labels and negative-domain validation.
 - Kasten, F. & Young, A. T. (1989), *Revised optical air mass tables and approximation formula*, *Applied Optics*, **28**, 4735–4738. [Reproduced approximation](https://www.e-education.psu.edu/eme810/node/533).
 - Hogg, D. W. (1999), *Distance Measures in Cosmology*, [astro-ph/9905116](https://arxiv.org/abs/astro-ph/9905116); Wright, E. L. (2006), *A Cosmology Calculator for the World Wide Web*, PASP **118**, 1711. NASA/IPAC [cosmology-calculator reference](https://ned.ipac.caltech.edu/help/cosmology_calc.html).
 - IAU Resolution B2 (2012) on the AU and Resolution B3 (2015) on nominal solar/planetary conversion constants.
+
+### Independent correctness audit: transit geometry
+
+A **grazing** transit does not fully superimpose the planetary disk on the stellar disk at mid-transit. The simple uniform-disk inversion `k = sqrt(depth)` then underestimates the true radius ratio even before limb darkening. The operation now explicitly rejects `b >= 1-k` with a physical-domain error instead of reporting a spurious radius and zero T23. This does **not** add a grazing overlap model. A non-grazing 1% depth still implies `k = 0.1` (1), and the contact durations remain in hours. See [NASA Exoplanet Archive transit documentation](https://exoplanetarchive.ipac.caltech.edu/docs/API_transit_detection.html) and Seager & Mallén-Ornelas (2003), *ApJ* 585, 1038–1055.

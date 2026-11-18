@@ -502,13 +502,17 @@ def _geometric_optics(data):
         }
     if focal == 0:
         raise ValueError("Focal length must be nonzero for lens or mirror equations.")
-    if math.isclose(obj, focal, rel_tol=1e-14, abs_tol=0.0):
+    # Only an object exactly on the focal plane has an infinite image.
+    # Nearby representable distances have finite (possibly very large) images.
+    if obj == focal:
         image = "at infinity (m)"
         magnification = "unbounded (1)"
         nature = "image at infinity (1)"
     else:
-        image = obj*focal/(obj-focal)
-        magnification = -image/obj
+        image = focal * (obj / (obj - focal))
+        if not math.isfinite(image):
+            raise ValueError("Image distance exceeds the supported numerical range (m).")
+        magnification = -image / obj
         nature = "real/inverted (1)" if image > 0 else "virtual/upright (1)"
     return {
         "summary": ("Paraxial thin lens: 1/f = 1/do + 1/di; positive f converging and positive di real."

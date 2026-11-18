@@ -116,3 +116,7 @@ evaluated as edge + (edge - sample), rather than 2*edge - sample; this preserves
 large finite constants without creating an intermediate infinity. Inputs
 whose actual intermediate results cannot be represented in binary64 still
 raise an explicit range error.
+
+### Independent correctness audit: zero stoichiometric extent
+
+In `reaction_yield`, reactant starting masses may be **zero grams**, so a zero limiting stoichiometric extent (mol) and zero theoretical product (g) are valid outputs. The percent yield is mathematically undefined when both theoretical and measured masses are zero (`0/0`); it is returned as the unit-bearing status `"undefined (zero theoretical yield)"`, **not** a numerical zero. Positive measured product mass (g) with zero theoretical product mass (g) is rejected as inconsistent. All nonzero-yield calculations, output keys and gram/mol units are unchanged. [OpenStax Chemistry 2e §4.4, Reaction Yields](https://openstax.org/books/chemistry-2e/pages/4-4-reaction-yields).

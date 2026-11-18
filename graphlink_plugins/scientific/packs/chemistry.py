@@ -689,15 +689,24 @@ def reaction_yield(data):
     extent = extents[limiting]
     theoretical_mol = extent * product_coeff
     theoretical_g = theoretical_mol * product_mm
-    if theoretical_g <= 0 or not math.isfinite(theoretical_g):
-        raise ValueError("Theoretical product yield must be positive and finite.")
-    yield_percent = 100 * (actual / theoretical_g)
-    if not math.isfinite(yield_percent):
-        raise ValueError("Yield percentage exceeds the numerical range.")
+    if not math.isfinite(theoretical_g):
+        raise ValueError("Theoretical product yield exceeds the numerical range.")
+    if theoretical_g == 0:
+        if actual:
+            raise ValueError("Positive actual product mass is inconsistent with zero theoretical yield.")
+        yield_percent = "undefined (zero theoretical yield)"
+        yield_text = "undefined (zero theoretical yield)"
+        warning = ""
+    else:
+        yield_percent = 100 * (actual / theoretical_g)
+        if not math.isfinite(yield_percent):
+            raise ValueError("Yield percentage exceeds the numerical range.")
+        yield_text = f"{yield_percent:.4g}%"
+        warning = (" Yield above 100% suggests product impurities or measurement error."
+                   if yield_percent > 100 else "")
     return {
         "summary": f"Reactant {limiting + 1} limits the reaction; theoretical product "
-                   f"{theoretical_g:.6g} g, observed yield {yield_percent:.4g}%." +
-                   (" Yield above 100% suggests product impurities or measurement error." if yield_percent > 100 else ""),
+                   f"{theoretical_g:.6g} g, observed yield {yield_text}." + warning,
         "values": {"limiting_reactant_index": limiting + 1, "reaction_extent_mol": extent,
                    "theoretical_product_mol": theoretical_mol,
                    "theoretical_product_mass_g": theoretical_g,
