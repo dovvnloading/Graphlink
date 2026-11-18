@@ -118,6 +118,8 @@ function scientificErrors(value: unknown, field: string, count: number): ErrorPa
 }
 
 function checkScientificAxis(values: number[], errors: ErrorPair[] | null | undefined, scale: AxisScale, field: string): void {
+  let smallest = Infinity;
+  let largest = -Infinity;
   values.forEach((value, index) => {
     const [minus, plus] = errors?.[index] ?? [0, 0];
     const lower = value - minus;
@@ -128,7 +130,12 @@ function checkScientificAxis(values: number[], errors: ErrorPair[] | null | unde
     if (scale === "log10" && lower <= 0) {
       throw new ChartSpecError(field + " at index " + index + " and its lower error endpoint must be greater than zero on a log10 axis");
     }
+    smallest = Math.min(smallest, lower);
+    largest = Math.max(largest, upper);
   });
+  if (!Number.isFinite(largest - smallest)) {
+    throw new ChartSpecError(field + " range including error endpoints must be finite");
+  }
 }
 
 interface ScientificValues {
