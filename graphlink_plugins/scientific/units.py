@@ -245,7 +245,10 @@ def convert_measurement(value: float, source: str, target: str) -> float:
             kelvin = Fraction(str(value)) * from_unit.scale + from_unit.offset
             if kelvin < 0:
                 raise ValueError("Absolute temperature must be at least 0 K.")
-            result = value if source == target else float((kelvin - to_unit.offset) / to_unit.scale)
+            exact_result = (kelvin - to_unit.offset) / to_unit.scale
+            result = value if source == target else float(exact_result)
+            if source != target and exact_result != 0 and result == 0:
+                raise ValueError("The converted measurement is below the numerical range.")
     else:
         result = value if source == target else float(Fraction(value) * from_unit.scale / to_unit.scale)
         if value and result == 0:
