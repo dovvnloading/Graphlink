@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { TOPIC_VALIDATORS } from "../lib/api-contract/topics";
+import { validateAppSettingsState } from "../lib/bridge-core/generated/app-settings-state";
 import type { AppSettingsState } from "../lib/bridge-core/generated/app-settings-state";
 import { isTextEditable } from "../lib/bridge-core/textFocus";
 import { ConnectionStatus, WsTransport, defaultWsUrl } from "../lib/ws/transport";
@@ -384,7 +384,7 @@ function App() {
       // Same validate-before-trust discipline as every other subscriber -
       // this one only reads a single boolean, but an unvalidated cast here
       // was the one inconsistent gap in the pattern.
-      const validated = TOPIC_VALIDATORS["app-settings"](payload);
+      const validated = validateAppSettingsState(payload);
       if (validated.ok) {
         setSettingsVisibility({ showTokenCounter: (validated.value as AppSettingsState).showTokenCounter });
         applyTheme((validated.value as AppSettingsState).theme);

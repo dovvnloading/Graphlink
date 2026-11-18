@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
-import { TOPIC_VALIDATORS } from "../../lib/api-contract/topics";
+import { validateAppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
+import { validateAppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
 import type { AppComposerRoute, AppComposerState } from "../../lib/bridge-core/generated/app-composer-state";
 import type { SceneStore } from "../canvas/sceneStore";
@@ -64,7 +65,7 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
 
   useEffect(() => {
     const offSettings = transport.subscribe("app-settings", (payload) => {
-      const validated = TOPIC_VALIDATORS["app-settings"](payload);
+      const validated = validateAppSettingsState(payload);
       if (validated.ok) {
         const value = validated.value as AppSettingsState;
         setHasCompletedOnboarding(value.hasCompletedOnboarding);
@@ -74,7 +75,7 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
       }
     });
     const offComposer = transport.subscribe("app-composer", (payload) => {
-      const validated = TOPIC_VALIDATORS["app-composer"](payload);
+      const validated = validateAppComposerState(payload);
       if (validated.ok) setRoute((validated.value as AppComposerState).route);
       else console.error("[app-composer] rejected snapshot:", validated.errors);
     });

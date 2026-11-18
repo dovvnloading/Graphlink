@@ -71,7 +71,7 @@ import { useCanvasPan } from "./useCanvasPan";
 import { motionDuration } from "../reducedMotion";
 import { useNodeDragAndSizeSync } from "./useNodeDragAndSizeSync";
 import { hiddenGroupMemberIds } from "./collapsedGroups";
-import { measuredNodeSize } from "./measuredNodeSize";
+import { measuredNodeSize, type MeasuredSizeSource } from "./measuredNodeSize";
 
 /**
  * The React Flow canvas (Qt-removal plan R1) - the QGraphicsScene/ChatView
