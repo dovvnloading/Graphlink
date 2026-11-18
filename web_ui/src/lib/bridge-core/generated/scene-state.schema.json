@@ -185,6 +185,12 @@
               "bins": {
                 "type": "integer"
               },
+              "columnLabels": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
               "flows": {
                 "items": {
                   "additionalProperties": false,
@@ -208,9 +214,86 @@
                 },
                 "type": "array"
               },
+              "groups": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "values"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "labels": {
                 "items": {
                   "type": "string"
+                },
+                "type": "array"
+              },
+              "matrix": {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "rowLabels": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "series": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "type": "array"
+                    },
+                    "xError": {
+                      "items": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "yError": {
+                      "items": {
+                        "items": {
+                          "type": "number"
+                        },
+                        "type": "array"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ],
+                  "type": "object"
                 },
                 "type": "array"
               },
@@ -223,8 +306,14 @@
                   "line",
                   "pie",
                   "histogram",
-                  "sankey"
+                  "sankey",
+                  "scatter",
+                  "boxplot",
+                  "heatmap"
                 ],
+                "type": "string"
+              },
+              "valueUnit": {
                 "type": "string"
               },
               "values": {
@@ -239,7 +328,51 @@
               "xAxis": {
                 "type": "string"
               },
+              "xError": {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "xScale": {
+                "enum": [
+                  "linear",
+                  "log10"
+                ],
+                "type": "string"
+              },
+              "xUnit": {
+                "type": "string"
+              },
+              "xValues": {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
               "yAxis": {
+                "type": "string"
+              },
+              "yError": {
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "yScale": {
+                "enum": [
+                  "linear",
+                  "log10"
+                ],
+                "type": "string"
+              },
+              "yUnit": {
                 "type": "string"
               }
             },

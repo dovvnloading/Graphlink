@@ -48,7 +48,7 @@ def test_model_driven_scatter_requests_advanced_options_and_creates_a_chart():
         ])
         assert node_id in document.nodes
         assert document.nodes[node_id].state.chart_type == "scatter"
-        assert "type" not in document.nodes[node_id].state.chart_data  # v1 generated scene validator
+        assert document.nodes[node_id].state.chart_data["type"] == "scatter"
         assert document.nodes[node_id].state.chart_data["series"][0]["yError"] == [[0.1, 0.1], [0.2, 0.3]]
         assert len(agent.calls) == 1
         prompt = agent.calls[0]["source_text"]
@@ -94,6 +94,6 @@ def test_invalid_model_scatter_result_gets_a_valid_numeric_placeholder():
         assert document.nodes[node_id].state.chart_type == "scatter"
         assert "log10 axis" in document.nodes[node_id].state.chart_error
         assert document.nodes[node_id].state.chart_data["xValues"] == [1.0, 2.0]
-        assert "type" not in document.nodes[node_id].state.chart_data
+        assert document.nodes[node_id].state.chart_data["type"] == "scatter"
 
     asyncio.run(run())

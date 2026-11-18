@@ -1,6 +1,5 @@
 /** Tukey box/whisker marks: median-of-halves quartiles, 1.5-IQR whiskers,
  * and all individual outliers. Geometry is shared with the export semantics. */
-import { boxplotFields } from "../chartSpec";
 import type { ChartMarksProps } from "./BarChartMarks";
 import { CartesianAxes, type XTick } from "./CartesianAxes";
 import {
@@ -12,7 +11,7 @@ import { computeBottomMargin, tooltipPositionFromEvent } from "./chartLayout";
 export function BoxplotChartMarks({
   chartData, theme, width, height, onHover, wrapperRef,
 }: ChartMarksProps) {
-  const groups = boxplotFields(chartData).groups ?? [];
+  const groups = chartData.groups ?? [];
   if (!groups.length || width <= 0 || height <= 0) return null;
   const summaries = groups.map((group) => computeBoxplotStats(group.values));
   const low = Math.min(...groups.flatMap((group) => group.values));

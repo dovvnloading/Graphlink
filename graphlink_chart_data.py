@@ -604,10 +604,7 @@ def canonicalize_chart_data(data, chart_type=None):
         ),
     }
 
-    # The generated v1 scene wire enum does not include these additive
-    # chart types. The outer ChartState.chart_type remains authoritative.
     if expected_type in {"boxplot", "heatmap"}:
-        result.pop("type")
         return (_boxplot_chart(data, result) if expected_type == "boxplot"
                 else _heatmap_chart(data, result))
 
@@ -615,13 +612,6 @@ def canonicalize_chart_data(data, chart_type=None):
         expected_type == "line" and any(key in data for key in
             ("xValues", "series", "xError", "yError", "xScale", "yScale", "xUnit", "yUnit"))
     ):
-        # The existing frontend wire validator accepts additive object keys,
-        # but its generated v1 enum (outside this feature's edit scope) has
-        # no "scatter" entry. ChartState.chart_type is already the
-        # authoritative discriminator. Omit only this optional nested field
-        # for scatter, so scene snapshots remain valid without touching codegen.
-        if expected_type == "scatter":
-            result.pop("type")
         return _scientific_chart(data, expected_type, result)
 
     if expected_type in {"bar", "line", "pie"}:

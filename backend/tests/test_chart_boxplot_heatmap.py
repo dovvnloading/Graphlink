@@ -34,7 +34,7 @@ def test_new_chart_canonicalization_is_idempotent_does_not_mutate_input_and_fits
     result = canonicalize_chart_data(payload, chart_type)
     assert payload == original
     assert result["version"] == 1
-    assert "type" not in result  # generated v1 scene enum is out of scope
+    assert result["type"] == chart_type
     assert canonicalize_chart_data(result, chart_type) == result
     assert result["title"] == payload["title"]
     assert CHART_JSON_SCHEMAS[chart_type]["required"]
@@ -46,7 +46,7 @@ def test_boxplot_preserves_samples_labels_and_defaults():
         {"label": "B", "values": ["3", 4]},
     ]}, "boxplot")
     assert result == {
-        "version": 1, "title": "Boxplot Chart",
+        "version": 1, "type": "boxplot", "title": "Boxplot Chart",
         "groups": [
             {"label": "A", "values": [1.0, 2.0]},
             {"label": "B", "values": [3.0, 4.0]},
@@ -122,6 +122,7 @@ def test_new_eval_fixtures_match_canonical_output(chart_type, fixture_name):
     folder = Path(__file__).parents[1] / "evals" / "fixtures" / "chart"
     fixture = json.loads((folder / fixture_name).read_text(encoding="utf-8"))
     assert fixture["input"]["chart_type"] == chart_type
+    assert fixture["expected"]["type"] == chart_type
     assert canonicalize_chart_data(
         json.loads(fixture["scripted_response"]), chart_type,
     ) == fixture["expected"]
@@ -171,3 +172,13 @@ def test_heatmap_exports_png_svg_with_correct_matrix_and_norm(monkeypatch):
 def test_existing_chart_types_still_require_their_original_shapes():
     assert canonicalize_chart_data({"type": "bar", "labels": ["A"], "values": [1]}, "bar")["type"] == "bar"
     assert canonicalize_chart_data({"type": "scatter", "xValues": [1], "values": [2]}, "scatter")["xValues"] == [1.0]
+
+
+
+@pytest.mark.parametrize("chart_type,payload", [
+    ("boxplot", BOXPLOT), ("heatmap", HEATMAP),
+])
+def test_pr590_saved_chart_without_nested_type_recovers_samples_and_matrix(chart_type, payload):
+    canonical = canonicalize_chart_data(payload, chart_type)
+    saved_by_pr590 = {key: value for key, value in canonical.items() if key != "type"}
+    assert canonicalize_chart_data(saved_by_pr590, chart_type) == canonical

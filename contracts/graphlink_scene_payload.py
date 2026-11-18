@@ -107,18 +107,13 @@ other kind, same additive rule as every field above. `chartAssetId`/
 rode this same shape until ADR-013 stage 13.4 retired them - the client-
 side interactive renderer (stage 13.2) draws straight from chartData, so
 nothing had read them since. `chartData` is the one genuinely hard case: graphlink_chart_data.
-py's canonicalize_chart_data() returns one of THREE different shapes
-depending on chart type (bar/line/pie: labels+values+xAxis+yAxis;
-histogram: values+bins+xAxis+yAxis; sankey: flows only) - a real
-discriminated union the schema generator's closed type set has no direct
-way to express (no tagged-union support). ChartDataRow below resolves
-this the same way SceneNodeRow ITSELF already resolves the analogous
-problem one level up (one node kind's fields, present; every other
-kind's fields, absent-and-defaulted): every field across all three chart
-shapes is declared, all of them optional, so a real chart's dict
-(always a subset of these) and a non-chart node's `{}` (all absent) both
-validate cleanly - not a new pattern, the same one this whole file
-already uses at the top level, applied one level deeper.
+py's canonicalize_chart_data() returns distinct shapes for categorical,
+histogram, sankey, scientific line/scatter, boxplot and heatmap charts.
+The schema generator has no discriminated-union support; ChartDataRow
+declares the union of their fields, all optional. This also admits the
+historical scatter/boxplot/heatmap workspace rows without a nested type.
+New canonical payloads always include it; the node's chartType remains
+the discriminator when loading old saved charts.
 
 `color`/`headerColor`/`isSystemPrompt`/`isSummaryNote`/`isBranchComparison`/
 `itemIds`/`isLocked`/`groupWidth`/`groupHeight` are the R6.1 Notes/Frames/
@@ -432,16 +427,32 @@ class ChartFlowRow:
 
 
 @dataclass
+class ChartScientificSeriesRow:
+    """Named scientific series. Error magnitudes are canonical lower/upper pairs."""
+
+    name: str
+    values: list[float]
+    xError: list[list[float]] | None = None
+    yError: list[list[float]] | None = None
+
+
+@dataclass
+class ChartBoxplotGroupRow:
+    """Observed boxplot samples, kept intact for Tukey statistics at render time."""
+
+    label: str
+    values: list[float]
+
+
+@dataclass
 class ChartDataRow:
-    """ADR-003 stage 3.3: canonicalize_chart_data() returns one of three
-    disjoint shapes depending on chart type - see SceneNodeRow's own module
-    docstring for why every field here is optional rather than this being
-    three separate row types. `type`/`title` are set on every real chart's
-    dict (never independently absent from each other in practice), but the
-    schema generator has no dependent-required-fields concept, so both stay
-    individually optional like every other field here - the same tolerance
-    the file's existing `gitlinkChangeFingerprint`-style fields already
-    accept."""
+    """The additive union of all eight chart shapes on the scene wire.
+
+    Every field remains optional: non-chart nodes send {}, and workspaces saved
+    before this contract change omit the nested type on scatter, boxplot and
+    heatmap. The outer chartType supplies it when those charts are loaded.
+    Canonicalizers now always stamp the real nested type for new charts.
+    """
 
     # ADR-013 stage 13.1: the spec's own schema version - canonicalize_chart_data
     # always stamps 1 today. Bumped only when the CANONICAL SHAPE this dataclass
@@ -449,7 +460,7 @@ class ChartDataRow:
     # on every feature addition. A future migration reads this to know which
     # shape it's looking at rather than sniffing field presence.
     version: int | None = None
-    type: Literal["bar", "line", "pie", "histogram", "sankey"] | None = None
+    type: Literal["bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"] | None = None
     title: str | None = None
     # bar/line/pie
     labels: list[str] | None = None
@@ -460,6 +471,22 @@ class ChartDataRow:
     bins: int | None = None
     # sankey
     flows: list[ChartFlowRow] | None = None
+    # scientific line/scatter (errors are canonical [minus, plus] pairs)
+    xValues: list[float] | None = None
+    series: list[ChartScientificSeriesRow] | None = None
+    xError: list[list[float]] | None = None
+    yError: list[list[float]] | None = None
+    xScale: Literal["linear", "log10"] | None = None
+    yScale: Literal["linear", "log10"] | None = None
+    xUnit: str | None = None
+    yUnit: str | None = None
+    # boxplot
+    groups: list[ChartBoxplotGroupRow] | None = None
+    # heatmap
+    rowLabels: list[str] | None = None
+    columnLabels: list[str] | None = None
+    matrix: list[list[float]] | None = None
+    valueUnit: str | None = None
 
 
 @dataclass

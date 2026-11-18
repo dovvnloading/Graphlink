@@ -40,12 +40,12 @@ def _setup(response):
     ("heatmap", {"type": "heatmap", "rowLabels": ["A"], "columnLabels": ["B"],
                  "matrix": [[-2]]}, "matrix"),
 ])
-def test_generated_chart_node_stores_new_type_without_out_of_scope_wire_change(chart_type, model_data, field):
+def test_generated_chart_node_stores_real_type_in_nested_wire_contract(chart_type, model_data, field):
     async def run():
         bus, document, _, agent, root = _setup(model_data)
         node_id = await bus.dispatch_intent("scene", "generateChart", [root, chart_type])
         assert document.nodes[node_id].state.chart_type == chart_type
-        assert "type" not in document.nodes[node_id].state.chart_data
+        assert document.nodes[node_id].state.chart_data["type"] == chart_type
         assert document.nodes[node_id].state.chart_data[field]
         assert document.nodes[node_id].state.chart_error == ""
         assert len(agent.calls) == 1
@@ -66,7 +66,7 @@ def test_failed_generated_data_creates_revalidatable_placeholder(chart_type, inv
         node_id = await bus.dispatch_intent("scene", "generateChart", [root, chart_type])
         assert document.nodes[node_id].state.chart_type == chart_type
         assert document.nodes[node_id].state.chart_error.startswith("The generated chart data could not be validated:")
-        assert "type" not in document.nodes[node_id].state.chart_data
+        assert document.nodes[node_id].state.chart_data["type"] == chart_type
         assert document.nodes[node_id].state.chart_data[placeholder]
 
     asyncio.run(run())

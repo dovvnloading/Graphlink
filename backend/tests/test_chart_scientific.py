@@ -31,10 +31,7 @@ def _scatter(**overrides):
 def test_scatter_canonicalizes_symmetric_and_asymmetric_errors_and_named_series():
     spec = canonicalize_chart_data(_scatter(), "scatter")
     assert spec["version"] == 1
-    # The nested type is optional in ChartDataRow. The authoritative outer
-    # ChartState.chart_type is "scatter", preserving the existing generated
-    # wire enum until a future (separately scoped) schema change.
-    assert "type" not in spec
+    assert spec["type"] == "scatter"
     assert spec["xValues"] == [1.0, 10.0, 100.0]
     assert spec["series"][0]["xError"] == [[0.05, 0.05], [1.0, 2.0], [10.0, 10.0]]
     assert spec["series"][0]["yError"] == [[0.1, 0.1], [0.1, 0.3], [0.2, 0.2]]
@@ -163,6 +160,7 @@ def test_scatter_fixture_validates_identically_to_scripted_eval_expected():
     folder = Path(__file__).parents[1] / "evals" / "fixtures" / "chart"
     fixture = json.loads((folder / "scatter_calibration_error_bars.json").read_text(encoding="utf-8"))
     actual = canonicalize_chart_data(json.loads(fixture["scripted_response"]), "scatter")
+    assert fixture["expected"]["type"] == "scatter"
     assert actual == fixture["expected"]
 
 
@@ -199,3 +197,9 @@ def test_scientific_line_exports_connected_series_without_affecting_legacy():
     svg = render_chart_svg("line", payload, 640, 480)
     assert b"<svg " in svg
     assert b"legend" in svg
+
+def test_pr586_saved_scatter_without_nested_type_recovers_the_same_scientific_data():
+    canonical = canonicalize_chart_data(_scatter(), "scatter")
+    saved_by_pr586 = {key: value for key, value in canonical.items() if key != "type"}
+    assert canonicalize_chart_data(saved_by_pr586, "scatter") == canonical
+    assert saved_by_pr586["series"][0]["yError"] == canonical["series"][0]["yError"]

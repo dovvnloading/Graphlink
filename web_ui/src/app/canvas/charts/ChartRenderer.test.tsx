@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import ChartRenderer from "./ChartRenderer";
+import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
 
 // ChartRenderer gates its own SVG on a real measured size (useElementSize,
 // see chartHooks.ts). vitest.setup.ts's global ResizeObserver stub is a
@@ -46,11 +47,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const SAMPLE_DATA: Record<string, Record<string, unknown>> = {
+const SAMPLE_DATA: Record<string, ChartDataRow> = {
   bar: { type: "bar", title: "Sales", labels: ["Q1", "Q2", "Q3"], values: [10, -4, 20] },
   line: { type: "line", title: "Trend", labels: ["Mon", "Tue", "Wed"], values: [1, 5, 3] },
   pie: { type: "pie", title: "Share", labels: ["A", "B", "C"], values: [30, 20, 50] },
   histogram: { type: "histogram", title: "Distribution", values: [1, 2, 2, 3, 4, 5, 5, 5, 6], bins: 4 },
+  scatter: {
+    type: "scatter", title: "Calibration", xValues: [1, 10, 100],
+    xScale: "log10", yScale: "linear", xUnit: "mg/L", yUnit: "mV",
+    series: [{ name: "Control", values: [1, 2, 3],
+      xError: [[0.05, 0.05], [1, 2], [10, 10]],
+      yError: [[0.1, 0.1], [0.1, 0.3], [0.2, 0.2]] }],
+  },
   boxplot: {
     type: "boxplot", title: "Measurements",
     groups: [
@@ -74,22 +82,46 @@ const SAMPLE_DATA: Record<string, Record<string, unknown>> = {
 
 describe("ChartRenderer", () => {
   it.each(Object.keys(SAMPLE_DATA))("renders %s chart data as SVG marks without crashing", (chartType) => {
-    const { container } = render(<ChartRenderer chartType={chartType} chartData={SAMPLE_DATA[chartType] as never} />);
+    const { container } = render(<ChartRenderer chartType={chartType} chartData={SAMPLE_DATA[chartType]} />);
     const svg = container.querySelector(".chart-canvas-svg");
     expect(svg).not.toBeNull();
     const marks = svg!.querySelectorAll("rect, path, circle");
     expect(marks.length).toBeGreaterThan(0);
   });
 
+  it.each(Object.keys(SAMPLE_DATA))("renders a saved %s chart with no nested type using the same SVG geometry", (chartType) => {
+    const typed = SAMPLE_DATA[chartType];
+    const signature = (container: HTMLElement) => {
+      const svg = container.querySelector(".chart-canvas-svg");
+      expect(svg).not.toBeNull();
+      return Array.from(svg!.querySelectorAll("rect, path, circle, line, polyline")).map((mark) =>
+        ["class", "x", "y", "x1", "x2", "y1", "y2", "cx", "cy", "width", "height", "d", "points", "fill", "stroke"]
+          .map((attribute) => {
+            const value = mark.getAttribute(attribute) ?? "";
+            return attribute === "fill" && value.startsWith("url(#") ? "gradient" : value;
+          }),
+      );
+    };
+    const current = render(<ChartRenderer chartType={chartType} chartData={typed} />);
+    const expected = signature(current.container);
+    expect(expected.length).toBeGreaterThan(0);
+    current.unmount();
+    const saved = { ...typed };
+    delete saved.type;
+    const legacy = render(<ChartRenderer chartType={chartType} chartData={saved} />);
+    expect(legacy.container.querySelector(".chart-canvas-placeholder")).toBeNull();
+    expect(signature(legacy.container)).toEqual(expected);
+  });
+
   it("shows the inline placeholder (not a crash) for chart data that fails re-validation", () => {
-    const { container } = render(<ChartRenderer chartType="bar" chartData={{ type: "bar" } as never} />);
+    const { container } = render(<ChartRenderer chartType="bar" chartData={{ type: "bar" }} />);
     expect(container.querySelector(".chart-canvas-placeholder")).not.toBeNull();
     expect(container.querySelector(".chart-canvas-svg")).toBeNull();
     expect(screen.getByText(/both be lists/)).toBeInTheDocument();
   });
 
   it("shows a tooltip on hovering a bar and hides it again on pointer leave", () => {
-    const { container } = render(<ChartRenderer chartType="bar" chartData={SAMPLE_DATA.bar as never} />);
+    const { container } = render(<ChartRenderer chartType="bar" chartData={SAMPLE_DATA.bar} />);
     const bar = container.querySelector(".chart-canvas-svg rect")!;
 
     expect(screen.queryByRole("tooltip")).toBeNull();
@@ -101,7 +133,7 @@ describe("ChartRenderer", () => {
   });
 
   it("shows full Tukey statistics and outliers on boxplot hover", () => {
-    const { container } = render(<ChartRenderer chartType="boxplot" chartData={SAMPLE_DATA.boxplot as never} />);
+    const { container } = render(<ChartRenderer chartType="boxplot" chartData={SAMPLE_DATA.boxplot} />);
     expect(container.querySelectorAll(".chart-boxplot-group")).toHaveLength(2);
     expect(container.querySelectorAll(".chart-boxplot-outlier")).toHaveLength(1);
     const hit = container.querySelector(".chart-boxplot-hit-target")!;
@@ -113,7 +145,7 @@ describe("ChartRenderer", () => {
   });
 
   it("shows original matrix values and labels on heatmap hover", () => {
-    const { container } = render(<ChartRenderer chartType="heatmap" chartData={SAMPLE_DATA.heatmap as never} />);
+    const { container } = render(<ChartRenderer chartType="heatmap" chartData={SAMPLE_DATA.heatmap} />);
     const cells = container.querySelectorAll(".chart-heatmap-cell");
     expect(cells).toHaveLength(4);
     expect(cells[0]).toHaveAttribute("fill", "#2166ac");
@@ -127,7 +159,7 @@ describe("ChartRenderer", () => {
   });
 
   it("zooms in on wheel-up and shows a reset control, which restores the original transform", () => {
-    const { container } = render(<ChartRenderer chartType="bar" chartData={SAMPLE_DATA.bar as never} />);
+    const { container } = render(<ChartRenderer chartType="bar" chartData={SAMPLE_DATA.bar} />);
     const svg = container.querySelector(".chart-canvas-svg")!;
     const zoomGroup = svg.querySelector("g")!;
     expect(zoomGroup.getAttribute("transform")).toBe("translate(0 0) scale(1)");

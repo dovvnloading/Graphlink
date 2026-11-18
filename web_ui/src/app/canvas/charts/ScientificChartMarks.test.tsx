@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { canonicalizeChartSpec, scientificFields } from "../chartSpec";
+import { canonicalizeChartSpec } from "../chartSpec";
 import { createLog10Scale, formatLogTick, formatScientificTick, log10Ticks, scientificDomain, scientificLinearTicks } from "./chartScales";
 import ChartRenderer from "./ChartRenderer";
 
@@ -46,9 +46,9 @@ const SCATTER = {
 };
 
 describe("scientific chart contract", () => {
-  it("normalizes symmetric and asymmetric errors and keeps optional wire type absent", () => {
-    const result = scientificFields(canonicalizeChartSpec(SCATTER, "scatter"));
-    expect(result.type).toBeUndefined();
+  it("normalizes symmetric and asymmetric errors and stamps the generated scatter type", () => {
+    const result = canonicalizeChartSpec(SCATTER, "scatter");
+    expect(result.type).toBe("scatter");
     expect(result.series?.[0].xError).toEqual([[0.05, 0.05], [1, 2], [10, 10]]);
     expect(result.series?.[0].yError).toEqual([[0.1, 0.1], [0.1, 0.3], [0.2, 0.2]]);
     expect(canonicalizeChartSpec(result, "scatter")).toEqual(result);

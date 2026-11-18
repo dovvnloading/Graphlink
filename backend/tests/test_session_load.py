@@ -551,6 +551,108 @@ def test_chart_with_unsupported_type_is_skipped():
     assert not any(n.kind == "chart" for n in document.nodes.values())
 
 
+
+@pytest.mark.parametrize("chart_type,fixture_name", [
+    ("scatter", "scatter_calibration_error_bars.json"),
+    ("boxplot", "boxplot_grouped_measurements.json"),
+    ("heatmap", "heatmap_assay_matrix.json"),
+])
+def test_pr586_590_typeless_saved_chart_loads_renders_and_resaves_with_type(chart_type, fixture_name):
+    """Load the exact historical typeless shape through the real disk loader."""
+    import json
+    from pathlib import Path
+
+    from backend.session_save import build_chat_data
+    from graphlink_chart_data import canonicalize_chart_data
+    from graphlink_chart_rendering import render_chart_svg
+
+    fixture_path = Path(__file__).parents[1] / "evals" / "fixtures" / "chart" / fixture_name
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    expected = fixture["expected"]
+    assert expected["type"] == chart_type
+    old_data = {key: value for key, value in expected.items() if key != "type"}
+    saved_record = {
+        "id": "pre-wire-contract-chart",
+        "data": old_data,
+        "position": {"x": 8, "y": 11},
+        "size": {"width": 640, "height": 420},
+        "aspect_ratio_locked": False,
+        "parent_node_index": 0,
+    }
+    document = _restore(nodes=[_chat("parent")], charts=[saved_record])
+    charts = [node for node in document.nodes.values() if node.kind == "chart"]
+    assert len(charts) == 1
+    chart = charts[0]
+    assert chart.state.chart_type == chart_type
+    assert chart.state.chart_error == ""
+    assert chart.state.chart_data == expected
+    assert canonicalize_chart_data(old_data, chart_type) == expected
+    assert "type" not in old_data  # no mutation of the imported workspace
+    assert (chart.state.chart_width, chart.state.chart_height) == (640.0, 420.0)
+    assert not chart.state.chart_aspect_locked
+    svg = render_chart_svg(chart_type, chart.state.chart_data, 640, 420)
+    assert b"<svg " in svg
+
+    # A saved workspace now writes the discriminator; subsequent reopening is
+    # lossless for the complete chart data, not only its chart-type badge.
+    resaved = build_chat_data(document)
+    assert len(resaved["charts"]) == 1
+    assert resaved["charts"][0]["data"] == expected
+    reopened = _restore(nodes=resaved["nodes"], charts=resaved["charts"])
+    reloaded_charts = [node for node in reopened.nodes.values() if node.kind == "chart"]
+    assert len(reloaded_charts) == 1
+    assert reloaded_charts[0].state.chart_type == chart_type
+    assert reloaded_charts[0].state.chart_data == expected
+
+
+@pytest.mark.parametrize("chart_type,payload", [
+    ("bar", {"type": "bar", "labels": ["A"], "values": [2]}),
+    ("line", {"type": "line", "labels": ["A", "B"], "values": [2, 3]}),
+    ("pie", {"type": "pie", "labels": ["A", "B"], "values": [2, 3]}),
+    ("histogram", {"type": "histogram", "values": [1, 2, 3], "bins": 2}),
+    ("sankey", {"type": "sankey", "flows": [{"source": "A", "target": "B", "value": 1}]}),
+])
+def test_historical_typed_chart_shapes_still_restore_unchanged(chart_type, payload):
+    from graphlink_chart_data import canonicalize_chart_data
+
+    document = _restore(charts=[{
+        "id": "old-chart", "data": payload, "position": {"x": 0, "y": 0},
+    }])
+    charts = [node for node in document.nodes.values() if node.kind == "chart"]
+    assert len(charts) == 1
+    assert charts[0].state.chart_type == chart_type
+    assert charts[0].state.chart_data == canonicalize_chart_data(payload, chart_type)
+
+
+@pytest.mark.parametrize("data", [
+    {}, {"groups": [{"label": "A", "values": [1, 2]}], "matrix": [[1]]},
+    {"type": "unrecognized", "xValues": [1, 2], "values": [1, 2]},
+])
+def test_ambiguous_or_explicitly_unsupported_saved_chart_is_not_misidentified(data):
+    document = _restore(charts=[{"id": "bad", "data": data, "position": {"x": 0, "y": 0}}])
+    assert all(node.kind != "chart" for node in document.nodes.values())
+
+
+@pytest.mark.parametrize("chart_type,bad_data", [
+    ("scatter", {"xValues": [0, 1], "values": [1, 2], "xScale": "log10"}),
+    ("boxplot", {"groups": []}),
+    ("heatmap", {"rowLabels": ["A"], "columnLabels": ["B"], "matrix": [[]]}),
+])
+def test_corrupted_typeless_saved_scientific_chart_still_restores_renderable_error(chart_type, bad_data):
+    from graphlink_chart_data import canonicalize_chart_data
+
+    document = _restore(charts=[{
+        "id": "invalid", "data": bad_data, "position": {"x": 0, "y": 0},
+    }])
+    charts = [node for node in document.nodes.values() if node.kind == "chart"]
+    assert len(charts) == 1
+    chart = charts[0]
+    assert chart.state.chart_type == chart_type
+    assert chart.state.chart_data["type"] == chart_type
+    assert chart.state.chart_error.startswith("This chart's saved data could not be validated:")
+    assert canonicalize_chart_data(chart.state.chart_data, chart_type) == chart.state.chart_data
+
+
 # -- frames -----------------------------------------------------------------
 
 

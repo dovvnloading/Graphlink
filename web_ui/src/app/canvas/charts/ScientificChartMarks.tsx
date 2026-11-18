@@ -1,7 +1,6 @@
 /** Scientific line and scatter marks. No charting library: the same finite
  * coordinates/error magnitudes checked by both canonicalizers are mapped to
  * SVG; only the scale (linear/log10) changes, never the numeric data. */
-import { scientificFields } from "../chartSpec";
 import type { AxisScale, ErrorPair } from "../chartSpec";
 import type { ChartMarksProps } from "./BarChartMarks";
 import { CartesianAxes, type XTick } from "./CartesianAxes";
@@ -19,7 +18,7 @@ interface PlottedSeries {
   yError?: ErrorPair[] | null;
 }
 
-export function scientificAxisLabel(label: string, unit?: string): string {
+export function scientificAxisLabel(label: string, unit?: string | null): string {
   return unit ? label + " (" + unit + ")" : label;
 }
 
@@ -63,18 +62,18 @@ function labeledTicks(domain: [number, number], scale: AxisScale): number[] {
 
 /** Keep tooltips exact: the legacy abbreviated tick-label formatter rounds
  * >=1000 to integers and values <.001 to zero, which is wrong for readings. */
-export function exactWithUnit(value: number, unit?: string): string {
+export function exactWithUnit(value: number, unit?: string | null): string {
   return String(value) + (unit ? " " + unit : "");
 }
 
-function errorWithUnit(pair: ErrorPair, unit?: string): string {
+function errorWithUnit(pair: ErrorPair, unit?: string | null): string {
   return "-" + String(pair[0]) + "/+" + String(pair[1]) + (unit ? " " + unit : "");
 }
 
 export function ScientificChartMarks({
   chartData, theme, width, height, onHover, wrapperRef, chartType,
 }: ChartMarksProps & { chartType: string }) {
-  const data = scientificFields(chartData);
+  const data = chartData;
   const named = data.series;
   const series: PlottedSeries[] = named ?? [{
     name: "",

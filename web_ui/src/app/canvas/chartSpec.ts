@@ -12,7 +12,7 @@
  * checked before it reaches the renderer.
  */
 
-import type { ChartDataRow, ChartFlowRow } from "../../lib/bridge-core/generated/scene-state";
+import type { ChartBoxplotGroupRow, ChartDataRow, ChartFlowRow, ChartScientificSeriesRow } from "../../lib/bridge-core/generated/scene-state";
 
 export const CHART_SPEC_VERSION = 1;
 export const SUPPORTED_CHART_TYPES = ["bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"] as const;
@@ -59,60 +59,12 @@ function finiteNumber(value: unknown, fieldName: string): number {
 }
 
 
-/** Additive scientific fields. The generated v1 wire validator accepts
- * unknown properties, but not a new nested type enum: the outer chartType
- * remains the scatter discriminator, and nested type is omitted for scatter. */
-export type ErrorPair = [number, number];
-export type AxisScale = "linear" | "log10";
-export interface ScientificSeries {
-  name: string;
-  values: number[];
-  xError?: ErrorPair[] | null;
-  yError?: ErrorPair[] | null;
-}
-export interface ScientificChartSpec {
-  version?: ChartDataRow["version"];
-  type?: ChartDataRow["type"];
-  title?: ChartDataRow["title"];
-  labels?: ChartDataRow["labels"];
-  values?: ChartDataRow["values"];
-  xAxis?: ChartDataRow["xAxis"];
-  yAxis?: ChartDataRow["yAxis"];
-  xValues?: number[];
-  series?: ScientificSeries[];
-  xError?: ErrorPair[] | null;
-  yError?: ErrorPair[] | null;
-  xScale?: AxisScale;
-  yScale?: AxisScale;
-  xUnit?: string;
-  yUnit?: string;
-};
-/** New chart types omit their optional nested type on the existing v1 wire.
- * ChartState.chartType is the discriminator until codegen can be updated. */
-export interface BoxplotGroup {
-  label: string;
-  values: number[];
-}
-export interface BoxplotChartSpec extends ChartDataRow {
-  groups?: BoxplotGroup[];
-}
-export interface HeatmapChartSpec extends ChartDataRow {
-  rowLabels?: string[];
-  columnLabels?: string[];
-  matrix?: number[][];
-  valueUnit?: string;
-}
-export function boxplotFields(spec: ChartDataRow): BoxplotChartSpec {
-  return spec as BoxplotChartSpec;
-}
-export function heatmapFields(spec: ChartDataRow): HeatmapChartSpec {
-  return spec as HeatmapChartSpec;
-}
+/** Error pairs and axis scales are defined by the generated scene wire type.
+ * The canonicalizer checks that each pair contains exactly two magnitudes. */
+export type ErrorPair = NonNullable<ChartDataRow["xError"]>[number];
+export type AxisScale = NonNullable<ChartDataRow["xScale"]>;
 
-export function scientificFields(spec: ChartDataRow): ScientificChartSpec {
-  return spec as ScientificChartSpec;
-}
-export function usesScientificMarks(data: ChartDataRow, chartType: string): boolean {
+export function usesScientificMarks(data: object, chartType: string): boolean {
   return chartType === "scatter" ||
     ["xValues", "series", "xError", "yError", "xScale", "yScale", "xUnit", "yUnit"].some((key) => key in data);
 }
@@ -168,7 +120,7 @@ interface ScientificValues {
 }
 
 function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "scatter", result: ChartDataRow): ChartDataRow {
-  const output = result as ScientificChartSpec;
+  const output = result;
   if (type === "scatter" && raw.xValues == null) {
     throw new ChartSpecError("Scatter charts require numeric xValues");
   }
@@ -205,6 +157,7 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
       throw new ChartSpecError("Named series cannot be combined with top-level values or errors");
     }
     const names = new Set<string>();
+    const namedSeries: ChartScientificSeriesRow[] = [];
     raw.series.forEach((entry, index) => {
       if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
         throw new ChartSpecError("series at index " + index + " must be an object");
@@ -217,13 +170,14 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
       if (!item.values.length) throw new ChartSpecError("series " + name + " requires at least one data point");
       if (item.values.length > MAX_SERIES_POINTS) throw new ChartSpecError("Charts support at most 300 data points");
       const values = item.values.map((value, i) => finiteNumber(value, "series " + name + " value at index " + i));
-      const row: ScientificValues = { name, values };
+      const row: ChartScientificSeriesRow = { name, values };
       for (const field of ["xError", "yError"] as const) {
         if (field in item) row[field] = scientificErrors(item[field], "series " + name + " " + field, values.length);
       }
       series.push(row);
+      namedSeries.push(row);
     });
-    output.series = series as ScientificSeries[];
+    output.series = namedSeries;
   } else {
     if (!Array.isArray(raw.values) || !raw.values.length) {
       throw new ChartSpecError(type[0].toUpperCase() + type.slice(1) + " charts require at least one data point");
@@ -295,7 +249,7 @@ function canonicalizeBoxplot(raw: Record<string, unknown>, result: ChartDataRow)
   let total = 0;
   let smallest = Infinity;
   let largest = -Infinity;
-  const groups: BoxplotGroup[] = raw.groups.map((entry, index) => {
+  const groups: ChartBoxplotGroupRow[] = raw.groups.map((entry, index) => {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
       throw new ChartSpecError("Boxplot group at index " + index + " must be an object");
     }
@@ -314,7 +268,7 @@ function canonicalizeBoxplot(raw: Record<string, unknown>, result: ChartDataRow)
     return { label, values };
   });
   if (!Number.isFinite(largest - smallest)) throw new ChartSpecError("Boxplot observation range must be finite");
-  (result as BoxplotChartSpec).groups = groups;
+  result.groups = groups;
   result.xAxis = cleanText(raw.xAxis, "X-axis label", { default: "Group" });
   result.yAxis = cleanText(raw.yAxis, "Y-axis label", { default: "Value" });
   return result;
@@ -345,7 +299,7 @@ function canonicalizeHeatmap(raw: Record<string, unknown>, result: ChartDataRow)
     return values;
   });
   if (!Number.isFinite(largest - smallest)) throw new ChartSpecError("Heatmap value range must be finite");
-  const output = result as HeatmapChartSpec;
+  const output = result;
   output.rowLabels = raw.rowLabels.map((label, i) => cleanText(label, "Heatmap row label at index " + i));
   output.columnLabels = raw.columnLabels.map((label, i) => cleanText(label, "Heatmap column label at index " + i));
   output.matrix = matrix;
@@ -436,7 +390,7 @@ export function canonicalizeChartSpec(data: unknown, chartType?: string | null):
 
   const result: ChartDataRow = {
     version: CHART_SPEC_VERSION,
-    type: expectedType === "scatter" || expectedType === "boxplot" || expectedType === "heatmap" ? undefined : expectedType,
+    type: expectedType,
     title: cleanText(raw.title, "Chart title", {
       default: `${expectedType[0].toUpperCase()}${expectedType.slice(1)} Chart`,
       maxLength: MAX_TITLE_LENGTH,
@@ -446,7 +400,7 @@ export function canonicalizeChartSpec(data: unknown, chartType?: string | null):
   if (expectedType === "boxplot") return canonicalizeBoxplot(raw, result);
   if (expectedType === "heatmap") return canonicalizeHeatmap(raw, result);
 
-  if (expectedType === "scatter" || (expectedType === "line" && usesScientificMarks(raw as ChartDataRow, expectedType))) {
+  if (expectedType === "scatter" || (expectedType === "line" && usesScientificMarks(raw, expectedType))) {
     return canonicalizeScientific(raw, expectedType, result);
   }
 
