@@ -334,7 +334,7 @@ export function Composer({
         >
           <span className="composer-control-label">Compare</span>
           <span className="composer-control-value">
-            {comparisonMode ? `${selectedComparisonModels.length} models` : "Off"}
+            {comparisonMode ? `${selectedComparisonModels.length} models` : "Single"}
           </span>
           <Icon name="chevron" />
         </button>
