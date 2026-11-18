@@ -28,6 +28,30 @@ export function createLinearScale(domain: [number, number], range: [number, numb
   return (value: number) => r0 + ((value - d0) / span) * (r1 - r0);
 }
 
+/** Log10 maps actual positive coordinates, never the point index or a
+ * rounded label. Callers validate all endpoints before constructing it. */
+export function createLog10Scale(domain: [number, number], range: [number, number]): Scale {
+  const [d0, d1] = domain.map((value) => Math.log10(value));
+  const [r0, r1] = range;
+  const span = d1 - d0;
+  if (!Number.isFinite(span) || span === 0) return () => (r0 + r1) / 2;
+  return (value: number) => r0 + (Math.log10(value) - d0) / span * (r1 - r0);
+}
+
+/** Power-of-ten ticks, downsampled for wide domains; bounded even across
+ * the full representable floating-point exponent range. */
+export function log10Ticks(min: number, max: number, targetCount = 6): number[] {
+  const first = Math.ceil(Math.log10(min));
+  const last = Math.floor(Math.log10(max));
+  if (first > last) return [min, max].filter((v, i, a) => i === 0 || v !== a[0]);
+  const stride = Math.max(1, Math.ceil((last - first + 1) / Math.max(1, targetCount)));
+  const ticks: number[] = [];
+  for (let power = first; power <= last; power += stride) {
+    ticks.push(10 ** power);
+  }
+  return ticks;
+}
+
 /** "Nice" round-number ticks spanning at least [min, max] - the classic
  * Sparks/D3-style algorithm: pick a step from the {1, 2, 5} x 10^n family
  * closest to the ideal step for the requested tick count, then emit every
