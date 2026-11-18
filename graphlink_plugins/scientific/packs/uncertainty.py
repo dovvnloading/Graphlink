@@ -205,7 +205,11 @@ def _differentiate(node, variables, name):
             elif function == "ln":
                 derivative = delta / argument
             elif function == "log10":
-                derivative = delta / (argument * math.log(10))
+                # Divide before multiplying by ln(10): argument*ln(10)
+                # can overflow even while the sensitivity is representable.
+                ratio = delta / argument
+                derivative = (ratio / math.log(10) if math.isfinite(ratio)
+                              else (delta / math.log(10)) / argument)
             elif function == "sin":
                 derivative = math.cos(argument) * delta
             else:
@@ -228,7 +232,7 @@ def _differentiate(node, variables, name):
                     if dr:
                         derivative = value * (dr * math.log(left) + right * dl / left)
                     else:
-                        derivative = right * left ** (right - 1) * dl if dl else 0.0
+                        derivative = right * left ** (right - 1) * dl if dl and right else 0.0
                 elif dr:
                     # The real-valued power is not differentiable with
                     # respect to its exponent at a nonpositive base.
