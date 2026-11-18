@@ -141,11 +141,11 @@ describe("Composer", () => {
     );
     await user.click(screen.getByRole("button", { name: /Compare/ }));
     for (const name of ["alpha", "beta", "gamma", "delta"]) {
-      await user.click(await screen.findByRole("checkbox", { name: `Ollama · ${name}` }));
+      await user.click(await screen.findByRole("checkbox", { name: new RegExp(`Ollama · ${name}`) }));
     }
-    expect(screen.getByRole("checkbox", { name: "Ollama · epsilon" })).toBeDisabled();
-    await user.click(screen.getByRole("checkbox", { name: "Ollama · delta" }));
-    expect(screen.getByRole("checkbox", { name: "Ollama · epsilon" })).not.toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /Ollama · epsilon/ })).toBeDisabled();
+    await user.click(screen.getByRole("checkbox", { name: /Ollama · delta/ }));
+    expect(screen.getByRole("checkbox", { name: /Ollama · epsilon/ })).not.toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Use single-model send" }));
     await user.click(screen.getByRole("button", { name: "Send message" }));
     expect(sendMessage).toHaveBeenCalledWith("one model");
