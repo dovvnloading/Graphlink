@@ -128,3 +128,23 @@ def test_gum_rejects_uncertainty_contribution_that_underflows_to_zero():
     # uncertainty cannot silently become an exactly-zero contribution.
     with pytest.raises(ValueError, match="numerical range"):
         propagate("x / 10", "x", 10, math.ulp(0.0))
+
+
+def test_gum_log10_large_value_retains_nonzero_sensitivity():
+    # d log10(x) / dx = 1 / (x * ln(10)). Forming x*ln(10) first
+    # overflows at x=1e308 even though the derivative is representable.
+    result = propagate("log10(x)", "x", 1e308, 1e307)
+    expected = (1 / 1e308) / math.log(10)
+    assert result["sensitivity_x"] == pytest.approx(expected, rel=2e-14, abs=0)
+    assert result["combined_standard_uncertainty"] == pytest.approx(
+        1 / (10 * math.log(10)), rel=2e-14, abs=0
+    )
+
+
+def test_gum_zero_power_has_zero_sensitivity_for_tiny_positive_base():
+    # x**0 is constant on positive x: differentiating must not evaluate
+    # x**(-1) before multiplying by the zero exponent.
+    result = propagate("x^0", "x", 1e-310, 1e-312)
+    assert result["estimate"] == 1.0
+    assert result["sensitivity_x"] == 0.0
+    assert result["combined_standard_uncertainty"] == 0.0
