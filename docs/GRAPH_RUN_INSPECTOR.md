@@ -32,8 +32,12 @@ output bodies, provider APIs, or live execution logs to reconstruct history.
   current records its content fingerprint without rerunning it.
 - `startedAt`, `finishedAt`, and `durationMs` are actual journaled UTC
   times for newly executed steps, and the run's terminal checkpoint records
-  its end time. Existing older records, unexecuted steps, or an incomplete
-  historical checkpoint show **Not recorded**, never made-up elapsed times.
+  its end time. Under parallel execution, independent step intervals **may
+  overlap**. The scheduler stamps starts when workers begin, not when queued,
+  and a downstream step begins only after all prerequisite receipts finish.
+  Blocked descendants that never executed have no fabricated start time.
+  Existing older records, unexecuted steps, or an incomplete historical
+  checkpoint show **Not recorded**, never made-up elapsed times.
 - `externalAttempt` already pins a single request ID, provider/model/tool,
   immutable input fingerprint, and persisted phase per step. The inspector
   exposes that saved attempt as history; Graph Runner never automatically
@@ -96,3 +100,14 @@ appear in the exported JSON. The frontend serializer test repeats the
 adversarial case even if the server-projected trace carries unexpected
 extra fields. The SQLite reopen test proves ordered steps, hashes, versions,
 and timestamps remain inspectable after restart.
+
+### Parallel-run inspection
+
+An optional fourth `executeGraphRun` argument sets `maxConcurrency` (1–8,
+default 3); the limit is stored in the saved run and applied on resume.
+The existing trace schema remains version 1: each step keeps its own actual
+start/end timestamps, even when external calls overlap. If two external calls
+were simultaneously in flight at a crash, both journal records retain their
+individual request IDs, phases, and times; neither will be sent again by
+Resume. A failed/uncertain branch's descendants show a classified upstream
+block, while successful independent branches retain their own receipts.
