@@ -87,6 +87,39 @@ export function scientificDomain(min: number, max: number, scale: "linear" | "lo
   return Number.isFinite(upper - lower) ? [lower, upper] : [min, max];
 }
 
+/** Scientific linear ticks cannot use niceTicks: its fixed-decimal rounding
+ * throws RangeError for 1e-200 and its integer formatter labels tiny
+ * nonzero measurements "0". Never change the legacy chart tick helper. */
+export function scientificLinearTicks(min: number, max: number, targetCount = 5): number[] {
+  if (min === max) return [min];
+  const rawStep = (max - min) / Math.max(1, targetCount);
+  const magnitude = Math.max(Number.MIN_VALUE, 10 ** Math.floor(Math.log10(rawStep)));
+  const ratio = rawStep / magnitude;
+  const step = magnitude * (ratio >= 5 ? 5 : ratio >= 2 ? 2 : 1);
+  if (!Number.isFinite(step) || step <= 0) return [min, max];
+  const lo = Math.floor(min / step);
+  const hi = Math.ceil(max / step);
+  if (!Number.isSafeInteger(lo) || !Number.isSafeInteger(hi) || hi - lo > 12) {
+    return [min, max];
+  }
+  const result: number[] = [];
+  for (let i = lo; i <= hi; i += 1) {
+    const tick = i * step;
+    if (Number.isFinite(tick)) {
+      const rounded = Number(tick.toPrecision(12));
+      if (result[result.length - 1] !== rounded) result.push(rounded);
+    }
+  }
+  return result.length > 1 ? result : [min, max];
+}
+
+export function formatScientificTick(value: number): string {
+  if (value !== 0 && (Math.abs(value) < 0.01 || Math.abs(value) >= 1e6)) {
+    return value.toExponential(2).replace(/\.00e/, "e").replace(/(\.\d)0e/, "$1e");
+  }
+  return formatValue(value);
+}
+
 /** "Nice" round-number ticks spanning at least [min, max] - the classic
  * Sparks/D3-style algorithm: pick a step from the {1, 2, 5} x 10^n family
  * closest to the ideal step for the requested tick count, then emit every
