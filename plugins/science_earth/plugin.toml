@@ -1,7 +1,7 @@
 [plugin]
 id = "science_earth"
 name = "Earth Science"
-description = "Analyze spherical distances, geothermal gradients and seismic arrival times."
+description = "WGS84 geodesics and UTM, isotope ages, groundwater, earthquake statistics, standard atmosphere and solar position."
 version = "1.1.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
