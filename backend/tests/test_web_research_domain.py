@@ -19,6 +19,8 @@ Deliberately out of scope (covered elsewhere / by a different increment):
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from graphlink_plugins.web_research.domain import (
@@ -246,6 +248,11 @@ class TestResearchSourceToDict:
             "truncated": True,
             "content_hash": "abc",
             "citation_count": 2,
+            "publisher": "",
+            "published_at": "",
+            "fetched_at": "",
+            "quality": "unknown",
+            "merged_into": "",
         }
 
 
@@ -266,7 +273,7 @@ class TestResearchResultToDict:
         d = result.to_dict()
         assert d["request_id"] == "r1"
         assert d["sources"] == [source.to_dict()]
-        assert d["citations"] == [{"source_id": "s1", "marker": "[s1]", "claim_context": "ctx"}]
+        assert d["citations"] == [{"source_id": "s1", "marker": "[s1]", "claim_context": "ctx", "quote": "", "role": "support"}]
         assert d["warnings"] == ["w1"]
         assert d["provider_snapshot"] == {"provider": "anthropic"}
 
@@ -634,45 +641,62 @@ class TestRunErrorHandling:
 
 
 class TestRunCitationFormatting:
-    def test_citation_count_is_set_per_source_by_whether_the_answer_actually_used_its_marker(self):
+    def test_only_verifiable_claim_citations_count_toward_sources(self):
         results = [_search_result("s1"), _search_result("s2")]
-        extractor = FakeExtractor(
-            {
-                "s1": _document("s1", sections=("Content one.",)),
-                "s2": _document("s2", sections=("Content two.",)),
-            }
+        extractor = FakeExtractor({
+            "s1": _document("s1", sections=("Content one is verified.",)),
+            "s2": _document("s2", sections=("Content two is unrelated.",)),
+        })
+        report = {"claims": [{
+            "text": "Content one is verified.", "topic": "verification", "value": "yes",
+            "evidence": [{"source_id": "s1", "quote": "Content one is verified."}],
+        }]}
+        model = FakeModel(
+            assessments={"s1": SourceAssessment(True, quality="high")},
+            answer=json.dumps(report),
         )
-        model = FakeModel(answer="Only cites [s1] here.")
-        service = _service(search=FakeSearchProvider(results), extractor=extractor, model=model)
-        result = service.run(_request())
-        by_id = {s.source_id: s for s in result.sources}
+        result = _service(search=FakeSearchProvider(results), extractor=extractor, model=model).run(_request())
+        by_id = {source.source_id: source for source in result.sources}
         assert by_id["s1"].citation_count == 1
         assert by_id["s2"].citation_count == 0
-        assert {c.source_id for c in result.citations} == {"s1", "s2"}
-        assert {c.marker for c in result.citations} == {"[s1]", "[s2]"}
+        assert [citation.source_id for citation in result.citations] == ["s1"]
+        assert [citation.quote for citation in result.citations] == ["Content one is verified."]
+        assert result.claims[0].status == "supported"
 
-    def test_missing_citations_appends_a_sources_section_and_a_warning(self):
-        model = FakeModel(answer="An answer with no markers at all.")
-        service = _service(model=model)
-        result = service.run(_request())
+    def test_old_freeform_prose_is_not_published_as_factual_answer(self):
+        result = _service(model=FakeModel(answer="Invented factual prose [s1].")).run(_request())
+        assert "Invented factual prose" not in result.answer_markdown
+        assert "No claims could be verified" in result.answer_markdown
         assert "### Sources" in result.answer_markdown
-        assert "[s1]" in result.answer_markdown
-        assert any("did not emit inline citations" in w for w in result.warnings)
+        assert not result.citations
+        assert any("verifiable claims report" in warning for warning in result.warnings)
 
-    def test_citations_already_present_leave_the_answer_untouched(self):
-        model = FakeModel(answer="Cited answer [s1].")
-        service = _service(model=model)
-        result = service.run(_request())
-        assert result.answer_markdown == "Cited answer [s1]."
-        assert not any("did not emit inline citations" in w for w in result.warnings)
+    def test_missing_quote_omits_the_claim_and_citation(self):
+        report = {"claims": [{
+            "text": "Invented assertion.", "topic": "widgets", "value": "invented",
+            "evidence": [{"source_id": "s1", "quote": "Words not in the fetched document."}],
+        }]}
+        result = _service(model=FakeModel(answer=json.dumps(report))).run(_request())
+        assert not result.citations
+        assert result.claims[0].status == "unverified"
+        assert "Invented assertion" not in result.answer_markdown
+        assert any("rejected" in warning for warning in result.warnings)
 
-    def test_rejected_sources_never_appear_in_the_citations_list(self):
+    def test_rejected_sources_never_appear_in_the_claim_citation_list(self):
         results = [_search_result("s1"), _search_result("s2")]
-        extractor = FakeExtractor({"s1": _document("s1", sections=("Content.",))})
-        model = FakeModel(assessments={"s2": SourceAssessment(accepted=False, reason="off_topic")}, answer="[s1] cited.")
-        service = _service(search=FakeSearchProvider(results), extractor=extractor, model=model)
-        result = service.run(_request())
-        assert {c.source_id for c in result.citations} == {"s1"}
+        extractor = FakeExtractor({"s1": _document("s1", sections=("Verified content for widgets.",))})
+        model = FakeModel(
+            assessments={"s1": SourceAssessment(True, quality="high"),
+                         "s2": SourceAssessment(False, reason="off_topic")},
+            answer=json.dumps({"claims": [{
+                "text": "Verified content for widgets.", "topic": "widgets", "value": "yes",
+                "evidence": [{"source_id": "s1", "quote": "Verified content for widgets."},
+                             {"source_id": "s2", "quote": "Default fake content."}],
+            }]}),
+        )
+        result = _service(search=FakeSearchProvider(results), extractor=extractor, model=model).run(_request())
+        assert {citation.source_id for citation in result.citations} == {"s1"}
+        assert result.claims[0].status == "qualified"
 
 
 # ===========================================================================
@@ -763,13 +787,17 @@ def test_cancellation_during_summary_cannot_produce_a_completed_result():
 
 def test_abbreviated_hash_source_marker_is_rewritten_to_the_exact_id():
     source_id = "s1-abcdef0123"
+    report = {"claims": [{
+        "text": "Default fake content.", "topic": "content", "value": "default",
+        "evidence": [{"source_id": "s1", "quote": "Default fake content."}],
+    }]}
     service = _service(
         search=FakeSearchProvider([_search_result(source_id)]),
         extractor=FakeExtractor(),
-        model=FakeModel(answer="A supported claim [s1]."),
+        model=FakeModel(answer=json.dumps(report)),
     )
     result = service.run(_request())
-    assert result.answer_markdown == f"A supported claim [{source_id}]."
+    assert f"[{source_id}]" in result.answer_markdown
     assert result.sources[0].citation_count == 1
     assert result.citations[0].marker == f"[{source_id}]"
     assert not result.warnings
@@ -777,33 +805,48 @@ def test_abbreviated_hash_source_marker_is_rewritten_to_the_exact_id():
 
 def test_unsupported_model_citations_are_removed_and_flagged():
     source_id = "s1-abcdef0123"
+    report = {"claims": [{
+        "text": "Default fake content.", "topic": "content", "value": "default",
+        "evidence": [
+            {"source_id": "s1", "quote": "Default fake content."},
+            {"source_id": "s999", "quote": "Invented supporting text."},
+        ],
+    }]}
     service = _service(
         search=FakeSearchProvider([_search_result(source_id)]),
         extractor=FakeExtractor(),
-        model=FakeModel(answer="Supported [s1]. Invented [s999]."),
+        model=FakeModel(answer=json.dumps(report)),
     )
     result = service.run(_request())
     assert f"[{source_id}]" in result.answer_markdown
     assert "[s999]" not in result.answer_markdown
-    assert any("unsupported citations" in warning for warning in result.warnings)
+    assert any("rejected" in warning for warning in result.warnings)
     assert result.sources[0].citation_count == 1
 
 
 def test_unrecognized_citations_alone_cannot_suppress_the_source_fallback():
-    service = _service(model=FakeModel(answer="Unsupported assertion [s999]."))
+    report = {"claims": [{
+        "text": "Unsupported assertion.", "topic": "content", "value": "unsupported",
+        "evidence": [{"source_id": "s999", "quote": "Invented supporting text."}],
+    }]}
+    service = _service(model=FakeModel(answer=json.dumps(report)))
     result = service.run(_request())
     assert "[s999]" not in result.answer_markdown
+    assert "No claims could be verified" in result.answer_markdown
     assert "### Sources" in result.answer_markdown
     assert "[s1]" in result.answer_markdown
     assert result.sources[0].citation_count == 0
-    assert any("did not emit inline citations" in warning for warning in result.warnings)
 
 
 def test_rejected_sources_cannot_be_cited_by_abbreviated_marker():
     results = [_search_result("s1-abcdef0123"), _search_result("s2-123abc4560")]
     model = FakeModel(
         assessments={"s2-123abc4560": SourceAssessment(accepted=False, reason="off_topic")},
-        answer="Right [s1]. Wrong [s2].",
+        answer=json.dumps({"claims": [{
+            "text": "Default fake content.", "topic": "content", "value": "default",
+            "evidence": [{"source_id": "s1", "quote": "Default fake content."},
+                         {"source_id": "s2", "quote": "Default fake content."}],
+        }]}),
     )
     service = _service(search=FakeSearchProvider(results), extractor=FakeExtractor(), model=model)
     result = service.run(_request())
