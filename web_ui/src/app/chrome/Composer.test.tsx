@@ -100,7 +100,7 @@ describe("Composer", () => {
       </OverlayProvider>,
     );
 
-    await user.click(screen.getByRole("button", { name: /Compare Off/ }));
+    await user.click(screen.getByRole("button", { name: /Compare/ }));
     expect(await screen.findByRole("checkbox", { name: "Ollama · alpha" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     await user.click(screen.getByRole("checkbox", { name: "Ollama · alpha" }));
@@ -139,7 +139,7 @@ describe("Composer", () => {
         <Composer store={store} sceneStore={sceneStore} />
       </OverlayProvider>,
     );
-    await user.click(screen.getByRole("button", { name: /Compare Off/ }));
+    await user.click(screen.getByRole("button", { name: /Compare/ }));
     for (const name of ["alpha", "beta", "gamma", "delta"]) {
       await user.click(await screen.findByRole("checkbox", { name: `Ollama · ${name}` }));
     }
