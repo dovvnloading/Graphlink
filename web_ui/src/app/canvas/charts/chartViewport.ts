@@ -33,7 +33,7 @@ export function chartFrame(chart: ChartDataRow, type: string, width: number, hei
   let left = 76;
   let top = 18;
   let right = 20;
-  let bottom = 48;
+  let bottom: number;
   let xKind: AxisKind = "linear";
   let yKind: AxisKind = "linear";
 
