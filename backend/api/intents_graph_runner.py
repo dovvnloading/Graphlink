@@ -16,7 +16,8 @@ from backend.domain.graph_run_external import RECONCILIATION_DETAIL, ExternalCal
 from backend.domain.graph_run_history import RUN_HISTORY_LIMIT, RUN_ID
 from backend.domain.graph_run_inspector import build_graph_run_trace
 from backend.domain.graph_runner import (
-    _inspect, _matching_node, _output_digest, execute_graph_step, plan_graph_run, validate_graph_run_ancestors,
+    _inspect, _matching_node, _output_digest, execute_graph_step, plan_graph_run, schedule_graph_steps,
+    validate_graph_run_ancestors,
 )
 from backend.domain.model import SceneError
 from backend.domain.node_states import ModelState
@@ -34,6 +35,7 @@ class GraphRunSelection:
 class ExecuteGraphRunArgs(GraphRunSelection):
     previewToken: str
     operationId: str
+    maxConcurrency: int = 3
 
 
 @dataclass
@@ -58,6 +60,7 @@ def _public_step(step: dict[str, Any]) -> dict[str, Any]:
 def _public_run(run: dict[str, Any]) -> dict[str, Any]:
     return {
         "runId": run["runId"], "status": run["status"], "startedAt": run["startedAt"],
+        "maxConcurrency": run.get("maxConcurrency", 3),
         "steps": [_public_step(step) for step in run["steps"]],
         "trace": build_graph_run_trace(run),
     }
@@ -79,6 +82,7 @@ def register_graph_runner(
     bus: SessionBus, document: SceneDocument, save_checkpoint: Callable[[], Awaitable[bool]], serialize_mutation: Callable,
 ) -> None:
     active_run_id: str | None = None
+    checkpoint_guard = asyncio.Lock()
 
     def visible_run(run: dict[str, Any]) -> dict[str, Any]:
         result = _public_run(run)
@@ -121,16 +125,20 @@ def register_graph_runner(
         return latest
 
     async def checkpoint():
-        # A cancelled WebSocket request must not release the graph's save guard
-        # while its SQLite worker still writes or is adopting an inserted row id.
-        write = asyncio.ensure_future(save_checkpoint())
-        try:
-            ok = await asyncio.shield(write)
-        except asyncio.CancelledError:
-            await write
-            raise
-        if not ok:
-            raise IntentValidationError(["Could not save the run checkpoint. Reopen Graph Runner to inspect or resume."])
+        # Every worker shares the same graph and journal. Serialize SQLite
+        # snapshots (including external pre-dispatch fences and receipts);
+        # overlapping writes could otherwise commit out of order.
+        async with checkpoint_guard:
+            # A cancelled request must not release the graph's save guard
+            # while its SQLite worker is still writing or adopting a row id.
+            write = asyncio.ensure_future(save_checkpoint())
+            try:
+                ok = await asyncio.shield(write)
+            except asyncio.CancelledError:
+                await write
+                raise
+            if not ok:
+                raise IntentValidationError(["Could not save the run checkpoint. Reopen Graph Runner to inspect or resume."])
 
     async def confirmed_checkpoint() -> bool:
         await checkpoint()
@@ -212,26 +220,26 @@ def register_graph_runner(
         active_run_id = run["runId"]
         run["status"] = "running"
         terminal_saved = False
-        try:
-            # Persist the pinned plan BEFORE the first transform. Also flush an
-            # in-memory output left by a failed write before resuming further.
-            await checkpoint()
-            by_node_id = {step["nodeId"]: step for step in run["steps"]}
-            for step in run["steps"]:
-                if step["status"] != "pending":
-                    continue
-                step.setdefault("startedAt", datetime.now(timezone.utc).isoformat())
+
+        async def checkpoint_blocked() -> None:
+            try:
+                await checkpoint()
+            finally:
+                await bus.publish("scene")
+
+        by_node_id = {step["nodeId"]: step for step in run["steps"]}
+
+        async def run_step(step: dict[str, Any]) -> None:
+            # Record when this task actually starts, not when it entered the
+            # preview queue. On resume a pending step gets a new real start.
+            step["startedAt"] = datetime.now(timezone.utc).isoformat()
+            step.pop("finishedAt", None)
+            try:
                 if "externalAttempt" in step:
-                    # A recovered outbound request cannot pass through the
-                    # deterministic transform runner or be sent a second time.
-                    step.update(
-                        status="reconciliation-required", detail=RECONCILIATION_DETAIL,
-                        finishedAt=datetime.now(timezone.utc).isoformat(),
-                    )
-                    await checkpoint()
-                    await bus.publish("scene")
-                    continue
-                if step["kind"] == "model":
+                    # Even a corrupt/imported pending step with an old fence
+                    # must never be sent again.
+                    step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
+                elif step["kind"] == "model":
                     try:
                         await run_model_step(run, step, by_node_id)
                     except asyncio.CancelledError:
@@ -240,50 +248,55 @@ def register_graph_runner(
                         if step["status"] != "reconciliation-required":
                             step.update(status="blocked", detail=str(exc))
                     except Exception:
-                        # An admitted request's remote outcome is uncertain;
-                        # dispatch_external_attempt already left its fence.
+                        # The external adapter owns the uncertainty fence. An
+                        # unadmitted failure is local; a sent call is uncertain.
                         if "externalAttempt" not in step:
                             step.update(status="blocked", detail="Model dispatch could not start.")
-                    step.setdefault("finishedAt", datetime.now(timezone.utc).isoformat())
-                    try:
-                        await checkpoint()
-                    finally:
-                        await bus.publish("scene")
-                    continue
-                if step["kind"] == "tool":
-                    step.update(
-                        status="blocked", detail="No Graph Runner tool adapter is authorized.",
-                        finishedAt=datetime.now(timezone.utc).isoformat(),
-                    )
-                    await checkpoint()
-                    await bus.publish("scene")
-                    continue
-                try:
-                    validate_graph_run_ancestors(document, step, by_node_id)
-                    if not step["inputHash"]:
-                        live = step.copy()
-                        _inspect(document, live)
-                        if live["configHash"] != step["configHash"] or live["targetHash"] != step["targetHash"]:
-                            raise SceneError("The deferred output or configuration changed since preview.")
-                        step["inputHash"] = live["inputHash"]
-                    digest, _ = document.record_command(
-                        "runGraphStep", "user", lambda: execute_graph_step(document, step),
-                        node_ids=(step["nodeId"],), run_id=run["runId"],
-                    )
-                except SceneError as exc:
-                    step.update(status="blocked", detail=str(exc))
+                        elif step["status"] != "reconciliation-required":
+                            step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
+                elif step["kind"] == "tool":
+                    step.update(status="blocked", detail="No Graph Runner tool adapter is authorized.")
                 else:
-                    step.update(status="completed", detail="Output updated.", outputHash=digest)
-                    _pin_output_version(document, step)
-                step["finishedAt"] = datetime.now(timezone.utc).isoformat()
-                # save_chat writes the graph, notes and journal in one SQLite
-                # transaction. Restart sees either side of the transform intact.
+                    try:
+                        validate_graph_run_ancestors(document, step, by_node_id)
+                        if not step["inputHash"]:
+                            live = step.copy()
+                            _inspect(document, live)
+                            if live["configHash"] != step["configHash"] or live["targetHash"] != step["targetHash"]:
+                                raise SceneError("The deferred output or configuration changed since preview.")
+                            step["inputHash"] = live["inputHash"]
+                        digest, _ = document.record_command(
+                            "runGraphStep", "user", lambda: execute_graph_step(document, step),
+                            node_ids=(step["nodeId"],), run_id=run["runId"],
+                        )
+                    except SceneError as exc:
+                        step.update(status="blocked", detail=str(exc))
+                    else:
+                        step.update(status="completed", detail="Output updated.", outputHash=digest)
+                        _pin_output_version(document, step)
+
+                step.setdefault("finishedAt", datetime.now(timezone.utc).isoformat())
+                # Transforms and receipts share a transaction. The Model
+                # adapter additionally checkpointed its request before send.
                 try:
                     await checkpoint()
                 finally:
-                    # The live graph retains both output and receipt on a failed
-                    # disk write; keep other attached canvases in sync with it.
                     await bus.publish("scene")
+            except asyncio.CancelledError:
+                # An unadmitted pending step is safe to resume. Do not retain
+                # its aborted scheduling timestamps as if it had finished.
+                if step["status"] == "pending" and "externalAttempt" not in step:
+                    step.pop("startedAt", None)
+                    step.pop("finishedAt", None)
+                raise
+
+        try:
+            # Persist the approved plan before executing *any* step.
+            await checkpoint()
+            await schedule_graph_steps(
+                run["steps"], max_concurrency=run.get("maxConcurrency", 3),
+                execute=run_step, checkpoint_blocked=checkpoint_blocked,
+            )
             if any(s["status"] == "reconciliation-required" for s in run["steps"]):
                 run["status"] = "reconciliation-required"
             else:
@@ -296,14 +309,15 @@ def register_graph_runner(
             terminal_saved = True
             return _public_run(run)
         finally:
-            # If the terminal write failed, resume must flush it again.
+            # schedule_graph_steps has cancelled and drained every child before
+            # the shared graph mutation guard can be released.
             active_run_id = None
             if not terminal_saved:
                 run["status"] = "interrupted"
                 run.pop("finishedAt", None)
 
     @serialize_mutation
-    async def start_run(node_ids: list[str], preview_token: str, run_id: str):
+    async def start_run(node_ids: list[str], preview_token: str, run_id: str, max_concurrency: int):
         token, steps = plan(node_ids)
         if token != preview_token:
             raise IntentValidationError(["The graph or selection changed. Preview the run again."])
@@ -320,6 +334,7 @@ def register_graph_runner(
         run = {
             "runId": run_id, "previewHash": token, "selectionHash": _digest(sorted(set(node_ids))),
             "startedAt": datetime.now(timezone.utc).isoformat(), "steps": steps, "status": "running",
+            "maxConcurrency": max_concurrency,
         }
         if len(document.graph_runs) >= RUN_HISTORY_LIMIT:
             oldest_finished = next((item for item in document.graph_runs if item["status"] in {"completed", "partial"}), None)
@@ -332,15 +347,19 @@ def register_graph_runner(
         document.graph_run_epoch = uuid.uuid4()
         return await drive(run)
 
-    async def execute_graph_run(node_ids: list[str], preview_token: str, run_id: str):
+    async def execute_graph_run(node_ids: list[str], preview_token: str, run_id: str, max_concurrency: int = 3):
+        if type(max_concurrency) is not int or not 1 <= max_concurrency <= 8:
+            raise IntentValidationError(["Graph Runner concurrency must be between 1 and 8."])
         if not RUN_ID.fullmatch(run_id):
             raise IntentValidationError(["Use an operation ID of 8–100 letters, digits, hyphens or underscores."])
         existing = _find_run(document, run_id)
         if existing is not None:
-            if existing["previewHash"] != preview_token or existing["selectionHash"] != _digest(sorted(set(node_ids))):
-                raise IntentValidationError(["This operation ID already belongs to another preview."])
+            if (existing["previewHash"] != preview_token
+                    or existing["selectionHash"] != _digest(sorted(set(node_ids)))
+                    or existing.get("maxConcurrency", 3) != max_concurrency):
+                raise IntentValidationError(["This operation ID already belongs to another preview or concurrency limit."])
             return visible_run(existing)
-        result = await start_run(node_ids, preview_token, run_id)
+        result = await start_run(node_ids, preview_token, run_id, max_concurrency)
         if result is None:
             raise IntentValidationError(["Another graph operation is in progress. Try again."])
         return result
