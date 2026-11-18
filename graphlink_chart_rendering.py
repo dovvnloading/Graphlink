@@ -66,6 +66,41 @@ SLATE = "#868686"         # legacy's own hardcoded QColor("#868686") cycle entry
 
 FONT_FAMILY = "Segoe UI"  # graphlink_styles.FONT_FAMILY_NAME
 
+# Okabe-Ito colors are distinguishable for common color-vision deficiencies.
+# Grayscale relies on hatches, markers and dashes as well as luminance.
+PUBLICATION_COLORS = (
+    "#0072B2", "#E69F00", "#009E73", "#CC79A7",
+    "#D55E00", "#56B4E9", "#F0E442", "#000000",
+)
+MONOCHROME_COLORS = ("#202020", "#5A5A5A", "#878787", "#B6B6B6")
+PUBLICATION_HATCHES = ("/", "\\\\", "xx", "--", "++", "oo", "..", "**")
+
+
+def _publication_theme(*, colorblind_safe: bool, grayscale_safe: bool) -> dict[str, Any]:
+    theme = _build_theme()
+    theme.update({
+        "surface": "#FFFFFF",
+        "panel": "#FFFFFF",
+        "border": "#555555",
+        "text": "#151515",
+        "muted": "#303030",
+        "grid": "#787878",
+        "primary": "#202020" if grayscale_safe else "#0072B2",
+        "secondary": "#626262" if grayscale_safe else "#D55E00",
+        "publication": True,
+        "colorblind": colorblind_safe,
+        "grayscale": grayscale_safe,
+    })
+    if grayscale_safe:
+        theme["cycle"] = list(MONOCHROME_COLORS)
+    elif colorblind_safe:
+        theme["cycle"] = list(PUBLICATION_COLORS)
+    else:
+        # Preserve Graphlink's original series colors when no alternative
+        # is requested, but on a white journal page.
+        theme["cycle"] = list(_build_theme()["cycle"])
+    return theme
+
 # -- figure sizing ------------------------------------------------------------
 # Legacy rendered at a device-pixel-ratio-scaled resolution above the CSS box
 # size for crispness (ChartItem._device_pixel_ratio defaulted to 1.5 with no
@@ -237,6 +272,10 @@ def _render_bar_chart(ax, chart_data: dict[str, Any], theme: dict[str, Any], lay
     )
     _prepare_standard_axes(ax, theme, chart_data["xAxis"], chart_data["yAxis"], y_grid=True)
     _set_categorical_ticks(ax, positions, labels, layout_width)
+    if theme.get("grayscale"):
+        for index, bar in enumerate(bars):
+            bar.set_hatch(PUBLICATION_HATCHES[index % len(PUBLICATION_HATCHES)])
+            bar.set_edgecolor(theme["text"])
     ax.margins(x=0.04)
 
     min_value = min(values)
@@ -439,6 +478,8 @@ def _render_boxplot(ax, chart_data: dict[str, Any], theme: dict[str, Any],
     for index, patch in enumerate(artists["boxes"]):
         patch.set_facecolor(theme["cycle"][index % len(theme["cycle"])])
         patch.set_alpha(0.75)
+        if theme.get("grayscale"):
+            patch.set_hatch(PUBLICATION_HATCHES[index % len(PUBLICATION_HATCHES)])
     _prepare_standard_axes(ax, theme, chart_data["xAxis"], chart_data["yAxis"])
     _set_categorical_ticks(ax, list(range(len(groups))), [group["label"] for group in groups], layout_width)
     ax.margins(x=0.07, y=0.16)
@@ -454,9 +495,9 @@ def _render_heatmap(figure, ax, chart_data: dict[str, Any],
     largest = max(max(row) for row in matrix)
     norm: Normalize
     if smallest < 0 < largest:
-        cmap = LinearSegmentedColormap.from_list(
-            "graphlink-diverging", ["#2166AC", "#F7F7F7", "#B2182B"]
-        )
+        colors = (["#0072B2", "#F7F7F7", "#D55E00"]
+                  if theme.get("colorblind") else ["#2166AC", "#F7F7F7", "#B2182B"])
+        cmap = LinearSegmentedColormap.from_list("graphlink-diverging", colors)
         norm = TwoSlopeNorm(vmin=smallest, vcenter=0, vmax=largest)
     else:
         cmap = LinearSegmentedColormap.from_list(
@@ -464,8 +505,21 @@ def _render_heatmap(figure, ax, chart_data: dict[str, Any],
         )
         # A constant matrix should still produce a visible, uniform map.
         norm = Normalize(vmin=smallest, vmax=largest if largest != smallest else smallest + 1)
-    image = ax.imshow(matrix, aspect="auto", interpolation="nearest", origin="upper",
-                      cmap=cmap, norm=norm, zorder=2)
+    if theme.get("grayscale"):
+        cmap = matplotlib.colormaps["Greys"]
+    elif theme.get("publication") and theme["cycle"][0] == PUBLICATION_COLORS[0]:
+        cmap = matplotlib.colormaps["cividis"] if smallest >= 0 else cmap
+    # pcolormesh keeps heatmap cells vector in SVG/PDF, including at 85 mm.
+    # The cell centers align with imshow and the interactive SVG rectangles.
+    if theme.get("publication"):
+        image = ax.pcolormesh(
+            [[value for value in row] for row in matrix], cmap=cmap, norm=norm,
+            shading="nearest", rasterized=False, zorder=2,
+        )
+        ax.invert_yaxis()
+    else:
+        image = ax.imshow(matrix, aspect="auto", interpolation="nearest", origin="upper",
+                          cmap=cmap, norm=norm, zorder=2)
     _prepare_standard_axes(ax, theme, chart_data["xAxis"], chart_data["yAxis"],
                            x_grid=False, y_grid=False)
     _set_categorical_ticks(ax, list(range(len(columns))), columns, layout_width)
@@ -506,6 +560,11 @@ def _render_pie_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str, A
         wedgeprops={"width": 0.38, "edgecolor": theme["surface"], "linewidth": 2},
     )
 
+    if theme.get("grayscale"):
+        for index, wedge in enumerate(wedges):
+            wedge.set_hatch(PUBLICATION_HATCHES[index % len(PUBLICATION_HATCHES)])
+            wedge.set_edgecolor(theme["text"])
+
     ax.text(
         0,
         0.05,
@@ -529,7 +588,9 @@ def _render_pie_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str, A
     legend_labels = []
     for label, value in zip(labels, values):
         percentage = (value / total) * 100 if total else 0
-        wrapped = textwrap.shorten(" ".join(str(label).split()), width=24, placeholder="...")
+        clean = " ".join(str(label).split())
+        wrapped = (clean if theme.get("publication") else
+                   textwrap.shorten(clean, width=24, placeholder="..."))
         legend_labels.append(f"{wrapped}  {percentage:.1f}%")
 
     legend = ax.legend(
@@ -565,6 +626,9 @@ def _render_histogram(ax, chart_data: dict[str, Any], theme: dict[str, Any]) -> 
         color = theme["cycle"][index % len(theme["cycle"])]
         patch.set_facecolor(color)
         patch.set_alpha(0.82)
+        if theme.get("grayscale"):
+            patch.set_hatch(PUBLICATION_HATCHES[index % len(PUBLICATION_HATCHES)])
+            patch.set_edgecolor(theme["text"])
 
     avg = mean(values)
     med = median(values)
@@ -909,5 +973,64 @@ def render_chart_svg(chart_type: str, chart_data: dict[str, Any], width: float, 
     an unrelated second constant."""
     figure, theme = _build_chart_figure(chart_type, chart_data, width, height, BASE_DPI)
     buffer = BytesIO()
-    figure.savefig(buffer, format="svg", facecolor=theme["surface"])
+    # Preserve selectable/searchable SVG text; Matplotlib's default turns
+    # every glyph into a path, making the file unsuitable for journal edits.
+    with matplotlib.rc_context({"svg.fonttype": "none", "font.family": ["DejaVu Sans"]}):
+        figure.savefig(buffer, format="svg", facecolor=theme["surface"])
     return buffer.getvalue()
+
+
+def render_chart_publication(
+    chart_type: str,
+    chart_data: dict[str, Any],
+    *,
+    width_mm: float,
+    height_mm: float,
+    fmt: str,
+    dpi: int = 300,
+    colorblind_safe: bool = False,
+    grayscale_safe: bool = False,
+) -> bytes:
+    """Print-sized export from the SAME canonical data and per-type artists.
+
+    PNG pixel dimensions are exactly the rounded mm-to-inch conversion at
+    300/600 DPI; SVG/PDF use real physical dimensions in points. Both vector
+    formats retain actual font glyphs as editable/selectable text.
+    """
+    from graphlink_chart_data import validate_publication_export
+
+    options = validate_publication_export({
+        "format": fmt, "size": "custom",
+        "widthMm": width_mm, "heightMm": height_mm,
+        "dpi": dpi, "colorblindSafe": colorblind_safe,
+        "grayscaleSafe": grayscale_safe,
+    })
+    canonical = canonicalize_chart_data(chart_data, chart_type)
+    width_in = options["widthMm"] / 25.4
+    height_in = options["heightMm"] / 25.4
+    # All matplotlib labels use physical point sizes, never pixel-scaled
+    # font sizes. 8pt ticks/legend and 9pt axis labels remain readable at
+    # journal single-column size irrespective of requested DPI.
+    theme = _publication_theme(
+        colorblind_safe=options["colorblindSafe"],
+        grayscale_safe=options["grayscaleSafe"],
+    )
+    with matplotlib.rc_context({
+        "font.family": ["DejaVu Sans"],
+        "font.size": 9,
+        "svg.fonttype": "none",
+        "pdf.fonttype": 42,  # embedded TrueType, not Type 3 glyph outlines
+        "pdf.use14corefonts": False,
+        "savefig.transparent": False,
+    }):
+        figure = Figure(figsize=(width_in, height_in), dpi=dpi)
+        FigureCanvasAgg(figure)
+        _render_chart_content(figure, chart_type, canonical, theme, width_in * 96)
+        figure.canvas.draw()
+        out = BytesIO()
+        figure.savefig(
+            out, format=fmt, dpi=dpi,
+            facecolor=theme["surface"], edgecolor="none",
+            metadata={"Creator": "Graphlink"} if fmt == "pdf" else None,
+        )
+        return out.getvalue()

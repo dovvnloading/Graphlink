@@ -1,6 +1,11 @@
 import { ReactFlowProvider, type NodeProps } from "@xyflow/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { downloadPublicationChartExport } from "./charts/publicationExport";
+
+vi.mock("./charts/publicationExport", () => ({
+  downloadPublicationChartExport: vi.fn().mockResolvedValue(undefined),
+}));
 import {
   ChartNodeView,
   chartExportUrl,
@@ -108,6 +113,44 @@ describe("ChartNodeView", () => {
   });
 });
 
+describe("chart publication export controls", () => {
+  afterEach(() => vi.mocked(downloadPublicationChartExport).mockClear());
+
+  it("offers vector PDF/SVG, physical journal widths, both DPIs and accessible monochrome options", () => {
+    renderChartNode({}, "chart-export");
+    fireEvent.click(screen.getByRole("button", { name: "Publication export…" }));
+    expect(screen.getByRole("group", { name: "Publication export settings" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "PDF (vector)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "SVG (vector)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Single column (85 mm)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Double column (180 mm)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "600" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Colorblind-safe palette/ })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Grayscale-safe/ })).toBeInTheDocument();
+  });
+
+  it("submits settings, custom physical size and uses the saved chart aspect for presets", async () => {
+    renderChartNode({ chartWidth: 680, chartHeight: 340 }, "chart-export");
+    fireEvent.click(screen.getByRole("button", { name: "Publication export…" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Publication format" }), { target: { value: "pdf" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Publication size" }), { target: { value: "custom" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Custom width in millimeters" }), { target: { value: "120" } });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Custom height in millimeters" }), { target: { value: "95" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Publication DPI" }), { target: { value: "600" } });
+    fireEvent.click(screen.getByRole("checkbox", { name: /Colorblind-safe palette/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /Grayscale-safe/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Download PDF" }));
+    await waitFor(() => expect(downloadPublicationChartExport).toHaveBeenCalledWith(
+      "chart-export",
+      {
+        format: "pdf", size: "custom", widthMm: 120, heightMm: 95,
+        dpi: 600, colorblindSafe: true, grayscaleSafe: true,
+      },
+      0.5,
+    ));
+  });
+});
+
 describe("chartExportUrl", () => {
   it("defaults to fmt=png", () => {
     expect(chartExportUrl("node-1")).toBe("/api/assets/chart/node-1/export?session=default&fmt=png");
@@ -189,9 +232,9 @@ describe("ChartNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
     expect(chartNodePropsAreEqual(p, { ...p })).toBe(true);
   });
 
-  it("treats an unchanged chartData reference as equal even when other unread fields differ", () => {
+  it("treats an unchanged chartData reference as equal even when unrelated source ID differs", () => {
     const a = props({ chartWidth: 680, chartData: { type: "bar", title: "Quarterly Revenue", values: [1, 2, 3] } });
-    const b = { ...a, data: { ...a.data, chartWidth: 999 } };
+    const b = { ...a, data: { ...a.data, chartSourceNodeId: "other-source" } };
     expect(a.data.chartData).toBe(b.data.chartData);
     expect(chartNodePropsAreEqual(a, b)).toBe(true);
   });
@@ -203,11 +246,11 @@ describe("ChartNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
     expect(chartNodePropsAreEqual(a, b)).toBe(false);
   });
 
-  it("is unaffected by ChartNodeData fields this component never reads (chartWidth, chartHeight, chartSourceNodeId) or unread NodeProps fields (dragging, zIndex)", () => {
+  it("is unaffected by the unread source ID and NodeProps fields (dragging, zIndex)", () => {
     const a = props({ chartWidth: 680, chartHeight: 500, chartSourceNodeId: "chat-1" }, { dragging: false, zIndex: 0 });
     const b = {
       ...a,
-      data: { ...a.data, chartWidth: 999, chartHeight: 999, chartSourceNodeId: "chat-2" },
+      data: { ...a.data, chartSourceNodeId: "chat-2" },
       dragging: true,
       zIndex: 9,
     };
@@ -228,6 +271,8 @@ describe("ChartNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
 
   it.each([
     ["chartType", { chartType: "line" }],
+    ["chartWidth", { chartWidth: 999 }],
+    ["chartHeight", { chartHeight: 999 }],
     ["chartError", { chartError: "boom" }],
     ["chartAspectLocked", { chartAspectLocked: false }],
     ["onToggleAspectLock", { onToggleAspectLock: vi.fn() }],
@@ -250,11 +295,10 @@ describe("ChartNodeView React.memo comparator (ADR-011 stage 11.1)", () => {
 
     root.className = "CORRUPTED";
 
-    // chartWidth is never read by this component - the comparator must say
-    // "equal", so no re-render should occur.
+    // The source ID is still unread and should not trigger a re-render.
     rerender(
       <ReactFlowProvider>
-        <ChartNodeView {...p} data={{ ...p.data, chartWidth: 999 }} />
+        <ChartNodeView {...p} data={{ ...p.data, chartSourceNodeId: "other-source" }} />
       </ReactFlowProvider>,
     );
     expect(root.className).toBe("CORRUPTED");

@@ -1,0 +1,150 @@
+{
+  "bar": {
+    "type": "bar",
+    "labels": [
+      "A",
+      "B"
+    ],
+    "values": [
+      2,
+      4
+    ],
+    "xAxis": "Group",
+    "yAxis": "Count"
+  },
+  "line": {
+    "type": "line",
+    "labels": [
+      "A",
+      "B"
+    ],
+    "values": [
+      2,
+      4
+    ],
+    "xAxis": "Time",
+    "yAxis": "Value"
+  },
+  "pie": {
+    "type": "pie",
+    "labels": [
+      "A",
+      "B"
+    ],
+    "values": [
+      2,
+      4
+    ]
+  },
+  "histogram": {
+    "type": "histogram",
+    "values": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "xAxis": "Response",
+    "yAxis": "Count"
+  },
+  "sankey": {
+    "type": "sankey",
+    "flows": [
+      {
+        "source": "Input",
+        "target": "Output",
+        "value": 8
+      }
+    ]
+  },
+  "scatter": {
+    "type": "scatter",
+    "xAxis": "Concentration",
+    "yAxis": "Signal",
+    "xUnit": "mg/L",
+    "yUnit": "mV",
+    "xValues": [
+      1,
+      10,
+      100
+    ],
+    "xScale": "log10",
+    "series": [
+      {
+        "name": "Control",
+        "values": [
+          2,
+          4,
+          8
+        ],
+        "xError": [
+          0.1,
+          [
+            1,
+            2
+          ],
+          10
+        ],
+        "yError": [
+          0.3,
+          [
+            0.2,
+            0.5
+          ],
+          1
+        ]
+      },
+      {
+        "name": "Treatment",
+        "values": [
+          3,
+          5,
+          9
+        ]
+      }
+    ]
+  },
+  "boxplot": {
+    "type": "boxplot",
+    "xAxis": "Treatment",
+    "yAxis": "Duration",
+    "groups": [
+      {
+        "label": "Control",
+        "values": [
+          1,
+          2,
+          2,
+          3,
+          3,
+          4,
+          100
+        ]
+      }
+    ]
+  },
+  "heatmap": {
+    "type": "heatmap",
+    "rowLabels": [
+      "Control",
+      "Treatment"
+    ],
+    "columnLabels": [
+      "0h",
+      "24h"
+    ],
+    "matrix": [
+      [
+        -2,
+        0
+      ],
+      [
+        2,
+        4
+      ]
+    ],
+    "xAxis": "Time",
+    "yAxis": "Sample",
+    "valueUnit": "AU"
+  }
+}

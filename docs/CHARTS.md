@@ -157,6 +157,65 @@ all-positive, all-negative, or constant matrices use a sequential palette.
 The interactive SVG exposes each original cell value and labels on hover,
 and both export formats include a colorbar. Row/column order is preserved.
 
+## Publication-quality export
+
+Open a chart node and click **Publication export…** in its toolbar. Select
+**SVG**, **PDF**, or **PNG**, then choose a physical width:
+
+* **Journal single column:** 85 mm wide;
+* **Journal double column:** 180 mm wide;
+* **Custom:** enter explicit width and height in millimeters.
+
+The journal presets preserve the chart node's saved width-to-height ratio.
+A custom size defines both dimensions. PNG offers **300** and **600 DPI**;
+these determine the actual raster pixel dimensions (mm / 25.4 × DPI) and
+are embedded as PNG resolution metadata. SVG and PDF are resolution
+independent, sized in physical points (72 pt/inch), so their DPI picker
+does not rasterize their content.
+
+Publication rendering is performed server-side by
+`graphlink_chart_rendering.render_chart_publication`. All eight chart types
+(bar, line, scatter including asymmetric error bars, box plot, heatmap,
+histogram, pie, Sankey) run through the **same canonical data and per-type
+artists** as Graphlink's existing PNG/SVG exporter. Axis names, scientific
+units, row and category order, values, error endpoints, and named-series
+legends come from the saved chart spec; source measurements are never
+inferred or modified for printing. Heatmap cells are vector quadrilaterals
+in publication SVG/PDF, with the same row/column layout and a colorbar.
+Matplotlib uses 8 pt axis ticks and legend labels and 9 pt axis titles
+in physical point units rather than shrinking fonts with the raster DPI.
+
+SVG contains actual `<text>` elements rather than paths for glyphs.
+PDF embeds TrueType fonts with text mappings (not a whole-page PNG and
+not Type 3 outlines). Both formats support selectable/searchable text.
+The export uses a light print background. Check **Colorblind-safe palette**
+for the Okabe–Ito categorical colors; check **Grayscale-safe style** for
+distinct line markers and dashes, hatched categories, and a grayscale
+heatmap. Grayscale style takes precedence if both options are checked.
+The interactive canvas's theme is intentionally unaffected.
+
+These are per-export options: they do not change the version-1 chart
+JSON or persist new fields. Client and backend both validate options.
+Physical dimensions must be 35–300 mm wide and 30–300 mm high;
+DPI is restricted to 300 or 600 and the export is capped at 30 million
+raster-equivalent pixels and a 24 MB wire response. Invalid settings and
+non-chart node IDs are rejected.
+
+The existing `GET /api/assets/chart/{node_id}/export?fmt=png|svg`
+endpoint remains supported for legacy display-sized downloads. Publication
+exports instead use the authenticated `scene.exportPublicationChart`
+WebSocket intent with arguments `[nodeId, options]`, returning a bounded
+base64 file with its filename, MIME type and resolved physical dimensions.
+The frontend uses a temporary one-shot authenticated socket and saves a
+local Blob: it does not navigate to a URL containing the session capability
+token.
+
+Parity tests live in `backend/tests/test_chart_publication_export.py`
+and the chart frontend test files. They cover all eight chart types across
+SVG/PDF/PNG, physical page/raster dimensions, selectable text, axes and
+units, original scatter/error-bar coordinates, box-plot quartiles/outliers,
+heatmap cell arrays, series legends, and authenticated download behavior.
+
 ## Generation and testing
 
 The existing `scene.generateChart` intent accepts `"boxplot"` and

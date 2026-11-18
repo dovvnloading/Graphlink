@@ -5,7 +5,7 @@
  * graphlink_chart_data.py's canonicalize_chart_data, ported here.
  */
 import { describe, expect, it } from "vitest";
-import { CHART_SPEC_VERSION, ChartSpecError, canonicalizeChartSpec } from "./chartSpec";
+import { CHART_SPEC_VERSION, ChartSpecError, canonicalizeChartSpec, resolvePublicationExportOptions, type PublicationExportOptions } from "./chartSpec";
 import { validateSceneState } from "../../lib/bridge-core/generated/scene-state";
 import { initialSceneState } from "./sceneStore";
 
@@ -351,5 +351,37 @@ describe("saved chart wire compatibility", () => {
       expect(loaded).toEqual(typed);
       expect(loaded.type).toBe(chartType);
     }
+  });
+});
+
+describe("publication export physical settings (mirrors Python validator)", () => {
+  const base: PublicationExportOptions = {
+    format: "svg", size: "single", dpi: 300,
+    colorblindSafe: true, grayscaleSafe: false,
+  };
+  it("resolves journal sizes in millimeters independently of resolution", () => {
+    expect(resolvePublicationExportOptions(base, 0.75)).toMatchObject({
+      widthMm: 85, heightMm: 63.75, dpi: 300,
+    });
+    expect(resolvePublicationExportOptions({ ...base, size: "double", dpi: 600 }, 0.5))
+      .toMatchObject({ widthMm: 180, heightMm: 90, dpi: 600 });
+    expect(resolvePublicationExportOptions({
+      ...base, size: "custom", widthMm: 123, heightMm: 91,
+    }, 1)).toMatchObject({ widthMm: 123, heightMm: 91 });
+  });
+
+  it("refuses unbounded raster, bogus DPI, invalid dimensions and flags", () => {
+    const invalid: Array<Partial<PublicationExportOptions>> = [
+      { dpi: 150 as never }, { dpi: true as never },
+      { size: "custom" }, { widthMm: 85 },
+      { colorblindSafe: "yes" as never }, { grayscaleSafe: 1 as never },
+      { size: "custom", widthMm: 0, heightMm: 10 },
+      { size: "custom", widthMm: 300, heightMm: 300, dpi: 600 },
+      { format: "jpeg" as never }, { size: "poster" as never },
+    ];
+    for (const item of invalid) {
+      expect(() => resolvePublicationExportOptions({ ...base, ...item }, 0.7)).toThrow(ChartSpecError);
+    }
+    expect(() => resolvePublicationExportOptions(base, NaN)).toThrow(ChartSpecError);
   });
 });

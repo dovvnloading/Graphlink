@@ -18,10 +18,14 @@ state anchored on the SOURCE node, not a pre-created placeholder chart node
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import re
 
-from graphlink_chart_data import ChartDataError, canonicalize_chart_data, scientific_result_chart, SUPPORTED_CHART_TYPES
+from graphlink_chart_data import ChartDataError, canonicalize_chart_data, scientific_result_chart, SUPPORTED_CHART_TYPES, validate_publication_export
+from graphlink_chart_rendering import render_chart_publication
+from backend.assets import _sanitize_chart_filename
 
 from backend.agents import AgentDispatcher
 from backend.api._shared import make_publish_scene
@@ -29,6 +33,55 @@ from backend.domain.graph import SceneDocument
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.domain.node_states import ChartState
+
+
+def _make_publication_export_handler(document: SceneDocument):
+    """Build the bounded scene export intent without inflating register_chart_intents."""
+
+    async def export_publication_chart(node_id, options):
+        """Stream a bounded, authenticated chart file over the existing scene
+        intent channel. backend/assets.py's legacy PNG/SVG route is unchanged:
+        this dedicated path supports selectable page dimensions and vector PDF
+        without widening that out-of-scope route.
+        """
+        node = document.nodes.get(node_id) if isinstance(node_id, str) else None
+        if node is None or node.kind != "chart" or not isinstance(node.state, ChartState):
+            raise ChartDataError("Unknown chart node")
+        state = node.state
+        if not isinstance(state.chart_data, dict):
+            raise ChartDataError("Chart has no data to export")
+        aspect = state.chart_height / state.chart_width
+        settings = validate_publication_export(options, aspect_ratio=aspect)
+        content = await asyncio.to_thread(
+            render_chart_publication,
+            state.chart_type,
+            state.chart_data,
+            width_mm=settings["widthMm"],
+            height_mm=settings["heightMm"],
+            fmt=settings["format"],
+            dpi=settings["dpi"],
+            colorblind_safe=settings["colorblindSafe"],
+            grayscale_safe=settings["grayscaleSafe"],
+        )
+        # Avoid sending arbitrarily large messages on the shared WS channel
+        # even if a new renderer or pathological chart becomes less compact.
+        if len(content) > 24_000_000:
+            raise ChartDataError("Publication export exceeds the 24 MB response limit")
+        title = state.chart_data.get("title", "")
+        name = _sanitize_chart_filename(str(title or ""))
+        return {
+            "filename": f"{name}.{settings['format']}",
+            "mimeType": {
+                "png": "image/png", "svg": "image/svg+xml",
+                "pdf": "application/pdf",
+            }[settings["format"]],
+            "base64": base64.b64encode(content).decode("ascii"),
+            "widthMm": settings["widthMm"],
+            "heightMm": settings["heightMm"],
+            "dpi": settings["dpi"],
+        }
+
+    return export_publication_chart
 
 
 def register_chart_intents(
@@ -327,3 +380,4 @@ def register_chart_intents(
     bus.register_intent("scene", "generateChart", generate_chart)
     bus.register_intent("scene", "resizeChart", resize_chart)
     bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
+    bus.register_intent("scene", "exportPublicationChart", _make_publication_export_handler(document))
