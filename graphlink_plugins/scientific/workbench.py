@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass
 from typing import ClassVar
 from uuid import uuid4
@@ -13,11 +14,12 @@ from backend.domain.node_states import ChartState, PersistedPluginState, PluginS
 from backend.plugin_sdk import HostContext, PluginNodeSeed, PluginSceneUpdate
 
 from .catalog import PACKS, operations
-from .core import INPUT_LIMITS, calculate_result, canonical_bytes, fingerprint, readable_result, validated_inputs
+from .core import INPUT_LIMITS, canonical_bytes, fingerprint, readable_result, validated_inputs
 from .data_table import (
     TableState, decode_input, numeric_column, parse_table, persist_table,
     stage_from_saved, table_metadata_valid,
 )
+from .execution import ExecutionFailure, execute_in_process, execution_timeout
 
 STATE_TYPES = (PersistedPluginState, PluginStateSnapshot, TableState)
 SCIENCE_KINDS = frozenset(f"science_{pack}.workbench" for pack in PACKS)
@@ -36,6 +38,19 @@ class RunArgs:
 class ExportArgs:
     node_id: str
     expected_run: str | None = None
+
+
+@dataclass
+class CancelArgs:
+    node_id: str
+    operation_id: str
+
+
+@dataclass
+class _ActiveCalculation:
+    operation_id: str
+    cancel_event: asyncio.Event
+    started_at: float
 
 
 @dataclass
@@ -196,6 +211,8 @@ def register_pack(host: HostContext, pack_id: str) -> None:
     catalog = {op.id: op for op in operations(pack_id)}
     schema = [op.describe() for op in catalog.values()]
     kind = f"science_{pack_id}.workbench"
+    # Scoped to this host/session, never persisted as a result or receipt.
+    active: dict[str, _ActiveCalculation] = {}
 
     def seed(document, ctx, parent):
         return PluginNodeSeed(title=title, state=PluginStateSnapshot.from_data({"version": 1, "latest": None, "nodeKey": uuid4().hex}))
@@ -248,21 +265,43 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         op = catalog.get(request.operation_id)
         if op is None:
             return {"ok": False, "error": "Choose an operation registered for this pack."}
+        if request.node_id in active:
+            return {"ok": False, "errorType": "busy", "error": "A calculation is already running on this scientific node."}
         state = node.state
         try:
             inputs = validated_inputs(op, request.inputs)
             sources = _verify_sources(document, node, inputs, request.sources or {}, ctx.is_plugin_granted)
-            # Compute on a detached input snapshot. All graph reads and the
-            # compare-and-commit below stay on the session event loop.
-            result = await asyncio.to_thread(calculate_result, pack_id, op, inputs, sources)
+            budget = execution_timeout(op)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+
+        # All graph reads and the eventual undoable commit remain in this
+        # event loop. Only detached, validated inputs enter the spawn worker.
+        ticket = _ActiveCalculation(op.id, asyncio.Event(), time.monotonic())
+        active[request.node_id] = ticket
+        try:
+            result = await execute_in_process(
+                pack_id, op, inputs, sources, timeout_s=budget, cancel_event=ticket.cancel_event,
+            )
+            if ticket.cancel_event.is_set():
+                elapsed_ms = int((time.monotonic() - ticket.started_at) * 1000)
+                raise ExecutionFailure("cancelled", f"Scientific calculation cancelled after {elapsed_ms} ms.", elapsed_ms)
             if not ctx.is_plugin_granted or not ctx.is_plugin_granted(ctx.plugin_id):
                 raise ValueError("The pack was disabled while the calculation was running.")
             if document.nodes.get(node.id) is not node or node.state is not state:
-                return {"ok": False, "conflict": True, "error": "The node changed during calculation. Review its current run."}
+                return {"ok": False, "conflict": True, "error": "The node changed during calculation. Review the current run."}
             if sources:
                 _verify_sources(document, node, inputs, sources, ctx.is_plugin_granted)
+        except ExecutionFailure as exc:
+            return exc.as_result()
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        finally:
+            # Cancelled and timed-out requests never write a latest artifact,
+            # change the node body, or add an undo command.
+            if active.get(request.node_id) is ticket:
+                active.pop(request.node_id)
+
         latest = state.data.get("latest")
         if isinstance(latest, dict):
             previous = latest["provenance"]
@@ -304,6 +343,17 @@ def register_pack(host: HostContext, pack_id: str) -> None:
         document.record_command(f"science:{pack_id}:{op.id}", "user", save_result,
                                 node_ids=[node.id, *chart_children])
         return PluginSceneUpdate({"ok": True})
+
+    def cancel(document, ctx, request):
+        # Key by the live run rather than the mutable node snapshot: Cancel
+        # must still work if an editor changed the node during calculation.
+        ticket = active.get(request.node_id)
+        if ticket is None or ticket.operation_id != request.operation_id:
+            return {"ok": False, "errorType": "not_running", "error": "That scientific calculation is not running."}
+        # The suspended run owns the worker. Its wakeable cancellation signal
+        # causes execute_in_process to terminate and reap that process.
+        ticket.cancel_event.set()
+        return {"ok": True}
 
     def export_result(document, ctx, request):
         node, error = _current_state(document, request.node_id, kind, request.expected_run)
@@ -391,6 +441,7 @@ def register_pack(host: HostContext, pack_id: str) -> None:
     )
     host.register_picker_entry(node_kind="workbench", name=title, description=description, category="Scientific Workbench")
     host.register_intent("run", run, args_schema=RunArgs, expose_to_builder=False)
+    host.register_intent("cancel", cancel, args_schema=CancelArgs, expose_to_builder=False)
     host.register_intent("export_result", export_result, args_schema=ExportArgs, expose_to_builder=False)
     host.register_intent("import_table", import_table, args_schema=ImportTableArgs, expose_to_builder=False)
     host.register_intent("table_column", table_column, args_schema=TableColumnArgs, expose_to_builder=False)

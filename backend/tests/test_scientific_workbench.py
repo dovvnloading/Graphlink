@@ -311,8 +311,9 @@ def test_invalid_asset_descriptor_survives_repeated_saves(session, broken):
 
 @pytest.mark.parametrize("change", ["revoke", "overwrite", "disconnect", "revoke_source", "delete"])
 def test_work_in_flight_cannot_commit_over_a_changed_graph(session, monkeypatch, change):
-    import threading
+    from backend.domain.node_states import PluginStateSnapshot
     from graphlink_plugins.scientific import workbench
+    from graphlink_plugins.scientific.core import calculate_result
 
     document, bus, _, _ = session
     grant(bus, "core")
@@ -323,29 +324,45 @@ def test_work_in_flight_cannot_commit_over_a_changed_graph(session, monkeypatch,
     state = envelope(document, source)
     ref = {"nodeId": source, "sourceKey": state["nodeKey"], "selector": ["column", 0],
            "resultHash": state["latest"]["provenance"]["resultHash"]}
-    entered, finish = threading.Event(), threading.Event()
-    calculate = workbench.calculate_result
-
-    def paused(*args):
-        if args[2]["observations"] == [1, 2]:
-            entered.set()
-            assert finish.wait(4), "Calculation blocked the event loop."
-        return calculate(*args)
-
-    monkeypatch.setattr(workbench, "calculate_result", paused)
     async def scenario():
+        entered, finish = asyncio.Event(), asyncio.Event()
+
+        async def paused(*args, **_kwargs):
+            if args[2]["observations"] == [1, 2]:
+                entered.set()
+                await finish.wait()
+            return calculate_result(*args)
+
+        # The stale-state guard is independent of the worker IPC mechanism.
+        # Hold the isolated-call seam without spawning a second process.
+        monkeypatch.setattr(workbench, "execute_in_process", paused)
+
         async def submit(values, sources):
             return await bus.dispatch_intent("app-plugins", "invokePluginIntent", [
                 "science_statistics", "run", {"node_id": target, "operation_id": "describe",
                 "inputs": {"observations": values}, "sources": sources}])
         task = asyncio.create_task(submit([1, 2], {"observations": ref}))
         try:
-            assert await asyncio.to_thread(entered.wait, 2)
+            await asyncio.wait_for(entered.wait(), timeout=10)
             if change in ("revoke", "revoke_source"):
                 pack = "science_core" if change == "revoke_source" else "science_statistics"
                 await bus.dispatch_intent("app-plugins", "setPluginGrant", [pack, False])
             elif change == "overwrite":
-                assert (await submit([10, 20], {}))["ok"]
+                # A new run on this node is now rejected as busy. Model an
+                # independent undoable user edit to its saved state instead.
+                node = document.nodes[target]
+                new_result = calculate_result(
+                    "statistics", next(op for op in operations("statistics") if op.id == "describe"),
+                    {"observations": [10.0, 20.0]}, None,
+                )
+                key = node.state.data["nodeKey"]
+
+                def overwrite():
+                    node.state = PluginStateSnapshot.from_data(
+                        {"version": 1, "nodeKey": key, "latest": new_result})
+                    node.content = new_result["summary"]
+
+                document.record_command("science:statistics:describe", "user", overwrite, node_ids=[target])
             elif change == "delete":
                 document.remove_nodes([target])
             else:
