@@ -39,10 +39,6 @@ def _legacy_prompt(history, system, *, window=32_000):
             {"role": "assistant", "content": "answer"},
             {"role": "user", "content": "latest"},
         ]),
-        ("persona", [
-            {"role": "assistant", "content": "orphan"},
-            {"role": "user", "content": "latest"},
-        ]),
         ("persona", [{"role": "assistant", "content": "standalone latest answer"}]),
         ("persona", [
             {"role": "user", "content": [
@@ -162,7 +158,7 @@ def test_retrieved_prompt_injection_cannot_grant_tool_permissions():
     assert "permissions" in body
     assert plan.sources[-2]["trust"] == "retrieved"
     assert plan.sources[-2]["origin"] == "document:42#chunk:3"
-    with pytest.raises(ValueError, match="typed wrapper"):
+    with pytest.raises(ValueError, match="system/tool role"):
         ContextCandidate(
             "evil", "document:evil", "retrieved", "knowledge_hit",
             {"role": "system", "content": hostile},
@@ -256,3 +252,27 @@ def test_pinned_llama_cpp_uses_local_n_ctx_even_if_task_default_is_cloud(monkeyp
         ),
     )
     assert selected_context_window(runtime, ModelRef("Llama.cpp", "local.gguf")) == 2048
+
+
+def test_leading_assistant_turn_obeys_existing_trim_rule():
+    history = [
+        {"role": "assistant", "content": "orphan"},
+        {"role": "user", "content": "latest"},
+    ]
+    # This is NOT an all-fits legacy-worker case: trim_history drops the
+    # leading orphan even with a large window, then triggers the historical
+    # optional summarizer. Compare the trim itself without invoking a model.
+    expected = _legacy_prompt(history, "persona")
+    plan = ContextAssembler().assemble(
+        ContextAssembler.chat_sources("persona", history), context_window=32_000,
+    )
+    assert list(plan.messages) == expected
+
+
+def test_system_and_current_candidates_cannot_be_optional():
+    with pytest.raises(ValueError, match="mandatory"):
+        ContextCandidate("sys", "settings", "system", "instructions",
+                         {"role": "system", "content": "safety"})
+    with pytest.raises(ValueError, match="mandatory"):
+        ContextCandidate("q", "draft", "user", "current_message",
+                         {"role": "user", "content": "question"})

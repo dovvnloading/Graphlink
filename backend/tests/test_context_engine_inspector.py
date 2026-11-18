@@ -15,7 +15,7 @@ from backend.domain.model import SceneError
 class _Dispatcher:
     def __init__(self, *, provider="ollama", window=4096, override=None):
         self._provider_runtime = SimpleNamespace(context_window=lambda _task: window)
-        self.provider = provider
+        self.route_label = provider
         self.override = override
         self.model_resolutions = 0
 
@@ -30,7 +30,7 @@ class _Dispatcher:
         return None
 
     def active_provider_model(self, ref=None):
-        return self.provider, "test-model"
+        return self.route_label, "test-model"
 
 
 def _document():

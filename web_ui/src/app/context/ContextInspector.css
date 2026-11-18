@@ -8,10 +8,10 @@
 }
 .context-inspector-toggle,
 .context-inspector-heading button {
-  border: 1px solid var(--gl-surface-border, #666);
+  border: 1px solid var(--gl-surface-border);
   border-radius: 5px;
   padding: 5px 9px;
-  background: var(--gl-graph-surface, #252525);
+  background: var(--gl-graph-surface);
   color: inherit;
   cursor: pointer;
 }
@@ -25,10 +25,10 @@
   overflow: auto;
   box-sizing: border-box;
   padding: 12px;
-  background: var(--gl-graph-surface, #252525);
-  border: 1px solid var(--gl-graph-border, #555);
+  background: var(--gl-graph-surface);
+  border: 1px solid var(--gl-graph-border);
   border-radius: 8px;
-  box-shadow: 0 8px 24px #0006;
+  box-shadow: var(--gl-shadow-3);
 }
 .context-inspector-heading,
 .context-inspector-source-title {
@@ -39,7 +39,7 @@
 }
 .context-inspector-heading > div { display: flex; gap: 4px; }
 .context-inspector-meta, .context-inspector-note {
-  color: var(--gl-surface-text-secondary, #999);
+  color: var(--gl-surface-text-secondary);
   overflow-wrap: anywhere;
   margin: 7px 0;
 }
@@ -51,7 +51,7 @@
   gap: 7px;
 }
 .context-inspector-sources li {
-  border: 1px solid var(--gl-graph-border, #555);
+  border: 1px solid var(--gl-graph-border);
   border-radius: 5px;
   padding: 8px;
   display: grid;
@@ -59,4 +59,4 @@
   overflow-wrap: anywhere;
 }
 .context-inspector-sources .excluded { opacity: .75; }
-.context-inspector-source-origin { color: var(--gl-surface-text-secondary, #999); }
+.context-inspector-source-origin { color: var(--gl-surface-text-secondary); }

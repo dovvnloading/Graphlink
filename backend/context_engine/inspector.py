@@ -56,10 +56,23 @@ def inspect_next_chat_send(document, node_id: str, dispatcher, *, bus=None, draf
     override = dispatcher._resolve_branch_system_prompt(document, node_id)
     persona = override if override is not None else dispatcher.persona()
     system_prompt = persona if override is not None else ChatAgent("Graphlink Assistant", persona).system_prompt
-    system_origin = (
-        f"system-note:{next((edge.source for edge in document.edges.values() if edge.target == document.get_branch_root(node_id).id and (source := document.nodes.get(edge.source)) is not None and source.kind == 'note' and getattr(source.state, 'is_system_prompt', False)), 'unknown')}"
-        if override is not None else "system:settings"
-    )
+    system_origin = "system:settings"
+    if override is not None:
+        # Match the dispatcher's first connected System Prompt note, using
+        # structural source identity rather than a long nested expression.
+        system_origin = "system-note:unknown"
+        root = document.get_branch_root(node_id)
+        if root is not None:
+            for edge in document.edges.values():
+                if edge.target != root.id:
+                    continue
+                source = document.nodes.get(edge.source)
+                if (
+                    source is not None and source.kind == "note"
+                    and getattr(source.state, "is_system_prompt", False)
+                ):
+                    system_origin = f"system-note:{source.id}"
+                    break
 
     model_ref = dispatcher._resolve_model_ref_for_dispatch(document, node_id, bus=bus)
     runtime = dispatcher._provider_runtime if dispatcher._provider_runtime is not None else api_provider.DEFAULT_RUNTIME

@@ -68,6 +68,8 @@ class ContextCandidate:
             raise ValueError(f"invalid context kind: {self.kind}")
         if self.required and self.kind not in ("instructions", "current_message"):
             raise ValueError("only instructions and the current message are mandatory")
+        if self.kind in ("instructions", "current_message") and not self.required:
+            raise ValueError("instructions and current messages are mandatory")
         if self.kind == "knowledge_hit" and self.trust != "retrieved":
             raise ValueError("knowledge hits must have retrieved trust")
         if self.kind == "summary" and self.trust != "generated":
