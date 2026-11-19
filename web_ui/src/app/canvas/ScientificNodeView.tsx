@@ -570,7 +570,7 @@ function Workbench({ session, state, options, run, configure, cancel, fetchTable
       options={options} run={run} configure={configure} cancel={cancel} fetchTableColumn={fetchTableColumn}
       busy={busy} setBusy={setBusy} />
     {tableEditor}
-    {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson}
+    {state.latest && <Results key={revision} result={state.latest} exportJson={exportJson} exportCsv={exportCsv}
       charts={charts} onChart={onChart} onRefresh={onRefresh} title={
       state.operations.find((candidate) => candidate.id === state.latest?.operationId)?.title ?? state.latest.operationId
     } />}
@@ -587,12 +587,14 @@ export const ScientificNodeView = memo(function ScientificNodeView({ data, id, s
       : state?.error ? <p role="alert">{state.error}</p> : state && data.pluginId === "science_" + state.packId
       ? <Workbench key={state.nodeKey ?? id} session={data.store.scientificEditor(id, state.nodeKey)} state={state} options={options}
         exportJson={() => data.store.exportScientificResult(data.pluginId, id, state.runToken)}
+        exportCsv={() => data.store.exportScientificTableCsv(data.pluginId, id, "result", state.runToken)}
         tableEditor={<TableEditor state={state} nodeId={id} pluginId={data.pluginId} store={data.store} />}
         fetchTableColumn={async (option) => {
           if (!option.tableColumn) throw new Error("Choose a typed table column.");
           const { nodeId, column, policy, start, end } = option.tableColumn;
           const answer = await tableIntent(data.store, data.pluginId, "table_column", {
             node_id: id, source_node_id: nodeId, column, policy, start, end,
+            table_source: option.tableColumn.source ?? "import",
             expected_hash: option.reference.resultHash, expected_receipt: option.reference.receiptHash,
           });
           if (!Array.isArray(answer.values) || !answer.values.every((n) => typeof n === "number" && Number.isFinite(n))
