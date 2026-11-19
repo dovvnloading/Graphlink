@@ -715,7 +715,7 @@ OPERATIONS += (
         "One-dimensional isotropic, uniform-temperature thermoelastic calculation; restraint=0 free, 1 fixed.",
         (Field("linear_expansion_per_k", "Linear thermal expansion coefficient α", "number", unit="K⁻¹"),
          Field("initial_length_mm", "Initial specimen length", "number", unit="mm"),
-         Field("temperature_change_k", "Temperature change (final − initial)", "number", unit="K"),
+         Field("temperature_change_k", "Temperature change (final − initial)", "number", unit="K", default_unit="delta_K"),
          Field("young_modulus_mpa", "Young modulus", "number", unit="MPa"),
          Field("axial_restraint_fraction", "Axial restraint fraction", "number", unit="1")),
         {"linear_expansion_per_k": 12e-6, "initial_length_mm": 1000,

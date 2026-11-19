@@ -159,6 +159,28 @@ describe("unit-aware scientific drafts", () => {
     });
   });
 
+  it("defers suffixed decimal rounding until after exact SI scaling on the backend", () => {
+    expect(parseInputs(operation, {
+      distance: "1e310 qm", temperature: "32 degF",
+      samples: '["9007199254740993 nm","1e310 qm",2]',
+      grid: '[["1e310 qPa","2 kPa"]]', count: "2 count",
+    })).toEqual({
+      distance: "1e310 qm", temperature: "32 degF",
+      samples: ["9007199254740993 nm", "1e310 qm", 2],
+      grid: [["1e310 qPa", "2 kPa"]], count: "2 count",
+    });
+    expect(() => parseInputs(operation, {
+      distance: "1e310", temperature: "300", samples: "[1]",
+      grid: "[[1]]", count: "2",
+    })).toThrow(/finite/);
+  });
+
+  it("restores normalized bare numbers from historical saved graph drafts", () => {
+    const normalized = { distance: 0.025, temperature: 273.15,
+      samples: [0.025, 0.02], grid: [[1200, 1]], count: 2 };
+    expect(parseInputs(operation, draftInputs(operation, normalized))).toEqual(normalized);
+  });
+
   it("retains numerical bare values and catches malformed measurements", () => {
     expect(parseInputs(operation, {
       distance: "0.025", temperature: "300", samples: "[1,2]", grid: "[[1,2]]", count: "2",

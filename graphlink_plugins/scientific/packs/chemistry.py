@@ -729,7 +729,7 @@ OPERATIONS += (
         "Enter successive ascending pKa values of the fully protonated species; spectator charge is "
         "positive for fixed cations and negative for fixed anions (mol charge/L).",
         (Field("family", "Starting neutral compound", "text", unit="category: acid | base"),
-         Field("pka_values", "Successive conjugate-acid pKa values", "vector", unit="1"),
+         Field("pka_values", "Successive conjugate-acid pKa values", "vector", unit="pKa"),
          Field("formal_concentration_mol_l", "Analytical concentration", "number", unit="mol/L"),
          Field("spectator_charge_mol_l", "Fixed spectator-ion charge (cations minus anions)", "number", unit="mol charge/L")),
         {"family": "acid", "pka_values": [2.15, 7.20, 12.35],
@@ -741,7 +741,7 @@ OPERATIONS += (
         "For a monoprotic HA/NaA (or BH+/B with the corresponding counterion) ideal aqueous "
         "buffer at 25 °C, compare Henderson–Hasselbalch with full charge balance and water, "
         "including buffer capacity d(strong base)/d(pH) per litre.",
-        (Field("pka", "Conjugate-acid pKa", "number", unit="1"),
+        (Field("pka", "Conjugate-acid pKa", "number", unit="pKa"),
          Field("acid_concentration_mol_l", "Weak acid (or conjugate acid) analytical concentration", "number", unit="mol/L"),
          Field("base_concentration_mol_l", "Conjugate-base salt analytical concentration", "number", unit="mol/L")),
         {"pka": 4.7447274948966935, "acid_concentration_mol_l": 0.1, "base_concentration_mol_l": 0.1},
@@ -753,7 +753,7 @@ OPERATIONS += (
         "strong-acid (base analyte) addition, including each stoichiometric equivalence point; "
         "assumes ideal, additive solution volumes and neutral initial analyte.",
         (Field("family", "Neutral analyte type", "text", unit="category: acid | base"),
-         Field("pka_values", "Successive conjugate-acid pKa values", "vector", unit="1"),
+         Field("pka_values", "Successive conjugate-acid pKa values", "vector", unit="pKa"),
          Field("analyte_concentration_mol_l", "Initial analyte concentration", "number", unit="mol/L"),
          Field("analyte_volume_ml", "Initial analyte volume", "number", unit="mL"),
          Field("titrant_concentration_mol_l", "Strong titrant concentration", "number", unit="mol/L"),

@@ -97,7 +97,7 @@ def test_conversions(source, target, value, expected):
     ("°C/s", "K/s", "absolute temperature"),
     ("degF*m", "delta_K*m", "absolute temperature"),
     ("nonsense", "m", "Unknown unit symbol"),
-    ("m//s", "m/s", "Invalid unit expression"),
+    ("m//s", "m/s", "Ambiguous unit expression"),
     ("m^(2)", "m²", "Unit powers"),
     ("m^999", "m", "Unit powers"),
     ("µkg", "kg", "Unknown unit symbol"),
