@@ -453,6 +453,9 @@ def kaplan_meier_logrank(data):
     median = ["not reached", "not reached"]
     obs_a = expected_a = variance = 0.0
     rows, xs, ys = [], [0.0], [1.0]
+    curve_times = [[0.0], [0.0]]
+    curve_survival = [[1.0], [1.0]]
+    censor_times = [[], []]
     for t in times:
         deaths = [groups[i][0][(t, 1)] for i in (0, 1)]
         censored = [groups[i][0][(t, 0)] for i in (0, 1)]
@@ -470,6 +473,11 @@ def kaplan_meier_logrank(data):
                     greenwood[i] += deaths[i] / (old_risk * (old_risk - deaths[i]))
                 if median[i] == "not reached" and survival[i] <= .5:
                     median[i] = t
+            if deaths[i] or censored[i]:
+                curve_times[i].append(t)
+                curve_survival[i].append(survival[i])
+            if censored[i]:
+                censor_times[i].append(t)
         rows.append([t, risk[0], deaths[0], censored[0], survival[0],
                      risk[1], deaths[1], censored[1], survival[1]])
         xs.append(t)
@@ -483,7 +491,7 @@ def kaplan_meier_logrank(data):
     return {
         "summary": "Two Kaplan–Meier product-limit survival curves (events before censoring at tied times); "
                    "two-sided Mantel–Cox log-rank chi-square, 1 df with hypergeometric tie variance. "
-                   "Both curves appear in the table; the plot shows A.",
+                   "Both curves appear in the survival view and table; the legacy plot shows A.",
         "values": {"group_a_size": groups[0][1], "group_b_size": groups[1][1],
                    "group_size_unit": "subjects", "observed_events_a": obs_a,
                    "expected_events_a": expected_a, "event_count_unit": "events",
@@ -504,6 +512,15 @@ def kaplan_meier_logrank(data):
                               "B censored (subjects)", "B survival (probability)"], "rows": rows},
         "plot": {"title": "Kaplan–Meier curve A (compare B in table)", "xLabel": f"Time ({tu})",
                  "yLabel": "Survival (probability)", "x": xs, "y": ys},
+        "views": [{
+            "type": "survival_curve", "title": "Kaplan–Meier survival by group",
+            "xLabel": f"Follow-up time ({tu})",
+            "groups": [
+                {"label": label, "times": curve_times[i], "survival": curve_survival[i],
+                 "censored": censor_times[i]}
+                for i, label in enumerate(("A", "B"))
+            ],
+        }],
     }
 
 
@@ -825,7 +842,8 @@ OPERATIONS = (
             "events before censoring at tied times; Greenwood's variance gives final survival SEs "
             "and medians are first crossings of 0.5. Use observed-minus-expected events with "
             "hypergeometric tie variance for a Mantel–Cox log-rank χ² (one degree of freedom when "
-            "variance > 0). Both curves appear in the table; the plot displays group A."
+            "variance > 0). Both curves appear in the typed survival view and table; "
+            "the legacy single-series plot displays group A."
         ),
         citations=(
             Citation(
