@@ -10,6 +10,20 @@ from datetime import UTC, datetime
 import math
 
 from graphlink_plugins.scientific.core import Field, Operation
+from graphlink_plugins.scientific.reference_data import Dataset
+
+REFERENCE_DATASETS = (
+    Dataset("astronomy.iau_galactic_rotation", "1.0.0", "astronomy", ("_EQ_TO_GAL",),
+            "Astronomical Almanac ICRS/J2000 Galactic rotation"),
+)
+
+
+def _coordinate_reference_datasets(inputs: dict) -> tuple[str, ...]:
+    if any(isinstance(inputs.get(key), str) and inputs[key].strip().lower() == "galactic"
+           for key in ("source_frame", "target_frame")):
+        return ("astronomy.iau_galactic_rotation",)
+    return ()
+
 
 # IAU fixed au (m), Julian year (s), definition of the parsec and exact c (m/s).
 _LIGHT_YEARS_PER_PARSEC = (648000 / math.pi) * 149597870700 / (31557600 * 299792458)
@@ -508,6 +522,7 @@ OPERATIONS: tuple[Operation, ...] = (
          "source_latitude_deg": 20, "utc_iso": "2000-01-01T12:00:00Z",
          "observer_latitude_deg": 30, "observer_longitude_deg_east": 0},
         _coordinates,
+        reference_datasets=_coordinate_reference_datasets,
     ),
     Operation(
         "airmass_extinction",

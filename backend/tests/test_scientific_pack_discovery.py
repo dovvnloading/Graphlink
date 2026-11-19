@@ -95,3 +95,16 @@ def test_every_biology_pack_has_its_own_reference_page():
         page = docs / f"{pack}.md"
         assert page.is_file(), f"Missing biology pack reference: {page}"
         assert f"science_{pack}" in page.read_text(encoding="utf-8")
+
+def test_biology_picker_description_covers_all_operation_families():
+    import tomllib
+
+    description = catalog.PACKS["biology"][1]
+    assert len(biology.OPERATIONS) == 11
+    assert all(word in description.lower() for word in (
+        "community", "quadrat", "growth", "enzyme", "dose-response",
+        "predator", "genetics", "survival",
+    ))
+    manifest = Path(__file__).resolve().parents[2] / "plugins" / "science_biology" / "plugin.toml"
+    with manifest.open("rb") as source:
+        assert tomllib.load(source)["plugin"]["description"] == description

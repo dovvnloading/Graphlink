@@ -8,6 +8,24 @@ import math
 from fractions import Fraction
 
 from graphlink_plugins.scientific.core import Field, Operation
+from graphlink_plugins.scientific.reference_data import Dataset
+
+REFERENCE_DATASETS = (
+    Dataset("materials.astm_e140_table_1", "2019.0.0", "materials",
+            ("_E140_TABLE_1",), "ASTM E140-12b (2019 reapproval), Table 1"),
+    Dataset("materials.astm_e140_table_2", "2019.0.0", "materials",
+            ("_E140_TABLE_2",), "ASTM E140-12b (2019 reapproval), Table 2"),
+)
+
+
+def _hardness_reference_datasets(inputs: dict) -> tuple[str, ...]:
+    table = inputs.get("e140_table")
+    selected = ({
+        "table1_non_austenitic_hrc": "materials.astm_e140_table_1",
+        "table2_non_austenitic_hrb": "materials.astm_e140_table_2",
+    }.get(table) if isinstance(table, str) else None)
+    return (selected,) if selected else ()
+
 
 
 def bulk_density(data):
@@ -744,6 +762,7 @@ OPERATIONS += (
                unit="HV, HBW, HBS, HRC or HRB (as selected)")),
         {"e140_table": "table1_non_austenitic_hrc", "from_scale": "HRC", "to_scale": "HV",
          "hardness_reading": 38}, hardness_e140,
+        reference_datasets=_hardness_reference_datasets,
     ),
     Operation(
         "arrhenius_diffusion_profile", "Compute Arrhenius diffusion and Fick II profile",

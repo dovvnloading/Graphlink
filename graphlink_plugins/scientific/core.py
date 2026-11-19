@@ -180,6 +180,8 @@ class Operation:
     timeout_s: float | None = None
     methods: str = ""
     citations: tuple[Citation, ...] = ()
+    # Dataset IDs, or a selector for references conditional on validated inputs.
+    reference_datasets: tuple[str, ...] | Callable[[dict], tuple[str, ...]] = ()
 
     def __post_init__(self):
         for field in self.fields:
@@ -432,7 +434,7 @@ def calculate_result(pack: str, operation: Operation, inputs: dict, sources: dic
     except ArithmeticError:
         raise ValueError("These inputs exceed the numerical range of this operation.") from None
     from .reference_data import references_for_operation
-    reference_data = references_for_operation(pack, operation.id, inputs)
+    reference_data = references_for_operation(pack, operation.id, inputs, operation=operation)
     result = {
         **output, "operationId": operation.id, "inputs": inputs,
         "provenance": {

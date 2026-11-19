@@ -4,6 +4,12 @@ import math
 from fractions import Fraction
 
 from graphlink_plugins.scientific.core import Field, Operation
+from graphlink_plugins.scientific.reference_data import Dataset
+
+REFERENCE_DATASETS = (
+    Dataset("chemistry.ciaaw_abridged_atomic_weights", "2024.0.0", "chemistry",
+            ("_ATOMIC_WEIGHTS",), "https://ciaaw.org/abridged-atomic-weights.htm"),
+)
 
 
 def beer_lambert(data):
@@ -819,6 +825,7 @@ OPERATIONS += (
         (Field("formula", "Neutral formula unit, e.g. CuSO4·5H2O", "text", unit="formula string"),),
         {"formula": "CuSO4·5H2O"},
         molar_mass,
+        reference_datasets=("chemistry.ciaaw_abridged_atomic_weights",),
     ),
     Operation(
         "solution_dilution", "Prepare a dilution from stock solution",

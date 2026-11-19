@@ -5,6 +5,15 @@ from datetime import UTC, datetime
 from fractions import Fraction
 
 from graphlink_plugins.scientific.core import Field, Operation
+from graphlink_plugins.scientific.reference_data import Dataset
+
+REFERENCE_DATASETS = (
+    Dataset("earth.wgs84_ellipsoid", "1.0.0", "earth", ("_WGS_A", "_WGS_F"),
+            "NGA World Geodetic System 1984"),
+    Dataset("earth.standard_atmosphere_1976", "1.0.0", "earth",
+            ("_ISA_LAYERS", "_ISA_RE", "_ISA_R", "_ISA_G"),
+            "US Standard Atmosphere 1976 / ISA dry-air layers"),
+)
 
 
 def great_circle_distance(data):
@@ -612,6 +621,7 @@ OPERATIONS: tuple[Operation, ...] = (
         {"latitude_a_deg": -37.95103341666667, "longitude_a_deg": 144.4248678888889,
          "latitude_b_deg": -37.65282113888889, "longitude_b_deg": 143.92649552777777},
         geodesic_inverse,
+        reference_datasets=("earth.wgs84_ellipsoid",),
     ),
     Operation(
         "utm_forward", "Convert WGS84 latitude/longitude to UTM",
@@ -620,6 +630,7 @@ OPERATIONS: tuple[Operation, ...] = (
         (Field("latitude_deg", "WGS84 latitude", "number", unit="°N"),
          Field("longitude_deg", "WGS84 longitude", "number", unit="°E")),
         {"latitude_deg": 40.0, "longitude_deg": -105.0}, utm_forward,
+        reference_datasets=("earth.wgs84_ellipsoid",),
     ),
     Operation(
         "utm_inverse", "Convert WGS84 UTM to latitude/longitude",
@@ -630,6 +641,7 @@ OPERATIONS: tuple[Operation, ...] = (
          Field("northing_m", "UTM northing", "number", unit="m")),
         {"zone_1": 13, "hemisphere": "N", "easting_m": 500000.0, "northing_m": 4427757.2189},
         utm_inverse,
+        reference_datasets=("earth.wgs84_ellipsoid",),
     ),
     Operation(
         "radiometric_age", "Calculate closed-system radiometric age",
@@ -699,6 +711,7 @@ OPERATIONS: tuple[Operation, ...] = (
         "Pressure, density and temperature are model values, not weather observations.",
         (Field("geometric_altitude_m", "Geometric altitude above sea level", "number", unit="m"),),
         {"geometric_altitude_m": 11019.0678}, isa_atmosphere,
+        reference_datasets=("earth.standard_atmosphere_1976",),
     ),
     Operation(
         "solar_position", "Solar elevation and true-north azimuth",
