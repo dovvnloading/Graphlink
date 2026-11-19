@@ -2,7 +2,7 @@
 id = "science_cell_culture"
 name = "Cell Culture"
 description = "Calculate hemocytometer counts and viability, seeding and serial-dilution plans, and centrifuge RCF/rpm."
-version = "1.1.0"
+version = "1.2.0"
 sdk_api_version = 1
 entry_point = "plugin:register"
 
